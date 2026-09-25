@@ -1,5 +1,13 @@
 
 
+**(P18.198) — (CHK.152) STEP 3: A NARROWED-RECEIVER SECOND CHANCE AT THE ARGUMENT READER, THEN UNION / NULLABLE PARAMETERS; +0 EVERYWHERE, 20,772 / 0 / 44 (2026-09-24).**
+A named-object argument against a UNION parameter was never related. After a verbatim split of the argument checker
+(7,629 -> 4,297 bytecodes), a failing relation now re-reads a guard-narrowed receiver's member (never a replacement),
+and union/nullable parameters are admitted with tsgo's chain order. Matrix agree 11 -> 20, no new false positive; 9
+pins. Screen 0; grid 8x0 byte-identical; cost_gate PASS; huge_methods 0. Two censuses landed beside it: rxjs's last row
+needs five fixes (filed in (CHK.161)), and **(CHK.169) — `this` is untyped at the argument reader inside every
+module-file class** — is specified to land at +0 after a small `??` fix ((CHK.170)).
+
 **(P18.197) — (CHK.162): AN INTERSECTION SOURCE RELATES TO A GENERIC TARGET THROUGH INSTANTIATED MEMBER TYPES; 25 OF 25 CELLS MATCH tsgo, 20,763 / 0 / 44 (2026-09-24).**
 `VD & { initializer: Call }` against `VDI<Call>` reported a false TS2741 because the intersection relation read a
 generic target's members raw (`T` as errorType), and the elaboration named a member another constituent supplies.

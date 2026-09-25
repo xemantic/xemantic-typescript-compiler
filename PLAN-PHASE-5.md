@@ -25,6 +25,44 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.203) — (CHK.172): `emitDeclarationOnly` runs the normal checker and `noCheck` is honoured — an `emitDeclarationOnly` project reports what a plain build reports (was: almost nothing); +0 on every `--noEmit` gate (2026-09-25)
+
+Finished from the previous session's ungated work-in-progress patch (`build/wip/p18203-chk172/`), which re-applied
+cleanly; every gate below was run from scratch on this session's build (`Checker.class` md5 `56e1ec6e`), none inherited.
+**The change**: `TypeScriptCompiler`'s two `emitDeclarationOnly` early returns (single-file and multi-file) are gone —
+the program is parsed, bound and checked exactly as a plain build (with its `.d.ts` inputs, module resolutions and JSON
+modules, which the multi-file branch used to drop or mis-parse), and only the JavaScript output is withheld (the echo
+channel keeps its old shape). The `declarationOnly` checker mode is deleted with everything that existed only for it:
+`initDeclarationOnlyPasses`, `checkDeclarationOnlySpineFamilies`, the `spineUResOnly`/`spineDeclOnlyFamilies` minimal
+spine driver, `checkUnresolvedNames`' declaration-only driver, the replay branch, and the legacy TS2564 statement
+walkers (`spinePiEdge` is now their only statement) — `Checker.kt` **−413** lines. `noCheck`, parsed and never read
+until now, drops every file-anchored checker row except TS4xxx/TS9xxx declaration diagnostics
+(`Checker.keptUnderNoCheck`, tsgo's `SkipTypeChecking`). The one corpus baseline the census predicted would move
+(`reuseTypeAnnotationImportTypeInGlobalThisTypeArgument`, a plain-mode false TS2305 for a named import of a JSDoc
+`@typedef` from a JS module) is closed by `jsDocTypedefExportNames`, additive to the known export set.
+
+**Measured**: the census's edo profiles (`build/scratch-p18201-census/prof/<name>-edo`, a tsconfig that SETS the
+option) read harness **84 -> 94**, row-for-row identical to the plain `declaration` build, `project` 46 -> 46; cost
+~5-6 s -> 27-38 s per profile under `emitDeclarationOnly` — the full check tsgo also pays. **Instrument trap**: the CLI
+silently ignores an unknown `--flag`, so a first probe passing `--declaration --emitDeclarationOnly` read 94 on BOTH
+arms and wrote 312 `.js` files (CLAUDE.md entry added).
+
+**Pins**: `EmitDeclarationOnlyChecksTest` (20, every expectation tsgo 7.0.2's row) and `-project`
+`EmitDeclarationOnlyProjectTest` (5, a real tsconfig + `.d.ts` + package import; the pre-round binary read 0 errors on
+it). Countdown pins re-pointed: `CtorSplitTest`'s GUARD seam now asserts tsgo's TS6133 under edo;
+`Inv4SpineBatch16Test`, `HugeMethodLimitTest` (nine constructor parts). **Ablation, one mistake per arm, tree restored
+and verified after each**: a1 typedef export off -> 1 pin RED + the corpus baseline; a2 `noCheck` filter off -> 4 RED;
+a3 JS output not withheld (both branches) -> 3 RED; a4 declaration diagnostics dropped under `noCheck` -> 1 RED.
+
+**Gates**: full suite **20,859 / 0 / 44** (+25, the new pins); corpus screen 0 of 8,725 (the edo path is live in it —
+arm a1 moved its baseline); cost_gate PASS (all within 0.02%); huge_methods 0; grid 8x `added=0 removed=0` (a CONTROL:
+it runs `--noEmit`, which never took the old path); warning gate clean with a live positive control.
+
+**Side findings still open** (from the census, unchanged by this round): TS2365/TS2367 missing (c18, c25); c13's extra
+TS2391/TS7010/TS2300/TS2842; TS9039 vs TS9007 under `isolatedDeclarations` (c23); TS8010 in
+`jsDeclarationEmitDoesNotRenameImport` and 4 TS2300 in `declarationEmitHigherOrderRetainedGenerics` (plain-mode
+defects the edo path now exposes; both baseline-less). **Successor**: (CHK.173) — its G2 census is partial (see its item).
+
 ### Round (P18.202) — (CHK.174): the relation relates a type-parameter source THROUGH ITS CONSTRAINT — (INC.30)'s rule, landed with both of its known hazards handled; 17 FPs -> 0, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.173) G2 census running beside it (and the (CHK.173) census
@@ -345,47 +383,6 @@ Residues: round 2 (class-property / `static` / default-export arrows reached by 
 `expressionTrueEnd` ignores internal whitespace (`x.trim( )` spans 8 where tsgo spans 9).
 
 **Successor**: (CHK.166)(a) step 1 (value-aware enum truthiness, specified, +0 predicted).
-
-### Round (P18.193) — (CHK.159) step 2: the contextual-return FALLBACK for a call's result type; **`rxjs` reads 0 ours-only rows for the first time** (2026-09-24)
-
-Orchestrated: one implementation subagent, with the (CHK.166)(a) enum census landing beside it (recorded in
-that item). `argInferResultTypeArguments` now returns an `ArgInferOutcome` (found map + COMPLETE / PARTIAL —
-also for calls with NO arguments — / REFUSED / CONSTRAINT_FAILED; the constraint check extracted to
-`argInferConstraintFails`), and on PARTIAL `argInferResultType` / `argInferOverloadResultType` call
-`argInferContextFallback`: `argBound` from the partial map into `ctxReturnTypeParamMapper`, argument candidate
-first per type parameter (tsgo `inferTypeArguments`, checker.go ~9366; inference.go ~189), all-or-nothing over
-the TPs the return mentions, the combined map constraint-checked (a failure still moves to the next overload).
-**The census's safeguard (6) is MANDATORY, not optional**: without refusing calls whose parent is a call or
-`new`, `typeNode.bypassed` read **+36.6%** (151,752 -> 207,262) and `typeOfExpr.calls` +3.4% against a
-rebuilt before-arm — the contextual pull re-enters checking of the outer call; with the refusal +0.14% / +7
-calls and every cell/row result identical (the one collision the all-or-nothing rule exists for,
-`combineLatest`'s `pipe(...)`, is a call argument, so the refusal covers it too). Safeguard (5) cannot reach
-`b03` (a one-TP callee answers from the OLD single-TP path before step 1 runs; a literal-keep was tried and
-reverted). Safeguards (1)'s refusal half and (3) are REDUNDANT by construction (0 RED, recorded).
-`argInferAnnotatedCallbackTypeParams` (safeguard 4, `r03`) and `argInferCallIsArgument` (safeguard 6) are
-new. `getReturnTypeOfCallExpressionCore` still 2,641 bytecodes.
-
-**Matrix**: census 44 cells **11 -> 25** match tsgo — exactly the census's 14 (a01 a02 a04 a10 a11 a12 a16
-a23 a24 b02 b05 grp8-orig r01 r07); the step-1 matrix unchanged (no row moved in any cell). Residues: tsgo's
-second pass over context-sensitive callbacks (`r03`, `s4`, `s2b`, `x2`, `a13`); `unknown` for a nested call's
-never-inferred TP (`s1r`); constraint substitution (`a14`, `s1c2`); `b03`'s literal (old single-TP path); the
-call-as-source reader gap (`a05`/`a08`/`a22`) and base-type/index-signature cells.
-
-**Pins**: `ContextualResultInferenceTest`, 26 tests (the 14 flipped cells, controls, 8 `residue -` pins; four
-assert the head line only, for pre-existing chain/display gaps). Ablation: all-or-nothing 1 RED (0 before
-the `x2` pin was added); combined constraint check 1; safeguard (4) 1; whole fallback 15; REFUSED ->
-fallback **0**; "context must contribute" **0**; CONSTRAINT_FAILED -> fallback **0**; call/`new`-parent
-refusal **0 pins but +36.8% bypassed** — a cost guard no pin can see, recorded as such.
-
-**Gates**: full suite **20,722 / 0 / 44** (+26); corpus screen 0 of 8,725 (five inference pending baselines
-byte-identical); cost_gate PASS (`typeNode.bypassed` +0.31% vs the recorded baseline); huge_methods 0; grid
-8x `added=0 removed=0`; no `w:`. **`rxjs`: 1 -> 0 — `diagnostics: 0 error(s)` on the orchestrator's own run.
-The library now reports NOTHING we invent; tsgo's one row (`WebSocketSubject.ts:304`, TS2345 against
-`string | Blob | BufferSource`) is still MISSED — (CHK.161)(c).** From 29 ours-only rows at (P18.173) to 0 in
-14 rounds. `marked` 0, `cronstrue` 1 (its known config row).
-
-**Successor**: (CHK.168) round 1 (annotated arrow expression bodies, specified, +0 predicted) or (CHK.166)(a)
-(enum `never` wash, specified, +0 predicted); both are false-negative classes.
 
 ## QUEUE
 
@@ -1086,7 +1083,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   corpus (surprisingly green on this — find out which pin walkers carry TS18047/TS18048 baselines). Direction: ADDS
   rows; the grid is likely a REAL gate.
 
-- [ ] **(CHK.172) IN PROGRESS — SESSION ENDED MID-ROUND 2026-09-24: an UNGATED work-in-progress patch is saved at
+- [x] **(CHK.172) LANDED 2026-09-25 ((P18.203) note: `emitDeclarationOnly` runs the normal checker, `noCheck` honoured, the whitelist deleted; side findings listed in the note stay open). EARLIER: SESSION ENDED MID-ROUND 2026-09-24: an UNGATED work-in-progress patch is saved at
   `build/wip/p18203-chk172/` (`tracked.patch`, +171/−620 over `Checker.kt`, `TypeScriptCompiler.kt` and five test files —
   the normal-pipeline switch and the `declarationOnly` machinery deletion — plus `untracked/` copies of the new
   `EmitDeclarationOnlyChecksTest`, the `-project` `EmitDeclarationOnlyProjectTest` (unfinished) and the round's grid

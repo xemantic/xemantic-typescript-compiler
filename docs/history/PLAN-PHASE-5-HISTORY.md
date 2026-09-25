@@ -1,5 +1,46 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.193) — (CHK.159) step 2: the contextual-return FALLBACK for a call's result type; **`rxjs` reads 0 ours-only rows for the first time** (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.166)(a) enum census landing beside it (recorded in
+that item). `argInferResultTypeArguments` now returns an `ArgInferOutcome` (found map + COMPLETE / PARTIAL —
+also for calls with NO arguments — / REFUSED / CONSTRAINT_FAILED; the constraint check extracted to
+`argInferConstraintFails`), and on PARTIAL `argInferResultType` / `argInferOverloadResultType` call
+`argInferContextFallback`: `argBound` from the partial map into `ctxReturnTypeParamMapper`, argument candidate
+first per type parameter (tsgo `inferTypeArguments`, checker.go ~9366; inference.go ~189), all-or-nothing over
+the TPs the return mentions, the combined map constraint-checked (a failure still moves to the next overload).
+**The census's safeguard (6) is MANDATORY, not optional**: without refusing calls whose parent is a call or
+`new`, `typeNode.bypassed` read **+36.6%** (151,752 -> 207,262) and `typeOfExpr.calls` +3.4% against a
+rebuilt before-arm — the contextual pull re-enters checking of the outer call; with the refusal +0.14% / +7
+calls and every cell/row result identical (the one collision the all-or-nothing rule exists for,
+`combineLatest`'s `pipe(...)`, is a call argument, so the refusal covers it too). Safeguard (5) cannot reach
+`b03` (a one-TP callee answers from the OLD single-TP path before step 1 runs; a literal-keep was tried and
+reverted). Safeguards (1)'s refusal half and (3) are REDUNDANT by construction (0 RED, recorded).
+`argInferAnnotatedCallbackTypeParams` (safeguard 4, `r03`) and `argInferCallIsArgument` (safeguard 6) are
+new. `getReturnTypeOfCallExpressionCore` still 2,641 bytecodes.
+
+**Matrix**: census 44 cells **11 -> 25** match tsgo — exactly the census's 14 (a01 a02 a04 a10 a11 a12 a16
+a23 a24 b02 b05 grp8-orig r01 r07); the step-1 matrix unchanged (no row moved in any cell). Residues: tsgo's
+second pass over context-sensitive callbacks (`r03`, `s4`, `s2b`, `x2`, `a13`); `unknown` for a nested call's
+never-inferred TP (`s1r`); constraint substitution (`a14`, `s1c2`); `b03`'s literal (old single-TP path); the
+call-as-source reader gap (`a05`/`a08`/`a22`) and base-type/index-signature cells.
+
+**Pins**: `ContextualResultInferenceTest`, 26 tests (the 14 flipped cells, controls, 8 `residue -` pins; four
+assert the head line only, for pre-existing chain/display gaps). Ablation: all-or-nothing 1 RED (0 before
+the `x2` pin was added); combined constraint check 1; safeguard (4) 1; whole fallback 15; REFUSED ->
+fallback **0**; "context must contribute" **0**; CONSTRAINT_FAILED -> fallback **0**; call/`new`-parent
+refusal **0 pins but +36.8% bypassed** — a cost guard no pin can see, recorded as such.
+
+**Gates**: full suite **20,722 / 0 / 44** (+26); corpus screen 0 of 8,725 (five inference pending baselines
+byte-identical); cost_gate PASS (`typeNode.bypassed` +0.31% vs the recorded baseline); huge_methods 0; grid
+8x `added=0 removed=0`; no `w:`. **`rxjs`: 1 -> 0 — `diagnostics: 0 error(s)` on the orchestrator's own run.
+The library now reports NOTHING we invent; tsgo's one row (`WebSocketSubject.ts:304`, TS2345 against
+`string | Blob | BufferSource`) is still MISSED — (CHK.161)(c).** From 29 ours-only rows at (P18.173) to 0 in
+14 rounds. `marked` 0, `cronstrue` 1 (its known config row).
+
+**Successor**: (CHK.168) round 1 (annotated arrow expression bodies, specified, +0 predicted) or (CHK.166)(a)
+(enum `never` wash, specified, +0 predicted); both are false-negative classes.
+
 ### Round (P18.192) — (CHK.167) round 1: a non-nullish UNION source is related to an object-family target at three readers; 100 missing rows now report, +0 on every profile and library (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.159) step-2 census landing beside it (recorded in

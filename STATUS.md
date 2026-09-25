@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,456** lines (**+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
+extraction):** `Checker.kt` **201,043** lines (**−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
 relation rule itself is `Relater.kt` 1,758 -> 1,809; a SEMANTIC parity change removing a FALSE-POSITIVE class;
 **+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
 constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
@@ -96,6 +96,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.203) — (CHK.172): `emitDeclarationOnly` RUNS THE NORMAL CHECKER AND `noCheck` IS HONOURED; +0 ON EVERY `--noEmit` GATE, 20,859 / 0 / 44 (2026-09-25).**
+Under `emitDeclarationOnly` xtsc used to check through a whitelist that skipped almost everything, so a project that
+only emits `.d.ts` (the esbuild/rollup setup) got a near no-op checker. The program is now checked exactly as a plain
+build and only the JavaScript is withheld; the whitelist machinery is deleted (`Checker.kt` −413 lines). `noCheck`
+now suppresses type-check rows as in tsgo. Harness under edo 84 -> 94 rows, identical to plain; 25 pins, four arms RED.
+Screen 0; grid 8x0 (a control); cost_gate PASS; huge_methods 0.
+
 **(P18.202) — (CHK.174) / (INC.30): THE RELATION RELATES A TYPE PARAMETER THROUGH ITS CONSTRAINT; 17 FALSE POSITIVES -> 0, +0 EVERYWHERE, 20,834 / 0 / 44 (2026-09-24).**
 `function g<T extends number>(k: T) { const n: number = k }` reported a false TS2322 — the relation had no
 "type parameter via its constraint" rule, the long-open (INC.30). It now does, with both hazards that item recorded
@@ -124,12 +131,4 @@ blocking (CHK.169)). A type-facts test mirroring tsgo's `EQUndefinedOrNull` (a t
 constraint, an intersection only if every member can be nullish) now returns the left type for `??` and `??=`. 14-cell
 matrix: every row where the left cannot be nullish now matches tsgo; 8 pins. Screen 0; grid 8x0; cost_gate PASS;
 huge_methods 0. Next: (CHK.169), the module-class `this` false negatives.
-
-**(P18.198) — (CHK.152) STEP 3: A NARROWED-RECEIVER SECOND CHANCE AT THE ARGUMENT READER, THEN UNION / NULLABLE PARAMETERS; +0 EVERYWHERE, 20,772 / 0 / 44 (2026-09-24).**
-A named-object argument against a UNION parameter was never related. After a verbatim split of the argument checker
-(7,629 -> 4,297 bytecodes), a failing relation now re-reads a guard-narrowed receiver's member (never a replacement),
-and union/nullable parameters are admitted with tsgo's chain order. Matrix agree 11 -> 20, no new false positive; 9
-pins. Screen 0; grid 8x0 byte-identical; cost_gate PASS; huge_methods 0. Two censuses landed beside it: rxjs's last row
-needs five fixes (filed in (CHK.161)), and **(CHK.169) — `this` is untyped at the argument reader inside every
-module-file class** — is specified to land at +0 after a small `??` fix ((CHK.170)).
 
