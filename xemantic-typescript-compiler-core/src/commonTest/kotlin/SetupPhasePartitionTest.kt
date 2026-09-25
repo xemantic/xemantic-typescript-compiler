@@ -35,7 +35,7 @@ import kotlin.test.Test
  * Until round 802 `--passTiming` printed a row called `outside-pass` — the
  * checker-init time inside no [pass] wrapper — and nobody had ever named what
  * was in it (975 ms, 3.4% of a compiler-profile compile). It is the ~15 setup
- * statements between `checkLibOption` and the first `if (!declarationOnly)`
+ * statements between `checkLibOption` and the first checking run
  * dispatch, plus two diagnostic retractions at the very end of `init`. Each is
  * now wrapped in its own `init:*` pass, which turns the residue into a
  * MEASUREMENT rather than a remainder: on the compiler profile the row fell

@@ -467,8 +467,8 @@ class Inv4SpineBatch16Test {
 
     @Test
     fun `emitDeclarationOnly still reports unresolved names`() {
-        // B95g: the declarationOnly checker runs the family via the minimal
-        // spineUResOnly driver (checkSpine does not run in that mode).
+        // B95g, (CHK.172): the family rides the spine in every mode — there is
+        // no declaration-only checking mode any more, so checkSpine runs here too.
         diagnose(
             """
             const x: MissingTypeName = null as any;

@@ -50,9 +50,10 @@ import kotlin.test.Test
  * The same resolution is applied to the legacy mirror (`checkCallTypesInStatement`'s class arm)
  * for parity, but NO pin here can reach it: that walker has no entry of its own any more — it is
  * reached only from `checkCallTypesInExpr` (a function-expression body inside a destructuring
- * computed key), where a class declaration is a B83.5 nested class with no binder symbol. The
- * declarationOnly path (`emitDeclarationOnly`) does not run argument checks at all — tsgo reports
- * `pn(this.s)` there and we are silent for a SCRIPT class too — so it is not that path either.
+ * computed key), where a class declaration is a B83.5 nested class with no binder symbol. It is
+ * not the `emitDeclarationOnly` path either: (CHK.172) deleted that path's checker whitelist, so an
+ * `emitDeclarationOnly` compile runs the argument checks exactly as these pins do (tsgo reports
+ * `pn(this.s)` there as well).
  */
 class ModuleClassThisArgumentTest {
 

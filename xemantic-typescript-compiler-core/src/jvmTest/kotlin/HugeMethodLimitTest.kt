@@ -772,8 +772,9 @@ class HugeMethodLimitTest {
     }
 
     /**
-     * (JIT.1)(d) round 814 — the ten helpers the `Checker` CONSTRUCTOR was split
-     * into. `<init>` was **11,298 bytecodes**; the entry is **5,538**, and that
+     * (JIT.1)(d) round 814 — the helpers the `Checker` CONSTRUCTOR was split
+     * into (ten until (CHK.172) deleted `initDeclarationOnlyPasses` with the
+     * `emitDeclarationOnly` checker whitelist; nine now). `<init>` was **11,298 bytecodes**; the entry is **5,538**, and that
      * residue is not the pass sequence but the class's **494 property
      * initializers**, which a constructor cannot delegate away. The ten helpers
      * are contiguous runs of the `init` body's ordered `pass("name") { … }`
@@ -781,7 +782,6 @@ class HugeMethodLimitTest {
      */
     private val ctorSplitParts = setOf(
         "initSetupPasses",
-        "initDeclarationOnlyPasses",
         "initCheckPasses1",
         "initCheckPasses2",
         "initCheckPasses3",
@@ -817,11 +817,10 @@ class HugeMethodLimitTest {
     fun `the Checker constructor split parts carry the dispatch sequence`() {
         val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
         val parts = sizes.filterKeys { it in ctorSplitParts }
-        assert(parts.size == 10)
-        // The smallest is `initDeclarationOnlyPasses` at 12 bytecodes — ONE pass
-        // dispatch — so this family's usual "every part carries a real share"
-        // floor does not apply: the cut criterion was size, and the guard's body
-        // is one statement. What must hold is that the EIGHT checking runs are
+        assert(parts.size == 9)
+        // The cut criterion was size, not share (the deleted
+        // `initDeclarationOnlyPasses` was 12 bytecodes). What must hold is that
+        // the EIGHT checking runs are
         // each a substantial slice (measured min 415) and that the whole moved
         // sequence is still there.
         val runs = parts.filterKeys { it.startsWith("initCheckPasses") }

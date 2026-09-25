@@ -35,9 +35,14 @@ import kotlin.test.Test
  *
  *  * `initSetupPasses` — the (SETUP.1) prologue, `checkLibOption` through
  *    `init:buildFileLocalTypeMaps`;
- *  * `initDeclarationOnlyPasses` — the body of `if (declarationOnly)`;
- *  * `initCheckPasses1` .. `initCheckPasses8` — the ~420 checking dispatches of
- *    `if (!declarationOnly)`, cut into eight runs of roughly equal size.
+ *  * `initCheckPasses1` .. `initCheckPasses8` — the ~420 checking dispatches,
+ *    cut into eight runs of roughly equal size.
+ *
+ * (CHK.172) A tenth helper, `initDeclarationOnlyPasses`, was the body of an
+ * `if (declarationOnly)` guard that `emitDeclarationOnly` compiles took INSTEAD
+ * of the eight checking runs. It is deleted: tsgo has no declaration-only
+ * checking mode (its checker never reads the option), so such a compile now
+ * runs every checking run and restricts only its emit.
  *
  * **This target's frequency argument is DEGENERATE and that is worth saying
  * plainly**: a constructor runs exactly once per compile and every input pays
@@ -55,9 +60,9 @@ import kotlin.test.Test
  *  * the ORDER seam — `applyDomLibSuggestionRewrite` sits at the end of run 8
  *    and REWRITES a TS2339 that the spine (run 1) emitted, so it can only work
  *    if run 8 still runs last;
- *  * the GUARD seam — the eight checking runs stay inside
- *    `if (!declarationOnly)`, so an `emitDeclarationOnly` compile must still
- *    report a name-resolution error and must NOT report an unused local.
+ *  * the (CHK.172) seam — an `emitDeclarationOnly` compile runs the eight
+ *    checking runs too, so it reports a name-resolution error AND an unused
+ *    local, exactly as tsgo 7.0.2 does over the same text.
  */
 class CtorSplitTest {
 
@@ -89,21 +94,25 @@ class CtorSplitTest {
         assert(d.isEmpty())
     }
 
-    // ── initDeclarationOnlyPasses, and the `declarationOnly` GUARD seam ──────
+    // ── (CHK.172) emitDeclarationOnly runs the checking runs too ─────────────
 
     @Test
-    fun `declarationOnly run - an unresolved name is still reported under emitDeclarationOnly`() {
+    fun `emitDeclarationOnly - an unresolved name is still reported`() {
         val d = declarationOnlyDiagnostics()
         assert(d.count { it.code == 2304 } == 1)
     }
 
     @Test
-    fun `GUARD seam - the checking runs stay behind the declarationOnly guard`() {
-        // Discriminating: hoisting any `initCheckPasses*()` call OUT of
-        // `if (!declarationOnly)` makes `checkUnusedDeclarations` (run 1) fire
-        // here, which tsc never does under emitDeclarationOnly.
+    fun `emitDeclarationOnly seam - the checking runs are not skipped`() {
+        // tsgo 7.0.2 over the same two files with `declaration` +
+        // `emitDeclarationOnly` + `noUnusedLocals` reports
+        // `a.ts(2,11): error TS6133: 'neverRead' is declared but its value is never read.`
+        // (its TS2304 reads TS2552 there only because its DOM lib has `TouchType`).
+        // This pin was the old GUARD seam and asserted the OPPOSITE — that the
+        // whitelist kept `checkUnusedDeclarations` (run 1) from firing.
         val d = declarationOnlyDiagnostics()
-        assert(d.none { it.code == 6133 })
+        val unused = d.filter { it.code == 6133 }.map { "${it.line}:${it.character} ${it.message}" }
+        assert(unused == listOf("2:11 'neverRead' is declared but its value is never read."))
         assert(d.none { it.code == 6196 })
     }
 

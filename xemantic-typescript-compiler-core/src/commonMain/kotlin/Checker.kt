@@ -43,8 +43,6 @@ class Checker(
     private val binderResults: List<BinderResult>,
     /** True when the source had @Filename directives (multi-file test input). */
     private val isMultiFileSource: Boolean = false,
-    /** When true, only run targeted checks (TS1210 etc.) — used for emitDeclarationOnly. */
-    private val declarationOnly: Boolean = false,
     /**
      * When non-null, this checker instance is one PARTITION WORKER of a
      * share-nothing parallel check (INV.6(6a), docs/parallel-caching.md): the
@@ -5480,10 +5478,10 @@ class Checker(
     // (M0.4) round 636: checkPropertyInitialization (TS2564) on the spine.
     // Anchors at ClassDeclaration/ClassExpression enters; reach is the
     // INT-valued MULTIPLICITY climb [spinePiMult] over [spinePiEdge] (the
-    // SURVIVING checkPropertyInitInStatements/-InExpr walker arms mirrored —
-    // they stay alive for the B439 declarationOnly dispatch, so per the
-    // round-630 shared-walker rule any walker-arm change must be mirrored in
-    // spinePiEdge). The ClassDeclaration statement arm's member-body DOUBLE
+    // arms of the legacy checkPropertyInitInStatements/-InExpr walkers,
+    // transcribed; (CHK.172) deleted those walkers with the
+    // `emitDeclarationOnly` whitelist that kept them alive, so [spinePiEdge]
+    // is now the only copy). The ClassDeclaration statement arm's member-body DOUBLE
     // walk (checkClassPropertyInit recursion + the arm's own loop) is the
     // factor-2 edge — nested classes in such bodies emit 2^depth duplicates,
     // exactly as legacy. No frames, no memo (anchors are rare — the
@@ -6597,16 +6595,6 @@ class Checker(
     private var spineUResSuppressCount = 0
     /** Count of stack levels with [UnresolvedSpineLevel.filter2304] set. */
     private var spineUResFilterCount = 0
-    /** True while the declarationOnly minimal driver runs [spineWalkFile] for the
-     *  unresolved-names family ONLY (every other spine handler skipped). */
-    private var spineUResOnly = false
-    /** (LEGACY.0b) True while [checkDeclarationOnlySpineFamilies] runs
-     *  [spineWalkFile] for the implicit-`this` (TS2683/TS7041/TS7017) and
-     *  implicit-any-`new` (TS7009) families ONLY. Rides the same [spineUResOnly]
-     *  suppression (which is set with it), so the walk performs no scope
-     *  maintenance and no other handler; this flag only re-admits the TWO
-     *  dispatches those families need. */
-    private var spineDeclOnlyFamilies = false
     /** Batch 4: per-file nodeId memo for [spineUResExprChecked] — 0 unknown /
      *  1 checked / 2 not (a deep binary chain would otherwise cost O(n²)
      *  across its operand identifiers). */
@@ -8151,16 +8139,10 @@ class Checker(
         }
         initSetupPasses()
 
-        // For declarationOnly mode, only run class strict-mode checks (TS1210) plus
-        // name-resolution (TS2304/TS2552/…). B95g (round 82): emitDeclarationOnly still
-        // reports unresolved names (e.g. `[Enum.A]` in a type position where `Enum` is
-        // undefined → TS2304) — checkUnresolvedNames is a self-contained name-resolution
-        // walker (no TS6131-style unused FPs that the broader declaration-only mode avoids).
-        if (declarationOnly) {
-            initDeclarationOnlyPasses()
-        }
-
-        if (!declarationOnly) {
+        // (CHK.172) There is no declaration-only CHECKING mode: tsgo's checker never
+        // reads `emitDeclarationOnly` (only `program.go`'s option validation and the
+        // output paths do), so every build runs the whole checking sequence and
+        // `emitDeclarationOnly` restricts EMIT alone (`TypeScriptCompiler`).
         initCheckPasses1()
         initCheckPasses2()
         initCheckPasses3()
@@ -8169,7 +8151,6 @@ class Checker(
         initCheckPasses6()
         initCheckPasses7()
         initCheckPasses8()
-        } // end if (!declarationOnly)
         // (WARM.30) round 903 — the OBJECT-weighted arm of the deep-key census,
         // swept from the live cache once the check is over. Iterating a HashMap's
         // keys hashes nothing, so this is one subtree walk per distinct key and no
@@ -8299,18 +8280,14 @@ class Checker(
         PassTiming.replayPasses = if (PassTiming.replayAllPasses) null else replay
         try {
             initSetupPasses()
-            if (declarationOnly) {
-                initDeclarationOnlyPasses()
-            } else {
-                initCheckPasses1()
-                initCheckPasses2()
-                initCheckPasses3()
-                initCheckPasses4()
-                initCheckPasses5()
-                initCheckPasses6()
-                initCheckPasses7()
-                initCheckPasses8()
-            }
+            initCheckPasses1()
+            initCheckPasses2()
+            initCheckPasses3()
+            initCheckPasses4()
+            initCheckPasses5()
+            initCheckPasses6()
+            initCheckPasses7()
+            initCheckPasses8()
         } catch (e: StackOverflowError) {
             // The `init` boundary guard, one entry point over: a re-entry runs the
             // same walkers, so the same net has to be under it.
@@ -8363,7 +8340,7 @@ class Checker(
         pass("checkLibOption") { checkLibOption() }
         // 0. Merge built-in type declarations into globals (before user files)
         // (SETUP.1, round 802: the ~15 statements between here and the first
-        // `if (!declarationOnly)` pass are the SETUP phase — they used to be the
+        // checking run are the SETUP phase — they used to be the
         // whole of `--passTiming`'s unattributed `outside-pass` row. Each is now
         // wrapped in its own `init:*` pass, which makes the partition exhaustive
         // BY CONSTRUCTION: `outside-pass` is the residue and must stay ~0. The
@@ -8521,65 +8498,6 @@ class Checker(
     }
 
     /**
-     * (JIT.1)(d) round 814 — the body of `if (declarationOnly)` — the
-     * `init:declarationOnlyDispatch` pass. The GUARD stays in the constructor;
-     * only its body moved.
-     *
-     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
-     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
-     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
-     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
-     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
-     * split here can get wrong is the ORDER, and the only cut criterion is size.
-     * Called from `init` in this position; do not reorder.
-     */
-    private fun initDeclarationOnlyPasses() {
-        pass("init:declarationOnlyDispatch") {
-        checkClassStrictModeIdentifiers()
-        checkUnresolvedNames()
-        // B520: JSDoc @typedef/@property type-name resolution (TS2304/TS2552) is a
-        // self-contained name-resolution walker (same category as checkUnresolvedNames),
-        // so it must also run under emitDeclarationOnly — e.g.
-        // reuseTypeAnnotationImportTypeInGlobalThisTypeArgument's `@typedef
-        // {Record<Keyword, ParamValueTyped>}` in a checkJs+emitDeclarationOnly file.
-        checkJsDocTypeNameResolution()
-        checkJsDocImportTypedefConstraint()
-        checkDtsImportEqualsAliasResolved()
-        // TS4081/TS4025 private-name refs are declaration-emit diagnostics and the
-        // walker is self-contained (no TS6131-style FPs), so it must also run under
-        // emitDeclarationOnly (which takes the declarationOnly path).
-        if (options.declaration) checkExportTypeAliasPrivateNameRef()
-        // TS2883/TS4023 nameability are declaration-emit diagnostics — self-contained
-        // and FP-safe — so they must also run under emitDeclarationOnly.
-        checkDeclarationEmitNameability()
-        checkDeclarationEmitComputedSymbolNameability()
-        checkDeclarationEmitHugeInferredType()
-        checkDeclarationEmitCyclicInferredReturn()
-        // (LEGACY.0b): TS2683/TS7041/TS7017 and TS7009 fire under emitDeclarationOnly
-        // too — TypeScript 7 has no declaration-only CHECKING mode, so tsgo reports
-        // them from its ordinary full check (jsDeclarationsGlobalFileConstFunction,
-        // jsDeclarationsGlobalFileConstFunctionNamed).
-        checkDeclarationOnlySpineFamilies()
-        // (P18.101) M2: TS2309 is tsgo's `checkExternalModuleExports`, run from its ordinary
-        // full check — `emitDeclarationOnly` does not switch it off
-        // (jsExportAssignmentNonMutableLocation reports it at `module.exports = {…}`).
-        checkExportAssignmentConflicts()
-        // (LEGACY.0b step 17): the `export=`-collapsed `exports` receiver is an ORDINARY
-        // checker answer in TypeScript 7 (there is no declaration-only CHECKING mode), so
-        // tsgo reports its TS2339/TS2551 under `emitDeclarationOnly` as well — measured on
-        // jsExportAssignmentNonMutableLocation, whose whole fixture is emitDeclarationOnly.
-        checkJsCommonJsExportEqualsAccess()
-        // B439: TS2564 strict-property-initialization fires in emitDeclarationOnly too
-        // (tsc reports it there — e.g. jsDeclarationsInheritedTypes). The walker is
-        // self-contained and well-guarded (skips any/optional/declare/static/abstract/
-        // import-type/unresolved-generic), so it is FP-safe under declarationOnly.
-        if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
-            checkPropertyInitialization()
-        }
-        }
-    }
-
-    /**
      * (JIT.1)(d) round 814 — checking passes, run 1 of 8:
      * `checkUnusedDeclarations` .. `checkJSDocTypedefTags` (24 dispatches, and
      * most of the run's bytecode is the inline
@@ -8661,8 +8579,7 @@ class Checker(
         // See the pass("checkSpine") site.
         // 6. checkPropertyInitialization (TS2564) is ON THE SPINE (M0.4, round
         // 636) — see the comment at the pass("checkSpine") site and
-        // spinePiEnterNode; the B439 declarationOnly direct dispatch above
-        // still routes through the surviving legacy walkers.
+        // spinePiEnterNode.
         // 6a. TS2540 for `const x = cond ? a : b; x.p = v` where p is readonly in a
         // union constituent (readonlyPropertySubtypeRelationDirected). Not strict-gated
         // (readonly is structural).
@@ -8853,12 +8770,9 @@ class Checker(
         // statement arm walked method/ctor/accessor bodies TWICE — once via
         // checkClassPropertyInit's nested recursion, once via the arm's
         // member loop — so nested classes in such bodies emit 2^depth
-        // duplicates, reproduced exactly). The recursion walkers
-        // (checkPropertyInitInStatements/-InExpr/checkClassPropertyInit)
-        // SURVIVE for the B439 declarationOnly direct dispatch (the
-        // round-630 shared-walker rule: spinePiEdge mirrors their arms and
-        // must stay IN SYNC); the spine anchors call the split-out
-        // checkClassPropertyInitEmit. No ambient sandwich (the emission is
+        // duplicates, reproduced exactly). The recursion walkers were deleted
+        // by (CHK.172) with the declarationOnly whitelist that kept them; the
+        // spine anchors call the split-out checkClassPropertyInitEmit. No ambient sandwich (the emission is
         // syntactic + the pure getTypeParamInfo/resolveAlias memos only).
         // The legacy driver iterated binderResults → the spine's partition
         // view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633
@@ -9276,8 +9190,8 @@ class Checker(
         // the unresolved-type-lib name strip BEFORE the unresolved-name walk.
         pass("checkTypeLibraryEntryPoints") { checkTypeLibraryEntryPoints() }
         // 8. Unresolved names (TS2304 family): migrated onto the check spine
-        // (INV.4(c)(iii) batch 2, spineUResDispatch) — checkUnresolvedNames
-        // remains only as the declarationOnly-mode driver.
+        // (INV.4(c)(iii) batch 2, spineUResDispatch); its declarationOnly-mode
+        // driver was deleted by (CHK.172).
         pass("checkDtsImportEqualsAliasResolved") { checkDtsImportEqualsAliasResolved() }
         // B98.r101: checkConstLiteralComparisons (TS2367 const-literal vs
         // different-literal comparisons) is ON THE SPINE (M0.4, round 646)
@@ -10909,7 +10823,26 @@ class Checker(
             else diagnostics.filter { it.fileName == null || it.fileName in assigned }
         // (LEGACY.0b) F6a: TypeScript 7's missing-property head suppression is decided
         // once, here, over the finished diagnostics — see [RelationHeadSuppression].
-        return applyTsCommentDirectives(RelationHeadSuppression.apply(visible))
+        val answered = applyTsCommentDirectives(RelationHeadSuppression.apply(visible))
+        return if (options.noCheck) answered.filter { keptUnderNoCheck(it) } else answered
+    }
+
+    /**
+     * (CHK.172) `noCheck` — tsgo's `Program.SkipTypeChecking` (`program.go`) answers
+     * true for every file, so `getBindAndCheckDiagnosticsWithChecker` returns NOTHING
+     * for it: no bind, no checker and no comment-directive diagnostic. What survives is
+     * what is not a type-check at all — the syntactic diagnostics (the parser's, which
+     * never reach this list), the program/option diagnostics (file-less here, as the
+     * checker's lib/option rows are), and the DECLARATION diagnostics
+     * (`GetDeclarationDiagnostics` does not consult `SkipTypeChecking`; tsgo's
+     * `tsc/noCheck/dts-errors` baseline reports its TS4094 under `--noCheck`), which in
+     * this compiler the checker's declaration-emit walkers produce in the TS4xxx /
+     * TS9xxx ranges and only when declarations are emitted.
+     */
+    private fun keptUnderNoCheck(d: Diagnostic): Boolean {
+        if (d.fileName == null) return true
+        if (!(options.declaration || options.composite)) return false
+        return d.code in 4000..4999 || d.code in 9000..9999
     }
 
     /**
@@ -24178,19 +24111,6 @@ class Checker(
     // -----------------------------------------------------------------------
 
     /**
-     * Check for class properties without initializer and not definitely assigned
-     * in the constructor. Emits TS2564.
-     */
-    private fun checkPropertyInitialization() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkPropertyInitInStatements(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    /**
      * 16.4da: TS2719 "Two different types with this name exist, but they are unrelated."
      *
      * Walks each class with type parameters and looks for `this.prop = identifier` where:
@@ -24469,255 +24389,11 @@ class Checker(
     }
 
     /**
-     * (M0.4) round 636: this walker family (checkPropertyInitInStatements /
-     * checkPropertyInitInExpr / checkClassPropertyInit) survives ONLY for the
-     * B439 declarationOnly direct dispatch — the normal-mode pass rides the
-     * spine ([spinePiEnterNode]), whose reach classifier [spinePiEdge] mirrors
-     * these arms verbatim. ANY descent-arm change here MUST be mirrored there
-     * (the round-630 shared-walker rule) or the spine reach silently diverges.
-     */
-    private fun checkPropertyInitInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-    ) {
-        for (stmt in statements) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    if (ModifierFlag.Declare in stmt.modifiers) continue
-                    // Abstract classes still need TS2564 for non-abstract properties
-                    checkClassPropertyInit(stmt.members, source, fileName)
-                    // round 44 iter2: recurse into class member bodies so nested ClassDeclaration
-                    // inside method/constructor/accessor bodies and PropertyDeclaration initializers
-                    // also reach TS2564 check.
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> member.body?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
-                            is Constructor -> member.body?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
-                            is GetAccessor -> member.body?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
-                            is SetAccessor -> member.body?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
-                            is PropertyDeclaration -> member.initializer?.let { checkPropertyInitInExpr(it, source, fileName) }
-                            else -> {}
-                        }
-                    }
-                }
-                is ModuleDeclaration -> {
-                    // Skip declare (ambient) namespaces — classes inside are ambient
-                    if (ModifierFlag.Declare in stmt.modifiers) continue
-                    when (val body = stmt.body) {
-                        is ModuleBlock -> checkPropertyInitInStatements(
-                            body.statements, source, fileName,
-                        )
-                        else -> {}
-                    }
-                }
-                is FunctionDeclaration -> {
-                    if (ModifierFlag.Declare in stmt.modifiers) continue
-                    stmt.body?.let {
-                        checkPropertyInitInStatements(it.statements, source, fileName)
-                    }
-                }
-                is Block -> checkPropertyInitInStatements(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    checkPropertyInitInStatements(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let {
-                        checkPropertyInitInStatements(listOf(it), source, fileName)
-                    }
-                }
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        checkPropertyInitInExpr(decl.initializer, source, fileName)
-                    }
-                }
-                is ExpressionStatement -> {
-                    checkPropertyInitInExpr(stmt.expression, source, fileName)
-                }
-                is ReturnStatement -> {
-                    checkPropertyInitInExpr(stmt.expression, source, fileName)
-                }
-                is ForStatement -> {
-                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
-                    when (val init = stmt.initializer) {
-                        is VariableDeclarationList -> for (decl in init.declarations) checkPropertyInitInExpr(decl.initializer, source, fileName)
-                        is Expression -> checkPropertyInitInExpr(init, source, fileName)
-                        else -> {}
-                    }
-                    stmt.condition?.let { checkPropertyInitInExpr(it, source, fileName) }
-                    stmt.incrementor?.let { checkPropertyInitInExpr(it, source, fileName) }
-                }
-                is ForInStatement -> {
-                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
-                    checkPropertyInitInExpr(stmt.expression, source, fileName)
-                }
-                is ForOfStatement -> {
-                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
-                    checkPropertyInitInExpr(stmt.expression, source, fileName)
-                }
-                is WhileStatement -> {
-                    checkPropertyInitInExpr(stmt.expression, source, fileName)
-                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
-                }
-                is DoStatement -> {
-                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
-                    checkPropertyInitInExpr(stmt.expression, source, fileName)
-                }
-                is SwitchStatement -> {
-                    checkPropertyInitInExpr(stmt.expression, source, fileName)
-                    for (clause in stmt.caseBlock) {
-                        when (clause) {
-                            is CaseClause -> {
-                                checkPropertyInitInExpr(clause.expression, source, fileName)
-                                checkPropertyInitInStatements(clause.statements, source, fileName)
-                            }
-                            is DefaultClause -> checkPropertyInitInStatements(clause.statements, source, fileName)
-                            else -> {}
-                        }
-                    }
-                }
-                is TryStatement -> {
-                    checkPropertyInitInStatements(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
-                    stmt.finallyBlock?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
-                is ThrowStatement -> checkPropertyInitInExpr(stmt.expression, source, fileName)
-                is ExportAssignment -> checkPropertyInitInExpr(stmt.expression, source, fileName)
-                else -> {}
-            }
-        }
-    }
-
-    private fun checkPropertyInitInExpr(expr: Expression?, source: String, fileName: String) {
-        if (expr == null) return
-        when (expr) {
-            is ClassExpression -> {
-                if (ModifierFlag.Abstract !in expr.modifiers) {
-                    checkClassPropertyInit(expr.members, source, fileName)
-                }
-                // Also recurse into member bodies which may contain ClassExpression in field initializers / method bodies
-                for (m in expr.members) {
-                    when (m) {
-                        is PropertyDeclaration -> checkPropertyInitInExpr(m.initializer, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is ParenthesizedExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                checkPropertyInitInExpr(expr.whenTrue, source, fileName)
-                checkPropertyInitInExpr(expr.whenFalse, source, fileName)
-            }
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    checkPropertyInitInExpr(cur.right, source, fileName)
-                    cur = cur.left
-                }
-                checkPropertyInitInExpr(cur, source, fileName)
-            }
-            is CallExpression -> {
-                checkPropertyInitInExpr(expr.expression, source, fileName)
-                expr.arguments.forEach { checkPropertyInitInExpr(it, source, fileName) }
-            }
-            is NewExpression -> {
-                checkPropertyInitInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkPropertyInitInExpr(it, source, fileName) }
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { checkPropertyInitInExpr(it, source, fileName) }
-            is SpreadElement -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkPropertyInitInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkPropertyInitInExpr(expr.operand, source, fileName)
-            is AwaitExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkPropertyInitInExpr(it, source, fileName) }
-            is VoidExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is TemplateExpression -> expr.templateSpans.forEach { checkPropertyInitInExpr(it.expression, source, fileName) }
-            is TaggedTemplateExpression -> {
-                checkPropertyInitInExpr(expr.tag, source, fileName)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
-                    checkPropertyInitInExpr(it.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> expr.elements.forEach { checkPropertyInitInExpr(it, source, fileName) }
-            is PropertyAccessExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkPropertyInitInExpr(expr.expression, source, fileName)
-                checkPropertyInitInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ObjectLiteralExpression -> for (p in expr.properties) {
-                when (p) {
-                    is PropertyAssignment -> checkPropertyInitInExpr(p.initializer, source, fileName)
-                    is SpreadAssignment -> checkPropertyInitInExpr(p.expression, source, fileName)
-                    else -> {}
-                }
-            }
-            // round 43 iter14: function-like body recursion so `() => class C { x = 1 }`
-            // and `function() { return class C { x = 1 } }` reach nested ClassExpression
-            // for TS2564 property-init check.
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> body.statements.forEach { stmt ->
-                    if (stmt is ExpressionStatement) checkPropertyInitInExpr(stmt.expression, source, fileName)
-                    else if (stmt is ReturnStatement) stmt.expression?.let { checkPropertyInitInExpr(it, source, fileName) }
-                    else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
-                        d.initializer?.let { checkPropertyInitInExpr(it, source, fileName) }
-                    }
-                }
-                is Expression -> checkPropertyInitInExpr(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> for (stmt in expr.body.statements) {
-                if (stmt is ExpressionStatement) checkPropertyInitInExpr(stmt.expression, source, fileName)
-                else if (stmt is ReturnStatement) stmt.expression?.let { checkPropertyInitInExpr(it, source, fileName) }
-                else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
-                    d.initializer?.let { checkPropertyInitInExpr(it, source, fileName) }
-                }
-            }
-            else -> {}
-        }
-    }
-
-    private fun checkClassPropertyInit(
-        members: List<ClassElement>,
-        source: String,
-        fileName: String,
-    ) {
-        checkClassPropertyInitEmit(members, source, fileName)
-
-        // Recurse into nested class elements for inner classes
-        for (member in members) {
-            when (member) {
-                is MethodDeclaration -> member.body?.let {
-                    checkPropertyInitInStatements(it.statements, source, fileName)
-                }
-                is Constructor -> member.body?.let {
-                    checkPropertyInitInStatements(it.statements, source, fileName)
-                }
-                is GetAccessor -> member.body?.let {
-                    checkPropertyInitInStatements(it.statements, source, fileName)
-                }
-                is SetAccessor -> member.body?.let {
-                    checkPropertyInitInStatements(it.statements, source, fileName)
-                }
-                is ClassStaticBlockDeclaration -> {
-                    checkPropertyInitInStatements(member.body.statements, source, fileName)
-                }
-                else -> {}
-            }
-        }
-    }
-
-    /**
-     * (M0.4) round 636: the per-class TS2564 emission, split out of
-     * [checkClassPropertyInit] so the spine anchors ([spinePiEnterNode]) can
-     * run it without the nested-class recursion (nested classes get their own
-     * anchors); the legacy walkers (kept for the B439 declarationOnly
-     * dispatch) still route through [checkClassPropertyInit] and are
-     * byte-identical.
+     * (M0.4) round 636: the per-class TS2564 emission, run by the spine anchors
+     * ([spinePiEnterNode]) without any nested-class recursion (nested classes get
+     * their own anchors). (CHK.172) deleted the legacy statement walkers that also
+     * routed here — they survived only for the `emitDeclarationOnly` whitelist,
+     * which no longer exists.
      */
     private fun checkClassPropertyInitEmit(
         members: List<ClassElement>,
@@ -26510,33 +26186,23 @@ class Checker(
             val top = nodes.size - 1
             val node = nodes.removeAt(top)
             if (phases[top]) {
-                if (!spineUResOnly) {
-                    spineLeaveNode(node)
-                    spineScopeLeaveIfOwner(node)
-                }
+                spineLeaveNode(node)
+                spineScopeLeaveIfOwner(node)
                 if (spineUResActive) spineUResLeave(node)
                 continue
             }
-            if (!spineUResOnly) {
-                spineScopeEnterIfOwner(node)
-                if (spineScopeAuditActive) spineScopeAuditNode(node)
-            }
+            spineScopeEnterIfOwner(node)
+            if (spineScopeAuditActive) spineScopeAuditNode(node)
             if (spineUResActive) {
                 spineUResEnter(node)
                 spineUResDispatch(node)
             }
-            if (spineDeclOnlyFamilies) {
-                if (spineItFileActive) spineItEnterNode(node)
-                if (spineNaActive) spineNaEnterNode(node)
-            }
-            if (!spineUResOnly) spineEnterNode(node)
+            spineEnterNode(node)
             buf.clear()
             forEachChild(node, collect)
             if (buf.isEmpty()) {
-                if (!spineUResOnly) {
-                    spineLeaveNode(node)
-                    spineScopeLeaveIfOwner(node)
-                }
+                spineLeaveNode(node)
+                spineScopeLeaveIfOwner(node)
                 if (spineUResActive) spineUResLeave(node)
                 continue
             }
@@ -26569,64 +26235,56 @@ class Checker(
             val top = nodes.size - 1
             val node = nodes.removeAt(top)
             if (phases[top]) {
-                if (!spineUResOnly) {
-                    val t = PassTiming.nowNanos()
-                    spineLeaveNode(node)
-                    val dl = PassTiming.nowNanos() - t
-                    PassTiming.spineLeaveNanos += dl
-                    // (AUDIT.1, round 758) The per-kind table said "enter+leave"
-                    // and accumulated ENTER only, so every per-kind figure ever
-                    // quoted from it — including ARCHITECTURE-RETHINK § 0's
-                    // "IDENTIFIER … 2,746 ns each" — was the enter chain alone.
-                    // The count stays one per node (bumped at enter).
-                    val kl = (node as NodeBase).kindId
-                    PassTiming.spineKindNanos[kl] = (PassTiming.spineKindNanos[kl] ?: 0L) + dl
-                    spineScopeLeaveIfOwner(node)
-                }
+                val t = PassTiming.nowNanos()
+                spineLeaveNode(node)
+                val dl = PassTiming.nowNanos() - t
+                PassTiming.spineLeaveNanos += dl
+                // (AUDIT.1, round 758) The per-kind table said "enter+leave"
+                // and accumulated ENTER only, so every per-kind figure ever
+                // quoted from it — including ARCHITECTURE-RETHINK § 0's
+                // "IDENTIFIER … 2,746 ns each" — was the enter chain alone.
+                // The count stays one per node (bumped at enter).
+                val kl = (node as NodeBase).kindId
+                PassTiming.spineKindNanos[kl] = (PassTiming.spineKindNanos[kl] ?: 0L) + dl
+                spineScopeLeaveIfOwner(node)
                 if (spineUResActive) spineUResLeave(node)
                 continue
             }
             PassTiming.spineNodes++
-            if (!spineUResOnly) {
-                val t = PassTiming.nowNanos()
-                spineScopeEnterIfOwner(node)
-                PassTiming.spineScopeNanos += PassTiming.nowNanos() - t
-                if (spineScopeAuditActive) spineScopeAuditNode(node)
-            }
+            val tScope = PassTiming.nowNanos()
+            spineScopeEnterIfOwner(node)
+            PassTiming.spineScopeNanos += PassTiming.nowNanos() - tScope
+            if (spineScopeAuditActive) spineScopeAuditNode(node)
             if (spineUResActive) {
                 val t = PassTiming.nowNanos()
                 spineUResEnter(node)
                 spineUResDispatch(node)
                 PassTiming.spineUResNanos += PassTiming.nowNanos() - t
             }
-            if (!spineUResOnly) {
-                val t = PassTiming.nowNanos()
-                spineEnterNode(node)
-                val d = PassTiming.nowNanos() - t
-                PassTiming.spineEnterNanos += d
-                val k = (node as NodeBase).kindId
-                PassTiming.spineKindNanos[k] = (PassTiming.spineKindNanos[k] ?: 0L) + d
-                PassTiming.spineKindCount[k] = (PassTiming.spineKindCount[k] ?: 0L) + 1L
-            }
+            val tEnter = PassTiming.nowNanos()
+            spineEnterNode(node)
+            val d = PassTiming.nowNanos() - tEnter
+            PassTiming.spineEnterNanos += d
+            val k = (node as NodeBase).kindId
+            PassTiming.spineKindNanos[k] = (PassTiming.spineKindNanos[k] ?: 0L) + d
+            PassTiming.spineKindCount[k] = (PassTiming.spineKindCount[k] ?: 0L) + 1L
             buf.clear()
             val tc = PassTiming.nowNanos()
             forEachChild(node, collect)
             PassTiming.spineChildrenNanos += PassTiming.nowNanos() - tc
             if (buf.isEmpty()) {
-                if (!spineUResOnly) {
-                    val t = PassTiming.nowNanos()
-                    spineLeaveNode(node)
-                    val dl = PassTiming.nowNanos() - t
-                    PassTiming.spineLeaveNanos += dl
-                    // (AUDIT.1, round 758) The per-kind table said "enter+leave"
-                    // and accumulated ENTER only, so every per-kind figure ever
-                    // quoted from it — including ARCHITECTURE-RETHINK § 0's
-                    // "IDENTIFIER … 2,746 ns each" — was the enter chain alone.
-                    // The count stays one per node (bumped at enter).
-                    val kl = (node as NodeBase).kindId
-                    PassTiming.spineKindNanos[kl] = (PassTiming.spineKindNanos[kl] ?: 0L) + dl
-                    spineScopeLeaveIfOwner(node)
-                }
+                val t = PassTiming.nowNanos()
+                spineLeaveNode(node)
+                val dl = PassTiming.nowNanos() - t
+                PassTiming.spineLeaveNanos += dl
+                // (AUDIT.1, round 758) The per-kind table said "enter+leave"
+                // and accumulated ENTER only, so every per-kind figure ever
+                // quoted from it — including ARCHITECTURE-RETHINK § 0's
+                // "IDENTIFIER … 2,746 ns each" — was the enter chain alone.
+                // The count stays one per node (bumped at enter).
+                val kl = (node as NodeBase).kindId
+                PassTiming.spineKindNanos[kl] = (PassTiming.spineKindNanos[kl] ?: 0L) + dl
+                spineScopeLeaveIfOwner(node)
                 if (spineUResActive) spineUResLeave(node)
                 continue
             }
@@ -34344,6 +34002,25 @@ class Checker(
         return out ?: emptySet()
     }
 
+    /**
+     * (CHK.172) The `@typedef`/`@callback` names a JS MODULE exports. tsgo binds a JSDoc
+     * type alias in a module file as an EXPORTED type, so `import { Rec } from "./types.js"`
+     * over a JSDoc comment declaring `@typedef {{a: number}} Rec` resolves and is silent;
+     * our binder does not bind typedefs at all (raw-source only), so the AST-derived export
+     * set of [getModuleExportsFollowingStars] never held them and the named-import absence
+     * check read a false TS2305 (`reuseTypeAnnotationImportTypeInGlobalThisTypeArgument`,
+     * reached once `emitDeclarationOnly` stopped bypassing the checker). Additive to the
+     * known export set, so it can only SUPPRESS an absence diagnostic.
+     */
+    private fun jsDocTypedefExportNames(file: SourceFile): Set<String> {
+        if (!isJsLikeFileName(file.fileName)) return emptySet()
+        val text = file.text
+        if (!srcHas(text, "@typedef") && !srcHas(text, "@callback")) return emptySet()
+        val out = HashSet<String>()
+        for (m in JSDOC_TYPEDEF_NAME_RE.findAll(text)) out.add(m.groupValues[1])
+        return out
+    }
+
     /** Every `@typedef`/`@callback` NAME in any JS file of the program — a lookup, not a walk. */
     private fun collectJsDocDeclaredTypeNames(): HashSet<String> {
         val out = HashSet<String>()
@@ -38899,100 +38576,6 @@ class Checker(
         return false
     }
 
-    /**
-     * INV.4(c)(iii) batch 2: the family's emissions live on the check spine
-     * ([spineUResDispatch] + the expression/type/class-element walkers it
-     * invokes). This driver remains ONLY for declarationOnly mode — checkSpine
-     * does not run there — walking each file with every non-family spine
-     * handler disabled ([spineUResOnly]). Deliberately does NOT call
-     * [computeTypeLibResolution]: the legacy declarationOnly path ran without
-     * checkTypeLibraryEntryPoints, so the type-lib strip stays empty there.
-     */
-    private fun checkUnresolvedNames() {
-        spineUResOnly = true
-        try {
-            for (result in binderResults) {
-                val sf = result.sourceFile
-                // (INC.17): a DIRECT partition read — see [checkedResults].
-                if (PassTiming.enabled) PassTiming.notePartitionRead()
-                if (retainForRecheck) PassTiming.currentPass?.let { partitionReadingPasses.add(it) }
-                val partitionHere = assignedFiles
-                if (partitionHere != null && sf.fileName !in partitionHere) continue
-                spineFileName = sf.fileName
-                spineSource = sf.text
-                spineUResSetup(result)
-                spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
-                try {
-                    spineWalkFile(sf)
-                } finally {
-                    spineUResTeardown()
-                }
-            }
-        } finally {
-            spineUResOnly = false
-        }
-    }
-
-    /**
-     * (LEGACY.0b) The implicit-`this` (TS2683/TS7041/TS7017) and implicit-any-`new`
-     * (TS7009) families under
-     * `emitDeclarationOnly`, where `checkSpine` does not run.
-     *
-     * TypeScript 7 has no "declaration-only" CHECKING mode — tsgo type-checks the
-     * whole program and then emits only declarations — so every diagnostic tsgo
-     * reports for such a project is reported from the full check. This checker's
-     * `declarationOnly` mode is an FP-avoidance whitelist instead, and the
-     * two families here belong on it for the same reason [checkUnresolvedNames]
-     * does: each is self-contained (one syntactic ancestor fold per `this` anchor,
-     * [spineItContextAt]; one memoized reach classifier plus a symbol-table consult
-     * per `new`, [spineNaStatus]), neither resolves types beyond the two
-     * contextual-`this` probes the `this` edges already run, and neither has a
-     * TS6133-style unused-declaration false positive.
-     *
-     * Drives [spineWalkFile] with [spineUResOnly] set — so scope maintenance and
-     * every other handler are skipped exactly as in [checkUnresolvedNames] — plus
-     * [spineDeclOnlyFamilies], which re-admits [spineItEnterNode] and
-     * [spineNaEnterNode] alone. Neither flag is ever set together with
-     * `spineUResActive`, so no emission can be duplicated.
-     */
-    private fun checkDeclarationOnlySpineFamilies() {
-        // Both run gates are [checkSpine]'s, recomputed here because that function
-        // does not run in this mode (it is where the two fields are assigned).
-        spineItRunActive = options.noImplicitThis ||
-            (!options.noImplicitThisExplicitlyFalse && !options.strictExplicitlyFalse)
-        spineNaRunActive = options.noImplicitAny ||
-            (!options.noImplicitAnyExplicitlyFalse && !options.strictExplicitlyFalse)
-        if (!spineItRunActive && !spineNaRunActive) return
-        // The `this` family's `currentFileLocals` install is the RESTING value,
-        // verbatim as in [checkSpine]'s setup — every installer restores, so this is
-        // the same ambient the spine driver would hand [spineItEnterNode].
-        spineItRestingLocals = currentFileLocals
-        spineUResOnly = true
-        spineDeclOnlyFamilies = true
-        try {
-            for (result in checkedResults) {
-                val sf = result.sourceFile
-                spineFileName = sf.fileName
-                spineSource = sf.text
-                spineIsDts = isDtsFile(spineFileName)
-                spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
-                    spineFileName.endsWith(".mjs") || spineFileName.endsWith(".cjs")
-                spineItSetup()
-                spineNaSetup(result)
-                try {
-                    if (spineItFileActive || spineNaActive) spineWalkFile(sf)
-                } finally {
-                    spineItTeardown()
-                    spineNaTeardown()
-                }
-            }
-        } finally {
-            spineDeclOnlyFamilies = false
-            spineUResOnly = false
-            spineItRunActive = false
-            spineNaRunActive = false
-        }
-    }
 
     /**
      * INV.4(c)(iii): build (once per file — the record is SHARED between the
@@ -53606,7 +53189,8 @@ class Checker(
                         // read a false TS2305, while the TYPE resolved correctly, which is
                         // what made it a pure absence-check defect. Additive: the extra
                         // names can only enlarge the known set, i.e. only SUPPRESS.
-                        val augNames = augmentationDeclaredExportNames(resolvedFile)
+                        val augNames = augmentationDeclaredExportNames(resolvedFile) +
+                            jsDocTypedefExportNames(targetFile)
                         val allExports = when {
                             starExports == null -> null
                             hasDefaultExport -> starExports + "default" + augNames
@@ -53796,7 +53380,8 @@ class Checker(
                         // read a false TS2305, while the TYPE resolved correctly, which is
                         // what made it a pure absence-check defect. Additive: the extra
                         // names can only enlarge the known set, i.e. only SUPPRESS.
-                        val augNames = augmentationDeclaredExportNames(resolvedFile)
+                        val augNames = augmentationDeclaredExportNames(resolvedFile) +
+                            jsDocTypedefExportNames(targetFile)
                         val allExports = when {
                             starExports == null -> null
                             hasDefaultExport -> starExports + "default" + augNames
@@ -57615,6 +57200,8 @@ class Checker(
 
         /** B423: JSDoc-valid primitive / keyword type names (lowercase-ish) that are NOT in
          *  KNOWN_GLOBALS but are legal single-identifier `@typedef`/`@property` types. */
+        /** (CHK.172) `@typedef`/`@callback` [{type}] NAME — see `jsDocTypedefExportNames`. */
+        private val JSDOC_TYPEDEF_NAME_RE = Regex("""@(?:typedef|callback)\s+(?:\{[^\n]*\}\s+)?([A-Za-z_$][\w$]*)""")
         private val JSDOC_TYPE_PRIMITIVE_NAMES: Set<String> = setOf(
             "string", "number", "boolean", "object", "function", "undefined", "null",
             "void", "any", "unknown", "never", "symbol", "bigint", "this", "true", "false",
@@ -76109,12 +75696,12 @@ interface DataView {
     }
 
     /**
-     * The SURVIVING checkPropertyInitInStatements/checkPropertyInitInExpr/
+     * The legacy checkPropertyInitInStatements/checkPropertyInitInExpr/
      * checkClassPropertyInit descent arms as per-edge visit FACTORS (0 =
      * unreached, 1 = walked once, 2 = the ClassDeclaration member-body double
-     * walk). MUST STAY IN SYNC with those walkers (they remain live for the
-     * B439 declarationOnly dispatch — the round-630 shared-walker rule).
-     * Notable non-reaches, mirrored from the walkers: if/ternary CONDITIONS,
+     * walk). Those walkers were deleted by (CHK.172) with the
+     * `emitDeclarationOnly` whitelist that kept them alive, so this is now the
+     * only statement of their reach. Notable non-reaches, transcribed from them: if/ternary CONDITIONS,
      * for-in/for-of binding heads, heritage clauses, decorators, parameter
      * defaults, computed member names, enum members, and everything inside an
      * arrow/fn-expression body except its DIRECT ExpressionStatement/

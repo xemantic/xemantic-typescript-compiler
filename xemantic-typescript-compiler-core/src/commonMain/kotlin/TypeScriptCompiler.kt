@@ -1205,28 +1205,6 @@ class TypeScriptCompiler {
         // Single-file compilation
         val file = parsed.files[0]
 
-        // emitDeclarationOnly: produce source echo only, no JS output — but still
-        // parse/bind/check in declarationOnly mode so declaration-emit diagnostics
-        // (TS4025/TS4081/TS2304/TS1210) are reported. Mirrors the multi-file path
-        // (which runs the checker with declarationOnly = true).
-        if (options.emitDeclarationOnly) {
-            val edoParser = Parser(file.content, file.fileName,
-                topLevelAwait = options.effectiveModule.allowsTopLevelAwait || fileLooksLikeModuleForAwait(file.content),
-                noImplicitAny = options.noImplicitAny || options.strict)
-            val edoSourceFile = edoParser.parse()
-            diagnostics.addAll(edoParser.getDiagnostics())
-            val edoBinder = Binder(options)
-            val edoBinderResult = edoBinder.bind(edoSourceFile)
-            val edoChecker = Checker(options, listOf(edoBinderResult), declarationOnly = true)
-            diagnostics.addAll(edoChecker.getDiagnostics())
-            return CompilationResult(
-                fileName = fileName,
-                sourceEchoes = listOf(fileName to file.content),
-                options = options,
-                diagnostics = diagnostics,
-            )
-        }
-
         // The option-derived parser flags (JSX forcing for .js, top-level await,
         // TS17004 gating, noImplicitAny) — via the shared INV.1(e) helper.
         val singleFileFlags = computeParserFlags(file.fileName, file.content, options)
@@ -1334,7 +1312,12 @@ class TypeScriptCompiler {
             .replace(".ts", ".js")
 
         // When noEmitOnError is set and there are errors, suppress all JS output
-        val singleFileJsOutputs = if (options.noEmitOnError &&
+        // (CHK.172) `emitDeclarationOnly` restricts EMIT, never checking: tsgo's checker
+        // does not read the option at all (only `program.go`'s option validation and the
+        // output-path computation do), so the file is parsed, bound and checked exactly as
+        // in a plain build above, and only the JavaScript output is withheld here.
+        val singleFileJsOutputs = if (options.emitDeclarationOnly) emptyList()
+        else if (options.noEmitOnError &&
             diagnostics.any { it.category == DiagnosticCategory.Error }) emptyList()
         else listOf(jsName to javascript)
 
@@ -1372,42 +1355,6 @@ class TypeScriptCompiler {
     ): CompilationResult {
         // All source files including tsconfig.json (for error baselines)
         val allFiles = parsed.files.map { it.fileName to it.content }
-
-        // Multi-file compilation — emitDeclarationOnly: produce source echoes only,
-        // but still parse/bind/check all files for targeted diagnostics (TS1210 etc.).
-        if (options.emitDeclarationOnly) {
-            val declSourceEchoes = mutableListOf<Pair<String, String>>()
-            val parsedFiles = mutableMapOf<String, SourceFile>()
-            for (file in parsed.files) {
-                val baseName = file.fileName.substringAfterLast('/')
-                if (baseName != "tsconfig.json") {
-                    declSourceEchoes.add(file.fileName to file.content)
-                }
-                val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")
-                if (!isDtsFile && file.content.isNotBlank()) {
-                    val flags = computeParserFlags(file.fileName, file.content, options)
-                    val parser = Parser(file.content, file.fileName, forceJsx = flags.forceJsx, topLevelAwait = flags.topLevelAwait, needsJsxFlag = flags.needsJsxFlag, noImplicitAny = flags.noImplicitAny)
-                    val sourceFile = parser.parse()
-                    diagnostics.addAll(parser.getDiagnostics())
-                    parsedFiles[file.fileName] = sourceFile
-                }
-            }
-            if (parsedFiles.isNotEmpty()) {
-                val binder = Binder(options)
-                val binderResults = parsedFiles.values.map { binder.bind(it) }
-                val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames, declarationOnly = true)
-                diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
-            }
-            return CompilationResult(
-                fileName = fileName,
-                sourceEchoes = declSourceEchoes,
-                jsOutputs = emptyList(),
-                isMultiFile = true,
-                options = options,
-                diagnostics = diagnostics,
-                allSourceFiles = allFiles,
-            )
-        }
 
         val sourceEchoes = mutableListOf<Pair<String, String>>() // fileName -> content
         // Map from tsFileName -> (jsName, javascript)
@@ -1885,10 +1832,18 @@ class TypeScriptCompiler {
         FrontEnd.close(FrontEnd.POST_ASSEMBLE, feOutBlockT0)
         FrontEnd.close(FrontEnd.POST_OUTPUTS, fePostBlockT0)
         FrontEnd.close(FrontEnd.POST, fePostT0)
+        // (CHK.172) `emitDeclarationOnly` restricts EMIT, never checking — tsgo's checker
+        // does not read the option (only `program.go`'s option validation and the output
+        // paths do), so the program above was parsed, bound and checked exactly as in a
+        // plain build, with its `.d.ts` inputs, its module resolutions and its JSON
+        // modules. Only the EMIT channel keeps the shape it has always had here: every
+        // input but `tsconfig.json` echoed in input order, and no JavaScript or JSON output.
+        val edo = options.emitDeclarationOnly
         return CompilationResult(
             fileName = fileName,
-            sourceEchoes = orderedSourceEchoes,
-            jsOutputs = suppressedJsOutputs,
+            sourceEchoes = if (edo) allFiles.filter { it.first.substringAfterLast('/') != "tsconfig.json" }
+                else orderedSourceEchoes,
+            jsOutputs = if (edo) emptyList() else suppressedJsOutputs,
             isMultiFile = true,
             options = options,
             diagnostics = diagnostics,
