@@ -233,14 +233,17 @@ class Inv4SpineBatch21Test {
     }
 
     @Test
-    fun `quirk pin - try-block const does NOT shadow - no block scope for try statements`() {
+    fun `a try-block const shadows the outer function - no TS2774`() {
+        // Was a quirk pin asserting TS2774 (the try block had no scope, so `isReady` read the
+        // outer function). A COUNTDOWN: tsgo 7.0.2 is silent — the inner `const` is `any`.
+        // (CHK.173) G5 S1's local-shadow guard closed it.
         diagnose("""
             declare function act(): boolean;
             declare function compute(): any;
             function isReady(): boolean { return true; }
             try { const isReady = compute(); if (isReady) { act(); } } catch (e) {}
         """) should {
-            have(any { it.code == 2774 })
+            have(none { it.code == 2774 })
         }
     }
 
@@ -311,13 +314,16 @@ class Inv4SpineBatch21Test {
     }
 
     @Test
-    fun `quirk pin - object-literal method body has NO param scope`() {
+    fun `an object-literal method parameter shadows the outer function - no TS2774`() {
+        // Was a quirk pin asserting TS2774 (the method body had no parameter scope). A
+        // COUNTDOWN: tsgo 7.0.2 is silent — `isReady` is the `number | undefined` parameter.
+        // (CHK.173) G5 S1's local-shadow guard closed it.
         diagnose("""
             declare function act(): boolean;
             function isReady(): boolean { return true; }
             const o = { m(isReady: number | undefined) { if (isReady) { act(); } } };
         """) should {
-            have(any { it.code == 2774 })
+            have(none { it.code == 2774 })
         }
     }
 

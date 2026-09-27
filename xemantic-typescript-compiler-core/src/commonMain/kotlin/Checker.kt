@@ -264,6 +264,17 @@ class Checker(
     private val fileResults: Map<String, BinderResult> =
         binderResults.associateBy { it.sourceFile.fileName }
 
+    /** (CHK.173) G5 S1 — see [LocalShadowGuard]; asked by [getTypeOfIdentifierConventional]. */
+    internal val localShadowGuard = LocalShadowGuard { fileResults[it]?.sourceFile }
+
+    /**
+     * (CHK.173) G5 S1 — suspends [localShadowGuard] for a read that deliberately asks for the
+     * OUTER binding of a name its own declaration shadows ([spineArithRecordVarDecl]'s shadow
+     * probe types `decl.name` to learn what it shadows; the guard would answer `any` there and
+     * drop the recording, losing a true TS2365 — `Inv4SpineBatch22Test`).
+     */
+    private var localShadowGuardSuspended = false
+
     // -----------------------------------------------------------------------
     // Per-checker mutable state — grouped for parallel-checking readiness.
     // When N Checker instances run concurrently (Phase 4 item 9c), each
@@ -3674,6 +3685,9 @@ class Checker(
                 applyBodyLocalShadowing(body.statements, paramNames)
                 applyAmbiguousBlockScopedLocals(body.statements, paramNames)
                 shadowNestedFunctionNames(body.statements)
+                // (CHK.173) G5 S3: a function-top `let x;` drops the annotation STRING the
+                // frame inherited for an outer `x` (the legacy assignment channel reads it).
+                LocalShadowGuard.dropInheritedUninitializedStrings(body.statements, paramNames, inner)
                 if (!tps.isNullOrEmpty() || !classTps.isNullOrEmpty()) {
                     val decls = base.fnTpDecls?.toMutableMap() ?: mutableMapOf()
                     classTps?.let { for (tp in it) decls[tp.name.text] = tp }
@@ -60804,7 +60818,10 @@ interface DataView {
                 // narrowing). Leaving non-shadowing locals as `any` keeps the pass's
                 // default suppression. Gated to a bare property-access/element-access/
                 // call/non-null initializer (never union/any/object/function).
-                val outerT = getTypeOfExpression(decl.name)
+                val outerT = run {
+                    localShadowGuardSuspended = true
+                    try { getTypeOfExpression(decl.name) } finally { localShadowGuardSuspended = false }
+                }
                 if (outerT is Type.Object && outerT.callSignatures?.isNotEmpty() == true) {
                     // A `const` (stable type) records the concrete primitive when
                     // determinable so a later comparison can still catch a real error
@@ -118595,63 +118612,76 @@ interface DataView {
                 // merged globals → FP TS2345 ×9 self-compile. The binding's member type
                 // is unmodeled → anyType (suppression-only).
                 if (id.text in currentParamBindingNames) return anyType
-                // (CHK.49) a module file's TYPE-only declaration of a lib global
-                // does not hide the lib's VALUE meaning, and this function IS the
-                // value position. It must be asked BEFORE the file-level type map
-                // and the file locals, because both are keyed by the shadowing
-                // DECLARATION — `interface Date {…}` in a module made `Date.now()`
-                // report TS2339. It must be asked AFTER [currentLocalTypes] and
-                // the destructured-binding set, which carry genuine inner
-                // bindings that DO shadow in both meanings.
-                if (id.text in libValueShadows()) {
-                    currentFileLocals?.get(id.text)?.let { local ->
-                        libValueBehindTypeOnlyShadow(id.text, local)
-                            ?.let { return getTypeOfSymbol(it) }
-                    }
-                }
-                // Check pre-built file-level type map (covers annotated file-level declarations)
-                currentCheckFileName?.let { fn ->
-                    val fltm = fileLocalTypeMapFor(fn)?.get(id.text)
-                    // (SETUP.2) the ONLY read of fileLocalTypeMaps — census hook.
-                    if (FltmCensus.on) FltmCensus.noteRead(fn, id.text, fltm != null)
-                    if (fltm != null) return fltm
-                }
-                // Check file-level locals symbol table (for symbols not in type map)
-                currentFileLocals?.get(id.text)?.let { symbol ->
-                    val type = getTypeOfSymbol(symbol)
-                    if (type !== anyType && type !== errorType) return type
-                }
-                // Namespace-aware fallback: when this lookup happens during lazy
-                // initializer-type inference for a namespace-scoped variable, walk
-                // the enclosing namespace symbol's parent chain and consult each
-                // namespace's `exports` table. Required for patterns like:
-                //   namespace M { var x: T = ...; export var y = x; }
-                // where `x` is bound in `M.exports` (not in file locals/globals).
-                // (CHK.76) the position-derived twin of the stack consult below — it
-                // sees every enclosing namespace where the stack saw the outermost,
-                // and it answers with no stack installed at all (a `declare
-                // namespace` body's `LE.Q`, read by the ambient-initializer walk and
-                // by the lens, typed `any`). Same acceptance rule as the stack's.
-                lookupInEnclosingNamespaces(id, id.text, SymbolFlags.Value)?.let { sym ->
-                    val type = getTypeOfSymbol(sym)
-                    if (type !== anyType && type !== errorType) return type
-                }
-                lookupInInferenceNamespace(id.text)?.let { return it }
-                // Then look up symbol in globals. INV.3(c)(iii) phase 3 (round
-                // 507b): node-keyed — a name with no per-file meaning types as
-                // `any` instead of a foreign module file's leaked local (tsc:
-                // TS2304 → any). Imports keep resolving through the visibility
-                // probe to the SAME merged instance (which is how the round-442
-                // by-NAME nulling differs — it broke import-driven typing).
-                val symbol = lookupPerFileForNode(id, id.text)
-                if (symbol == null) return anyType
-                // (CHK.49) same second chance one resolution layer down: the
-                // per-file probe answers the declaring file's own TYPE-space
-                // symbol for a shadowed lib name.
-                libValueBehindTypeOnlyShadow(id.text, symbol)?.let { return getTypeOfSymbol(it) }
-                getTypeOfSymbol(symbol)
+                // (CHK.173) G5 S1: the OUTER ladder, then the local-shadow guard — a name
+                // bound between this read and its file by a local variable the walk never
+                // recorded (catch / for-header / block let-const / missed destructured leaf /
+                // `any` parameter) must not answer the outer declaration. See [LocalShadowGuard].
+                val outer = getTypeOfIdentifierOuter(id)
+                if (outer !== anyType && outer !== errorType && !localShadowGuardSuspended &&
+                    localShadowGuard.shadowedByLocalVariable(id, currentCheckFileName)
+                ) return anyType
+                outer
             }
         }
+    }
+
+    /** The FILE / GLOBAL half of [getTypeOfIdentifierConventional], below the walk tables. */
+    private fun getTypeOfIdentifierOuter(id: Identifier): Type {
+        // (CHK.49) a module file's TYPE-only declaration of a lib global
+        // does not hide the lib's VALUE meaning, and this function IS the
+        // value position. It must be asked BEFORE the file-level type map
+        // and the file locals, because both are keyed by the shadowing
+        // DECLARATION — `interface Date {…}` in a module made `Date.now()`
+        // report TS2339. It must be asked AFTER [currentLocalTypes] and
+        // the destructured-binding set, which carry genuine inner
+        // bindings that DO shadow in both meanings.
+        if (id.text in libValueShadows()) {
+            currentFileLocals?.get(id.text)?.let { local ->
+                libValueBehindTypeOnlyShadow(id.text, local)
+                    ?.let { return getTypeOfSymbol(it) }
+            }
+        }
+        // Check pre-built file-level type map (covers annotated file-level declarations)
+        currentCheckFileName?.let { fn ->
+            val fltm = fileLocalTypeMapFor(fn)?.get(id.text)
+            // (SETUP.2) the ONLY read of fileLocalTypeMaps — census hook.
+            if (FltmCensus.on) FltmCensus.noteRead(fn, id.text, fltm != null)
+            if (fltm != null) return fltm
+        }
+        // Check file-level locals symbol table (for symbols not in type map)
+        currentFileLocals?.get(id.text)?.let { symbol ->
+            val type = getTypeOfSymbol(symbol)
+            if (type !== anyType && type !== errorType) return type
+        }
+        // Namespace-aware fallback: when this lookup happens during lazy
+        // initializer-type inference for a namespace-scoped variable, walk
+        // the enclosing namespace symbol's parent chain and consult each
+        // namespace's `exports` table. Required for patterns like:
+        //   namespace M { var x: T = ...; export var y = x; }
+        // where `x` is bound in `M.exports` (not in file locals/globals).
+        // (CHK.76) the position-derived twin of the stack consult below — it
+        // sees every enclosing namespace where the stack saw the outermost,
+        // and it answers with no stack installed at all (a `declare
+        // namespace` body's `LE.Q`, read by the ambient-initializer walk and
+        // by the lens, typed `any`). Same acceptance rule as the stack's.
+        lookupInEnclosingNamespaces(id, id.text, SymbolFlags.Value)?.let { sym ->
+            val type = getTypeOfSymbol(sym)
+            if (type !== anyType && type !== errorType) return type
+        }
+        lookupInInferenceNamespace(id.text)?.let { return it }
+        // Then look up symbol in globals. INV.3(c)(iii) phase 3 (round
+        // 507b): node-keyed — a name with no per-file meaning types as
+        // `any` instead of a foreign module file's leaked local (tsc:
+        // TS2304 → any). Imports keep resolving through the visibility
+        // probe to the SAME merged instance (which is how the round-442
+        // by-NAME nulling differs — it broke import-driven typing).
+        val symbol = lookupPerFileForNode(id, id.text)
+        if (symbol == null) return anyType
+        // (CHK.49) same second chance one resolution layer down: the
+        // per-file probe answers the declaring file's own TYPE-space
+        // symbol for a shadowed lib name.
+        libValueBehindTypeOnlyShadow(id.text, symbol)?.let { return getTypeOfSymbol(it) }
+        return getTypeOfSymbol(symbol)
     }
 
     /** If a containing namespace was pushed by [pushInferenceNamespaceFor], walk its
