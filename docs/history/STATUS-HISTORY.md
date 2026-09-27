@@ -1,5 +1,13 @@
 
 
+**(P18.200) — (CHK.169): INSIDE A MODULE-FILE CLASS, `this` IS TYPED AT THE ARGUMENT READER; 25 CELLS CLOSED, +0 EVERYWHERE, 20,791 / 0 / 44 (2026-09-24).**
+`export class C { s = "x"; m() { pn(this.s); } }` was silent — the class was looked up only in `globals`, which never
+holds a module file's declarations (and `export class Map` got the lib `Map`). The class now resolves through its own
+declared symbol and its base through the per-file view (mandatory: the class lookup alone produced an rxjs false
+positive). Matrix agree 64 -> 89, 0 ours-only; 11 pins. Screen 0; grid 8x0 (a live gate); cost_gate PASS;
+huge_methods 0. **Filed (CHK.172): under `emitDeclarationOnly` xtsc reports NO diagnostics at all** (tsgo checks fully).
+
+
 **(P18.199) — (CHK.170): `a ?? b` TYPES AS THE LEFT TYPE WHEN THE LEFT CANNOT BE NULLISH; +0 EVERYWHERE, 20,780 / 0 / 44 (2026-09-24).**
 `x ?? y` with a non-nullable `x` was typed `X | Y`, producing false positives (3 in the census cell, and the one row
 blocking (CHK.169)). A type-facts test mirroring tsgo's `EQUndefinedOrNull` (a type parameter answers through its

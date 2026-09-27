@@ -1,3 +1,37 @@
+### Round (P18.195) — (CHK.166)(a) step 1: VALUE-AWARE enum truthiness — an enum is no longer washed to `never`; 193 -> 639 of 660 cells, byte-identical on every instrument (2026-09-24)
+
+Orchestrated: one implementation subagent, with the census of rxjs's last missed row running beside it.
+`EnumSemantics.enumTruthiness(type)` answers TRUTHY / FALSY / EITHER (member: FALSY for 0, NaN or "", TRUTHY for
+any other known value, EITHER when opaque per `enumMemberEntries` — computed, or ambient non-const without an
+initializer; whole enum by its members, EITHER when `enumMemberTypesOf` cannot decompose), memoised by enum
+symbol id; `enumTruthinessSplit` answers the member list only when the enum is EITHER and the branch removes at
+least one member. `isDefinitelyTruthyMember`/`isDefinitelyFalsyMember` gain an enum arm, and
+`splitEnumsForTruthiness` at the top of `narrowByTruthiness` decomposes a whole-enum constituent ONLY on a
+proper-subset removal, so the `K` display survives wherever nothing is removed. This mirrors tsgo
+(`getDeclaredTypeOfEnum` as the union of member literals, `getTypeFactsWorker` by value,
+`createComputedEnumType` for opaque members); a one-member `enum O { Only }` is FALSY as in tsgo. **Where the brief
+was loose**: `&&=`/`||=` call `narrowByTruthiness` directly and the object-literal `&&` arm reads the predicate, so
+both move with this round (the census's m3 arm patched the same functions, so its numbers already included them);
+x22 has no tsgo row and agrees either way.
+
+**Matrix**: D+A **193 -> 639 of 660**, 0 ours-only — the census's prediction exactly (before-arm reproduced it
+byte for byte); the R column (legacy return reader) byte-identical; the 21 left are `S | string` / `M | string` /
+`S1 | string` — tsgo's union LITERAL REDUCTION, separate (6 S cells flip agree -> diff because the old wash had hidden
+`S.Empty`). Hand cells: the x16/x17 FALSE POSITIVES on legal code close; x08-x11, x13, x19-x21, x23 match tsgo text.
+
+**Pins**: `EnumTruthinessNarrowingTest`, 9 tests, both directions (N1/S1 never falsy-branch, O never truthy-branch,
+`declare enum`, computed member, flags / string / const / mixed). Ablation: naive every-enum-EITHER 8 of 9 RED; no
+decomposition 6; decomposition when nothing is removed 3; opaque as truthy 2; memo on a constant key 1.
+
+**Gates**: full suite **20,751 / 0 / 44** (+9); corpus screen 0 of 8,725 (`controlFlowInstanceof`,
+`jsEnumCrossFileExport` identical under `--include`); huge_methods 0; cost_gate PASS (identical to (P18.194)); grid 8x `added=0 removed=0`; no `w:`. The agent
+measured the full `--listAll` text BYTE-IDENTICAL on all 8 profiles, rxjs, marked and cronstrue — so the grid is a
+control and the pins are the gate, exactly as the census said. Residues: step 2 (`&&`/`||` result-type displays
+x01-x05, x15; switch comparability x07); the R column with (CHK.164) step 2; union literal reduction.
+
+**Successor**: (CHK.164) step 1 (truthiness splits `boolean`, specified, +0 predicted) — it shares
+`narrowByTruthiness` with this round.
+
 ### Round (P18.194) — (CHK.168) round 1: an annotated arrow's EXPRESSION body is return-checked through the block-body path; 28 cells fixed, 0 FPs, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with a census of rxjs's last missed row running beside it.

@@ -25,6 +25,46 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.205) — (CHK.173) G5 slice 1 (S1 + S3): a local-shadow lookup guard and the `let x;` annotation-string drop; 4 false positives gone, only 2 of the census's 20 cells — the rest is S2, as measured (2026-09-27)
+
+Orchestrated: one implementation subagent beside one read-only census agent (G1/G3/G4/G6, recorded in the (CHK.173)
+item). **The builder STALLED twice** (idle ~80 min with no process alive, then again right after a `SendMessage`
+resume — waiting on a background notification that never came); it was stopped and the orchestrator finished the round
+from its tree (identical to its own `work.patch`). **S1** `LocalShadowGuard` (new file, 239 lines): after the OUTER
+ladder of `getTypeOfIdentifierConventional` (split out as `getTypeOfIdentifierOuter`) answers a real type, a name bound
+BETWEEN the read and its file by a parameter / var / let / const / catch / for-head binding answers `any` instead
+(function / class / enum and named function / class expressions stop the ascent: the scope-space consult owns them).
+**S3** `dropInheritedUninitializedStrings`: a function-top `let x;` drops the annotation string the frame inherited
+for an outer `x` (the legacy assignment channel's TS2322 on `x = 1`).
+
+**Gating found two defects the builder had not seen.** (1) The full suite lost a TRUE TS2365
+(`Inv4SpineBatch22Test`, tsgo reports it): `spineArithRecordVarDecl` learns what a local shadows by typing its own
+`decl.name`, and the guard answered `any` for that probe, so the recording was dropped — fixed by suspending the guard
+for that one probe (`localShadowGuardSuspended`; ablated -> 1 RED). The idiom `getTypeOfExpression(decl.name)` has one
+site. (2) **The guard cost +3.6% WARM** (`ab-warm.sh`, 2 pairs, B lost both): its gate set holds every parameter name in
+the file, so on `checker.ts` almost every read ascends, and each ascent re-scanned every statement of every enclosing
+block. Memoizing each scope level's bound names per file by `nodeId` (an AST node is a data class, never a hash key)
+took it to **-1.4%, B wins 2/2, both arms sd < 1%** — read as "no regression", not as a win. `cost_gate.py` saw
+neither (CLAUDE.md: a pure AST walk is invisible to it). **Countdowns**: two `Inv4SpineBatch21Test` "quirk pins"
+asserted TS2774 on legal code where tsgo is silent (a `try`-block `const` and an object-literal method parameter
+shadowing an outer function) — the guard fixed both; re-pointed and renamed.
+
+**Measured on the census's own cells**: projL 8 -> 6 rows (a1, a12 — the S3 cells), projL2 12 -> 12, projM 6 -> 6
+(tsgo 0 / 1 / 2). The other 18 false positives come from the walkers' FLAT per-function tables (the assignment
+string map, `currentLocalTypes` recordings and their leak past a block), which a lookup guard never reaches — **S2 is
+the round that pays**, and this slice's worth is the pins' shapes (catch / for-header / destructured leaves against lib
+globals, the member walker's function-top destructuring) plus the two countdown FPs. **Pins**:
+`LocalVariableShadowGuardTest` (15, 8 controls); **ablation** (builder, one arm each): a1 guard off 4+ RED, a2 catch 2,
+a4 S3 off 2, a6 2, a7 for-header 1, plus the suspend arm 1; **a3 (declarations answered as VARIABLE) and a5 (S3's
+parameter exclusion) read 0 RED** — a3 is a REDUNDANT guard (measured: every arm prints identical rows on block
+function / class / enum shadows, because the scope-space consult answers first), a5 unpinned-and-recorded.
+
+**Gates**: full suite **20,884 / 0 / 44** (+15); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x
+`added=0 removed=0` (chained, fresh chain control OK), rxjs / marked 0 -> 0, cronstrue 1 -> 1; warning-clean.
+**New residue** (probe): a block `function f` shadowing an outer `declare const f: string` is still CALLED as the outer
+(`f()` -> TS2349 where tsgo is silent), and `function f2() { function f(n: number) … return f("s") }` misses tsgo's
+TS2345 — B83.5's call-side, filed under G5. **Successor**: G3 + G6 (census below), then S2.
+
 ### Round (P18.204) — (CHK.173) G2: a flow assignment from a non-nullish call / element read now narrows the declared union; the 14 G2 false-positive sites of the TS18048 census arm are gone, +0 everywhere (2026-09-27)
 
 Orchestrated: one implementation subagent (G2) beside one read-only census agent (G5, recorded in the (CHK.173) item);
@@ -350,40 +390,6 @@ m10 (`x || true`) and m1/m2 (`Boolean(x)`, (CHK.166)(b)); step 2 (the legacy tru
 
 **Successor**: (CHK.162) (intersection source vs union target false TS2741) or (CHK.163)/(CHK.160) — or the rxjs
 last-row round once its census lands.
-
-### Round (P18.195) — (CHK.166)(a) step 1: VALUE-AWARE enum truthiness — an enum is no longer washed to `never`; 193 -> 639 of 660 cells, byte-identical on every instrument (2026-09-24)
-
-Orchestrated: one implementation subagent, with the census of rxjs's last missed row running beside it.
-`EnumSemantics.enumTruthiness(type)` answers TRUTHY / FALSY / EITHER (member: FALSY for 0, NaN or "", TRUTHY for
-any other known value, EITHER when opaque per `enumMemberEntries` — computed, or ambient non-const without an
-initializer; whole enum by its members, EITHER when `enumMemberTypesOf` cannot decompose), memoised by enum
-symbol id; `enumTruthinessSplit` answers the member list only when the enum is EITHER and the branch removes at
-least one member. `isDefinitelyTruthyMember`/`isDefinitelyFalsyMember` gain an enum arm, and
-`splitEnumsForTruthiness` at the top of `narrowByTruthiness` decomposes a whole-enum constituent ONLY on a
-proper-subset removal, so the `K` display survives wherever nothing is removed. This mirrors tsgo
-(`getDeclaredTypeOfEnum` as the union of member literals, `getTypeFactsWorker` by value,
-`createComputedEnumType` for opaque members); a one-member `enum O { Only }` is FALSY as in tsgo. **Where the brief
-was loose**: `&&=`/`||=` call `narrowByTruthiness` directly and the object-literal `&&` arm reads the predicate, so
-both move with this round (the census's m3 arm patched the same functions, so its numbers already included them);
-x22 has no tsgo row and agrees either way.
-
-**Matrix**: D+A **193 -> 639 of 660**, 0 ours-only — the census's prediction exactly (before-arm reproduced it
-byte for byte); the R column (legacy return reader) byte-identical; the 21 left are `S | string` / `M | string` /
-`S1 | string` — tsgo's union LITERAL REDUCTION, separate (6 S cells flip agree -> diff because the old wash had hidden
-`S.Empty`). Hand cells: the x16/x17 FALSE POSITIVES on legal code close; x08-x11, x13, x19-x21, x23 match tsgo text.
-
-**Pins**: `EnumTruthinessNarrowingTest`, 9 tests, both directions (N1/S1 never falsy-branch, O never truthy-branch,
-`declare enum`, computed member, flags / string / const / mixed). Ablation: naive every-enum-EITHER 8 of 9 RED; no
-decomposition 6; decomposition when nothing is removed 3; opaque as truthy 2; memo on a constant key 1.
-
-**Gates**: full suite **20,751 / 0 / 44** (+9); corpus screen 0 of 8,725 (`controlFlowInstanceof`,
-`jsEnumCrossFileExport` identical under `--include`); huge_methods 0; cost_gate PASS (identical to (P18.194)); grid 8x `added=0 removed=0`; no `w:`. The agent
-measured the full `--listAll` text BYTE-IDENTICAL on all 8 profiles, rxjs, marked and cronstrue — so the grid is a
-control and the pins are the gate, exactly as the census said. Residues: step 2 (`&&`/`||` result-type displays
-x01-x05, x15; switch comparability x07); the R column with (CHK.164) step 2; union literal reduction.
-
-**Successor**: (CHK.164) step 1 (truthiness splits `boolean`, specified, +0 predicted) — it shares
-`narrowByTruthiness` with this round.
 
 ## QUEUE
 
@@ -1042,7 +1048,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   gate, measure, pin both readers plus a genuinely-mismatched constraint control (`T extends string` -> `number` must
   still report).
 
-- [ ] **(CHK.173) G2 LANDED 2026-09-27 ((P18.204) note: four failed non-nullish proofs in `narrowByAssignmentRhs`, not an `any` RHS; census arm harness 32 -> 18, tsc 23 -> 13). OPEN: G5 -> G1 -> G3/G4/G6 -> Round A -> Round B. **G5 CENSUSED 2026-09-27** (read-only, frozen (P18.203) classes, `build/scratch-p18205-census/README.txt`, 2,160 cells vs tsgo; JDI force arm `jdi2/ArmG5b.java`) — **A REAL BLOCK-SCOPING DEFECT IN FOUR WALKERS, NOT A DESTRUCTURING GAP.** A local declared in a nested block, a `catch` or a `for` header that shadows an outer name is typed as the OUTER binding (417 cells print the outer type; 20 false positives on legal code, tsgo silent — TS2322 on `x = 1` after `let x;`/block `let`/`catch`, TS2365 on a `for (let x = 0; x < 1; x++)` shadowing a parameter, TS2551 `toFixed` on a block `const` shadowing a `string` parameter), and a block `const`'s inner type LEAKS past the block. Mechanism: the declaration / member-access / argument / arithmetic walkers each keep ONE flat map per function — R1 `getTypeOfIdentifierConventional` (~118585) falls through to file/global on any miss; R2 the shadow pre-passes (`applyBodyLocalShadowing` ~101129, `applyDestructuredShadow` ~101316, `registerNestedGlobalShadowName` ~101272) each miss a form and run before parameters are populated; R3 first-wins recorders (`recordDestructuredElementTypes` ~105044) vs `cvdaInferredLocalType` overwriting (the leak); R4 no block frame in cpa (~2805) / arg (~1737) / arith (~60399); R5 `caeLegacyDeclaredStringPath` (~110701) reads a stale annotation string. The force arm (lookup guard + per-block remove/restore) turned 256 wrong cells agreeing and 58 silent cells agreeing, 0 regressions, all 8 profiles + rxjs + marked byte-identical — so the grid is a CONTROL and the gate is pins + the corpus. **SPEC**: S1 a lookup guard (name absent from walk tables but bound between node and file by a param / var / let / const / catch / for-head -> `any`, gated on a per-file name set: ~330k calls on the compiler profile, bench it); S2 real scoped frames in all four walkers, opened only for a block / catch / case / for-header that declares a name the map holds or that is bound at file/global level, catch typed `unknown` under `useUnknownInCatchVariables`, the argument walker recording inside the scope instead of pre-recording function-wide; S3 function-top `let x;` drops the inherited annotation string; S4 for-header bindings in arith + cpa; S5 (optional) a destructuring case in `cpaApplyDeclRecordings`. `var` is never block-scoped. 9 ablation arms each with its own failing cell (README). 16 test classes reference the old flat workarounds — run the whole core module. **Split it**: S1+S3 first (smallest, fixes a1/a9/a13-class FPs), then S2 per walker. EARLIER: (CHK.173) CENSUSED 2026-09-24 (read-only, frozen (P18.200) classes, `build/scratch-p18201-census2/`, README.txt;
+- [ ] **(CHK.173) G5 SLICE 1 (S1+S3) LANDED 2026-09-27 ((P18.205) note: 2 of the 20 census cells; S2 is what pays). G2 LANDED 2026-09-27 ((P18.204) note: four failed non-nullish proofs in `narrowByAssignmentRhs`, not an `any` RHS; census arm harness 32 -> 18, tsc 23 -> 13). OPEN, IN THIS ORDER: G3 + G6 (one round) -> G1 (+ switch) -> G1c -> G4 -> G5 S2 (per walker) -> Round A -> Round B. **G1/G3/G4/G6 CENSUSED 2026-09-27** (read-only, frozen G2 classes, `build/scratch-p18206-census/README.txt`, 122 cells vs tsgo, JDI arm re-run): **every residual arm row is attributed** — G1 12 (builder.ts:1617, inlineVariable.ts:177, fourslashImpl.ts:1554), G1c 1/profile + G7 2 (harness), G3 16 (builder.ts:1060/1068 `??=`), G4 16 (expressionToTypeNode.ts:596), G6 16 (watch.ts:284 `filter(f => f !== undefined).map(f => f.x)`), G5 48 — and with all of them the arm residual is 0 on all 8 profiles. **Every ours-only element-read (`x['k']`) cell is a false positive we ALREADY SHIP** (that channel reads the same flow walk Round A will), so pin the e-cells; the mis-assignment (m) differences are the var-decl reader's legacy `extractNullNarrowing` — a separate residue. Specs, ranked: **S-G3** (-16, low risk) `narrowByAssignmentRhs`'s four value arms are gated `op == Equals`: for `??=`/`||=` answer (antecedent minus nullish / truthy part) UNION (declared reduced by RHS); **S-G6** (-16, low) a nullish arrow-body shape in `inferDiscriminantArrowPredicateTarget` (`!== undefined/null`, `!= null`, reversed, `!!p` with every kept member never-falsy, `Boolean(p)`, single-return block), risk: the `inferTypePredicates` baseline is wipe-and-pin (`checkInferTypePredicates`); **S-G1** (-12, medium) a containment rule at the top of `narrowByEquality` (never early-return; chain test syntactic first, per tsgo flow.go:1019) + a switch arm (flow.go:1202); **S-G1c** (-5 incl. G7) a parent-pointer "guarded by an optional chain" helper for call args / element indices / later links, crossing a closure only for an un-reassigned root — a binder optional-chain flow node is REFUSED (a label at every `?.` for 3 rows); **S-G4** (-16, medium-high, needs a bench) a flow-narrowed reference compared with `===` removes nullish when the other side's NARROWED type is nullish-free (a declared-type check fixes neither real row). Each spec's pins, controls and ablation arms are in the README. PREVIOUSLY: G5 S1+S3 was: OPEN: G5 -> G1 -> G3/G4/G6 -> Round A -> Round B. **G5 CENSUSED 2026-09-27** (read-only, frozen (P18.203) classes, `build/scratch-p18205-census/README.txt`, 2,160 cells vs tsgo; JDI force arm `jdi2/ArmG5b.java`) — **A REAL BLOCK-SCOPING DEFECT IN FOUR WALKERS, NOT A DESTRUCTURING GAP.** A local declared in a nested block, a `catch` or a `for` header that shadows an outer name is typed as the OUTER binding (417 cells print the outer type; 20 false positives on legal code, tsgo silent — TS2322 on `x = 1` after `let x;`/block `let`/`catch`, TS2365 on a `for (let x = 0; x < 1; x++)` shadowing a parameter, TS2551 `toFixed` on a block `const` shadowing a `string` parameter), and a block `const`'s inner type LEAKS past the block. Mechanism: the declaration / member-access / argument / arithmetic walkers each keep ONE flat map per function — R1 `getTypeOfIdentifierConventional` (~118585) falls through to file/global on any miss; R2 the shadow pre-passes (`applyBodyLocalShadowing` ~101129, `applyDestructuredShadow` ~101316, `registerNestedGlobalShadowName` ~101272) each miss a form and run before parameters are populated; R3 first-wins recorders (`recordDestructuredElementTypes` ~105044) vs `cvdaInferredLocalType` overwriting (the leak); R4 no block frame in cpa (~2805) / arg (~1737) / arith (~60399); R5 `caeLegacyDeclaredStringPath` (~110701) reads a stale annotation string. The force arm (lookup guard + per-block remove/restore) turned 256 wrong cells agreeing and 58 silent cells agreeing, 0 regressions, all 8 profiles + rxjs + marked byte-identical — so the grid is a CONTROL and the gate is pins + the corpus. **SPEC**: S1 a lookup guard (name absent from walk tables but bound between node and file by a param / var / let / const / catch / for-head -> `any`, gated on a per-file name set: ~330k calls on the compiler profile, bench it); S2 real scoped frames in all four walkers, opened only for a block / catch / case / for-header that declares a name the map holds or that is bound at file/global level, catch typed `unknown` under `useUnknownInCatchVariables`, the argument walker recording inside the scope instead of pre-recording function-wide; S3 function-top `let x;` drops the inherited annotation string; S4 for-header bindings in arith + cpa; S5 (optional) a destructuring case in `cpaApplyDeclRecordings`. `var` is never block-scoped. 9 ablation arms each with its own failing cell (README). 16 test classes reference the old flat workarounds — run the whole core module. **Split it**: S1+S3 first (smallest, fixes a1/a9/a13-class FPs), then S2 per walker. EARLIER: (CHK.173) CENSUSED 2026-09-24 (read-only, frozen (P18.200) classes, `build/scratch-p18201-census2/`, README.txt;
   113 cells; a JDI arm mirroring the element-access arm) — THE NAIVE ARM ADDS +23..+32 FPs PER PROFILE, ALL FROM SEVEN
   NAMED NARROWING GAPS; CLOSE THEM FIRST.** `checkSinglePropertyAccess` (~153776) has only two TS18048 arms — B81.1c
   (`emitTs18048ForOptionalPropertyAccessReceiver`, a receiver that is itself an optional member access, hence `o.p.q`)

@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,178** lines (**+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
+extraction):** `Checker.kt` **201,208** lines (**+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
 relation rule itself is `Relater.kt` 1,758 -> 1,809; a SEMANTIC parity change removing a FALSE-POSITIVE class;
 **+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
 constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
@@ -96,6 +96,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.205) — (CHK.173) G5 SLICE 1: A LOCAL THAT SHADOWS AN OUTER NAME NO LONGER READS AS THE OUTER BINDING AT THE NAME LOOKUP; 4 FALSE POSITIVES GONE, +0 EVERYWHERE, 20,884 / 0 / 44 (2026-09-27).**
+A `catch` variable, `for`-header `let`, block `let`/`const` or missed destructured leaf shadowing an outer name was
+typed as the outer binding. A lookup guard now answers `any` there, and a function-top `let x;` drops the outer's
+annotation. Gating caught a lost true TS2365 (fixed) and a +3.6% warm cost (memoized; now within noise). Only 2 of the
+census's 20 cells close — the walkers' flat tables (S2) own the rest. 15 pins; two countdown pins re-pointed. Screen 0;
+grid 8x0; libs 0; cost_gate PASS; huge_methods 0. Next: G3 + G6.
+
 **(P18.204) — (CHK.173) G2: A FLOW ASSIGNMENT FROM A NON-NULLISH CALL / ELEMENT READ NARROWS THE DECLARED UNION; +0 EVERYWHERE, 20,869 / 0 / 44 (2026-09-27).**
 `let s = m.get(k); if (!s) s = createSymbol(1); s.flags` kept `s` possibly-undefined because the non-nullish proof of
 the right-hand side failed four ways (the callee's own locals, a nested callee name declared twice, element reads, arrow
@@ -124,10 +131,3 @@ plus the class's type parameters, inner names shadowing. Matrix 69 -> 82 agree, 
 Screen 0; grid 8x0; huge_methods 0; cost_gate `mapped.hits` +3.1% (cache hits), rebaselined. Found and filed: **(CHK.174),
 `T extends number` rejected against `number` at the declaration/return readers — a false positive on HEAD**; and **(CHK.173),
 `x.length` on a nullable identifier never reports "possibly null"**, the most common strict-mode error.
-
-**(P18.200) — (CHK.169): INSIDE A MODULE-FILE CLASS, `this` IS TYPED AT THE ARGUMENT READER; 25 CELLS CLOSED, +0 EVERYWHERE, 20,791 / 0 / 44 (2026-09-24).**
-`export class C { s = "x"; m() { pn(this.s); } }` was silent — the class was looked up only in `globals`, which never
-holds a module file's declarations (and `export class Map` got the lib `Map`). The class now resolves through its own
-declared symbol and its base through the per-file view (mandatory: the class lookup alone produced an rxjs false
-positive). Matrix agree 64 -> 89, 0 ours-only; 11 pins. Screen 0; grid 8x0 (a live gate); cost_gate PASS;
-huge_methods 0. **Filed (CHK.172): under `emitDeclarationOnly` xtsc reports NO diagnostics at all** (tsgo checks fully).
