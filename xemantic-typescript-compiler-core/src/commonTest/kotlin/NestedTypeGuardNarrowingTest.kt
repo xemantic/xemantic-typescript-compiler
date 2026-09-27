@@ -137,10 +137,12 @@ class NestedTypeGuardNarrowingTest {
     }
 
     @Test
-    fun `FP-safety - an ambiguous nested-function name does not resolve as a guard`() {
-        // Two distinct nested functions share the name `pick` → the program-wide unique-name
-        // map records it as ambiguous (null) → no narrowing. The access on the wide `Base`
-        // (which lacks `extra`) therefore still fires TS2339 (the conservative outcome).
+    fun `an ambiguous nested-function name resolves lexically to the guard visible at the call`() {
+        // Two distinct nested functions share the name `pick`, so the program-wide unique-name
+        // map records it as ambiguous (null). This pin used to assert the conservative TS2339
+        // that followed; it was a COUNTDOWN — tsgo 7.0.2 resolves `pick` by lexical scope to
+        // wrapA's guard, narrows `x` to `Sub` and reports NOTHING. (CHK.173) G2b's
+        // `lexicalFlowCalleeDecl` now resolves it the same way.
         diagnose(
             """
             interface Base { flags: number; }
@@ -157,7 +159,7 @@ class NestedTypeGuardNarrowingTest {
             }
             """,
         ) should {
-            have(any { it.code == 2339 && it.message.contains("extra") })
+            have(none { it.code == 2339 })
         }
     }
 }

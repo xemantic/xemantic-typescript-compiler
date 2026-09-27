@@ -120565,6 +120565,23 @@ interface DataView {
                         return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
                     }
                 }
+                // (CHK.173) G2: an ELEMENT-ACCESS RHS is the fourth resolving arm — tsc's
+                // own fourslashImpl.ts `if (!expectedRange) { … expectedRange =
+                // this.getRanges()[0]; }` defaults an optional parameter from an array, and
+                // tsgo's `getAssignmentReducedType` keeps the declared member the element
+                // type relates to. No structural test proves `rs[0]` non-nullish, so the
+                // post-assignment read kept `Range | undefined`. Same gates as the three
+                // arms above: a `noUncheckedIndexedAccess` element (`X | undefined`) is a
+                // UNION and is refused by construction, as is an `any`-typed element.
+                (rhs as? ElementAccessExpression)?.let { ea ->
+                    if (ea.questionDotToken) return@let
+                    val t = typeOfExpressionWithFlowThis(ea)
+                    if (t !== anyType && t !== errorType && t !== unknownType &&
+                        t !is Type.Union
+                    ) {
+                        return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
+                    }
+                }
             }
         }
         // (CHK.85)(b): an assignment to the walked reference that NO arm above could
@@ -120576,6 +120593,71 @@ interface DataView {
         // of unknown value is the DECLARED type (tsc's own fallback), so a reporting walk
         // asks for that; see [NarrowFlowMemo.overwriteResetsToDeclared].
         return if (overwriteResetsToDeclared && rhs != null) declaredType else antecedent
+    }
+
+    /**
+     * (CHK.173) G2: [getTypeOfExpression] of an assignment right-hand side rooted at `this`,
+     * with `this` typed from the enclosing INSTANCE member's class when the ambient has no
+     * `this` — a flow walk runs under whichever reader asked (the property-access frame
+     * types no `this`), so tsc fourslashImpl.ts's `expectedRange = this.getRanges()[0]`
+     * typed `any` and the default kept its `| undefined`.
+     *
+     * Installed for THIS ONE typing and removed again, never into a reader's frame:
+     * typing `this` in the property-access frame was measured to wake two unrelated
+     * emitters on the corpus (a false TS2341 on `({ x } = this)` inside the class, and a
+     * duplicate TS2339 on a rest element destructured from `this` —
+     * `noUnusedLocals_destructuringAssignment`, `destructuringUnspreadableIntoRest`).
+     * A static member, a `this:` parameter, a class EXPRESSION and a `function` boundary
+     * all answer nothing and leave the ambient as it was.
+     */
+    private fun typeOfExpressionWithFlowThis(e: Expression): Type {
+        if (currentLocalTypes["this"] != null) return getTypeOfExpression(e)
+        var root: Expression = e
+        while (true) {
+            root = when (root) {
+                is ElementAccessExpression -> root.expression
+                is PropertyAccessExpression -> root.expression
+                is CallExpression -> root.expression
+                is ParenthesizedExpression -> root.expression
+                is NonNullExpression -> root.expression
+                else -> break
+            }
+        }
+        if ((root as? Identifier)?.text != "this") return getTypeOfExpression(e)
+        val thisType = enclosingInstanceThisTypeForFlow(e) ?: return getTypeOfExpression(e)
+        currentLocalTypes["this"] = thisType
+        try {
+            return getTypeOfExpression(e)
+        } finally {
+            currentLocalTypes.remove("this")
+        }
+    }
+
+    /** The instance type `this` denotes at [node] — its nearest non-arrow container is a
+     *  non-static method / constructor / accessor / property of a class DECLARATION — or
+     *  null. The class symbol is [callWalkClassSymbol]'s ((CHK.169): tsgo's
+     *  `tryGetThisTypeAtEx` reads the class's OWN symbol). */
+    private fun enclosingInstanceThisTypeForFlow(node: Node): Type? {
+        var cur: Node? = (node as NodeBase).parent
+        while (cur != null) {
+            val member: Node = when (cur) {
+                is ArrowFunction -> { cur = (cur as NodeBase).parent; continue }
+                is MethodDeclaration -> if (ModifierFlag.Static in cur.modifiers ||
+                    (cur.parameters.firstOrNull()?.name as? Identifier)?.text == "this") return null else cur
+                is GetAccessor -> if (ModifierFlag.Static in cur.modifiers) return null else cur
+                is SetAccessor -> if (ModifierFlag.Static in cur.modifiers) return null else cur
+                is PropertyDeclaration -> if (ModifierFlag.Static in cur.modifiers) return null else cur
+                is Constructor -> cur
+                is FunctionDeclaration, is FunctionExpression, is SourceFile, is ClassExpression,
+                is ModuleDeclaration -> return null
+                else -> { cur = (cur as NodeBase).parent; continue }
+            }
+            val cls = (member as NodeBase).parent as? ClassDeclaration ?: return null
+            val sym = callWalkClassSymbol(cls, null) ?: return null
+            val t = getDeclaredTypeOfSymbol(sym)
+            return if (t === anyType || t === errorType) null else t
+        }
+        return null
     }
 
     /**
@@ -120891,6 +120973,13 @@ interface DataView {
         val (ret, tps, params) = when (decl) {
             is FunctionDeclaration -> Triple(decl.type, decl.typeParameters, decl.parameters)
             is MethodDeclaration -> Triple(decl.type, decl.typeParameters, decl.parameters)
+            // (CHK.173) G2: since (CHK.31) [resolveFlowCalleeDecl] answers a `const f =
+            // (…) => …` callee with the ARROW itself ([flowCalleeFunctionLike]), so the
+            // VariableDeclaration arm below never sees a function-valued initializer any
+            // more and a call through a const arrow was never proven non-nullish —
+            // annotated or not, top-level or nested (`if (!s) s = mk(1)` kept `| undefined`).
+            is ArrowFunction -> Triple(decl.type, decl.typeParameters, decl.parameters)
+            is FunctionExpression -> Triple(decl.type, decl.typeParameters, decl.parameters)
             is VariableDeclaration -> when (val init = decl.initializer) {
                 is ArrowFunction -> Triple(init.type, init.typeParameters, init.parameters)
                 is FunctionExpression -> Triple(init.type, init.typeParameters, init.parameters)
@@ -120911,8 +121000,17 @@ interface DataView {
             // kind that could hide a return we cannot see, all fail. tsc's own
             // `convertAutoToAny(type: Type) { return type === autoType ? anyType :
             // type === autoArrayType ? anyArrayType : type; }` (checker.ts).
-            return decl is FunctionDeclaration && tps.isNullOrEmpty() &&
-                calleeBodyReturnsNonNullishForFlow(decl)
+            if (!tps.isNullOrEmpty()) return false
+            return when (decl) {
+                is FunctionDeclaration -> decl.body?.let { calleeBodyReturnsNonNullishForFlow(decl.parameters, it) } == true
+                is FunctionExpression -> calleeBodyReturnsNonNullishForFlow(decl.parameters, decl.body)
+                is ArrowFunction -> when (val b = decl.body) {
+                    is Block -> calleeBodyReturnsNonNullishForFlow(decl.parameters, b)
+                    is Expression -> retExprNonNullishForFlow(b, flowParamAnnotations(decl.parameters), depth = 0)
+                    else -> false
+                }
+                else -> false
+            }
         }
         val tpNames = tps?.map { it.name.text }?.toSet() ?: emptySet()
         // Round 461: the `Debug.checkDefined` shape — a bare OWN-TP return `T` where
@@ -120970,18 +121068,32 @@ interface DataView {
      *  param identifiers via the callee's OWN annotations (never the caller's
      *  same-named bindings), other identifiers via the cheap [getTypeOfIdentifier]
      *  (a narrowing-only classifier — a wrong resolution can only suppress). */
-    private fun calleeBodyReturnsNonNullishForFlow(decl: FunctionDeclaration): Boolean {
-        val body = decl.body ?: return false
+    private fun calleeBodyReturnsNonNullishForFlow(parameters: List<Parameter>, body: Block): Boolean {
+        val paramAnns = flowParamAnnotations(parameters)
+        val returns = ArrayList<Expression>()
+        if (!collectReturnExprsForFlow(body.statements, returns, IntArray(1) { 64 })) return false
+        if (returns.isEmpty()) return false
+        // (CHK.173) G2: the callee's OWN body locals, exactly as the destructured-member
+        // sibling below consults them. Without them a returned `symbol` fell through to
+        // [getTypeOfIdentifier] and the program-wide unique-name map, i.e. to whatever
+        // OTHER function also declares a `symbol` (tsc checker.ts: `createSymbol`'s
+        // `const symbol = new Symbol(…)` against a dozen same-named locals), so the call
+        // was not proven non-nullish and `lateSymbol` kept its `| undefined`.
+        val bodyDecls = HashMap<String, MutableList<VariableDeclaration>>()
+        collectBodyVarDeclsForFlow(body.statements, bodyDecls, IntArray(1) { 64 })
+        return returns.all { retExprNonNullishForFlow(it, paramAnns, depth = 0, bodyDecls = bodyDecls) }
+    }
+
+    /** A callee's own parameter annotations by name — the leaves a return expression
+     *  resolves FIRST, never the caller's same-named bindings. */
+    private fun flowParamAnnotations(parameters: List<Parameter>): HashMap<String, TypeNode> {
         val paramAnns = HashMap<String, TypeNode>()
-        for (p in decl.parameters) {
+        for (p in parameters) {
             val n = (p.name as? Identifier)?.text ?: continue
             val t = p.type ?: continue
             paramAnns[n] = t
         }
-        val returns = ArrayList<Expression>()
-        if (!collectReturnExprsForFlow(body.statements, returns, IntArray(1) { 64 })) return false
-        if (returns.isEmpty()) return false
-        return returns.all { retExprNonNullishForFlow(it, paramAnns, depth = 0) }
+        return paramAnns
     }
 
     /** Companion of [calleeBodyReturnsNonNullishForFlow]: collect every return
@@ -123346,6 +123458,7 @@ interface DataView {
                         // files nest same-named guards (the program-wide unique winner
                         // is null there).
                         uniqueFunctionDeclByName(callee.text)
+                            ?: lexicalFlowCalleeDecl(callee)
                             ?: currentFileNestedPredicateDecl(callee.text)
                     } else if (globalsHitNonGuard) {
                         currentFileNestedPredicateDecl(callee.text) ?: direct
@@ -123359,6 +123472,28 @@ interface DataView {
         val functionLike = flowCalleeFunctionLike(decl)
         if (useCache) narrowWalkDeclCache[key] = functionLike
         return functionLike
+    }
+
+    /**
+     * (CHK.173) G2: an AMBIGUOUS nested callee name — several functions in the program
+     * nest a `function createSymbol` (tsc: `createTypeChecker` and `createBinder`), so the
+     * program-wide unique-name map answers null — resolved the way tsgo resolves it: by
+     * the lexical scope at the call. The INV.2(c) tables hold only declarations the main
+     * binder never bound (B83.5), so a hit cannot change how a bound name resolves. The
+     * INNERMOST binding wins whatever its kind (a `const` shadowing an outer `function`
+     * answers the variable), which [flowCalleeFunctionLike] then reads as usual.
+     */
+    private fun lexicalFlowCalleeDecl(callee: Identifier): Node? {
+        val scopes = lexicalResolver.scopesOfOwningFile(callee) ?: return null
+        val sym = lexicalResolver.symbolAt(callee, callee.text, scopes, startAtParent = true, hopCap = 0)
+            ?: return null
+        // An OVERLOAD SET is left to the caller's existing fallback
+        // ([nullishMirrorOverloadNonNullish]): the unique-name map records one as ambiguous
+        // too, and answering its first declaration let [callRhsHasNonNullishReturnAnnotation]
+        // select an overload for a NULLABLE argument that tsgo does not (a lost TS18048,
+        // `NullishMirrorOverloadTest`'s negative control).
+        if (sym.declarations.size != 1) return null
+        return sym.declarations[0]
     }
 
     /**
