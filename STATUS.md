@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,043** lines (**−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
+extraction):** `Checker.kt` **201,178** lines (**+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
 relation rule itself is `Relater.kt` 1,758 -> 1,809; a SEMANTIC parity change removing a FALSE-POSITIVE class;
 **+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
 constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
@@ -96,6 +96,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.204) — (CHK.173) G2: A FLOW ASSIGNMENT FROM A NON-NULLISH CALL / ELEMENT READ NARROWS THE DECLARED UNION; +0 EVERYWHERE, 20,869 / 0 / 44 (2026-09-27).**
+`let s = m.get(k); if (!s) s = createSymbol(1); s.flags` kept `s` possibly-undefined because the non-nullish proof of
+the right-hand side failed four ways (the callee's own locals, a nested callee name declared twice, element reads, arrow
+callees). All four fixed; the census arm for the missing identifier TS18048 loses its 14 G2 false positives (harness
+32 -> 18). 10 pins, six arms RED, one countdown re-pointed to tsgo. Screen 0; grid 8x0; libs 0; cost_gate PASS;
+huge_methods 0. Found: the cronstrue library arm of recent grids was vacuous (wrong directory). Next: (CHK.173) G5.
+
 **(P18.203) — (CHK.172): `emitDeclarationOnly` RUNS THE NORMAL CHECKER AND `noCheck` IS HONOURED; +0 ON EVERY `--noEmit` GATE, 20,859 / 0 / 44 (2026-09-25).**
 Under `emitDeclarationOnly` xtsc used to check through a whitelist that skipped almost everything, so a project that
 only emits `.d.ts` (the esbuild/rollup setup) got a near no-op checker. The program is now checked exactly as a plain
@@ -124,11 +131,3 @@ holds a module file's declarations (and `export class Map` got the lib `Map`). T
 declared symbol and its base through the per-file view (mandatory: the class lookup alone produced an rxjs false
 positive). Matrix agree 64 -> 89, 0 ours-only; 11 pins. Screen 0; grid 8x0 (a live gate); cost_gate PASS;
 huge_methods 0. **Filed (CHK.172): under `emitDeclarationOnly` xtsc reports NO diagnostics at all** (tsgo checks fully).
-
-**(P18.199) — (CHK.170): `a ?? b` TYPES AS THE LEFT TYPE WHEN THE LEFT CANNOT BE NULLISH; +0 EVERYWHERE, 20,780 / 0 / 44 (2026-09-24).**
-`x ?? y` with a non-nullable `x` was typed `X | Y`, producing false positives (3 in the census cell, and the one row
-blocking (CHK.169)). A type-facts test mirroring tsgo's `EQUndefinedOrNull` (a type parameter answers through its
-constraint, an intersection only if every member can be nullish) now returns the left type for `??` and `??=`. 14-cell
-matrix: every row where the left cannot be nullish now matches tsgo; 8 pins. Screen 0; grid 8x0; cost_gate PASS;
-huge_methods 0. Next: (CHK.169), the module-class `this` false negatives.
-

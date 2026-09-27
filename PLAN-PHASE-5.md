@@ -25,6 +25,44 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.204) — (CHK.173) G2: a flow assignment from a non-nullish call / element read now narrows the declared union; the 14 G2 false-positive sites of the TS18048 census arm are gone, +0 everywhere (2026-09-27)
+
+Orchestrated: one implementation subagent (G2) beside one read-only census agent (G5, recorded in the (CHK.173) item);
+the session was interrupted once mid-regression-fix and resumed from the tree (the builder's receipts postdated its
+final source; every gate below re-run by the orchestrator). **The queue's mechanism was wrong**: the flow reader never
+types a call RHS as `any` — `narrowByAssignmentRhs` tries to PROVE non-nullishness syntactically and that proof failed
+four independent ways. **G2a** `calleeBodyReturnsNonNullishForFlow` never handed the callee's own body locals to
+`retExprNonNullishForFlow`, so a returned local (`symbol`) resolved through the program-wide unique-name map and
+collided with every other function's `symbol`. **G2b** `resolveFlowCalleeDecl` answered null for a nested name declared
+in two functions; the new `lexicalFlowCalleeDecl` resolves it innermost-first through `LexicalScopeResolver.symbolAt`
+(only on that null path; a nested OVERLOAD SET is refused, which is what `NullishMirrorOverloadTest`'s negative control
+caught in the first suite run). **G2c** there was no element-access RHS arm; a `this`-rooted one is typed by
+installing the enclosing instance class's `this` for that one typing only (`typeOfExpressionWithFlowThis`) — installing
+it into the cpa frame instead woke unrelated emitters and reddened 2 corpus baselines, so it was reverted. **G2d**
+`callRhsHasNonNullishReturnAnnotation` had no arrow / function-expression arm (dead since (CHK.31) changed
+`flowCalleeFunctionLike`). The observable today is the existing element-access TS18048 arm (`s["flags"]`) plus a
+mis-assignment probe; every pin expectation is tsgo 7.0.2's row list.
+
+**Measured**: the census's JDI force-arm (the not-yet-landed identifier TS18048 arm) re-run on the new binary: harness
+**32 -> 18**, tsc **23 -> 13** rows, removed exactly `lateSymbol` x7, `indexSymbol` x3, `expectedRange` x4, none added.
+**Countdown**: `NestedTypeGuardNarrowingTest`'s "ambiguous nested-function name does not resolve as a guard" asserted a
+TS2339 tsgo does not report (verified by the orchestrator: tsgo exit 0 on the fixture) — re-pointed and renamed.
+**Pins**: `AssignmentNarrowingNonNullishRhsTest` (10). **Ablation**, one mistake per arm, rebuilt after each: a1 no body
+locals 3 RED; a2 no lexical callee 3; a3 no element arm 2; a4 no flow `this` 1; a5 no arrow/function-expression arms
+2; a6 overload sets resolved lexically 2.
+
+**Gates**: full suite **20,869 / 0 / 44** (+10); corpus screen 0 of 8,725; cost_gate PASS (largest `typeNode.cacheHits`
++0.19%); huge_methods 0; grid 8x `added=0 removed=0` (BEFORE 56e1ec6e chained from (P18.203)'s captures, prefix-
+normalised, with a fresh BEFORE-arm chain control on `tsc-project` byte-identical), rxjs 0 -> 0, marked 0 -> 0,
+cronstrue 1 -> 1 (TS5108, the shared config row). **Instrument finding**: every agent grid since at least (P18.199)
+compiled `build/scratch-p18171/libs/cronstrue`, whose tsconfig lives in `src/` — so that library arm read a single
+TS5083 "Cannot read file" row on both arms and was VACUOUS; this round's grid points at `…/cronstrue/src` (CLAUDE.md
+entry added). **Residues**: `const rs = this.getRanges(); if (!r) r = rs[0]` (Round B — the cpa frame types no
+`this`); an `any` RHS to a union declared without initializer is a false NEGATIVE (c00 f2); the var-decl reader
+leaves a multi-statement nested-function call untyped (c01 p1); a static `this` and a `?.[` element RHS. **Successor**:
+(CHK.173) G5, whose census landed this session (spec in the item) — it is a four-walker block-scoping change, larger
+than any G-round so far.
+
 ### Round (P18.203) — (CHK.172): `emitDeclarationOnly` runs the normal checker and `noCheck` is honoured — an `emitDeclarationOnly` project reports what a plain build reports (was: almost nothing); +0 on every `--noEmit` gate (2026-09-25)
 
 Finished from the previous session's ungated work-in-progress patch (`build/wip/p18203-chk172/`), which re-applied
@@ -346,43 +384,6 @@ x01-x05, x15; switch comparability x07); the R column with (CHK.164) step 2; uni
 
 **Successor**: (CHK.164) step 1 (truthiness splits `boolean`, specified, +0 predicted) — it shares
 `narrowByTruthiness` with this round.
-
-### Round (P18.194) — (CHK.168) round 1: an annotated arrow's EXPRESSION body is return-checked through the block-body path; 28 cells fixed, 0 FPs, +0 everywhere (2026-09-24)
-
-Orchestrated: one implementation subagent, with a census of rxjs's last missed row running beside it.
-`walkArrowExpressionBodyScoped` (extracted from `walkFunctionBodiesInExpr`, 7,800 -> 6,767 bytecodes) runs, for an
-annotated arrow, the contextual pull and `checkArrowExpressionBodyReturn` (async flag from the arrow, generator off,
-anchored at the body with parentheses and `satisfies` skipped — tsgo `checkFunctionExpressionOrObjectLiteralMethodDeferred`
--> `checkReturnExpression` -> `getEffectiveCheckNode`); the return check is keyed by expression + anchor
-(`checkReturnAssignability(expr, anchorPos, anchorLen, …)`, the `ReturnStatement` overload passing
-`RETURN_KEYWORD_WIDTH` — 13 hardcoded `stmt.pos, 6` sites retired); the spine's `checkArrowConciseBodyReturnType`
-is DELETED. **Where the census was wrong**: no dedupe was needed (its 3x emission was an artifact of the JDI-forced
-arm; keeping the spine call is absorbed by `init:tpTargetReturnDedup` except for conditional branches — the a5
-arm shows it); **"+0 on harness" was false as specified** — 1 ours-only row at `fourslashImpl.ts:3886` from two
-causes, both fixed: the body must be checked PAREN-STRIPPED (else `=> ({ … })` loses the object-literal contextual
-type and `"exact"` widens), and `keyof typeof ts.PatternMatchKind` (a QUALIFIED name) answered `string`/`never` —
-`keyofTypeQueryEnumMemberNames` now resolves qualified names, which also removes 3 FPs the block path already had.
-Parameterless annotated arrows never entered the scoped branch (gate fixed). **Async ternaries were a pre-existing
-FP in the block path** (each branch related to `Promise<number>`); branches are now related to the promised type
-(tsgo's recursion with the unwrapped type) — without that the new route would have added more.
-
-**Matrix**: census cells 24 MISS -> AGREE, 6 now on the right row with the block path's own text/span residue
-(`k_arr`, `k_nested`, `k_nc`, `k_or`, `k_async_id`, `k_await`), 9 still missing (round-2 hosts,
-`<T>(x: string): T => x`, `t_unionsrc_obj`), **0 FPs, all 54 clean controls clean** (the three mode-1 traps
-included), `B*` block twins unchanged; `hostb` 4 fixed (`ctx_annot`, `paren`, `ro`, `weak`).
-
-**Pins**: `ArrowExpressionBodyReturnTest`, 20 tests. Ablation, eight arms, all RED (async flag 2; contextual pull
-1; unstripped anchor 2; unstripped checked expression 1; spine call kept 3 incl. the return5 duplicate; async
-branch unwrap 2; parameterless scoping 1; qualified `keyof typeof` 1).
-
-**Gates**: full suite **20,742 / 0 / 44** (+20); corpus screen 0 of 8,725 (the 41 pending diffs byte-identical);
-cost_gate PASS (`typeOfExpr.calls` +0.75% — concise bodies are now typed); huge_methods 0 (`cpaSpineLeave` 7,898
-unchanged); spine closure audit clean; grid 8x `added=0 removed=0`; no `w:`. `rxjs` 0, `marked` 0, `cronstrue` 0.
-Residues: round 2 (class-property / `static` / default-export arrows reached by NOTHING); the shared display family
-(`string | 1` printed `string | number`, async mismatches naming `Promise<number>`, no member drill);
-`expressionTrueEnd` ignores internal whitespace (`x.trim( )` spans 8 where tsgo spans 9).
-
-**Successor**: (CHK.166)(a) step 1 (value-aware enum truthiness, specified, +0 predicted).
 
 ## QUEUE
 
@@ -1041,7 +1042,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   gate, measure, pin both readers plus a genuinely-mismatched constraint control (`T extends string` -> `number` must
   still report).
 
-- [ ] **(CHK.173) CENSUSED 2026-09-24 (read-only, frozen (P18.200) classes, `build/scratch-p18201-census2/`, README.txt;
+- [ ] **(CHK.173) G2 LANDED 2026-09-27 ((P18.204) note: four failed non-nullish proofs in `narrowByAssignmentRhs`, not an `any` RHS; census arm harness 32 -> 18, tsc 23 -> 13). OPEN: G5 -> G1 -> G3/G4/G6 -> Round A -> Round B. **G5 CENSUSED 2026-09-27** (read-only, frozen (P18.203) classes, `build/scratch-p18205-census/README.txt`, 2,160 cells vs tsgo; JDI force arm `jdi2/ArmG5b.java`) — **A REAL BLOCK-SCOPING DEFECT IN FOUR WALKERS, NOT A DESTRUCTURING GAP.** A local declared in a nested block, a `catch` or a `for` header that shadows an outer name is typed as the OUTER binding (417 cells print the outer type; 20 false positives on legal code, tsgo silent — TS2322 on `x = 1` after `let x;`/block `let`/`catch`, TS2365 on a `for (let x = 0; x < 1; x++)` shadowing a parameter, TS2551 `toFixed` on a block `const` shadowing a `string` parameter), and a block `const`'s inner type LEAKS past the block. Mechanism: the declaration / member-access / argument / arithmetic walkers each keep ONE flat map per function — R1 `getTypeOfIdentifierConventional` (~118585) falls through to file/global on any miss; R2 the shadow pre-passes (`applyBodyLocalShadowing` ~101129, `applyDestructuredShadow` ~101316, `registerNestedGlobalShadowName` ~101272) each miss a form and run before parameters are populated; R3 first-wins recorders (`recordDestructuredElementTypes` ~105044) vs `cvdaInferredLocalType` overwriting (the leak); R4 no block frame in cpa (~2805) / arg (~1737) / arith (~60399); R5 `caeLegacyDeclaredStringPath` (~110701) reads a stale annotation string. The force arm (lookup guard + per-block remove/restore) turned 256 wrong cells agreeing and 58 silent cells agreeing, 0 regressions, all 8 profiles + rxjs + marked byte-identical — so the grid is a CONTROL and the gate is pins + the corpus. **SPEC**: S1 a lookup guard (name absent from walk tables but bound between node and file by a param / var / let / const / catch / for-head -> `any`, gated on a per-file name set: ~330k calls on the compiler profile, bench it); S2 real scoped frames in all four walkers, opened only for a block / catch / case / for-header that declares a name the map holds or that is bound at file/global level, catch typed `unknown` under `useUnknownInCatchVariables`, the argument walker recording inside the scope instead of pre-recording function-wide; S3 function-top `let x;` drops the inherited annotation string; S4 for-header bindings in arith + cpa; S5 (optional) a destructuring case in `cpaApplyDeclRecordings`. `var` is never block-scoped. 9 ablation arms each with its own failing cell (README). 16 test classes reference the old flat workarounds — run the whole core module. **Split it**: S1+S3 first (smallest, fixes a1/a9/a13-class FPs), then S2 per walker. EARLIER: (CHK.173) CENSUSED 2026-09-24 (read-only, frozen (P18.200) classes, `build/scratch-p18201-census2/`, README.txt;
   113 cells; a JDI arm mirroring the element-access arm) — THE NAIVE ARM ADDS +23..+32 FPs PER PROFILE, ALL FROM SEVEN
   NAMED NARROWING GAPS; CLOSE THEM FIRST.** `checkSinglePropertyAccess` (~153776) has only two TS18048 arms — B81.1c
   (`emitTs18048ForOptionalPropertyAccessReceiver`, a receiver that is itself an optional member access, hence `o.p.q`)

@@ -1,5 +1,13 @@
 
 
+**(P18.199) — (CHK.170): `a ?? b` TYPES AS THE LEFT TYPE WHEN THE LEFT CANNOT BE NULLISH; +0 EVERYWHERE, 20,780 / 0 / 44 (2026-09-24).**
+`x ?? y` with a non-nullable `x` was typed `X | Y`, producing false positives (3 in the census cell, and the one row
+blocking (CHK.169)). A type-facts test mirroring tsgo's `EQUndefinedOrNull` (a type parameter answers through its
+constraint, an intersection only if every member can be nullish) now returns the left type for `??` and `??=`. 14-cell
+matrix: every row where the left cannot be nullish now matches tsgo; 8 pins. Screen 0; grid 8x0; cost_gate PASS;
+huge_methods 0. Next: (CHK.169), the module-class `this` false negatives.
+
+
 **(P18.198) — (CHK.152) STEP 3: A NARROWED-RECEIVER SECOND CHANCE AT THE ARGUMENT READER, THEN UNION / NULLABLE PARAMETERS; +0 EVERYWHERE, 20,772 / 0 / 44 (2026-09-24).**
 A named-object argument against a UNION parameter was never related. After a verbatim split of the argument checker
 (7,629 -> 4,297 bytecodes), a failing relation now re-reads a guard-narrowed receiver's member (never a replacement),

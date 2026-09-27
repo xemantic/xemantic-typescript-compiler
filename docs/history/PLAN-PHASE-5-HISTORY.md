@@ -1,3 +1,40 @@
+### Round (P18.194) — (CHK.168) round 1: an annotated arrow's EXPRESSION body is return-checked through the block-body path; 28 cells fixed, 0 FPs, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with a census of rxjs's last missed row running beside it.
+`walkArrowExpressionBodyScoped` (extracted from `walkFunctionBodiesInExpr`, 7,800 -> 6,767 bytecodes) runs, for an
+annotated arrow, the contextual pull and `checkArrowExpressionBodyReturn` (async flag from the arrow, generator off,
+anchored at the body with parentheses and `satisfies` skipped — tsgo `checkFunctionExpressionOrObjectLiteralMethodDeferred`
+-> `checkReturnExpression` -> `getEffectiveCheckNode`); the return check is keyed by expression + anchor
+(`checkReturnAssignability(expr, anchorPos, anchorLen, …)`, the `ReturnStatement` overload passing
+`RETURN_KEYWORD_WIDTH` — 13 hardcoded `stmt.pos, 6` sites retired); the spine's `checkArrowConciseBodyReturnType`
+is DELETED. **Where the census was wrong**: no dedupe was needed (its 3x emission was an artifact of the JDI-forced
+arm; keeping the spine call is absorbed by `init:tpTargetReturnDedup` except for conditional branches — the a5
+arm shows it); **"+0 on harness" was false as specified** — 1 ours-only row at `fourslashImpl.ts:3886` from two
+causes, both fixed: the body must be checked PAREN-STRIPPED (else `=> ({ … })` loses the object-literal contextual
+type and `"exact"` widens), and `keyof typeof ts.PatternMatchKind` (a QUALIFIED name) answered `string`/`never` —
+`keyofTypeQueryEnumMemberNames` now resolves qualified names, which also removes 3 FPs the block path already had.
+Parameterless annotated arrows never entered the scoped branch (gate fixed). **Async ternaries were a pre-existing
+FP in the block path** (each branch related to `Promise<number>`); branches are now related to the promised type
+(tsgo's recursion with the unwrapped type) — without that the new route would have added more.
+
+**Matrix**: census cells 24 MISS -> AGREE, 6 now on the right row with the block path's own text/span residue
+(`k_arr`, `k_nested`, `k_nc`, `k_or`, `k_async_id`, `k_await`), 9 still missing (round-2 hosts,
+`<T>(x: string): T => x`, `t_unionsrc_obj`), **0 FPs, all 54 clean controls clean** (the three mode-1 traps
+included), `B*` block twins unchanged; `hostb` 4 fixed (`ctx_annot`, `paren`, `ro`, `weak`).
+
+**Pins**: `ArrowExpressionBodyReturnTest`, 20 tests. Ablation, eight arms, all RED (async flag 2; contextual pull
+1; unstripped anchor 2; unstripped checked expression 1; spine call kept 3 incl. the return5 duplicate; async
+branch unwrap 2; parameterless scoping 1; qualified `keyof typeof` 1).
+
+**Gates**: full suite **20,742 / 0 / 44** (+20); corpus screen 0 of 8,725 (the 41 pending diffs byte-identical);
+cost_gate PASS (`typeOfExpr.calls` +0.75% — concise bodies are now typed); huge_methods 0 (`cpaSpineLeave` 7,898
+unchanged); spine closure audit clean; grid 8x `added=0 removed=0`; no `w:`. `rxjs` 0, `marked` 0, `cronstrue` 0.
+Residues: round 2 (class-property / `static` / default-export arrows reached by NOTHING); the shared display family
+(`string | 1` printed `string | number`, async mismatches naming `Promise<number>`, no member drill);
+`expressionTrueEnd` ignores internal whitespace (`x.trim( )` spans 8 where tsgo spans 9).
+
+**Successor**: (CHK.166)(a) step 1 (value-aware enum truthiness, specified, +0 predicted).
+
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
 ### Round (P18.193) — (CHK.159) step 2: the contextual-return FALLBACK for a call's result type; **`rxjs` reads 0 ours-only rows for the first time** (2026-09-24)
