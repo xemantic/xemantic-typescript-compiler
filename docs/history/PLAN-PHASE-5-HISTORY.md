@@ -1,3 +1,36 @@
+### Round (P18.200) — (CHK.169): a MODULE-file class is resolved through its own symbol (and its base through the per-file view) at the argument reader, so `this` is typed; 25 cells, 0 FPs, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.171) census landing beside it (recorded in its item).
+`callWalkClassSymbol` returns `globals[name]` only if it DECLARES the node, else `nodeSymbolOf(node)` if it declares it,
+else namespace exports (tsgo `tryGetThisTypeAtEx`, checker.go ~12135, types `this` from the class's own declared
+symbol); `ccetInstallClassThis` types `this` in method AND constructor bodies; the base is
+`lookupPerFileForNode(baseIdent, …)` (tsgo resolves it as an ordinary expression). **Where the census/brief was
+wrong**: the "legacy mirror" `checkCallTypesInStatement(s)` is NOT the declarationOnly path — it is reached only for a
+function-expression body inside a destructuring computed key and only ever sees B83.5 nested classes, so its update is
+unobservable (a4 0 RED, updated for parity); "26 module cells" is 22 by the census's own table (+ m07/s07 +
+`x09_try_ccet_m`); `rxmin/` did not reproduce the no-base FP as left — re-reduced from rxjs (the ingredients are a
+PRIVATE PARAMETER PROPERTY on the root class `Subscription` with the `super.schedule` subclass checked first; the
+mechanism itself is not isolated). **Found in passing and filed as (CHK.172): under `emitDeclarationOnly` the compiler
+reports NO diagnostics at all** — the orchestrator re-probed it: `pn("x")` and `const n: number = "s"` are 2 rows in
+tsgo and 0 here.
+
+**Matrix, 94 cells**: agree 64 -> **89**, missing 43 -> 18, ours-only 0 -> 0 (closed m01 m02 m04 m05 m07 m11-m14 m16
+m20-m23 m27 m29-m32 m34 m36-m38 s07 x09_m; still missing: accessor / arrow-property / initializer / static-block
+`this`, class expressions, anonymous default class, B83.5 nested classes, y01/y04/y08, x11 — mostly missing in script
+files too). Imported bases resolve to an alias symbol that `buildBaseConstructorSignatureForSuper` rejects, so a
+cross-file `super(...)` is still unchecked (inert).
+
+**Pins**: `ModuleClassThisArgumentTest`, 11 tests (module/script pairs; m11; m29 lib shadow; negative control m28;
+m31 two-file same-name with colliding offsets; the rxjs-shaped `super.schedule` guard). Ablation: no base lookup 3 RED
+(incl. the rx guard); keep a non-owning `globals` answer 1 (m29); no constructor `this` 1; legacy mirror **0**
+(unreachable); `nodeSymbolOf` not declaration-checked **0** (redundant — `owningBinderResult` already makes m31 right).
+
+**Gates**: full suite **20,791 / 0 / 44** (+11); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x
+`added=0 removed=0` — a live gate (the no-base arm adds rxjs `AsyncAction.ts:119`); orchestrator re-probe:
+`export class C { s = "x"; m() { pn(this.s); } }` now reports TS2345 as tsgo does. rxjs 0, marked 0, cronstrue 0.
+
+**Successor**: (CHK.172) (`emitDeclarationOnly` reports nothing) — census first; it may be large.
+
 ### Round (P18.199) — (CHK.170): `a ?? b` / `a ??= b` type as the LEFT type when the left cannot be nullish; x05's 3 FPs gone, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.171) census running beside it. `mayBeNullishByTypeFacts`

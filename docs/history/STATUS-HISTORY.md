@@ -1,5 +1,13 @@
 
 
+**(P18.205) — (CHK.173) G5 SLICE 1: A LOCAL THAT SHADOWS AN OUTER NAME NO LONGER READS AS THE OUTER BINDING AT THE NAME LOOKUP; 4 FALSE POSITIVES GONE, +0 EVERYWHERE, 20,884 / 0 / 44 (2026-09-27).**
+A `catch` variable, `for`-header `let`, block `let`/`const` or missed destructured leaf shadowing an outer name was
+typed as the outer binding. A lookup guard now answers `any` there, and a function-top `let x;` drops the outer's
+annotation. Gating caught a lost true TS2365 (fixed) and a +3.6% warm cost (memoized; now within noise). Only 2 of the
+census's 20 cells close — the walkers' flat tables (S2) own the rest. 15 pins; two countdown pins re-pointed. Screen 0;
+grid 8x0; libs 0; cost_gate PASS; huge_methods 0. Next: G3 + G6.
+
+
 **(P18.204) — (CHK.173) G2: A FLOW ASSIGNMENT FROM A NON-NULLISH CALL / ELEMENT READ NARROWS THE DECLARED UNION; +0 EVERYWHERE, 20,869 / 0 / 44 (2026-09-27).**
 `let s = m.get(k); if (!s) s = createSymbol(1); s.flags` kept `s` possibly-undefined because the non-nullish proof of
 the right-hand side failed four ways (the callee's own locals, a nested callee name declared twice, element reads, arrow

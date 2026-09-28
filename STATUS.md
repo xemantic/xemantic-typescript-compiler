@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,446** lines (**+101 at (P18.209)**, equality with a flow-narrowed value — a SEMANTIC parity change removing a FALSE-POSITIVE class; **-97 at (P18.208)**, the old optional-chain range walker deleted, the new guard is `OptionalChainGuard.kt` (157 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class and closing four false NEGATIVES the old walker hid; **+97 at (P18.207)**, tsgo's optional-chain containment rule for equality and switch narrowing — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+137 at (P18.206)**, the `??=`/`||=` branch and the nullish arrow-predicate shape — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
+extraction):** `Checker.kt` **201,538** lines (**+92 at (P18.210)**, three overload-selection helpers — a SEMANTIC parity change: a wrong overload (and an `any` result) became the right one; **+101 at (P18.209)**, equality with a flow-narrowed value — a SEMANTIC parity change removing a FALSE-POSITIVE class; **-97 at (P18.208)**, the old optional-chain range walker deleted, the new guard is `OptionalChainGuard.kt` (157 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class and closing four false NEGATIVES the old walker hid; **+97 at (P18.207)**, tsgo's optional-chain containment rule for equality and switch narrowing — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+137 at (P18.206)**, the `??=`/`||=` branch and the nullish arrow-predicate shape — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
 relation rule itself is `Relater.kt` 1,758 -> 1,809; a SEMANTIC parity change removing a FALSE-POSITIVE class;
 **+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
 constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
@@ -96,6 +96,12 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.210) — (CHK.173) S-G4b: OVERLOAD SELECTION PICKS THE OVERLOAD tsgo PICKS (optional parameters, constraints naming a type parameter, predicate parameters); +0 EVERYWHERE, 21,018 / 0 / 44 (2026-09-28).**
+`f(t: string): string; f(t?: number): number; f(x)` with `x: number | undefined` chose the FIRST overload, and an
+overload whose parameter is a type predicate accepted a plain boolean callback — tsc's two-overload `visitNodes` call
+typed as `any`. Three defects in overload acceptance fixed. The future TS18048 check now adds 0 rows on the profiles.
+19 pins, 7 of 7 arms RED. Screen 0; grid 8x0; libs 0; cost_gate PASS. Next: Round A, the TS18048 check itself.
+
 **(P18.209) — (CHK.173) S-G4: `if (r) { if (r === nodes) nodes.x }` NARROWS `nodes`; +0 EVERYWHERE, 20,999 / 0 / 44 (2026-09-28).**
 Comparing a reference with a value that is non-nullish only because it was flow-narrowed now removes nullish from the
 reference, as tsgo does (and feeds the optional-chain rule). 29 pins, 9 of 9 arms RED. The real tsc site this was
@@ -120,10 +126,3 @@ libs 0; cost_gate PASS; warm A/B inside the band. Next: S-G1c.
 element type. Both now follow tsgo (and `Boolean(p)`, which tsgo does not treat as a predicate, is pinned as not
 one). 18 pins, 7 of 8 arms RED (one redundant guard). Screen 0; grid 8x0; libs 0; cost_gate PASS; huge_methods 0.
 Next: S-G1, optional-chain comparison narrowing.
-
-**(P18.205) — (CHK.173) G5 SLICE 1: A LOCAL THAT SHADOWS AN OUTER NAME NO LONGER READS AS THE OUTER BINDING AT THE NAME LOOKUP; 4 FALSE POSITIVES GONE, +0 EVERYWHERE, 20,884 / 0 / 44 (2026-09-27).**
-A `catch` variable, `for`-header `let`, block `let`/`const` or missed destructured leaf shadowing an outer name was
-typed as the outer binding. A lookup guard now answers `any` there, and a function-top `let x;` drops the outer's
-annotation. Gating caught a lost true TS2365 (fixed) and a +3.6% warm cost (memoized; now within noise). Only 2 of the
-census's 20 cells close — the walkers' flat tables (S2) own the rest. 15 pins; two countdown pins re-pointed. Screen 0;
-grid 8x0; libs 0; cost_gate PASS; huge_methods 0. Next: G3 + G6.
