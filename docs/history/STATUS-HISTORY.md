@@ -1,5 +1,13 @@
 
 
+**(P18.211) — (CHK.173) ROUND A: `x.length` WITH `x: string | null` NOW REPORTS "'x' IS POSSIBLY 'null'" (TS18047 / TS18048 / TS18049) AS tsgo DOES; +0 ON EVERY PROFILE AND LIBRARY, 21,118 / 0 / 44 (2026-09-28).**
+The most common strictNullChecks error was never reported on an identifier receiver — for an embedded checker, the
+most visible false negative. Six preparatory rounds closed the narrowing gaps that would have made it fire on legal
+code, so it lands with 0 false positives on tsc's sources, rxjs, marked and cronstrue. 100 pins (56 report, 42 stay
+silent), 13 of 16 arms RED (3 recorded redundant). `narrow.walks` +3.06% (one walk per nullable receiver) re-baselined;
+warm A/B inside the band. Next: G5 S2 (block-scoped locals), then Round B (body locals, `x?: T`).
+
+
 **(P18.210) — (CHK.173) S-G4b: OVERLOAD SELECTION PICKS THE OVERLOAD tsgo PICKS (optional parameters, constraints naming a type parameter, predicate parameters); +0 EVERYWHERE, 21,018 / 0 / 44 (2026-09-28).**
 `f(t: string): string; f(t?: number): number; f(x)` with `x: number | undefined` chose the FIRST overload, and an
 overload whose parameter is a type predicate accepted a plain boolean callback — tsc's two-overload `visitNodes` call

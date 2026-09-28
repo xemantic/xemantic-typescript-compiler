@@ -1,3 +1,34 @@
+### Round (P18.206) — (CHK.173) G3 + G6: `??=` / `||=` narrow the target, and a nullish arrow body infers a type predicate; 42 of 46 census cells agree with tsgo (was 25), the arm's tsc residual 7 -> 3, +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent, no census beside it; the orchestrator re-ran every gate. **G3**:
+`narrowByAssignmentRhs` typed the right-hand side with its four resolvers (member read, identifier, conditional,
+element read) only for a plain `=`; they moved verbatim into `resolvedAssignedTypeForFlow`, and a `??=` / `||=`
+branch (`logicalAssignmentJoin`) answers the antecedent minus its nullish (`??=`) or falsy (`||=`) part, joined with
+the declared type reduced by the RHS; a union RHS stays refused (round 463's `=` rule). **G6**:
+`inferDiscriminantArrowPredicateTarget` knew only the discriminant and `typeof` shapes on an expression body; it now
+skips parentheses, accepts a `{ return <expr> }` block, and `inferNullishArrowPredicateShape` / `…Target` infer a
+predicate for `!==`/`!=` against `undefined` / `void 0` / `null` (either order) and `!!p` (every kept member
+never-falsy; `any`/`unknown`/a type parameter/a test that removes nothing -> none). **Where the census/brief were
+wrong** (all measured on tsgo 7.0.2): `Boolean(p)` infers NO predicate in tsgo (pinned as a control, not added);
+`null` is an `Identifier("null")` from the parser (as `true`/`false` are — CLAUDE.md), so `isNullRef`'s keyword
+check missed `p != null`; and a lone `x !== null` over `R | undefined` infers nothing (it removes nothing), which
+the census treated as interchangeable with `!== undefined`.
+
+**Measured**: census cells 25 -> 42 of 46 agreeing (the 4 left are G6 e/f — an inferred predicate of a USER function
+used as a call guard, `narrowByCallPredicate`, no profile site); the builder's own 18 fixtures 6 -> 18 agreeing,
+including tsgo's exact `filter` result display (`(R | null)[]`, `R[]`, `("a" | R)[]`). JDI arm (the future Round A
+TS18048): tsc **7 -> 3**, removed exactly builder.ts:1060/1068 (G3) and watch.ts:284 x2 (G6); harness 8 after (3 G1 +
+1 G1c + 2 G7 + 2 G4). **Pins**: `LogicalAssignmentAndNullishPredicateNarrowingTest` (18). **Ablation**, one mistake
+per arm: A1 branch removed 7 RED, A2 raw antecedent 7, **A3 union RHS accepted 0** (a REDUNDANT guard — a nullable RHS
+relates to no single declared member, so the reduction already returns the declared union), B1 primitives under
+`!!p` 2, B2 `Boolean(p)` 1, B3 block bodies dropped 1, B4 `!= null` strict 2, B5 `Identifier("null")` 2.
+
+**Gates**: full suite **20,902 / 0 / 44** (+18); corpus screen 0 of 8,725; cost_gate PASS (`narrow.walks` -0.06%,
+all within 0.13%); huge_methods 0; grid 8x `added=0 removed=0` (chain control OK), rxjs / marked 0 -> 0, cronstrue
+1 -> 1. **Residues**: a `function (x) { return x !== undefined }` passed to `filter` infers nothing (only arrows);
+a `boolean` member and `unknown` elements are refused conservatively (tsgo infers, `{} | null` for `unknown`).
+**Successor**: S-G1 (+ switch), then S-G1c, S-G4, G5 S2, Round A.
+
 ### Round (P18.205) — (CHK.173) G5 slice 1 (S1 + S3): a local-shadow lookup guard and the `let x;` annotation-string drop; 4 false positives gone, only 2 of the census's 20 cells — the rest is S2, as measured (2026-09-27)
 
 Orchestrated: one implementation subagent beside one read-only census agent (G1/G3/G4/G6, recorded in the (CHK.173)
