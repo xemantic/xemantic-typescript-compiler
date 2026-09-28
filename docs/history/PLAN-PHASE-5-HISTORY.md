@@ -1,3 +1,32 @@
+### Round (P18.199) — (CHK.170): `a ?? b` / `a ??= b` type as the LEFT type when the left cannot be nullish; x05's 3 FPs gone, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.171) census running beside it. `mayBeNullishByTypeFacts`
+mirrors tsgo's `hasTypeFacts(t, TypeFactsEQUndefinedOrNull)` under strictNullChecks (`any` / `unknown` / error: yes;
+null / undefined / void: yes; union: any member; intersection: EVERY member — the fact is in tsgo's AND mask; type
+parameter: its CONSTRAINT decides, unconstrained yes; everything else no), and `combineBinaryTypes`' `??` and `??=`
+arms return the left type when it cannot be nullish (tsgo checker.go ~12484: `resultType := leftType`, union only if
+`hasTypeFacts(…)`); without strictNullChecks nothing changes (every type carries the fact there). **The queue item's
+rule was slightly too broad**: a type parameter answers through its constraint (`U extends string` -> `U ?? s` is `U`),
+`never` is not nullish. No other site types `??` (the other 36 `QuestionQuestion` sites are narrowing / contextual /
+walk code). A brand filter was built, measured REDUNDANT (a7 0 RED) and slightly worse than tsgo for
+`undefined & {…}`, and removed.
+
+**Matrix, 14 cells** (ours-only rows): x05 3 -> **0**, primitive left 2 -> 0, object left 2 -> 0, union left 1 -> 0,
+optional property 1 -> 0, `??=` 3 -> 1, the `session.ts:2158` shape 1 -> 0, literal left 3 -> 1, type parameter 3 -> 2;
+controls (nullable, void, non-strict) 0; every remaining ours-only row is WORDING where the left CAN be nullish, except
+c14's two pre-existing rows (the operand not narrowed to `never` at the argument reader after two `typeof … return`
+guards). Residues (display): `unknown ?? s` prints `unknown | string` (tsgo `{}`), `T ?? s` prints `T` (tsgo
+`NonNullable<T>`), no subtype reduction / literal generalization on a nullable left (`string | "a"` vs `string`).
+
+**Pins**: `NullishCoalescingLeftTypeTest`, 8 tests. Ablation: `??` return 4 RED; `??=` return 1; strictNullChecks gate
+1; type parameter always nullish 1; union any->all 1; any/unknown arm 0 (display-only, `any` absorbs either way).
+
+**Gates**: full suite **20,780 / 0 / 44** (+8); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x `added=0 removed=0`;
+warning-clean. rxjs 0, marked 0, cronstrue 0 at its target-free config. Housekeeping: a stale paragraph copied from the
+(P18.180) grid driver into every later `scripts/p18-18x/19x-grid.sh` header was removed (19 files; comment-only).
+
+**Successor**: (CHK.169) — this was its prerequisite; its census predicts +0 everywhere with the class AND base lookups.
+
 ### Round (P18.198) — (CHK.152) step 3: a narrowed-receiver second chance at the argument reader, then UNION / nullable parameters admitted; harness +0, all 8 profiles byte-identical (2026-09-24)
 
 Orchestrated: one implementation subagent, with two read-only censuses finishing beside it — rxjs's last missed row

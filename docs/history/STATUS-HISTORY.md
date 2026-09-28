@@ -1,5 +1,13 @@
 
 
+**(P18.204) — (CHK.173) G2: A FLOW ASSIGNMENT FROM A NON-NULLISH CALL / ELEMENT READ NARROWS THE DECLARED UNION; +0 EVERYWHERE, 20,869 / 0 / 44 (2026-09-27).**
+`let s = m.get(k); if (!s) s = createSymbol(1); s.flags` kept `s` possibly-undefined because the non-nullish proof of
+the right-hand side failed four ways (the callee's own locals, a nested callee name declared twice, element reads, arrow
+callees). All four fixed; the census arm for the missing identifier TS18048 loses its 14 G2 false positives (harness
+32 -> 18). 10 pins, six arms RED, one countdown re-pointed to tsgo. Screen 0; grid 8x0; libs 0; cost_gate PASS;
+huge_methods 0. Found: the cronstrue library arm of recent grids was vacuous (wrong directory). Next: (CHK.173) G5.
+
+
 **(P18.203) — (CHK.172): `emitDeclarationOnly` RUNS THE NORMAL CHECKER AND `noCheck` IS HONOURED; +0 ON EVERY `--noEmit` GATE, 20,859 / 0 / 44 (2026-09-25).**
 Under `emitDeclarationOnly` xtsc used to check through a whitelist that skipped almost everything, so a project that
 only emits `.d.ts` (the esbuild/rollup setup) got a near no-op checker. The program is now checked exactly as a plain

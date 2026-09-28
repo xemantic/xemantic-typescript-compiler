@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,345** lines (**-97 at (P18.208)**, the old optional-chain range walker deleted, the new guard is `OptionalChainGuard.kt` (157 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class and closing four false NEGATIVES the old walker hid; **+97 at (P18.207)**, tsgo's optional-chain containment rule for equality and switch narrowing — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+137 at (P18.206)**, the `??=`/`||=` branch and the nullish arrow-predicate shape — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
+extraction):** `Checker.kt` **201,446** lines (**+101 at (P18.209)**, equality with a flow-narrowed value — a SEMANTIC parity change removing a FALSE-POSITIVE class; **-97 at (P18.208)**, the old optional-chain range walker deleted, the new guard is `OptionalChainGuard.kt` (157 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class and closing four false NEGATIVES the old walker hid; **+97 at (P18.207)**, tsgo's optional-chain containment rule for equality and switch narrowing — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+137 at (P18.206)**, the `??=`/`||=` branch and the nullish arrow-predicate shape — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
 relation rule itself is `Relater.kt` 1,758 -> 1,809; a SEMANTIC parity change removing a FALSE-POSITIVE class;
 **+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
 constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
@@ -96,6 +96,12 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.209) — (CHK.173) S-G4: `if (r) { if (r === nodes) nodes.x }` NARROWS `nodes`; +0 EVERYWHERE, 20,999 / 0 / 44 (2026-09-28).**
+Comparing a reference with a value that is non-nullish only because it was flow-narrowed now removes nullish from the
+reference, as tsgo does (and feeds the optional-chain rule). 29 pins, 9 of 9 arms RED. The real tsc site this was
+aimed at did NOT move: re-running the arm on the final binary found its cause is an overloaded call typed `any`
+(filed as S-G4b). Screen 0; grid 8x0; libs 0; cost_gate PASS. Next: S-G4b, then Round A (the TS18048 check itself).
+
 **(P18.208) — (CHK.173) S-G1c: `t?.[t.length - 1]` / `d?.m(d.p)` / A CLOSURE INSIDE THE CHAIN SEE THE ROOT AS NON-NULLISH; 42 OF 46 CELLS MATCH tsgo, +0 EVERYWHERE, 20,970 / 0 / 44 (2026-09-28).**
 A reference read inside the later links of its own optional chain was treated as possibly undefined. A new
 `OptionalChainGuard` decides it as tsgo does (closures by our flow walk's capture gate, parens end the chain,
@@ -121,10 +127,3 @@ typed as the outer binding. A lookup guard now answers `any` there, and a functi
 annotation. Gating caught a lost true TS2365 (fixed) and a +3.6% warm cost (memoized; now within noise). Only 2 of the
 census's 20 cells close — the walkers' flat tables (S2) own the rest. 15 pins; two countdown pins re-pointed. Screen 0;
 grid 8x0; libs 0; cost_gate PASS; huge_methods 0. Next: G3 + G6.
-
-**(P18.204) — (CHK.173) G2: A FLOW ASSIGNMENT FROM A NON-NULLISH CALL / ELEMENT READ NARROWS THE DECLARED UNION; +0 EVERYWHERE, 20,869 / 0 / 44 (2026-09-27).**
-`let s = m.get(k); if (!s) s = createSymbol(1); s.flags` kept `s` possibly-undefined because the non-nullish proof of
-the right-hand side failed four ways (the callee's own locals, a nested callee name declared twice, element reads, arrow
-callees). All four fixed; the census arm for the missing identifier TS18048 loses its 14 G2 false positives (harness
-32 -> 18). 10 pins, six arms RED, one countdown re-pointed to tsgo. Screen 0; grid 8x0; libs 0; cost_gate PASS;
-huge_methods 0. Found: the cronstrue library arm of recent grids was vacuous (wrong directory). Next: (CHK.173) G5.
