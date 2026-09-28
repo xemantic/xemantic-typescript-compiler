@@ -1,3 +1,36 @@
+### Round (P18.196) — (CHK.164) step 1: truthiness narrowing splits `boolean`, and a flow join rejoins `true | false` into `boolean`; `decl` 25 -> 0 differing, 8 FPs gone (2026-09-24)
+
+Orchestrated: one implementation subagent, beside the still-running census of rxjs's last missed row.
+`splitBooleanForTruthiness` (after (P18.195)'s `splitEnumsForTruthiness` in `narrowByTruthiness`) turns a bare
+`boolean` or a `boolean` union member into the half the branch allows — tsgo's `boolean` IS
+`false | true` (checker.go ~1002) filtered member-wise by `getAdjustedTypeWithFacts`. **The census's patch arm was
+INCOMPLETE and would have introduced a new tsgo divergence**: after `if (x) {}`, the two branches join as
+`false | true`, which prints `boolean` but is elaborated MEMBER BY MEMBER — `const d: never = x` grew a chain line
+tsgo does not print (tsgo's `boolean` is a primitive there). The grid compares head lines only, so only the new
+chain-aware pins saw it. Fixed by `rejoinBooleanHalves` in `flowJoinUnion`: when the DECLARED type contains
+`boolean` and a join holds both halves, it rejoins them — which also fixes a pre-existing chain divergence after
+(P18.188)'s `if (x === true) {}`. `||=`/`&&=` result types (tsgo `removeDefinitelyFalsyTypes` /
+`extractDefinitelyFalsyTypes`) now agree too. Three census cells lacked a `tsconfig.json` (their `ours` output
+covered 0 files).
+
+**Matrix**: `decl` 15 agree / 25 diff -> **40 / 0**; `ctl` ours-only 2 -> 0 (c19/c20 FPs gone); `misc` ours-only 3
+-> 1 (m9/m11 gone; m10 is the `||` result type); `member` 6 -> 14 agree; `argnever` 57 -> 62; `argnum`, `assign`,
+`ret`, `opt*` unchanged. 70 rows changed: 39 now agree, 8 FPs on legal code gone, 23 text-diffs with the head now
+right (the argument reader names `boolean` or the wrong member in the chain). No row got worse.
+
+**Pins**: `BooleanTruthinessNarrowingTest`, 5 tests at the declaration reader (both branches, bare and union,
+`boolean | undefined`, silent legal code, no-removal controls, the join). Ablation: no split 5 RED; bare only 3;
+union only 4; no rejoin 2; truthy branch only 4.
+
+**Gates**: full suite **20,756 / 0 / 44** (+5); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x
+`added=0 removed=0` and a FULL-output diff (chains included) 0 changes on all 8 profiles and the three libraries —
+a control, as predicted; no `w:`. Residues: `const z = x ? true : false` still gets the extra chain line (no flow
+join — a general fix would make `getUnionType` merge `false | true`, pre-existing); the argument reader's chain;
+m10 (`x || true`) and m1/m2 (`Boolean(x)`, (CHK.166)(b)); step 2 (the legacy truthiness arm) and (b).
+
+**Successor**: (CHK.162) (intersection source vs union target false TS2741) or (CHK.163)/(CHK.160) — or the rxjs
+last-row round once its census lands.
+
 ### Round (P18.195) — (CHK.166)(a) step 1: VALUE-AWARE enum truthiness — an enum is no longer washed to `never`; 193 -> 639 of 660 cells, byte-identical on every instrument (2026-09-24)
 
 Orchestrated: one implementation subagent, with the census of rxjs's last missed row running beside it.

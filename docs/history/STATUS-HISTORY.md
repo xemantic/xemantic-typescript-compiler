@@ -1,5 +1,14 @@
 
 
+**(P18.201) — (CHK.171) R1: CONSTRUCTOR / SETTER AND NESTED-FUNCTION FRAMES KEEP THE TYPE-PARAMETER SCOPE; 13 ROWS CLOSED, +0 EVERYWHERE, 20,814 / 0 / 44 (2026-09-24).**
+A class's type parameters were out of scope in its constructor and setters, and an outer function's in a nested
+function, so `T[]` read `any[]` and silently hid errors. Frames now build their scope from the nearest enclosing one
+plus the class's type parameters, inner names shadowing. Matrix 69 -> 82 agree, exactly the predicted 13; 23 pins.
+Screen 0; grid 8x0; huge_methods 0; cost_gate `mapped.hits` +3.1% (cache hits), rebaselined. Found and filed: **(CHK.174),
+`T extends number` rejected against `number` at the declaration/return readers — a false positive on HEAD**; and **(CHK.173),
+`x.length` on a nullable identifier never reports "possibly null"**, the most common strict-mode error.
+
+
 **(P18.200) — (CHK.169): INSIDE A MODULE-FILE CLASS, `this` IS TYPED AT THE ARGUMENT READER; 25 CELLS CLOSED, +0 EVERYWHERE, 20,791 / 0 / 44 (2026-09-24).**
 `export class C { s = "x"; m() { pn(this.s); } }` was silent — the class was looked up only in `globals`, which never
 holds a module file's declarations (and `export class Map` got the lib `Map`). The class now resolves through its own
