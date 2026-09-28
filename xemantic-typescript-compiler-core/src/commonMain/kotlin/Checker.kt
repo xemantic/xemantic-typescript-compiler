@@ -153692,18 +153692,12 @@ interface DataView {
         val closure = found ?: return false
         // Receiver must be CAPTURED — not one of the closure's own params/locals.
         if (root in closure.localNames) return false
-        // Round 479: a closure that is an ARGUMENT of a call whose callee chain is
-        // rooted at `root?.` executes only when `root` is non-nullish —
+        // Round 479 / (CHK.173) S-G1c: a closure that is an ARGUMENT of a later part of
+        // an optional chain guarded by `root` runs only when `root` is non-nullish —
         // `program?.getSourceFiles().slice().sort().forEach(f => { program.x })`
-        // (tsc harness incrementalUtils.ts getProgramStructure). tsc binds
-        // optional-chain conditions into the arguments' flow; our Flow.kt does not
-        // model chains, so bail here (suppression-only, FP-safe).
-        val graphSource = graph.sourceFile
-        if (graphSource != null) {
-            closure.container?.let { c ->
-                if (closureGuardedByOptionalChainRoot(c, root, graphSource)) return false
-            }
-        }
+        // (tsc harness incrementalUtils.ts getProgramStructure). tsgo binds the chain's
+        // condition into the arguments' flow; our Flow.kt does not model chains.
+        if (optionalChainGuardsRef(recv, root)) return false
         // B467: a function-body `var`/`let` captured in a nested closure does not resolve
         // its declared annotation type through the closure scope (getTypeOfExpression →
         // any), unlike a parameter. When the receiver is a captured `var` with a known
@@ -153739,117 +153733,23 @@ interface DataView {
     }
 
     /**
-     * Round 479: is [closureNode] contained (by range) in an ARGUMENT of some
-     * CallExpression whose callee chain's leftmost link is `[root]?.` — i.e.
-     * `root?.a().b.forEach(closure)`? Argument evaluation implies the optional
-     * chain did not short-circuit, so `root` is non-nullish while the closure
-     * runs. Iterative worklist (never recurse a BinaryExpression left spine —
-     * the binderBinaryExpressionStress rule).
+     * (CHK.173) S-G1c: is [ref] evaluated inside the non-nullish part of an optional
+     * chain guarded by the reference [name] (`t?.[t.length - 1]`, `d?.m(d.p)`,
+     * `d?.a.forEach(() => d.p)`)? See [optionalChainGuardsReference]. A closure is
+     * crossed only where the flow walk itself would carry narrowing in
+     * ([outerFlowForCapturedName]). Shared by the element-read TS1804x arm, B464 and
+     * (to come) Round A's property arm.
      */
-    private fun closureGuardedByOptionalChainRoot(
-        closureNode: Node, root: String, sourceFile: SourceFile,
-    ): Boolean {
-        val work = ArrayDeque<Node>()
-        for (s in sourceFile.statements) {
-            if (closureNode.pos >= s.pos && closureNode.end <= s.end) work.add(s)
-        }
-        while (work.isNotEmpty()) {
-            val n = work.removeLast()
-            if (closureNode.pos < n.pos || closureNode.end > n.end) continue
-            if (n is CallExpression &&
-                n.arguments.any { a -> closureNode.pos >= a.pos && closureNode.end <= a.end }
-            ) {
-                // Walk the callee chain leftward; the link whose receiver IS the
-                // bare root Identifier must carry the `?.`.
-                var e: Expression = n.expression
-                var guarded = false
-                loop@ while (true) {
-                    when (e) {
-                        is PropertyAccessExpression -> {
-                            if ((e.expression as? Identifier)?.text == root && e.questionDotToken) guarded = true
-                            e = e.expression
-                        }
-                        is ElementAccessExpression -> {
-                            if ((e.expression as? Identifier)?.text == root && e.questionDotToken) guarded = true
-                            e = e.expression
-                        }
-                        is CallExpression -> e = e.expression
-                        is ParenthesizedExpression -> e = e.expression
-                        is NonNullExpression -> e = e.expression
-                        else -> break@loop
-                    }
-                }
-                if (guarded) return true
-            }
-            for (c in nodeChildrenForRangeWalk(n)) {
-                if (closureNode.pos >= c.pos && closureNode.end <= c.end) work.add(c)
-            }
-        }
-        return false
-    }
-
-    /** Children of [n] relevant for the range-containment walk above — statements,
-     *  expressions, and function bodies; iterative-friendly (returns a list). */
-    private fun nodeChildrenForRangeWalk(n: Node): List<Node> = when (n) {
-        is ExpressionStatement -> listOf(n.expression)
-        is VariableStatement -> n.declarationList.declarations.mapNotNull { it.initializer }
-        is ReturnStatement -> listOfNotNull(n.expression)
-        is IfStatement -> listOfNotNull(n.expression, n.thenStatement, n.elseStatement)
-        is Block -> n.statements
-        is ForStatement -> listOfNotNull(n.initializer, n.condition, n.incrementor, n.statement)
-        is ForInStatement -> listOfNotNull(n.expression, n.statement)
-        is ForOfStatement -> listOfNotNull(n.expression, n.statement)
-        is WhileStatement -> listOfNotNull(n.expression, n.statement)
-        is DoStatement -> listOfNotNull(n.statement, n.expression)
-        is SwitchStatement -> n.caseBlock.flatMap {
-            when (it) {
-                is CaseClause -> it.statements + listOfNotNull(it.expression)
-                is DefaultClause -> it.statements
-                else -> emptyList()
-            }
-        }
-        is TryStatement -> listOfNotNull(n.tryBlock, n.catchClause?.block, n.finallyBlock)
-        is LabeledStatement -> listOf(n.statement)
-        is FunctionDeclaration -> listOfNotNull(n.body)
-        is ClassDeclaration -> n.members
-        is ModuleDeclaration -> (n.body as? ModuleBlock)?.statements ?: emptyList()
-        is MethodDeclaration -> listOfNotNull(n.body)
-        is Constructor -> listOfNotNull(n.body)
-        is GetAccessor -> listOfNotNull(n.body)
-        is SetAccessor -> listOfNotNull(n.body)
-        is PropertyDeclaration -> listOfNotNull(n.initializer)
-        is ArrowFunction -> listOfNotNull(n.body)
-        is FunctionExpression -> listOfNotNull(n.body)
-        is CallExpression -> n.arguments + n.expression
-        is NewExpression -> (n.arguments ?: emptyList()) + n.expression
-        is PropertyAccessExpression -> listOf(n.expression)
-        is ElementAccessExpression -> listOf(n.expression, n.argumentExpression)
-        is BinaryExpression -> listOf(n.left, n.right)
-        is ConditionalExpression -> listOf(n.condition, n.whenTrue, n.whenFalse)
-        is ParenthesizedExpression -> listOf(n.expression)
-        is PrefixUnaryExpression -> listOf(n.operand)
-        is PostfixUnaryExpression -> listOf(n.operand)
-        is AwaitExpression -> listOf(n.expression)
-        is NonNullExpression -> listOf(n.expression)
-        is AsExpression -> listOf(n.expression)
-        is SatisfiesExpression -> listOf(n.expression)
-        is TypeAssertionExpression -> listOf(n.expression)
-        is ObjectLiteralExpression -> n.properties.mapNotNull {
-            when (it) {
-                is PropertyAssignment -> it.initializer
-                is ShorthandPropertyAssignment -> it.objectAssignmentInitializer
-                is MethodDeclaration -> it.body
-                is GetAccessor -> it.body
-                is SetAccessor -> it.body
-                is SpreadAssignment -> it.expression
-                else -> null
-            }
-        }
-        is ArrayLiteralExpression -> n.elements
-        is SpreadElement -> listOf(n.expression)
-        is TemplateExpression -> n.templateSpans.map { it.expression }
-        else -> emptyList()
-    }
+    internal fun optionalChainGuardsRef(ref: Expression, name: String): Boolean =
+        optionalChainGuardsReference(
+            ref, name,
+            refPath = { getReferencePath(it) },
+            chainContainsRef = { e, n -> isOptionalChainNode(e) && optionalChainContainsReference(e, n) },
+            mayCrossClosure = { c ->
+                val start = currentFlowGraph?.innermostClosureAt(c.pos)
+                start != null && start.container === c && outerFlowForCapturedName(start, name) != null
+            },
+        )
 
     private fun checkSinglePropertyAccess(
         expr: PropertyAccessExpression, source: String, fileName: String,
@@ -154319,6 +154219,9 @@ interface DataView {
         val hasNull = typeIncludesNull(narrowed)
         val hasUndef = typeIncludesExplicitUndefined(narrowed)
         if (!hasNull && !hasUndef) return
+        // (CHK.173) S-G1c: `t?.[t['length'] - 1]`, `d?.m(d['p'])` — a later part of an
+        // optional chain guarded by the receiver (tsgo's optional-chain condition).
+        if (optionalChainGuardsRef(recv, recv.text)) return
         val (code, kind) = when {
             hasNull && hasUndef -> 18049 to "'null' or 'undefined'"
             hasNull -> 18047 to "'null'"
