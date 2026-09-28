@@ -85,7 +85,70 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
         return bound
     }
 
+    // (CHK.173) G5 S2 — per-file memo of [directScopeNames], keyed by the per-file `nodeId`.
+    private var directNamesFile: String? = null
+    private var directNamesCache = IntKeyMap<List<String>>(64)
+
+    /**
+     * (CHK.173) G5 S2 — the names a BLOCK SCOPE declares directly, for the spine walkers
+     * that keep one flat map per function (arith, cpa): the `let` / `const` / `using` leaves
+     * of a statement-position [Block]'s own statements (plus a `catch` variable's leaves when
+     * the block is a catch body), of EVERY clause of a [SwitchStatement] (the case block is
+     * ONE scope — clauses share it), and of a [ForStatement]'s header. Empty for anything
+     * else, including a function / accessor / static-block body (the function frame's job)
+     * and a file-level block. `var` is never included — it is function-scoped.
+     *
+     * The walker opens a scope only for the names it holds or that are bound at file /
+     * global level, so a block that shadows nothing pays one memo probe.
+     */
+    fun directScopeNames(scope: Node, fileName: String?): List<String> {
+        val id = (scope as NodeBase).nodeId
+        if (id < 0) return collectDirectScopeNames(scope)
+        if (directNamesFile != fileName) { directNamesCache = IntKeyMap(64); directNamesFile = fileName }
+        return directNamesCache[id] ?: collectDirectScopeNames(scope).also { directNamesCache[id] = it }
+    }
+
     companion object {
+
+        /** The uncached body of [directScopeNames]. */
+        fun collectDirectScopeNames(scope: Node): List<String> {
+            var out: ArrayList<String>? = null
+            fun leaves(n: Node?) {
+                when (n) {
+                    is Identifier -> (out ?: ArrayList<String>(2).also { out = it }).add(n.text)
+                    is ObjectBindingPattern -> for (e in n.elements) leaves(e.name)
+                    is ArrayBindingPattern -> for (e in n.elements) (e as? BindingElement)?.let { leaves(it.name) }
+                    else -> {}
+                }
+            }
+            fun list(init: Node?) {
+                val l = init as? VariableDeclarationList ?: return
+                if (l.flags != SyntaxKind.LetKeyword && l.flags != SyntaxKind.ConstKeyword &&
+                    l.flags != SyntaxKind.UsingKeyword && l.flags != SyntaxKind.AwaitUsingKeyword) return
+                for (d in l.declarations) leaves(d.name)
+            }
+            fun statements(sts: List<Statement>) { for (st in sts) if (st is VariableStatement) list(st.declarationList) }
+            when (scope) {
+                is Block -> {
+                    when (val p = (scope as NodeBase).parent) {
+                        null, is SourceFile, is FunctionDeclaration, is FunctionExpression, is ArrowFunction,
+                        is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor,
+                        is ClassStaticBlockDeclaration -> return emptyList()
+                        is CatchClause -> p.variableDeclaration?.let { leaves(it.name) }
+                        else -> {}
+                    }
+                    statements(scope.statements)
+                }
+                is SwitchStatement -> for (clause in scope.caseBlock) when (clause) {
+                    is CaseClause -> statements(clause.statements)
+                    is DefaultClause -> statements(clause.statements)
+                    else -> {}
+                }
+                is ForStatement -> list(scope.initializer)
+                else -> {}
+            }
+            return out ?: emptyList()
+        }
 
         private const val NONE = 0
         private const val VARIABLE = 1

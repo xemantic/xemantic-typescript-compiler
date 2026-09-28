@@ -209,20 +209,22 @@ class BlockScopedReceiverTypeTest {
     /**
      * a2's shape: `applyAmbiguousBlockScopedLocals` registers a name declared
      * twice at any statement depth as `anyType` — flat `currentLocalTypes` cannot
-     * represent two block scopes — and that SUPPRESSION is older and wider than
-     * this change, so it must keep winning. tsc reports here; we do not.
+     * represent two block scopes — and this pin used to assert that suppression
+     * kept winning (tsc reported, we did not).
      *
-     * It discriminates where the global-shadow shape below does NOT, because this
-     * registrar writes only `currentLocalTypes` while `applyNestedGlobalShadow`
-     * writes `currentShadowedNames` as well.
+     * (CHK.173) G5 S2 slice 1: the member-access walker now opens a block scope for
+     * each block that redeclares a name it holds, so the `any` registration is
+     * removed inside the first block and the read resolves to the block's own
+     * `A | F` — exactly tsgo 7.0.2's row, elaboration included.
      */
     @Test
-    fun `an AMBIGUOUS block-scoped name keeps its anyType suppression`() {
+    fun `an AMBIGUOUS block-scoped name reports the member tsgo reports`() {
         val d = diagnose(
             prelude +
                 "export function f() { { const c: A | F = u; c.files; } { const c: A | B = ab; } }"
         )
-        assert(d.none { it.code == 2339 })
+        val rows = d.map { "${it.line}:${it.character} TS${it.code}: ${it.message}" }
+        assert(rows == listOf("7:47 TS2339: Property 'files' does not exist on type 'A | F'."))
     }
 
 

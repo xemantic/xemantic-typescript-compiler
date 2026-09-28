@@ -2856,6 +2856,79 @@ class Checker(
                 }
             }
         }
+        cpaOpenBlockScope(node, parent)
+    }
+
+    /**
+     * (CHK.173) G5 S2 slice 1 — the key a block-scoping walker opens its scope on for
+     * [node]: the [Block] / [ForStatement] itself, or the [SwitchStatement] when [node] is
+     * its FIRST clause (the case block is one scope, shared by every clause). Null
+     * otherwise; the scope's names come from [LocalShadowGuard.directScopeNames].
+     */
+    private fun blockScopeKeyFor(node: Node, parent: Node?): Node? = when (node) {
+        is Block, is ForStatement -> node
+        is CaseClause, is DefaultClause ->
+            (parent as? SwitchStatement)?.takeIf { it.caseBlock.firstOrNull() === node }
+        else -> null
+    }
+
+    /** (CHK.173) G5 S2 — is [name] bound at file or global level (a leak target)? */
+    private fun blockScopeOuterBound(name: String): Boolean =
+        globals[name] != null || currentFileLocals?.get(name) != null
+
+    /**
+     * (CHK.173) G5 S2 — opens [scope] over a walker's flat [map]: removes each direct name
+     * ([LocalShadowGuard.directScopeNames]) the map holds and notes one bound only at file /
+     * global level as absent. Answers the (name, previous entry or null) pairs
+     * [blockScopeRestore] puts back, or null when the scope shadows nothing (no allocation).
+     */
+    private fun blockScopeRemove(map: MutableMap<String, Type>, scope: Node, fileName: String?): List<Pair<String, Type?>>? {
+        val names = localShadowGuard.directScopeNames(scope, fileName)
+        if (names.isEmpty()) return null
+        var saved: ArrayList<Pair<String, Type?>>? = null
+        for (name in names) {
+            val prev = map[name]
+            if (prev == null && !blockScopeOuterBound(name)) continue
+            (saved ?: ArrayList<Pair<String, Type?>>(names.size).also { saved = it }).add(name to prev)
+            if (prev != null) map.remove(name)
+        }
+        return saved
+    }
+
+    /** Undoes [blockScopeRemove], in reverse: a removed entry comes back, an absent one is dropped. */
+    private fun blockScopeRestore(map: MutableMap<String, Type>, saved: List<Pair<String, Type?>>) {
+        for (i in saved.indices.reversed()) {
+            val (name, prev) = saved[i]
+            if (prev != null) map[name] = prev else map.remove(name)
+        }
+    }
+
+    /**
+     * (CHK.173) G5 S2 slice 1 — cpa's block scope. The frame map is per FUNCTION, so a
+     * `let`/`const` a nested block (or catch, case block, `for` header) declares used to
+     * read as the OUTER binding inside the block (a false TS2551/TS2339 on legal code) and
+     * the inner recording to leak past it. At the scope's enter each direct name the map
+     * holds is removed and queued on [cpaLoopVarRestores] (keyed by the scope's nodeId, so
+     * the existing leave loop restores it); a name bound only at file / global level is
+     * queued with `hadPrev = false`, which drops a leaked inner recording. An unrecorded
+     * inner read then falls to the identifier ladder and [LocalShadowGuard] (`any`).
+     */
+    private fun cpaOpenBlockScope(node: Node, parent: Node?) {
+        val scope = blockScopeKeyFor(node, parent) ?: return
+        val id = (scope as NodeBase).nodeId
+        if (id < 0) return
+        val names = localShadowGuard.directScopeNames(scope, spineFileName)
+        if (names.isEmpty()) return
+        val map = cpaFrames.last().localTypes
+        for (name in names) {
+            val prev = map[name]
+            if (prev != null) {
+                cpaLoopVarRestores.addLast(CpaLoopVarRestore(id, name, true, prev))
+                map.remove(name)
+            } else if (blockScopeOuterBound(name)) {
+                cpaLoopVarRestores.addLast(CpaLoopVarRestore(id, name, false, null))
+            }
+        }
     }
 
     private fun cpaSpineLeave(node: Node) {
@@ -4795,10 +4868,12 @@ class Checker(
      *  value of exactly one state channel; popped at that node's leave. */
     private class SpineArithFrame(
         val node: Node,
-        val kind: Int, // 0=localsMap, 1=ctx, 2=typeofSet, 3=truthySet
+        val kind: Int, // 0=localsMap, 1=ctx, 2=typeofSet, 3=truthySet, 4=blockScope
         val savedLocals: MutableMap<String, Type>? = null,
         val savedCtx: Type? = null,
         val savedSet: Set<String>? = null,
+        /** kind 4: the (name, previous entry or null) pairs a block scope removed. */
+        val savedScope: List<Pair<String, Type?>>? = null,
     )
     private val spineArithFrames = ArrayList<SpineArithFrame>()
 
@@ -60555,6 +60630,23 @@ interface DataView {
             }
             else -> {}
         }
+        spineArithOpenBlockScope(node)
+    }
+
+    /**
+     * (CHK.173) G5 S2 slice 1 — arith's block scope (see [cpaOpenBlockScope]). The pass
+     * keeps one map per function and never records a `for`-header binding, so a header or
+     * block `let`/`const` that shadows a parameter read as the parameter (a false TS2365 on
+     * `for (let x = 0; x < 1; x++)`), and a block recording leaked past the block. Each
+     * direct name the map holds is removed; a name bound only at file / global level is
+     * noted absent. A kind-4 frame keyed on the scope puts every entry back at its leave —
+     * the live map is edited in place, not copied, so a `var` recorded inside the block
+     * (function-scoped) survives it.
+     */
+    private fun spineArithOpenBlockScope(node: Node) {
+        val scope = blockScopeKeyFor(node, (node as NodeBase).parent) ?: return
+        val saved = blockScopeRemove(spineArithLocals, scope, spineFileName) ?: return
+        spineArithFrames.add(SpineArithFrame(scope, 4, savedScope = saved))
     }
 
     /** The legacy function-like scope entry: copy the map, push the TP scope,
@@ -60635,6 +60727,7 @@ interface DataView {
                 1 -> spineArithCtx = f.savedCtx
                 2 -> arithTypeofNarrowedNames = f.savedSet!!
                 3 -> arithTruthyNarrowedNames = f.savedSet!!
+                4 -> blockScopeRestore(spineArithLocals, f.savedScope!!)
             }
         }
     }
@@ -150214,6 +150307,19 @@ interface DataView {
             startAtParent = true, hopCap = 0,
         )
 
+    /**
+     * (CHK.173) G5 S2 slice 1 — [cpaOpenBlockScope] for the LEGACY statement walker, which
+     * the cpa anchors still use for a function body nested in an expression (an arrow or
+     * function expression in an initializer or argument): [blockScopeRemove] over
+     * `currentLocalTypes`, undone by [blockScopeRestore] in the caller's `finally`.
+     */
+    private fun cpaLegacyOpenScope(scope: Node, fileName: String): List<Pair<String, Type?>>? =
+        blockScopeRemove(currentLocalTypes, scope, fileName)
+
+    private fun cpaLegacyCloseScope(saved: List<Pair<String, Type?>>?) {
+        if (saved != null) blockScopeRestore(currentLocalTypes, saved)
+    }
+
     private fun checkPropertyAccessInStatements(
         stmts: List<Statement>, source: String, fileName: String,
         enclosingClassType: Type?,
@@ -150384,15 +150490,23 @@ interface DataView {
                 checkPropertyAccessInStatement(stmt.thenStatement, source, fileName, enclosingClassType)
                 stmt.elseStatement?.let { checkPropertyAccessInStatement(it, source, fileName, enclosingClassType) }
             }
-            is Block -> checkPropertyAccessInStatements(stmt.statements, source, fileName, enclosingClassType)
+            is Block -> {
+                val scope = cpaLegacyOpenScope(stmt, fileName)
+                try {
+                    checkPropertyAccessInStatements(stmt.statements, source, fileName, enclosingClassType)
+                } finally { cpaLegacyCloseScope(scope) }
+            }
             is ForStatement -> {
-                stmt.condition?.let {
-                    checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
-                }
-                stmt.incrementor?.let {
-                    checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
-                }
-                checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+                val scope = cpaLegacyOpenScope(stmt, fileName)
+                try {
+                    stmt.condition?.let {
+                        checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
+                    }
+                    stmt.incrementor?.let {
+                        checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
+                    }
+                    checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+                } finally { cpaLegacyCloseScope(scope) }
             }
             is ForInStatement -> {
                 // B70.2: for-in loop variable is always `string`. Push into currentLocalTypes
@@ -150447,23 +150561,26 @@ interface DataView {
             }
             is SwitchStatement -> {
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> {
-                            checkPropertyAccessInExpr(clause.expression, source, fileName, enclosingClassType)
-                            checkPropertyAccessInStatements(clause.statements, source, fileName, enclosingClassType)
+                val scope = cpaLegacyOpenScope(stmt, fileName)
+                try {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> {
+                                checkPropertyAccessInExpr(clause.expression, source, fileName, enclosingClassType)
+                                checkPropertyAccessInStatements(clause.statements, source, fileName, enclosingClassType)
+                            }
+                            is DefaultClause -> {
+                                checkPropertyAccessInStatements(clause.statements, source, fileName, enclosingClassType)
+                            }
+                            else -> {}
                         }
-                        is DefaultClause -> {
-                            checkPropertyAccessInStatements(clause.statements, source, fileName, enclosingClassType)
-                        }
-                        else -> {}
                     }
-                }
+                } finally { cpaLegacyCloseScope(scope) }
             }
             is TryStatement -> {
-                checkPropertyAccessInStatements(stmt.tryBlock.statements, source, fileName, enclosingClassType)
-                stmt.catchClause?.block?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType) }
-                stmt.finallyBlock?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType) }
+                checkPropertyAccessInStatement(stmt.tryBlock, source, fileName, enclosingClassType)
+                stmt.catchClause?.block?.let { checkPropertyAccessInStatement(it, source, fileName, enclosingClassType) }
+                stmt.finallyBlock?.let { checkPropertyAccessInStatement(it, source, fileName, enclosingClassType) }
             }
             is ThrowStatement -> {
                 stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
