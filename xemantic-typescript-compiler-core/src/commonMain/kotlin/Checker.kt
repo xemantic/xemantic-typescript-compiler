@@ -131244,15 +131244,28 @@ interface DataView {
             // only SHARP once an enum-member union discriminates, which is why it lands
             // with (b): before it, every member related to every other and the
             // constraint accepted everything anyway.
-            val constrainedParamType = if (paramType is Type.TypeParam) {
-                paramType.constraint?.takeIf { it !== anyType && it !== errorType } ?: continue
+            val declaredParamType = if (paramType is Type.TypeParam) {
+                val c = paramType.constraint?.takeIf { it !== anyType && it !== errorType } ?: continue
+                sigTypeParamsErasedInConstraint(sig, c)
             } else paramType
+            // (CHK.173) S-G4b: an OPTIONAL parameter (`t?: T`, `t: T = …`) accepts
+            // `undefined` — tsgo's parameter type is `T | undefined` under strict null
+            // checks. [getTypeOfSymbol] answers the bare annotation, so an argument
+            // typed `T | undefined` (an optional parameter passed through) was refused
+            // by EVERY overload and [resolveCallOverload] fell back to the FIRST —
+            // `f(t: string): string; f(t?: number): number; f(tOpt)` answered `string`,
+            // and tsc's `visitNodes(nodes, visitor, test)` its predicate overload.
+            val constrainedParamType =
+                if (strictNullChecks && isOptionalParameterSymbol(sig.parameters[i]))
+                    getUnionType(listOf(declaredParamType, undefinedType))
+                else declaredParamType
             // Prefer the non-widened literal type so a string/number-literal arg can
             // select a specialized literal-param overload (e.g. createElement('canvas')
             // → the `(tagName: 'canvas'): Derived1` overload, not the `(tagName: string)`
             // fallback). Falls through to the widened type for non-literal args.
             val argType = literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
+            if (argFnLacksParamTypePredicate(argType, constrainedParamType)) return false
             var acceptedType = argType
             if (!isSimpleTypeRelatedTo(argType, constrainedParamType) &&
                 !checkTypeRelatedTo(argType, constrainedParamType, assignableRelation)) {
@@ -131320,6 +131333,73 @@ interface DataView {
                 !objLitLiteralPropsSatisfyParam(arg, argType, constrainedParamType)) return false
         }
         return true
+    }
+
+    /**
+     * (CHK.173) S-G4b: tsc's `compareSignaturesRelated` refuses a target signature
+     * returning a type PREDICATE (`(node: Node) => node is TOut`) against a source that
+     * returns none (TS1224 *Signature '…' must be a type predicate*). Our relation models a
+     * predicate return as `boolean` and so accepted `(node: Node) => boolean` there,
+     * which made tsc's two-overload `visitNodes(nodes, visitor, test)` select the
+     * PREDICATE overload and type the call through its un-inferred `TOut`.
+     *
+     * Asked at OVERLOAD ACCEPTANCE only ([signatureAcceptsArgs] and [allArgumentsMatch],
+     * which must agree), never inside the relation. Refuses only what is certain: the
+     * parameter's non-nullish part is ONE call signature whose declaration SPELLS a
+     * non-`asserts` predicate, and every call signature of the argument's non-nullish
+     * part has a declaration with an explicit return annotation that is not one — an
+     * un-annotated function may carry a predicate tsgo INFERS from its body, so it is
+     * never refused here.
+     */
+    private fun argFnLacksParamTypePredicate(argType: Type, paramType: Type): Boolean {
+        val param = sg4bNonNullishObject(paramType) ?: return false
+        resolveStructuredTypeMembers(param)
+        val psig = param.callSignatures?.singleOrNull() ?: return false
+        val pret = unwrapParenType(sg4bDeclReturnTypeNode(psig.declaration))
+        if (pret !is TypePredicate || pret.assertsModifier) return false
+        val arg = sg4bNonNullishObject(argType) ?: return false
+        resolveStructuredTypeMembers(arg)
+        val asigs = arg.callSignatures
+        if (asigs.isNullOrEmpty()) return false
+        return asigs.all { s ->
+            val r = unwrapParenType(sg4bDeclReturnTypeNode(s.declaration))
+            r != null && r !is TypePredicate
+        }
+    }
+
+    private fun sg4bNonNullishObject(t: Type): Type.Object? {
+        val u = if (t is Type.Union) t.types.filter { !isNullishConstituent(it) }.singleOrNull() ?: return null else t
+        return if (u is Type.Object && u !is Type.Interface && u !is Type.Reference) u else null
+    }
+
+    private fun sg4bDeclReturnTypeNode(node: Node?): TypeNode? = when (node) {
+        is FunctionType -> node.type
+        is FunctionDeclaration -> node.type
+        is FunctionExpression -> node.type
+        is ArrowFunction -> node.type
+        is MethodDeclaration -> node.type
+        else -> null
+    }
+
+    /**
+     * (CHK.173) S-G4b: a type parameter's constraint that mentions the SIGNATURE's
+     * OTHER type parameters (`TInArray extends NodeArray<TIn> | undefined`) is related
+     * with those parameters replaced by their own constraints (`NodeArray<Node> |
+     * undefined`), `any` for an unconstrained one. Raw, the argument had to relate to a
+     * target still carrying the un-inferred `TIn`, which refused every such overload
+     * and handed selection to [resolveCallOverload]'s first-arity fallback. tsc infers
+     * `TIn` first; the constraint is the widest thing that inference can answer, so
+     * this can only turn a refusal into an acceptance. One pass: a result still
+     * mentioning a type parameter keeps the raw constraint, the behaviour before.
+     */
+    private fun sigTypeParamsErasedInConstraint(sig: Signature, constraint: Type): Type {
+        val tps = sig.typeParameters
+        if (tps.isNullOrEmpty() || !typeMentionsAnyTypeParam(constraint)) return constraint
+        val erased = instantiateType(
+            constraint,
+            createTypeMapper(tps, tps.map { tp -> tp.constraint?.takeIf { it !== errorType } ?: anyType }),
+        )
+        return if (typeMentionsAnyTypeParam(erased)) constraint else erased
     }
 
     /**
@@ -165833,6 +165913,11 @@ interface DataView {
                 (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg))
                 else enumTargetLiteralSource(arg, paramType) ?: getTypeOfExpression(arg)) // (CHK.83)
             if (argType === anyType || argType === errorType) continue
+            // (CHK.173) S-G4b: [allArgumentsMatch]'s predicate refusal, so the candidate
+            // is not dropped from the TS2769 pool (tsgo's chain adds TS1224's *must be a
+            // type predicate* line below this head, which is not modelled).
+            if (argFnLacksParamTypePredicate(argType, paramType))
+                return "Argument of type '${typeToString(argType)}' is not assignable to parameter of type '${typeToString(paramType)}'."
             if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // For object literal args, try to find the specific mismatched property
@@ -166069,6 +166154,11 @@ interface DataView {
             if (paramType === anyType || paramType === errorType) continue
             val argType = overloadNarrowedArgType(arg, getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
+            if (argFnLacksParamTypePredicate(argType, paramType)) {
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) return Pair(start, length)
+            }
             if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // For object/array literals, find the inner mismatched expression
@@ -166328,6 +166418,8 @@ interface DataView {
                 (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg))
                 else enumTargetLiteralSource(arg, paramType) ?: getTypeOfExpression(arg)) // (CHK.83)
             if (argType === anyType || argType === errorType) continue
+            // (CHK.173) S-G4b: the same predicate rule [signatureAcceptsArgs] asks.
+            if (argFnLacksParamTypePredicate(argType, paramType)) return false
             // B176: an explicit `undefined` arg is LEGAL for an OPTIONAL parameter (absent
             // and undefined are interchangeable for params unless exactOptionalPropertyTypes).
             if (argType.flags.hasAny(TypeFlags.Undefined) && !options.exactOptionalPropertyTypes &&
