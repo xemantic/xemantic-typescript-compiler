@@ -110,7 +110,23 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
 
     companion object {
 
-        /** The uncached body of [directScopeNames]. */
+        /** The identifier leaves of a binding name (an identifier or a destructuring pattern). */
+        fun bindingLeaves(name: Node?): List<String> {
+            val out = ArrayList<String>(2)
+            fun leaves(n: Node?) {
+                when (n) {
+                    is Identifier -> out.add(n.text)
+                    is ObjectBindingPattern -> for (e in n.elements) leaves(e.name)
+                    is ArrayBindingPattern -> for (e in n.elements) (e as? BindingElement)?.let { leaves(it.name) }
+                    else -> {}
+                }
+            }
+            leaves(name)
+            return out
+        }
+
+        /** The uncached body of [directScopeNames] (a `for…of` / `for…in` answers its
+         *  own let/const binding — cta's loop-body scope; never a slice-1 key). */
         fun collectDirectScopeNames(scope: Node): List<String> {
             var out: ArrayList<String>? = null
             fun leaves(n: Node?) {
@@ -145,6 +161,8 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
                     else -> {}
                 }
                 is ForStatement -> list(scope.initializer)
+                is ForOfStatement -> list(scope.initializer)
+                is ForInStatement -> list(scope.initializer)
                 else -> {}
             }
             return out ?: emptyList()

@@ -266,6 +266,9 @@ class Checker(
 
     /** (CHK.173) G5 S1 — see [LocalShadowGuard]; asked by [getTypeOfIdentifierConventional]. */
     internal val localShadowGuard = LocalShadowGuard { fileResults[it]?.sourceFile }
+    // (CHK.173) G5 S2 slice 2 — per-file memo of [blockScopeAnyOuterBound], by scope nodeId.
+    private var blockScopeOuterFile: String? = null
+    private var blockScopeOuterCache = IntKeyMap<Boolean>(64)
 
     /**
      * (CHK.173) G5 S1 — suspends [localShadowGuard] for a read that deliberately asks for the
@@ -2877,6 +2880,19 @@ class Checker(
         globals[name] != null || currentFileLocals?.get(name) != null
 
     /**
+     * (CHK.173) G5 S2 slice 2 — is any of [scope]'s direct [names] bound at file or global
+     * level? Memoized per file by the scope's nodeId: the spine's cta scope and the legacy
+     * statement walker both ask it for every block that declares a `let`/`const`, and nearly
+     * every answer is a `globals` MISS.
+     */
+    private fun blockScopeAnyOuterBound(scope: Node, names: List<String>, fileName: String?): Boolean {
+        val id = (scope as NodeBase).nodeId
+        if (id < 0) return names.any { blockScopeOuterBound(it) }
+        if (blockScopeOuterFile != fileName) { blockScopeOuterCache = IntKeyMap(64); blockScopeOuterFile = fileName }
+        return blockScopeOuterCache[id] ?: names.any { blockScopeOuterBound(it) }.also { blockScopeOuterCache[id] = it }
+    }
+
+    /**
      * (CHK.173) G5 S2 — opens [scope] over a walker's flat [map]: removes each direct name
      * ([LocalShadowGuard.directScopeNames]) the map holds and notes one bound only at file /
      * global level as absent. Answers the (name, previous entry or null) pairs
@@ -3203,7 +3219,7 @@ class Checker(
          *  parent's map because the legacy dispatch passed it straight through.
          *  It is what [ctaSpineLeave] pops on, so it must be set at exactly the
          *  pushes that call `ctaVarScope.push()`. */
-        val varScoped: Boolean = true,
+        var varScoped: Boolean = true,
         /** (WARM.18b) round 892 — true when this frame OPENED a
          *  [ctaLocalTypeScope] scope, i.e. where it used to own a `localTypes`
          *  COPY. That is the eight fn-body shapes (which also copied
@@ -3211,12 +3227,18 @@ class Checker(
          *  narrowing frame (which copied `localTypes` ALONE, into an
          *  `EpochMap`, and SHARED the other two). Every other frame shares all
          *  three; the file-root frame opens nothing and is dropped by `reset`. */
-        val localScoped: Boolean = false,
+        var localScoped: Boolean = false,
         /** (WARM.18b) round 892 — true when this frame also opened the
          *  [ctaDeclNodeScope] / [ctaShadowScope] scopes. Fn-body frames only:
          *  the narrowing frame SHARES those two with its parent, so its
          *  `localScoped` is true while this is false. */
-        val ctaFnScoped: Boolean = false,
+        var ctaFnScoped: Boolean = false,
+        /** (CHK.173) G5 S2 slice 2 — may [ctaSpineLeave]'s (CHK.64)(ii) early-exit
+         *  narrowing write into this frame? True exactly where [localScoped] was set
+         *  before slice 2 (fn bodies, narrowing frames); a frame that opened a scope
+         *  only to hide a block-level shadow ([ctaOpenBlockScope]) keeps it false, so
+         *  that slice does not switch the early-exit rule on inside every such block. */
+        var earlyExitScoped: Boolean = false,
     )
     internal val ctaFrames = ArrayDeque<CtaFrame>()
 
@@ -3728,7 +3750,7 @@ class Checker(
             localTypes = ctaLocalTypeScope.view,
             localDeclNodes = ctaDeclNodeScope.view,
             shadowedNames = ctaShadowScope.view,
-            localScoped = true, ctaFnScoped = true)
+            localScoped = true, ctaFnScoped = true, earlyExitScoped = true)
         // (WARM.18b) round 892 — the three `putAll(base.*)` seeds are GONE:
         // `base` is `ctaFrames.last()` at every one of the eight call sites and
         // every frame now holds the LIVE view, so the scope just opened already
@@ -3755,7 +3777,7 @@ class Checker(
             try {
             val paramNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
             withCtaFrameLocals(frame) {
-                applyBodyLocalShadowing(body.statements, paramNames)
+                applyBodyLocalShadowing(body.statements, paramNames, blockScoped = true)
                 applyAmbiguousBlockScopedLocals(body.statements, paramNames)
                 shadowNestedFunctionNames(body.statements)
                 // (CHK.173) G5 S3: a function-top `let x;` drops the annotation STRING the
@@ -4145,7 +4167,7 @@ class Checker(
                     classForThis = top.classForThis,
                     narrowedDeclared = nd,
                     varScoped = narrowVarScoped,
-                    localScoped = true))
+                    localScoped = true, earlyExitScoped = true))
             }
         }
         // (cta-m3i): compute the legacy IfStatement arms' narrowing verdict at
@@ -4312,6 +4334,9 @@ class Checker(
                 localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
                 shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
         }
+        // (CHK.173) G5 S2 slice 2 — block scoping for the declaration / assignment
+        // readers (after this node's own frame push, before a clause's frame).
+        if (!spineIsDts) ctaBlockScopeEnter(node, parent)
         // Switch clauses: per-clause varTypes copies (returnType/typeParams
         // threaded through unchanged).
         if (node is CaseClause || node is DefaultClause) {
@@ -4348,6 +4373,183 @@ class Checker(
                     if (s != null) ctaFrames.last().varTypes[nm.text] = s
                 }
             }
+        }
+    }
+
+    /**
+     * (CHK.173) G5 S2 slice 2 — cta's block scope. The frame chain keeps ONE
+     * localTypes / localDeclNodes / shadowedNames family per FUNCTION (statement
+     * blocks and case clauses share it — the legacy leak), so a `let`/`const`, catch
+     * variable or `for` binding that a nested scope declares used to read as the
+     * OUTER binding in the declaration and assignment readers (a false TS2322 on
+     * `{ let x: number; x = 1 }` inside `f(x: string)`), and a block's inner literal
+     * leaked past the block. Here the scope's direct names
+     * ([LocalShadowGuard.directScopeNames], plus a `for…of`/`for…in` let/const binding
+     * for the loop body) are hidden for the scope's lifetime: [ctaOpenBlockScope] opens
+     * the frame's scopes (popped by [ctaSpineLeave]'s existing mirror) and removes the
+     * names, so the ordinary recorders record the inner binding and the pop restores
+     * the outer one. It opens only where a name is held by the frame or bound at file
+     * / global level; everything else pays one memo probe.
+     *
+     * The scope is the node's own frame (a statement block, a narrowing frame, a
+     * `for` header's frame); a `for` header or loop body with no frame of its own and
+     * the CASE BLOCK (keyed on the switch, opened at its FIRST clause — clauses share
+     * one scope) get a plain frame pushed here.
+     */
+    private fun ctaBlockScopeEnter(node: Node, parent: Node?) {
+        val key = blockScopeKeyFor(node, parent)
+        val bindingNames = when (parent) {
+            is ForOfStatement -> if (parent.statement === node) LocalShadowGuard.collectDirectScopeNames(parent) else emptyList()
+            is ForInStatement -> if (parent.statement === node) LocalShadowGuard.collectDirectScopeNames(parent) else emptyList()
+            else -> emptyList()
+        }
+        if (key == null && bindingNames.isEmpty()) return
+        val names: List<String> = when {
+            key == null -> bindingNames
+            bindingNames.isEmpty() -> localShadowGuard.directScopeNames(key, spineFileName)
+            else -> localShadowGuard.directScopeNames(key, spineFileName) + bindingNames
+        }
+        if (names.isEmpty()) return
+        val owner = key ?: node
+        var top = ctaFrames.last()
+        // A `for` header / for-of / for-in binding is a DECLARATION registered on the
+        // narrowing mechanism: its registered names keep their new lt entry.
+        val nid = (owner as NodeBase).nodeId
+        val keep: Set<String> = if (top.owner === owner && (owner is ForStatement || bindingNames.isNotEmpty()))
+            ctaM3NarrowThen[nid]?.mapTo(HashSet()) { it.first } ?: emptySet() else emptySet()
+        val held = names.any { n ->
+            (n !in keep && top.localTypes.containsKey(n)) || top.narrowedDeclared.containsKey(n) ||
+                top.varTypes.containsKey(n) || top.localDeclNodes.containsKey(n)
+        }
+        if (!held && !blockScopeAnyOuterBound(owner, names, spineFileName)) return
+        SpineDispatch.work()
+        if (top.owner !== owner) {
+            FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0); ctaVarScope.push()
+            top = CtaFrame(owner, ctaVarScope.view,
+                top.returnType, top.returnTypeNode, top.typeParams,
+                top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
+                classForThis = top.classForThis,
+                narrowedDeclared = top.narrowedDeclared,
+                localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
+                shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames)
+            ctaFrames.addLast(top)
+        }
+        ctaOpenBlockScope(top, owner, names, keep)
+    }
+
+    /**
+     * (CHK.173) G5 S2 slice 2 — opens [frame]'s scopes (each only once; the pop mirrors
+     * the flags) and hides [names] in them: removed from localTypes (except [keep], a
+     * loop binding's just-registered entry), localDeclNodes and varTypes, added to
+     * shadowedNames (a SCRIPT file's assignment reader reads `globals` for a name not
+     * shadowed), and dropped from a COPY of narrowedDeclared (shared down the chain,
+     * no undo log). A catch body additionally types its variable: `unknown` for an
+     * un-annotated identifier under `useUnknownInCatchVariables` or `: unknown`, `any`
+     * otherwise and for every destructured leaf.
+     */
+    private fun ctaOpenBlockScope(frame: CtaFrame, scope: Node, names: List<String>, keep: Set<String>) {
+        if (!frame.localScoped) {
+            FrontEnd.addCopy(FrontEnd.CP_CTA_LOCAL, 0); ctaLocalTypeScope.push(); frame.localScoped = true
+        }
+        if (!frame.ctaFnScoped) { ctaDeclNodeScope.push(); ctaShadowScope.push(); frame.ctaFnScoped = true }
+        if (!frame.varScoped) {
+            FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0); ctaVarScope.push(); frame.varScoped = true
+        }
+        val lt = frame.localTypes
+        for (n in names) {
+            if (n !in keep) lt.remove(n)
+            frame.localDeclNodes.remove(n)
+            frame.varTypes.remove(n)
+            frame.shadowedNames.add(n)
+        }
+        if (names.any { frame.narrowedDeclared.containsKey(it) }) {
+            if (!frame.narrowedDeclaredOwned) {
+                frame.narrowedDeclared = HashMap(frame.narrowedDeclared)
+                frame.narrowedDeclaredOwned = true
+            }
+            for (n in names) frame.narrowedDeclared.remove(n)
+        }
+        ctaCatchVariableTypes(scope, lt)
+    }
+
+    /**
+     * (CHK.173) G5 S2 slice 2 — a catch body's variable, as tsgo types it: `unknown` for
+     * an un-annotated identifier under `useUnknownInCatchVariables` (explicit, else on
+     * unless `strict: false`) or for `: unknown`; `any` for `: any`, without the flag, and
+     * for every destructured leaf. Written into [lt]; no-op unless [scope] is a catch body.
+     */
+    private fun ctaCatchVariableTypes(scope: Node, lt: MutableMap<String, Type>) {
+        val cc = (scope as? Block)?.let { (it as NodeBase).parent as? CatchClause }
+        val vd = cc?.variableDeclaration ?: return
+        when (val nm = vd.name) {
+            is Identifier -> {
+                val ann = vd.type
+                val unknown = when {
+                    ann == null -> if (options.useUnknownInCatchVariablesExplicitlySet)
+                        options.useUnknownInCatchVariables else !options.strictExplicitlyFalse
+                    else -> ann is KeywordTypeNode && ann.kind == SyntaxKind.UnknownKeyword
+                }
+                lt[nm.text] = if (unknown) unknownType else anyType
+            }
+            else -> for (leaf in LocalShadowGuard.bindingLeaves(nm)) lt[leaf] = anyType
+        }
+    }
+
+    /**
+     * (CHK.173) G5 S2 slice 2 — [ctaBlockScopeEnter]'s twin for the LEGACY statement
+     * walker, which still owns the emissions for a function body nested in an expression
+     * (an arrow / function expression in an initializer, argument or `return`). Over the
+     * ambient `currentLocalTypes` family: when [scope]'s direct names
+     * ([LocalShadowGuard.directScopeNames]; a `for…of`/`for…in` answers its let/const
+     * binding) shadow something held or file / globally bound, [body] runs with them hidden
+     * from the ambient maps and [varTypes] (the catch variable typed by
+     * [ctaCatchVariableTypes]), every entry put back afterwards; otherwise [body] runs unchanged.
+     */
+    private inline fun ctaLegacyScoped(scope: Node, fileName: String, varTypes: MutableMap<String, String>, body: () -> Unit) {
+        val saved = ctaLegacyScopeOpen(scope, fileName, varTypes)
+        try { body() } finally { if (saved != null) ctaLegacyScopeClose(saved, varTypes) }
+    }
+
+    /** What [ctaLegacyScopeOpen] hid: per name, its previous localTypes / narrowedDeclared /
+     *  declNode / varTypes entry and whether it was already shadowed. */
+    private class CtaLegacyScope(
+        val names: List<String>, val lt: Array<Type?>, val nd: Array<Type?>, val dn: Array<TypeNode?>,
+        val vt: Array<String?>, val sh: BooleanArray,
+    )
+
+    /** The open half of [ctaLegacyScoped], kept out of line (the wrapper is inlined at seven arms
+     *  of two already-large dispatchers). The ambient maps are edited IN PLACE and put back by
+     *  [ctaLegacyScopeClose] — the legacy walk's maps are large (a whole enclosing function's
+     *  locals) and a per-block copy measured +4.4% warm. */
+    private fun ctaLegacyScopeOpen(scope: Node, fileName: String, varTypes: MutableMap<String, String>): CtaLegacyScope? {
+        val names = localShadowGuard.directScopeNames(scope, fileName)
+        if (names.isEmpty()) return null
+        if (names.none { n ->
+                currentLocalTypes.containsKey(n) || narrowedDeclaredTypes.containsKey(n) || varTypes.containsKey(n) ||
+                    currentLocalDeclTypeNodes.containsKey(n)
+            } && !blockScopeAnyOuterBound(scope, names, fileName)) return null
+        val k = names.size
+        val saved = CtaLegacyScope(names, arrayOfNulls(k), arrayOfNulls(k), arrayOfNulls(k), arrayOfNulls(k), BooleanArray(k))
+        for (i in 0 until k) {
+            val n = names[i]
+            saved.lt[i] = currentLocalTypes.remove(n)
+            saved.nd[i] = narrowedDeclaredTypes.remove(n)
+            saved.dn[i] = currentLocalDeclTypeNodes.remove(n)
+            saved.vt[i] = varTypes.remove(n)
+            saved.sh[i] = !currentShadowedNames.add(n)
+        }
+        ctaCatchVariableTypes(scope, currentLocalTypes)
+        return saved
+    }
+
+    private fun ctaLegacyScopeClose(saved: CtaLegacyScope, varTypes: MutableMap<String, String>) {
+        for (i in saved.names.indices.reversed()) {
+            val n = saved.names[i]
+            saved.lt[i].let { if (it != null) currentLocalTypes[n] = it else currentLocalTypes.remove(n) }
+            saved.nd[i].let { if (it != null) narrowedDeclaredTypes[n] = it else narrowedDeclaredTypes.remove(n) }
+            saved.dn[i].let { if (it != null) currentLocalDeclTypeNodes[n] = it else currentLocalDeclTypeNodes.remove(n) }
+            saved.vt[i].let { if (it != null) varTypes[n] = it else varTypes.remove(n) }
+            if (!saved.sh[i]) currentShadowedNames.remove(n)
         }
     }
 
@@ -4418,7 +4620,7 @@ class Checker(
             ctaFrames.size > 1 && ctaAlwaysExits(node.thenStatement)
         ) {
             val top = ctaFrames.last()
-            val neg = if (top.localScoped) negateCondition(node.expression) else null
+            val neg = if (top.earlyExitScoped) negateCondition(node.expression) else null
             if (neg != null) {
                 SpineDispatch.work()
                 var narrowings: List<Pair<String, Type>> = emptyList()
@@ -100116,7 +100318,7 @@ interface DataView {
                         currentClassForThis = savedThis
                     }
                 }
-                is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                is Block -> ctaLegacyScoped(stmt, fileName, varTypes) { checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
                 is IfStatement -> {
                     // B417: flow-aware TS2367 on the if/else-if CONDITION.
                     // (cta-m3j): truncated when the spine anchored this If.
@@ -100158,9 +100360,9 @@ interface DataView {
                         }
                     }
                 }
-                is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
-                is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
-                is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                is ForStatement -> ctaLegacyScoped(stmt, fileName, varTypes) { checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
+                is ForInStatement -> ctaLegacyScoped(stmt, fileName, varTypes) { checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
+                is ForOfStatement -> ctaLegacyScoped(stmt, fileName, varTypes) { checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
                 is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 is ClassDeclaration -> {
@@ -100368,11 +100570,11 @@ interface DataView {
                 is TryStatement -> {
                     // round 431c: thread returnTypeNode so returns inside try/catch check
                     // through the ENGINE path, consistent with top-level/if returns.
-                    checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
-                    stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
-                    stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
+                    ctaLegacyScoped(stmt.tryBlock, fileName, varTypes) { checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
+                    stmt.catchClause?.block?.let { ctaLegacyScoped(it, fileName, varTypes) { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) } }
+                    stmt.finallyBlock?.let { ctaLegacyScoped(it, fileName, varTypes) { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) } }
                 }
-                is SwitchStatement -> {
+                is SwitchStatement -> ctaLegacyScoped(stmt, fileName, varTypes) {
                     // round 431c: thread returnTypeNode (see the TryStatement note above).
                     for (clause in stmt.caseBlock) {
                         when (clause) {
@@ -101242,7 +101444,11 @@ interface DataView {
      * re-records it for an inferred local). Top-level only — block-scoped let/const in
      * nested blocks do not shadow at the function level. Bounded to genuine shadows.
      */
-    private fun applyBodyLocalShadowing(statements: List<Statement>, paramNames: Set<String>) {
+    /** [blockScoped]: the caller scopes block-level declarations itself ((CHK.173) G5 S2
+     *  slice 2 — the cta walkers), so the (CHK.71) inherited-local arm of
+     *  [registerNestedGlobalShadowName], which records a nested block's annotation
+     *  FUNCTION-wide and leaks it past the block, is skipped. */
+    private fun applyBodyLocalShadowing(statements: List<Statement>, paramNames: Set<String>, blockScoped: Boolean = false) {
         for (s in statements) {
             if (s !is VariableStatement) {
                 // Round 455: descend into nested blocks for the GLOBAL-shadow case — a
@@ -101251,7 +101457,7 @@ interface DataView {
                 // A value-position use inside the block (`return clone`) otherwise falls
                 // through getTypeOfIdentifier to the global generic function → FP
                 // TS2322/TS2345 (expressionToTypeNode.ts:535 / checker.ts:15679).
-                applyNestedGlobalShadow(s, paramNames)
+                applyNestedGlobalShadow(s, paramNames, blockScoped)
                 continue
             }
             for (d in s.declarationList.declarations) {
@@ -101322,34 +101528,35 @@ interface DataView {
      *  records a concrete annotation type (which would leak the block-local shape
      *  function-wide). Restricted to global collisions to avoid washing an outer LOCAL's
      *  type across the whole body. */
-    private fun applyNestedGlobalShadow(s: Statement?, paramNames: Set<String>) {
+    private fun applyNestedGlobalShadow(s: Statement?, paramNames: Set<String>, blockScoped: Boolean = false) {
         when (s) {
             null -> {}
-            is VariableStatement -> registerNestedGlobalShadowDecls(s.declarationList.declarations, paramNames)
-            is Block -> for (st in s.statements) applyNestedGlobalShadow(st, paramNames)
+            is VariableStatement -> registerNestedGlobalShadowDecls(s.declarationList.declarations, paramNames,
+                blockScoped && s.declarationList.flags != SyntaxKind.VarKeyword)
+            is Block -> for (st in s.statements) applyNestedGlobalShadow(st, paramNames, blockScoped)
             is IfStatement -> {
-                applyNestedGlobalShadow(s.thenStatement, paramNames)
-                applyNestedGlobalShadow(s.elseStatement, paramNames)
+                applyNestedGlobalShadow(s.thenStatement, paramNames, blockScoped)
+                applyNestedGlobalShadow(s.elseStatement, paramNames, blockScoped)
             }
             is ForStatement -> {
-                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames) }
-                applyNestedGlobalShadow(s.statement, paramNames)
+                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames, blockScoped && it.flags != SyntaxKind.VarKeyword) }
+                applyNestedGlobalShadow(s.statement, paramNames, blockScoped)
             }
             is ForInStatement -> {
-                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames) }
-                applyNestedGlobalShadow(s.statement, paramNames)
+                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames, blockScoped && it.flags != SyntaxKind.VarKeyword) }
+                applyNestedGlobalShadow(s.statement, paramNames, blockScoped)
             }
             is ForOfStatement -> {
-                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames) }
-                applyNestedGlobalShadow(s.statement, paramNames)
+                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames, blockScoped && it.flags != SyntaxKind.VarKeyword) }
+                applyNestedGlobalShadow(s.statement, paramNames, blockScoped)
             }
-            is WhileStatement -> applyNestedGlobalShadow(s.statement, paramNames)
-            is DoStatement -> applyNestedGlobalShadow(s.statement, paramNames)
-            is LabeledStatement -> applyNestedGlobalShadow(s.statement, paramNames)
+            is WhileStatement -> applyNestedGlobalShadow(s.statement, paramNames, blockScoped)
+            is DoStatement -> applyNestedGlobalShadow(s.statement, paramNames, blockScoped)
+            is LabeledStatement -> applyNestedGlobalShadow(s.statement, paramNames, blockScoped)
             is TryStatement -> {
-                for (st in s.tryBlock.statements) applyNestedGlobalShadow(st, paramNames)
-                s.catchClause?.block?.statements?.forEach { applyNestedGlobalShadow(it, paramNames) }
-                s.finallyBlock?.statements?.forEach { applyNestedGlobalShadow(it, paramNames) }
+                for (st in s.tryBlock.statements) applyNestedGlobalShadow(st, paramNames, blockScoped)
+                s.catchClause?.block?.statements?.forEach { applyNestedGlobalShadow(it, paramNames, blockScoped) }
+                s.finallyBlock?.statements?.forEach { applyNestedGlobalShadow(it, paramNames, blockScoped) }
             }
             is SwitchStatement -> for (c in s.caseBlock) {
                 val stmts = when (c) {
@@ -101357,16 +101564,16 @@ interface DataView {
                     is DefaultClause -> c.statements
                     else -> emptyList()
                 }
-                for (st in stmts) applyNestedGlobalShadow(st, paramNames)
+                for (st in stmts) applyNestedGlobalShadow(st, paramNames, blockScoped)
             }
             else -> {}
         }
     }
 
-    private fun registerNestedGlobalShadowDecls(declarations: List<VariableDeclaration>, paramNames: Set<String>) {
+    private fun registerNestedGlobalShadowDecls(declarations: List<VariableDeclaration>, paramNames: Set<String>, blockScoped: Boolean = false) {
         for (d in declarations) {
             when (val declName = d.name) {
-                is Identifier -> registerNestedGlobalShadowName(declName.text, paramNames, d.type)
+                is Identifier -> registerNestedGlobalShadowName(declName.text, paramNames, d.type, blockScoped)
                 // Round 460: a nested DESTRUCTURED const's binding names shadow a global
                 // the same way — tsc checker.ts `const { start, length } =
                 // getDiagnosticSpanForCallNode(…)` inside an if-block: the bare-RHS read
@@ -101375,11 +101582,11 @@ interface DataView {
                 // anyType-only / global-collision-only discipline as the Identifier arm.
                 is ObjectBindingPattern -> for (el in declName.elements) {
                     if (el.dotDotDotToken) continue
-                    (el.name as? Identifier)?.text?.let { registerNestedGlobalShadowName(it, paramNames) }
+                    (el.name as? Identifier)?.text?.let { registerNestedGlobalShadowName(it, paramNames, blockScoped = blockScoped) }
                 }
                 is ArrayBindingPattern -> for (el in declName.elements) {
                     ((el as? BindingElement)?.name as? Identifier)?.text
-                        ?.let { registerNestedGlobalShadowName(it, paramNames) }
+                        ?.let { registerNestedGlobalShadowName(it, paramNames, blockScoped = blockScoped) }
                 }
                 else -> {}
             }
@@ -101387,7 +101594,7 @@ interface DataView {
     }
 
     private fun registerNestedGlobalShadowName(
-        nm: String, paramNames: Set<String>, ann: TypeNode? = null,
+        nm: String, paramNames: Set<String>, ann: TypeNode? = null, blockScoped: Boolean = false,
     ) {
         if (nm in paramNames) return
         // INV.3(d): + currentFileLocals — see applyBodyLocalShadowing's inGlobals note.
@@ -101417,7 +101624,7 @@ interface DataView {
         // approximation, and exactly what the top-level arm does); an un-annotated one
         // records `anyType`, i.e. suppression, because a block-scoped inferred type must
         // not be claimed for reads outside the block.
-        if (!outerBound && currentLocalTypes.containsKey(nm)) {
+        if (!blockScoped && !outerBound && currentLocalTypes.containsKey(nm)) {
             currentShadowedNames.add(nm)
             val t = ann?.let { getTypeFromTypeNode(it) }
             currentLocalTypes[nm] =
@@ -101625,7 +101832,7 @@ interface DataView {
             val savedAmbiguous = ambiguousBlockLocalNames
             ambiguousBlockLocalNames = mutableSetOf()
             val bodyParamNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
-            applyBodyLocalShadowing(it.statements, bodyParamNames)
+            applyBodyLocalShadowing(it.statements, bodyParamNames, blockScoped = true)
             // Round 460: AFTER shadowing (so the ambiguity override wins) register names
             // with ≥2 block-scoped declarations as anyType — the flat first-decl-wins
             // currentLocalTypes cannot know which block's binding a later read refers to.
@@ -102282,7 +102489,7 @@ interface DataView {
         returnTypeNode: TypeNode? = null,
     ) {
         when (stmt) {
-            is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+            is Block -> ctaLegacyScoped(stmt, fileName, varTypes) { checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
             is ExpressionStatement -> {
                 checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
             }
@@ -102342,12 +102549,12 @@ interface DataView {
                     }
                 }
             }
-            is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
-            is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
-            is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+            is ForStatement -> ctaLegacyScoped(stmt, fileName, varTypes) { checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
+            is ForInStatement -> ctaLegacyScoped(stmt, fileName, varTypes) { checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
+            is ForOfStatement -> ctaLegacyScoped(stmt, fileName, varTypes) { checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
             is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
-            is SwitchStatement -> {
+            is SwitchStatement -> ctaLegacyScoped(stmt, fileName, varTypes) {
                 // round 431c: thread returnTypeNode so returns inside switch cases check
                 // through the ENGINE path, consistent with top-level/if returns.
                 for (clause in stmt.caseBlock) {
@@ -102359,9 +102566,9 @@ interface DataView {
                 }
             }
             is TryStatement -> {
-                checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
-                stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
-                stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
+                ctaLegacyScoped(stmt.tryBlock, fileName, varTypes) { checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
+                stmt.catchClause?.block?.let { ctaLegacyScoped(it, fileName, varTypes) { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) } }
+                stmt.finallyBlock?.let { ctaLegacyScoped(it, fileName, varTypes) { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) } }
             }
             is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             else -> {}
