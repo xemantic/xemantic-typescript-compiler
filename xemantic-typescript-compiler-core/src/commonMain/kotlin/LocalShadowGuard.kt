@@ -391,6 +391,48 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
             return false
         }
 
+        /**
+         * (CHK.173) Round B2 (G2) — the OPTIONAL parameter `name?: T` (plain identifier,
+         * no initializer, not rest) of the nearest function-like above [node] whose
+         * parameter list binds [name], or null. A named function / class expression's own
+         * name, a `catch` variable and a namespace body end the ascent with null; a block-
+         * scoped shadow is NOT seen here — the caller compares the lexical symbol's
+         * declaration with the returned parameter.
+         */
+        fun optionalParameterBinding(node: Node, name: String): Parameter? {
+            var cur: Node? = (node as NodeBase).parent
+            var hops = 0
+            while (cur != null && cur !is SourceFile && hops++ < 512) {
+                if (cur is ModuleBlock || cur is ModuleDeclaration) return null
+                val params = when (cur) {
+                    is FunctionDeclaration -> cur.parameters
+                    is ArrowFunction -> cur.parameters
+                    is MethodDeclaration -> cur.parameters
+                    is Constructor -> cur.parameters
+                    is GetAccessor -> cur.parameters
+                    is SetAccessor -> cur.parameters
+                    is FunctionExpression -> cur.parameters
+                    else -> null
+                }
+                if (params != null) {
+                    val p = params.firstOrNull { bindsName(it.name, name) }
+                    if (p != null) {
+                        return p.takeIf {
+                            it.name is Identifier && it.questionToken && it.initializer == null && !it.dotDotDotToken
+                        }
+                    }
+                    if (cur is FunctionExpression && cur.name?.text == name) return null
+                }
+                if (cur is ClassExpression && cur.name?.text == name) return null
+                if (cur is CatchClause) {
+                    val v = cur.variableDeclaration
+                    if (v != null && bindsName(v.name, name)) return null
+                }
+                cur = (cur as NodeBase).parent
+            }
+            return null
+        }
+
         /** A statement list's verdict for [name]: null when it binds nothing (a declaration wins). */
         private fun statementsBinding(statements: List<Statement>, name: String): Boolean? {
             for (st in statements) when (st) {

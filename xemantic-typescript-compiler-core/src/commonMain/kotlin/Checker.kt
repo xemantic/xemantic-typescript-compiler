@@ -154855,10 +154855,19 @@ interface DataView {
         val recv = expr.expression as? Identifier ?: return
         val name = recv.text
         if (name == "this" || name == "super" || name == "arguments" || name == "undefined") return
-        val declared = getTypeOfIdentifier(recv)
-        if (declared !is Type.Union) return
+        val declared = nullableIdentifierReceiverType(recv, name, getTypeOfIdentifier(recv)) ?: return
         if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
-        val narrowed = getNarrowedTypeForReferenceFollowLoopEntry(declared, recv)
+        // (CHK.173) Round B2: the cpa walk does not thread `this`, so a guarded
+        // reassignment from `this.m()` / `this.p` ([resolvePropertyMethodDecl]'s
+        // carrier) proved nothing and the reference kept its `| undefined`
+        // (`if (!sf) sf = this.getSourceFile(); sf.text`, tsc services.ts).
+        val savedThis = currentClassForThis
+        if (savedThis == null) currentClassForThis = captureRecorder.typeCaptureThisClass(recv)
+        val narrowed = try {
+            getNarrowedTypeForReferenceFollowLoopEntry(declared, recv)
+        } finally {
+            currentClassForThis = savedThis
+        }
         if (narrowed === anyType || narrowed === unknownType || narrowed === errorType) return
         val hasNull = typeIncludesNull(narrowed)
         val hasUndef = typeIncludesExplicitUndefined(narrowed)
@@ -154877,6 +154886,26 @@ interface DataView {
             start = recv.pos,
             length = name.length,
         ))
+    }
+
+    /**
+     * (CHK.173) Round B2 — the declared type Round A's identifier arm reads, or null to
+     * stay silent: a nullable UNION (Round A); an OPTIONAL parameter `x?: T` not shadowed
+     * by a local, as `T | undefined` (G2 — [populateParameterLocalTypes] records the bare
+     * `T`, tsgo's declared type carries `undefined`; the lexical symbol RETURNS the
+     * parameter itself, so the shadow test is declaration identity, never null); and a
+     * non-union `null` / `undefined` (G3b) unless the receiver is the `null` keyword,
+     * which parses as an Identifier and is tsgo's TS18050.
+     */
+    private fun nullableIdentifierReceiverType(recv: Identifier, name: String, toi: Type): Type? {
+        if (toi === anyType || toi === errorType || toi === unknownType) return null
+        val p = LocalShadowGuard.optionalParameterBinding(recv, name)
+        if (p != null && lexicalScopeSymbol(recv, name).let { it == null || it.valueDeclaration === p }) {
+            return if (typeIncludesExplicitUndefined(toi)) toi else getUnionType(listOf(toi, undefinedType))
+        }
+        if (toi is Type.Union) return toi
+        if ((toi === nullType || toi === undefinedType) && name != "null") return toi
+        return null
     }
 
     /**

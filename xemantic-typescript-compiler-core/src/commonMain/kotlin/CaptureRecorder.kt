@@ -1340,7 +1340,7 @@ internal class CaptureRecorder(
      * INV.2(a) stamps `parent` on every node, so this is a pointer walk; the cap is
      * against a corrupt chain and nothing else.
      */
-    private fun typeCaptureThisClass(node: Node): ClassDeclaration? {
+    internal fun typeCaptureThisClass(node: Node): ClassDeclaration? {
         var current: Node = node
         var steps = 0
         while (steps++ < TYPE_CAPTURE_ENCLOSING_MAX_DEPTH) {
