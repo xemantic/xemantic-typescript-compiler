@@ -122639,7 +122639,7 @@ interface DataView {
         }
     }
 
-    private fun narrowBySwitchClause(t: Type, flowNode: FlowSwitchClause, name: String): Type? {
+    private fun narrowBySwitchClauseCore(t: Type, flowNode: FlowSwitchClause, name: String): Type? {
         val switchExpr = flowNode.switchStatement.expression
         // B411: `switch (true) { case <cond>: ... }` — each case expression is a
         // CONDITION (not a discriminant literal). The matched clause narrows [name]
@@ -125696,8 +125696,11 @@ interface DataView {
      * then falls back to `x === literal` direct equality narrowing.
      */
     private fun narrowByEquality(
-        t: Type, expr: BinaryExpression, equal: Boolean, name: String,
+        t0: Type, expr: BinaryExpression, equal: Boolean, name: String,
     ): Type {
+        // (CHK.173) S-G1: reduce FIRST and keep going — the discriminant filter below
+        // must see the reduced type (tsgo `narrowTypeByBinaryExpression` assigns `t = …`).
+        val t = optionalChainContainmentNarrow(t0, expr, equal, name)
         tryNarrowByTypeOf(t, expr, equal, name)?.let { return it }
         narrowByConstructorEquals(t, expr, equal, name)?.let { return it }
         narrowByDiscriminantProperty(t, expr, equal, name)?.let { return it }
@@ -125753,6 +125756,100 @@ interface DataView {
             (literalType === nullType || literalType === undefinedType)
         ) return narrowByLooseNullishEquality(t, keep = equal)
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * (CHK.173) S-G1 — tsgo's `narrowTypeByOptionalChainContainment` (flow.go:1019): in a
+     * branch of `obj?.foo <op> value` where the optional chain CONTAINS the walked
+     * reference, `null`/`undefined` leave the reference's type when the comparison proves
+     * the chain did not short-circuit. `nullable` is `undefined` for `===`/`!==` and
+     * `null | undefined` for `==`/`!=`; with [equal] the effective polarity, the reference
+     * is non-nullish when (NOT equal and every member of the value's type is `nullable`) or
+     * (equal and no member is `any`/`unknown`/`nullable`). tsgo asks this only when neither
+     * side IS the reference; the chain test is syntactic and runs before the value is typed,
+     * so an ordinary comparison pays two `when`s.
+     */
+    private fun optionalChainContainmentNarrow(t: Type, expr: BinaryExpression, equal: Boolean, name: String): Type {
+        if (!strictNullChecks) return t
+        val left = unwrapParensExpr(expr.left)
+        val right = unwrapParensExpr(expr.right)
+        val value = when {
+            isOptionalChainNode(left) && optionalChainContainsReference(left, name) -> expr.right
+            isOptionalChainNode(right) && optionalChainContainsReference(right, name) -> expr.left
+            else -> return t
+        }
+        if (getReferencePath(left) == name || getReferencePath(right) == name) return t
+        val loose = expr.operator == SyntaxKind.EqualsEquals || expr.operator == SyntaxKind.ExclamationEquals
+        val nullable = if (loose) TypeFlags.Null or TypeFlags.Undefined else TypeFlags.Undefined
+        val vt = literalTypeOfExpression(value) ?: enumMemberTypeOfExpr(value) ?: getTypeOfExpression(value)
+        val members = if (vt is Type.Union) vt.types else listOf(vt)
+        val remove = if (equal) members.all { it.flags.hasNone(TypeFlags.Any or TypeFlags.Unknown or nullable) }
+        else members.all { it.flags.hasAny(nullable) }
+        return if (remove) narrowByExcludingNullUndefined(t) else t
+    }
+
+    /** tsgo `ast.IsOptionalChain`: a link carrying `?.`, or any later link of the same chain (a paren ends it). */
+    private fun isOptionalChainNode(e: Expression): Boolean {
+        var cur = e
+        while (true) {
+            cur = when (cur) {
+                is PropertyAccessExpression -> if (cur.questionDotToken) return true else cur.expression
+                is ElementAccessExpression -> if (cur.questionDotToken) return true else cur.expression
+                is CallExpression -> if (cur.questionDotToken) return true else cur.expression
+                is NonNullExpression -> cur.expression
+                else -> return false
+            }
+        }
+    }
+
+    /** tsgo `optionalChainContainsReference` (flow.go:1830): some receiver down the chain IS the reference. */
+    private fun optionalChainContainsReference(source: Expression, name: String): Boolean {
+        var s = source
+        while (isOptionalChainNode(s)) {
+            s = when (s) {
+                is PropertyAccessExpression -> s.expression
+                is ElementAccessExpression -> s.expression
+                is CallExpression -> s.expression
+                is NonNullExpression -> s.expression
+                else -> return false
+            }
+            if (getReferencePath(s) == name) return true
+        }
+        return false
+    }
+
+    /**
+     * (CHK.173) S-G1 switch arm — tsgo `narrowTypeBySwitchOptionalChainContainment`
+     * (flow.go:1202): `switch (obj?.k)` (or `switch (typeof obj?.k)`) whose chain contains
+     * the reference, in a non-empty clause range with no `default`, where no case value's
+     * type is `undefined`/`never` (typeof: no case is the string `"undefined"`), removes
+     * `null`/`undefined`. tsgo tests the case type's OWN flags, so a union case value
+     * containing `undefined` passes (measured on 7.0.2) — as `Type.Union.flags` does here.
+     */
+    private fun switchOptionalChainContainmentNarrow(t: Type, flowNode: FlowSwitchClause, name: String): Type {
+        if (!strictNullChecks || flowNode.clauseStart >= flowNode.clauseEnd) return t
+        val subject = unwrapParensExpr(flowNode.switchStatement.expression)
+        val isTypeof = when {
+            isOptionalChainNode(subject) && optionalChainContainsReference(subject, name) -> false
+            subject is TypeOfExpression && unwrapParensExpr(subject.expression).let {
+                isOptionalChainNode(it) && optionalChainContainsReference(it, name)
+            } -> true
+            else -> return t
+        }
+        val clauses = flowNode.switchStatement.caseBlock
+        for (i in flowNode.clauseStart until minOf(flowNode.clauseEnd, clauses.size)) {
+            val e = (clauses[i] as? CaseClause ?: return t).expression
+            val ct = literalTypeOfExpression(e) ?: enumMemberTypeOfExpr(e) ?: getTypeOfExpression(e)
+            if (isTypeof) {
+                if (ct is Type.StringLiteral && ct.value == "undefined" || ct === neverType) return t
+            } else if (ct.flags.hasAny(TypeFlags.Undefined or TypeFlags.Never)) return t
+        }
+        return narrowByExcludingNullUndefined(t)
+    }
+
+    private fun narrowBySwitchClause(t0: Type, flowNode: FlowSwitchClause, name: String): Type? {
+        val t = switchOptionalChainContainmentNarrow(t0, flowNode, name)
+        return narrowBySwitchClauseCore(t, flowNode, name) ?: t.takeIf { it !== t0 }
     }
 
     /**
