@@ -1,5 +1,13 @@
 
 
+**(P18.206) — (CHK.173) G3 + G6: `??=` / `||=` NARROW, AND `filter(x => x !== undefined)` INFERS A PREDICATE; 42 OF 46 CELLS MATCH tsgo, +0 EVERYWHERE, 20,902 / 0 / 44 (2026-09-28).**
+`x ??= y` left `x` possibly-undefined when `y` was a member / identifier / element read, and an arrow like
+`x => x !== undefined` or `x => !!x` inferred no type predicate, so `arr.filter(...)` kept `undefined` in its
+element type. Both now follow tsgo (and `Boolean(p)`, which tsgo does not treat as a predicate, is pinned as not
+one). 18 pins, 7 of 8 arms RED (one redundant guard). Screen 0; grid 8x0; libs 0; cost_gate PASS; huge_methods 0.
+Next: S-G1, optional-chain comparison narrowing.
+
+
 **(P18.205) — (CHK.173) G5 SLICE 1: A LOCAL THAT SHADOWS AN OUTER NAME NO LONGER READS AS THE OUTER BINDING AT THE NAME LOOKUP; 4 FALSE POSITIVES GONE, +0 EVERYWHERE, 20,884 / 0 / 44 (2026-09-27).**
 A `catch` variable, `for`-header `let`, block `let`/`const` or missed destructured leaf shadowing an outer name was
 typed as the outer binding. A lookup guard now answers `any` there, and a function-top `let x;` drops the outer's

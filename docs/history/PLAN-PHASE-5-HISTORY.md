@@ -1,3 +1,39 @@
+### Round (P18.201) — (CHK.171) R1: constructor / setter frames and nested-function frames keep the type-parameter scope; 13 rows closed, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.172) census (recorded in its item) and the (CHK.173) census
+running beside it. `ctaFnBodyFrame` reads `outerTpScope = ctaEnclosingTpScope()` before pushing the frame; the Block
+branch starts from it (was `currentTypeParamScope`), and the constructor/setter branch builds a scope from it plus the
+class type parameters, sets `fnTpScope`/`fnTpDecls`, and runs the (unchanged) seeds under it. New helpers
+`ctaEnclosingTpScope` (nearest enclosing `fnTpScope`, stopping at a namespace body or the file), `ctaBuildTpScope`
+(the Block branch's inline code, shared; class TPs first, own after, so inner names win), `ctaCtorSetterSeeds`. tsgo
+has no frames — `resolveNameHelper` walks the parent chain and takes the innermost declaring container, which the
+chain + shadowing order reproduce. **Where the census/brief was wrong**: the nested-function seed must WALK outward to
+the nearest frame with a scope (block/clause/narrowing frames carry none until R4, so reading `ctaFrames.last()` alone
+would leave a function nested in an `if` as blind as before); `fnTpDecls` is set only on ctor/setter frames (the
+census's B14 run had copied it everywhere); **"0 rows everywhere" does not hold on hand-written shapes** — two
+pre-existing FP kinds now also fire inside ctor / setter / nested bodies (none on any profile or library): a type
+parameter constrained to a primitive rejected against that primitive at the declaration/return readers — **a false
+positive on HEAD at a function's top level too, re-probed by the orchestrator and filed as (CHK.174)** — and static
+setters reporting TS2322 for a class TP where tsgo reports only TS2302 (as static methods already did).
+
+**Matrix, 55 cells**: 69 agree / 215 missing -> **82 / 202** — exactly the 13 predicted closures (`ctor_top` x3,
+`set_top` x3, `cm_nestedfn` x3, `f_nestedfn` x2, `nest_own_tp`, `nest_class_in_fn`), nothing else moved; extra pin cells
+24 agree vs 8 before.
+
+**Pins**: `CtaFrameTypeParamScopeTest`, 23 tests (16 red on the before binary; one renamed `control -` — a nested
+generic arrow already saw the outer TPs). Ablation: ctor/setter scope not built 10 RED; seeds not under it 5; nested
+from the resting scope 6; own TPs before class TPs 1; outer layered over own 3 (the shadowing pins).
+
+**Gates**: full suite **20,814 / 0 / 44** (+23); corpus screen 0 of 8,725; huge_methods 0 (`cpaSpineLeave` 7,898
+unchanged); grid 8x `added=0 removed=0` (a control — no counter proves the change fires there); warning-clean.
+**cost_gate FAILED on one counter and was rebaselined in this commit**: `mapped.hits` +5.17% vs the recorded baseline
+(+3.1%, 7,253 -> 7,481, vs the rebuilt before-arm; `mapped.keyed` +1.1%) — constructor / setter / nested bodies now
+resolve type annotations with a scope in place, served from the mapped cache (HITS, the cheap path). rxjs 0, marked 0,
+cronstrue 1. Residues: (CHK.174); the static-setter TS2322; ctor/setter ARGUMENT probes still miss (accessors push no
+argument-reader frame); member reads on a type parameter never report TS2339; R2-R4.
+
+**Successor**: (CHK.174) (small FP), then (CHK.173) once its census lands.
+
 ### Round (P18.200) — (CHK.169): a MODULE-file class is resolved through its own symbol (and its base through the per-file view) at the argument reader, so `this` is typed; 25 cells, 0 FPs, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.171) census landing beside it (recorded in its item).

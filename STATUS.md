@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,538** lines (**+92 at (P18.210)**, three overload-selection helpers — a SEMANTIC parity change: a wrong overload (and an `any` result) became the right one; **+101 at (P18.209)**, equality with a flow-narrowed value — a SEMANTIC parity change removing a FALSE-POSITIVE class; **-97 at (P18.208)**, the old optional-chain range walker deleted, the new guard is `OptionalChainGuard.kt` (157 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class and closing four false NEGATIVES the old walker hid; **+97 at (P18.207)**, tsgo's optional-chain containment rule for equality and switch narrowing — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+137 at (P18.206)**, the `??=`/`||=` branch and the nullish arrow-predicate shape — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
+extraction):** `Checker.kt` **201,595** lines (**+57 at (P18.211)**, the identifier-receiver TS1804x arm and its shared code chooser — the binding guard is in `LocalShadowGuard.kt`; a SEMANTIC parity change closing the checker's most visible FALSE-NEGATIVE class; **+92 at (P18.210)**, three overload-selection helpers — a SEMANTIC parity change: a wrong overload (and an `any` result) became the right one; **+101 at (P18.209)**, equality with a flow-narrowed value — a SEMANTIC parity change removing a FALSE-POSITIVE class; **-97 at (P18.208)**, the old optional-chain range walker deleted, the new guard is `OptionalChainGuard.kt` (157 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class and closing four false NEGATIVES the old walker hid; **+97 at (P18.207)**, tsgo's optional-chain containment rule for equality and switch narrowing — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+137 at (P18.206)**, the `??=`/`||=` branch and the nullish arrow-predicate shape — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
 relation rule itself is `Relater.kt` 1,758 -> 1,809; a SEMANTIC parity change removing a FALSE-POSITIVE class;
 **+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
 constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
@@ -96,6 +96,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.211) — (CHK.173) ROUND A: `x.length` WITH `x: string | null` NOW REPORTS "'x' IS POSSIBLY 'null'" (TS18047 / TS18048 / TS18049) AS tsgo DOES; +0 ON EVERY PROFILE AND LIBRARY, 21,118 / 0 / 44 (2026-09-28).**
+The most common strictNullChecks error was never reported on an identifier receiver — for an embedded checker, the
+most visible false negative. Six preparatory rounds closed the narrowing gaps that would have made it fire on legal
+code, so it lands with 0 false positives on tsc's sources, rxjs, marked and cronstrue. 100 pins (56 report, 42 stay
+silent), 13 of 16 arms RED (3 recorded redundant). `narrow.walks` +3.06% (one walk per nullable receiver) re-baselined;
+warm A/B inside the band. Next: G5 S2 (block-scoped locals), then Round B (body locals, `x?: T`).
+
 **(P18.210) — (CHK.173) S-G4b: OVERLOAD SELECTION PICKS THE OVERLOAD tsgo PICKS (optional parameters, constraints naming a type parameter, predicate parameters); +0 EVERYWHERE, 21,018 / 0 / 44 (2026-09-28).**
 `f(t: string): string; f(t?: number): number; f(x)` with `x: number | undefined` chose the FIRST overload, and an
 overload whose parameter is a type predicate accepted a plain boolean callback — tsc's two-overload `visitNodes` call
@@ -119,10 +126,3 @@ Comparing an optional chain (`d?.p !== undefined`, `n === d?.p`, `d?.a?.length !
 remove `undefined` from `d`, so a later `d.p` was reported (today on element reads; on every read once the TS18048
 arm lands). tsgo's containment rule is ported. 36 pins, 9 of 10 arms RED (one redundant guard). Screen 0; grid 8x0;
 libs 0; cost_gate PASS; warm A/B inside the band. Next: S-G1c.
-
-**(P18.206) — (CHK.173) G3 + G6: `??=` / `||=` NARROW, AND `filter(x => x !== undefined)` INFERS A PREDICATE; 42 OF 46 CELLS MATCH tsgo, +0 EVERYWHERE, 20,902 / 0 / 44 (2026-09-28).**
-`x ??= y` left `x` possibly-undefined when `y` was a member / identifier / element read, and an arrow like
-`x => x !== undefined` or `x => !!x` inferred no type predicate, so `arr.filter(...)` kept `undefined` in its
-element type. Both now follow tsgo (and `Boolean(p)`, which tsgo does not treat as a predicate, is pinned as not
-one). 18 pins, 7 of 8 arms RED (one redundant guard). Screen 0; grid 8x0; libs 0; cost_gate PASS; huge_methods 0.
-Next: S-G1, optional-chain comparison narrowing.
