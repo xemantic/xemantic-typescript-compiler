@@ -1,5 +1,13 @@
 
 
+**(P18.203) — (CHK.172): `emitDeclarationOnly` RUNS THE NORMAL CHECKER AND `noCheck` IS HONOURED; +0 ON EVERY `--noEmit` GATE, 20,859 / 0 / 44 (2026-09-25).**
+Under `emitDeclarationOnly` xtsc used to check through a whitelist that skipped almost everything, so a project that
+only emits `.d.ts` (the esbuild/rollup setup) got a near no-op checker. The program is now checked exactly as a plain
+build and only the JavaScript is withheld; the whitelist machinery is deleted (`Checker.kt` −413 lines). `noCheck`
+now suppresses type-check rows as in tsgo. Harness under edo 84 -> 94 rows, identical to plain; 25 pins, four arms RED.
+Screen 0; grid 8x0 (a control); cost_gate PASS; huge_methods 0.
+
+
 **(P18.202) — (CHK.174) / (INC.30): THE RELATION RELATES A TYPE PARAMETER THROUGH ITS CONSTRAINT; 17 FALSE POSITIVES -> 0, +0 EVERYWHERE, 20,834 / 0 / 44 (2026-09-24).**
 `function g<T extends number>(k: T) { const n: number = k }` reported a false TS2322 — the relation had no
 "type parameter via its constraint" rule, the long-open (INC.30). It now does, with both hazards that item recorded

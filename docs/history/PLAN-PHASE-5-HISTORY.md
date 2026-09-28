@@ -1,3 +1,41 @@
+### Round (P18.198) — (CHK.152) step 3: a narrowed-receiver second chance at the argument reader, then UNION / nullable parameters admitted; harness +0, all 8 profiles byte-identical (2026-09-24)
+
+Orchestrated: one implementation subagent, with two read-only censuses finishing beside it — rxjs's last missed row
+((CHK.161)(c): FIVE fixes, not two) and (CHK.169) (module-class `this`; both recorded in their items, with (CHK.170)
+and (CHK.171) split out). **Split first, verbatim**: `caasArgTypeFor` and `caasEmitArgRelationError` out of
+`checkArgumentsAgainstSignatureCore` (**7,629 -> 4,297 bytecodes**; 184 at-risk classes green on the split alone).
+**Round A alone was NOT enough for harness**: `utilities.ts:1366` came back as `ImportDeclaration | JSDocImportTag |
+Node` — earlier guards on `parent` reset `parent.parent` through the path walk's prefix arm to the guard target's
+declared `parent` (`Node`), so the join was WIDER than the re-read, where tsgo resets to the re-read; a path-narrowing
+answer is now kept only if it is assignable to the re-read. `argMemberRereadFromNarrowedReceiver` runs ONLY after the
+relation failed (builds on round 784's `propertyTypeFromNarrowedReceiver`, applies the member's path narrowing, refuses
+`never`/`any`/error and any non-refinement; legal if it relates, else it names the message — tsgo narrows the receiver
+then the member path, checker.go ~11361). `isNamedObjectForArgCheck(…, allowUnion)` admits a union of named objects,
+optionally nullish, on the PARAMETER side only (union arguments stay step 4). **The step-1 chain helper is wrong for a
+union parameter**: tsgo strips null/undefined, drills into the best constituent and reports a missing member before a
+member-type mismatch (a lone missing member becomes a bare TS2741) — `argNamedVsUnionParamChain` does that at the
+argument position (the declaration position has the same order divergence, untouched).
+
+**Matrix, 19 files**: agree 11 -> **20**, missing 28 -> 16, text-diff 17 -> 8, head-only-chain 11 -> 23 (former
+text-diffs whose head is now right); ours-only 4 -> 4, the SAME four pre-existing FPs. Both census harness shapes are
+silent as in tsgo; unguarded and nullable cases agree exactly.
+
+**Pins**: `NarrowedReceiverArgumentTest`, 9 tests. Ablation: replacement instead of second chance 1 RED; no member path
+narrowing 1; union params without Round A 4; no union chain 2; path-narrowing refinement guard 1; union params refused
+2; re-read not used in the message 1; member type before missing member 2; `never`/`any` refusal **0** and re-read
+refinement guard **0** — redundant (the helper and the relation already cover them), recorded. `ArgKindCensusTest`
+gained a union-parameter call; `NamedObjectArgumentAssignabilityTest`'s "union parameter stays outside the gate"
+control is renamed — the parameter is now INSIDE the gate and kept silent by Round A.
+
+**Gates**: full suite **20,772 / 0 / 44** (+9); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x
+`added=0 removed=0` (harness the gate) with full text byte-identical; warning gate proved live. rxjs 0, marked 0,
+cronstrue 1. Residues: step 4 (union arguments — also where an `if`-block argument arrives already narrowed to a union);
+Round B (declaration / object-literal / assignment / return readers, `instanceof`/`asserts` prefix arms); union
+parameters with primitive or array members; chain-order divergences; four pre-existing FPs (`k1` exhaustive negated
+guards, `w1`/`x1` non-subtype guard targets, `probe3` g3 object-literal reader).
+
+**Successor**: (CHK.170) (`??` typing), then (CHK.169) — the module-class `this` false-negative class.
+
 ### Round (P18.197) — (CHK.162): an intersection source relates to a generic target through the INSTANTIATED member types; 14 -> 0 cells off tsgo (2026-09-24)
 
 Orchestrated: one implementation subagent. **The item's axis was wrong**: the union target is not the cause — it
