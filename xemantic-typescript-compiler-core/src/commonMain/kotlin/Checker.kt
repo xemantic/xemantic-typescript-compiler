@@ -1347,6 +1347,9 @@ class Checker(
         val nodeId: Int, val frame: CcetFrame,
         val names: List<String>, val prevTypes: List<Type?>, val hadPrev: List<Boolean>,
         val addedBindings: List<String>,
+        /** (CHK.173) G5 S2 slice 3 — a block scope's per-name [CcetFrame.paramBindings]
+         *  membership at its enter, put back verbatim at its leave; null otherwise. */
+        val bindingHad: BooleanArray? = null,
     )
     private val ccetRestores = ArrayDeque<CcetRestore>()
 
@@ -1734,6 +1737,46 @@ class Checker(
                 topF.localTypes[name] = t
             }
         }
+        ccetOpenBlockScope(node, parent)
+    }
+
+    /**
+     * (CHK.173) G5 S2 slice 3 — the argument walker's block scope. The frame map is per
+     * FUNCTION, and the body pre-scan ([applyCallTypesBodyLocalShadowing]) used to type a
+     * nested block's `let`/`const` function-wide: a destructured leaf, a `for` header or a
+     * `catch` variable named like a parameter kept reading as the PARAMETER inside the
+     * block (a false TS2345 on legal code), and an inner recording leaked past the block.
+     * At a scope's enter ([blockScopeKeyFor]) each direct name is hidden from the frame's
+     * map and side set, the scope's own declarations are pre-scanned exactly as a body's
+     * are ([shadowCallTypesDeclList], over an empty parameter set), a `catch` variable is
+     * typed by [ctaCatchVariableTypes], and one [CcetRestore] keyed by the scope's nodeId
+     * puts every name back at its leave — including a name absent at the enter, so an
+     * inner recording never outlives the block.
+     */
+    private fun ccetOpenBlockScope(node: Node, parent: Node?) {
+        val scope = blockScopeKeyFor(node, parent) ?: return
+        val id = (scope as NodeBase).nodeId
+        if (id < 0) return
+        val names = localShadowGuard.directScopeNames(scope, spineFileName)
+        if (names.isEmpty()) return
+        SpineDispatch.work()
+        val topF = ccetFrames.last()
+        val prev = ArrayList<Type?>(names.size)
+        val had = ArrayList<Boolean>(names.size)
+        val bindingHad = BooleanArray(names.size)
+        for ((i, nm) in names.withIndex()) {
+            prev.add(topF.localTypes[nm])
+            had.add(topF.localTypes.containsKey(nm))
+            bindingHad[i] = nm in topF.paramBindings
+            topF.localTypes.remove(nm)
+            topF.paramBindings.remove(nm)
+        }
+        ccetRestores.addLast(CcetRestore(id, topF, names, prev, had, emptyList(), bindingHad))
+        val decls = LocalShadowGuard.collectDirectScopeDeclarations(scope)
+        withCcetFrameAmbient(topF) {
+            if (decls.isNotEmpty()) shadowCallTypesDeclList(decls, emptySet(), HashSet())
+        }
+        ctaCatchVariableTypes(scope, topF.localTypes)
     }
 
     /**
@@ -1757,7 +1800,7 @@ class Checker(
                 ccetFrames.addLast(frame)
                 withCcetFrameAmbient(frame) {
                     populateParameterLocalTypes(parent.parameters)
-                    applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
+                    applyCallTypesBodyLocalShadowing(node.statements, parent.parameters, scoped = true)
                     shadowNestedFunctionNames(node.statements)
                 }
             } }
@@ -1792,7 +1835,7 @@ class Checker(
                     ccetFrames.addLast(frame)
                     withCcetFrameAmbient(frame) {
                         populateParameterLocalTypes(parent.parameters)
-                        applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
+                        applyCallTypesBodyLocalShadowing(node.statements, parent.parameters, scoped = true)
                         if (!isStatic) ccetInstallClassThis(classFrame.classSym)
                     }
                 } else if (node === parent.body) {
@@ -1811,7 +1854,7 @@ class Checker(
                     ccetFrames.addLast(frame)
                     withCcetFrameAmbient(frame) {
                         populateParameterLocalTypes(parent.parameters)
-                        applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
+                        applyCallTypesBodyLocalShadowing(node.statements, parent.parameters, scoped = true)
                         // (CHK.169) `this` in a constructor body is the instance, as in
                         // a method (tsgo's `tryGetThisTypeAtEx` makes no distinction).
                         ccetInstallClassThis(classFrame.classSym)
@@ -1977,7 +2020,7 @@ class Checker(
                     currentLocalTypes[nm] = t
                 }
                 (node.let { if (it is ArrowFunction) it.body else (it as FunctionExpression).body } as? Block)?.let { b ->
-                    applyCallTypesBodyLocalShadowing(b.statements, params)
+                    applyCallTypesBodyLocalShadowing(b.statements, params, scoped = true)
                 }
             } else {
                 val ownNames = mutableSetOf<String>()
@@ -2001,7 +2044,7 @@ class Checker(
                 applyPulledContextualParamTypes(node, params, refuseTpFnTypes = true)
                 val body = if (node is ArrowFunction) node.body else (node as FunctionExpression).body
                 (body as? Block)?.let { b ->
-                    applyCallTypesBodyLocalShadowing(b.statements, params)
+                    applyCallTypesBodyLocalShadowing(b.statements, params, scoped = true)
                     shadowNestedFunctionNames(b.statements)
                 }
             }
@@ -2045,7 +2088,7 @@ class Checker(
             for (n in ownNames) currentLocalTypes[n] = anyType
             populateParameterLocalTypes(params)
             applyPulledContextualParamTypes(member, params, refuseTpFnTypes = true)
-            applyCallTypesBodyLocalShadowing(body.statements, params)
+            applyCallTypesBodyLocalShadowing(body.statements, params, scoped = true)
             shadowNestedFunctionNames(body.statements)
         }
         return frame
@@ -2067,6 +2110,10 @@ class Checker(
                 else r.frame.localTypes.remove(nm)
             }
             for (nm in r.addedBindings) r.frame.paramBindings.remove(nm)
+            val bh = r.bindingHad
+            if (bh != null) for ((i, nm) in r.names.withIndex()) {
+                if (bh[i]) r.frame.paramBindings.add(nm) else r.frame.paramBindings.remove(nm)
+            }
         }
         tp = SpineSections.split(SpineSections.CCET_RESTORES, kid, tp)
         // (ccet-m3): the per-call-node anchors — Call/New/TaggedTemplate
@@ -161151,7 +161198,13 @@ interface DataView {
      *  local-decl name with anyType. Suppression-only (never a concrete type). A name
      *  matching THIS function's OWN param is a REDECLARATION (param wins, TS2403), not a
      *  shadow — excluded via the param-name set (mirrors [applyBodyLocalShadowing]). */
-    private fun applyCallTypesBodyLocalShadowing(statements: List<Statement>, parameters: List<Parameter>) {
+    private fun applyCallTypesBodyLocalShadowing(
+        statements: List<Statement>, parameters: List<Parameter>,
+        // (CHK.173) G5 S2 slice 3: the spine walker scopes a nested block's (and a `for`
+        // header's) `let`/`const` itself ([ccetOpenBlockScope]), so its pre-scan leaves
+        // them out; the legacy walker keeps the function-wide treatment.
+        scoped: Boolean = false,
+    ) {
         // (round 436: no currentLocalTypes.isEmpty() early-out — the destructured-local
         // binding-name registration below must run even when no param types were recorded.)
         val paramNames = mutableSetOf<String>()
@@ -161162,7 +161215,7 @@ interface DataView {
         // or is recorded at its LEAVE by [ccetApplyDeclRecordings] (an annotated
         // local; without this the second block read the first block's annotation).
         val bodyNames = HashSet<String>()
-        for (s in statements) shadowCallTypesLocalDecls(s, paramNames, bodyNames)
+        for (s in statements) shadowCallTypesLocalDecls(s, paramNames, bodyNames, scoped = scoped)
     }
 
     private fun shadowCallTypesDeclList(
@@ -161274,39 +161327,42 @@ interface DataView {
 
     private fun shadowCallTypesLocalDecls(
         s: Statement?, paramNames: Set<String>, bodyNames: MutableSet<String>, nested: Boolean = false,
+        scoped: Boolean = false,
     ) {
+        fun isLetConst(list: VariableDeclarationList): Boolean = list.flags != SyntaxKind.VarKeyword
         // [nested] = inside a block/if/loop/try/switch — a let/const there that collides
         // with a PARAM is a genuine block-scoped shadow (see shadowCallTypesDeclList).
         fun listNestedLetConst(list: VariableDeclarationList): Boolean =
             nested && list.flags != SyntaxKind.VarKeyword
         when (s) {
             null -> {}
-            is VariableStatement -> shadowCallTypesDeclList(
+            is VariableStatement -> if (!(scoped && nested && isLetConst(s.declarationList))) shadowCallTypesDeclList(
                 s.declarationList.declarations, paramNames, bodyNames, listNestedLetConst(s.declarationList))
-            is Block -> for (st in s.statements) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true)
+            is Block -> for (st in s.statements) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true, scoped = scoped)
             is IfStatement -> {
-                shadowCallTypesLocalDecls(s.thenStatement, paramNames, bodyNames, nested = true)
-                shadowCallTypesLocalDecls(s.elseStatement, paramNames, bodyNames, nested = true)
+                shadowCallTypesLocalDecls(s.thenStatement, paramNames, bodyNames, nested = true, scoped = scoped)
+                shadowCallTypesLocalDecls(s.elseStatement, paramNames, bodyNames, nested = true, scoped = scoped)
             }
             is ForStatement -> {
-                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames, bodyNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
+                (s.initializer as? VariableDeclarationList)?.takeIf { !(scoped && isLetConst(it)) }
+                    ?.let { shadowCallTypesDeclList(it.declarations, paramNames, bodyNames) }
+                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true, scoped = scoped)
             }
             is ForInStatement -> {
                 (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames, bodyNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
+                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true, scoped = scoped)
             }
             is ForOfStatement -> {
                 (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames, bodyNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
+                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true, scoped = scoped)
             }
-            is WhileStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
-            is DoStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
-            is LabeledStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested)
+            is WhileStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true, scoped = scoped)
+            is DoStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true, scoped = scoped)
+            is LabeledStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested, scoped)
             is TryStatement -> {
-                for (st in s.tryBlock.statements) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true)
-                s.catchClause?.block?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, bodyNames, nested = true) }
-                s.finallyBlock?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, bodyNames, nested = true) }
+                for (st in s.tryBlock.statements) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true, scoped = scoped)
+                s.catchClause?.block?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, bodyNames, nested = true, scoped = scoped) }
+                s.finallyBlock?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, bodyNames, nested = true, scoped = scoped) }
             }
             is SwitchStatement -> for (c in s.caseBlock) {
                 val stmts = when (c) {
@@ -161314,7 +161370,7 @@ interface DataView {
                     is DefaultClause -> c.statements
                     else -> emptyList()
                 }
-                for (st in stmts) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true)
+                for (st in stmts) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true, scoped = scoped)
             }
             else -> {}
         }
@@ -167066,100 +167122,117 @@ interface DataView {
         }
     }
 
+    /** [getCalleeType]'s identifier ladder below the scope-space consult (the arm as it
+     *  was before (CHK.173) G5 S2 slice 4). */
+    private fun calleeTypeOfIdentifierConventional(expr: Identifier): Type {
+        // Local scope (function params, block-scoped vars) shadows globals.
+        // E.g. `function b1(b1: number) { b1(12); }` — the inner `b1` is the
+        // param, not the outer function — so resolving via globals would
+        // miss the primitive-callee case.
+        currentLocalTypes[expr.text]?.let { return it }
+        // A function-body destructured/shadowed binding name (registered into the
+        // side set by applyCallTypesBodyLocalShadowing — see the
+        // currentParamBindingNames gotcha) shadows any cross-file `globals` function
+        // of the same name. Mirrors getTypeOfIdentifier (line ~92457): without it,
+        // `const { watchFile } = createWatchFactory()` resolved the CALLEE to
+        // tsbuildPublic's top-level `function watchFile<T>(state: SolutionBuilderState<T>,
+        // file: string, ...)` and FP'd the call's args against ITS params (arrow arg
+        // vs `file: string`). The binding's member type is unmodeled → anyType
+        // (suppression-only).
+        if (expr.text in currentParamBindingNames) return anyType
+        // 17.21: Namespace fallback so a class/fn declared inside `namespace M`
+        // is reachable from a call/new inside another method in the same
+        // namespace. Without this, `new List<T>(null)` inside
+        // `namespace Editor { class ListFactory<T> { make() { ... } } }` would
+        // bail at anyType and skip arg-type checking. Mirrors
+        // `getTypeOfIdentifier`'s namespace fallback. MUST precede the file-local
+        // consult below: a call inside `namespace Parser` to `createSourceFile`
+        // must pick the namespace-internal one, NOT the file-level exported
+        // `createSourceFile(fileName, sourceText: string, ...)` (parser.ts).
+        lookupInInferenceNamespace(expr.text)?.let { return it }
+        // Blocker #3 (cross-file name collision): the current file's OWN top-level
+        // FUNCTION declaration of the callee name must win over the merged `globals`
+        // symbol. `mergeSymbolTable` pollutes the FIRST-processed file's own symbol with
+        // every other file's same-named declarations, so resolving `getBuildInfo` via
+        // globals inside tsbuildPublic.ts (which has its OWN `function getBuildInfo<T>(
+        // state: SolutionBuilderState<T>, ...)`) picked emitter.ts's `getBuildInfo(file:
+        // string, ...)` → FP'd `state` against `string`. A non-first-processed file's
+        // currentFileLocals entry is a CLEAN own-symbol (mergeSymbolTable never mutates
+        // the source table). NARROW to a genuine same-file FUNCTION declaration (NOT a
+        // type-only import / interface / type-alias): a callee `Date` shadowed by a
+        // type-only `import { Date }` (an interface) must still resolve to the GLOBAL
+        // `Date` VALUE (isolatedModulesShadowGlobalTypeNotValue), so an Alias/non-function
+        // local must not override globals here.
+        currentFileLocals?.get(expr.text)?.let { symbol ->
+            if (symbol.flags.hasAny(SymbolFlags.Function) &&
+                !symbol.flags.hasAny(SymbolFlags.Alias) &&
+                symbol.declarations.any { it is FunctionDeclaration }
+            ) {
+                val type = getTypeOfSymbol(symbol)
+                if (type !== anyType && type !== errorType) return type
+            }
+            // Round 474 (Blocker #3): a barrel-IMPORTED callee resolves through
+            // its OWN import when the merged `globals` winner is a DIFFERENT
+            // same-named function from another subproject —
+            // executeCommandLine.ts's compiler-barrel `formatMessage(message:
+            // DiagnosticMessage, …)` vs server/session.ts's `formatMessage(msg,
+            // logger: Logger, …)`: the merged symbol's valueDeclaration is
+            // file-order-dependent, so args were checked against the wrong
+            // file's signature. Gated to a genuine collision (globals resolves
+            // to a declaration NOT among the import target's own) — the
+            // non-collision path stays byte-identical through globals.
+            if (symbol.flags.hasAny(SymbolFlags.Alias)) {
+                importedCalleeFunctionType(expr.text, symbol)?.let { return it }
+                // Round 479: an import-equals alias to a namespace-import
+                // member (`export import parse = ts.getPathComponents`,
+                // harness vpathUtil.ts) resolves through its OWN target —
+                // never the same-named merged-globals function (`parse(path)`
+                // FP'd against a cross-file `parse(sourceFile: SourceFile)`).
+                importEqualsNamespaceMemberCalleeType(expr.text, symbol)?.let { return it }
+            }
+        }
+        // INV.3(c)(iii) round 507: node-keyed — a callee with no per-file
+        // meaning must not check args against a foreign module file's leaked
+        // signature (tsc: TS2304 → any; suppression-only).
+        val symbol = lookupPerFileForNode(expr, expr.text)
+            // (CHK.109) `true`/`false` are RESERVED WORDS the Parser renders as an
+            // `Identifier` (Parser.kt's Boolean-literal arm), so a boolean literal
+            // callee arrives here and resolves to nothing. Read on the MISS path
+            // only: no scope can bind either spelling, so a hit is never one of
+            // them and the ordinary callee pays nothing. `(true)()` is `Boolean` to
+            // both references.
+            ?: return if (expr.text == "true" || expr.text == "false") {
+                getTypeOfExpression(expr)
+            } else {
+                anyType
+            }
+        // (CHK.49) the callee position is a VALUE position, and a module
+        // file's TYPE-only declaration/import of a lib name does not hide
+        // the lib's `declare var` — which is exactly the case the
+        // Blocker-#3 narrowing above is written about
+        // (isolatedModulesShadowGlobalTypeNotValue). Before (CHK.49) the
+        // per-file probe answered the MERGED globals symbol and carried
+        // the value meaning by accident; it now answers the shadowing
+        // TYPE, so the value half is restored here.
+        libValueBehindTypeOnlyShadow(expr.text, symbol)?.let { return getTypeOfSymbol(it) }
+        return getTypeOfSymbol(symbol)
+    }
+
     internal fun getCalleeType(expr: Expression): Type {
         return when (expr) {
             is Identifier -> {
-                // Local scope (function params, block-scoped vars) shadows globals.
-                // E.g. `function b1(b1: number) { b1(12); }` — the inner `b1` is the
-                // param, not the outer function — so resolving via globals would
-                // miss the primitive-callee case.
-                currentLocalTypes[expr.text]?.let { return it }
-                // A function-body destructured/shadowed binding name (registered into the
-                // side set by applyCallTypesBodyLocalShadowing — see the
-                // currentParamBindingNames gotcha) shadows any cross-file `globals` function
-                // of the same name. Mirrors getTypeOfIdentifier (line ~92457): without it,
-                // `const { watchFile } = createWatchFactory()` resolved the CALLEE to
-                // tsbuildPublic's top-level `function watchFile<T>(state: SolutionBuilderState<T>,
-                // file: string, ...)` and FP'd the call's args against ITS params (arrow arg
-                // vs `file: string`). The binding's member type is unmodeled → anyType
-                // (suppression-only).
-                if (expr.text in currentParamBindingNames) return anyType
-                // 17.21: Namespace fallback so a class/fn declared inside `namespace M`
-                // is reachable from a call/new inside another method in the same
-                // namespace. Without this, `new List<T>(null)` inside
-                // `namespace Editor { class ListFactory<T> { make() { ... } } }` would
-                // bail at anyType and skip arg-type checking. Mirrors
-                // `getTypeOfIdentifier`'s namespace fallback. MUST precede the file-local
-                // consult below: a call inside `namespace Parser` to `createSourceFile`
-                // must pick the namespace-internal one, NOT the file-level exported
-                // `createSourceFile(fileName, sourceText: string, ...)` (parser.ts).
-                lookupInInferenceNamespace(expr.text)?.let { return it }
-                // Blocker #3 (cross-file name collision): the current file's OWN top-level
-                // FUNCTION declaration of the callee name must win over the merged `globals`
-                // symbol. `mergeSymbolTable` pollutes the FIRST-processed file's own symbol with
-                // every other file's same-named declarations, so resolving `getBuildInfo` via
-                // globals inside tsbuildPublic.ts (which has its OWN `function getBuildInfo<T>(
-                // state: SolutionBuilderState<T>, ...)`) picked emitter.ts's `getBuildInfo(file:
-                // string, ...)` → FP'd `state` against `string`. A non-first-processed file's
-                // currentFileLocals entry is a CLEAN own-symbol (mergeSymbolTable never mutates
-                // the source table). NARROW to a genuine same-file FUNCTION declaration (NOT a
-                // type-only import / interface / type-alias): a callee `Date` shadowed by a
-                // type-only `import { Date }` (an interface) must still resolve to the GLOBAL
-                // `Date` VALUE (isolatedModulesShadowGlobalTypeNotValue), so an Alias/non-function
-                // local must not override globals here.
-                currentFileLocals?.get(expr.text)?.let { symbol ->
-                    if (symbol.flags.hasAny(SymbolFlags.Function) &&
-                        !symbol.flags.hasAny(SymbolFlags.Alias) &&
-                        symbol.declarations.any { it is FunctionDeclaration }
-                    ) {
-                        val type = getTypeOfSymbol(symbol)
-                        if (type !== anyType && type !== errorType) return type
-                    }
-                    // Round 474 (Blocker #3): a barrel-IMPORTED callee resolves through
-                    // its OWN import when the merged `globals` winner is a DIFFERENT
-                    // same-named function from another subproject —
-                    // executeCommandLine.ts's compiler-barrel `formatMessage(message:
-                    // DiagnosticMessage, …)` vs server/session.ts's `formatMessage(msg,
-                    // logger: Logger, …)`: the merged symbol's valueDeclaration is
-                    // file-order-dependent, so args were checked against the wrong
-                    // file's signature. Gated to a genuine collision (globals resolves
-                    // to a declaration NOT among the import target's own) — the
-                    // non-collision path stays byte-identical through globals.
-                    if (symbol.flags.hasAny(SymbolFlags.Alias)) {
-                        importedCalleeFunctionType(expr.text, symbol)?.let { return it }
-                        // Round 479: an import-equals alias to a namespace-import
-                        // member (`export import parse = ts.getPathComponents`,
-                        // harness vpathUtil.ts) resolves through its OWN target —
-                        // never the same-named merged-globals function (`parse(path)`
-                        // FP'd against a cross-file `parse(sourceFile: SourceFile)`).
-                        importEqualsNamespaceMemberCalleeType(expr.text, symbol)?.let { return it }
-                    }
-                }
-                // INV.3(c)(iii) round 507: node-keyed — a callee with no per-file
-                // meaning must not check args against a foreign module file's leaked
-                // signature (tsc: TS2304 → any; suppression-only).
-                val symbol = lookupPerFileForNode(expr, expr.text)
-                    // (CHK.109) `true`/`false` are RESERVED WORDS the Parser renders as an
-                    // `Identifier` (Parser.kt's Boolean-literal arm), so a boolean literal
-                    // callee arrives here and resolves to nothing. Read on the MISS path
-                    // only: no scope can bind either spelling, so a hit is never one of
-                    // them and the ordinary callee pays nothing. `(true)()` is `Boolean` to
-                    // both references.
-                    ?: return if (expr.text == "true" || expr.text == "false") {
-                        getTypeOfExpression(expr)
-                    } else {
-                        anyType
-                    }
-                // (CHK.49) the callee position is a VALUE position, and a module
-                // file's TYPE-only declaration/import of a lib name does not hide
-                // the lib's `declare var` — which is exactly the case the
-                // Blocker-#3 narrowing above is written about
-                // (isolatedModulesShadowGlobalTypeNotValue). Before (CHK.49) the
-                // per-file probe answered the MERGED globals symbol and carried
-                // the value meaning by accident; it now answers the shadowing
-                // TYPE, so the value half is restored here.
-                libValueBehindTypeOnlyShadow(expr.text, symbol)?.let { return getTypeOfSymbol(it) }
-                getTypeOfSymbol(symbol)
+                // (CHK.173) G5 S2 slice 4: the scope-space consult [getTypeOfIdentifierCore]
+                // makes for a VALUE read, made for the CALLEE too. A `function f` nested in a
+                // block or function body is bound in no conventional table (B83.5), so a
+                // same-named OUTER binding answered the call — `declare const f: string` made
+                // `f(1)` a false TS2349, and the nested function's own parameters were never
+                // checked (tsgo reports TS2345 there). The innermost binding wins whatever
+                // its kind ([NameResolver.lexicalValueSymbolForNode] stops at a variable), and
+                // an `any` / error answer is left alone, exactly as at the value read.
+                val conventional = calleeTypeOfIdentifierConventional(expr)
+                if (conventional === anyType || conventional === errorType) return conventional
+                val scoped = nameResolver.lexicalValueSymbolForNode(expr, expr.text) ?: return conventional
+                getTypeOfSymbol(scoped)
             }
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
             is ElementAccessExpression -> getTypeOfElementAccess(expr)

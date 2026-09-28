@@ -44,8 +44,9 @@ import kotlin.test.Test
  * (WIDEN.1)); (b) the leave-time [Checker.ccetApplyDeclRecordings] records an intrinsic
  * primitive or single-literal ANNOTATION beside the union-of-literals arm it always had.
  *
- * NEGATIVE CONTROLS: a compatible argument stays silent; a same-named SECOND local in one
- * body reads `any` (round 460's ambiguity rule, now also for an annotated pair); a local
+ * NEGATIVE CONTROLS: a compatible argument stays silent; a same-named local in a NESTED
+ * block reads its own binding inside the block only ((CHK.173) G5 S2 slice 3 — it read
+ * `any` under round 460's ambiguity rule until the argument walker scoped blocks); a local
  * named after a lib global or a file-level binding keeps the collision guard's `any`; a
  * MUTABLE boolean local is deliberately NOT recorded — tsc's `boolean` is `true | false`
  * and narrows by assignment where ours is an intrinsic the gate cannot reduce, so
@@ -354,30 +355,34 @@ class BodyLocalLiteralArgumentTest {
     }
 
     @Test
-    fun `negative control - two sibling blocks declaring one name read any`() {
-        // tsc reports the first block's `"a"`; the flat frame cannot tell the two
-        // bindings apart — round 460's ambiguity rule, silence is the safe direction.
-        assert(messages("function f() { { const s = \"a\"; takeB(s) } { const s = \"b\"; takeB(s) } }").isEmpty())
+    fun `two sibling blocks declaring one name each read their own binding`() {
+        // (CHK.173) G5 S2 slice 3: was a countdown asserting silence (round 460's
+        // ambiguity rule); the argument walker now scopes each block, as tsgo does.
+        assert(messages("function f() { { const s = \"a\"; takeB(s) } { const s = \"b\"; takeB(s) } }") ==
+            listOf("Argument of type '\"a\"' is not assignable to parameter of type '\"b\"'."))
     }
 
     @Test
-    fun `negative control - two sibling blocks with annotated locals read any`() {
+    fun `two sibling blocks with annotated locals each read their own annotation`() {
         // Without the pre-scan's body-name set the second block read the FIRST block's
-        // annotation (`string` against `2`, a false positive).
+        // annotation (`string` against `2`, a false positive); scoped, it reads its own
+        // `number`, which tsgo reports against `2`.
         assert(messages(
             "function f() { { const s: string = \"a\"; takeS(s) } { const s: number = 1; takeN(s) } }"
-        ).isEmpty())
+        ) == listOf("Argument of type 'number' is not assignable to parameter of type '2'."))
     }
 
     @Test
-    fun `negative control - a shadowing inner const reads any`() {
-        assert(messages("function f() { const s = \"b\"; if (cond) { const s = \"a\"; takeB(s) } }").isEmpty())
-        assert(messages("function f() { const s = \"a\"; if (cond) { const s = \"b\" } takeB(s) }").isEmpty())
+    fun `a shadowing inner const reads its own literal inside its block and not after it`() {
+        val expected = listOf("Argument of type '\"a\"' is not assignable to parameter of type '\"b\"'.")
+        assert(messages("function f() { const s = \"b\"; if (cond) { const s = \"a\"; takeB(s) } }") == expected)
+        assert(messages("function f() { const s = \"a\"; if (cond) { const s = \"b\" } takeB(s) }") == expected)
     }
 
     @Test
-    fun `negative control - a block const shadowing a parameter reads any`() {
-        assert(messages("function f(s: \"b\") { takeB(s); { const s = \"a\"; takeB(s) } }").isEmpty())
+    fun `a block const shadowing a parameter reads its own literal`() {
+        assert(messages("function f(s: \"b\") { takeB(s); { const s = \"a\"; takeB(s) } }") ==
+            listOf("Argument of type '\"a\"' is not assignable to parameter of type '\"b\"'."))
     }
 
     @Test

@@ -168,6 +168,39 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
             return out ?: emptyList()
         }
 
+        /**
+         * (CHK.173) G5 S2 slice 3 — the `let` / `const` / `using` DECLARATIONS behind
+         * [collectDirectScopeNames] for a statement [Block] (never a function body), every
+         * clause of a [SwitchStatement], or a [ForStatement] header. The `catch` variable is
+         * NOT included (its type is the catch rule's, not an initializer's).
+         */
+        fun collectDirectScopeDeclarations(scope: Node): List<VariableDeclaration> {
+            val out = ArrayList<VariableDeclaration>(2)
+            fun list(init: Node?) {
+                val l = init as? VariableDeclarationList ?: return
+                if (l.flags != SyntaxKind.LetKeyword && l.flags != SyntaxKind.ConstKeyword &&
+                    l.flags != SyntaxKind.UsingKeyword && l.flags != SyntaxKind.AwaitUsingKeyword) return
+                out.addAll(l.declarations)
+            }
+            fun statements(sts: List<Statement>) { for (st in sts) if (st is VariableStatement) list(st.declarationList) }
+            when (scope) {
+                is Block -> when ((scope as NodeBase).parent) {
+                    null, is SourceFile, is FunctionDeclaration, is FunctionExpression, is ArrowFunction,
+                    is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor,
+                    is ClassStaticBlockDeclaration -> {}
+                    else -> statements(scope.statements)
+                }
+                is SwitchStatement -> for (clause in scope.caseBlock) when (clause) {
+                    is CaseClause -> statements(clause.statements)
+                    is DefaultClause -> statements(clause.statements)
+                    else -> {}
+                }
+                is ForStatement -> list(scope.initializer)
+                else -> {}
+            }
+            return out
+        }
+
         private const val NONE = 0
         private const val VARIABLE = 1
         private const val DECLARATION = 2
