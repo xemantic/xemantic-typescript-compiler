@@ -1,3 +1,41 @@
+### Round (P18.203) — (CHK.172): `emitDeclarationOnly` runs the normal checker and `noCheck` is honoured — an `emitDeclarationOnly` project reports what a plain build reports (was: almost nothing); +0 on every `--noEmit` gate (2026-09-25)
+
+Finished from the previous session's ungated work-in-progress patch (`build/wip/p18203-chk172/`), which re-applied
+cleanly; every gate below was run from scratch on this session's build (`Checker.class` md5 `56e1ec6e`), none inherited.
+**The change**: `TypeScriptCompiler`'s two `emitDeclarationOnly` early returns (single-file and multi-file) are gone —
+the program is parsed, bound and checked exactly as a plain build (with its `.d.ts` inputs, module resolutions and JSON
+modules, which the multi-file branch used to drop or mis-parse), and only the JavaScript output is withheld (the echo
+channel keeps its old shape). The `declarationOnly` checker mode is deleted with everything that existed only for it:
+`initDeclarationOnlyPasses`, `checkDeclarationOnlySpineFamilies`, the `spineUResOnly`/`spineDeclOnlyFamilies` minimal
+spine driver, `checkUnresolvedNames`' declaration-only driver, the replay branch, and the legacy TS2564 statement
+walkers (`spinePiEdge` is now their only statement) — `Checker.kt` **−413** lines. `noCheck`, parsed and never read
+until now, drops every file-anchored checker row except TS4xxx/TS9xxx declaration diagnostics
+(`Checker.keptUnderNoCheck`, tsgo's `SkipTypeChecking`). The one corpus baseline the census predicted would move
+(`reuseTypeAnnotationImportTypeInGlobalThisTypeArgument`, a plain-mode false TS2305 for a named import of a JSDoc
+`@typedef` from a JS module) is closed by `jsDocTypedefExportNames`, additive to the known export set.
+
+**Measured**: the census's edo profiles (`build/scratch-p18201-census/prof/<name>-edo`, a tsconfig that SETS the
+option) read harness **84 -> 94**, row-for-row identical to the plain `declaration` build, `project` 46 -> 46; cost
+~5-6 s -> 27-38 s per profile under `emitDeclarationOnly` — the full check tsgo also pays. **Instrument trap**: the CLI
+silently ignores an unknown `--flag`, so a first probe passing `--declaration --emitDeclarationOnly` read 94 on BOTH
+arms and wrote 312 `.js` files (CLAUDE.md entry added).
+
+**Pins**: `EmitDeclarationOnlyChecksTest` (20, every expectation tsgo 7.0.2's row) and `-project`
+`EmitDeclarationOnlyProjectTest` (5, a real tsconfig + `.d.ts` + package import; the pre-round binary read 0 errors on
+it). Countdown pins re-pointed: `CtorSplitTest`'s GUARD seam now asserts tsgo's TS6133 under edo;
+`Inv4SpineBatch16Test`, `HugeMethodLimitTest` (nine constructor parts). **Ablation, one mistake per arm, tree restored
+and verified after each**: a1 typedef export off -> 1 pin RED + the corpus baseline; a2 `noCheck` filter off -> 4 RED;
+a3 JS output not withheld (both branches) -> 3 RED; a4 declaration diagnostics dropped under `noCheck` -> 1 RED.
+
+**Gates**: full suite **20,859 / 0 / 44** (+25, the new pins); corpus screen 0 of 8,725 (the edo path is live in it —
+arm a1 moved its baseline); cost_gate PASS (all within 0.02%); huge_methods 0; grid 8x `added=0 removed=0` (a CONTROL:
+it runs `--noEmit`, which never took the old path); warning gate clean with a live positive control.
+
+**Side findings still open** (from the census, unchanged by this round): TS2365/TS2367 missing (c18, c25); c13's extra
+TS2391/TS7010/TS2300/TS2842; TS9039 vs TS9007 under `isolatedDeclarations` (c23); TS8010 in
+`jsDeclarationEmitDoesNotRenameImport` and 4 TS2300 in `declarationEmitHigherOrderRetainedGenerics` (plain-mode
+defects the edo path now exposes; both baseline-less). **Successor**: (CHK.173) — its G2 census is partial (see its item).
+
 ### Round (P18.202) — (CHK.174): the relation relates a type-parameter source THROUGH ITS CONSTRAINT — (INC.30)'s rule, landed with both of its known hazards handled; 17 FPs -> 0, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.173) G2 census running beside it (and the (CHK.173) census

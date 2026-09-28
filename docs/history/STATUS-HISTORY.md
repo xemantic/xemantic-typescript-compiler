@@ -1,5 +1,12 @@
 
 
+**(P18.208) — (CHK.173) S-G1c: `t?.[t.length - 1]` / `d?.m(d.p)` / A CLOSURE INSIDE THE CHAIN SEE THE ROOT AS NON-NULLISH; 42 OF 46 CELLS MATCH tsgo, +0 EVERYWHERE, 20,970 / 0 / 44 (2026-09-28).**
+A reference read inside the later links of its own optional chain was treated as possibly undefined. A new
+`OptionalChainGuard` decides it as tsgo does (closures by our flow walk's capture gate, parens end the chain,
+evaluation-ordered reassignment); it replaced a stand-in that was also hiding four real errors, which now report.
+32 pins, 10 of 10 arms RED. Screen 0; grid 8x0; libs 0; cost_gate PASS. Next: S-G4.
+
+
 **(P18.207) — (CHK.173) S-G1: `d?.p !== undefined` (AND ITS SWITCH FORM) NARROWS `d`; 67 OF 67 CELLS MATCH tsgo, +0 EVERYWHERE, 20,938 / 0 / 44 (2026-09-28).**
 Comparing an optional chain (`d?.p !== undefined`, `n === d?.p`, `d?.a?.length !== 1`, `switch (d?.k)`) did not
 remove `undefined` from `d`, so a later `d.p` was reported (today on element reads; on every read once the TS18048
