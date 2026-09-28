@@ -120557,60 +120557,25 @@ interface DataView {
                 // getReferencedFileLocation) resolves the member's declared type and
                 // filters the antecedent union by it. Same gates: non-union resolved
                 // type only (the round-463 lenient-member-relation lesson).
-                (rhs as? PropertyAccessExpression)?.let { pa ->
-                    if (pa.questionDotToken) return@let
-                    val t = getTypeOfPropertyAccess(pa)
-                    if (t !== anyType && t !== errorType && t !== unknownType &&
-                        t !is Type.Union
-                    ) {
-                        return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
-                    }
+                resolvedAssignedTypeForFlow(rhs)?.let { t ->
+                    return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
                 }
-                (rhs as? Identifier)?.let { id ->
-                    val t = getTypeOfIdentifier(id)
-                    if (t !== anyType && t !== errorType && t !== unknownType &&
-                        t !is Type.Union
-                    ) {
-                        return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
-                    }
-                }
-                // (CHK.70)(f) A CONDITIONAL RHS is the third resolving arm, and the two
-                // above cannot stand in for it: its arms are property accesses that no
-                // STRUCTURAL test can prove non-nullish ([rhsIsDefinitelyNonNullish]
-                // refuses a member read, because a member may be optional), while
-                // [getTypeOfExpression] answers the ternary EXACTLY — measured against
-                // tsc 7.0.2, `stat ? stat.mtimeMs : Number.NaN` is `number` on both,
-                // including through the `stat?.isDirectory()` condition. knip's
-                // `util/glob-cache.ts statDirMtime` is the shape: a `T | undefined`
-                // defaulted inside its own `=== undefined` guard by a ternary, where the
-                // antecedent is nullish-only and the assignment plainly overwrites it.
-                // Same gates as the two arms above — no `any`/`error`/`unknown`, and a
-                // NON-UNION resolved type only (round 463's lenient-member-relation
-                // lesson), so a nullish resolved type is refused by construction.
-                (rhs as? ConditionalExpression)?.let { tern ->
-                    val t = getTypeOfExpression(tern)
-                    if (t !== anyType && t !== errorType && t !== unknownType &&
-                        t !is Type.Union
-                    ) {
-                        return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
-                    }
-                }
-                // (CHK.173) G2: an ELEMENT-ACCESS RHS is the fourth resolving arm — tsc's
-                // own fourslashImpl.ts `if (!expectedRange) { … expectedRange =
-                // this.getRanges()[0]; }` defaults an optional parameter from an array, and
-                // tsgo's `getAssignmentReducedType` keeps the declared member the element
-                // type relates to. No structural test proves `rs[0]` non-nullish, so the
-                // post-assignment read kept `Range | undefined`. Same gates as the three
-                // arms above: a `noUncheckedIndexedAccess` element (`X | undefined`) is a
-                // UNION and is refused by construction, as is an `any`-typed element.
-                (rhs as? ElementAccessExpression)?.let { ea ->
-                    if (ea.questionDotToken) return@let
-                    val t = typeOfExpressionWithFlowThis(ea)
-                    if (t !== anyType && t !== errorType && t !== unknownType &&
-                        t !is Type.Union
-                    ) {
-                        return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
-                    }
+            }
+            // (CHK.173) G3: `x ??= <rhs>` / `x ||= <rhs>` with an RHS only the four
+            // resolving arms can type (`m ??= s.m`, tsc builder.ts:1060). The assignment
+            // fires only on the nullish (falsy) part, so the post-state is tsgo's join of
+            // the NON-nullish (truthy) antecedent with the declared type reduced by the RHS
+            // (`getAssignmentReducedType`). Same gates as the `=` arms; `&&=` is untouched.
+            if (node is BinaryExpression &&
+                (node.operator == SyntaxKind.QuestionQuestionEquals ||
+                    node.operator == SyntaxKind.BarBarEquals)
+            ) {
+                resolvedAssignedTypeForFlow(rhs)?.let { t ->
+                    logicalAssignmentJoin(
+                        node.operator == SyntaxKind.QuestionQuestionEquals,
+                        antecedent,
+                        narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t),
+                    )?.let { return it }
                 }
             }
         }
@@ -120623,6 +120588,97 @@ interface DataView {
         // of unknown value is the DECLARED type (tsc's own fallback), so a reporting walk
         // asks for that; see [NarrowFlowMemo.overwriteResetsToDeclared].
         return if (overwriteResetsToDeclared && rhs != null) declaredType else antecedent
+    }
+
+    /**
+     * The four RESOLVING arms of [narrowByAssignmentRhs] (rounds 463/464, (CHK.70)(f),
+     * (CHK.173) G2): the assigned type of a property-access, identifier, conditional or
+     * element-access right-hand side, or `null` when it is `any`/`error`/`unknown` or a
+     * UNION (round 463's lenient-member-relation lesson). Shared by `=` and, since
+     * (CHK.173) G3, by `??=` / `||=`.
+     */
+    private fun resolvedAssignedTypeForFlow(rhs: Expression): Type? {
+        (rhs as? PropertyAccessExpression)?.let { pa ->
+            if (pa.questionDotToken) return@let
+            val t = getTypeOfPropertyAccess(pa)
+            if (t !== anyType && t !== errorType && t !== unknownType &&
+                t !is Type.Union
+            ) {
+                return t
+            }
+        }
+        (rhs as? Identifier)?.let { id ->
+            val t = getTypeOfIdentifier(id)
+            if (t !== anyType && t !== errorType && t !== unknownType &&
+                t !is Type.Union
+            ) {
+                return t
+            }
+        }
+        // (CHK.70)(f) A CONDITIONAL RHS is the third resolving arm, and the two
+        // above cannot stand in for it: its arms are property accesses that no
+        // STRUCTURAL test can prove non-nullish ([rhsIsDefinitelyNonNullish]
+        // refuses a member read, because a member may be optional), while
+        // [getTypeOfExpression] answers the ternary EXACTLY — measured against
+        // tsc 7.0.2, `stat ? stat.mtimeMs : Number.NaN` is `number` on both,
+        // including through the `stat?.isDirectory()` condition. knip's
+        // `util/glob-cache.ts statDirMtime` is the shape: a `T | undefined`
+        // defaulted inside its own `=== undefined` guard by a ternary, where the
+        // antecedent is nullish-only and the assignment plainly overwrites it.
+        // Same gates as the two arms above — no `any`/`error`/`unknown`, and a
+        // NON-UNION resolved type only (round 463's lenient-member-relation
+        // lesson), so a nullish resolved type is refused by construction.
+        (rhs as? ConditionalExpression)?.let { tern ->
+            val t = getTypeOfExpression(tern)
+            if (t !== anyType && t !== errorType && t !== unknownType &&
+                t !is Type.Union
+            ) {
+                return t
+            }
+        }
+        // (CHK.173) G2: an ELEMENT-ACCESS RHS is the fourth resolving arm — tsc's
+        // own fourslashImpl.ts `if (!expectedRange) { … expectedRange =
+        // this.getRanges()[0]; }` defaults an optional parameter from an array, and
+        // tsgo's `getAssignmentReducedType` keeps the declared member the element
+        // type relates to. No structural test proves `rs[0]` non-nullish, so the
+        // post-assignment read kept `Range | undefined`. Same gates as the three
+        // arms above: a `noUncheckedIndexedAccess` element (`X | undefined`) is a
+        // UNION and is refused by construction, as is an `any`-typed element.
+        (rhs as? ElementAccessExpression)?.let { ea ->
+            if (ea.questionDotToken) return@let
+            val t = typeOfExpressionWithFlowThis(ea)
+            if (t !== anyType && t !== errorType && t !== unknownType &&
+                t !is Type.Union
+            ) {
+                return t
+            }
+        }
+        return null
+    }
+
+    /**
+     * (CHK.173) G3: the post-state of `x ??= v` / `x ||= v` — the antecedent's
+     * non-nullish (for `??=`) or truthy (for `||=`) part joined with [assigned], the
+     * declared type already reduced by `v`'s type. `null` when nothing survives.
+     */
+    private fun logicalAssignmentJoin(nullishOp: Boolean, antecedent: Type, assigned: Type): Type? {
+        val kept = if (nullishOp) {
+            val parts = if (antecedent is Type.Union) antecedent.types else listOf(antecedent)
+            parts.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void) }
+        } else {
+            val tr = pTruthy(antecedent, true)
+            if (tr is Type.Union) tr.types else listOf(tr)
+        }
+        val all = ArrayList<Type>()
+        for (m in kept + (if (assigned is Type.Union) assigned.types else listOf(assigned))) {
+            if (m === neverType || all.any { it === m }) continue
+            all.add(m)
+        }
+        return when (all.size) {
+            0 -> null
+            1 -> all[0]
+            else -> getUnionType(all)
+        }
     }
 
     /**
@@ -130641,7 +130697,21 @@ interface DataView {
         if (arrow.type != null) return null
         if (arrow.parameters.size != 1) return null
         val paramName = (arrow.parameters[0].name as? Identifier)?.text ?: return null
-        val body = arrow.body as? Expression ?: return null
+        // (CHK.173) G6: tsgo's `getTypePredicateFromBody` reads the single returned
+        // expression, so a block body that is exactly `{ return <expr> }` is the same
+        // predicate as `=> <expr>`, and a parenthesized body is skipped through.
+        val body = unwrapParensExpr(
+            when (val b = arrow.body) {
+                is Expression -> b
+                is Block -> (b.statements.singleOrNull() as? ReturnStatement)?.expression ?: return null
+                else -> return null
+            }
+        )
+        inferNullishArrowPredicateShape(body, paramName)?.let { (removed, bangBang) ->
+            val element = arrowPredicateElementType(arg, call) ?: return null
+            val members = (element as? Type.Union)?.types ?: listOf(element)
+            return inferNullishArrowPredicateTarget(members, removed, bangBang)
+        }
         // (CHK.98) stage 2: the `typeof` shape — `x => typeof x === "string"` (and
         // `!==` / `==` / `!=`), the other inferred predicate tsc 5.5 reads off a
         // one-expression body ([inferTypeofArrowPredicateTarget]).
@@ -130680,6 +130750,73 @@ interface DataView {
             }
             val isFalse = litText == "false"
             if (if (wantFalse) isFalse else !isFalse) kept.add(m)
+        }
+        if (kept.isEmpty() || kept.size == members.size) return null
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
+    }
+
+    /**
+     * (CHK.173) G6: the nullish shape of an inferred predicate body — `p !== undefined`
+     * (or `void 0`), `p !== null`, `p != null` / `p != undefined`, either operand order,
+     * and `!!p`. Answers the nullish flags the true branch removes and whether it is the
+     * `!!p` form, else null. `Boolean(p)` is deliberately absent: tsgo does not narrow
+     * through that call, so it infers no predicate (measured).
+     */
+    private fun inferNullishArrowPredicateShape(body: Expression, paramName: String): Pair<TypeFlags, Boolean>? {
+        if (body is PrefixUnaryExpression && body.operator == SyntaxKind.Exclamation) {
+            val inner = unwrapParensExpr(body.operand)
+            if (inner is PrefixUnaryExpression && inner.operator == SyntaxKind.Exclamation &&
+                isVarRef(inner.operand, paramName)
+            ) return (TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void) to true
+            return null
+        }
+        val bin = body as? BinaryExpression ?: return null
+        val strict = when (bin.operator) {
+            SyntaxKind.ExclamationEqualsEquals -> true
+            SyntaxKind.ExclamationEquals -> false
+            else -> return null
+        }
+        val other = when {
+            isVarRef(bin.left, paramName) -> bin.right
+            isVarRef(bin.right, paramName) -> bin.left
+            else -> return null
+        }
+        val isUndef = isUndefinedRef(other)
+        // The parser renders `null` as an `Identifier` (the KEYWORD_IDENTIFIERS
+        // convention, as for `true`/`false`), so [isNullRef]'s kind test alone misses it.
+        val isNull = isNullRef(other) || (unwrapParensExpr(other) as? Identifier)?.text == "null"
+        if (!isUndef && !isNull) return null
+        val removed = when {
+            !strict -> TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void
+            isUndef -> TypeFlags.Undefined or TypeFlags.Void
+            else -> TypeFlags.Null
+        }
+        return removed to false
+    }
+
+    /**
+     * (CHK.173) G6: tsgo's `checkIfExpressionRefinesParameter` for the nullish shapes over
+     * the element [members]: the true type drops the members the test removes, and a
+     * predicate is inferred only when the FALSE branch of that true type is `never`. For
+     * an equality test that holds for every kept member; for `!!p` every kept member must
+     * be never-falsy — a `string` / `number` / `boolean` element (`''`, `0`, `false`) or an
+     * empty object type infers nothing, and definitely-falsy literals are dropped. Any
+     * member that decides nothing (`any`, `unknown`, a type parameter) answers null, as
+     * does a test that removes nothing.
+     */
+    private fun inferNullishArrowPredicateTarget(members: List<Type>, removed: TypeFlags, bangBang: Boolean): Type? {
+        val kept = mutableListOf<Type>()
+        for (m in members) {
+            if (m === anyType || m === errorType || m === unknownType || m is Type.TypeParam) return null
+            if (m.flags.hasAny(removed)) continue
+            if (bangBang) {
+                if (isDefinitelyFalsyMember(m)) continue
+                if (!isDefinitelyTruthyMember(m)) return null
+                if (m is Type.Object && !m.flags.hasAny(TypeFlags.Enum or TypeFlags.EnumLiteral) &&
+                    !typeofDecidesObjectMember(m)
+                ) return null
+            }
+            kept.add(m)
         }
         if (kept.isEmpty() || kept.size == members.size) return null
         return if (kept.size == 1) kept[0] else getUnionType(kept)
