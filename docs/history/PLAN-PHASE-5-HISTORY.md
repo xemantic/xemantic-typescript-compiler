@@ -1,3 +1,36 @@
+### Round (P18.207) — (CHK.173) S-G1: an optional-chain comparison narrows the chain ROOT (and its switch form); 67 of 67 cells agree with tsgo (was 30), the arm residual harness 8 -> 5 / tsc 3 -> 2, +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent beside a read-only S2 design census (recorded in the (CHK.173) item); the
+orchestrator re-ran every gate. **Mechanism**: `narrowByEquality` had no optional-chain containment rule (round 422's
+`dropNullish` covered only a single `x?.p` link against a literal on the equal branch). It now starts `val t =
+optionalChainContainmentNarrow(t0, …)` — never an early return, the discriminant filter still sees the reduced type —
+a port of tsgo flow.go ~1019: operands tested SYNTACTICALLY first (parens unwrapped), only then is the compared value
+typed; bail when a side IS the reference; `nullable` = `undefined` for `===`/`!==`, `null | undefined` for `==`/`!=`;
+remove nullish when the branch is not-equal and every value member is nullable, or equal and none is
+any/unknown/nullable. `isOptionalChainNode` (`ast.IsOptionalChain`: a `?.` link or a later link, `!` passes through, a
+paren ends the chain) and `optionalChainContainsReference` (flow.go ~1830). The switch form (flow.go ~1202) runs from a
+new `narrowBySwitchClause` wrapper over the renamed `…Core`, so both walker mirrors get it. **Where the brief was
+wrong**: the m-cells (mis-assignment probe) were predicted to stay a legacy-reader residue — all 17 now agree for free;
+tsgo decides a switch case by the case VALUE's type flags (`case z:` with `z: 'a' | undefined` still narrows), not a
+syntactic test; tsgo also narrows `switch (typeof d?.p)` (except `case 'undefined'`), added. The compared value is not
+flow-narrowed (S-G4 has not landed) — that can only KEEP a report.
+
+**Measured**: 14 G1 e-cells + 17 m-cells + 25 new shapes -> **67 of 67** agreeing (30 before); JDI arm (future Round A
+TS18048) harness **8 -> 5** (builder.ts:1617, fourslashImpl.ts:1554, inlineVariable.ts:177 — all three G1 rows), tsc
+**3 -> 2**. **Pins**: `OptionalChainContainmentNarrowingTest` (36, 12 controls); related classes (`*OptionalChain*`,
+`*Narrow*`, `*Switch*`, `*Discriminant*`, `*Nullish*`, `*TS18048*`) 1,089 / 0. **Ablation** (one mistake per arm): C1
+early return 2 RED, C2 wrong branch 23, C3 any/unknown non-nullable 2, C4 first link only 4, C5 switch dropped 3, C6
+loose uses strict 3, C7 continuation ends chain 3, C8 union case decomposed 1, C9 typeof `'undefined'` 1, **C10 "a side
+is the reference" bail removed 0** — redundant by construction (that side's declared type carries nullish, so the value
+rule removes nothing); kept for tsgo's order.
+
+**Gates**: full suite **20,938 / 0 / 44** (+36); corpus screen 0 of 8,725; cost_gate PASS (all within 0.13%);
+huge_methods 0; grid 8x `added=0 removed=0` (chain control OK), rxjs / marked 0 -> 0, cronstrue 1 -> 1; warm A/B
+(`narrowByEquality` is hot) **+0.62%, inside the band** (both arm sds 2-3% — a sanity bound, not a precise number).
+**Arm residual now**: G4 x2 (expressionToTypeNode.ts:596), G7 x2 (incrementalUtils.ts:168/176), G1c x1
+(fixMissingTypeAnnotationOnExports.ts:631). **Successor**: S-G1c, then S-G4 (after which the compared value here should
+read the flow-narrowed type, as tsgo's does), then G5 S2 slice 1.
+
 ### Round (P18.206) — (CHK.173) G3 + G6: `??=` / `||=` narrow the target, and a nullish arrow body infers a type predicate; 42 of 46 census cells agree with tsgo (was 25), the arm's tsc residual 7 -> 3, +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent, no census beside it; the orchestrator re-ran every gate. **G3**:

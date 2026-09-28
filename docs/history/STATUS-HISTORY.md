@@ -1,5 +1,13 @@
 
 
+**(P18.212) — (CHK.173) G5 S2 SLICE 1: A BLOCK-SCOPED `let`/`const` SHADOWING AN OUTER NAME IS TYPED AS ITSELF IN ARITHMETIC AND MEMBER ACCESS; ALSO FIXES 24 FALSE TS18048 ROWS ROUND A SHIPPED; +0 EVERYWHERE, 21,153 / 0 / 44 (2026-09-28).**
+`function f(zed: RegExp | undefined) { { const zed = 1; zed.toFixed() } }` read the inner `zed` as the outer parameter
+— and after Round A that became a false "possibly 'undefined'" (found by the 2,160-cell shadow matrix; no profile or
+library has the shape). Both walkers, including a legacy walker the census missed, now scope blocks, catch, case blocks
+and for headers. 24 FPs removed, 12 true rows added, 0 FPs added on the matrix. 35 pins, 8 of 8 arms RED. Screen 0;
+grid 8x0; libs 0; cost_gate PASS. Next: slice 2 (declarations / assignments).
+
+
 **(P18.211) — (CHK.173) ROUND A: `x.length` WITH `x: string | null` NOW REPORTS "'x' IS POSSIBLY 'null'" (TS18047 / TS18048 / TS18049) AS tsgo DOES; +0 ON EVERY PROFILE AND LIBRARY, 21,118 / 0 / 44 (2026-09-28).**
 The most common strictNullChecks error was never reported on an identifier receiver — for an embedded checker, the
 most visible false negative. Six preparatory rounds closed the narrowing gaps that would have made it fire on legal
