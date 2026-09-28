@@ -1,3 +1,43 @@
+### Round (P18.205) — (CHK.173) G5 slice 1 (S1 + S3): a local-shadow lookup guard and the `let x;` annotation-string drop; 4 false positives gone, only 2 of the census's 20 cells — the rest is S2, as measured (2026-09-27)
+
+Orchestrated: one implementation subagent beside one read-only census agent (G1/G3/G4/G6, recorded in the (CHK.173)
+item). **The builder STALLED twice** (idle ~80 min with no process alive, then again right after a `SendMessage`
+resume — waiting on a background notification that never came); it was stopped and the orchestrator finished the round
+from its tree (identical to its own `work.patch`). **S1** `LocalShadowGuard` (new file, 239 lines): after the OUTER
+ladder of `getTypeOfIdentifierConventional` (split out as `getTypeOfIdentifierOuter`) answers a real type, a name bound
+BETWEEN the read and its file by a parameter / var / let / const / catch / for-head binding answers `any` instead
+(function / class / enum and named function / class expressions stop the ascent: the scope-space consult owns them).
+**S3** `dropInheritedUninitializedStrings`: a function-top `let x;` drops the annotation string the frame inherited
+for an outer `x` (the legacy assignment channel's TS2322 on `x = 1`).
+
+**Gating found two defects the builder had not seen.** (1) The full suite lost a TRUE TS2365
+(`Inv4SpineBatch22Test`, tsgo reports it): `spineArithRecordVarDecl` learns what a local shadows by typing its own
+`decl.name`, and the guard answered `any` for that probe, so the recording was dropped — fixed by suspending the guard
+for that one probe (`localShadowGuardSuspended`; ablated -> 1 RED). The idiom `getTypeOfExpression(decl.name)` has one
+site. (2) **The guard cost +3.6% WARM** (`ab-warm.sh`, 2 pairs, B lost both): its gate set holds every parameter name in
+the file, so on `checker.ts` almost every read ascends, and each ascent re-scanned every statement of every enclosing
+block. Memoizing each scope level's bound names per file by `nodeId` (an AST node is a data class, never a hash key)
+took it to **-1.4%, B wins 2/2, both arms sd < 1%** — read as "no regression", not as a win. `cost_gate.py` saw
+neither (CLAUDE.md: a pure AST walk is invisible to it). **Countdowns**: two `Inv4SpineBatch21Test` "quirk pins"
+asserted TS2774 on legal code where tsgo is silent (a `try`-block `const` and an object-literal method parameter
+shadowing an outer function) — the guard fixed both; re-pointed and renamed.
+
+**Measured on the census's own cells**: projL 8 -> 6 rows (a1, a12 — the S3 cells), projL2 12 -> 12, projM 6 -> 6
+(tsgo 0 / 1 / 2). The other 18 false positives come from the walkers' FLAT per-function tables (the assignment
+string map, `currentLocalTypes` recordings and their leak past a block), which a lookup guard never reaches — **S2 is
+the round that pays**, and this slice's worth is the pins' shapes (catch / for-header / destructured leaves against lib
+globals, the member walker's function-top destructuring) plus the two countdown FPs. **Pins**:
+`LocalVariableShadowGuardTest` (15, 8 controls); **ablation** (builder, one arm each): a1 guard off 4+ RED, a2 catch 2,
+a4 S3 off 2, a6 2, a7 for-header 1, plus the suspend arm 1; **a3 (declarations answered as VARIABLE) and a5 (S3's
+parameter exclusion) read 0 RED** — a3 is a REDUNDANT guard (measured: every arm prints identical rows on block
+function / class / enum shadows, because the scope-space consult answers first), a5 unpinned-and-recorded.
+
+**Gates**: full suite **20,884 / 0 / 44** (+15); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x
+`added=0 removed=0` (chained, fresh chain control OK), rxjs / marked 0 -> 0, cronstrue 1 -> 1; warning-clean.
+**New residue** (probe): a block `function f` shadowing an outer `declare const f: string` is still CALLED as the outer
+(`f()` -> TS2349 where tsgo is silent), and `function f2() { function f(n: number) … return f("s") }` misses tsgo's
+TS2345 — B83.5's call-side, filed under G5. **Successor**: G3 + G6 (census below), then S2.
+
 ### Round (P18.204) — (CHK.173) G2: a flow assignment from a non-nullish call / element read now narrows the declared union; the 14 G2 false-positive sites of the TS18048 census arm are gone, +0 everywhere (2026-09-27)
 
 Orchestrated: one implementation subagent (G2) beside one read-only census agent (G5, recorded in the (CHK.173) item);

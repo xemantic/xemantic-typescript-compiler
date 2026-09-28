@@ -1,5 +1,12 @@
 
 
+**(P18.210) — (CHK.173) S-G4b: OVERLOAD SELECTION PICKS THE OVERLOAD tsgo PICKS (optional parameters, constraints naming a type parameter, predicate parameters); +0 EVERYWHERE, 21,018 / 0 / 44 (2026-09-28).**
+`f(t: string): string; f(t?: number): number; f(x)` with `x: number | undefined` chose the FIRST overload, and an
+overload whose parameter is a type predicate accepted a plain boolean callback — tsc's two-overload `visitNodes` call
+typed as `any`. Three defects in overload acceptance fixed. The future TS18048 check now adds 0 rows on the profiles.
+19 pins, 7 of 7 arms RED. Screen 0; grid 8x0; libs 0; cost_gate PASS. Next: Round A, the TS18048 check itself.
+
+
 **(P18.209) — (CHK.173) S-G4: `if (r) { if (r === nodes) nodes.x }` NARROWS `nodes`; +0 EVERYWHERE, 20,999 / 0 / 44 (2026-09-28).**
 Comparing a reference with a value that is non-nullish only because it was flow-narrowed now removes nullish from the
 reference, as tsgo does (and feeds the optional-chain rule). 29 pins, 9 of 9 arms RED. The real tsc site this was
