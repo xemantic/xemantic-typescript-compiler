@@ -6666,16 +6666,18 @@ object CpaSections {
     const val Q_TS18048_OPT = 4
     /** `emitTs18048ForClosureCapturedUndefinedReceiver`. */
     const val Q_TS18048_CLO = 5
+    /** (CHK.173) Round A: `emitTs1804xForNullableIdentifierReceiver`. */
+    const val Q_TS1804X_ID = 6
     /** The `super.X` cluster: TS2340/TS2855 + `emitTs2339ForMissingSuperMember`. */
-    const val Q_SUPER = 6
+    const val Q_SUPER = 7
     /** TS2748 — ambient const enum under `isolatedModules`. */
-    const val Q_CONSTENUM = 7
+    const val Q_CONSTENUM = 8
     /** `checkPrivateMemberAccess` — TS2341. */
-    const val Q_PRIVATE = 8
+    const val Q_PRIVATE = 9
     /** `checkMemberAccessMissing` — TS2339/TS2551, the property-resolution ENGINE. */
-    const val Q_MISSING = 9
+    const val Q_MISSING = 10
 
-    const val NQ = 10
+    const val NQ = 11
 
     // -- level R: checkMemberAccessMissing, in source order ------------------
     // Round 789, (ENGINE.2c). Level Q's engine row is ONE ~1,965-line function
@@ -6774,6 +6776,7 @@ object CpaSections {
         "Q: emitTs2532 optional-chain instantiation receiver",
         "Q: emitTs18048 optional-property receiver",
         "Q: emitTs18048 closure-captured receiver",
+        "Q: emitTs1804x nullable identifier receiver",
         "Q: super.X cluster (TS2340/2855/2339)",
         "Q: TS2748 ambient const enum",
         "Q: checkPrivateMemberAccess (TS2341)",

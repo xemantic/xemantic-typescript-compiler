@@ -261,17 +261,17 @@ class ContextualParamReadersTest {
         assert(d.none { it.code == 2339 })
     }
 
-    /** KNOWN GAP recorded with the lift: a NULLISH union contextual parameter is
-     *  typed, and the property-access reader still emits no TS18048 for it — both
-     *  references report `'x' is possibly 'undefined'`. A false NEGATIVE, so the
-     *  lift is safe; queued rather than fixed. */
+    /** A NULLISH union contextual parameter is typed, and since (CHK.173) Round A
+     *  the property-access reader reports it — tsgo 7.0.2 prints exactly this row
+     *  (`t.ts(8,25): error TS18048`). Was a KNOWN-GAP countdown asserting silence. */
     @Test
-    fun `KNOWN GAP - a nullish UNION contextual parameter reports no TS18048 here`() {
+    fun `a nullish UNION contextual parameter reports TS18048`() {
         val d = diagnose(
             prelude + "type UF4 = (u: N | undefined) => void;\n" +
                 "const hu5: UF4 = u => { u.kind; };"
         )
-        assert(d.none { it.code == 18048 })
+        val rows = d.filter { it.code == 18048 }.map { "${it.line}:${it.character} ${it.message}" }
+        assert(rows == listOf("8:25 'u' is possibly 'undefined'."))
     }
 
     // --- (c) the pull's exact arms ------------------------------------------------

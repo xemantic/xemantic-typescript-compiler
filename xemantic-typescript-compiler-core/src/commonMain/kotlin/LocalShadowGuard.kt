@@ -218,6 +218,97 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
 
         private fun MutableMap<String, Int>.putIfAbsentCompat(k: String, v: Int) { if (k !in this) this[k] = v }
 
+        /**
+         * (CHK.173) Round A — the binding guard of the identifier-receiver TS1804x arm
+         * ([Checker] `emitTs1804xForNullableIdentifierReceiver`). Until G5 S2 lands the
+         * cpa frame answers a BLOCK-scoped shadow of a nullable name with the OUTER
+         * binding's type, and the arm would turn that wrong type into a confident false
+         * positive. True — REFUSE — when the INNERMOST syntactic binding of [name] above
+         * [node] is (R1) a `catch` variable, (R2) a named function / class expression's own
+         * name or a `function` / `class` / `enum` declaration, or (R3) a binding-pattern
+         * leaf of a `var`/`let`/`const` in a block, function body or case clause. A
+         * parameter (destructured leaves included), a `for`-header binding, a plain
+         * identifier declaration in a statement list and anything at file / namespace
+         * level are typed correctly and answer false. Asked only at a site about to fire,
+         * so it carries no cache.
+         */
+        fun nullableReceiverBindingRefused(node: Node, name: String): Boolean {
+            var cur: Node? = (node as NodeBase).parent
+            var hops = 0
+            while (cur != null && cur !is SourceFile && hops++ < 512) {
+                if (cur is ModuleBlock || cur is ModuleDeclaration) return false
+                when (cur) {
+                    is FunctionDeclaration -> if (paramsBind(cur.parameters, name)) return false
+                    is ArrowFunction -> if (paramsBind(cur.parameters, name)) return false
+                    is MethodDeclaration -> if (paramsBind(cur.parameters, name)) return false
+                    is Constructor -> if (paramsBind(cur.parameters, name)) return false
+                    is GetAccessor -> if (paramsBind(cur.parameters, name)) return false
+                    is SetAccessor -> if (paramsBind(cur.parameters, name)) return false
+                    is FunctionExpression -> {
+                        if (paramsBind(cur.parameters, name)) return false
+                        if (cur.name?.text == name) return true // R2
+                    }
+                    is ClassExpression -> if (cur.name?.text == name) return true // R2
+                    is CatchClause -> {
+                        val v = cur.variableDeclaration
+                        if (v != null && bindsName(v.name, name)) return true // R1
+                    }
+                    is ForStatement -> if (listBinds(cur.initializer, name)) return false
+                    is ForInStatement -> if (listBinds(cur.initializer, name)) return false
+                    is ForOfStatement -> if (listBinds(cur.initializer, name)) return false
+                    is Block -> statementsBinding(cur.statements, name)?.let { return it }
+                    is SwitchStatement -> {
+                        var verdict: Boolean? = null
+                        for (clause in cur.caseBlock) {
+                            val sts = when (clause) {
+                                is CaseClause -> clause.statements
+                                is DefaultClause -> clause.statements
+                                else -> continue
+                            }
+                            val v = statementsBinding(sts, name) ?: continue
+                            verdict = if (verdict == null) v else (verdict || v)
+                        }
+                        if (verdict != null) return verdict
+                    }
+                    else -> {}
+                }
+                cur = (cur as NodeBase).parent
+            }
+            return false
+        }
+
+        /** A statement list's verdict for [name]: null when it binds nothing (a declaration wins). */
+        private fun statementsBinding(statements: List<Statement>, name: String): Boolean? {
+            for (st in statements) when (st) {
+                is FunctionDeclaration -> if (st.name?.text == name) return true // R2
+                is ClassDeclaration -> if (st.name?.text == name) return true // R2
+                is EnumDeclaration -> if (st.name.text == name) return true // R2
+                else -> {}
+            }
+            var verdict: Boolean? = null
+            for (st in statements) {
+                if (st !is VariableStatement) continue
+                for (d in st.declarationList.declarations) {
+                    val n = d.name
+                    if (n is Identifier) { if (n.text == name) verdict = verdict ?: false }
+                    else if (bindsName(n, name)) return true // R3
+                }
+            }
+            return verdict
+        }
+
+        private fun paramsBind(params: List<Parameter>, name: String): Boolean = params.any { bindsName(it.name, name) }
+
+        private fun listBinds(init: Node?, name: String): Boolean =
+            (init as? VariableDeclarationList)?.declarations?.any { bindsName(it.name, name) } == true
+
+        private fun bindsName(n: Node?, name: String): Boolean = when (n) {
+            is Identifier -> n.text == name
+            is ObjectBindingPattern -> n.elements.any { bindsName(it.name, name) }
+            is ArrayBindingPattern -> n.elements.any { (it as? BindingElement)?.let { e -> bindsName(e.name, name) } == true }
+            else -> false
+        }
+
         /** The ascent. See the class KDoc for what ends it and what it answers. */
         fun innermostBindingIsVariable(node: Node, name: String, cache: IntKeyMap<Map<String, Int>>? = null): Boolean {
             var cur: Node? = (node as NodeBase).parent

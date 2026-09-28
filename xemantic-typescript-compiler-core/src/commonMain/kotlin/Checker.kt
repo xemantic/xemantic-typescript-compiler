@@ -153867,9 +153867,11 @@ interface DataView {
         // null/undefined/never receiver (those are owned by other paths).
         if (narrowed.types.all { it === undefinedType || it === nullType || it === neverType }) return false
         val (line, ch) = getLineAndCharacterOfPosition(source, recv.pos)
+        // (CHK.173) Round A: a surviving `null | undefined` is TS18049 in tsgo, not 18048.
+        val (code, kind) = nullishReceiverCode(typeIncludesNull(narrowed), hasUndef = true)
         diagnostics.add(Diagnostic(
-            message = "'$root' is possibly 'undefined'.",
-            category = DiagnosticCategory.Error, code = 18048,
+            message = "'$root' is possibly $kind.",
+            category = DiagnosticCategory.Error, code = code,
             fileName = fileName, line = line, character = ch,
             start = recv.pos, length = root.length,
         ))
@@ -154014,6 +154016,12 @@ interface DataView {
         // reassigned after the closure, so the `if (x)` guard does not flow in). ===
         CpaSections.atQ(CpaSections.Q_TS18048_CLO)
         if (emitTs18048ForClosureCapturedUndefinedReceiver(expr, source, fileName)) return
+
+        // === (CHK.173) Round A: TS18047/18048/18049 "'x' is possibly 'null'." for `x.p`
+        // whose bare-identifier receiver is declared nullable and stays so after narrowing.
+        // No return: tsgo continues on the non-null type, so a TS2339 on `p` still follows. ===
+        CpaSections.atQ(CpaSections.Q_TS1804X_ID)
+        emitTs1804xForNullableIdentifierReceiver(expr, source, fileName)
 
         // === TS2855: super property access restriction. (LEGACY.1)(j2): the `<= ES5` arm
         // (TS2340 `Only public and protected methods of the base class are accessible via
@@ -154366,11 +154374,7 @@ interface DataView {
         // (CHK.173) S-G1c: `t?.[t['length'] - 1]`, `d?.m(d['p'])` — a later part of an
         // optional chain guarded by the receiver (tsgo's optional-chain condition).
         if (optionalChainGuardsRef(recv, recv.text)) return
-        val (code, kind) = when {
-            hasNull && hasUndef -> 18049 to "'null' or 'undefined'"
-            hasNull -> 18047 to "'null'"
-            else -> 18048 to "'undefined'"
-        }
+        val (code, kind) = nullishReceiverCode(hasNull, hasUndef)
         val (line, character) = getLineAndCharacterOfPosition(source, recv.pos)
         diagnostics.add(Diagnostic(
             message = "'${recv.text}' is possibly $kind.",
@@ -154381,6 +154385,59 @@ interface DataView {
             character = character,
             start = recv.pos,
             length = recv.text.length,
+        ))
+    }
+
+    /**
+     * (CHK.173) The one TS1804x code/message chooser, shared by the element arm, B464 and
+     * Round A's identifier arm: which nullish constituents SURVIVE narrowing decide it.
+     */
+    private fun nullishReceiverCode(hasNull: Boolean, hasUndef: Boolean): Pair<Int, String> = when {
+        hasNull && hasUndef -> 18049 to "'null' or 'undefined'"
+        hasNull -> 18047 to "'null'"
+        else -> 18048 to "'undefined'"
+    }
+
+    /**
+     * (CHK.173) Round A: TS18047/18048/18049 for `x.p` (read, write, call) whose BARE
+     * identifier receiver is declared a union carrying `null`/`undefined` that SURVIVES
+     * flow narrowing — the property twin of [emitTs1804xForNullishElementAccessReceiver],
+     * reading the same two types. Gates: strictNullChecks (our declared types keep
+     * `| null` without it); no `?.`; no paren unwrap (`(x).p` is tsgo's TS2531); not
+     * `this`/`super`/`arguments`/`undefined`; not a later part of an optional chain
+     * guarded by `x`; and [LocalShadowGuard.nullableReceiverBindingRefused] until G5 S2
+     * makes a block-scoped shadow's type right. Runs after B464, which returns when it
+     * fires, so a closure-captured `undefined` is reported once. Does NOT return.
+     */
+    private fun emitTs1804xForNullableIdentifierReceiver(
+        expr: PropertyAccessExpression, source: String, fileName: String,
+    ) {
+        if (!strictNullChecks) return
+        if (expr.questionDotToken) return
+        val recv = expr.expression as? Identifier ?: return
+        val name = recv.text
+        if (name == "this" || name == "super" || name == "arguments" || name == "undefined") return
+        val declared = getTypeOfIdentifier(recv)
+        if (declared !is Type.Union) return
+        if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
+        val narrowed = getNarrowedTypeForReferenceFollowLoopEntry(declared, recv)
+        if (narrowed === anyType || narrowed === unknownType || narrowed === errorType) return
+        val hasNull = typeIncludesNull(narrowed)
+        val hasUndef = typeIncludesExplicitUndefined(narrowed)
+        if (!hasNull && !hasUndef) return
+        if (optionalChainGuardsRef(recv, name)) return
+        if (LocalShadowGuard.nullableReceiverBindingRefused(recv, name)) return
+        val (code, kind) = nullishReceiverCode(hasNull, hasUndef)
+        val (line, character) = getLineAndCharacterOfPosition(source, recv.pos)
+        diagnostics.add(Diagnostic(
+            message = "'$name' is possibly $kind.",
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = recv.pos,
+            length = name.length,
         ))
     }
 
