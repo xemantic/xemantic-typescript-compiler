@@ -1,3 +1,41 @@
+### Round (P18.204) — (CHK.173) G2: a flow assignment from a non-nullish call / element read now narrows the declared union; the 14 G2 false-positive sites of the TS18048 census arm are gone, +0 everywhere (2026-09-27)
+
+Orchestrated: one implementation subagent (G2) beside one read-only census agent (G5, recorded in the (CHK.173) item);
+the session was interrupted once mid-regression-fix and resumed from the tree (the builder's receipts postdated its
+final source; every gate below re-run by the orchestrator). **The queue's mechanism was wrong**: the flow reader never
+types a call RHS as `any` — `narrowByAssignmentRhs` tries to PROVE non-nullishness syntactically and that proof failed
+four independent ways. **G2a** `calleeBodyReturnsNonNullishForFlow` never handed the callee's own body locals to
+`retExprNonNullishForFlow`, so a returned local (`symbol`) resolved through the program-wide unique-name map and
+collided with every other function's `symbol`. **G2b** `resolveFlowCalleeDecl` answered null for a nested name declared
+in two functions; the new `lexicalFlowCalleeDecl` resolves it innermost-first through `LexicalScopeResolver.symbolAt`
+(only on that null path; a nested OVERLOAD SET is refused, which is what `NullishMirrorOverloadTest`'s negative control
+caught in the first suite run). **G2c** there was no element-access RHS arm; a `this`-rooted one is typed by
+installing the enclosing instance class's `this` for that one typing only (`typeOfExpressionWithFlowThis`) — installing
+it into the cpa frame instead woke unrelated emitters and reddened 2 corpus baselines, so it was reverted. **G2d**
+`callRhsHasNonNullishReturnAnnotation` had no arrow / function-expression arm (dead since (CHK.31) changed
+`flowCalleeFunctionLike`). The observable today is the existing element-access TS18048 arm (`s["flags"]`) plus a
+mis-assignment probe; every pin expectation is tsgo 7.0.2's row list.
+
+**Measured**: the census's JDI force-arm (the not-yet-landed identifier TS18048 arm) re-run on the new binary: harness
+**32 -> 18**, tsc **23 -> 13** rows, removed exactly `lateSymbol` x7, `indexSymbol` x3, `expectedRange` x4, none added.
+**Countdown**: `NestedTypeGuardNarrowingTest`'s "ambiguous nested-function name does not resolve as a guard" asserted a
+TS2339 tsgo does not report (verified by the orchestrator: tsgo exit 0 on the fixture) — re-pointed and renamed.
+**Pins**: `AssignmentNarrowingNonNullishRhsTest` (10). **Ablation**, one mistake per arm, rebuilt after each: a1 no body
+locals 3 RED; a2 no lexical callee 3; a3 no element arm 2; a4 no flow `this` 1; a5 no arrow/function-expression arms
+2; a6 overload sets resolved lexically 2.
+
+**Gates**: full suite **20,869 / 0 / 44** (+10); corpus screen 0 of 8,725; cost_gate PASS (largest `typeNode.cacheHits`
++0.19%); huge_methods 0; grid 8x `added=0 removed=0` (BEFORE 56e1ec6e chained from (P18.203)'s captures, prefix-
+normalised, with a fresh BEFORE-arm chain control on `tsc-project` byte-identical), rxjs 0 -> 0, marked 0 -> 0,
+cronstrue 1 -> 1 (TS5108, the shared config row). **Instrument finding**: every agent grid since at least (P18.199)
+compiled `build/scratch-p18171/libs/cronstrue`, whose tsconfig lives in `src/` — so that library arm read a single
+TS5083 "Cannot read file" row on both arms and was VACUOUS; this round's grid points at `…/cronstrue/src` (CLAUDE.md
+entry added). **Residues**: `const rs = this.getRanges(); if (!r) r = rs[0]` (Round B — the cpa frame types no
+`this`); an `any` RHS to a union declared without initializer is a false NEGATIVE (c00 f2); the var-decl reader
+leaves a multi-statement nested-function call untyped (c01 p1); a static `this` and a `?.[` element RHS. **Successor**:
+(CHK.173) G5, whose census landed this session (spec in the item) — it is a four-walker block-scoping change, larger
+than any G-round so far.
+
 ### Round (P18.203) — (CHK.172): `emitDeclarationOnly` runs the normal checker and `noCheck` is honoured — an `emitDeclarationOnly` project reports what a plain build reports (was: almost nothing); +0 on every `--noEmit` gate (2026-09-25)
 
 Finished from the previous session's ungated work-in-progress patch (`build/wip/p18203-chk172/`), which re-applied

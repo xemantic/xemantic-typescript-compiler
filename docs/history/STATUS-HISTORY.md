@@ -1,5 +1,12 @@
 
 
+**(P18.209) — (CHK.173) S-G4: `if (r) { if (r === nodes) nodes.x }` NARROWS `nodes`; +0 EVERYWHERE, 20,999 / 0 / 44 (2026-09-28).**
+Comparing a reference with a value that is non-nullish only because it was flow-narrowed now removes nullish from the
+reference, as tsgo does (and feeds the optional-chain rule). 29 pins, 9 of 9 arms RED. The real tsc site this was
+aimed at did NOT move: re-running the arm on the final binary found its cause is an overloaded call typed `any`
+(filed as S-G4b). Screen 0; grid 8x0; libs 0; cost_gate PASS. Next: S-G4b, then Round A (the TS18048 check itself).
+
+
 **(P18.208) — (CHK.173) S-G1c: `t?.[t.length - 1]` / `d?.m(d.p)` / A CLOSURE INSIDE THE CHAIN SEE THE ROOT AS NON-NULLISH; 42 OF 46 CELLS MATCH tsgo, +0 EVERYWHERE, 20,970 / 0 / 44 (2026-09-28).**
 A reference read inside the later links of its own optional chain was treated as possibly undefined. A new
 `OptionalChainGuard` decides it as tsgo does (closures by our flow walk's capture gate, parens end the chain,
