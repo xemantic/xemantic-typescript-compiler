@@ -118941,9 +118941,27 @@ interface DataView {
             conventional.symbol?.flags?.hasAny(SymbolFlags.Module) == true &&
             nameBoundByEnclosingScope(id, id.text)
         ) return anyType
-        if (conventional === anyType || conventional === errorType) return conventional
+        if (conventional === anyType) return shadowedScopeValueType(id) ?: conventional
+        if (conventional === errorType) return conventional
         if (id.text !in lexicalBlockScopedValueNames) return conventional
         val scoped = nameResolver.lexicalValueSymbolForNode(id, id.text) ?: return conventional
+        return getTypeOfSymbol(scoped)
+    }
+
+    /**
+     * (CHK.173) G5 residue c6 — the step-10b override for a name whose conventional answer
+     * is a WALK-TABLE `any` rather than an outer declaration. [shadowNestedFunctionNames]
+     * writes `any` for a nested `function` whose name collides with an outer binding, so
+     * the override above never saw a conventional answer to replace and the nested
+     * function's own parameters went unchecked (tsgo reports TS2345). Still OVERRIDE-ONLY
+     * in step 10b's sense: a name with no table entry (a UNIQUE nested name, answered by a
+     * lookup miss) keeps its `any`, and a nearer value-space binding — an `any`-annotated
+     * parameter, a `let` — stops the ascent, so the table's `any` stands for it.
+     */
+    private fun shadowedScopeValueType(id: Identifier): Type? {
+        if (id.text !in lexicalBlockScopedValueNames) return null
+        if (currentLocalTypes[id.text] !== anyType) return null
+        val scoped = nameResolver.lexicalValueSymbolForNode(id, id.text) ?: return null
         return getTypeOfSymbol(scoped)
     }
 
@@ -167230,7 +167248,8 @@ interface DataView {
                 // its kind ([NameResolver.lexicalValueSymbolForNode] stops at a variable), and
                 // an `any` / error answer is left alone, exactly as at the value read.
                 val conventional = calleeTypeOfIdentifierConventional(expr)
-                if (conventional === anyType || conventional === errorType) return conventional
+                if (conventional === anyType) return shadowedScopeValueType(expr) ?: conventional
+                if (conventional === errorType) return conventional
                 val scoped = nameResolver.lexicalValueSymbolForNode(expr, expr.text) ?: return conventional
                 getTypeOfSymbol(scoped)
             }
