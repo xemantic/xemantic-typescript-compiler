@@ -266,6 +266,14 @@ class Checker(
 
     /** (CHK.173) G5 S1 — see [LocalShadowGuard]; asked by [getTypeOfIdentifierConventional]. */
     internal val localShadowGuard = LocalShadowGuard { fileResults[it]?.sourceFile }
+    /** (CHK.173) Round B1 — see [FlowShadowScope]; asked by [flowAssignmentMightNarrow] and
+     *  [isAssignedAtFlow] for the reference [narrowWalkRef] of the walk in flight. */
+    internal val flowShadowScope = FlowShadowScope()
+    /** (CHK.173) Round B1 — the REFERENCE of the flow walk in flight (the read a narrowing /
+     *  definite-assignment walk answers for), installed by [flowWalkWithTripCheck] around
+     *  the walk and restored after it, so a nested walk sees its own. Null for every walk
+     *  whose caller passes none: the name-only assignment match is then unchanged. */
+    private var narrowWalkRef: Node? = null
     // (CHK.173) G5 S2 slice 2 — per-file memo of [blockScopeAnyOuterBound], by scope nodeId.
     private var blockScopeOuterFile: String? = null
     private var blockScopeOuterCache = IntKeyMap<Boolean>(64)
@@ -23395,7 +23403,7 @@ class Checker(
             }
             val unionDisplay = formatTypeForDisplay(decl.type!!) ?: "$primText | undefined"
             for (arg in scan.gatedLoopArgs) {
-                if (flowWalkWithTripCheck(arg, WK_ASSIGNED_ARG, name.hashCode().toLong(), flowPathRoot(name)) {
+                if (flowWalkWithTripCheck(arg, WK_ASSIGNED_ARG, name.hashCode().toLong(), flowPathRoot(name), arg) {
                         isAssignedAtFlow(getFlowAt(arg), name, mutableSetOf())
                     } != false) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
@@ -23933,7 +23941,7 @@ class Checker(
                     // TS2563 (the end-of-init range filter then retracts the TS2454).
                     // A disabled container (null) is treated as assigned (tsc errorType).
                     val flow = getFlowAt(expr)
-                    val assigned = flowWalkWithTripCheck(expr, WK_ASSIGNED_EXPR, expr.text.hashCode().toLong(), flowPathRoot(expr.text)) {
+                    val assigned = flowWalkWithTripCheck(expr, WK_ASSIGNED_EXPR, expr.text.hashCode().toLong(), flowPathRoot(expr.text), expr) {
                         isAssignedAtFlow(flow, expr.text, mutableSetOf())
                     } ?: true
                     if (pos !in emitted && !assigned) {
@@ -24154,7 +24162,8 @@ class Checker(
                 }
                 is FlowUnreachable -> return false
                 is FlowAssignment -> {
-                    if (flowAssignmentTargetsName(f.node, varName)) return true
+                    if (flowAssignmentTargetsName(f.node, varName) &&
+                        !flowAssignmentWritesOtherBinding(f.node, varName)) return true
                     flow = f.antecedent
                 }
                 is FlowBranchLabel -> {
@@ -119304,6 +119313,7 @@ interface DataView {
         kind: Int,
         inputId: Long = 0L,
         rootName: String? = null,
+        narrowRef: Node? = null,
         walk: () -> T,
     ): T? {
         if (isFlowAnalysisDisabledAt(reference.pos)) return null
@@ -119324,6 +119334,8 @@ interface DataView {
         val probeStart = if (PassTiming.detailed) PassTiming.nowNanos() else 0L
         val saved = flowDepthTripped
         flowDepthTripped = false
+        val savedRef = narrowWalkRef
+        narrowWalkRef = narrowRef
         try {
             val result = walk()
             if (PassTiming.detailed) {
@@ -119394,6 +119406,7 @@ interface DataView {
             return result
         } finally {
             flowDepthTripped = saved
+            narrowWalkRef = savedRef
         }
     }
 
@@ -119538,7 +119551,7 @@ interface DataView {
         val declared = if (expr is Identifier && expr.text in discriminantCarryNames)
             destructuredDiscriminantCarry(expr, declaredType) ?: declaredType else declaredType
         val seen = NarrowSeen()
-        return flowWalkWithTripCheck(expr, kind, declared.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
+        return flowWalkWithTripCheck(expr, kind, declared.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path), expr) {
             // (ENGINE.2d)(a): the lambda runs iff a real traversal happens — see
             // [narrowWalkLaunches].
             narrowWalkLaunches++
@@ -119640,7 +119653,7 @@ interface DataView {
                 val narrowedSib = flowWalkWithTripCheck(
                     expr, WK_NARROW,
                     declaredSib.id.toLong() shl 32 or (sibName.hashCode().toLong() and 0xFFFF_FFFFL),
-                    flowPathRoot(sibName),
+                    flowPathRoot(sibName), expr,
                 ) {
                     narrowWalkLaunches++
                     narrowTypeFromFlow(declaredSib, flow, sibName, NarrowSeen(), depth = 0, NarrowFlowMemo())
@@ -119714,7 +119727,7 @@ interface DataView {
         val declared = if (expr is Identifier && expr.text in discriminantCarryNames)
             destructuredDiscriminantCarry(expr, declaredType) ?: declaredType else declaredType
         val seen = NarrowSeen()
-        return flowWalkWithTripCheck(expr, WK_NARROW_LOOP, declared.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
+        return flowWalkWithTripCheck(expr, WK_NARROW_LOOP, declared.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path), expr) {
             narrowTypeFromFlowFollowLoopEntry(declared, flow, path, seen, depth = 0)
         } ?: declared
     }
@@ -120051,7 +120064,22 @@ interface DataView {
         }
     }
 
-    private fun flowAssignmentMightNarrow(node: Node, name: String): Boolean {
+    private fun flowAssignmentMightNarrow(node: Node, name: String): Boolean =
+        flowAssignmentMightNarrowByName(node, name) && !flowAssignmentWritesOtherBinding(node, name)
+
+    /**
+     * (CHK.173) Round B1 — the name match above is not a BINDING match: an assignment whose
+     * target is a block-scoped `let` / `const` (or `catch` / `for`-header binding) declared in
+     * a scope that does not contain the walk's reference writes a DIFFERENT variable, and
+     * tsgo (which matches by symbol) passes it through. See [FlowShadowScope]. Only when a
+     * walk reference is installed ([narrowWalkRef]); asked after the name matched.
+     */
+    private fun flowAssignmentWritesOtherBinding(node: Node, name: String): Boolean {
+        val ref = narrowWalkRef ?: return false
+        return flowShadowScope.writesOtherBinding(node, flowPathRoot(name), ref, currentFlowGraph)
+    }
+
+    private fun flowAssignmentMightNarrowByName(node: Node, name: String): Boolean {
         if (flowAssignmentTargetsName(node, name)) return true
         return when (node) {
             is VariableDeclaration -> (node.name as? Identifier)?.text == name
@@ -126080,11 +126108,16 @@ interface DataView {
         // alongside bare Identifiers. `getReferencePath` returns null for shapes
         // that aren't pure Identifier-or-PropertyAccess chains, so calls/parens/
         // element-access on either side of `===` won't accidentally match.
-        val leftIsRef = getReferencePath(expr.left) == name
-        val rightIsRef = getReferencePath(expr.right) == name
+        // (CHK.173) Round B1 (N2): tsgo matches the reference against each side's
+        // REFERENCE CANDIDATE ([flowReferenceCandidate]), so `(m = re.exec(s)) != null`
+        // narrows `m`.
+        val left = flowReferenceCandidate(expr.left)
+        val right = flowReferenceCandidate(expr.right)
+        val leftIsRef = getReferencePath(left) == name
+        val rightIsRef = getReferencePath(right) == name
         val other = when {
-            leftIsRef && !rightIsRef -> expr.right
-            rightIsRef && !leftIsRef -> expr.left
+            leftIsRef && !rightIsRef -> right
+            rightIsRef && !leftIsRef -> left
             else -> return t
         }
         // B469: `x === myNull` where `myNull` is a const/var typed exactly `null`
@@ -126094,7 +126127,10 @@ interface DataView {
         // (REL.2)(B) round 763: `kk === K.A` — an enum-MEMBER reference is not a literal
         // NODE, so without [enumMemberTypeOfExpr] this bailed and `===` never narrowed
         // against an enum member at all.
-        val literalType = literalTypeOfExpression(other)
+        // (CHK.173) Round B1 (N15): `x === void 0` is `x === undefined` (tsgo types the
+        // value operand, and a `void` expression is `undefined`).
+        val literalType = (if (other is VoidExpression) undefinedType else null)
+            ?: literalTypeOfExpression(other)
             ?: constNullishAnnotationType(other)
             ?: enumMemberTypeOfExpr(other)
         if (literalType == null) {
@@ -126129,6 +126165,19 @@ interface DataView {
             (literalType === nullType || literalType === undefinedType)
         ) return narrowByLooseNullishEquality(t, keep = equal)
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /** (CHK.173) Round B1 (N2) — tsgo `getReferenceCandidate` (flow.go:1840): a parenthesized
+     *  expression's inner one, an assignment's (`=` `||=` `&&=` `??=`) target, a comma's right. */
+    private fun flowReferenceCandidate(e: Expression): Expression = when (e) {
+        is ParenthesizedExpression -> flowReferenceCandidate(e.expression)
+        is BinaryExpression -> when (e.operator) {
+            SyntaxKind.Equals, SyntaxKind.BarBarEquals, SyntaxKind.AmpersandAmpersandEquals,
+            SyntaxKind.QuestionQuestionEquals -> flowReferenceCandidate(e.left)
+            SyntaxKind.Comma -> flowReferenceCandidate(e.right)
+            else -> e
+        }
+        else -> e
     }
 
     /**

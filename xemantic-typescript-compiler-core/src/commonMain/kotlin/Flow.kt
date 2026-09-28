@@ -2132,8 +2132,24 @@ class FlowGraphBuilder {
             SyntaxKind.GreaterThanGreaterThanGreaterThanEquals,
             SyntaxKind.AmpersandEquals,
             SyntaxKind.BarEquals,
+            // (CHK.173) Round B1 (N5): `a &&= b` evaluates `b` only when `a` is truthy, and
+            // assigns only then — tsc's `bindLogicalLikeExpression`: the right operand is
+            // bound under the TRUE condition of the left, the short-circuit path joins the
+            // post-state under its FALSE condition. `s &&= s.trim()` read `s` nullable.
+            SyntaxKind.AmpersandAmpersandEquals -> {
+                bindCondition(expr.left)
+                val preRight = currentFlow
+                val postExpr = newBranchLabel()
+                joinAntecedent(postExpr, newCondition(false, expr.left, preRight))
+                currentFlow = newCondition(true, expr.left, preRight)
+                bindExpression(expr.right)
+                if ((expr.left is Identifier || expr.left is PropertyAccessExpression) && isReachable()) {
+                    currentFlow = newAssignment(expr, currentFlow)
+                }
+                joinAntecedent(postExpr, currentFlow)
+                currentFlow = finishBranchLabel(postExpr)
+            }
             SyntaxKind.CaretEquals,
-            SyntaxKind.AmpersandAmpersandEquals,
             SyntaxKind.BarBarEquals,
             SyntaxKind.QuestionQuestionEquals -> {
                 bindExpression(expr.left)
