@@ -1,3 +1,41 @@
+### Round (P18.197) — (CHK.162): an intersection source relates to a generic target through the INSTANTIATED member types; 14 -> 0 cells off tsgo (2026-09-24)
+
+Orchestrated: one implementation subagent. **The item's axis was wrong**: the union target is not the cause — it
+fails only because its `VDI<Call>` member fails; the combined property table (VD's `kind` was in it), the inherited
+members and the `readonly initializer: T` override were all fine. The fault was ONE read:
+`intersectionMergedSatisfiesTarget` read each target member with `getTypeOfSymbol`, which for a generic reference's
+own declaration answers the raw `T` (errorType — the same family (P18.180)'s CLAUDE.md entry records), so it gave up
+on `initializer`. And the `'kind' is missing` TEXT never came from the relation: the intersection elaboration named
+the first constituent's missing member without checking whether another constituent supplies it. The trigger is a
+generic target whose members depend on `T` (a generic target without `extends` also failed; non-generic and
+no-override variants already agreed); the argument form was already silent.
+
+**The change (`Checker.kt` +42/−16, three functions)**: `intersectionMergedSatisfiesTarget` reads source and target
+members through `getPropertyTypeForRelation(owner, prop)` (the instantiated type the structural relation compares —
+the acceptance half of tsgo's `structuredTypeRelatedTo` -> `propertiesRelatedTo` over an intersection's combined
+properties); `intersectionMergedContradictsTarget` takes the same read and answers UNDECIDABLE when any constituent is
+a union (without it the corrected read made `VD & ({initializer: Call} | …)` a false contradiction), letting the
+distribution fallback decide; `getIntersectionPropertyElaborationChain` takes the same read, never names a member
+another constituent supplies, and falls back to the first required member missing from the WHOLE intersection
+(`{ b: 1 } & { a: Call }` vs `T3<Call>` now says `'c'`, as tsgo).
+
+**Matrix, 25 cells** (reducer at four positions, union declaration/argument/parameter, each suspect isolated, 9
+must-report controls): 14 off tsgo -> **25 of 25 agree**, every control still reports with the right code.
+
+**Pins**: `IntersectionSourceGenericTargetTest`, 7 tests. Ablation, seven arms, all RED (satisfies target read 4;
+satisfies source read 1; union guard 1; supplied-elsewhere filter 1; whole-intersection fallback 1; contradicts
+target read 1; elaboration target read 1).
+
+**Gates**: full suite **20,763 / 0 / 44** (+7); corpus screen 0 of 8,725 (four relation pending baselines identical
+under `--include`); cost_gate PASS (a before-binary `--passTiming` run reads identical counters — the change moves
+none); huge_methods 0; grid 8x `added=0 removed=0` with full `--listAll` text byte-identical — a control, since the
+real `moveToFile.ts:486` site needs (CHK.152) step 3; warning gate proved live by an injected probe. rxjs 0, marked
+0, cronstrue 1. Residues (pre-existing): one-level-shallow elaboration for a wrong-typed member; a union target's
+wrong member prints no chain; an intersection-with-union-member display without tsgo's parentheses.
+
+**Unblocks**: (CHK.152) step 3's third harness row, and (P18.191)'s refused tsgo constraint substitution
+(`checker.ts:6604` was this family) — both worth re-measuring.
+
 ### Round (P18.196) — (CHK.164) step 1: truthiness narrowing splits `boolean`, and a flow join rejoins `true | false` into `boolean`; `decl` 25 -> 0 differing, 8 FPs gone (2026-09-24)
 
 Orchestrated: one implementation subagent, beside the still-running census of rxjs's last missed row.

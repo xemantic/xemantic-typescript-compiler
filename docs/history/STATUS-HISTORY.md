@@ -1,5 +1,13 @@
 
 
+**(P18.202) — (CHK.174) / (INC.30): THE RELATION RELATES A TYPE PARAMETER THROUGH ITS CONSTRAINT; 17 FALSE POSITIVES -> 0, +0 EVERYWHERE, 20,834 / 0 / 44 (2026-09-24).**
+`function g<T extends number>(k: T) { const n: number = k }` reported a false TS2322 — the relation had no
+"type parameter via its constraint" rule, the long-open (INC.30). It now does, with both hazards that item recorded
+handled: circular constraints answer null, and the B57.1b alias guard (a recursion brake) runs on its own relation with
+the rule off. The TS2344 row now carries tsgo's exact head. 34-cell matrix ours-only 17 -> 0; 20 pins, six arms RED; one
+stale divergence control re-pinned to tsgo's head. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
+
+
 **(P18.201) — (CHK.171) R1: CONSTRUCTOR / SETTER AND NESTED-FUNCTION FRAMES KEEP THE TYPE-PARAMETER SCOPE; 13 ROWS CLOSED, +0 EVERYWHERE, 20,814 / 0 / 44 (2026-09-24).**
 A class's type parameters were out of scope in its constructor and setters, and an outer function's in a nested
 function, so `T[]` read `any[]` and silently hid errors. Frames now build their scope from the nearest enclosing one

@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,345** lines (**+137 at (P18.206)**, the `??=`/`||=` branch and the nullish arrow-predicate shape — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
+extraction):** `Checker.kt` **201,442** lines (**+97 at (P18.207)**, tsgo's optional-chain containment rule for equality and switch narrowing — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+137 at (P18.206)**, the `??=`/`||=` branch and the nullish arrow-predicate shape — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+30 at (P18.205)**, the outer-ladder split and the local-shadow guard's two call sites — the guard itself is `LocalShadowGuard.kt` (new, 239 lines); a SEMANTIC parity change removing a FALSE-POSITIVE class; **+135 at (P18.204)**, four non-nullish proofs for a flow assignment's RHS (body locals, a lexical nested callee, an element read, arrow / function-expression callees) — a SEMANTIC parity change removing a FALSE-POSITIVE class under the coming TS18048 arm; **−413 at (P18.203)**, the `emitDeclarationOnly` checker whitelist deleted — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
 relation rule itself is `Relater.kt` 1,758 -> 1,809; a SEMANTIC parity change removing a FALSE-POSITIVE class;
 **+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
 constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
@@ -96,6 +96,12 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.207) — (CHK.173) S-G1: `d?.p !== undefined` (AND ITS SWITCH FORM) NARROWS `d`; 67 OF 67 CELLS MATCH tsgo, +0 EVERYWHERE, 20,938 / 0 / 44 (2026-09-28).**
+Comparing an optional chain (`d?.p !== undefined`, `n === d?.p`, `d?.a?.length !== 1`, `switch (d?.k)`) did not
+remove `undefined` from `d`, so a later `d.p` was reported (today on element reads; on every read once the TS18048
+arm lands). tsgo's containment rule is ported. 36 pins, 9 of 10 arms RED (one redundant guard). Screen 0; grid 8x0;
+libs 0; cost_gate PASS; warm A/B inside the band. Next: S-G1c.
+
 **(P18.206) — (CHK.173) G3 + G6: `??=` / `||=` NARROW, AND `filter(x => x !== undefined)` INFERS A PREDICATE; 42 OF 46 CELLS MATCH tsgo, +0 EVERYWHERE, 20,902 / 0 / 44 (2026-09-28).**
 `x ??= y` left `x` possibly-undefined when `y` was a member / identifier / element read, and an arrow like
 `x => x !== undefined` or `x => !!x` inferred no type predicate, so `arr.filter(...)` kept `undefined` in its
@@ -123,10 +129,3 @@ only emits `.d.ts` (the esbuild/rollup setup) got a near no-op checker. The prog
 build and only the JavaScript is withheld; the whitelist machinery is deleted (`Checker.kt` −413 lines). `noCheck`
 now suppresses type-check rows as in tsgo. Harness under edo 84 -> 94 rows, identical to plain; 25 pins, four arms RED.
 Screen 0; grid 8x0 (a control); cost_gate PASS; huge_methods 0.
-
-**(P18.202) — (CHK.174) / (INC.30): THE RELATION RELATES A TYPE PARAMETER THROUGH ITS CONSTRAINT; 17 FALSE POSITIVES -> 0, +0 EVERYWHERE, 20,834 / 0 / 44 (2026-09-24).**
-`function g<T extends number>(k: T) { const n: number = k }` reported a false TS2322 — the relation had no
-"type parameter via its constraint" rule, the long-open (INC.30). It now does, with both hazards that item recorded
-handled: circular constraints answer null, and the B57.1b alias guard (a recursion brake) runs on its own relation with
-the rule off. The TS2344 row now carries tsgo's exact head. 34-cell matrix ours-only 17 -> 0; 20 pins, six arms RED; one
-stale divergence control re-pinned to tsgo's head. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
