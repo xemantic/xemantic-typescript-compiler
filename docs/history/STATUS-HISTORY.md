@@ -1,5 +1,12 @@
 
 
+**(P18.207) — (CHK.173) S-G1: `d?.p !== undefined` (AND ITS SWITCH FORM) NARROWS `d`; 67 OF 67 CELLS MATCH tsgo, +0 EVERYWHERE, 20,938 / 0 / 44 (2026-09-28).**
+Comparing an optional chain (`d?.p !== undefined`, `n === d?.p`, `d?.a?.length !== 1`, `switch (d?.k)`) did not
+remove `undefined` from `d`, so a later `d.p` was reported (today on element reads; on every read once the TS18048
+arm lands). tsgo's containment rule is ported. 36 pins, 9 of 10 arms RED (one redundant guard). Screen 0; grid 8x0;
+libs 0; cost_gate PASS; warm A/B inside the band. Next: S-G1c.
+
+
 **(P18.206) — (CHK.173) G3 + G6: `??=` / `||=` NARROW, AND `filter(x => x !== undefined)` INFERS A PREDICATE; 42 OF 46 CELLS MATCH tsgo, +0 EVERYWHERE, 20,902 / 0 / 44 (2026-09-28).**
 `x ??= y` left `x` possibly-undefined when `y` was a member / identifier / element read, and an arrow like
 `x => x !== undefined` or `x => !!x` inferred no type predicate, so `arr.filter(...)` kept `undefined` in its

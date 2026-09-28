@@ -1,3 +1,46 @@
+### Round (P18.202) — (CHK.174): the relation relates a type-parameter source THROUGH ITS CONSTRAINT — (INC.30)'s rule, landed with both of its known hazards handled; 17 FPs -> 0, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.173) G2 census running beside it (and the (CHK.173) census
+recorded in its item). **The readers were not the problem**: `canUseTypeEngine`'s B60.8 rule already admits a constrained
+type parameter against a primitive target, and `Relater.structuredTypeRelatedTo` then had no rule that could accept the
+pair; the assignment and argument readers only looked fine because each has its own bail through the constraint
+(`bareTpConstraintRelatesTo`, the round-442 bail). The same defect hit object-literal members and union targets with an
+object constraint. **This is (INC.30)'s rule**, and its first build reddened exactly the two corpus baselines that
+record its known hazards — the B57.1b alias type-argument guard uses the relation as a RECURSION BRAKE
+(`excessPropertyCheckIntersectionWithRecursiveType` gained a TS2322), and a CIRCULAR constraint (`T extends T`) reached
+the cycle break and related to everything (`typeParameterHasSelfAsConstraint`).
+
+**The change (`Relater.kt` +51, `Checker.kt` +42/−5)**: `Relater.typeParamRelatedThroughConstraint` at the tail of
+`structuredTypeRelatedTo` and in the union-target arm after no single member accepts (tsgo `structuredTypeRelatedToWorker`:
+`constraint := getConstraintOfType(source)`, `isRelatedTo(constraint, target)`, after union decomposition); no / `any` /
+unresolved / CIRCULAR constraint answers null so the old verdict stands (tsgo's `getConstraintOfTypeParameter` is nil for
+a circular constraint; an `any` constraint relates as `{}`); a new `CheckerState.aliasGuardRelation` — a separate relation
+instance with its own cache — is used ONLY by B57.1b's first pass, with the rule off, so (INC.30) still owns that guard;
+at the call type-argument site the missing member is computed directly from the constraint (the cached verdict skips the
+side effect that recorded it), giving tsgo's exact TS2344 `Type 'T' does not satisfy the constraint 'Base'.` + chain
+`Property 'b' is missing…` where we printed a TS2741 head. **The full suite fired one control in
+`ExplicitCallTypeArgIntersectionTest`** that had recorded the TS2741 head as a divergence; the orchestrator re-measured it
+against tsgo (TS2344 head `Type 'U & { m: 1; }' does not satisfy the constraint 'NodeX'.` + a constraint-substituted
+chain line) and re-pinned the head, with the missing chain as a residue.
+
+**Matrix, 34 cells**: agree 13 -> 14, **ours-only 17 -> 0**, missing 4 -> 3, text-diff 3 -> 3. Residues (pre-existing):
+the declaration/return readers print no chain line; for a union/literal-union constraint tsgo's head names the
+constraint (`getNarrowableTypeForReference`); a bare unconstrained `T` / `T extends any` vs `number` still silent; two
+TS2313 rows naming `T`/`U` swapped in a mutual cycle.
+
+**Pins**: `TypeParamConstraintRelationTest`, 20 tests (12 silent legal shapes, 8 reporting controls incl. self and mutual
+circularity, `unknown` and `any` constraints). Ablation: tail rule 9 RED; union-arm fallback 1; circular check 2 +
+corpus `typeParameterHasSelfAsConstraint`; guard on the ordinary relation 1 + corpus
+`excessPropertyCheckIntersectionWithRecursiveType`; TS2344 direct computation 1; `any` constraint usable 1 (after a pin
+was added).
+
+**Gates**: full suite 20,834 with ONE failure — the control above, re-pinned; its class and the pin class then 25/0
+(no other file changed); corpus screen 0 of 8,725; cost_gate PASS (`typeOfExpr.calls` −71, `narrow.walks` −8 — the rule
+fires on the profile); huge_methods 0; grid 8x `added=0 removed=0` (full text byte-identical — a control); warning gate
+proved live. rxjs 0, marked 0, cronstrue 0.
+
+**Successor**: (CHK.173)'s prerequisite G2 (census running), then G5 / G1.
+
 ### Round (P18.201) — (CHK.171) R1: constructor / setter frames and nested-function frames keep the type-parameter scope; 13 rows closed, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.172) census (recorded in its item) and the (CHK.173) census
