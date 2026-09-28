@@ -7982,6 +7982,12 @@ class Checker(
      *  [narrowWalkDeclCache]. Declared before `init` (init runs the check pipeline). */
     private var narrowLiveDepth = 0
 
+    /** (CHK.173) S-G4: live nesting of [equalityValueFlowType]'s re-entrant value walks. */
+    private var equalityValueNarrowDepth = 0
+
+    /** (CHK.173) S-G4: at most this many nested value walks (`a === b` inside `b`'s walk …). */
+    private val EQUALITY_VALUE_NARROW_MAX = 2
+
     /** Remaining walker-invocation budget for the current outermost narrowing request. */
     private var narrowVisitsLeft = 0
 
@@ -125728,8 +125734,10 @@ interface DataView {
             ?: enumMemberTypeOfExpr(other)
         if (literalType == null) {
             enumImpossibleEqualityNarrow(t, other, equal)?.let { return it }
-            if (equal) objectValueEqualityNarrow(t, other)?.let { return it }
-            return t
+            if (!equal) return t
+            // (CHK.173) S-G4: the nullish half of tsgo's comparability filter first.
+            val (tv, ot) = equalityValueExcludesNullish(t, other)
+            return objectValueEqualityNarrow(tv, other, ot) ?: tv
         }
         // (CHK.101)(A1): LOOSE equality against a nullish KEYWORD tests BOTH nullish
         // values — `x != null` is true exactly when `x` is neither `null` nor
@@ -125781,7 +125789,8 @@ interface DataView {
         if (getReferencePath(left) == name || getReferencePath(right) == name) return t
         val loose = expr.operator == SyntaxKind.EqualsEquals || expr.operator == SyntaxKind.ExclamationEquals
         val nullable = if (loose) TypeFlags.Null or TypeFlags.Undefined else TypeFlags.Undefined
-        val vt = literalTypeOfExpression(value) ?: enumMemberTypeOfExpr(value) ?: getTypeOfExpression(value)
+        val vt = literalTypeOfExpression(value) ?: enumMemberTypeOfExpr(value)
+            ?: getTypeOfExpression(value).let { equalityValueFlowType(value, it) }
         val members = if (vt is Type.Union) vt.types else listOf(vt)
         val remove = if (equal) members.all { it.flags.hasNone(TypeFlags.Any or TypeFlags.Unknown or nullable) }
         else members.all { it.flags.hasAny(nullable) }
@@ -125853,6 +125862,61 @@ interface DataView {
     }
 
     /**
+     * (CHK.173) S-G4 — the NULLISH half of tsgo's equality filter (`narrowTypeByEquality`,
+     * flow.go:556: on the equal branch keep the members of [t] comparable to the value's
+     * type). `x === y` with `x: string | undefined` and `y: string` drops `undefined`,
+     * and so does `if (y) { if (x === y) … }` with `y` DECLARED `string | undefined`:
+     * tsgo's value type is the FLOW type of the other operand ([equalityValueFlowType]).
+     * Removes `null`/`undefined`/`void` from [t] only when every member of the value's
+     * type is provably non-nullish — never a primitive or object member (that is
+     * [objectValueEqualityNarrow]'s half) and never against `any`/`unknown`/a type
+     * parameter/`void`, all of which `undefined` is comparable to. Answers the (possibly
+     * reduced) type and the value's type when it was computed, so the object half does
+     * not type the operand twice. Asked only on the equal branch of a comparison whose
+     * reference union mixes a nullish member with a non-nullish one.
+     */
+    private fun equalityValueExcludesNullish(t: Type, other: Expression): Pair<Type, Type?> {
+        if (!strictNullChecks || t !is Type.Union) return t to null
+        if (t.types.none { isNullishConstituent(it) } || t.types.all { isNullishConstituent(it) }) return t to null
+        val vt = equalityValueFlowType(other, getTypeOfExpression(other))
+        return (if (equalityValueIsNonNullish(vt)) narrowByExcludingNullUndefined(t) else t) to vt
+    }
+
+    /**
+     * (CHK.173) S-G4 — tsgo types an equality's value operand with `getTypeOfExpression`,
+     * which FLOW-NARROWS a reference; ours never does, so a reference whose declared type
+     * carries a nullish member is re-walked at its own position (a RE-ENTRANT walk: it
+     * shares the outer request's visit budget through [narrowLiveDepth], and memoizes
+     * under its own reference node and root name). Only when [vt] is nullish-bearing —
+     * that is the only fact [equalityValueIsNonNullish] can change — and at most
+     * [EQUALITY_VALUE_NARROW_MAX] nested levels, since each level may itself meet an
+     * equality against yet another nullable reference.
+     */
+    private fun equalityValueFlowType(value: Expression, vt: Type): Type {
+        if (!strictNullChecks || equalityValueNarrowDepth >= EQUALITY_VALUE_NARROW_MAX) return vt
+        val nullish = if (vt is Type.Union) vt.types.any { isNullishConstituent(it) } else isNullishConstituent(vt)
+        if (!nullish || getReferencePath(value) == null) return vt
+        equalityValueNarrowDepth++
+        try {
+            return getNarrowedTypeForReference(vt, value)
+        } finally {
+            equalityValueNarrowDepth--
+        }
+    }
+
+    /** (CHK.173) S-G4: is no member of [vt] something `undefined`/`null` is comparable to? */
+    private fun equalityValueIsNonNullish(vt: Type): Boolean {
+        val members = if (vt is Type.Union) vt.types else listOf(vt)
+        val open = TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Void or TypeFlags.Undefined or
+            TypeFlags.Null or TypeFlags.Never or TypeFlags.TypeParameter or TypeFlags.Index or
+            TypeFlags.IndexedAccess or TypeFlags.Conditional or TypeFlags.Substitution
+        return members.all { m ->
+            m !== anyType && m !== errorType && m !== unknownType && m.flags.hasNone(open) &&
+                (m !is Type.Intersection || m.types.none { it.flags.hasAny(open) })
+        }
+    }
+
+    /**
      * (CHK.167): `x === kk` (or `x == kk`, which tsgo narrows identically — measured)
      * where `kk` is a reference to an OBJECT-typed value narrows a
      * union `x` by dropping the primitive (and, under strictNullChecks, nullish)
@@ -125871,13 +125935,13 @@ interface DataView {
      * primitive-or-nullish member with an object one, since this runs inside the walk.
      * A filter that keeps nothing or everything answers null.
      */
-    private fun objectValueEqualityNarrow(t: Type, other: Expression): Type? {
+    private fun objectValueEqualityNarrow(t: Type, other: Expression, otherType: Type? = null): Type? {
         if (t !is Type.Union) return null
         if (other !is Identifier && other !is PropertyAccessExpression) return null
         if (other is PropertyAccessExpression && other.questionDotToken) return null
         if (t.types.none { isValuePrimitiveConstituent(it) || isNullishConstituent(it) }) return null
         if (t.types.none { !isValuePrimitiveConstituent(it) && !isNullishConstituent(it) }) return null
-        val ot = getTypeOfExpression(other)
+        val ot = otherType ?: getTypeOfExpression(other)
         if (ot !is Type.Object) return null
         val kept = t.types.filter { m ->
             when {
@@ -179348,6 +179412,7 @@ interface DataView {
         // construction) intact: that view's operands and this one's are complements.
         reducePrimitiveDomainIntersection(filtered)?.let { return it }
         reduceUnionAndEmptyObjectIntersection(filtered)?.let { return it }
+        reduceUnionAndNullishIntersection(filtered)?.let { return it }
         // B8.1: reduce `A & B` to `never` when a property name appears in 2+
         // class constituents and is `private` in at least one. The reduction
         // reason (display string + conflicting prop name) is captured by
@@ -179382,6 +179447,42 @@ interface DataView {
                 m.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void) -> {}
                 m is Type.TypeParam -> out.add(state.interner.intersection(listOf(m, other)))
                 else -> out.add(m)
+            }
+        }
+        if (out.isEmpty()) return neverType
+        return getUnionType(out)
+    }
+
+    /**
+     * (CHK.173) S-G4 — `U & undefined` (or `U & null`) for a UNION `U`: tsc's own
+     * `visitNodes` returns `NodeArray<Node> | (TInArray & undefined)`, and with `TInArray`
+     * instantiated to `NodeArray<Node> | undefined` tsgo distributes the intersection and
+     * reduces every `M & undefined` — `undefined` for an `undefined` member (and for
+     * `void`, whose `undefined` is the redundant supertype's survivor), `never` for an
+     * object / primitive / other nullish member under strictNullChecks — so the member is
+     * plain `undefined` (measured on 7.0.2: `NodeArray<Node> | undefined`). Kept whole, a
+     * truthiness guard never recognised it as nullish, and the flow type of such a value
+     * stayed nullable (the (CHK.173) G4 real site, `expressionToTypeNode.ts:596`). A type
+     * parameter / instantiable member keeps its `& undefined`; `any` / `unknown` members
+     * leave the shape alone. Exactly two constituents, like
+     * [reduceUnionAndEmptyObjectIntersection]; round 777's refusal of distributing OBJECT
+     * intersections at construction is untouched.
+     */
+    private fun reduceUnionAndNullishIntersection(types: List<Type>): Type? {
+        if (!strictNullChecks || types.size != 2) return null
+        val union = types.firstOrNull { it is Type.Union } as? Type.Union ?: return null
+        val other = if (types[0] === union) types[1] else types[0]
+        if (other !== undefinedType && other !== nullType) return null
+        val out = ArrayList<Type>(union.types.size)
+        for (m in union.types) {
+            when {
+                m === anyType || m === errorType || m.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown) -> return null
+                m === other -> out.add(other)
+                other === undefinedType && m.flags.hasAny(TypeFlags.Void or TypeFlags.Undefined) -> out.add(other)
+                m.flags.hasAny(TypeFlags.TypeParameter or TypeFlags.Index or TypeFlags.IndexedAccess or
+                    TypeFlags.Conditional or TypeFlags.Substitution) || m is Type.Intersection ->
+                    out.add(state.interner.intersection(listOf(m, other)))
+                else -> {}
             }
         }
         if (out.isEmpty()) return neverType
