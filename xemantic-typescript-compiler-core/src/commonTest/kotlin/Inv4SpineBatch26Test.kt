@@ -327,13 +327,14 @@ class Inv4SpineBatch26Test {
     // ── reach quirks (negative controls, legacy walker geometry) ────────────
 
     @Test
-    fun `negative control - a new-expression CALLEE expression is unreached`() {
-        diagnose("""
+    fun `a new-expression CALLEE call is reported by the signature reader`() {
+        // (CHK.176)(a) The name walker does not reach it; the signature-based reader
+        // does, with tsgo 7.0.2's row.
+        val d = diagnose("""
             function getCtor(a: number): any { return null; }
             const x = new (getCtor())();
-        """) should {
-            have(none { it.code == 2554 })
-        }
+        """)
+        assert(d.map { "${it.line}:${it.character} ${it.code} ${it.message}" } == listOf("2:16 2554 Expected 1 arguments, but got 0."))
     }
 
     @Test
@@ -361,23 +362,21 @@ class Inv4SpineBatch26Test {
     }
 
     @Test
-    fun `negative control - parameter default initializers are unreached`() {
-        diagnose("""
+    fun `a parameter default initializer call is reported by the signature reader`() {
+        val d = diagnose("""
             function f(a: number): number { return a; }
             function g(x = f()) {}
-        """) should {
-            have(none { it.code == 2554 })
-        }
+        """)
+        assert(d.map { "${it.line}:${it.character} ${it.code} ${it.message}" } == listOf("2:16 2554 Expected 1 arguments, but got 0."))
     }
 
     @Test
-    fun `negative control - class heritage arguments are unreached`() {
-        diagnose("""
+    fun `a class heritage call is reported by the signature reader`() {
+        val d = diagnose("""
             function mix(a: number): any { return class {}; }
             class C extends mix() {}
-        """) should {
-            have(none { it.code == 2554 })
-        }
+        """)
+        assert(d.map { "${it.line}:${it.character} ${it.code} ${it.message}" } == listOf("2:17 2554 Expected 1 arguments, but got 0."))
     }
 
     @Test
@@ -391,28 +390,29 @@ class Inv4SpineBatch26Test {
     }
 
     @Test
-    fun `negative control - object-literal accessor bodies are unreached`() {
-        diagnose("""
+    fun `object-literal accessor body calls are reported by the signature reader`() {
+        val d = diagnose("""
             function f(a: number) {}
             const o = {
                 get a() { f(); return 1; },
                 set b(v: number) { f(); },
             };
-        """) should {
-            have(none { it.code == 2554 })
-        }
+        """)
+        assert(
+            d.map { "${it.line}:${it.character} ${it.code} ${it.message}" }.sorted() ==
+                listOf("3:15 2554 Expected 1 arguments, but got 0.", "4:24 2554 Expected 1 arguments, but got 0.")
+        )
     }
 
     @Test
-    fun `negative control - shorthand destructuring defaults are unreached`() {
-        diagnose("""
+    fun `a shorthand destructuring default call is reported by the signature reader`() {
+        val d = diagnose("""
             function f(a: number): number { return a; }
             declare const obj: any;
             let x: any;
             ({ x = f() } = obj);
-        """) should {
-            have(none { it.code == 2554 })
-        }
+        """)
+        assert(d.map { "${it.line}:${it.character} ${it.code} ${it.message}" } == listOf("4:8 2554 Expected 1 arguments, but got 0."))
     }
 
     @Test
@@ -426,14 +426,13 @@ class Inv4SpineBatch26Test {
     }
 
     @Test
-    fun `legacy depth-200 recursion cap prunes deeply parenthesized calls`() {
+    fun `a call past the name walker's depth-200 cap is reported by the signature reader`() {
         val deep = "(".repeat(205) + "f()" + ")".repeat(205)
-        diagnose("""
+        val dd = diagnose("""
             function f(a: number): number { return a; }
             const x = $deep;
-        """) should {
-            have(none { it.code == 2554 })
-        }
+        """)
+        assert(dd.map { "${it.line}:${it.character} ${it.code} ${it.message}" } == listOf("2:216 2554 Expected 1 arguments, but got 0."))
         val shallow = "(".repeat(50) + "f()" + ")".repeat(50)
         val d = diagnose("""
             function f(a: number): number { return a; }
@@ -482,8 +481,12 @@ class Inv4SpineBatch26Test {
         }
     }
 
+    /** Residue: tsgo 7.0.2 reports `3:7 TS2554 Expected 0 arguments, but got 3.` (the call
+     *  binds the function expression itself). This checker resolves the callee to the OUTER
+     *  `f`, so the signature reader ((CHK.176)(a), `arityIdentifierCalleeTrusted`) refuses
+     *  rather than print `Expected 2`; the pin guards against that wrong row. */
     @Test
-    fun `negative control - a function expression's own name shadows the outer function`() {
+    fun `residue - a function expression's own name shadows the outer function`() {
         diagnose("""
             function f(a: number, b: number) {}
             const v = function f() {
@@ -623,8 +626,11 @@ class Inv4SpineBatch26Test {
         }
     }
 
+    /** Residue: tsgo 7.0.2 reads the two implementations as overloads — `Expected 1-2
+     *  arguments, but got 3.` beside TS2393 at both declarations. The signature reader
+     *  refuses a name with two implementations rather than print one of their counts. */
     @Test
-    fun `negative control - cross-file duplicate function names are skipped`() {
+    fun `residue - cross-file duplicate function names are skipped`() {
         diagnose(
             """
             // @filename: a.ts

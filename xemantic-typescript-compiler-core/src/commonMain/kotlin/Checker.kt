@@ -506,6 +506,12 @@ class Checker(
     private fun noteDiagnosticsDependency() {
         PassTiming.currentPass?.let { diagnosticsDependentPasses.add(it) }
     }
+
+    /** (CHK.176)(a) The call or `new` expression whose per-call anchor is running
+     *  ([checkSingleCallExpressionTypes] / [checkSingleNewExpressionTypes]) — how
+     *  [reportSignatureArity] finds the node for an argument list. Trusted only when
+     *  its argument list IS the one asked about (identity), so a stale value is inert. */
+    private var arityCall: Expression? = null
     private val referencedAliases get() = state.referencedAliases
     /** (WARM.31) round 904 — EVERY `enumValues[...]` expression evaluates this
      *  accessor exactly once, so one hook here counts all ~25 boxed-`Int` map
@@ -163017,6 +163023,13 @@ interface DataView {
      * early `return`s inside the core.
      */
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
+        val prevArityCall = arityCall
+        arityCall = expr
+        checkSingleCallExpressionTypesTimed(expr, source, fileName)
+        arityCall = prevArityCall
+    }
+
+    private fun checkSingleCallExpressionTypesTimed(expr: CallExpression, source: String, fileName: String) {
         if (CallSections.mode == CallSections.OFF) {
             checkSingleCallExpressionTypesCore(expr, source, fileName)
             return
@@ -163336,7 +163349,14 @@ interface DataView {
             // without generic type argument inference, parameter types may resolve
             // incorrectly and produce false positive TS2769 errors.
             val hasTypeParams = signatures.any { !it.typeParameters.isNullOrEmpty() }
-            if (hasTypeParams) return
+            if (hasTypeParams) {
+                // (CHK.176)(a) arity needs no inference: an overload set no member of which
+                // takes this many arguments is tsgo's arity error, generic or not.
+                if (signatures.all { callArityFails(expr.arguments, it) }) {
+                    reportSignatureArity(expr.arguments, signatures, source, fileName)
+                }
+                return
+            }
             // B280: method-overload ARITY — when the arg count matches NO overload
             // (and none has a rest param), tsc emits TS2554 with the cross-overload
             // range instead of TS2769. Too-many squiggles the excess args; too-few
@@ -165199,7 +165219,11 @@ interface DataView {
                 }
                 checkTs2554ForPropertyAccessCall(expr, instantiated, source, fileName)
                 val taArgsT = CallSections.t()
-                checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated, calleeGenericInstantiation = true)
+                checkArgumentsAgainstSignature(
+                    expr.arguments, instantiated, source, fileName, implRelated, calleeGenericInstantiation = true,
+                    // (CHK.176)(a) one generic candidate is the call's whole set; of several, it is not.
+                    reportArity = genericCandidates.size == 1,
+                )
                 CallSections.close(CallSections.N_TYPEARGS_ARGS, taArgsT)
                 return true
             }
@@ -165860,6 +165884,13 @@ interface DataView {
     }
 
     private fun checkSingleNewExpressionTypes(expr: NewExpression, source: String, fileName: String) {
+        val prevArityCall = arityCall
+        arityCall = expr
+        checkSingleNewExpressionTypesCore(expr, source, fileName)
+        arityCall = prevArityCall
+    }
+
+    private fun checkSingleNewExpressionTypesCore(expr: NewExpression, source: String, fileName: String) {
         // (M3.0/ANY.1) round 837 — TS2347 "Untyped function calls may not accept type
         // arguments." tsc's `resolveUntypedCall` is reached from `resolveNewExpression` as
         // well as `resolveCallExpression`, so `new x<any>(x)` on an `any` callee is exactly
@@ -166539,12 +166570,15 @@ interface DataView {
                     implRelated = implRelatedCandidate
                 }
             }
-            checkArgumentsAgainstSignature(args, arityMatches[0], source, fileName, implRelated)
+            checkArgumentsAgainstSignature(args, arityMatches[0], source, fileName, implRelated, reportArity = false)
             return
         }
         // (CHK.175) tsgo lists no arity-failed candidate for an argument error; when every
         // overload fails arity the TS2554/TS2575 row is the whole report.
-        if (signatures.all { callArityFails(args, it) }) return
+        if (signatures.all { callArityFails(args, it) }) {
+            reportSignatureArity(args, signatures, source, fileName)
+            return
+        }
         for (sig in signatures) {
             if (allArgumentsMatch(args, sig, applyWeakRule = true)) return // found a matching overload
         }
@@ -166580,7 +166614,7 @@ interface DataView {
             // ordinary one — but the gate is tsgo's, not an assumption about the pool.
             val multi = failingCandidates.size > 1
             if (!multi) {
-                checkArgumentsAgainstSignature(args, last, source, fileName)
+                checkArgumentsAgainstSignature(args, last, source, fileName, reportArity = false)
                 return
             }
             // tsgo emits ONE diagnostic per entry `isSignatureApplicable` produced for the
@@ -166657,7 +166691,7 @@ interface DataView {
         }
         // Fallback: no position found despite errors — try fallback TS2345
         val lastSig = signatures.last()
-        checkArgumentsAgainstSignature(args, lastSig, source, fileName)
+        checkArgumentsAgainstSignature(args, lastSig, source, fileName, reportArity = false)
     }
 
     /**
@@ -170234,10 +170268,17 @@ interface DataView {
         // (ENGINE.2h) round 795: the caller left the TS2793 related-info probe
         // UNEVALUATED; compute it at the one site that reads it.
         deferImplementationRelated: Boolean = false,
+        // (CHK.176)(a) false when [sigIn] is ONE candidate of an overload set the caller is
+        // resolving: its arity verdict is not the call's, so it reports no arity row.
+        reportArity: Boolean = true,
     ) {
         // (CHK.175) tsgo relates no argument of an arity-failed signature — the TS2554 is the
         // whole report (`resolveCall` never reaches `getSignatureApplicabilityError`).
-        if (callArityFails(args, sigIn)) return
+        if (callArityFails(args, sigIn)) {
+            if (reportArity) reportSignatureArity(args, listOf(sigIn), source, fileName)
+            return
+        }
+        if (reportArity && reportSpreadSignatureArity(args, sigIn, source, fileName)) return
         if (ArgSections.mode == ArgSections.OFF) {
             checkArgumentsAgainstSignatureCore(
                 args, sigIn, source, fileName, implementationRelated,
@@ -170285,20 +170326,335 @@ interface DataView {
         val n = args.size
         // Fast path for the ordinary call: within the symbol-level range the declared range
         // can only be wider (a binding pattern is dropped from `parameters` but counted in
-        // `minArgumentCount`), so the answer is `false` either way.
-        if (n >= sig.minArgumentCount && n <= sig.parameters.size) return false
+        // `minArgumentCount`), so the answer is `false` either way — except for a rest
+        // parameter typed as a fixed TUPLE, which tsgo expands into required positions.
+        if (n >= sig.minArgumentCount && n <= sig.parameters.size && !endsInTupleRest(sig)) return false
         if (args.any { it is SpreadElement }) return false
         val info = signatureDeclaredArity(sig) ?: return false
-        val tooMany = !info.hasRest && n > info.maxParams
-        if (!tooMany && n >= info.minParams) return false
+        if (!arityDeclTrusted(sig)) return false
+        val a = callArity(info, sig, n)
+        return a.fails(n)
+    }
+
+    /** (CHK.176)(a) Is [sig]'s declaration one whose arity this checker reads exactly — not
+     *  JS (JSDoc `[p]` optionality is not in [paramInfo]'s reading), not an EMBEDDED-lib
+     *  member (it simplifies optional parameters away, B279), and present at all. */
+    private fun arityDeclTrusted(sig: Signature): Boolean {
         val decl = sig.declaration ?: return false
         if (!options.useRealLibs && (decl in builtinLibDecls || decl in builtinLibMemberDecls)) return false
         var root: Node = decl
         while (true) root = (root as? NodeBase)?.parent ?: break
-        if ((root as? SourceFile)?.fileName?.let { isJsLikeFileName(it) } != false) return false
-        if (tooMany) return true
-        return n < callMinArgumentCount(info, sig)
+        return (root as? SourceFile)?.fileName?.let { isJsLikeFileName(it) } == false
     }
+
+    /** (CHK.176)(a) Does [sig] end in a rest parameter annotated with a fixed tuple? */
+    private fun endsInTupleRest(sig: Signature): Boolean {
+        val p = sig.parameters.lastOrNull()?.valueDeclaration as? Parameter ?: return false
+        return p.dotDotDotToken && fixedTupleLengthOfRestParam(p) != null
+    }
+
+    /** (CHK.176)(a) tsgo's call arity of one signature: `getMinArgumentCount` (void-trimmed),
+     *  `getParameterCount` and `hasEffectiveRestParameter`, with a fixed-tuple rest expanded
+     *  into its elements (`...a: [string, number?]` is one required and one optional). */
+    private class CallArity(val min: Int, val max: Int, val hasRest: Boolean) {
+        fun fails(n: Int) = (!hasRest && n > max) || n < min
+    }
+
+    private fun callArity(info: FuncParamInfo, sig: Signature?, trimBelow: Int): CallArity {
+        if (info.hasRest) {
+            val rest = info.parameters.lastOrNull { it.dotDotDotToken }
+            var ann: TypeNode? = rest?.type
+            while (ann is TypeOperator || ann is ParenthesizedType) {
+                ann = if (ann is TypeOperator) ann.type else (ann as ParenthesizedType).type
+            }
+            val tuple = ann as? TupleType
+            if (tuple != null && tuple.elements.none { it is RestType }) {
+                // The parser records a `?` element in [TupleType.elementOptional].
+                val opt = tuple.elementOptional
+                val required = tuple.elements.indices.indexOfLast { opt?.getOrNull(it) != true } + 1
+                val min = if (required > 0) info.maxParams + required
+                    else if (trimBelow < info.minParams) callMinArgumentCount(info, sig) else info.minParams
+                return CallArity(min, info.maxParams + tuple.elements.size, hasRest = false)
+            }
+        }
+        // The void trim resolves parameter types — only below the declared minimum
+        // ([trimBelow] = the argument count, or -1 for the reported range).
+        val min = if (trimBelow < info.minParams) callMinArgumentCount(info, sig) else info.minParams
+        return CallArity(min, info.maxParams, info.hasRest)
+    }
+
+    /**
+     * (CHK.176)(a) tsgo's `getArgumentArityError` for a call every one of whose [sigs] fails
+     * arity ([callArityFails]) — the ONE signature-based TS2554 / TS2555 / TS2575 reader, for
+     * the calls the name-based walkers ([spineArgCallEnter], `new`, property-access,
+     * overload) never reach: a function-typed parameter or variable, a real-lib function or
+     * member, an overloaded constructor, an optional chain, a tuple rest, a call result.
+     *
+     * Rows (checker.go `getArgumentArityError`): too MANY squiggles `args[max]..args.last`;
+     * too FEW anchors at `getErrorNodeForCallNode` — the callee (its NAME for a property
+     * access), the whole expression for `new` — with the closest signature's missing
+     * parameter as TS6210; a count strictly between the overloads' extremes that no overload
+     * takes is TS2575. The range is `min-max` across the set, `at least min` (TS2555) when
+     * any signature has a rest parameter.
+     *
+     * Deduplicated against every other arity emitter by SPAN: the name walker runs at the
+     * call's enter and the property-access / method-overload readers just before this one,
+     * all drawing tsgo's span through the same emit helpers, so a row already present over
+     * the same span in the same file (any of TS2554/2555/2556/2575) means the call is
+     * reported. Emits nothing unless
+     * [arityCall]'s argument list is [args] itself.
+     */
+    private fun reportSignatureArity(args: List<Expression>, sigs: List<Signature>, source: String, fileName: String) {
+        val call = arityCall ?: return
+        val callArgs = when (call) {
+            is CallExpression -> call.arguments
+            is NewExpression -> call.arguments
+            else -> null
+        }
+        if (callArgs !== args || sigs.isEmpty()) return
+        val calleeId = when (call) {
+            is CallExpression -> call.expression
+            is NewExpression -> call.expression
+            else -> null
+        } as? Identifier
+        if (calleeId != null && sigs.any { !arityIdentifierCalleeTrusted(calleeId, it) }) return
+        if (!arityOverloadSetComplete(sigs)) return
+        val n = args.size
+        var minCount = Int.MAX_VALUE
+        var maxCount = Int.MIN_VALUE
+        var maxBelow = Int.MIN_VALUE
+        var minAbove = Int.MAX_VALUE
+        var hasRest = false
+        var closest: FuncParamInfo? = null
+        var closestSig: Signature? = null
+        for (sig in sigs) {
+            val info = signatureDeclaredArity(sig) ?: return
+            if (!arityDeclTrusted(sig)) return
+            val a = callArity(info, sig, trimBelow = -1)
+            if (!a.fails(n)) return
+            if (a.min < minCount) { minCount = a.min; closest = info; closestSig = sig }
+            maxCount = maxOf(maxCount, a.max)
+            if (a.min < n && a.min > maxBelow) maxBelow = a.min
+            if (n < a.max && a.max < minAbove) minAbove = a.max
+            if (a.hasRest) hasRest = true
+        }
+        val errorNode: Expression = when (call) {
+            is CallExpression -> (call.expression as? PropertyAccessExpression)?.name ?: call.expression
+            else -> call
+        }
+        when {
+            minCount < n && n < maxCount -> {
+                val length = expressionTrueEnd(errorNode) - errorNode.pos
+                if (length <= 0 || arityRowAt(fileName, errorNode.pos, length)) return
+                val (line, ch) = getLineAndCharacterOfPosition(source, errorNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "No overload expects $n arguments, but overloads do exist that expect either $maxBelow or $minAbove arguments.",
+                    category = DiagnosticCategory.Error, code = 2575,
+                    fileName = fileName, line = line, character = ch,
+                    start = errorNode.pos, length = length,
+                ))
+            }
+            n < minCount -> {
+                if (arityRowAt(fileName, errorNode.pos, expressionTrueEnd(errorNode) - errorNode.pos)) return
+                // The missing parameter's TS6210 lives in the DECLARING file.
+                var root: Node? = closestSig?.declaration
+                while (root != null && root !is SourceFile) root = (root as NodeBase).parent
+                val declFile = root
+                val params = closest?.parameters.orEmpty()
+                if (hasRest) {
+                    emitTS2555TooFew(
+                        minCount, n, errorNode, source, fileName,
+                        if (declFile == null || declFile.fileName == fileName) params else emptyList(),
+                    )
+                } else {
+                    emitTS2554TooFew(
+                        minCount, maxCount, n, errorNode, source, fileName, params,
+                        declFile?.text, declFile?.fileName,
+                    )
+                }
+            }
+            n > maxCount && maxCount >= 0 -> {
+                // emitTS2554TooMany's own span, so a row the name walker drew matches.
+                if (arityRowAt(fileName, args[maxCount].pos, args.last().end - 1 - args[maxCount].pos)) return
+                emitTS2554TooMany(minCount, maxCount, n, args, maxCount, source, fileName)
+            }
+        }
+    }
+
+    /** (CHK.176)(a) TS2556 for a single signature whose argument list carries a SURVIVING
+     *  spread it cannot take ([spreadArityView] / [spreadArityFails], tsgo's first line of
+     *  `getArgumentArityError`); true when the call is consumed (reported, here or earlier). */
+    private fun reportSpreadSignatureArity(args: List<Expression>, sig: Signature, source: String, fileName: String): Boolean {
+        if (args.none { it is SpreadElement }) return false
+        val call = arityCall ?: return false
+        val callArgs = when (call) {
+            is CallExpression -> call.arguments
+            is NewExpression -> call.arguments
+            else -> null
+        }
+        if (callArgs !== args) return false
+        val calleeId = when (call) {
+            is CallExpression -> call.expression
+            is NewExpression -> call.expression
+            else -> null
+        } as? Identifier
+        if (calleeId != null && !arityIdentifierCalleeTrusted(calleeId, sig)) return false
+        if (!arityOverloadSetComplete(listOf(sig))) return false
+        val view = spreadArityView(args) as? SpreadArityView.Spread ?: return false
+        val info = signatureDeclaredArity(sig) ?: return false
+        if (!arityDeclTrusted(sig) || endsInTupleRest(sig)) return false
+        if (!spreadArityFails(view, info.minParams, info.maxParams, info.hasRest)) return false
+        val length = (expressionTrueEnd(view.arg.expression) - view.arg.pos).coerceAtLeast(1)
+        if (!arityRowAt(fileName, view.arg.pos, length)) emitTS2556(view.arg, source, fileName)
+        return true
+    }
+
+    /**
+     * (CHK.176)(a) For a call whose callee is a bare IDENTIFIER: does the name's nearest
+     * lexical binding own [sig]? The callee's type comes from the checker's scope tables,
+     * which cannot see every binding — an `any`-annotated parameter is in no walk-scoped
+     * table, a function expression's own name and a destructured parameter neither — so
+     * `function g(f: any) { f() }` beside an outer `function f(a, b)` resolves `f` to the
+     * OUTER function. Every argument reader was blind to that (zero arguments relate
+     * nothing); an ARITY reader turns it into a false TS2554 on legal code, so it reports
+     * only when the syntax agrees with the resolution.
+     *
+     * The binding is found by walking the callee's ancestors (parameters, a function or
+     * class expression's own name, statement-list declarations and imports, loop and
+     * `catch` variables). It owns [sig] when: it is an import; a function declaration in
+     * the same list as [sig]'s (an overload set); a class and [sig] is a constructor or a
+     * class; a variable, parameter or binding element that CONTAINS [sig]'s declaration,
+     * or — for a variable or parameter — is annotated with a type other than `any` /
+     * `unknown` (`declare const f: F` reaches `F`'s call signature through a reference).
+     * No binding in the file means a global: trusted, unless two function declarations
+     * implement the name (TS2393 — tsgo then reads them as overloads).
+     */
+    private fun arityIdentifierCalleeTrusted(callee: Identifier, sig: Signature): Boolean {
+        val name = callee.text
+        val decl = sig.declaration ?: return false
+        var cur: Node? = (callee as NodeBase).parent
+        while (cur != null) {
+            val b = arityBindingIn(cur, name)
+            if (b != null) return arityBindingOwns(b, decl, name)
+            cur = (cur as NodeBase).parent
+        }
+        val sym = globals[name] ?: return true
+        return sym.declarations.count { it is FunctionDeclaration && it.body != null } <= 1
+    }
+
+    /**
+     * (CHK.176)(a) Do [sigs] carry every overload their declarations spell? A callee type
+     * reached through some aliases keeps ONE signature of an overload set (measured on tsc's
+     * own `src/harness/vpathUtil.ts`: `export import extname = ts.getAnyExtensionFromPath`,
+     * three overloads, typed as the first alone), and the arity of one overload is not the
+     * call's. Counts the body-less function / method declarations of the same name beside
+     * each signature's declaration; fewer signatures than that is an incomplete set.
+     */
+    private fun arityOverloadSetComplete(sigs: List<Signature>): Boolean {
+        for (sig in sigs) {
+            val decl = sig.declaration
+            val name = when (decl) {
+                is FunctionDeclaration -> decl.name?.text
+                is MethodDeclaration -> (decl.name as? Identifier)?.text
+                else -> null
+            } ?: continue
+            val siblings: List<Node> = when (val p = (decl as NodeBase).parent) {
+                is SourceFile -> p.statements
+                is Block -> p.statements
+                is ModuleBlock -> p.statements
+                is ClassDeclaration -> p.members
+                is ClassExpression -> p.members
+                is InterfaceDeclaration -> p.members
+                is TypeLiteral -> p.members
+                else -> continue
+            }
+            val overloads = siblings.count {
+                (it is FunctionDeclaration && it.body == null && it.name?.text == name) ||
+                    (it is MethodDeclaration && it.body == null && (it.name as? Identifier)?.text == name)
+            }
+            if (overloads > sigs.size) return false
+        }
+        return true
+    }
+
+    /** (CHK.176)(a) The declaration in scope node [scope] that binds [name], or null. */
+    private fun arityBindingIn(scope: Node, name: String): Node? {
+        fun params(ps: List<Parameter>): Node? = ps.firstOrNull { spineExBindingNameShadows(name, it.name) }
+        fun list(ss: List<Statement>): Node? {
+            for (st in ss) when (st) {
+                is VariableStatement -> st.declarationList.declarations
+                    .firstOrNull { spineExBindingNameShadows(name, it.name) }?.let { return it }
+                is FunctionDeclaration -> if (st.name?.text == name) return st
+                is ClassDeclaration -> if (st.name?.text == name) return st
+                is EnumDeclaration -> if (st.name.text == name) return st
+                is ModuleDeclaration -> if ((st.name as? Identifier)?.text == name) return st
+                is ImportEqualsDeclaration -> if (st.name.text == name) return st
+                is ImportDeclaration -> {
+                    val c = st.importClause ?: continue
+                    if (c.name?.text == name) return st
+                    when (val nb = c.namedBindings) {
+                        is NamespaceImport -> if (nb.name.text == name) return st
+                        is NamedImports -> if (nb.elements.any { it.name.text == name }) return st
+                        else -> {}
+                    }
+                }
+                else -> {}
+            }
+            return null
+        }
+        fun declList(n: Node?): Node? = (n as? VariableDeclarationList)?.declarations
+            ?.firstOrNull { spineExBindingNameShadows(name, it.name) }
+        return when (scope) {
+            is FunctionDeclaration -> params(scope.parameters)
+            is MethodDeclaration -> params(scope.parameters)
+            is Constructor -> params(scope.parameters)
+            is GetAccessor -> params(scope.parameters)
+            is SetAccessor -> params(scope.parameters)
+            is ArrowFunction -> params(scope.parameters)
+            is FunctionExpression -> if (scope.name?.text == name) scope else params(scope.parameters)
+            is ClassExpression -> if (scope.name?.text == name) scope else null
+            is SourceFile -> list(scope.statements)
+            is Block -> list(scope.statements)
+            is ModuleBlock -> list(scope.statements)
+            is CaseClause -> list(scope.statements)
+            is DefaultClause -> list(scope.statements)
+            is ForStatement -> declList(scope.initializer)
+            is ForInStatement -> declList(scope.initializer)
+            is ForOfStatement -> declList(scope.initializer)
+            is CatchClause -> scope.variableDeclaration?.takeIf { spineExBindingNameShadows(name, it.name) }
+            else -> null
+        }
+    }
+
+    /** (CHK.176)(a) Does binding [b] of [name] own the signature declared at [decl]? */
+    private fun arityBindingOwns(b: Node, decl: Node, name: String): Boolean {
+        fun contains(): Boolean {
+            var c: Node? = decl
+            while (c != null) { if (c === b) return true; c = (c as NodeBase).parent }
+            return false
+        }
+        fun annotated(t: TypeNode?): Boolean =
+            t != null && !(t is KeywordTypeNode && (t.kind == SyntaxKind.AnyKeyword || t.kind == SyntaxKind.UnknownKeyword))
+        return when (b) {
+            is ImportDeclaration, is ImportEqualsDeclaration -> true
+            is FunctionDeclaration -> decl is FunctionDeclaration && decl.name?.text == name &&
+                (decl as NodeBase).parent === (b as NodeBase).parent
+            is ClassDeclaration, is ClassExpression -> decl is Constructor || decl is ClassDeclaration || contains()
+            is FunctionExpression -> decl === b
+            is VariableDeclaration -> contains() || annotated(b.type)
+            is Parameter -> contains() || annotated(b.type)
+            else -> contains()
+        }
+    }
+
+    /** (CHK.176)(a) Is an arity row (TS2554 / 2555 / 2556 / 2575) already drawn over exactly
+     *  [start, start + length)? The LENGTH is what separates `h()()`'s two too-few rows, which
+     *  tsgo anchors at one start (`h` and `h()`). */
+    private fun arityRowAt(fileName: String, start: Int, length: Int): Boolean =
+        diagnostics.any {
+            it.start == start && it.length == length && it.fileName == fileName &&
+                (it.code == 2554 || it.code == 2555 || it.code == 2556 || it.code == 2575)
+        }
 
     /**
      * (CHK.176)(b) tsgo's `getMinArgumentCount` for a CALL (relater.go `getMinArgumentCountEx`,

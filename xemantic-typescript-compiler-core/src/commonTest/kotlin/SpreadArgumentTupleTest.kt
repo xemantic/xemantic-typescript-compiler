@@ -445,16 +445,16 @@ class SpreadArgumentTupleTest {
         assert(d.isEmpty())
     }
 
-    /** Both references: `t.ts(3,4): error TS2556`. A VARIABLE callee is not arity-checked
-     *  by this checker at all ((CHK.97)'s recorded gap); the spread rule inherits it. */
+    /** Both references: `t.ts(3,4): error TS2556`. Once a recorded residue ((CHK.97)'s
+     *  gap: no arity reader reached a VARIABLE callee); closed by (CHK.176)(a). */
     @Test
-    fun `residue - a variable callee is not arity-checked`() {
+    fun `a variable callee is arity-checked by the signature reader`() {
         val d = d2556("""
             declare const zv: (a: number, b: number) => void;
             declare const zarr: number[];
             zv(...zarr);
         """)
-        assert(d.isEmpty())
+        assert(d.map { "${it.line}:${it.character} ${it.code}" } == listOf("3:4 2556"))
     }
 
     /** Both references: `t.ts(2,42): error TS2556` — an array literal with an inner
