@@ -1,5 +1,12 @@
 
 
+**(P18.219) — (CHK.176): `g(s: string, v: void)` CALLED AS `g("a")` IS LEGAL AGAIN (A FALSE TS2554 IN SEVEN EMITTERS), AND `g<string>(1)` REPORTS ITS TS2345 ONCE; +0 EVERYWHERE, 21,418 / 0 / 44 (2026-09-29).**
+tsgo treats a trailing `void` parameter as optional; seven of our arity checks did not. One shared rule now serves them
+all, with tsgo's "Expected 1-2 arguments" wording. A pin walker no longer repeats a TS2345 the main reader already
+reports. 4 -> 21 of 26 cells agree with tsgo; 19 pins, 12 of 12 arms RED. Screen 0; grid 8x0; libs 0; warning gate
+clean. Next: (CHK.173) B3.
+
+
 **(P18.218) — (CHK.175): `g(1, 2)` FOR `g(s: string)` REPORTS ONLY "Expected 1 arguments, but got 2." (WAS: PLUS A FALSE TS2345, OR A FALSE TS2769 ON OVERLOADS); +0 EVERYWHERE, 21,399 / 0 / 44 (2026-09-29).**
 Once a call has the wrong number of arguments, tsgo relates none of them; we related them anyway (three emitters). A
 shared `callArityFails` now gates all three: 12 -> 38 of 48 cells agree with tsgo. 16 pins, 7 of 9 arms RED (2 recorded

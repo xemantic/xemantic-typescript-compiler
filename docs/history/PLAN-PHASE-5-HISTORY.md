@@ -1,3 +1,37 @@
+### Round (P18.214) — (CHK.173) G5 S2 slices 3 + 4: the argument walker scopes block-level shadows, and a called name consults the lexical scope; 62 false rows removed, 165 true added, 0 false added on the 2,160-cell matrix; +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent (no stall) beside the Round B census; the orchestrator re-ran every gate.
+**Slice 3 — where the census was wrong**: it is not a pre-pass patch. `shadowCallTypesDeclList`'s function-wide `any`
+would lose TRUE rows after the block (tsgo reports `projF_after/Oparam__D30blockDestr__Farg` 9:12), and a second defect
+the census never named — an inner recording LEAKING past its block — gave false TS2345s beside tsgo's TS2304. So the
+argument walker is scoped like cpa: `ccetOpenBlockScope` at the end of `ccetSpineEnter` (keyed by `blockScopeKeyFor`),
+per name saving and removing the frame's type entry AND its `paramBindings` side-set membership, one `CcetRestore`
+(new `bindingHad` field) pushed for EVERY name including ones absent at entry (so nothing leaks), a pre-scan of the
+scope's own declarations (`LocalShadowGuard.collectDirectScopeDeclarations`) and the catch variable typed by
+`ctaCatchVariableTypes`; the 6 spine callers of `applyCallTypesBodyLocalShadowing` pass `scoped = true` (nested
+`let`/`const` and for headers skipped). No legacy twin needed scoping this time (`checkCallTypesInStatement` is reached
+only from a computed destructuring-key path; it keeps `scoped = false`). **Slice 4**: `getCalleeType`'s identifier arm
+moved verbatim into `calleeTypeOfIdentifierConventional`; when that answer is not `any`/error,
+`nameResolver.lexicalValueSymbolForNode` is consulted first — the value read's rule — so a block `function f`
+shadowing an outer `const f: string` is called as itself (x5a silent) and a nested `function f(n: number)` reports
+tsgo's TS2345 at 1:96 (x5b); a nested overload SET resolves as a set (TS2769 at tsgo's column). **Countdowns**: four
+`BodyLocalLiteralArgumentTest` tests asserted silence where tsgo reports; all five shapes now match tsgo row for row —
+re-pointed.
+
+**Measured**: x13, y2, y7, y8 false TS2345 -> silent (= tsgo), x5a false TS2349 -> silent, x5b false TS2349 -> tsgo's
+TS2345; **2,160-cell matrix 62 false rows removed, 0 false added, 165 true added**, 146 messages moved to tsgo's text;
+8 "true removed" are D33/D34 destructure-from-local cells that printed the OUTER type and now read `any` (an
+unannotated call-initialised local is not recorded in this walker). **Pins**: `BlockScopeCcetCalleeSlice34Test` (22).
+**Ablation** (7 arms, all RED): a1 no block scope 18, a2 no pre-scan at the scope 7, a3 catch not typed 1, a4 restore
+only held/outer-bound names 6, a5 side-set not restored 1 (a dedicated pin), a6 entry pre-scan still takes nested
+`let`/`const` 3, a7 no scope consult in the callee 4. **Gates**: full suite **21,223 / 0 / 44** (+22); corpus screen
+0 of 8,725; cost_gate PASS (`globals.lookups` +0.25%, the scope pre-scan; the rest ±0.04%); huge_methods 0; grid 8x
+`added=0 removed=0` (chain control OK), libraries 0; **warm A/B NOT run** — a census JDI arm held the CPU; the same
+open-only-when-shadowing mechanism measured noise in slices 1 and 2 and the counters are flat. **Residues**: c6 a
+nested function named like an outer FUNCTION still types `any` at the call (`shadowNestedFunctionNames` writes `any`
+before the consult runs — make it skip names the consult resolves); D33/D34; TS2454 (p11) and TS2348 (c5) not produced.
+**G5 S2 is now complete** except those residues. **Successor**: Round B (census landing beside this round).
+
 ### Round (P18.213) — (CHK.173) G5 S2 slice 2: the declaration / assignment / return readers scope block-level `let`/`const`, catch and `for` bindings; the 2,160-cell matrix loses 172 false rows and gains 104 true ones, 0 false added; +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent (no stall); the orchestrator re-ran every gate. **Mechanism**:
