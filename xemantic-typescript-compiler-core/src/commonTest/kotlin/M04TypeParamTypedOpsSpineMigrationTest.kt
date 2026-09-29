@@ -115,9 +115,20 @@ class M04TypeParamTypedOpsSpineMigrationTest {
         assert(ts2339(run("function f<T extends { foo: number }>(t: T) { t.foo; }")) == 0)
     }
 
+    /**
+     * Was `negative control - a constrained TP is not tracked even for a missing member`
+     * asserting 0 — a countdown: tsgo 7.0.2 reports `Property 'bar' does not exist on type
+     * 'T'.` at 1:49, and since (CHK.173) Round B4 the property-access family types the
+     * `T`-annotated parameter and reports it. This walker still does not track a
+     * constrained TP; the row is the property-access family's, exactly once.
+     */
     @Test
-    fun `negative control - a constrained TP is not tracked even for a missing member`() {
-        assert(ts2339(run("function f<T extends { foo: number }>(t: T) { t.bar; }")) == 0)
+    fun `a constrained TP's missing member is reported once - by the property-access family`() {
+        val ds = run("function f<T extends { foo: number }>(t: T) { t.bar; }")
+        assert(ts2339(ds) == 1)
+        val d = ds.single { it.code == 2339 }
+        assert(d.message == "Property 'bar' does not exist on type 'T'.")
+        assert(d.line == 1 && d.character == 49)
     }
 
     @Test

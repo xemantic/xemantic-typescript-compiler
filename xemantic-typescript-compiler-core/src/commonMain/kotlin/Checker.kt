@@ -1311,8 +1311,10 @@ class Checker(
         val classType: Type?,
         val inStatic: Boolean,
         val nsSymbol: Symbol? = null,
+        val tpScope: Map<String, Type.TypeParam>? = null,
     )
     private val cpaFrames = ArrayDeque<CpaFrame>()
+    private val cpaTpSaves = ArrayList<Map<String, Type.TypeParam>?>()
 
     /** (cpa-m2a): pending ForIn/ForOf loop-var override restores, keyed by the
      *  BODY statement's nodeId (the override wraps the body walk only). */
@@ -2417,7 +2419,7 @@ class Checker(
         val sCFN = currentCheckFileName; val sFG = currentFlowGraph
         val sLx = currentLexicalScopes
         val sStatic = inStaticClassMethod
-        val sNs = ArrayList(propertyAccessEnclosingNamespaces)
+        val sNs = cpaAmbientEnterScopes(frame)
         currentLocalTypes = frame.localTypes
         currentParamBindingNames = frame.paramBindings
         currentEnumConstrainedParams = frame.enumParams
@@ -2426,8 +2428,6 @@ class Checker(
         currentFlowGraph = ctaM3FlowGraph
         currentLexicalScopes = cpaM3LexicalScopes
         inStaticClassMethod = frame.inStatic
-        propertyAccessEnclosingNamespaces.clear()
-        for (f in cpaFrames) f.nsSymbol?.let { propertyAccessEnclosingNamespaces.addLast(it) }
         if (sec >= 0) {
             SpineSections.close(SpineSections.CPA_INSTALL, kind, t0)
             // (SPINE.1) round 908 — the rebuild's own population, read from the
@@ -2448,13 +2448,34 @@ class Checker(
             currentCheckFileName = sCFN; currentFlowGraph = sFG
             currentLexicalScopes = sLx
             inStaticClassMethod = sStatic
-            propertyAccessEnclosingNamespaces.clear()
-            propertyAccessEnclosingNamespaces.addAll(sNs)
+            cpaAmbientExitScopes(sNs)
             if (sec >= 0) {
                 SpineSections.close(SpineSections.CPA_INSTALL, kind, t1)
                 SpineSections.close(sec, kind, t0)
             }
         }
+    }
+
+    /**
+     * The two scope stacks [withCpaFrameAmbient] installs, kept OUT of that inline function
+     * so its ~10 expansions do not grow ([cpaSpineLeave] sits at the 8,000-bytecode JIT
+     * limit): the frame-reproduced namespace stack (answers the saved copy) and, since
+     * (CHK.173) Round B4, the frame's type-parameter scope (saved on [cpaTpSaves]).
+     */
+    private fun cpaAmbientEnterScopes(frame: CpaFrame): ArrayList<Symbol> {
+        val sNs = ArrayList(propertyAccessEnclosingNamespaces)
+        val sTp = currentTypeParamScope
+        cpaTpSaves.add(sTp)
+        currentTypeParamScope = frame.tpScope ?: sTp
+        propertyAccessEnclosingNamespaces.clear()
+        for (f in cpaFrames) f.nsSymbol?.let { propertyAccessEnclosingNamespaces.addLast(it) }
+        return sNs
+    }
+
+    private fun cpaAmbientExitScopes(sNs: ArrayList<Symbol>) {
+        currentTypeParamScope = cpaTpSaves.removeAt(cpaTpSaves.size - 1)
+        propertyAccessEnclosingNamespaces.clear()
+        propertyAccessEnclosingNamespaces.addAll(sNs)
     }
 
     /** (cpa-m2b): the legacy ClassExpression arm's per-visit synthetic
@@ -2624,6 +2645,47 @@ class Checker(
         }
     }
 
+    /**
+     * (CHK.173) Round B4 (G3a) — the type-parameter scope a cpa function-like frame opens
+     * INSIDE: the enclosing frame's scope, then [classTps] (a member of a class), then the
+     * function's own [ownTps] (a later name shadows an earlier one). Before this the cpa
+     * frames carried NO scope, so every annotation naming a type parameter resolved to
+     * `errorType`, the parameter went unregistered and read `any` to the whole
+     * property-access family (tsgo resolves by the lexical parent walk,
+     * `binder/nameresolver.go`). Interned exactly as [ctaBuildTpScope] (which it reuses),
+     * so a cta-typed and a cpa-typed `T` are one object; constraints are resolved under
+     * [top]'s ambient.
+     */
+    private fun classTypeParametersOf(cls: Node?): List<TypeParameter>? = when (cls) {
+        is ClassDeclaration -> cls.typeParameters
+        is ClassExpression -> cls.typeParameters
+        else -> null
+    }
+
+    /**
+     * (CHK.173) Round B4 — the legacy property-access walker's twin of [cpaTpScope], for the
+     * function-likes it walks itself (an arrow / function expression / class member nested
+     * in an anchored statement): [block] runs with the ambient scope extended by
+     * [classTps] then [ownTps]; nothing is installed when both are empty.
+     */
+    private inline fun cpaWithOwnTps(
+        classTps: List<TypeParameter>?, ownTps: List<TypeParameter>?, block: () -> Unit,
+    ) {
+        if (classTps.isNullOrEmpty() && ownTps.isNullOrEmpty()) { block(); return }
+        val saved = currentTypeParamScope
+        currentTypeParamScope = ctaBuildTpScope(saved, classTps.orEmpty() + ownTps.orEmpty())
+        try { block() } finally { currentTypeParamScope = saved }
+    }
+
+    private fun cpaTpScope(
+        top: CpaFrame, classTps: List<TypeParameter>?, ownTps: List<TypeParameter>?,
+    ): Map<String, Type.TypeParam>? {
+        if (classTps.isNullOrEmpty() && ownTps.isNullOrEmpty()) return top.tpScope
+        var scope: Map<String, Type.TypeParam>? = null
+        withCpaFrameAmbient(top) { scope = ctaBuildTpScope(top.tpScope, classTps.orEmpty() + ownTps.orEmpty()) }
+        return scope
+    }
+
     /** (cpa-m2a): the legacy ClassDeclaration arm's classType resolution,
      *  against the frame-reproduced namespace stack. (cpa-m3a): runs at
      *  frame-push time OUTSIDE the ambient install, so the lexical tables
@@ -2736,7 +2798,8 @@ class Checker(
                     val frame = CpaFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
                         collectEnumConstrainedParams(parent.typeParameters, parent.parameters),
                         EpochSet(top.shadowed),
-                        classType = null, inStatic = top.inStatic)
+                        classType = null, inStatic = top.inStatic,
+                        tpScope = cpaTpScope(top, null, parent.typeParameters))
                     cpaFrames.addLast(frame)
                     withCpaFrameAmbient(frame) {
                         populateParameterLocalTypes(parent.parameters)
@@ -2764,7 +2827,8 @@ class Checker(
                         }
                         val frame = CpaFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
                             top.enumParams, EpochSet(top.shadowed),
-                            classType = eff, inStatic = isStatic && !hasThisParam)
+                            classType = eff, inStatic = isStatic && !hasThisParam,
+                            tpScope = cpaTpScope(top, if (isStatic) null else classTypeParametersOf(cls), md?.typeParameters))
                         cpaFrames.addLast(frame)
                         withCpaFrameAmbient(frame) {
                             val params = when (parent) {
@@ -2780,7 +2844,7 @@ class Checker(
                         // (shared maps) so pops stay balanced; statements under
                         // it are chain-excluded anyway.
                         cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
-                            top.enumParams, top.shadowed, top.classType, top.inStatic))
+                            top.enumParams, top.shadowed, top.classType, top.inStatic, tpScope = top.tpScope))
                     }
                 }
                 is GetAccessor -> {
@@ -2795,7 +2859,9 @@ class Checker(
                     cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
                         top.enumParams, top.shadowed,
                         classType = if (inClass) clsType else top.classType,
-                        inStatic = if (inClass) isStatic else top.inStatic))
+                        inStatic = if (inClass) isStatic else top.inStatic,
+                        tpScope = if (inClass && !isStatic) cpaTpScope(top, classTypeParametersOf(clsNode), null)
+                            else top.tpScope))
                 }
                 is SetAccessor -> {
                     val clsNode = (parent as NodeBase).parent
@@ -2808,14 +2874,15 @@ class Checker(
                         val isStatic = ModifierFlag.Static in parent.modifiers
                         val frame = CpaFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
                             top.enumParams, top.shadowed,
-                            classType = clsType, inStatic = isStatic)
+                            classType = clsType, inStatic = isStatic,
+                            tpScope = cpaTpScope(top, if (isStatic) null else classTypeParametersOf(clsNode), null))
                         cpaFrames.addLast(frame)
                         withCpaFrameAmbient(frame) {
                             populateParameterLocalTypes(parent.parameters)
                         }
                     } else {
                         cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
-                            top.enumParams, top.shadowed, top.classType, top.inStatic))
+                            top.enumParams, top.shadowed, top.classType, top.inStatic, tpScope = top.tpScope))
                     }
                 }
                 is ArrowFunction -> {
@@ -2832,7 +2899,8 @@ class Checker(
                     }
                     val frame = CpaFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
                         top.enumParams, EpochSet(top.shadowed),
-                        classType = ect, inStatic = top.inStatic)
+                        classType = ect, inStatic = top.inStatic,
+                        tpScope = cpaTpScope(top, null, parent.typeParameters))
                     cpaFrames.addLast(frame)
                     withCpaFrameAmbient(frame) {
                         populateParameterLocalTypes(parent.parameters)
@@ -2852,7 +2920,8 @@ class Checker(
                     withCpaFrameAmbient(top) { ctx = cpaCtxAt(parent) }
                     val frame = CpaFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
                         top.enumParams, EpochSet(top.shadowed),
-                        classType = null, inStatic = top.inStatic)
+                        classType = null, inStatic = top.inStatic,
+                        tpScope = cpaTpScope(top, null, parent.typeParameters))
                     cpaFrames.addLast(frame)
                     withCpaFrameAmbient(frame) {
                         for (param in parent.parameters) {
@@ -90310,6 +90379,15 @@ interface DataView {
         spineTpoAst = ast
     }
 
+    /** (CHK.173) Round B4 — does the live cpa frame type [name] as a type parameter with
+     *  a real constraint (not absent, not itself, not `any`)? Then the property-access
+     *  family's TS2339 reports the access and this walker's would be the same row twice. */
+    private fun spineTpoCpaOwns(name: String): Boolean {
+        val t = cpaFrames.lastOrNull()?.localTypes?.get(name) as? Type.TypeParam ?: return false
+        val c = t.constraint ?: return false
+        return c !== t && c !== anyType && c !== errorType
+    }
+
     /** The legacy ClassDeclaration arm: the class's own TPs are layered for the
      *  member loop. `tpVars` is irrelevant across that edge (every member body
      *  REBUILDS it) but rides the frame so the leave restores symmetrically. */
@@ -90450,6 +90528,12 @@ interface DataView {
                 val recvTp = (node.expression as? Identifier)?.let { spineTpoVars[it.text] } ?: return
                 val tpName = recvTp.name.text
                 val propName = node.name.text
+                // (CHK.173) Round B4: since the cpa frames carry a type-parameter scope,
+                // the property-access family types a `T`-annotated receiver itself and
+                // reports a member missing from a REAL constraint (the self-recursive-alias
+                // case this walker also tracks); an unconstrained / `extends any` `T` stays
+                // this walker's (the cpa reader's apparent type is `any` there).
+                if (spineTpoCpaOwns(node.expression.text)) return
                 // Under strictNullChecks, TypeParam apparent = unknown → every
                 // property access fires TS2339. Under non-strict, apparent is
                 // `{}` which inherits Object.prototype methods — skip those
@@ -150784,7 +150868,7 @@ interface DataView {
                     currentParamBindingNames = EpochSet(currentParamBindingNames)
                     currentEnumConstrainedParams = collectEnumConstrainedParams(stmt.typeParameters, stmt.parameters)
                     currentShadowedNames = EpochSet(currentShadowedNames)
-                    try {
+                    try { cpaWithOwnTps(null, stmt.typeParameters) {
                         populateParameterLocalTypes(stmt.parameters)
                         val fdParamNames = stmt.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
                         applyBodyLocalShadowing(body.statements, fdParamNames)
@@ -150796,6 +150880,7 @@ interface DataView {
                         // `result.value` FP TS2339 on the wrong block's type.
                         applyAmbiguousBlockScopedLocals(body.statements, fdParamNames)
                         checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
+                    }
                     } finally {
                         currentLocalTypes = savedLocalTypes
                         currentParamBindingNames = savedParamBindings
@@ -151067,6 +151152,8 @@ interface DataView {
             val ann = member.parameters.firstOrNull()?.type
             if (ann != null) getTypeFromTypeNode(ann) else classType
         } else classType
+        cpaWithOwnTps(if (isStatic) null else classTypeParametersOf((member as NodeBase).parent),
+            (member as? MethodDeclaration)?.typeParameters) {
         when (member) {
             is MethodDeclaration -> {
                 member.body?.let { body ->
@@ -151145,6 +151232,7 @@ interface DataView {
                 }
             }
             else -> {}
+        }
         }
         inStaticClassMethod = savedStatic
     }
@@ -152675,7 +152763,9 @@ interface DataView {
                 CpaSections.armP(CpaSections.PA_UNWRAP)
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
             }
-            is ArrowFunction -> cpaExprArrowFunction(expr, source, fileName, enclosingClassType)
+            is ArrowFunction -> cpaWithOwnTps(null, expr.typeParameters) {
+                cpaExprArrowFunction(expr, source, fileName, enclosingClassType)
+            }
             is NewExpression -> {
                 CpaSections.armP(CpaSections.PA_NEW)
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
@@ -152768,7 +152858,9 @@ interface DataView {
                 CpaSections.armP(CpaSections.PA_UNARY)
                 expr.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
             }
-            is FunctionExpression -> cpaExprFunctionExpression(expr, source, fileName, enclosingClassType)
+            is FunctionExpression -> cpaWithOwnTps(null, expr.typeParameters) {
+                cpaExprFunctionExpression(expr, source, fileName, enclosingClassType)
+            }
             is ClassExpression -> cpaExprClassExpression(expr, source, fileName, enclosingClassType)
             else -> CpaSections.armP(CpaSections.PA_LEAF)
         }
@@ -154894,7 +154986,7 @@ interface DataView {
         val savedThis = currentClassForThis
         if (savedThis == null) currentClassForThis = captureRecorder.typeCaptureThisClass(core)
         try {
-            val declared = compoundReceiverDeclaredType(core) ?: return
+            val declared = compoundReceiverDeclaredType(core)?.let { typeParamsToBaseConstraints(it) } ?: return
             if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
             val path = getReferencePath(core)
             val narrowed = if (path != null) getNarrowedTypeForReferenceFollowLoopEntry(declared, core) else declared
@@ -155020,7 +155112,7 @@ interface DataView {
         if (!strictNullChecks) return
         if (expr.questionDotToken) return
         val recv = expr.expression as? Identifier ?: return
-        val declared = getTypeOfIdentifier(recv)
+        val declared = typeParamsToBaseConstraints(getTypeOfIdentifier(recv)) ?: return
         if (declared === anyType || declared === errorType) return
         if (declared !is Type.Union) return
         if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
@@ -155116,8 +155208,9 @@ interface DataView {
      * non-union `null` / `undefined` (G3b) unless the receiver is the `null` keyword,
      * which parses as an Identifier and is tsgo's TS18050.
      */
-    private fun nullableIdentifierReceiverType(recv: Identifier, name: String, toi: Type): Type? {
-        if (toi === anyType || toi === errorType || toi === unknownType) return null
+    private fun nullableIdentifierReceiverType(recv: Identifier, name: String, toi0: Type): Type? {
+        if (toi0 === anyType || toi0 === errorType || toi0 === unknownType) return null
+        val toi = typeParamsToBaseConstraints(toi0) ?: return null
         val p = LocalShadowGuard.optionalParameterBinding(recv, name)
         if (p != null && lexicalScopeSymbol(recv, name).let { it == null || it.valueDeclaration === p }) {
             return if (typeIncludesExplicitUndefined(toi)) toi else getUnionType(listOf(toi, undefinedType))
@@ -155125,6 +155218,45 @@ interface DataView {
         if (toi is Type.Union) return toi
         if ((toi === nullType || toi === undefinedType) && name != "null") return toi
         return null
+    }
+
+    /**
+     * (CHK.173) Round B4 (G3a) — [t] with every type parameter (bare, or a union member)
+     * replaced by its BASE constraint, the type whose null / undefined tsgo's
+     * `checkNonNullType` reads through `getTypeFacts` (an instantiable type's facts are its
+     * base constraint's). [t] itself when it names no type parameter; null when one has no
+     * constraint (an unconstrained `T` is `unknown`-faceted and tsgo reports no TS1804x for
+     * it) or the chain is circular.
+     */
+    private fun typeParamsToBaseConstraints(t: Type, depth: Int = 0): Type? {
+        // A constraint may name a type parameter again, directly or inside a union
+        // (`<T extends U | null, U extends T>` is a TS2313 cycle): bounded, never recursive
+        // without limit.
+        if (depth > 8) return null
+        fun base(tp: Type.TypeParam): Type? {
+            var cur: Type = tp
+            var hops = 0
+            while (cur is Type.TypeParam) {
+                cur = cur.constraint ?: return null
+                if (++hops > 32) return null
+            }
+            return typeParamsToBaseConstraints(cur, depth + 1)
+        }
+        return when (t) {
+            is Type.TypeParam -> base(t)
+            is Type.Union -> {
+                if (t.types.none { it is Type.TypeParam }) return t
+                val parts = ArrayList<Type>(t.types.size)
+                for (m in t.types) {
+                    if (m is Type.TypeParam) {
+                        val b = base(m) ?: return null
+                        if (b is Type.Union) parts.addAll(b.types) else parts.add(b)
+                    } else parts.add(m)
+                }
+                getUnionType(parts)
+            }
+            else -> t
+        }
     }
 
     /**
@@ -156009,7 +156141,12 @@ interface DataView {
                             narrowed.types.all { m -> resolveMemberPropertyType(m, propName) != null }
                     } else {
                         val app = getApparentType(narrowed)
-                        getPropertyOfType(app, propName) != null
+                        // (CHK.173) Round B4: a guard on a TYPE-PARAMETER receiver narrows
+                        // it to `T & Candidate` (round 744); the member lives on the
+                        // candidate, which only the intersection fold finds. Reachable since
+                        // the cpa frames type `T`-annotated parameters.
+                        getPropertyOfType(app, propName) != null ||
+                            (narrowed is Type.Intersection && resolveMemberPropertyType(narrowed, propName) != null)
                     }
                 }
                 // (ENGINE.2d)(a) round 790: bracket the plain walk with the two
