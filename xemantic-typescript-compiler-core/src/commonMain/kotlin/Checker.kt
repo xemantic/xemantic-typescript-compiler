@@ -121083,6 +121083,9 @@ interface DataView {
                 resolvedAssignedTypeForFlow(rhs)?.let { t ->
                     return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
                 }
+                (rhs as? ConditionalExpression)?.let { tern ->
+                    conditionalCallBranchesReducedTypeForFlow(tern, antecedent, declaredType)?.let { return it }
+                }
             }
             // (CHK.173) G3: `x ??= <rhs>` / `x ||= <rhs>` with an RHS only the four
             // resolving arms can type (`m ??= s.m`, tsc builder.ts:1060). The assignment
@@ -121379,6 +121382,14 @@ interface DataView {
                 c = c.expression
             }
         }
+        return annotatedCallReturnTypeForFlow(call) ?: engineCallReturnTypeForFlow(call)
+    }
+
+    /** The syntactic half of [resolvedCallReturnTypeForFlow]: the resolved callee
+     *  declaration's return ANNOTATION (or, for an overload set, the engine's selected
+     *  signature). Null when the callee is not a function / method DECLARATION or the
+     *  annotation names the callee's own type parameters. */
+    private fun annotatedCallReturnTypeForFlow(call: CallExpression): Type? {
         val decl = resolveFlowCalleeDecl(call, call.expression) ?: return null
         // (CHK.72) An OVERLOAD SET's first signature is not the selected one — ask the
         // engine, which resolves the overload properly, instead of reading an annotation
@@ -121401,6 +121412,64 @@ interface DataView {
         }
         val t = getTypeFromTypeNode(ret)
         return if (t !== errorType && t !== anyType) t else null
+    }
+
+    /**
+     * (CHK.173) B5a: the ENGINE half of [resolvedCallReturnTypeForFlow], asked only when
+     * the annotation read gives up — an interface / lib METHOD callee (`s =
+     * p.substring(1)`, `m = re.exec(x)`: a `MethodSignature`, never a declaration with an
+     * annotation this walk reads) and a GENERIC callee whose annotation names its own type
+     * parameters, with or without explicit type arguments (`s = first(a)`, `r =
+     * tok<"a">()`). tsgo types the assignment from the call's resolved signature; the
+     * annotation read answered null and the declared nullish type survived the overwrite
+     * (two shipped false TS18047/TS18048 after `if (!s) s = first(a)`).
+     *
+     * The caller has already refused a `?.` on the call and on its property-access
+     * callee chain. Refused here: `any` / `error` / `unknown` (they relate to every
+     * member) and a result still carrying an unresolved type parameter (a failed
+     * inference, never a type the program states).
+     */
+    private fun engineCallReturnTypeForFlow(call: CallExpression): Type? {
+        val t = getReturnTypeOfCallExpression(call)
+        return if (t === anyType || t === errorType || t === unknownType ||
+            typeContainsUnresolvedTypeParam(t)
+        ) null else t
+    }
+
+    /**
+     * (CHK.173) B5a: a CONDITIONAL right-hand side at least one of whose branches is a
+     * call — `s = c ? mkA() : first(bs)` — typed branch by branch through the same arms a
+     * bare right-hand side takes ([resolvedCallReturnTypeForFlow] for a call,
+     * [resolvedAssignedTypeForFlow] otherwise), and reduced as tsgo's
+     * `getAssignmentReducedType` reduces it: the members of [base] some branch
+     * constituent is assignable to. [resolvedAssignedTypeForFlow]'s own conditional arm
+     * refuses a UNION ternary type (round 463), which is every ternary whose branches
+     * differ. Null when a branch is unresolved, a branch constituent relates to no member
+     * (the reduction would drop a value the reference can hold), or nothing is removed.
+     */
+    private fun conditionalCallBranchesReducedTypeForFlow(
+        tern: ConditionalExpression, antecedent: Type, declaredType: Type,
+    ): Type? {
+        if (declaredType !is Type.Union) return null
+        val parts = ArrayList<Type>()
+        var sawCall = false
+        for (branch in listOf(tern.whenTrue, tern.whenFalse)) {
+            val e = unwrapParensExpr(branch)
+            val t = if (e is CallExpression) {
+                sawCall = true
+                resolvedCallReturnTypeForFlow(e)
+            } else {
+                resolvedAssignedTypeForFlow(e)
+            } ?: return null
+            if (t is Type.Union) parts.addAll(t.types) else parts.add(t)
+        }
+        if (!sawCall) return null
+        val assigned = if (parts.size == 1) parts[0] else getUnionType(parts)
+        val base = assignmentReduceBase(antecedent, declaredType, assigned) as? Type.Union ?: return null
+        val kept = base.types.filter { m -> parts.any { checkTypeRelatedTo(it, m, assignableRelation) } }
+        if (kept.isEmpty() || kept.size == base.types.size) return null
+        if (parts.any { p -> kept.none { checkTypeRelatedTo(p, it, assignableRelation) } }) return null
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
     }
 
 
