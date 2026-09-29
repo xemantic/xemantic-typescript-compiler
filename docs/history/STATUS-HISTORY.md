@@ -1,5 +1,12 @@
 
 
+**(P18.221) — (CHK.173) ROUND B4: `function f<T extends string | null>(x: T) { x.length }` NOW REPORTS "'x' IS POSSIBLY 'null'" AS tsgo DOES; +75 TRUE ROWS, 0 FALSE, +0 EVERYWHERE, 21,608 / 0 / 44 (2026-09-29).**
+The member-access check did not know the enclosing function's or class's type parameters, so a `T`-typed receiver read
+as `any`. It now carries that scope and checks `T`'s constraint. The full suite caught three real regressions from the
+wider typing (a type-guard false positive, a doubled row) and one stale test; all fixed and checked against tsgo. 93
+pins. Warm A/B both orders: no regression. Screen 0; grid 8x0; libs 0. Next: the G1 arc (body locals).
+
+
 **(P18.220) — (CHK.173) ROUND B3: `o.p.length` / `this.x.length` ON A NULLABLE MEMBER AND `(x).length` NOW REPORT AS tsgo DOES; +53 TRUE ROWS, 0 FALSE, +0 EVERYWHERE, 21,515 / 0 / 44 (2026-09-29).**
 Member and parenthesised receivers now reach the "possibly null/undefined" check, with tsgo's exact wording (an entity
 path named, otherwise "Object is possibly …"), and a TS2339 after it names the non-null type. The 8-profile grid and

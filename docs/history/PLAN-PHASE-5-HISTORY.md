@@ -1,3 +1,37 @@
+### Round (P18.216) — (CHK.173) Round B1: flow narrowing no longer lets an inner same-named `let`/`const` re-narrow the OUTER variable — 16 shipped false positives gone (Round A's flow-shadow class), plus N15 / N2 / N5; +0 everywhere, warm A/B inside the band (2026-09-28)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism**: `flowAssignmentMightNarrow`
+kept its name match (`…ByName`) and adds `flowAssignmentWritesOtherBinding` -> `FlowShadowScope.writesOtherBinding`
+(new, 141 lines): the innermost block-scoped binding of the root name above the assignment TARGET (a non-function-body
+Block, a switch case block, a for / for-in / for-of header, a catch clause; never `var`); true when the READ's parent
+chain does not reach that scope; memoized per target node id per flow graph. The read is `narrowWalkRef`, installed by
+`flowWalkWithTripCheck` from a new `narrowRef` parameter and restored in `finally` — both `getNarrowedTypeForReference*`
+walks, the discriminant-carry sibling walk and the two TS2454 walks pass it (and `isAssignedAtFlow` is gated the same
+way); every other walk passes null (unchanged). **N2**: `narrowByEquality` matches through `flowReferenceCandidate` (a
+port of tsgo's `getReferenceCandidate`: parens, `=`/`||=`/`&&=`/`??=` to the left, comma to the right); **N15**: a `void`
+operand types `undefined`; **N5**: Flow.kt binds `&&=` as tsc's `bindLogicalLikeExpression` does (right operand under
+the left's TRUE condition, the short-circuit path joins under the FALSE one). **Where the census was wrong**: two MORE
+shipped FPs at the parent (r02 a false TS2345 at an argument, r05 after a typeof guard + a block `const s = 1`) — the
+same leak surfaced by (P18.214)'s argument reader; d01/d03 TS2454 stay missing (a different, AST-based top-level
+emitter) while the gate adds 4 true TS2454 rows the census did not list (d11, d12, d15, d16); the memo concern was
+already met (`walkMemoKey` includes the reference's node id — pinned by e01); the nested-walk restore is only visible on
+a two-branch shape (g01/g02).
+
+**Measured**: census `lk` + `nar` + k12 (60 cells, tsgo 8 rows) 26 ours-only / 6 missing -> 2 / 2 (n8c/n8p = N8,
+d01/d03); `d2` 5 missing -> 1; 26 new `e` cells 13 ours-only -> 0; the 2,160-cell matrix and all 29 census cell dirs:
+0 changed except rows moving toward tsgo (17 flow-shadow + 8 narrowing FPs removed; f06, f12, r06, k12 and a leak row
+added). **Pins**: `FlowShadowNarrowingTest` (72). **Ablation** (12 arms, all RED): A1 no gate 33, A2 `var`
+block-scoped 3, A3 position containment 2, A4 core walk ungated 5, A5 FollowLoopEntry walk ungated 24, A6 reference =
+its function 4, A7 no nested restore 2, A8 memo key without reference 4, A9 TS2454 ungated 4, N15 4, N2 5, N5 3.
+**Gates**: full suite **21,309 / 0 / 44** (+72); corpus screen 0 of 8,725; cost_gate PASS (`narrow.walks` +0.01%);
+huge_methods 0; grid 8x `added=0 removed=0` (chain control OK), libraries 0; warm A/B -0.17%, B 2/2, both sds ~1%
+(inside the band). **Residues**: the CONDITION leak — a condition inside the shadow's scope still narrows the outer name
+(e07 `{ const s = g(); if (!s) return } s.length` misses tsgo's TS18047; same test on the FlowCondition node, but
+conditions far outnumber assignments — measure the cost first; closing it blinds g01/g02, which then need a new shape);
+for-of body read under an outer guard (e09); `s &&= g()` post-state (e18: `narrowByAssignmentRhs` has no `&&=` arm);
+TS2454 d01/d03/d13/e26/z1; N8 (`if (!s) s = first(a)`) still FP. **Successor**: B2 (optional parameters and non-union
+null in the Round A emitter), then the condition leak.
+
 ### Round (P18.215) — (CHK.173) G5 residue c6: a nested function whose name collides with an outer binding is typed as itself at the call and the value read; 15 true rows on the matrix, 0 false added, +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent beside the Round B census (recorded in the (CHK.173) item); the orchestrator
