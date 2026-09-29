@@ -682,6 +682,10 @@ class Checker(
     private val shadowExprMemo = HashMap<Int, Pair<Long, Type>>()
     private val shadowConfirmed = HashSet<Int>()
 
+    /** (CHK.173) Round B3: set only around the compound receiver arm's own typing ask —
+     *  see [Checker.computeRawTypeOfPropertyAccess]'s optional-chain exception. */
+    private var nonNullChainReceiverReads = false
+
     internal var currentClassForThis: ClassDeclaration? = null
         set(v) { if (field !== v) { field = v; bumpExprEpoch("currentClassForThis") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentClassForThis") }
 
@@ -122640,6 +122644,14 @@ interface DataView {
                     t
                 } else t
             }
+            // (CHK.173) Round B3: tsgo `narrowTypeByTruthiness`'s optional-chain arm for an
+            // ELEMENT access — a truthy `x?.[0]` / `o.p?.[0]` / `o?.p[0]` proves every
+            // `?.`-guarded receiver down the chain non-nullish (the chain short-circuits
+            // to `undefined`, falsy, otherwise). Positive branch only, as the property arm.
+            is ElementAccessExpression ->
+                if (isTrue && strictNullChecks && isOptionalChainNode(expr) &&
+                    optionalChainContainsReference(expr, name)) pExcludeNullish(t)
+                else t
             else -> t
         }
     }
@@ -135004,6 +135016,22 @@ interface DataView {
             t !== anyType && t !== errorType)
             getUnionType(listOf(t, undefinedType)) else t
 
+    /**
+     * (CHK.173) Round B3 (G6): under strictNullChecks a UNION receiver without its
+     * `null` / `undefined` constituents (tsgo `getNonNullableType` as applied by
+     * `checkNonNullType`); unchanged when nothing, or everything, is nullish.
+     */
+    private fun nonNullReceiverPart(t: Type): Type {
+        if (!strictNullChecks || t !is Type.Union) return t
+        if (t.types.none { it === nullType || it === undefinedType }) return t
+        val rest = t.types.filter { it !== nullType && it !== undefinedType }
+        return when (rest.size) {
+            0 -> t
+            1 -> rest[0]
+            else -> getUnionType(rest)
+        }
+    }
+
     private fun computeRawTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
         // (CHK.61)(a) A bare `this` receiver carries no type — see
         // [thisReceiverCarrierType]. Written FIRST for legibility; the ORDER is not
@@ -135021,10 +135049,24 @@ interface DataView {
         // Conservative gates: receiver must be a pure Identifier-or-PropertyAccess
         // chain (so [getReferencePath] is non-null), and only Union receivers are
         // narrowed — non-Unions can't be refined by condition-based narrowing.
-        val objectType: Type =
+        val narrowedObjectType: Type =
             if (rawObjectType is Type.Union && getReferencePath(expr.expression) != null) {
                 getNarrowedTypeForReference(rawObjectType, expr.expression)
             } else rawObjectType
+        // (CHK.173) Round B3 (G6): tsgo types a member access through
+        // `checkNonNullExpression`, i.e. on the receiver's NON-NULL part — the TS1804x /
+        // TS2531 row for the nullish part is the receiver arm's. Asking the member of
+        // `null` too made every access on a still-nullable receiver `any`, so a following
+        // TS2339 named the nullable union and a TS2322 on the member never fired.
+        // An OPTIONAL chain (`x?.y`, `a?.b.c`) keeps the old reading except inside the
+        // Round B3 receiver arm's own ask: typing it everywhere resolves values
+        // (`const a = t?.exports?.get(k)`) whose narrowing partners this checker still
+        // reads as `any` (a nested function's call), and three false rows on tsc's own
+        // sources followed — measured; the arm needs it to name `o?.p` in `o?.p.length`.
+        val objectType: Type =
+            if (!nonNullChainReceiverReads && (expr.questionDotToken || isOptionalChainNode(expr.expression)))
+                narrowedObjectType
+            else nonNullReceiverPart(narrowedObjectType)
         val propName = expr.name.text
         // (REL.1)(b0) round 742: `SK.A` in VALUE position is the MEMBER's type. The
         // lookup below cannot find it — an enum's `Type.Object` has no member table
@@ -154472,7 +154514,7 @@ interface DataView {
         // so reads INSIDE a loop body see narrowing established at loop entry
         // (e.g. `if (foo.a) { for(...) { foo.a.b ... } }` suppresses). ===
         CpaSections.atQ(CpaSections.Q_TS18048_OPT)
-        emitTs18048ForOptionalPropertyAccessReceiver(expr, source, fileName)
+        val optionalMemberHandled = emitTs18048ForOptionalPropertyAccessReceiver(expr, source, fileName)
 
         // === B464: TS18048 "'x' is possibly 'undefined'." for `x.prop` where `x` is a
         // captured (closed-over) parameter/variable inside a closure whose narrowing
@@ -154486,6 +154528,9 @@ interface DataView {
         // No return: tsgo continues on the non-null type, so a TS2339 on `p` still follows. ===
         CpaSections.atQ(CpaSections.Q_TS1804X_ID)
         emitTs1804xForNullableIdentifierReceiver(expr, source, fileName)
+        // (CHK.173) Round B3: a MEMBER / parenthesized receiver — `o.p.length`, `this.x.length`,
+        // `o['p'].length`, `(x).length`. B81.1c above owns an OPTIONAL member it resolved.
+        if (!optionalMemberHandled && !expr.questionDotToken) emitTs1804xForNullableCompoundReceiver(expr.expression, source, fileName)
 
         // === TS2855: super property access restriction. (LEGACY.1)(j2): the `<= ES5` arm
         // (TS2340 `Only public and protected methods of the base class are accessible via
@@ -154695,9 +154740,9 @@ interface DataView {
      */
     private fun emitTs18048ForOptionalPropertyAccessReceiver(
         expr: PropertyAccessExpression, source: String, fileName: String,
-    ) {
-        if (!strictNullChecks) return
-        if (expr.questionDotToken) return
+    ): Boolean {
+        if (!strictNullChecks) return false
+        if (expr.questionDotToken) return false
         val recvExpr = expr.expression
         // Resolve receiver shape: PropertyAccess `foo.a` (original B81.1c) or
         // ElementAccess `foo["a"]` with a string-literal index (B81.1c-EAext).
@@ -154705,7 +154750,7 @@ interface DataView {
         // and squiggle span via the local `recvInfo` shape.
         val info = when (recvExpr) {
             is PropertyAccessExpression -> {
-                if (recvExpr.questionDotToken) return
+                if (recvExpr.questionDotToken) return false
                 ReceiverInfo(
                     recvOfRecv = recvExpr.expression,
                     propName = recvExpr.name.text,
@@ -154715,8 +154760,8 @@ interface DataView {
                 )
             }
             is ElementAccessExpression -> {
-                if (recvExpr.questionDotToken) return
-                val arg = recvExpr.argumentExpression as? StringLiteralNode ?: return
+                if (recvExpr.questionDotToken) return false
+                val arg = recvExpr.argumentExpression as? StringLiteralNode ?: return false
                 // Span ends at the closing `]` — argumentExpression.end + 1 covers it
                 // (mirrors `expressionTrueEnd`'s ElementAccess branch). Fall back to
                 // recvExpr.end if the argument-end position is unreliable.
@@ -154729,14 +154774,14 @@ interface DataView {
                     narrowExpr = recvExpr,
                 )
             }
-            else -> return
+            else -> return false
         }
         // Resolve receiver-of-receiver's apparent type to find the property symbol.
         val recvOfRecvType = getTypeOfExpression(info.recvOfRecv)
-        if (recvOfRecvType === anyType || recvOfRecvType === errorType) return
+        if (recvOfRecvType === anyType || recvOfRecvType === errorType) return false
         val apparent = getApparentType(recvOfRecvType)
-        val propSym = getPropertyOfType(apparent, info.propName) ?: return
-        if (!isOptionalProperty(propSym)) return
+        val propSym = getPropertyOfType(apparent, info.propName) ?: return false
+        if (!isOptionalProperty(propSym)) return false
         // Round 412 (M3.4): a user type-guard on the RECEIVER (`Debug.assert(isDefinedProgram(state))`,
         // `if (isDefinedX(state))`) narrows `state` to a subtype that REDEFINES this optional
         // property as required non-undefined — but the reference-path narrowing below keys on
@@ -154759,45 +154804,193 @@ interface DataView {
                 val np = getPropertyOfType(getApparentType(recvNarrowed), info.propName)
                 if (np != null && !isOptionalProperty(np)) {
                     val npType = getTypeOfSymbol(np)
-                    if (npType !== anyType && npType !== errorType && !typeIncludesExplicitUndefined(npType)) return
+                    if (npType !== anyType && npType !== errorType && !typeIncludesExplicitUndefined(npType)) return true
                 }
             }
         }
         // Compute the receiver's declared type as `propType | undefined`, then
-        // consult loop-aware flow narrowing. If undefined survives narrowing,
-        // emit the diagnostic.
+        // consult loop-aware flow narrowing. If a nullish constituent survives, report.
         val propType = getTypeOfSymbol(propSym)
-        if (propType === anyType || propType === errorType) return
+        if (propType === anyType || propType === errorType) return true
         val declaredWithUndef = if (typeIncludesExplicitUndefined(propType)) propType
             else getUnionType(listOf(propType, undefinedType))
         val narrowed = getNarrowedTypeForReferenceFollowLoopEntry(declaredWithUndef, info.narrowExpr)
-        if (!typeIncludesExplicitUndefined(narrowed)) return
-        // Construct the display path for the receiver. For PropertyAccess
-        // (`foo.a`), use `getReferencePath` (dotted form). For ElementAccess
-        // (`foo["a"]`), build a bracket-form display by combining the
-        // receiver-of-receiver's path with the literal index.
-        val display = when (recvExpr) {
-            is PropertyAccessExpression -> getReferencePath(recvExpr) ?: return
-            is ElementAccessExpression -> {
-                val basePath = getReferencePath(info.recvOfRecv) ?: return
-                val arg = recvExpr.argumentExpression as StringLiteralNode
-                val q = if (arg.singleQuote) "'" else "\""
-                "$basePath[$q${arg.text}$q]"
-            }
-        }
+        val hasUndef = typeIncludesExplicitUndefined(narrowed)
+        // (CHK.173) Round B3: `p?: T | null` narrowed past `undefined` keeps its `null`.
+        val hasNull = typeIncludesNull(narrowed)
+        if (!hasUndef && !hasNull) return true
         val length = info.spanEnd - info.spanStart
-        if (length <= 0) return
-        val (line, character) = getLineAndCharacterOfPosition(source, info.spanStart)
+        if (length <= 0) return true
+        // (CHK.173) Round B3: tsgo's `reportObjectPossiblyNullOrUndefinedError` — an ENTITY
+        // receiver (`foo.a`) is named, anything else (`foo['a']`, `a[0].b`) is "Object".
+        reportNullishReceiver(recvExpr, hasNull, hasUndef, info.spanStart, length, source, fileName)
+        return true
+    }
+
+    /**
+     * (CHK.173) Round B3 — tsgo's `reportObjectPossiblyNullOrUndefinedError`: an entity
+     * name expression (an identifier, or a property access of one — never `this`, an
+     * element access or a parenthesis) shorter than 100 characters is named in
+     * TS18047/18048/18049; every other receiver is TS2531/2532/2533 "Object is possibly …".
+     */
+    private fun reportNullishReceiver(
+        recv: Expression, hasNull: Boolean, hasUndef: Boolean, start: Int, length: Int,
+        source: String, fileName: String,
+    ) {
+        val (code, kind) = nullishReceiverCode(hasNull, hasUndef)
+        val entity = entityNameExpressionText(recv)?.takeIf { it.length < 100 }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
-            message = "'$display' is possibly 'undefined'.",
+            message = if (entity != null) "'$entity' is possibly $kind." else "Object is possibly $kind.",
             category = DiagnosticCategory.Error,
-            code = 18048,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = info.spanStart,
-            length = length,
+            code = if (entity != null) code else code - 18047 + 2531,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
         ))
+    }
+
+    /**
+     * tsgo `IsEntityNameExpression` + `entityNameToString`: `a`, `a.b.c`, and `a?.b` as
+     * `a.b` (the question dot is not part of an entity name's text); else null.
+     */
+    private fun entityNameExpressionText(e: Expression): String? = when (e) {
+        is Identifier -> if (e.text == "this" || e.text == "super") null else e.text
+        is PropertyAccessExpression ->
+            if (e.name.text.startsWith("#")) null
+            else entityNameExpressionText(e.expression)?.let { "$it.${e.name.text}" }
+        else -> null
+    }
+
+    /**
+     * (CHK.173) Round B3 (G5 + G4p): TS1804x / TS2531-2533 for an access whose receiver
+     * is a MEMBER (`o.p.length`, `this.x.length`, `o['p'].length`, `a[0].p.length`,
+     * `this.#x.length`) or a PARENTHESIZED expression (`(x).length`, `(y as T | null).s`)
+     * whose type carries `null` / `undefined` that survives narrowing — tsgo's
+     * `checkNonNullExpression` on the receiver. A bare identifier is Round A's; an
+     * OPTIONAL member B81.1c resolved is B81.1c's (the caller skips this then). A receiver
+     * inside an optional chain (`o?.p.length`, `o.a?.p.q.length`) is reported like any
+     * other — the chain's own `undefined` never reaches the member's type here. Skipped
+     * for a call / `new` core (`host.getX?.().y` — the census's one real false positive
+     * was a call core, unmeasured otherwise), and where
+     * a guard on the receiver-of-receiver narrows it to a type whose member is non-nullish
+     * (the round-412 rule B81.1c carries). `this` is typed through [currentClassForThis],
+     * installed from [CaptureRecorder.typeCaptureThisClass] for this ask only (Round B2's
+     * carrier). Does NOT return anything: tsgo continues on the non-null type.
+     */
+
+    private fun emitTs1804xForNullableCompoundReceiver(recv: Expression, source: String, fileName: String) {
+        if (!strictNullChecks) return
+        var core = recv
+        var paren = false
+        while (core is ParenthesizedExpression) {
+            if (core.instantiationEnd != null) return
+            paren = true; core = core.expression
+        }
+        when (core) {
+            is PropertyAccessExpression, is ElementAccessExpression -> {}
+            is Identifier, is AsExpression, is TypeAssertionExpression, is NonNullExpression -> if (!paren) return
+            else -> return
+        }
+        val savedThis = currentClassForThis
+        if (savedThis == null) currentClassForThis = captureRecorder.typeCaptureThisClass(core)
+        try {
+            val declared = compoundReceiverDeclaredType(core) ?: return
+            if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
+            val path = getReferencePath(core)
+            val narrowed = if (path != null) getNarrowedTypeForReferenceFollowLoopEntry(declared, core) else declared
+            if (narrowed === anyType || narrowed === unknownType || narrowed === errorType) return
+            val hasNull = typeIncludesNull(narrowed)
+            val hasUndef = typeIncludesExplicitUndefined(narrowed)
+            if (!hasNull && !hasUndef) return
+            // (Round A's binding guard is NOT applied to the path root: measured redundant
+            // here — 0 of the pins and 0 of seven block / catch / case / nested-function
+            // shadow shapes move without it, as the Round B census's arm found.)
+            if (path != null && optionalChainGuardsRef(core, path)) return
+            if (path != null && path.startsWith("this.") && thisMemberAssignedInFunction(core, path)) return
+            if (core is PropertyAccessExpression || core is ElementAccessExpression) {
+                if (receiverOfReceiverGuardClears(core)) return
+            }
+            val start = recv.pos
+            val length = expressionTrueEnd(recv) - start
+            if (length <= 0) return
+            reportNullishReceiver(if (paren) recv else core, hasNull, hasUndef, start, length, source, fileName)
+        } finally {
+            currentClassForThis = savedThis
+        }
+    }
+
+    /**
+     * (CHK.173) Round B3 — an interim guard for a `this.x` receiver: true when the
+     * function that binds this `this` (arrows are transparent) ASSIGNS the same member
+     * path anywhere. The narrowing then rests on the assigned value's type, and this
+     * checker still reads many such values as `any` where tsgo types them (a destructured
+     * body local — G1 — as in rxjs WebSocketSubject's `const { WebSocketCtor } =
+     * this._config; socket = new WebSocketCtor!(url); this._socket = socket;
+     * this._socket.binaryType = …`, the one false row a real library showed). Asked only
+     * at a site about to fire; an explicit stack, so a deep binary chain cannot recurse.
+     */
+    private fun thisMemberAssignedInFunction(core: Expression, path: String): Boolean {
+        var fn: Node? = (core as NodeBase).parent
+        while (fn != null && fn !is SourceFile) {
+            if (fn is FunctionDeclaration || fn is FunctionExpression || fn is MethodDeclaration ||
+                fn is Constructor || fn is GetAccessor || fn is SetAccessor ||
+                fn is PropertyDeclaration || fn is ClassStaticBlockDeclaration) break
+            fn = (fn as NodeBase).parent
+        }
+        if (fn == null || fn is SourceFile) return false
+        val stack = ArrayDeque<Node>()
+        stack.addLast(fn)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeLast()
+            if (n is BinaryExpression && isAssignmentOperator(n.operator) &&
+                getReferencePath(unwrapParensExpr(n.left)) == path) return true
+            forEachChild(n) { stack.addLast(it) }
+        }
+        return false
+    }
+
+    /**
+     * The declared type of a Round B3 receiver core: an identifier through Round A /
+     * B2's reader, anything else through [getTypeOfExpression] (whose property path
+     * already narrows a UNION receiver-of-receiver and adds `| undefined` for an optional
+     * member). Null to stay silent.
+     */
+    private fun compoundReceiverDeclaredType(core: Expression): Type? {
+        if (core is Identifier) {
+            val name = core.text
+            if (name == "this" || name == "super" || name == "arguments" || name == "undefined" || name == "null") return null
+            return nullableIdentifierReceiverType(core, name, getTypeOfIdentifier(core))
+        }
+        val saved = nonNullChainReceiverReads
+        nonNullChainReceiverReads = true
+        val t = try { getTypeOfExpression(core) } finally { nonNullChainReceiverReads = saved }
+        return if (t === anyType || t === errorType || t === unknownType) null else t
+    }
+
+    /**
+     * B81.1c's round-412 rule for a Round B3 member receiver: a guard on the
+     * receiver-of-receiver PATH (`if (isDefined(state)) state.p.x`) narrows it to a type
+     * whose member is present and non-nullish — our reference-path walk of `state.p` does
+     * not see a guard written on `state`. True = stay silent.
+     */
+    private fun receiverOfReceiverGuardClears(core: Expression): Boolean {
+        val (inner, name) = when (core) {
+            is PropertyAccessExpression -> core.expression to core.name.text
+            is ElementAccessExpression -> core.expression to ((core.argumentExpression as? StringLiteralNode)?.text ?: return false)
+            else -> return false
+        }
+        val innerPath = getReferencePath(inner) ?: return false
+        val innerType = thisReceiverCarrierType(inner) ?: getTypeOfExpression(inner)
+        if (innerType === anyType || innerType === errorType) return false
+        val innerNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(innerType, inner)
+        if (innerNarrowed === innerType) return false
+        val parts = (innerNarrowed as? Type.Union)?.types ?: listOf(innerNarrowed)
+        for (c in parts) {
+            if (isNullishConstituent(c)) continue
+            val t = resolveMemberPropertyType(c, name) ?: return false
+            if (t === anyType || t === errorType || typeIncludesNull(t) || typeIncludesExplicitUndefined(t)) return false
+        }
+        return innerPath.isNotEmpty()
     }
 
     /** Internal carrier for [emitTs18048ForOptionalPropertyAccessReceiver]. */
@@ -158690,8 +158883,14 @@ interface DataView {
                     val alias = asym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                     if (alias?.type is UnionType) annName else null
                 }
+                // (CHK.173) Round B3 (G6): tsgo reports the member on the receiver's
+                // NON-NULL part (`checkNonNullExpression`), so a nullish constituent is
+                // never named here — `'string'`, not `'string | null'`, and a single
+                // surviving member carries no member chain.
+                val strippedNullish = members.size != narrowed.types.size
                 val unionDisplay = aliasName ?: typeToString(
-                    if (allWellResolved) Type.Union(members.sortedWith(stableOrdering.comparator)) else narrowed)
+                    if (allWellResolved) Type.Union(members.sortedWith(stableOrdering.comparator))
+                    else if (strippedNullish) nonNullReceiverPart(narrowed) else narrowed)
                 val memberDisplay = typeToString(missingMember)
                 // TS2551 for an all-interface well-resolved union when the union's
                 // COMMON property set carries a close spelling match.
@@ -158720,7 +158919,8 @@ interface DataView {
                     // `Alfa`). The round-512 anonymous-plain-object path keeps its
                     // chainless form — its baselines pin it and this round does not
                     // re-open them.
-                    messageChain = if (anyHasIt || allWellResolved || allMissingTrusted)
+                    messageChain = if ((anyHasIt || allWellResolved || allMissingTrusted) &&
+                        !(strippedNullish && members.size == 1))
                         listOf("  Property '$propName' does not exist on type '$memberDisplay'.")
                     else emptyList(),
                 ))
@@ -160309,6 +160509,8 @@ interface DataView {
         // [jsAccessReceiverIsExpandoImmune]; see its KDoc.
         if (isJsLikeFileName(fileName)) return
         emitTs1804xForNullishElementAccessReceiver(expr, source, fileName)
+        // (CHK.173) Round B3: a member / parenthesized receiver (`o.p['x']`, `(y)['length']`).
+        if (!expr.questionDotToken) emitTs1804xForNullableCompoundReceiver(expr.expression, source, fileName)
         val arg = expr.argumentExpression
         // 17.93: TS2538 "Type 'null'/'undefined' cannot be used as an index type." for
         // element-access indices that resolve to null/undefined. Mirrors TypeScript's
@@ -163484,7 +163686,11 @@ interface DataView {
                     hasNull -> "Cannot invoke an object which is possibly 'null'." to 2721
                     else -> "Cannot invoke an object which is possibly 'undefined'." to 2722
                 }
-                val (start, length) = computeSpan()
+                // (CHK.173) Round B3: tsgo reports this on the WHOLE callee expression
+                // (`checkNonNullTypeWithReporter(funcType, node.expression, …)`), `o.p` in
+                // `o.p()` — not on the member name the case-(b) TS2349 below anchors at.
+                val start = calleeExpr.pos
+                val length = expressionTrueEnd(calleeExpr) - start
                 if (length > 0) {
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                     diagnostics.add(Diagnostic(
