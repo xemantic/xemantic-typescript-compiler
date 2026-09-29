@@ -1,5 +1,12 @@
 
 
+**(P18.220) — (CHK.173) ROUND B3: `o.p.length` / `this.x.length` ON A NULLABLE MEMBER AND `(x).length` NOW REPORT AS tsgo DOES; +53 TRUE ROWS, 0 FALSE, +0 EVERYWHERE, 21,515 / 0 / 44 (2026-09-29).**
+Member and parenthesised receivers now reach the "possibly null/undefined" check, with tsgo's exact wording (an entity
+path named, otherwise "Object is possibly …"), and a TS2339 after it names the non-null type. The 8-profile grid and
+rxjs caught two design errors mid-round, both fixed. 97 pins, 20 of 20 arms RED. Warm A/B: the second-run arm is ~1.7%
+slower in both orders — an artefact, net ~0; memo-served narrowing asks +2.2% re-baselined. Next: B4 / the G1 arc.
+
+
 **(P18.219) — (CHK.176): `g(s: string, v: void)` CALLED AS `g("a")` IS LEGAL AGAIN (A FALSE TS2554 IN SEVEN EMITTERS), AND `g<string>(1)` REPORTS ITS TS2345 ONCE; +0 EVERYWHERE, 21,418 / 0 / 44 (2026-09-29).**
 tsgo treats a trailing `void` parameter as optional; seven of our arity checks did not. One shared rule now serves them
 all, with tsgo's "Expected 1-2 arguments" wording. A pin walker no longer repeats a TS2345 the main reader already

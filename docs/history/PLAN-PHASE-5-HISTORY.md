@@ -1,3 +1,30 @@
+### Round (P18.215) — (CHK.173) G5 residue c6: a nested function whose name collides with an outer binding is typed as itself at the call and the value read; 15 true rows on the matrix, 0 false added, +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent beside the Round B census (recorded in the (CHK.173) item); the orchestrator
+re-ran every gate. **Mechanism**: `shadowNestedFunctionNames` writes `anyType` into `currentLocalTypes` for a nested
+function whose name collides with an outer binding, and both `getTypeOfIdentifierCore` and `getCalleeType` returned on
+an `any` answer, so the lexical consult never ran. `shadowedScopeValueType(id)` runs the consult only when the answer
+is `any` AND `currentLocalTypes[name] === anyType` AND the name is in `lexicalBlockScopedValueNames`, and returns the
+found declaration's type (`errorType` untouched); both sites call it. `Checker.kt` +21 / -2. **Where the brief was
+wrong** (it proposed the fix): making `shadowNestedFunctionNames` skip names the consult resolves is WRONG — an
+`any`-annotated inner parameter is in no walk table, so without the inherited `any` the outer `declare function g(n:
+number)` answers `g("x")`: a new false TS2345 (arm a4, pinned by the `inner(g: any)` control); the gap was also wider
+than the callee (the value read `const k: number = g`, `take(g)`, the return type); and a nested function with a
+UNIQUE name is `any` too (m19, tsgo TS2345) — step 10b's "override an answer, never replace silence" rule, re-priced:
+lifting it (arm a3) costs **+33 false rows on the compiler profile** (46 -> 79), so it stays a pinned `residue - …`.
+
+**Measured**: a 27-cell matrix 6 -> 23 rows (tsgo 26): m01 (c6), outer class, nested overload SET (TS2769), called
+before its declaration, recursive, `const k: number = g` (TS2322), outer import, call from an inner function, passed as
+an argument, return type into a declaration, generic, arrow body, callback, innermost of two wins, optional parameter;
+2,160-cell matrix +15 true rows (D29bodyFn), 0 false, 0 true removed. **Pins**: `NestedFunctionShadowAnyConsultTest`
+(14). **Ablation**: a1 value-read consult removed 3 RED, a2 callee consult removed 7, a3 table-`any` condition dropped 1
+(+33 FPs on the profile), a4 the brief's design 1. **Gates**: full suite **21,237 / 0 / 44** (+14); corpus screen 0 of
+8,725; cost_gate PASS (flat); huge_methods 0; grid 8x `added=0 removed=0` (chain control OK), libraries 0.
+**Residues**: (a) an unannotated local holding a function is `any` at its call (m07, m16, m24, `const f2 = g;
+f2(1)`); **(b) a GENERAL false positive, pre-existing: a plain `function g(s: string); g(1, 2)` reports TS2345 beside
+tsgo's lone TS2554** — filed as (CHK.175); (c) unique nested names stay `any` (+33 FPs to lift). **Successor**: Round B1
+— the census below found Round A ships a flow-shadow false-positive class.
+
 ### Round (P18.214) — (CHK.173) G5 S2 slices 3 + 4: the argument walker scopes block-level shadows, and a called name consults the lexical scope; 62 false rows removed, 165 true added, 0 false added on the 2,160-cell matrix; +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent (no stall) beside the Round B census; the orchestrator re-ran every gate.
