@@ -1,5 +1,12 @@
 
 
+**(P18.222) — (CHK.173) CONDITION LEAK: `{ const s = g(); if (!s) return } s.length` NO LONGER NARROWS THE OUTER `s`; 5 -> 37 ROWS AGAINST tsgo's 37, +0 EVERYWHERE, 21,652 / 0 / 44 (2026-09-29).**
+A condition, assertion call or `switch` on a same-named inner variable was narrowing the outer one, hiding real
+"possibly null" errors. The binding check B1 added for assignments now also covers these sites (and a `switch`
+discriminant is no longer treated as inside its own case block). Every cost counter +0.00%; 44 pins, 7 of 7 arms RED.
+Screen 0; grid 8x0; libs 0. Filed (CHK.177), an alias display defect. Next: the G1 arc.
+
+
 **(P18.221) — (CHK.173) ROUND B4: `function f<T extends string | null>(x: T) { x.length }` NOW REPORTS "'x' IS POSSIBLY 'null'" AS tsgo DOES; +75 TRUE ROWS, 0 FALSE, +0 EVERYWHERE, 21,608 / 0 / 44 (2026-09-29).**
 The member-access check did not know the enclosing function's or class's type parameters, so a `T`-typed receiver read
 as `any`. It now carries that scope and checks `T`'s constraint. The full suite caught three real regressions from the

@@ -1,3 +1,34 @@
+### Round (P18.217) — (CHK.173) Round B2: the identifier-receiver TS1804x arm reads an optional parameter `x?: T` as `T | undefined` and accepts a non-union `null` / `undefined`; +26 true rows, 0 false, and the grid caught (and the round fixed) 6 `this`-rooted false positives; +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism** (inside the Round A emitter
+only): `nullableIdentifierReceiverType` — **G2** `LocalShadowGuard.optionalParameterBinding` finds the nearest
+function-like whose parameters bind the name and returns it only for `name?: T` without initializer or rest; the
+emitter requires `lexicalScopeSymbol(...).valueDeclaration === p` (IDENTITY — `lexicalScopeSymbol` returns the parameter
+for parameters, so a null check suppresses every row) and reads `T | undefined` (or `T` if it already carries
+`undefined`); **G3b** a non-union `nullType` / `undefinedType` is accepted unless the receiver's text is `null` (corpus
+`nullKeyword` / `propertyAccess4` stay TS18050-only). **The grid was a REAL gate this time**: built as briefed, G2 added
+2 false TS18048 rows each on harness, server and services (`services.ts:451` / `:628`, `if (!sourceFile) { sourceFile =
+this.getSourceFile(); } sourceFile.text`) — the cpa walk sets no `currentClassForThis`, so narrowing could not resolve a
+`this.m()` / `this.p` RHS; the same FP already existed for a union-declared parameter (t04, shipped by Round A). Fixed
+inside the emitter: around the narrowing call only, `currentClassForThis` is installed from
+`captureRecorder.typeCaptureThisClass(recv)` (made `internal`) when null, restored in `finally` — which also removes
+Round A's t04. **Where the brief was wrong**: p20 is not silent (tsgo reports a destructured leaf with a default —
+residue); the lexical shadow check is almost redundant (flow narrowing clears most block shadows; only a for-of `const`
+pin reddens without it); q03 stays silent (closed by (P18.216)'s N15).
+
+**Measured**: g2 4 -> 21 rows (tsgo 28, +18 true; p07 18047 -> 18049), g3 7 -> 13 (tsgo 27, +6), Round A `p/` cells 30
+-> 32 (+c07, c19); the 2,160-cell matrix, L / L2 / M and Round A q-w: 0 added / 0 removed. **Pins**:
+`OptionalParamNullishReceiverTest` (74). **Ablation**: A1 no `?`/initializer/rest test 25 RED, A2 shadow check by null
+18, A3 skip unions 1, A4 no `null`-keyword exclusion 1 + 2 corpus mismatches, A5 initializer counted optional 1, A6 no
+lexical shadow check 1, A7 no `this` install 5. **Gates**: full suite **21,383 / 0 / 44** (+74); corpus screen 0 of
+8,725; cost_gate PASS (`narrow.walks` +0.24%); huge_methods 0; grid 8x `added=0 removed=0` (chain control OK),
+libraries 0. **Residues**: a STATIC method's `this` (t08 `static m(sf?: SF) { if (!sf) sf = this.getSF(); sf.text }`)
+stays a false TS18048 — `currentClassForThis` cannot represent `typeof C`; the union-parameter form (u1) was already
+shipped by Round A; no profile / library has it (not pinned — a countdown); p18 (G3a), p19 (G4), p20, p28/p29
+(contextual optional parameter), s07/s09 (G1); the broader `populateParameterLocalTypes` fix (w02 / w09); `this` is not
+threaded into flow narrowing for any other cpa reader (B3 needs the same carrier). **Successor**: (CHK.175) — a general
+false positive on the most ordinary call shape outranks the remaining Round B false negatives.
+
 ### Round (P18.216) — (CHK.173) Round B1: flow narrowing no longer lets an inner same-named `let`/`const` re-narrow the OUTER variable — 16 shipped false positives gone (Round A's flow-shadow class), plus N15 / N2 / N5; +0 everywhere, warm A/B inside the band (2026-09-28)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism**: `flowAssignmentMightNarrow`
