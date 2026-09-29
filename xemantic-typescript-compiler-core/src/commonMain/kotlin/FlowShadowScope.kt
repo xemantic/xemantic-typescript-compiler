@@ -47,6 +47,13 @@ package com.xemantic.typescript.compiler
  *
  * The target's scope is memoized per target `nodeId` within one flow graph (an AST node is
  * a data class and must never be a hash key).
+ *
+ * (P18.222) [readsOtherBinding] asks the same question of a narrowing SITE — a flow
+ * condition's expression, a `switch` discriminant, an assertion call: a condition inside
+ * the shadow's scope tests the INNER binding and must not narrow the outer one
+ * (`{ const s = g(); if (!s) return } s.length` — tsgo TS18047). A `switch` statement's own
+ * discriminant is evaluated OUTSIDE its case block, so a case clause's `const` does not
+ * scope it (`switch (s) { case null: return; default: const s = 1 }` narrows the outer `s`).
  */
 internal class FlowShadowScope {
 
@@ -60,6 +67,11 @@ internal class FlowShadowScope {
         private set
     var refused = 0
         private set
+    /** Census (P18.222): narrowing sites asked (only once a site HAS narrowed), and refused. */
+    var siteAsks = 0
+        private set
+    var siteRefused = 0
+        private set
 
     /**
      * True when [target] — a flow assignment's node whose name already matched [root] —
@@ -67,13 +79,30 @@ internal class FlowShadowScope {
      * [graph] identifies the file whose node ids key the memo.
      */
     fun writesOtherBinding(target: Node, root: String, ref: Node, graph: Any?): Boolean {
-        val scope = scopeOf(target, root, graph) ?: return false
+        if (!outside(target, root, ref, graph)) return false
+        refused++
+        return true
+    }
+
+    /**
+     * True when the narrowing [site] (a condition expression, a `switch` discriminant, an
+     * assertion call) reads a block-scoped binding of [root] whose scope does not contain
+     * [ref] — the site tests a different variable than the walk's read.
+     */
+    fun readsOtherBinding(site: Node, root: String, ref: Node, graph: Any?): Boolean {
+        siteAsks++
+        if (!outside(site, root, ref, graph)) return false
+        siteRefused++
+        return true
+    }
+
+    private fun outside(node: Node, root: String, ref: Node, graph: Any?): Boolean {
+        val scope = scopeOf(node, root, graph) ?: return false
         var cur: Node? = ref
         while (cur != null) {
             if (cur === scope) return false
             cur = (cur as NodeBase).parent
         }
-        refused++
         return true
     }
 
@@ -90,6 +119,7 @@ internal class FlowShadowScope {
 
     private fun ascend(target: Node, root: String): Node? {
         ascents++
+        var prev: Node? = null
         var cur: Node? = target
         while (cur != null) {
             when (cur) {
@@ -97,7 +127,7 @@ internal class FlowShadowScope {
                 is Constructor, is GetAccessor, is SetAccessor, is ClassStaticBlockDeclaration,
                 is SourceFile, is ModuleBlock -> return null
                 is Block -> if (!isFunctionBody(cur) && statementsBind(cur.statements, root)) return cur
-                is SwitchStatement -> for (clause in cur.caseBlock) {
+                is SwitchStatement -> if (prev !== cur.expression) for (clause in cur.caseBlock) {
                     val sts = when (clause) {
                         is CaseClause -> clause.statements
                         is DefaultClause -> clause.statements
@@ -111,6 +141,7 @@ internal class FlowShadowScope {
                 is CatchClause -> if (cur.variableDeclaration?.let { bindsName(it.name, root) } == true) return cur
                 else -> {}
             }
+            prev = cur
             cur = (cur as NodeBase).parent
         }
         return null

@@ -120181,6 +120181,18 @@ interface DataView {
         return flowShadowScope.writesOtherBinding(node, flowPathRoot(name), ref, currentFlowGraph)
     }
 
+    /**
+     * (P18.222) the CONDITION half of [flowAssignmentWritesOtherBinding]: a narrowing site
+     * (condition expression, `switch` discriminant, assertion call) inside a same-named
+     * block-scoped binding's scope tests THAT binding, not the walk's — tsgo matches the
+     * reference by symbol. Asked only once the site has narrowed (the name matched), so a
+     * site that does not mention [name] costs nothing. See [FlowShadowScope.readsOtherBinding].
+     */
+    private fun flowSiteReadsOtherBinding(site: Node, name: String): Boolean {
+        val ref = narrowWalkRef ?: return false
+        return flowShadowScope.readsOtherBinding(site, flowPathRoot(name), ref, currentFlowGraph)
+    }
+
     private fun flowAssignmentMightNarrowByName(node: Node, name: String): Boolean {
         if (flowAssignmentTargetsName(node, name)) return true
         return when (node) {
@@ -120473,7 +120485,8 @@ interface DataView {
                 // UNBRACKETED entry point left behind (the FollowLoopEntry mirror,
                 // narrowByAssertCall) is discarded rather than attributed here.
                 val tC = if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.beginCond() else 0L
-                val r = applyConditionNarrowing(antecedent, node.expression, node.isTrue, name)
+                val r0 = applyConditionNarrowing(antecedent, node.expression, node.isTrue, name)
+                val r = if (r0 !== antecedent && flowSiteReadsOtherBinding(node.expression, name)) antecedent else r0
                 if (NarrowSections.mode != NarrowSections.OFF) {
                     NarrowSections.closeCond(tC, r === antecedent)
                 }
@@ -120568,7 +120581,8 @@ interface DataView {
                 // `function assertX(x): asserts x is T`, after the call returns, x is
                 // narrowed to T.
                 val tR = NarrowSections.t()
-                val r = narrowByAssertCall(antecedent, node.node, name) ?: antecedent
+                val r0 = narrowByAssertCall(antecedent, node.node, name)
+                val r = if (r0 == null || r0 === antecedent || flowSiteReadsOtherBinding(node.node, name)) antecedent else r0
                 NarrowSections.close(NarrowSections.S_ASSERT, tR)
                 r
             }
@@ -120578,7 +120592,9 @@ interface DataView {
                 // and X's reference path matches [name], narrow [antecedent] (a union)
                 // by filtering to members assignable from the case literal.
                 val tW = NarrowSections.t()
-                val r = narrowBySwitchClause(antecedent, node, name) ?: antecedent
+                val r0 = narrowBySwitchClause(antecedent, node, name)
+                val r = if (r0 == null || r0 === antecedent ||
+                    flowSiteReadsOtherBinding(node.switchStatement.expression, name)) antecedent else r0
                 NarrowSections.close(NarrowSections.S_SWITCH, tW)
                 r
             }
@@ -155566,7 +155582,8 @@ interface DataView {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
                     declaredType, node.antecedent, name, seen, depth + 1, memo,
                 )
-                applyConditionNarrowing(antecedent, node.expression, node.isTrue, name)
+                val r = applyConditionNarrowing(antecedent, node.expression, node.isTrue, name)
+                if (r !== antecedent && flowSiteReadsOtherBinding(node.expression, name)) antecedent else r
             }
             is FlowBranchLabel -> {
                 if (node.antecedents.isEmpty()) neverType
@@ -155611,7 +155628,8 @@ interface DataView {
                 // round 43 iter4: assert-function narrowing mirror (see iter3 in
                 // narrowTypeFromFlow's FlowCall branch). Loop-entry variant gets
                 // the same assert-call narrowing applied after the call returns.
-                narrowByAssertCall(antecedent, node.node, name) ?: antecedent
+                val r = narrowByAssertCall(antecedent, node.node, name)
+                if (r == null || r === antecedent || flowSiteReadsOtherBinding(node.node, name)) antecedent else r
             }
             is FlowSwitchClause -> {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
@@ -155619,7 +155637,9 @@ interface DataView {
                 )
                 // round 43 iter6: mirror iter5's switch-discriminant narrowing into
                 // the loop-aware variant.
-                narrowBySwitchClause(antecedent, node, name) ?: antecedent
+                val r = narrowBySwitchClause(antecedent, node, name)
+                if (r == null || r === antecedent ||
+                    flowSiteReadsOtherBinding(node.switchStatement.expression, name)) antecedent else r
             }
             // Unreachable (the fast-forward loop always iterates FlowArrayMutation).
             is FlowArrayMutation -> narrowTypeFromFlowFollowLoopEntry(

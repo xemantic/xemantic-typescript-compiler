@@ -42,11 +42,11 @@ import kotlin.test.Test
  * `nar`, Round A's `u/k12`) or of this round (`build/bench/p18216-agent/{d2,e}`), and
  * every expectation is tsgo 7.0.2's WHOLE row list for it, `line:col` as tsgo prints.
  *
- * Residues deliberately NOT pinned (tsgo reports, we do not): a CONDITION inside the
- * shadow's scope still narrows the outer name (`{ const s = g(); if (!s) return } s.length`);
- * a `for…of` body read under an outer guard; `s &&= g()`'s post-state after a guard;
+ * Residues deliberately NOT pinned (tsgo reports, we do not): a `for…of` body read under
+ * an outer guard; `s &&= g()`'s post-state after a guard;
  * the TS2454 rows the top-level emitter owns (census d01 / d03) and a case clause read
  * before its clause's `const` (z1). N8 (`if (!s) s = first(a)`) is its own round.
+ * The CONDITION half (a condition inside the shadow's scope) is `FlowShadowConditionTest`.
  */
 class FlowShadowNarrowingTest {
 
@@ -720,8 +720,10 @@ class FlowShadowNarrowingTest {
     // block re-walks `t` (S-G4's equality-value walk) on the first branch's unwind; a
     // reference left at `t` (inside the block) would let the second branch's `s = 'x'`
     // re-narrow the OUTER `s` and silence the row. The discrimination rides on the
-    // condition-leak residue (the inner `s === t` still narrows the outer name), so a
-    // round that closes that residue must re-derive this pin's shape.
+    // inner `s === t`: (P18.222) closed the condition leak, but the site test runs AFTER
+    // the condition's nested walk and reads the reference that walk left behind — so a
+    // missing restore still keeps the inner condition (and the inner assignment) and
+    // silences the row. Re-measured: (P18.216)'s A7 arm is still RED on g01 and g02.
 
     @Test
     fun `g01 a nested equality walk before an else-branch assignment reports as tsgo`() {
