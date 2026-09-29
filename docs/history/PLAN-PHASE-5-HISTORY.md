@@ -1,3 +1,44 @@
+### Round (P18.212) — (CHK.173) G5 S2 slice 1: the arithmetic and member-access walkers scope block / catch / case / for-header `let`/`const`; it also REMOVES 24 false TS18048 rows that (P18.211) Round A shipped; +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate and reproduced the headline finding by
+hand. **(P18.211) Round A SHIPPED A FALSE-POSITIVE CLASS**: `function f(zed: RegExp | undefined) { { const zed = 1;
+zed.toFixed() } }` printed `TS18048 'zed' is possibly 'undefined'` on the Round A binary (8c54ef84), where tsgo is
+silent — the member-access walker typed the block `const` as the OUTER parameter, and Round A's binding guard assumed a
+plain identifier declared in a block was typed right. Its census's 156 cells had no shadowing shape; the G5 census's
+**2,160-cell matrix** (`build/scratch-p18205-census/`) found 24 such cells — **any future receiver-nullability arm
+must be run against that matrix, not only its own cells**. No profile or library carried the shape (grid +0 both
+rounds), so no shipped user saw it via the gates, but it was live on `main` for one round.
+
+**Mechanism**: one scope-name source, `LocalShadowGuard.directScopeNames` (the direct `let`/`const`/`using` leaves of a
+statement block + its catch variable, of ALL clauses of a switch, or of a `for` header; never `var`; memoized per file
+by nodeId); a scope opens only where one of those names is in the walker's map or bound at file/global level (a
+file-bound name absent from the map is recorded ABSENT so the restore drops a leak) — blocks that shadow nothing
+allocate nothing. **cpa (spine)**: `cpaOpenBlockScope` at the end of `cpaSpineEnter` queues onto the existing
+`cpaLoopVarRestores` (`cpaSpineLeave` unchanged at 7,898 bytecodes). **arith**: a kind-4 restore frame editing the LIVE
+map (not the brief's kind-0 copy: a `var` recorded inside a shadowing block must survive the block — pin e2, tsgo
+reports that row). **Where the census was wrong**: a THIRD path — arrow / function-expression bodies nested in an
+expression are walked by the LEGACY `checkPropertyAccessInStatement`, not the spine, so it needed the scope too
+(`cpaLegacyOpenScope`, try/finally around its Block / For / Switch arms; try/catch/finally blocks now route through the
+Block arm); R1/R3 of Round A's binding guard CANNOT relax yet (relaxed, the legacy walker adds a false TS18047 on r17 —
+destructured leaves are never recorded — for no true row gained). **Countdown**: `BlockScopedReceiverTypeTest`'s "an
+AMBIGUOUS block-scoped name keeps its anyType suppression" asserted silence where tsgo reports `7:47 TS2339 'files' …
+'A | F'` — we now match it exactly; re-pointed.
+
+**Measured**: silent (= tsgo) arith a11, b1, b2, b3, x1/x13 TS2365 halves, y10, z2, e1, e5, l4, l5, n03 and cpa b6, m8,
+m9, x6, x15, x18, y1, y11, y12, z1, z7, n01, n02, n07, n09, n10; b9/b12 lose their TS2551; p1/e7/e8/n08/n13 now print
+tsgo's `'number'`; the 2,160-cell matrix: 24 FPs removed, 12 true rows ADDED (block rest-destructuring `x.nope`), 0
+true removed, 0 FPs added. **Pins**: `BlockScopeWalkerSlice1Test` (35). **Ablation** (8 arms): a1 no arith for-header
+6 RED, a2 no arith block 3, a3 cpa no removal 16, a4 cpa restore skipped 3, a5 per-clause case scope 1, a6 `var` scoped
+2, a7 file-bound-absent not noted 1 (its cpa half is REDUNDANT — no shape shows a cpa leak even on the parent), a8 no
+legacy-walker scope 5. **Gates**: full suite **21,153 / 0 / 44** (+35); corpus screen 0 of 8,725; cost_gate PASS
+(`globals.lookups` +1.57%, 12,966 of the 12,972 extra lookups are misses — the file-level probe in
+`blockScopeOuterBound`; `typeOfExpr.calls` +0.24%, call / element initializers now recorded inside shadowing blocks);
+huge_methods 0 (`cpaSpineEnter` 6,876 -> 6,882); spine closure audit OK; grid 8x `added=0 removed=0`, libraries 0;
+warm A/B 4 pairs +2.24 / +0.55 / -1.61 / +0.60%, noise-dominated. **Residues**: slice 2 (cta: assignment /
+declaration readers, catch typed `unknown`, x1/z4, x2); neither walker records a for-header or destructured INNER
+binding (n13, r12, r13 still missing; keeps R3); TS2454 / catch-`unknown` rows (z1, e4, e5, n09, n10, y1) not
+produced; e6 a pre-existing miss. **Successor**: G5 S2 slice 2 (cta).
+
 ### Round (P18.211) — (CHK.173) ROUND A: a property access / call on a nullable IDENTIFIER now reports TS18047 / TS18048 / TS18049 as tsgo does — the embeddable checker's most visible false negative; +95 rows on 156 census cells, 0 ours-only, +0 on every profile and library (2026-09-28)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate and added an end-to-end POSITIVE

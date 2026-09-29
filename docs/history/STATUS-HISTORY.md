@@ -1,5 +1,12 @@
 
 
+**(P18.217) — (CHK.173) ROUND B2: `function f(x?: string) { x.length }` NOW REPORTS "'x' IS POSSIBLY 'undefined'" AS tsgo DOES; +0 EVERYWHERE, 21,383 / 0 / 44 (2026-09-28).**
+Optional parameters and a declared `null` / `undefined` now reach the identifier-receiver check (+26 true rows, 0 false).
+The 8-profile grid caught 6 false positives on tsc's own sources in the first build (`this.getSourceFile()` assignments)
+and the round fixed them, which also removed one Round A had shipped. 74 pins, 7 of 7 arms RED. Screen 0; grid 8x0;
+libs 0; cost_gate PASS. Next: (CHK.175), a false TS2345 next to TS2554 on an ordinary arity error.
+
+
 **(P18.216) — (CHK.173) ROUND B1: AN INNER SAME-NAMED `const` NO LONGER RE-NARROWS THE OUTER VARIABLE — ROUND A's REMAINING FALSE-POSITIVE CLASS IS CLOSED; +0 EVERYWHERE, 21,309 / 0 / 44 (2026-09-28).**
 `if (!s) return; { const s = g(); } return s.length` reported "'s' is possibly 'null'" because narrowing matched an
 assignment by name. A binding-identity gate now ignores assignments to a different, block-scoped binding. Also:
