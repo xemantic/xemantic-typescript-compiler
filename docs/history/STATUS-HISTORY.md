@@ -1,5 +1,12 @@
 
 
+**(P18.218) — (CHK.175): `g(1, 2)` FOR `g(s: string)` REPORTS ONLY "Expected 1 arguments, but got 2." (WAS: PLUS A FALSE TS2345, OR A FALSE TS2769 ON OVERLOADS); +0 EVERYWHERE, 21,399 / 0 / 44 (2026-09-29).**
+Once a call has the wrong number of arguments, tsgo relates none of them; we related them anyway (three emitters). A
+shared `callArityFails` now gates all three: 12 -> 38 of 48 cells agree with tsgo. 16 pins, 7 of 9 arms RED (2 recorded
+redundant). A warning that an earlier round had committed (a `|` in a test name, also illegal for Kotlin/Native) was
+found and fixed; the warning gate was re-run with a live positive control. Screen 0; grid 8x0; libs 0. Next: (CHK.176).
+
+
 **(P18.217) — (CHK.173) ROUND B2: `function f(x?: string) { x.length }` NOW REPORTS "'x' IS POSSIBLY 'undefined'" AS tsgo DOES; +0 EVERYWHERE, 21,383 / 0 / 44 (2026-09-28).**
 Optional parameters and a declared `null` / `undefined` now reach the identifier-receiver check (+26 true rows, 0 false).
 The 8-profile grid caught 6 false positives on tsc's own sources in the first build (`this.getSourceFile()` assignments)

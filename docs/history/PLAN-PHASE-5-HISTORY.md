@@ -1,3 +1,43 @@
+### Round (P18.213) — (CHK.173) G5 S2 slice 2: the declaration / assignment / return readers scope block-level `let`/`const`, catch and `for` bindings; the 2,160-cell matrix loses 172 false rows and gains 104 true ones, 0 false added; +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent (no stall); the orchestrator re-ran every gate. **Mechanism**:
+`ctaBlockScopeEnter` (after the node's own frame push, before a case clause's frame) for statement blocks incl. catch
+bodies, `for` headers, `for…of`/`for…in` bodies and the case block (keyed on the `SwitchStatement`, opened at its
+first clause — clauses share ONE scope); a scope opens only when a directly declared name is held by
+localTypes / narrowedDeclared / varTypes / declNodes or bound at file/global level (`blockScopeAnyOuterBound`, memoized
+per file by nodeId). `ctaOpenBlockScope` opens the local-type / decl-node / shadow (and var) scopes the existing pop
+already mirrors, removes the names, adds them to shadowed names (the script-file `globals` path, x3), drops them from a
+COPY-ON-WRITE `narrowedDeclared` keeping the loop's own binding (x1 / z4), and runs after the narrowing writes (x2).
+`ctaCatchVariableTypes`: `unknown` under an effective `useUnknownInCatchVariables` or `: unknown`, else and for every
+destructured leaf `any`. A new `CtaFrame.earlyExitScoped` flag keeps (CHK.64)(ii)'s early-exit rule on fn-body and
+narrowing frames only (without it two tsgo rows vanish, g3 / g4). **Where the census was wrong**: a second walker again
+— the LEGACY statement walker (`checkTypeAssignabilityInStatements` / `…InStmt`) still reports for arrow /
+function-expression bodies and needed the same scope (`ctaLegacyScoped`, out of line — inlined it pushed the method to
+10,326 bytecodes); the leak also came from a PRE-PASS, (CHK.71)'s arm of `registerNestedGlobalShadowName` recording a
+nested block's annotation function-wide — now skipped for `let`/`const` in the cta callers (`var` keeps it). Round A's
+binding guard still stays: relaxing R3 for `var` adds 6 true rows but 1 false TS18047 (r18, `var [x] = ["a"]`) until
+destructuring-assignment narrowing exists.
+
+**Measured** (before 1491ec5b, after 6d7f3afd): census cells a4, a7, a9, a10, a13, b7, b8, b9/b12 (TS2322 half), m10,
+m13, x1, x2, x3, x7, y5, z4 go from a false TS2322 to tsgo's answer, b5 / m11 print tsgo's `'unknown'`; **2,160-cell
+matrix 172 false rows removed, 104 true rows added, 0 false rows added, 139 messages moved to tsgo's text** — the 16
+"true rows removed" all had the right position and the WRONG (outer) type and now read `any` (D22 evolving `let x;`,
+D34, D23 lib names); extra probe sets 31 false removed, 3 true added, 0 false added. **Pins**: `BlockScopeCtaSlice2Test`
+(48). **Ablation** (11 arms, all RED): a1 no block scope 28, a2 per-clause 2, a3 no `narrowedDeclared` drop 3, a4
+removal before narrowing 1, a5 no shadowed add 1, a6 catch `any` 5, a7 (CHK.64)(ii) flag not separated 2, a8 no
+legacy scope 7, a9 (CHK.71) arm not skipped 4, a10 `var` in the skip filter 2, a11 keep set ignored 1.
+
+**Gates**: full suite **21,201 / 0 / 44** (+48); corpus screen 0 of 8,725; huge_methods 0; grid 8x `added=0
+removed=0` (chain control OK), libraries 0; **cost_gate over tolerance on `globals.lookups` +2.27% /
+`globals.misses` +2.32% against the recorded baseline** — the file-level probe of slices 1 AND 2 (slice 1 alone read
++1.57%, inside the band): ~18.7k extra `globals` probes per compile, all misses (~2 ns each by CLAUDE.md's measured
+probe price, i.e. <0.05 ms); against the rebuilt parent every counter is within +0.70%; **accepted and
+`docs/perf/cost-counters.txt` re-baselined in this commit**; scope census per compiler-profile compile: spine 4,196
+asks / 647 opens, legacy 188 / 11; warm A/B -0.19% (noise-dominated; an earlier map-copying cut of the builder read
++4.4% and was replaced by in-place edits). **Residues**: slice 3 (ccet pre-pass: x13, y2, y7, y8 false TS2345s), slice
+4 (x5a / x5b callee resolver), TS2454 (z1 / e4), TS18046 (e5 / y1), evolving `let x;` and destructured inner bindings
+read `any`, `var` destructuring narrowing (r18). **Successor**: slices 3 + 4 (small), then Round B.
+
 ### Round (P18.212) — (CHK.173) G5 S2 slice 1: the arithmetic and member-access walkers scope block / catch / case / for-header `let`/`const`; it also REMOVES 24 false TS18048 rows that (P18.211) Round A shipped; +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate and reproduced the headline finding by
