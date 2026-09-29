@@ -1,3 +1,39 @@
+### Round (P18.208) — (CHK.173) S-G1c + G7: a reference read inside its OWN optional chain's later links is non-nullish; 42 of 46 cells agree with tsgo (was 23), the arm residual harness 5 -> 2, +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism**: the binder creates no
+optional-chain flow node (a binder-level one stays REFUSED — a label at every `?.` for 3 real rows); the only
+stand-in was `closureGuardedByOptionalChainRoot`, closures-only, leftmost-link-only. New collaborator
+`OptionalChainGuard.kt` (`optionalChainGuardsReference`, 157 lines): walk up by parent pointers; at a call argument
+or element index walk that node's chain down (`.`/`[]`/`()`/`!`, a paren ENDS the chain) for a `?.` link whose
+receiver is the reference or an optional chain containing it (tsgo's `optionalChainContainsReference`, which is what
+narrows `(d?.a)?.push(d['p'])`); an arrow / function expression is crossed only through the flow walk's own capture
+gate (`outerFlowForCapturedName` over `FlowStart.reassignedAfterNames`); an assignment / `++` to the reference or a
+path prefix defeats the guard only when evaluated BEFORE the read and not an ancestor of it. `Checker.optionalChainGuardsRef`
+wires it into the element-read TS1804x arm (a shipped false positive gone) and B464, replacing the old walker —
+`Checker.kt` **+24 / -121**. **Where the brief was wrong**: tsgo's closure rule is not "parameter or never-reassigned
+`const`" — a `let` never reassigned (or reassigned only before the closure) narrows too, a `var` or a reassignment at
+or after the closure does not, i.e. exactly our flow walk's capture gate; **the OLD stand-in was HIDING real errors**
+(no reassignment gate, parens walked through): x09, y06 (root reassigned after the closure), x27 (captured `var`), y01
+(`(d?.a).forEach(() => d.p)`) now REPORT, as tsgo does; evaluation order matters (`d?.m([d['p'], d = undefined])`
+keeps the narrowing, `(d = undefined, d['p'])` reports); the real rows are a property-access index and a closure
+argument, visible only to the arm; G1c_d was never a false positive.
+
+**Measured**: 46 cells (the census's 9 + 37 new) **23 -> 42** agreeing; JDI arm harness **5 -> 2**
+(fixMissingTypeAnnotationOnExports.ts:631, incrementalUtils.ts:168/176 gone; the helper's positive control counted
+exactly those 3), tsc 2 -> 2 (the G4 pair). **Pins**: `OptionalChainContinuationGuardTest` (32, 14 negative
+controls; tsgo's full rows); 142 related classes 1,130 / 0 (presence asserted in the XMLs). **Ablation** (10 arms, all
+RED): D1 always cross closures 6, D2 any ancestor call 14, D3 no chain walk 18, D4 parens pass through 2, D5 no
+assignment scan 1, D6 no evaluation order 1, D7 no containment 1, D8 element consumer removed 17, D9 B464 consumer
+removed 2, D10 never cross closures 6.
+
+**Gates**: full suite **20,970 / 0 / 44** (+32); corpus screen 0 of 8,725; cost_gate PASS (flat); huge_methods 0;
+grid 8x `added=0 removed=0` (a control — the profiles hold no such element-read FP), rxjs / marked 0 -> 0, cronstrue
+1 -> 1. **Residues**: tsgo's TS2532 on a paren-ended chain receiver (`(d?.a).push`, x01/y01) is not emitted; TS7053
+missing in `d?.[d["p"]]` (x24); a TS2695 for an element access as a comma's left side (y09, tsgo silent); object-literal
+methods are not crossed (only matters for Round A); destructuring targets are ignored by the assignment scan. **Round A
+must call `optionalChainGuardsRef` in its property arm.** **Successor**: S-G4 (clears the last two arm rows), then
+G5 S2 slice 1, then Round A.
+
 ### Round (P18.207) — (CHK.173) S-G1: an optional-chain comparison narrows the chain ROOT (and its switch form); 67 of 67 cells agree with tsgo (was 30), the arm residual harness 8 -> 5 / tsc 3 -> 2, +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent beside a read-only S2 design census (recorded in the (CHK.173) item); the

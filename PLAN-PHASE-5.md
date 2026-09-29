@@ -25,6 +25,35 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.218) — (CHK.175): an arity-failed call relates no argument — `g(1, 2)` for `g(s: string)` reports only tsgo's TS2554 (was: plus a false TS2345, or a false TS2769 on an overload set); 12 -> 38 of 48 matrix cells agree, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate and ran the WARNING GATE properly
+(`--rerun-tasks`, no `-q`, with a throwaway positive-control file whose warning had to appear) — the builder had
+flagged a warning in already-COMMITTED code: (P18.216)'s `FlowShadowNarrowingTest` named a test `` `n5d control - ||eq
+is silent` `` (a `|` — a Kotlin warning AND an illegal Kotlin/Native backtick name), invisible to the per-round suite
+greps because an incremental build does not re-emit warnings; renamed `or-equals`. **Mechanism**: TS2554 comes from
+the name-based arity walker (`spineArgCallEnter` / `paramInfo`), TS2345 from `checkArgumentsAgainstSignature`, which
+never checked arity — same pass (`checkSpine`), two unrelated readers. New `callArityFails` mirrors tsgo's
+`hasCorrectArity` for a spread-free argument list (fast path inside `minArgumentCount..parameters.size`; the declared
+range from `signatureDeclaredArity`; too few fails only if a missing position does not accept `void`; answers false —
+keep checking — on a spread, no declaration (a combined union signature), a JS declaration, or an embedded-test-lib
+member, whose lib drops optional parameters); consulted at the top of `checkArgumentsAgainstSignature`, in
+`checkArgumentsAgainstOverloads` (every overload arity-failed -> return before TS2769), and as an inline `paramInfo`
+guard in the B498 pin walker `checkGenericDefaultParamCall` — a THIRD emitter the queue did not name, which also
+double-emitted TS2345 (`g<string>(1)` twice). **Why the corpus never pinned it**: its arity baselines pass arguments
+of the RIGHT type (`functionCall11`); all 3,117 errors subtests (incl. the 38 ignored) are byte-identical on both
+binaries — the corpus is a control here and the pins are the gate.
+
+**Measured**: 48 cells 12 -> 38 agree (too many / too few across functions, methods, constructors, `super`, generics,
+`declare`, namespaces, `this` parameters, object literals, callbacks; overload-set TS2769 and TS2575 gaps; the doubled
+explicit-type-argument TS2345). **Pins**: `ArityFailedCallRelatesNoArgumentTest` (16). **Ablation**: A1 no signature
+gate 8 RED, A2 no overload gate 2, A3 void ignored 1, A4 spreads ignored 1, A5 embedded-lib exclusion dropped 1, A7 B498
+guard dropped 1, A8 rest ignored 1; A6 (JS exclusion) 0 — redundant today (JS argument relation emits nothing even on
+the parent); A9 (fast path) 0 — expected, it only saves time. **Gates**: full suite **21,399 / 0 / 44** (+16); corpus
+screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x `added=0 removed=0` (a control, as predicted), libraries 0;
+warning gate clean with a live positive control; warm A/B not run (two integer compares per ordinary call).
+**Residues filed as (CHK.176)**. **Successor**: (CHK.176)'s false positives (b)/(c), then (CHK.173) B3.
+
 ### Round (P18.217) — (CHK.173) Round B2: the identifier-receiver TS1804x arm reads an optional parameter `x?: T` as `T | undefined` and accepts a non-union `null` / `undefined`; +26 true rows, 0 false, and the grid caught (and the round fixed) 6 `this`-rooted false positives; +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism** (inside the Round A emitter
@@ -340,42 +369,6 @@ intersection distribution removed 2 each. **Gates**: full suite **20,999 / 0 / 4
 cost_gate PASS (flat — `narrow.walks` -0.04%, the nested walk runs only when both sides are nullable); huge_methods 0;
 grid 8x `added=0 removed=0` (chain control OK), rxjs / marked 0 -> 0, cronstrue 1 -> 1; warm A/B -3.1% B 2/2 (read as
 NO regression, not a win — arm B sd 2.3%). **Successor**: S-G4b (the overloaded-call `any`), then Round A.
-
-### Round (P18.208) — (CHK.173) S-G1c + G7: a reference read inside its OWN optional chain's later links is non-nullish; 42 of 46 cells agree with tsgo (was 23), the arm residual harness 5 -> 2, +0 everywhere (2026-09-28)
-
-Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism**: the binder creates no
-optional-chain flow node (a binder-level one stays REFUSED — a label at every `?.` for 3 real rows); the only
-stand-in was `closureGuardedByOptionalChainRoot`, closures-only, leftmost-link-only. New collaborator
-`OptionalChainGuard.kt` (`optionalChainGuardsReference`, 157 lines): walk up by parent pointers; at a call argument
-or element index walk that node's chain down (`.`/`[]`/`()`/`!`, a paren ENDS the chain) for a `?.` link whose
-receiver is the reference or an optional chain containing it (tsgo's `optionalChainContainsReference`, which is what
-narrows `(d?.a)?.push(d['p'])`); an arrow / function expression is crossed only through the flow walk's own capture
-gate (`outerFlowForCapturedName` over `FlowStart.reassignedAfterNames`); an assignment / `++` to the reference or a
-path prefix defeats the guard only when evaluated BEFORE the read and not an ancestor of it. `Checker.optionalChainGuardsRef`
-wires it into the element-read TS1804x arm (a shipped false positive gone) and B464, replacing the old walker —
-`Checker.kt` **+24 / -121**. **Where the brief was wrong**: tsgo's closure rule is not "parameter or never-reassigned
-`const`" — a `let` never reassigned (or reassigned only before the closure) narrows too, a `var` or a reassignment at
-or after the closure does not, i.e. exactly our flow walk's capture gate; **the OLD stand-in was HIDING real errors**
-(no reassignment gate, parens walked through): x09, y06 (root reassigned after the closure), x27 (captured `var`), y01
-(`(d?.a).forEach(() => d.p)`) now REPORT, as tsgo does; evaluation order matters (`d?.m([d['p'], d = undefined])`
-keeps the narrowing, `(d = undefined, d['p'])` reports); the real rows are a property-access index and a closure
-argument, visible only to the arm; G1c_d was never a false positive.
-
-**Measured**: 46 cells (the census's 9 + 37 new) **23 -> 42** agreeing; JDI arm harness **5 -> 2**
-(fixMissingTypeAnnotationOnExports.ts:631, incrementalUtils.ts:168/176 gone; the helper's positive control counted
-exactly those 3), tsc 2 -> 2 (the G4 pair). **Pins**: `OptionalChainContinuationGuardTest` (32, 14 negative
-controls; tsgo's full rows); 142 related classes 1,130 / 0 (presence asserted in the XMLs). **Ablation** (10 arms, all
-RED): D1 always cross closures 6, D2 any ancestor call 14, D3 no chain walk 18, D4 parens pass through 2, D5 no
-assignment scan 1, D6 no evaluation order 1, D7 no containment 1, D8 element consumer removed 17, D9 B464 consumer
-removed 2, D10 never cross closures 6.
-
-**Gates**: full suite **20,970 / 0 / 44** (+32); corpus screen 0 of 8,725; cost_gate PASS (flat); huge_methods 0;
-grid 8x `added=0 removed=0` (a control — the profiles hold no such element-read FP), rxjs / marked 0 -> 0, cronstrue
-1 -> 1. **Residues**: tsgo's TS2532 on a paren-ended chain receiver (`(d?.a).push`, x01/y01) is not emitted; TS7053
-missing in `d?.[d["p"]]` (x24); a TS2695 for an element access as a comma's left side (y09, tsgo silent); object-literal
-methods are not crossed (only matters for Round A); destructuring targets are ignored by the assignment scan. **Round A
-must call `optionalChainGuardsRef` in its property arm.** **Successor**: S-G4 (clears the last two arm rows), then
-G5 S2 slice 1, then Round A.
 
 ## QUEUE
 
@@ -975,7 +968,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.175) AN ARITY MISMATCH REPORTS TS2345 BESIDE tsgo's LONE TS2554 — `function g(s: string) {}; g(1, 2)` prints both on HEAD (found by (P18.215)'s builder, cell `build/bench/p18215-agent/ar/a1`, reproduced on the parent build).** tsgo reports only `Expected 1 arguments, but got 2.` — once the arity check fails it does not relate the arguments (`resolveCall` picks no candidate; `getSignatureApplicabilityError` is not reached for an arity-failed signature). A GENERAL false positive on the most ordinary call shape; census first: which reader emits the TS2345 (`checkArgumentsAgainstSignatureCore` vs the spine), whether TS2554 and TS2345 are emitted by different passes, the population on the 8 profiles (likely 0 — tsc's code is arity-clean) and the corpus (arity baselines should pin it — find out why they do not), and overload / rest / optional-parameter variants against tsgo. Direction: REMOVES rows.
+- [ ] **(CHK.176) THE ARITY RESIDUES (CHK.175) MEASURED — two FALSE POSITIVES first, then missing rows (all pre-existing, cells under `build/bench/p18218-agent/m/` and `x/`).** (b) FALSE TS2554: the name-based arity walker (`spineArgCallEnter` / `paramInfo`) ignores `void`-accepting trailing parameters (b01 / b02 — tsgo reports only TS2345); (c) DUPLICATE TS2345: the B498 pin walker `checkGenericDefaultParamCall` repeats the main reader's TS2345 when arity is CORRECT (`g<string>(1)` prints it twice); (a) MISSING TS2554 where the name-based walker does not reach — a call through a function-typed parameter (a09), real-lib functions and members (b04 `parseInt`, `charAt`), an overloaded constructor (b06), an optional-chain call (b07), a tuple rest (b10) — a signature-based TS2554 reader could share `callArityFails`; (d) JS: untyped JS parameters are treated as optional ("1-2") where TypeScript 7 makes them required (x/j1), and JS argument relation never fires (b05 / j2); (e) a tagged template's TS2554 at the wrong column (a14); (f) decorators: TS1241 never emitted (a31). Measure each against tsgo first.
+
+- [x] **(CHK.175) LANDED 2026-09-29 ((P18.218) note: `callArityFails` gates argument relation, overload TS2769 and the B498 walker; residues filed as (CHK.176)). AN ARITY MISMATCH REPORTS TS2345 BESIDE tsgo's LONE TS2554 — `function g(s: string) {}; g(1, 2)` prints both on HEAD (found by (P18.215)'s builder, cell `build/bench/p18215-agent/ar/a1`, reproduced on the parent build).** tsgo reports only `Expected 1 arguments, but got 2.` — once the arity check fails it does not relate the arguments (`resolveCall` picks no candidate; `getSignatureApplicabilityError` is not reached for an arity-failed signature). A GENERAL false positive on the most ordinary call shape; census first: which reader emits the TS2345 (`checkArgumentsAgainstSignatureCore` vs the spine), whether TS2554 and TS2345 are emitted by different passes, the population on the 8 profiles (likely 0 — tsc's code is arity-clean) and the corpus (arity baselines should pin it — find out why they do not), and overload / rest / optional-parameter variants against tsgo. Direction: REMOVES rows.
 
 - [ ] **(CHK.167) ROUND 1 LANDED 2026-09-24 ((P18.192) note; 100 missing rows now report, +0 everywhere).
   OPEN: round 2 (return + argument readers, after the four reference-source narrowing gaps and the

@@ -1,5 +1,12 @@
 
 
+**(P18.213) — (CHK.173) G5 S2 SLICE 2: DECLARATIONS, ASSIGNMENTS AND RETURNS SEE A BLOCK-SCOPED SHADOW (AND A CATCH VARIABLE AS `unknown`) AS tsgo DOES; +0 EVERYWHERE, 21,201 / 0 / 44 (2026-09-28).**
+`let x = 1` in a block shadowing an outer `x: string` made `x = 2` a false TS2322, and the inner type leaked past the
+block. The declaration/assignment walker and its legacy twin now scope blocks, catch, case blocks and for headers. On
+the 2,160-cell shadow matrix: 172 false rows removed, 104 true rows added, 0 false rows added. 48 pins, 11 of 11 arms
+RED. Screen 0; grid 8x0; libs 0; `globals` probes +2.3% (file-level misses, re-baselined). Next: slices 3 + 4.
+
+
 **(P18.212) — (CHK.173) G5 S2 SLICE 1: A BLOCK-SCOPED `let`/`const` SHADOWING AN OUTER NAME IS TYPED AS ITSELF IN ARITHMETIC AND MEMBER ACCESS; ALSO FIXES 24 FALSE TS18048 ROWS ROUND A SHIPPED; +0 EVERYWHERE, 21,153 / 0 / 44 (2026-09-28).**
 `function f(zed: RegExp | undefined) { { const zed = 1; zed.toFixed() } }` read the inner `zed` as the outer parameter
 — and after Round A that became a false "possibly 'undefined'" (found by the 2,160-cell shadow matrix; no profile or
