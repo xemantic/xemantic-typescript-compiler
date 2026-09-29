@@ -1,3 +1,39 @@
+### Round (P18.210) — (CHK.173) S-G4b: overload SELECTION fixed three ways (optional parameters accept `undefined`, constraints naming another type parameter, a boolean callback refused for a predicate parameter); the Round A arm now reads **0 rows** on tsc and harness, +0 everywhere (2026-09-28)
+
+Orchestrated: one implementation subagent (it finished without stalling this time); the orchestrator re-ran every gate
+and confirmed the builder's JDI arm ran on the FINAL binary (the suite's build md5 `54284d6b` = the arm's).
+**Where the queue item was wrong**: not predicate-specific — overload selection itself; even a plain non-generic
+`f(t: string): string; f(t?: number): number; f(tOpt)` answered `string` (the FIRST overload). When every overload
+refused, `resolveCallOverload`'s `arityMatches[0]` fallback picked the predicate overload whose un-inferred `TOut`
+typed the call `any`. **Three independent defects in `signatureAcceptsArgs`**: (1) an optional parameter's type
+(`t?: T`, `t: T = …`) is the bare annotation from `getTypeOfSymbol`, so an argument typed `T | undefined` was refused
+by the overload it matches — under `strictNullChecks` the parameter is now unioned with `undefined`
+(`isOptionalParameterSymbol`); (2) `sigTypeParamsErasedInConstraint` related an argument to a constraint that still
+names another type parameter (`TInArray extends NodeArray<TIn> | undefined`) — one substitution pass of each type
+parameter by its own constraint (`any` if unconstrained), falling back to the raw constraint if one survives; (3) this
+relation models `x is T` as `boolean`, so `(n) => boolean` was accepted for a predicate parameter where tsgo refuses —
+`argFnLacksParamTypePredicate` refuses at overload ACCEPTANCE only (never in the relation), and only when the
+parameter's non-nullish part is a single call signature spelling a non-`asserts` predicate and EVERY argument call
+signature has an explicit non-predicate return annotation (un-annotated arrows are never refused — tsgo may infer a
+predicate). The rule is mirrored into `allArgumentsMatch`, `getFirstArgumentError` and `getFirstFailingArgPosition`
+(CLAUDE.md's "selection and the TS2769 matcher must ask the same question"). In the flow walk the same `test` argument
+types without `| undefined`, which is why defect (3) — not (1) — cleared the real site.
+
+**Measured**: 45 cells vs tsgo 7.0.2 — the real site (c01) and 25 optional-parameter / predicate / constraint cells
+move to agreement, `g05`/`g11` gain tsgo's TS2769; the JDI arm (Round A) **tsc 2 -> 0, harness 2 -> 0** — the arm's
+LAST rows. **Pins**: `OverloadSelectionOptionalPredicateTest` (19, 4 controls, tsgo's output). **Ablation** (7 arms,
+all RED): A1 no optional `undefined` 8, A2 raw constraint 4, A3 no predicate refusal in selection 5, A4 not in
+`allArgumentsMatch` 2, A5 not in `getFirstArgumentError` 2, A6 un-annotated arrows refused 1, A7 `asserts` refused 1.
+**Gates**: full suite **21,018 / 0 / 44** (+19); corpus screen 0 of 8,725; cost_gate PASS (`narrow.memoServed` -1.21%,
+`narrow.walks` -0.23%, the rest within 0.11%); huge_methods 0; grid 8x `added=0 removed=0` (chain control OK), rxjs /
+marked 0 -> 0, cronstrue 1 -> 1; warm A/B -0.11%, noise-dominated (no regression signal; the extra per-candidate work
+is one `getUnionType` per optional parameter and a structural check per function argument). **Residues**: c03 the
+single-signature argument check lacks the predicate rule (tsgo TS2345); c07 a real predicate argument selects the
+predicate overload but leaves `TOut` un-inferred (`any`); g02 an un-annotated non-predicate arrow still selects the
+predicate overload (deliberately not refused); g11 the predicate parameter displays as `(n: Node) => boolean` and the
+TS1224 chain line is missing; d01 an optional parameter's argument displays without `| undefined`; d08 the
+`arityMatches[0]` fallback's result adds a TS2322 tsgo does not report. **Successor**: ROUND A.
+
 ### Round (P18.209) — (CHK.173) S-G4: equality with a FLOW-NARROWED non-nullish value removes nullish from the reference; its pinned shapes all agree with tsgo, but the arm's last two rows did NOT move — their real cause is an overload-resolution `any`, filed as S-G4b (2026-09-28)
 
 Orchestrated: one implementation subagent, which **stalled a third time** this session (finished work, then idle with no

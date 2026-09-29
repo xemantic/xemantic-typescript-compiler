@@ -1,5 +1,13 @@
 
 
+**(P18.215) — (CHK.173) G5 RESIDUE c6: A NESTED FUNCTION NAMED LIKE AN OUTER BINDING IS TYPED AS ITSELF; +0 EVERYWHERE, 21,237 / 0 / 44 (2026-09-28).**
+`function outer() { function g(n: number) {} g("x") }` beside a file-level `g` read `g` as `any`, so its arguments were
+never checked. A lexical consult now runs past that `any`; the 2,160-cell matrix gains 15 true rows, 0 false. The
+Round B census also found Round A still ships a false-positive class — a same-named `const` in an inner block
+re-narrows the outer variable (the matrix could not see it) — and a general arity false positive (TS2345 beside
+TS2554, filed as (CHK.175)). 14 pins, 4 of 4 arms RED. Screen 0; grid 8x0; libs 0. Next: Round B1 (the flow-shadow fix).
+
+
 **(P18.214) — (CHK.173) G5 S2 SLICES 3 + 4: CALL ARGUMENTS AND CALLED NAMES SEE A BLOCK-SCOPED SHADOW; +0 EVERYWHERE, 21,223 / 0 / 44 (2026-09-28).**
 A block `let`/`const` shadowing a parameter was passed as the parameter (false TS2345), and a block `function f`
 shadowing an outer `const f: string` was called as the outer (false TS2349). The argument walker is now scoped and the
