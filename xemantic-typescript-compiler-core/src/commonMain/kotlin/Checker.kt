@@ -57284,6 +57284,8 @@ class Checker(
         private const val WK_RHS = 11
         /** (CHK.85)(b): the TS2367 emitter's REPORTING walk — its own memo key, see [NarrowFlowMemo.overwriteResetsToDeclared]. */
         private const val WK_NARROW_REPORT = 12
+        /** (CHK.173) B5c: a destructured leaf's synthetic-reference walk, see [NarrowFlowMemo.syntheticLeaf]. */
+        private const val WK_DESTRUCTURE = 13
 
         private const val TPO_STMT = 1
         private const val TPO_NONE = 2
@@ -104803,16 +104805,126 @@ interface DataView {
             getUnionType(parts)
         } else bindingElementSlotType(elem, pattern, parent, refuseFnMembers) ?: return null
         if (slot === anyType || slot === errorType || slot === unknownType) return null
-        val init = elem.initializer ?: return slot
+        val narrowedSlot = destructuringFlowNarrowed(elem, slot)
+        val init = elem.initializer ?: return narrowedSlot
         val defRaw = literalTypeOfExpression(init) ?: getTypeOfExpression(init)
         if (defRaw === anyType || defRaw === errorType || defRaw === unknownType) return null
         if (bindingPatternRootIsAnnotated(elem)) {
-            return if (strictNullChecks && !typeIncludesUndefined(defRaw)) nonUndefinedType(slot) else slot
+            return if (strictNullChecks && !typeIncludesUndefined(defRaw)) nonUndefinedType(narrowedSlot) else narrowedSlot
         }
         val def = if (isConst) defRaw else widenLiteralMembers(defRaw)
-        val base = if (strictNullChecks) nonUndefinedType(slot) else slot
+        val base = if (strictNullChecks) nonUndefinedType(narrowedSlot) else narrowedSlot
         if (base === def) return base
+        if (emptyObjectDefaultIsSubsumed(init, base)) return base
         return flowJoinUnion(listOf(base, def), base)
+    }
+
+    /**
+     * (CHK.173) B5c — an EMPTY object literal default (`{ options = {} } = change`) over
+     * a slot holding a WEAK object type (every member optional). tsgo joins the default
+     * with `UnionReduction.Subtype`, and a fresh `{}` literal is a strict subtype of a
+     * weak type (`requireOptionalProperties` is off for an object-literal source), so the
+     * `{}` is removed: `options` reads `InsertNodeOptions`, where our subtype-less join
+     * kept `InsertNodeOptions | {}` and every member read was a false TS2339 — shipped on
+     * a plain `{ k: 1; o?: A } | { k: 2; o?: B }` source, and on tsc's own
+     * `textChanges.ts:1321-1324` once the pattern source is flow-narrowed. Only an
+     * all-object slot with a weak constituent is decided here; every other join keeps
+     * [flowJoinUnion] (a slot of required-member types reduces to `{}` in tsgo — a
+     * display residue this does not take).
+     */
+    private fun emptyObjectDefaultIsSubsumed(init: Expression, base: Type): Boolean {
+        var e: Expression = init
+        while (e is ParenthesizedExpression) e = e.expression
+        if (e !is ObjectLiteralExpression || e.properties.isNotEmpty()) return false
+        val cs = (base as? Type.Union)?.types ?: listOf(base)
+        if (cs.any { it !is Type.Object }) return false
+        return cs.any { isWeakObjectType(it) }
+    }
+
+    /**
+     * (CHK.173) B5c — tsgo's `getFlowTypeOfDestructuring` (checker.go:17762): a
+     * non-rest leaf of a pattern whose ROOT initializer is a reference is typed as the
+     * SYNTHETIC reference `init.p` / `init[i]` (nested: `init.p.q`) flow-narrowed at the
+     * initializer's position — `if (!o.x) return; const { x } = o` reads `x` as
+     * `string`, where the member's declared `string | null` is a false TS2345 / TS2322
+     * text / (under G1) TS18048. The root must be an Identifier / property / literal
+     * element access ITSELF: tsgo gives no flow node to `(o)`, `o!`, `o as T`, so those
+     * stay un-narrowed (measured). A parameter pattern and a `for…of` head have no
+     * initializer and never narrow. Only a UNION slot walks (a non-union declared type
+     * cannot be narrowed by the truthiness / equality / `typeof` guards this serves).
+     * The walk runs on the OWNING file's flow graph, whatever reader asked — the symbol
+     * half and the arithmetic pass reach here with another (or no) graph installed.
+     */
+    private fun destructuringFlowNarrowed(elem: BindingElement, slot: Type): Type {
+        if (slot !is Type.Union || elem.dotDotDotToken) return slot
+        val (path, anchor) = destructuringReferencePath(elem, 0) ?: return slot
+        return narrowSyntheticReference(slot, path, anchor)
+    }
+
+    /**
+     * (CHK.173) B5c — the PARENT half of tsgo's binding-element typing: the pattern's
+     * source is `getTypeOfInitializer`, i.e. the initializer's FLOW type, so `if (o.k ===
+     * "a") { const { v } = o }` destructures the narrowed constituent. [raw] is the
+     * initializer's [getTypeOfExpression] answer (which never narrows); a reference
+     * initializer (Identifier / property / literal element access itself — not `(o)`,
+     * `o!`, `o as T`) of UNION type is narrowed at its own position.
+     */
+    private fun destructuringSourceFlowNarrowed(init: Expression, raw: Type): Type {
+        if (raw !is Type.Union) return raw
+        if (init !is Identifier && init !is PropertyAccessExpression && init !is ElementAccessExpression) return raw
+        val path = getReferencePath(init) ?: return raw
+        return narrowSyntheticReference(raw, path, init)
+    }
+
+    /** (CHK.173) B5c: [slot] narrowed as the reference [path] at [anchor]'s flow position, on
+     *  the anchor's OWNING file's graph, as a [NarrowFlowMemo.syntheticLeaf] walk. */
+    private fun narrowSyntheticReference(slot: Type, path: String, anchor: Expression): Type {
+        val graph = owningSourceFile(anchor)?.fileName?.let { fileResults[it] }?.flowGraph ?: return slot
+        if (graph.flowAt(anchor) == null) return slot
+        val saved = currentFlowGraph
+        currentFlowGraph = graph
+        try {
+            val flow = graph.flowAt(anchor) ?: return slot
+            return flowWalkWithTripCheck(
+                anchor, WK_DESTRUCTURE, slot.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL),
+                flowPathRoot(path), anchor,
+            ) {
+                narrowWalkLaunches++
+                val memo = NarrowFlowMemo()
+                memo.syntheticLeaf = true
+                narrowTypeFromFlow(slot, flow, path, NarrowSeen(), depth = 0, memo)
+            } ?: slot
+        } finally {
+            currentFlowGraph = saved
+        }
+    }
+
+    /** (CHK.173) B5c — the synthetic reference path of the leaf [elem] and the root
+     *  initializer it is anchored at (see [destructuringFlowNarrowed]), or null. */
+    private fun destructuringReferencePath(elem: BindingElement, depth: Int): Pair<String, Expression>? {
+        if (depth > 16 || elem.dotDotDotToken) return null
+        val pattern = (elem as NodeBase).parent ?: return null
+        val seg = when (pattern) {
+            is ObjectBindingPattern -> {
+                val p = bindingElementPropertyName(elem) ?: return null
+                if (isIdentifierSpellableName(p)) ".$p" else "[$p]"
+            }
+            is ArrayBindingPattern -> {
+                val i = pattern.elements.indexOfFirst { it === elem }
+                if (i < 0) return null
+                "[$i]"
+            }
+            else -> return null
+        }
+        return when (val owner = (pattern as NodeBase).parent) {
+            is VariableDeclaration -> {
+                val init = owner.initializer ?: return null
+                if (init !is Identifier && init !is PropertyAccessExpression && init !is ElementAccessExpression) return null
+                (getReferencePath(init) ?: return null) + seg to init
+            }
+            is BindingElement -> destructuringReferencePath(owner, depth + 1)?.let { (base, anchor) -> base + seg to anchor }
+            else -> null
+        }
     }
 
     /** (CHK.96) one constituent of [bindingElementType] — see there. */
@@ -105322,7 +105434,7 @@ interface DataView {
             if (e is ConditionalExpression && conditionalOfArrayLiterals(e))
                 return conditionalArrayLiteralTuples(e)
         }
-        return getTypeOfExpression(init)
+        return destructuringSourceFlowNarrowed(init, getTypeOfExpression(init))
     }
 
     /**
@@ -120199,6 +120311,30 @@ interface DataView {
         return flowShadowScope.readsOtherBinding(site, flowPathRoot(name), ref, currentFlowGraph)
     }
 
+    /**
+     * (CHK.173) B5c: does the flow assignment [node] write a STRICT PREFIX of the reference
+     * path [name] (`o = o2` against `o.x`, `o.p = q` against `o.p.x`)? tsgo's
+     * `getTypeAtFlowAssignment` answers the declared type there (`containsMatchingReference`).
+     * Asked only by a synthetic-leaf walk; a write to a same-named inner binding is not one.
+     */
+    private fun flowAssignmentWritesPathPrefix(node: Node, name: String): Boolean {
+        val target: String = when (node) {
+            is VariableDeclaration -> (node.name as? Identifier)?.text ?: return false
+            is BinaryExpression -> {
+                if (!isAssignmentOperator(node.operator)) return false
+                when (val left = node.left) {
+                    is Identifier, is PropertyAccessExpression, is ElementAccessExpression -> getReferencePath(left) ?: return false
+                    else -> return false
+                }
+            }
+            else -> return false
+        }
+        if (target.length >= name.length || !name.startsWith(target)) return false
+        val c = name[target.length]
+        if (c != '.' && c != '[') return false
+        return !flowAssignmentWritesOtherBinding(node, name)
+    }
+
     private fun flowAssignmentMightNarrowByName(node: Node, name: String): Boolean {
         if (flowAssignmentTargetsName(node, name)) return true
         return when (node) {
@@ -120453,7 +120589,8 @@ interface DataView {
             // terminal node ⇒ null ⇒ break to the recursive computation below.
             val ante = when (val fn = flowNode) {
                 is FlowArrayMutation -> fn.antecedent
-                is FlowAssignment -> if (flowAssignmentMightNarrow(fn.node, name)) null else fn.antecedent
+                is FlowAssignment -> if (flowAssignmentMightNarrow(fn.node, name) ||
+                    (memo.syntheticLeaf && flowAssignmentWritesPathPrefix(fn.node, name))) null else fn.antecedent
                 // (CHK.62) a call to a `never`-returning function DIVERGES, so the flow
                 // past it is unreachable — break out of the fast-forward loop so the
                 // recursive arm below answers `never` instead of following the
@@ -120479,7 +120616,8 @@ interface DataView {
                 // B464: flow outer narrowing into a closure for a captured const-like
                 // variable (see [outerFlowForCapturedName] / FlowStart doc).
                 val tS = NarrowSections.t()
-                val outer = outerFlowForCapturedName(node, name)
+                val outer = if (memo.syntheticLeaf && (name.indexOf('.') >= 0 || name.indexOf('[') >= 0)) null
+                    else outerFlowForCapturedName(node, name)
                 NarrowSections.close(NarrowSections.S_START, tS)
                 if (outer != null) narrowTypeFromFlowCore(declaredType, outer, name, seen, depth + 1, memo)
                 else declaredType
@@ -120566,11 +120704,15 @@ interface DataView {
                 // identifier AND property-path targets, incl. ??=/||=) — shared with
                 // the FollowLoopEntry mirror via [narrowByAssignmentRhs]. Reached only
                 // when [flowAssignmentMightNarrow] gated the fast-forward loop above.
+                // (CHK.173) B5c: a synthetic-leaf walk's reference is reset by a write to
+                // a strict prefix of it ([NarrowFlowMemo.syntheticLeaf]).
+                if (memo.syntheticLeaf && flowAssignmentWritesPathPrefix(node.node, name)) declaredType else {
                 val antecedent = narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
                 val tA = NarrowSections.t()
                 val r = narrowByAssignmentRhs(node.node, name, antecedent, declaredType, memo.overwriteResetsToDeclared)
                 NarrowSections.close(NarrowSections.S_ASSIGN, tA)
                 r
+                }
             }
             is FlowCall -> if (flowCallDiverges(node.node)) {
                 // (CHK.62) `Debug.assertNever(kind);` in a switch's `default` clause

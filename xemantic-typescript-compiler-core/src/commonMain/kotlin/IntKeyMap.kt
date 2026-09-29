@@ -169,6 +169,18 @@ internal class NarrowFlowMemo(initialCapacity: Int = 32) {
      * inherits it and never stores a reporting answer under a suppression key.
      */
     var overwriteResetsToDeclared: Boolean = false
+    /**
+     * (CHK.173) B5c: a destructured leaf's SYNTHETIC reference walk (`const { x } = o`
+     * reads `o.x`). tsgo's `getTypeAtFlowAssignment` answers the declared type when the
+     * assignment writes a strict PREFIX of the reference (`o = o2` kills `o.x`), and a
+     * property / element path never crosses into a closure (tsgo's `isConstantReference`
+     * needs a READONLY member; this is the conservative half — a bare identifier still
+     * crosses as B464 lets it). The ordinary property-path walk does neither (a
+     * pre-existing gap: `takeS(o.x)` after `o = o2`, or inside a closure after an outer
+     * guard, is silent here and TS2345 in tsgo); this walk asks for both so a leaf is not
+     * narrowed further than tsgo narrows it. Per WALK, as above.
+     */
+    var syntheticLeaf: Boolean = false
     private var capacity = highestOneBit(maxOf(initialCapacity, 16))
     private var keys = emptyKeys(capacity)
     private var depths = IntArray(capacity)
