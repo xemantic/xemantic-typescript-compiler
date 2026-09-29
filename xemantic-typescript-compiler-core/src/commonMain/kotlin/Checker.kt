@@ -149650,6 +149650,12 @@ interface DataView {
         val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return
         val fnDecls = sym.declarations.filterIsInstance<FunctionDeclaration>()
         if (fnDecls.size != 1) return
+        // (CHK.175) an arity-failed call relates no argument in tsgo.
+        if (call.arguments.none { it is SpreadElement }) {
+            val pi = paramInfo(fnDecls[0].parameters)
+            val n = call.arguments.size
+            if ((!pi.hasRest && n > pi.maxParams) || n < pi.minParams) return
+        }
         val tps = fnDecls[0].typeParameters ?: return
         if (typeArgs.size > tps.size) return
         // Map each TP name to its supplied/explicit-or-default TypeNode.
@@ -166145,6 +166151,9 @@ interface DataView {
             checkArgumentsAgainstSignature(args, arityMatches[0], source, fileName, implRelated)
             return
         }
+        // (CHK.175) tsgo lists no arity-failed candidate for an argument error; when every
+        // overload fails arity the TS2554/TS2575 row is the whole report.
+        if (signatures.all { callArityFails(args, it) }) return
         for (sig in signatures) {
             if (allArgumentsMatch(args, sig, applyWeakRule = true)) return // found a matching overload
         }
@@ -169835,6 +169844,9 @@ interface DataView {
         // UNEVALUATED; compute it at the one site that reads it.
         deferImplementationRelated: Boolean = false,
     ) {
+        // (CHK.175) tsgo relates no argument of an arity-failed signature — the TS2554 is the
+        // whole report (`resolveCall` never reaches `getSignatureApplicabilityError`).
+        if (callArityFails(args, sigIn)) return
         if (ArgSections.mode == ArgSections.OFF) {
             checkArgumentsAgainstSignatureCore(
                 args, sigIn, source, fileName, implementationRelated,
@@ -169863,6 +169875,53 @@ interface DataView {
             )
             CallSections.noteImplRelatedVerifiedAll(deferred != implementationRelated)
         }
+    }
+
+    /**
+     * (CHK.175) tsgo's `hasCorrectArity` for a SPREAD-FREE argument list: true only when
+     * [sig] certainly rejects `args.size`, so its arguments must not be related (tsgo reports
+     * the arity error alone — no TS2345, and no TS2769 when every overload fails arity).
+     *
+     * Conservative in the one direction that costs a missing row: `false` whenever the
+     * count is not decidable here — a spread (TS2556's family), no declaration (a combined
+     * union signature, whose reader decides arity itself), a JS declaration (JSDoc `[p]`
+     * optionality is not in [paramInfo]'s TS reading), or an EMBEDDED-lib member (it
+     * simplifies optional parameters away, B279). Too few arguments fail only when some
+     * missing position is not void-accepting — tsgo's `acceptsVoid` loop, so `g(1)` for
+     * `g(s: string, v: void)` still reports its TS2345.
+     */
+    private fun callArityFails(args: List<Expression>, sig: Signature): Boolean {
+        val n = args.size
+        // Fast path for the ordinary call: within the symbol-level range the declared range
+        // can only be wider (a binding pattern is dropped from `parameters` but counted in
+        // `minArgumentCount`), so the answer is `false` either way.
+        if (n >= sig.minArgumentCount && n <= sig.parameters.size) return false
+        if (args.any { it is SpreadElement }) return false
+        val info = signatureDeclaredArity(sig) ?: return false
+        val tooMany = !info.hasRest && n > info.maxParams
+        if (!tooMany && n >= info.minParams) return false
+        val decl = sig.declaration ?: return false
+        if (!options.useRealLibs && (decl in builtinLibDecls || decl in builtinLibMemberDecls)) return false
+        var root: Node = decl
+        while (true) root = (root as? NodeBase)?.parent ?: break
+        if ((root as? SourceFile)?.fileName?.let { isJsLikeFileName(it) } != false) return false
+        if (tooMany) return true
+        val positional = info.parameters.filter {
+            !it.dotDotDotToken && !((it.name as? Identifier)?.text == "this")
+        }
+        for (i in n until info.minParams) {
+            val p = positional.getOrNull(i) ?: return false
+            val t = sig.parameters.firstOrNull { it.valueDeclaration === p }?.let { getTypeOfSymbol(it) }
+            val acceptsVoid = if (t != null) {
+                t === voidType || (t is Type.Union && t.types.any { it === voidType })
+            } else {
+                val tn = p.type
+                (tn is KeywordTypeNode && tn.kind == SyntaxKind.VoidKeyword) ||
+                    (tn is UnionType && tn.types.any { it is KeywordTypeNode && it.kind == SyntaxKind.VoidKeyword })
+            }
+            if (!acceptsVoid) return true
+        }
+        return false
     }
 
     private fun checkArgumentsAgainstSignatureCore(

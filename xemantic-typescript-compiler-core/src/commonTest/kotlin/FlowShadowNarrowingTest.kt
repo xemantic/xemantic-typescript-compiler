@@ -681,7 +681,7 @@ class FlowShadowNarrowingTest {
     }
 
     @Test
-    fun `n5d control - ||eq is silent`() {
+    fun `n5d control - or-equals is silent`() {
         val rows = rowsOf("""
             declare function g(): string | null; declare function first<T>(a: T[]): T; function f() { let s = g(); s ||= 'x'; return s.length }
             export {}
