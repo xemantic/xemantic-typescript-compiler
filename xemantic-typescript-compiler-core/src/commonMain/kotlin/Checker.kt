@@ -120819,7 +120819,9 @@ interface DataView {
             // although an assignment OVERWRITES — and tsc's own `harness/tsserverLogger.ts`
             // `replaceAll` then reported at its `return result`.
             getLiteralRhsTypeForAssignment(node)?.let {
-                return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, it), it)
+                val base = assignmentReduceBase(antecedent, declaredType, it)
+                literalUnionReducedType(base, it)?.let { r -> return r }
+                return narrowUnionByRhsAssignment(base, it)
             }
         }
         // Round 460: a destructuring ASSIGNMENT `({ pos, end } = refs(i))` OVERWRITES each
@@ -121050,7 +121052,14 @@ interface DataView {
             if (node is VariableDeclaration) {
                 node.type?.let { tn ->
                     val t = getTypeFromTypeNode(tn)
-                    if (t !== errorType) return t
+                    if (t !== errorType) {
+                        // (CHK.173) B5b: a non-nullish UNION initializer removes the
+                        // annotation's nullish members ([nonNullishUnionOverwrite]).
+                        if (typeHasNullishConstituent(t) &&
+                            isNonNullishUnionAssignedType(resolvedAssignedRawTypeForFlow(rhs))
+                        ) return narrowByExcludingNullUndefined(t)
+                        return t
+                    }
                 }
                 (node.initializer as? CallExpression)?.let { call ->
                     resolvedCallReturnTypeForFlow(call)?.let { return it }
@@ -121080,12 +121089,14 @@ interface DataView {
                 // getReferencedFileLocation) resolves the member's declared type and
                 // filters the antecedent union by it. Same gates: non-union resolved
                 // type only (the round-463 lenient-member-relation lesson).
-                resolvedAssignedTypeForFlow(rhs)?.let { t ->
+                val raw = resolvedAssignedRawTypeForFlow(rhs)
+                raw?.takeIf { it !is Type.Union }?.let { t ->
                     return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
                 }
                 (rhs as? ConditionalExpression)?.let { tern ->
                     conditionalCallBranchesReducedTypeForFlow(tern, antecedent, declaredType)?.let { return it }
                 }
+                nonNullishUnionOverwrite(raw, declaredType)?.let { return it }
             }
             // (CHK.173) G3: `x ??= <rhs>` / `x ||= <rhs>` with an RHS only the four
             // resolving arms can type (`m ??= s.m`, tsc builder.ts:1060). The assignment
@@ -121096,13 +121107,15 @@ interface DataView {
                 (node.operator == SyntaxKind.QuestionQuestionEquals ||
                     node.operator == SyntaxKind.BarBarEquals)
             ) {
-                resolvedAssignedTypeForFlow(rhs)?.let { t ->
+                val raw = resolvedAssignedRawTypeForFlow(rhs)
+                raw?.takeIf { it !is Type.Union }?.let { t ->
                     logicalAssignmentJoin(
                         node.operator == SyntaxKind.QuestionQuestionEquals,
                         antecedent,
                         narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t),
                     )?.let { return it }
                 }
+                nonNullishUnionOverwrite(raw, declaredType)?.let { return it }
             }
         }
         // (CHK.85)(b): an assignment to the walked reference that NO arm above could
@@ -121123,23 +121136,24 @@ interface DataView {
      * UNION (round 463's lenient-member-relation lesson). Shared by `=` and, since
      * (CHK.173) G3, by `??=` / `||=`.
      */
-    private fun resolvedAssignedTypeForFlow(rhs: Expression): Type? {
+    private fun resolvedAssignedTypeForFlow(rhs: Expression): Type? =
+        resolvedAssignedRawTypeForFlow(rhs)?.takeIf { it !is Type.Union }
+
+    /**
+     * (CHK.173) B5b: the type [resolvedAssignedTypeForFlow] computes BEFORE its union
+     * refusal — any type but `any`/`error`/`unknown`, unions included — so a caller that
+     * needs both answers types the right-hand side once (`getTypeOfExpression` has no
+     * per-node memo).
+     */
+    private fun resolvedAssignedRawTypeForFlow(rhs: Expression): Type? {
         (rhs as? PropertyAccessExpression)?.let { pa ->
             if (pa.questionDotToken) return@let
             val t = getTypeOfPropertyAccess(pa)
-            if (t !== anyType && t !== errorType && t !== unknownType &&
-                t !is Type.Union
-            ) {
-                return t
-            }
+            if (t !== anyType && t !== errorType && t !== unknownType) return t
         }
         (rhs as? Identifier)?.let { id ->
             val t = getTypeOfIdentifier(id)
-            if (t !== anyType && t !== errorType && t !== unknownType &&
-                t !is Type.Union
-            ) {
-                return t
-            }
+            if (t !== anyType && t !== errorType && t !== unknownType) return withOptionalParameterUndefined(id, t)
         }
         // (CHK.70)(f) A CONDITIONAL RHS is the third resolving arm, and the two
         // above cannot stand in for it: its arms are property accesses that no
@@ -121156,11 +121170,7 @@ interface DataView {
         // lesson), so a nullish resolved type is refused by construction.
         (rhs as? ConditionalExpression)?.let { tern ->
             val t = getTypeOfExpression(tern)
-            if (t !== anyType && t !== errorType && t !== unknownType &&
-                t !is Type.Union
-            ) {
-                return t
-            }
+            if (t !== anyType && t !== errorType && t !== unknownType) return withOptionalParameterUndefined(tern, t)
         }
         // (CHK.173) G2: an ELEMENT-ACCESS RHS is the fourth resolving arm — tsc's
         // own fourslashImpl.ts `if (!expectedRange) { … expectedRange =
@@ -121173,13 +121183,95 @@ interface DataView {
         (rhs as? ElementAccessExpression)?.let { ea ->
             if (ea.questionDotToken) return@let
             val t = typeOfExpressionWithFlowThis(ea)
-            if (t !== anyType && t !== errorType && t !== unknownType &&
-                t !is Type.Union
-            ) {
-                return t
-            }
+            if (t !== anyType && t !== errorType && t !== unknownType) return t
         }
         return null
+    }
+
+    /**
+     * (CHK.173) B5b: [t] with `undefined` added when the value of [e] may be a bare
+     * OPTIONAL parameter `v?: T` (no initializer, not rest, not shadowed — even by a
+     * block-scoped binding) — directly, or
+     * as a conditional branch / the value operand of `||` `??` `&&` `,`. The expression
+     * typer answers such a parameter as its bare annotation `T`, so an assignment `a = v`
+     * read as a non-nullish overwrite and dropped a TS18048 tsgo reports (`v` is `T |
+     * undefined` there). Round B2 fixed the same gap in the receiver arm only.
+     */
+    private fun withOptionalParameterUndefined(e: Expression, t: Type): Type =
+        if (!typeIncludesExplicitUndefined(t) && flowValueMayBeOptionalParameter(e, 0)) {
+            getUnionType(listOf(t, undefinedType))
+        } else t
+
+    private fun flowValueMayBeOptionalParameter(e: Expression, depth: Int): Boolean {
+        if (depth > 16) return true
+        return when (e) {
+            // The cheap ascent first (no allocation); the scope-exact one only when an
+            // optional parameter of that name exists at all.
+            is Identifier -> LocalShadowGuard.optionalParameterBinding(e, e.text) != null &&
+                LocalShadowGuard.innermostOptionalParameter(e, e.text) != null
+            is ParenthesizedExpression -> flowValueMayBeOptionalParameter(e.expression, depth + 1)
+            is ConditionalExpression -> flowValueMayBeOptionalParameter(e.whenTrue, depth + 1) ||
+                flowValueMayBeOptionalParameter(e.whenFalse, depth + 1)
+            is BinaryExpression -> when (e.operator) {
+                SyntaxKind.BarBar, SyntaxKind.QuestionQuestion, SyntaxKind.Comma ->
+                    flowValueMayBeOptionalParameter(e.right, depth + 1)
+                SyntaxKind.AmpersandAmpersand -> flowValueMayBeOptionalParameter(e.left, depth + 1) ||
+                    flowValueMayBeOptionalParameter(e.right, depth + 1)
+                else -> false
+            }
+            else -> false
+        }
+    }
+
+    /**
+     * (CHK.173) B5b (N13), the LITERAL arm's half: a conditional of literals of DIFFERENT
+     * primitive kinds (`a = c ? "x" : 1`) types as the literal UNION `"x" | 1`, which
+     * [narrowUnionByRhsAssignment] relates to no single member, so the declared `string |
+     * number | undefined` survived the overwrite whole (a false TS18048). tsgo's
+     * `getAssignmentReducedType` keeps the declared members some constituent is
+     * assignable to; a literal relates exactly (none of round 463's lenient member
+     * relation), so the filter is safe here. Null unless [assigned] is a union with no
+     * nullish / `any` / type-parameter member, every constituent relates to a kept
+     * member, and something is removed.
+     */
+    private fun literalUnionReducedType(base: Type, assigned: Type): Type? {
+        if (assigned !is Type.Union || base !is Type.Union || !isNonNullishUnionAssignedType(assigned)) return null
+        val kept = base.types.filter { m -> assigned.types.any { checkTypeRelatedTo(it, m, assignableRelation) } }
+        if (kept.isEmpty() || kept.size == base.types.size) return null
+        if (assigned.types.any { a -> kept.none { checkTypeRelatedTo(a, it, assignableRelation) } }) return null
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
+    }
+
+    /**
+     * (CHK.173) B5b (N13): the post-state of `x = v` / `x ??= v` / `x ||= v` when the
+     * resolving arms typed `v` as a UNION they refuse to FILTER by (round 463's
+     * lenient-member-relation lesson) — `a ??= c ? gs() : emptyArr` (`string[] |
+     * never[]`, tsc program.ts `automaticTypeDirectiveNames ??= …`). A union with no
+     * nullish member proves the reference non-nullish afterwards exactly as a
+     * structurally non-nullish right-hand side does (round 416), so the answer is the
+     * declared type with only its nullish members removed — never a filter of the
+     * others. Null (the older fallthrough decides) unless the declared type HAS a
+     * nullish member and [raw] passes [isNonNullishUnionAssignedType].
+     */
+    private fun nonNullishUnionOverwrite(raw: Type?, declaredType: Type): Type? =
+        if (typeHasNullishConstituent(declaredType) && isNonNullishUnionAssignedType(raw)) {
+            narrowByExcludingNullUndefined(declaredType)
+        } else null
+
+    /** (CHK.173) B5b: [t] is a union none of whose members is nullish / `void` / `any` /
+     *  `unknown`, where a bare type-parameter member is read through its base constraint
+     *  ([typeParamsToBaseConstraints]; an unconstrained one may be instantiated nullish and
+     *  refuses). */
+    private fun isNonNullishUnionAssignedType(t: Type?): Boolean {
+        if (t !is Type.Union) return false
+        val nullishFlags = TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void or
+            TypeFlags.Any or TypeFlags.Unknown
+        return t.types.none { m ->
+            if (m is Type.TypeParam) {
+                val b = typeParamsToBaseConstraints(m) ?: return false
+                b.flags.hasAny(nullishFlags) || (b is Type.Union && b.types.any { it.flags.hasAny(nullishFlags) })
+            } else m.flags.hasAny(nullishFlags)
+        }
     }
 
     /**

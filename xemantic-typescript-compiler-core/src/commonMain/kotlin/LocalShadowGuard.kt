@@ -433,6 +433,39 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
             return null
         }
 
+        /**
+         * (CHK.173) B5b — the OPTIONAL parameter `name?: T` (plain identifier, no
+         * initializer, not rest) that is the INNERMOST syntactic binding of [name] above
+         * [node], or null. Unlike [optionalParameterBinding] a block-scoped shadow (`{
+         * const name = …; … }`, a `for` header, a `catch` variable, a nested `function`)
+         * ends the ascent — the lexical symbol cannot see one (B83.5 leaves it unbound).
+         */
+        fun innermostOptionalParameter(node: Node, name: String): Parameter? {
+            var cur: Node? = (node as NodeBase).parent
+            var hops = 0
+            while (cur != null && cur !is SourceFile && hops++ < 512) {
+                if (cur is ModuleBlock || cur is ModuleDeclaration) return null
+                if (name in scopeBindings(cur)) {
+                    val params = when (cur) {
+                        is FunctionDeclaration -> cur.parameters
+                        is ArrowFunction -> cur.parameters
+                        is MethodDeclaration -> cur.parameters
+                        is Constructor -> cur.parameters
+                        is GetAccessor -> cur.parameters
+                        is SetAccessor -> cur.parameters
+                        is FunctionExpression -> cur.parameters
+                        else -> return null
+                    }
+                    val p = params.firstOrNull { bindsName(it.name, name) } ?: return null
+                    return p.takeIf {
+                        it.name is Identifier && it.questionToken && it.initializer == null && !it.dotDotDotToken
+                    }
+                }
+                cur = (cur as NodeBase).parent
+            }
+            return null
+        }
+
         /** A statement list's verdict for [name]: null when it binds nothing (a declaration wins). */
         private fun statementsBinding(statements: List<Statement>, name: String): Boolean? {
             for (st in statements) when (st) {
