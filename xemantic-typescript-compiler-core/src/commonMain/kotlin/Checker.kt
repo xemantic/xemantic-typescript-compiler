@@ -72764,7 +72764,11 @@ interface DataView {
     private fun spineAiEnterNode(node: Node) {
         if ((node as NodeBase).kindId != NodeKind.NEW_EXPRESSION) return
         node as NewExpression
-        val callee = node.expression as? Identifier ?: return
+        // (CHK.173) B5f: `new ac!()` is `new (ac!)()` since the parser keeps the `!` in the
+        // callee — tsgo reports TS2511 through the assertion (it checks the non-null type).
+        var calleeExpr = node.expression
+        while (calleeExpr is NonNullExpression) calleeExpr = calleeExpr.expression
+        val callee = calleeExpr as? Identifier ?: return
         if (spineAiStatus(node) != AI_REACHED) return
         val name = callee.text
         if (name !in spineAiClassesAt(node) && name !in spineAiTypeofAt(node)) return
@@ -135063,11 +135067,12 @@ interface DataView {
                         val classSym = Symbol(SymbolFlags.Class, classDecl.name.text)
                         classSym.declarations.add(classDecl)
                         getDeclaredTypeOfSymbol(classSym)
-                    } else return anyType
+                    } else newCalleeMemberValueType(callee) ?: return anyType
                 }
             }
+            is ElementAccessExpression -> newCalleeMemberValueType(callee) ?: return anyType
             else -> return anyType
-        }
+        }.let { narrowByExcludingNullUndefined(it) }
         if (calleeType === anyType || calleeType === errorType) return anyType
         // For new expressions, the return type is the class type itself.
         // 16.0: honor explicit type arguments (e.g. `new Test1<string>()`) by
@@ -135203,6 +135208,23 @@ interface DataView {
         }
         if (sigs.isNullOrEmpty()) return anyType
         return sigs[0].resolvedReturnType ?: anyType
+    }
+
+    /**
+     * (CHK.173) B5f (N1) — the value type of a MEMBER `new` callee that is not a
+     * namespace-qualified class: `new o.W!()`, `new K.make!()`, `new arr[0]!()`. tsgo's
+     * `resolveNewExpression` reads `checkNonNullExpression(node.expression)` whatever the
+     * callee is written as; this path answered `any` for every non-class member, so the
+     * instance a nullable constructor property builds was untyped (and an assignment of it
+     * could not narrow). Null for an `any` / error answer, which keeps the old `any`.
+     */
+    private fun newCalleeMemberValueType(callee: Expression): Type? {
+        val t = when (callee) {
+            is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
+            is ElementAccessExpression -> getTypeOfElementAccess(callee)
+            else -> return null
+        }
+        return if (t === anyType || t === errorType) null else t
     }
 
     /**
@@ -151803,7 +151825,8 @@ interface DataView {
      * and answers nothing here.
      */
     private fun constructSignaturesForNewCtx(expr: NewExpression): Pair<List<Signature>, List<Type.TypeParam>?>? {
-        val calleeType = getCalleeType(expr.expression)
+        // (CHK.173) B5f: the non-null callee, as the emitter and `resolveNewExpression`.
+        val calleeType = narrowByExcludingNullUndefined(getCalleeType(expr.expression))
         if (calleeType === anyType || calleeType === errorType) return null
         val classSym = (calleeType as? Type.Interface)?.symbol?.takeIf { it.flags.hasAny(SymbolFlags.Class) }
         if (classSym != null) {
@@ -154858,39 +154881,8 @@ interface DataView {
         CpaSections.beginQ(fileName, (expr as NodeBase).nodeId)
         try {
         CpaSections.atQ(CpaSections.Q_TS1209)
-        // 17.201: TS1209 — `new A?.b()` where the `?.` chains off a NewExpression
-        // with NO arguments list. Parser shape: PropertyAccessExpression with
-        // `questionDotToken == true`, expression == `NewExpression(arguments == null)`.
-        // Squiggle on the `?.` token (length 2), located by searching forward
-        // from the receiver expression's source position.
-        if (expr.questionDotToken && expr.expression is NewExpression) {
-            val recv = expr.expression
-            if (recv.arguments == null) {
-                val ctor = recv.expression
-                val ctorName = (ctor as? Identifier)?.text
-                val didYouMean = if (ctorName != null) " Did you mean to call '$ctorName()'?" else ""
-                // Search backward from `expr.name.pos` for the `?.` token (always
-                // immediately precedes the property name, possibly with whitespace).
-                var i = (expr.name.pos - 1).coerceAtMost(source.length - 1)
-                while (i >= 0 && source[i] != '?') {
-                    if (!source[i].isWhitespace() && source[i] != '.') break
-                    i--
-                }
-                if (i >= 0 && source[i] == '?') {
-                    val (line, character) = getLineAndCharacterOfPosition(source, i)
-                    diagnostics.add(Diagnostic(
-                        message = "Invalid optional chain from new expression.$didYouMean",
-                        category = DiagnosticCategory.Error,
-                        code = 1209,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = i,
-                        length = 2,
-                    ))
-                }
-            }
-        }
+        // 17.201's TS1209 (`new A?.b()`) moved to the parser at (CHK.173) B5f, which reports
+        // every `?.` after a `new` callee (tsgo's `parseNewExpressionOrNewDotTarget`).
         CpaSections.atQ(CpaSections.Q_PROTO)
         // 17.190: TS2339 — `.prototype` on a NewExpression instance (e.g.
         // `new Object().prototype`). Instances never have a `prototype`
@@ -155345,6 +155337,12 @@ interface DataView {
      * this._config; socket = new WebSocketCtor!(url); this._socket = socket;
      * this._socket.binaryType = …`, the one false row a real library showed). Asked only
      * at a site about to fire; an explicit stack, so a deep binary chain cannot recurse.
+     *
+     * (CHK.173) B5f measured it NOT retirable yet: `new WebSocketCtor!(…)` now types, but
+     * the rxjs row survives the guard's removal because `this._socket = socket` reads the
+     * BODY LOCAL `socket` un-narrowed (`let socket: T | null = null; socket = s;
+     * this._socket = socket; this._socket.p` is a false TS2531 with no `new` at all) — the
+     * G1 gap, B6's round.
      */
     private fun thisMemberAssignedInFunction(core: Expression, path: String): Boolean {
         var fn: Node? = (core as NodeBase).parent
@@ -166415,7 +166413,7 @@ interface DataView {
             ))
             return
         }
-        val calleeType = getCalleeType(expr.expression)
+        val calleeType = newCalleeNonNullType(expr, getCalleeType(expr.expression), source, fileName) ?: return
         if (calleeType === anyType || calleeType === errorType) return
         // (LEGACY.0b) TS7009 for a callee that is NOT a bare identifier. tsc decides it
         // from the RESOLVED SIGNATURE's declaration - `checkCallExpression`'s
@@ -166793,6 +166791,69 @@ interface DataView {
         } else {
             checkArgumentsAgainstOverloads(args, effectiveSigs, source, fileName, expr.expression)
         }
+    }
+
+    /**
+     * (CHK.173) B5f (N1) — tsgo's `resolveNewExpression` reads its callee through
+     * `checkNonNullExpression`: a `null` / `undefined` member of the callee type is reported
+     * (TS18047/8/9 for an entity name, TS2531/2/3 otherwise — [reportNullishReceiver]) and
+     * the resolution continues on the NON-NULL type. This emitter read the raw union, so
+     * `new W()` on a `(new () => S) | undefined` was TS2351 "Not all constituents …" — also
+     * after `if (W)`, since [getCalleeType] does not flow-narrow (the call path's
+     * [ccetUnionCalleeChecks] re-narrows the same way). The report is limited to a callee
+     * the flow walk can narrow (an identifier / property path); any other callee (`arr[0]`,
+     * a call result) is stripped SILENTLY rather than risk reporting a guarded one — a
+     * missing TS2532 where tsgo has one, never a false row. `new W!()` arrives stripped
+     * already ([getCalleeType]'s `!` arm).
+     *
+     * Also tsgo's `invocationError` for a PRIMITIVE callee: `new n()` / `new n!()` with `n`
+     * a number is TS2351 "Type 'Number' has no construct signatures." at the callee; answers
+     * null (the caller returns) once reported.
+     */
+    private fun newCalleeNonNullType(expr: NewExpression, raw: Type, source: String, fileName: String): Type? {
+        var t = raw
+        val ce = expr.expression
+        if (t is Type.Union && strictNullChecks && t.types.any { isNullishConstituent(it) }) {
+            if (ce is Identifier || ce is PropertyAccessExpression) t = getNarrowedTypeForReference(t, ce)
+            if (t is Type.Union) {
+                val nullish = t.types.filter { isNullishConstituent(it) }
+                val rest = t.types.filter { !isNullishConstituent(it) }
+                if (nullish.isNotEmpty() && rest.isNotEmpty()) {
+                    if (ce is Identifier || ce is PropertyAccessExpression) {
+                        val start = ce.pos
+                        val length = expressionTrueEnd(ce) - start
+                        if (length > 0) reportNullishReceiver(
+                            ce, nullish.any { it.flags.hasAny(TypeFlags.Null) },
+                            nullish.any { it.flags.hasAny(TypeFlags.Undefined) }, start, length, source, fileName,
+                        )
+                    }
+                    t = if (rest.size == 1) rest[0] else getUnionType(rest)
+                }
+            }
+        }
+        val apparent = when {
+            t.flags.hasAny(TypeFlags.NumberLike) -> "Number"
+            t.flags.hasAny(TypeFlags.StringLike) -> "String"
+            t.flags.hasAny(TypeFlags.BooleanLike) -> "Boolean"
+            t.flags.hasAny(TypeFlags.BigIntLike) -> "BigInt"
+            else -> null
+        }
+        if (apparent != null && t !is Type.Union && t !is Type.Intersection && !t.flags.hasAny(TypeFlags.EnumLike)) {
+            val start = ce.pos
+            val length = expressionTrueEnd(ce) - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "This expression is not constructable.",
+                    category = DiagnosticCategory.Error, code = 2351,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                    messageChain = listOf("  Type '$apparent' has no construct signatures."),
+                ))
+            }
+            return null
+        }
+        return t
     }
 
     /**

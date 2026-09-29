@@ -166,16 +166,15 @@ class NewExprImplicitAnyNonIdentifierCalleeTest {
     }
 
     @Test
-    fun `residue - a construct-signature property does not type the new expression`() {
-        // `getReturnTypeOfNewExpression`'s PropertyAccessExpression arm handles only a
-        // namespace-qualified CLASS, so `new ctorOnly.f()` types as `any` and tsgo's
-        // TS2322 (`Type 'object' is not assignable to type 'never'`) is missing. Unrelated
-        // to the TS7009 rule — which reads the callee's SIGNATURES and gets them right
-        // here — and pinned so the gap is recorded rather than rediscovered.
+    fun `a construct-signature property types the new expression`() {
+        // Was a residue: `getReturnTypeOfNewExpression`'s PropertyAccessExpression arm
+        // handled only a namespace-qualified CLASS, so `new ctorOnly.f()` typed `any`.
+        // (CHK.173) B5f reads the member's value type there, and tsgo's row appears.
         assert(
             diagnose(
                 "declare const ctorOnly: { f: { new (): object } };\nconst r: never = new ctorOnly.f();",
-            ).none { it.code == 2322 },
+            ).map { "${it.line}:${it.character} TS${it.code} ${it.message}" } ==
+                listOf("2:7 TS2322 Type 'object' is not assignable to type 'never'."),
         )
     }
 

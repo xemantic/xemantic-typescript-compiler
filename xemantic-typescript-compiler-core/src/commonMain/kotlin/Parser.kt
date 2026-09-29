@@ -6856,8 +6856,17 @@ class Parser(
         // Handle nested `new` (e.g. `new new Date`) by recursing.
         val baseExpr = if (token == NewKeyword) parseNewExpression() else parsePrimaryExpression()
         val expr = parseMemberAccessOnly(baseExpr)
+        val calleeEnd = scanner.getPrevTokenEnd()
         // Only parse trailing type args if we didn't find leading ones (e.g. `new Foo<T>()`)
         val typeArgs = if (leadingTypeArgs == null && !isJsLikeFile) tryParseTypeArguments() else null
+        // (CHK.173) B5f: TS1209 at a `?.` straight after the callee, as tsgo's
+        // `parseNewExpressionOrNewDotTarget` — `new A?.b()`, `new W?.()`, `new W?.[0]` alike (the
+        // checker used to report only the property-access form). The rest parses as usual:
+        // `new A` without arguments, then the chain.
+        if (token == SyntaxKind.QuestionDot) {
+            val calleeText = source.substring(expr.pos.coerceAtMost(calleeEnd), calleeEnd)
+            reportError("Invalid optional chain from new expression. Did you mean to call '$calleeText()'?", code = 1209, overrideLength = 2)
+        }
         val args = if (token == OpenParen) parseArgumentList() else null
         val innerComments = if (args != null) lastCallInnerComments else null
         return NewExpression(expression = expr, typeArguments = typeArgs, leadingTypeArguments = leadingTypeArgs, arguments = args, innerComments = innerComments, pos = pos, end = getEnd())
@@ -6888,6 +6897,16 @@ class Parser(
                     }
                     parseExpected(SyntaxKind.CloseBracket)
                     ElementAccessExpression(expression = result, argumentExpression = arg, pos = result.pos, end = getEnd())
+                }
+                // (CHK.173) B5f (N1): a non-null assertion is part of a `new` callee, as tsgo's
+                // `parseMemberExpressionRest` — `new W!()` is `new (W!)()`. Without this arm the
+                // callee stopped at `W` and the `!()` became a CALL of `(new W)!`, so every
+                // nullable constructor read `new W` (no arguments) against `(new () => S) |
+                // undefined`: a false TS2351 and an `any` result.
+                Exclamation -> {
+                    if (scanner.hasPrecedingLineBreak()) return result
+                    nextToken()
+                    NonNullExpression(expression = result, pos = result.pos, end = getEnd())
                 }
                 else -> return result
             }
