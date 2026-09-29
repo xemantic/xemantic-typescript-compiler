@@ -1,5 +1,12 @@
 
 
+**(P18.223) — (CHK.176)(a): "Expected N arguments" NOW REACHES CALLBACKS, LIB FUNCTIONS, OVERLOADED CONSTRUCTORS AND OPTIONAL-CHAIN CALLS; 24 -> 73 OF 87 CELLS MATCH tsgo, +0 EVERYWHERE, 21,676 / 0 / 44 (2026-09-29).**
+`cb(1, 2)` for `cb: (n: number) => void`, `parseInt("1", 2, 3)`, `new Map(1, 2)`, `o?.m(1, 2)` reported nothing. A
+signature-based reader now reports tsgo's TS2554 / TS2555 / TS2556 / TS2575, deduplicated against the older walker.
+The 8-profile grid caught 3 false rows in the first build (an alias that loses overloads), fixed. 24 pins, 13 of 14 arms
+RED (1 redundant). Six stale tests re-pointed to tsgo. Next: the G1 arc (B5a), whose census finally completed.
+
+
 **(P18.222) — (CHK.173) CONDITION LEAK: `{ const s = g(); if (!s) return } s.length` NO LONGER NARROWS THE OUTER `s`; 5 -> 37 ROWS AGAINST tsgo's 37, +0 EVERYWHERE, 21,652 / 0 / 44 (2026-09-29).**
 A condition, assertion call or `switch` on a same-named inner variable was narrowing the outer one, hiding real
 "possibly null" errors. The binding check B1 added for assignments now also covers these sites (and a `switch`

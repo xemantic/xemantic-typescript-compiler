@@ -1,3 +1,32 @@
+### Round (P18.218) — (CHK.175): an arity-failed call relates no argument — `g(1, 2)` for `g(s: string)` reports only tsgo's TS2554 (was: plus a false TS2345, or a false TS2769 on an overload set); 12 -> 38 of 48 matrix cells agree, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate and ran the WARNING GATE properly
+(`--rerun-tasks`, no `-q`, with a throwaway positive-control file whose warning had to appear) — the builder had
+flagged a warning in already-COMMITTED code: (P18.216)'s `FlowShadowNarrowingTest` named a test `` `n5d control - ||eq
+is silent` `` (a `|` — a Kotlin warning AND an illegal Kotlin/Native backtick name), invisible to the per-round suite
+greps because an incremental build does not re-emit warnings; renamed `or-equals`. **Mechanism**: TS2554 comes from
+the name-based arity walker (`spineArgCallEnter` / `paramInfo`), TS2345 from `checkArgumentsAgainstSignature`, which
+never checked arity — same pass (`checkSpine`), two unrelated readers. New `callArityFails` mirrors tsgo's
+`hasCorrectArity` for a spread-free argument list (fast path inside `minArgumentCount..parameters.size`; the declared
+range from `signatureDeclaredArity`; too few fails only if a missing position does not accept `void`; answers false —
+keep checking — on a spread, no declaration (a combined union signature), a JS declaration, or an embedded-test-lib
+member, whose lib drops optional parameters); consulted at the top of `checkArgumentsAgainstSignature`, in
+`checkArgumentsAgainstOverloads` (every overload arity-failed -> return before TS2769), and as an inline `paramInfo`
+guard in the B498 pin walker `checkGenericDefaultParamCall` — a THIRD emitter the queue did not name, which also
+double-emitted TS2345 (`g<string>(1)` twice). **Why the corpus never pinned it**: its arity baselines pass arguments
+of the RIGHT type (`functionCall11`); all 3,117 errors subtests (incl. the 38 ignored) are byte-identical on both
+binaries — the corpus is a control here and the pins are the gate.
+
+**Measured**: 48 cells 12 -> 38 agree (too many / too few across functions, methods, constructors, `super`, generics,
+`declare`, namespaces, `this` parameters, object literals, callbacks; overload-set TS2769 and TS2575 gaps; the doubled
+explicit-type-argument TS2345). **Pins**: `ArityFailedCallRelatesNoArgumentTest` (16). **Ablation**: A1 no signature
+gate 8 RED, A2 no overload gate 2, A3 void ignored 1, A4 spreads ignored 1, A5 embedded-lib exclusion dropped 1, A7 B498
+guard dropped 1, A8 rest ignored 1; A6 (JS exclusion) 0 — redundant today (JS argument relation emits nothing even on
+the parent); A9 (fast path) 0 — expected, it only saves time. **Gates**: full suite **21,399 / 0 / 44** (+16); corpus
+screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x `added=0 removed=0` (a control, as predicted), libraries 0;
+warning gate clean with a live positive control; warm A/B not run (two integer compares per ordinary call).
+**Residues filed as (CHK.176)**. **Successor**: (CHK.176)'s false positives (b)/(c), then (CHK.173) B3.
+
 ### Round (P18.217) — (CHK.173) Round B2: the identifier-receiver TS1804x arm reads an optional parameter `x?: T` as `T | undefined` and accepts a non-union `null` / `undefined`; +26 true rows, 0 false, and the grid caught (and the round fixed) 6 `this`-rooted false positives; +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism** (inside the Round A emitter
