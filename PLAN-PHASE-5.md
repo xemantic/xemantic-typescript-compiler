@@ -25,6 +25,35 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.219) — (CHK.176) (b) + (c): a trailing `void` parameter is optional to every arity reader (a false TS2554 on legal code removed, `Expected 1-2 arguments` wording), and the B498 walker stops doubling TS2345; (a) refused after measurement; 4 -> 21 of 26 cells agree, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate incl. the warning gate with a live
+positive control. **Where the item was wrong**: (b) was a false TS2554 on LEGAL code (`function g(s: string, v: void)
+{}; g("a")`), not only an extra row beside a correct TS2345, and SEVEN emitters ignored the rule — the name-based call
+walker, the `new` walker, the overload walker, the explicit-type-argument overload branch (B95b), the property-access
+reader (`checkTs2554ForPropertyAccessCall`, incl. the synthesized `f.call` signature), the method-overload reader and
+the union reader (`unionCalleeArityDiagnostic`); tsgo also words it with the trimmed minimum (`Expected 1-2
+arguments`). (c) is NOT a plain duplicate — built with B498 off, `h<number>(1, "x")`'s default-resolved TS2345 (c02) is
+lost (the main reader does not resolve `<T, U = T>` defaults) — so the walker stays and skips only parameters whose type
+parameter was EXPLICITLY supplied. **Mechanism**: tsgo's `getMinArgumentCount` (`relater.go:1708`) drops a trailing run
+of required parameters typed `void` (or a union containing it), which is exactly why `hasCorrectArity`'s `acceptsVoid`
+loop works; one shared `callMinArgumentCount(minParams, parameters, sig?)` + `overloadCallMin` and `typeAcceptsVoid`
+(also used by `relationMinArgumentCount`) now serve `callArityFails` and all seven too-few emitters, in the check and the
+message; the union reader's too-few row now anchors on the member name (`u.m()` at `m`, as tsgo — wrong before for
+non-void unions too).
+
+**Measured**: 26 cells 4 -> 21 agree (false TS2554 removed on v00 v02 v04 v06 v09 v10 v13-v16 v18; wording on v03 v12
+v19 v20; duplicate TS2345 removed c01 c03; c02 kept; controls v05 v07 v08 v11 unchanged); the 5 left are (a). **Pins**:
+`CallArityTrailingVoidTest` (19). **Ablation** (12 arms, all RED): A1 no trim 14, A2 call walker 9, A3 `new` 1, A4
+property-access 2, A5 `f.call` fallback 1, A6 overload walker 1, A7 B95b 1, A8 method overload 1, A9 union reader 1, A10
+union anchor 1, A11 B498 skip 2, A12 union arm of `typeAcceptsVoid` 2. **Gates**: full suite **21,418 / 0 / 44** (+19);
+corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0 (`spineArgCallEnter` 3,514); grid 8x `added=0 removed=0` (a
+control), libraries 0; warning gate clean (positive control live). **(a) REFUSED**: `cb(1, 2)` through a function-typed
+parameter, real-lib members, an overloaded constructor, an optional-chain call and a tuple rest are reached by NO
+TS2554 emitter — they need a new signature-based TS2554 emitter at `checkArgumentsAgainstSignature`, deduplicated
+against the name walker's `funcParams`; a separate, row-ADDING round. Also unmeasured: an un-annotated parameter with a
+CONTEXTUAL `void` type still counts as required. (d)-(f) untouched. **Successor**: (CHK.173) B3.
+
 ### Round (P18.218) — (CHK.175): an arity-failed call relates no argument — `g(1, 2)` for `g(s: string)` reports only tsgo's TS2554 (was: plus a false TS2345, or a false TS2769 on an overload set); 12 -> 38 of 48 matrix cells agree, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate and ran the WARNING GATE properly
@@ -338,37 +367,6 @@ predicate overload but leaves `TOut` un-inferred (`any`); g02 an un-annotated no
 predicate overload (deliberately not refused); g11 the predicate parameter displays as `(n: Node) => boolean` and the
 TS1224 chain line is missing; d01 an optional parameter's argument displays without `| undefined`; d08 the
 `arityMatches[0]` fallback's result adds a TS2322 tsgo does not report. **Successor**: ROUND A.
-
-### Round (P18.209) — (CHK.173) S-G4: equality with a FLOW-NARROWED non-nullish value removes nullish from the reference; its pinned shapes all agree with tsgo, but the arm's last two rows did NOT move — their real cause is an overload-resolution `any`, filed as S-G4b (2026-09-28)
-
-Orchestrated: one implementation subagent, which **stalled a third time** this session (finished work, then idle with no
-process — waiting on a notification that never came) and was stopped; the orchestrator gated its tree (identical to
-its saved `work.patch`, its final build `cdd4a728`). **Mechanism**: `narrowByEquality` on the EQUAL branch now asks
-the OTHER operand's type through `equalityValueFlowType` — a re-entrant flow narrowing of the value (bounded:
-`EQUALITY_VALUE_NARROW_MAX = 2` nested levels), run only when the value is a reference whose declared type carries a
-nullish member — and when that narrowed type is nullish-free (not any / unknown / void / a type parameter / an
-index / indexed-access / conditional / substitution type) removes nullish from the walked reference; the same value
-type now feeds (P18.207)'s `optionalChainContainmentNarrow` (`n === d?.p` with `n` narrowed non-null narrows `d`, as
-tsgo). Along the way the builder found tsgo distributes `(A | B) & undefined` and keeps only the nullish member
-(`reduceUnionAndNullishIntersection`) — needed for the real site's `NodeArray<Node> | (TInArray & undefined)` return.
-`Checker.kt` +106 / -5.
-
-**The prediction failed and the orchestrator caught it**: the builder's JDI arm run predated its last fix, and
-re-running the arm on the FINAL binary (`build/bench/p18209-orch/arm/`) still reads **tsc 2, harness 2** — both
-`expressionToTypeNode.ts:596 'nodes'`. A 4-variant probe (flat / nested x one / two overloads — session scratch, the matrix is restated in the S-G4b queue text)
-names the cause: **the real `visitNodes` is an OVERLOAD SET**, and with the predicate overload declared first our
-`let result = visitNodes(nodes, visitor, test, start, count)` types as `any` (no TS2322 at a mis-assignment probe
-where tsgo prints `NodeArray<Node>`), so there is no narrowed value to compare with; nesting (B83.5) is irrelevant; one
-overload works. The builder's "real site shape" pin declares ONE overload, so it passed while the site did not —
-the brief's census line is the lesson: a pin is a claim about its fixture, the arm is the claim about the site.
-
-**Pins**: `EqualityValueNullishNarrowTest` (29, 11 negative controls). **Ablation** (9 arms, all RED): E1 value
-narrowing skipped 3+, E2 wrong branch 3+, E3 nullable value accepted 2, E4 any/unknown/void accepted 3, E5
-optional-chain value not narrowed 1, E6 no nullish removal 3+, E7 depth cap 1 (three nested narrowed values), E8/E9
-intersection distribution removed 2 each. **Gates**: full suite **20,999 / 0 / 44** (+29); corpus screen 0 of 8,725;
-cost_gate PASS (flat — `narrow.walks` -0.04%, the nested walk runs only when both sides are nullable); huge_methods 0;
-grid 8x `added=0 removed=0` (chain control OK), rxjs / marked 0 -> 0, cronstrue 1 -> 1; warm A/B -3.1% B 2/2 (read as
-NO regression, not a win — arm B sd 2.3%). **Successor**: S-G4b (the overloaded-call `any`), then Round A.
 
 ## QUEUE
 
@@ -968,7 +966,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.176) THE ARITY RESIDUES (CHK.175) MEASURED — two FALSE POSITIVES first, then missing rows (all pre-existing, cells under `build/bench/p18218-agent/m/` and `x/`).** (b) FALSE TS2554: the name-based arity walker (`spineArgCallEnter` / `paramInfo`) ignores `void`-accepting trailing parameters (b01 / b02 — tsgo reports only TS2345); (c) DUPLICATE TS2345: the B498 pin walker `checkGenericDefaultParamCall` repeats the main reader's TS2345 when arity is CORRECT (`g<string>(1)` prints it twice); (a) MISSING TS2554 where the name-based walker does not reach — a call through a function-typed parameter (a09), real-lib functions and members (b04 `parseInt`, `charAt`), an overloaded constructor (b06), an optional-chain call (b07), a tuple rest (b10) — a signature-based TS2554 reader could share `callArityFails`; (d) JS: untyped JS parameters are treated as optional ("1-2") where TypeScript 7 makes them required (x/j1), and JS argument relation never fires (b05 / j2); (e) a tagged template's TS2554 at the wrong column (a14); (f) decorators: TS1241 never emitted (a31). Measure each against tsgo first.
+- [ ] **(CHK.176) (b) + (c) LANDED 2026-09-29 ((P18.219) note: void-trimmed minimum in seven arity emitters; B498 skips explicit type arguments). OPEN: (a) needs a NEW signature-based TS2554 emitter at `checkArgumentsAgainstSignature` (row-adding; deduplicate against the name walker), (d)-(f), and the contextual-`void` parameter case. THE ARITY RESIDUES (CHK.175) MEASURED — two FALSE POSITIVES first, then missing rows (all pre-existing, cells under `build/bench/p18218-agent/m/` and `x/`).** (b) FALSE TS2554: the name-based arity walker (`spineArgCallEnter` / `paramInfo`) ignores `void`-accepting trailing parameters (b01 / b02 — tsgo reports only TS2345); (c) DUPLICATE TS2345: the B498 pin walker `checkGenericDefaultParamCall` repeats the main reader's TS2345 when arity is CORRECT (`g<string>(1)` prints it twice); (a) MISSING TS2554 where the name-based walker does not reach — a call through a function-typed parameter (a09), real-lib functions and members (b04 `parseInt`, `charAt`), an overloaded constructor (b06), an optional-chain call (b07), a tuple rest (b10) — a signature-based TS2554 reader could share `callArityFails`; (d) JS: untyped JS parameters are treated as optional ("1-2") where TypeScript 7 makes them required (x/j1), and JS argument relation never fires (b05 / j2); (e) a tagged template's TS2554 at the wrong column (a14); (f) decorators: TS1241 never emitted (a31). Measure each against tsgo first.
 
 - [x] **(CHK.175) LANDED 2026-09-29 ((P18.218) note: `callArityFails` gates argument relation, overload TS2769 and the B498 walker; residues filed as (CHK.176)). AN ARITY MISMATCH REPORTS TS2345 BESIDE tsgo's LONE TS2554 — `function g(s: string) {}; g(1, 2)` prints both on HEAD (found by (P18.215)'s builder, cell `build/bench/p18215-agent/ar/a1`, reproduced on the parent build).** tsgo reports only `Expected 1 arguments, but got 2.` — once the arity check fails it does not relate the arguments (`resolveCall` picks no candidate; `getSignatureApplicabilityError` is not reached for an arity-failed signature). A GENERAL false positive on the most ordinary call shape; census first: which reader emits the TS2345 (`checkArgumentsAgainstSignatureCore` vs the spine), whether TS2554 and TS2345 are emitted by different passes, the population on the 8 profiles (likely 0 — tsc's code is arity-clean) and the corpus (arity baselines should pin it — find out why they do not), and overload / rest / optional-parameter variants against tsgo. Direction: REMOVES rows.
 

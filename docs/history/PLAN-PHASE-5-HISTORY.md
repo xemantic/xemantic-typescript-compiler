@@ -1,3 +1,34 @@
+### Round (P18.209) — (CHK.173) S-G4: equality with a FLOW-NARROWED non-nullish value removes nullish from the reference; its pinned shapes all agree with tsgo, but the arm's last two rows did NOT move — their real cause is an overload-resolution `any`, filed as S-G4b (2026-09-28)
+
+Orchestrated: one implementation subagent, which **stalled a third time** this session (finished work, then idle with no
+process — waiting on a notification that never came) and was stopped; the orchestrator gated its tree (identical to
+its saved `work.patch`, its final build `cdd4a728`). **Mechanism**: `narrowByEquality` on the EQUAL branch now asks
+the OTHER operand's type through `equalityValueFlowType` — a re-entrant flow narrowing of the value (bounded:
+`EQUALITY_VALUE_NARROW_MAX = 2` nested levels), run only when the value is a reference whose declared type carries a
+nullish member — and when that narrowed type is nullish-free (not any / unknown / void / a type parameter / an
+index / indexed-access / conditional / substitution type) removes nullish from the walked reference; the same value
+type now feeds (P18.207)'s `optionalChainContainmentNarrow` (`n === d?.p` with `n` narrowed non-null narrows `d`, as
+tsgo). Along the way the builder found tsgo distributes `(A | B) & undefined` and keeps only the nullish member
+(`reduceUnionAndNullishIntersection`) — needed for the real site's `NodeArray<Node> | (TInArray & undefined)` return.
+`Checker.kt` +106 / -5.
+
+**The prediction failed and the orchestrator caught it**: the builder's JDI arm run predated its last fix, and
+re-running the arm on the FINAL binary (`build/bench/p18209-orch/arm/`) still reads **tsc 2, harness 2** — both
+`expressionToTypeNode.ts:596 'nodes'`. A 4-variant probe (flat / nested x one / two overloads — session scratch, the matrix is restated in the S-G4b queue text)
+names the cause: **the real `visitNodes` is an OVERLOAD SET**, and with the predicate overload declared first our
+`let result = visitNodes(nodes, visitor, test, start, count)` types as `any` (no TS2322 at a mis-assignment probe
+where tsgo prints `NodeArray<Node>`), so there is no narrowed value to compare with; nesting (B83.5) is irrelevant; one
+overload works. The builder's "real site shape" pin declares ONE overload, so it passed while the site did not —
+the brief's census line is the lesson: a pin is a claim about its fixture, the arm is the claim about the site.
+
+**Pins**: `EqualityValueNullishNarrowTest` (29, 11 negative controls). **Ablation** (9 arms, all RED): E1 value
+narrowing skipped 3+, E2 wrong branch 3+, E3 nullable value accepted 2, E4 any/unknown/void accepted 3, E5
+optional-chain value not narrowed 1, E6 no nullish removal 3+, E7 depth cap 1 (three nested narrowed values), E8/E9
+intersection distribution removed 2 each. **Gates**: full suite **20,999 / 0 / 44** (+29); corpus screen 0 of 8,725;
+cost_gate PASS (flat — `narrow.walks` -0.04%, the nested walk runs only when both sides are nullable); huge_methods 0;
+grid 8x `added=0 removed=0` (chain control OK), rxjs / marked 0 -> 0, cronstrue 1 -> 1; warm A/B -3.1% B 2/2 (read as
+NO regression, not a win — arm B sd 2.3%). **Successor**: S-G4b (the overloaded-call `any`), then Round A.
+
 ### Round (P18.208) — (CHK.173) S-G1c + G7: a reference read inside its OWN optional chain's later links is non-nullish; 42 of 46 cells agree with tsgo (was 23), the arm residual harness 5 -> 2, +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism**: the binder creates no

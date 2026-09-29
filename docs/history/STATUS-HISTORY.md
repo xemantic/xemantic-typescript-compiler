@@ -1,5 +1,12 @@
 
 
+**(P18.214) — (CHK.173) G5 S2 SLICES 3 + 4: CALL ARGUMENTS AND CALLED NAMES SEE A BLOCK-SCOPED SHADOW; +0 EVERYWHERE, 21,223 / 0 / 44 (2026-09-28).**
+A block `let`/`const` shadowing a parameter was passed as the parameter (false TS2345), and a block `function f`
+shadowing an outer `const f: string` was called as the outer (false TS2349). The argument walker is now scoped and the
+callee resolver asks the lexical scope, as the value read already did. 2,160-cell matrix: 62 false rows removed, 165
+true added, 0 false added. 22 pins, 7 of 7 arms RED. Screen 0; grid 8x0; libs 0; cost_gate PASS. Next: Round B.
+
+
 **(P18.213) — (CHK.173) G5 S2 SLICE 2: DECLARATIONS, ASSIGNMENTS AND RETURNS SEE A BLOCK-SCOPED SHADOW (AND A CATCH VARIABLE AS `unknown`) AS tsgo DOES; +0 EVERYWHERE, 21,201 / 0 / 44 (2026-09-28).**
 `let x = 1` in a block shadowing an outer `x: string` made `x = 2` a false TS2322, and the inner type leaked past the
 block. The declaration/assignment walker and its legacy twin now scope blocks, catch, case blocks and for headers. On
