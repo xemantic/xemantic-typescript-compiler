@@ -1,5 +1,12 @@
 
 
+**(P18.216) — (CHK.173) ROUND B1: AN INNER SAME-NAMED `const` NO LONGER RE-NARROWS THE OUTER VARIABLE — ROUND A's REMAINING FALSE-POSITIVE CLASS IS CLOSED; +0 EVERYWHERE, 21,309 / 0 / 44 (2026-09-28).**
+`if (!s) return; { const s = g(); } return s.length` reported "'s' is possibly 'null'" because narrowing matched an
+assignment by name. A binding-identity gate now ignores assignments to a different, block-scoped binding. Also:
+`x === void 0`, `(m = re.exec(s)) != null` and `s &&= …` narrow as tsgo does. 16 shipped false positives removed, 4 true
+rows added; 72 pins, 12 of 12 arms RED; warm A/B inside the band. Screen 0; grid 8x0; libs 0. Next: B2.
+
+
 **(P18.215) — (CHK.173) G5 RESIDUE c6: A NESTED FUNCTION NAMED LIKE AN OUTER BINDING IS TYPED AS ITSELF; +0 EVERYWHERE, 21,237 / 0 / 44 (2026-09-28).**
 `function outer() { function g(n: number) {} g("x") }` beside a file-level `g` read `g` as `any`, so its arguments were
 never checked. A lexical consult now runs past that `any`; the 2,160-cell matrix gains 15 true rows, 0 false. The

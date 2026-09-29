@@ -1,3 +1,45 @@
+### Round (P18.211) — (CHK.173) ROUND A: a property access / call on a nullable IDENTIFIER now reports TS18047 / TS18048 / TS18049 as tsgo does — the embeddable checker's most visible false negative; +95 rows on 156 census cells, 0 ours-only, +0 on every profile and library (2026-09-28)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate and added an end-to-end POSITIVE
+CONTROL the grid cannot give (a 5-line project: the parent binary reports nothing, the new one exactly tsgo's
+`(2,29) TS18047 'x' is possibly 'null'` and `(3,10) TS18048 'y' is possibly 'undefined'`). Six rounds
+((P18.204)-(P18.210)) first closed every narrowing gap that would have turned this check into false positives — the
+census arm went 32 -> 0 on harness — which is why it lands at +0 on real code. **Mechanism**:
+`emitTs1804xForNullableIdentifierReceiver` in `checkSinglePropertyAccess`, right after the B464 call and before
+`Q_SUPER` (new `CpaSections.Q_TS1804X_ID`); gates `strictNullChecks`, not `?.`, a BARE identifier (not
+this/super/arguments/undefined; no paren unwrap — tsgo reports `(x).s` as TS2531), declared type (`getTypeOfIdentifier`)
+a union carrying null/undefined, nullish surviving `getNarrowedTypeForReferenceFollowLoopEntry`, not
+`optionalChainGuardsRef`, not refused by `LocalShadowGuard.nullableReceiverBindingRefused` (R1 catch variable, R2 a
+function / class expression's own name or a function / class / enum declaration, R3 a destructuring leaf of a block /
+body / case-clause local — the interim guard until (CHK.173) G5 S2 types those locals); no `return` after firing (a
+TS2339/TS2551 still follows, as tsgo). One code chooser `nullishReceiverCode` (null+undefined 18049 / null 18047 /
+undefined 18048 from the NARROWED type) is shared with the element arm and B464 — which printed 18048 where tsgo says
+18049 (cell d03), fixed. **Where the census was wrong**: its ablation A7 as written (leave the original call) measures
+double emission, not order (51 red vs the real arm's 2); A3b (non-loop-entry narrowing) and R2's declaration half
+(A8d) read 0 red — redundant (the scope-space override already types a block function/class/enum), kept per spec; the
+any/unknown/error bail (A11) is redundant too; the population is stale in our favour (113-cell matrix 102 agree / 0
+ours-only / 11 missing against the census's 100 / 2 / 11). **Countdown**: `ContextualParamReadersTest`'s "KNOWN GAP
+- a nullish UNION contextual parameter reports no TS18048" asserted a silence tsgo contradicts (`t.ts(8,25)`) —
+re-pointed and renamed.
+
+**Pins**: `IdentifierReceiverNullishTest` (100: 56 must-report with tsgo's whole row list, 42 must-stay-silent, c46
+paren and e01-e03 codes-only). **Ablation**, one arm each: A1 no strictNullChecks gate 1 RED, A2 no `?.` skip 5, A3
+declared not narrowed 25, A4 no `optionalChainGuardsRef` 3, A5 code from declared type 1, A6 return after firing 1, A7
+before B464 2, A8 no binding guard 4 (A8a R1 1, A8b R2-expression 1, A8c R3 2), A9 B464 old code 1, A10 paren unwrap
+1; A3b / A8d / A11 0 (recorded redundant). **Cost** (the predicted one walk per nullable-declared identifier receiver):
+against the rebuilt parent `narrow.walks` 37,350 -> 38,494 (+3.06%), `globals.lookups` +1.54%, `typeOfExpr.calls`
++0.16% — accepted, `docs/perf/cost-counters.txt` re-baselined in the same commit; warm A/B +0.81%, inside the band.
+**Gates**: full suite **21,118 / 0 / 44** (+100); corpus screen 0 of 8,725 (its one corpus firing,
+`inferTypePredicates.ts` 52:17, is a correct row a wipe-and-pin walker hides); huge_methods 0; grid 8x `added=0
+removed=0` (chain control OK); rxjs / marked / cronstrue / strict cronstrue all equal to tsgo on this family.
+
+**Still missing (not pinned — they would be countdowns)**: body locals the cpa frame does not type (c06, c35, m10,
+c33 — G5 S2 slice 1, which also lets R1/R3 relax), an optional parameter written `x?: T` with a non-union `T` (c07),
+a type-parameter receiver (c14), a non-union `null` (c19), TS2531 for `(x).p`, the TS2339 message after the new row
+still naming `| null` (e01-e03), reach in parameter defaults / computed keys / for-of expressions / static blocks /
+`typeof x.s` / decorators, and B81.1c's `x.a` row (d01). **Successor**: G5 S2 slice 1 (arith + cpa block scoping),
+then Round B (the missing receivers above).
+
 ### Round (P18.210) — (CHK.173) S-G4b: overload SELECTION fixed three ways (optional parameters accept `undefined`, constraints naming another type parameter, a boolean callback refused for a predicate parameter); the Round A arm now reads **0 rows** on tsc and harness, +0 everywhere (2026-09-28)
 
 Orchestrated: one implementation subagent (it finished without stalling this time); the orchestrator re-ran every gate
