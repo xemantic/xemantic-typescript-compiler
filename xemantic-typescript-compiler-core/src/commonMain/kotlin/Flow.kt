@@ -83,7 +83,16 @@ class FlowUnreachable(override val id: Int) : FlowNode
 class FlowBranchLabel(
     override val id: Int,
     val antecedents: MutableList<FlowNode> = mutableListOf(),
-) : FlowNode
+) : FlowNode {
+    /**
+     * (CHK.173 B5e) true for a try statement's EXCEPTION label: the pre-try (or pre-catch)
+     * flow at `antecedents[0]` plus every mutation bound inside the block. Narrowing reads
+     * every antecedent; the OR-semantics TS2454 walk (`Checker.isAssignedAtFlow`) follows
+     * `antecedents[0]` only, because an assignment on ONE exceptional path does not make
+     * the variable assigned on the path that threw before it.
+     */
+    var isTryException: Boolean = false
+}
 
 /**
  * A loop's join point (top-of-loop). Has antecedents from the entry and
@@ -741,6 +750,14 @@ class FlowGraphBuilder {
      */
     private val labeledTargets: MutableMap<String, Pair<FlowBranchLabel, FlowLoopLabel?>> = mutableMapOf()
 
+    /**
+     * (CHK.173 B5e) tsgo `currentExceptionTarget`: while a `try` (or `catch`) block is
+     * bound, every MUTATION (a [FlowAssignment]) is also an antecedent of this label, so the
+     * `catch` / `finally` entry sees each state an exception could leave behind — not only
+     * the pre-try state. Null outside a try and reset at every function boundary.
+     */
+    private var exceptionTarget: FlowBranchLabel? = null
+
     fun build(sourceFile: SourceFile): FlowGraph {
         sourceText = sourceFile.text
         reassignScanCache.clear() // per-file text — a reused builder must not serve stale scans
@@ -816,7 +833,10 @@ class FlowGraphBuilder {
     private fun newBranchLabel(): FlowBranchLabel = noteMint(FlowBranchLabel(nextId++))
     private fun newLoopLabel(): FlowLoopLabel = noteMint(FlowLoopLabel(nextId++))
     private fun newAssignment(node: Node, antecedent: FlowNode): FlowAssignment =
-        noteMint(FlowAssignment(nextId++, node, antecedent)).also { noteNarrowingNode(it) }
+        noteMint(FlowAssignment(nextId++, node, antecedent)).also {
+            noteNarrowingNode(it)
+            exceptionTarget?.antecedents?.add(it)
+        }
     private fun newCondition(isTrue: Boolean, expr: Expression, antecedent: FlowNode): FlowCondition =
         noteMint(FlowCondition(nextId++, isTrue, expr, antecedent)).also { noteNarrowingNode(it) }
     private fun newSwitchClause(
@@ -1280,46 +1300,68 @@ class FlowGraphBuilder {
     }
 
     private fun bindTryStatement(stmt: TryStatement) {
-        // Conservative: any point inside try may throw, so the catch clause's
-        // antecedent is the try-entry flow. Final flow after try-catch-finally
-        // is the join of the try's normal completion + catch's normal completion.
-        val preTry = currentFlow
+        // (CHK.173 B5e) tsgo `bindTryStatement`. Any point in the try may throw, but only
+        // MUTATIONS change a flow type, so the exception label collects the pre-try flow
+        // plus every assignment bound while it is the [exceptionTarget] (newAssignment).
+        // The catch entry is that label; the catch then acts as a second try block with
+        // its own exception label, and the finally entry joins the normal completion with
+        // the (last) exception label.
+        //
+        // tsgo also joins a `return` in the try/catch into the finally entry (its return
+        // label). That label is NOT built here: every state a return path can carry is the
+        // pre-try flow or a mutation already in the exception label, narrowed further, so
+        // for a union of types it adds nothing — measured by ablation (0 of 18 pins move) —
+        // and its only other reader in tsgo is the ReduceLabel of an IIFE return.
+        val savedException = exceptionTarget
+        var exceptionLabel = newBranchLabel().also { it.isTryException = true }
+        joinAntecedent(exceptionLabel, currentFlow)
+        exceptionTarget = exceptionLabel
         bindStatement(stmt.tryBlock)
-        val tryEnd = currentFlow
 
         // Normal-completion join (try's normal end + catch's normal end): the flow
         // that continues AFTER the whole statement.
         val normalJoin = newBranchLabel()
-        joinAntecedent(normalJoin, tryEnd)
+        joinAntecedent(normalJoin, currentFlow)
 
         if (stmt.catchClause != null) {
-            // Catch entry: pre-try flow (any throw point during try)
-            currentFlow = preTry
+            currentFlow = finishBranchLabel(exceptionLabel)
+            exceptionLabel = newBranchLabel().also { it.isTryException = true }
+            joinAntecedent(exceptionLabel, currentFlow)
+            exceptionTarget = exceptionLabel
             stmt.catchClause.variableDeclaration?.let { catchVar ->
                 bindAssignmentTarget(catchVar.name, catchVar)
             }
             bindStatement(stmt.catchClause.block)
             joinAntecedent(normalJoin, currentFlow)
         }
+        exceptionTarget = savedException
 
         val normalCompletion = finishBranchLabel(normalJoin)
 
         if (stmt.finallyBlock != null) {
-            // The finally block runs on EVERY exit path, including an EARLY throw
-            // from the try/catch (before their normal completion). Its entry flow
-            // therefore joins the pre-try flow (exceptional early exit) with the
-            // normal completion. WITHOUT the pre-try antecedent, a try that always
-            // returns/throws makes the normal completion unreachable, so every read
-            // in finally washes to `never` → spurious TS2339 on cleanup code
-            // (checker.ts checkGrammarRegularExpressionLiteral's scanner reset).
+            // The finally block runs on EVERY exit path: normal completion and an
+            // exception (the exception label: the pre-try flow plus every mutation in the
+            // try, or in the catch when there is one — which also covers every state a
+            // `return` can leave). WITHOUT the exceptional antecedents, a try that always
+            // returns/throws makes the normal completion unreachable, so every read in
+            // finally washes to `never` → spurious TS2339 on cleanup code (checker.ts
+            // checkGrammarRegularExpressionLiteral's scanner reset). The exception label
+            // is joined AS a label (not flattened) so it keeps [FlowBranchLabel.isTryException].
             val finallyEntry = newBranchLabel()
-            joinAntecedent(finallyEntry, preTry)
             joinAntecedent(finallyEntry, normalCompletion)
+            if (exceptionLabel.antecedents.isNotEmpty()) finallyEntry.antecedents.add(exceptionLabel)
             currentFlow = finishBranchLabel(finallyEntry)
             bindStatement(stmt.finallyBlock)
+            // tsgo routes an enclosing exception target through a ReduceLabel (the
+            // finally body re-walked with only the exceptional antecedents). This graph has
+            // no ReduceLabel, so the enclosing target takes the finally's END flow — the
+            // same body over the full entry, i.e. a superset of tsgo's answer.
+            if (exceptionLabel.antecedents.isNotEmpty()) exceptionTarget?.let { joinAntecedent(it, currentFlow) }
             // After the finally completes normally, control resumes at the try/catch's
             // normal completion — NOT the finally's exceptional-inclusive flow (which
             // would widen away the try/catch narrowing for the statements that follow).
+            // tsgo's ReduceLabel would additionally carry the finally body's own
+            // assignments here; without one they are not seen after the statement.
             currentFlow = normalCompletion
         } else {
             currentFlow = normalCompletion
@@ -1399,6 +1441,8 @@ class FlowGraphBuilder {
         val savedContinues = continueTargetStack.toList()
         breakTargetStack.clear()
         continueTargetStack.clear()
+        val savedException = exceptionTarget
+        exceptionTarget = null
 
         // B464: for a closure (ArrowFunction / FunctionExpression) nested inside
         // another function, capture the enclosing flow + the captured-var gate
@@ -1455,6 +1499,7 @@ class FlowGraphBuilder {
 
         functionLikeStack.removeLast()
         currentFlow = savedFlow
+        exceptionTarget = savedException
         breakTargetStack.clear(); breakTargetStack.addAll(savedBreaks)
         continueTargetStack.clear(); continueTargetStack.addAll(savedContinues)
     }

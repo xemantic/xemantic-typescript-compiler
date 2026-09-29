@@ -24246,8 +24246,11 @@ class Checker(
                     flow = f.antecedent
                 }
                 is FlowBranchLabel -> {
-                    // tsc: a single-antecedent label is followed in the loop (no depth).
-                    if (f.antecedents.size == 1) flow = f.antecedents[0]
+                    // (CHK.173 B5e): each path of an exception label is "the try threw
+                    // here", so the variable is assigned only if it was at the pre-try
+                    // flow (antecedents[0]). tsc: a single-antecedent label is followed in
+                    // the loop (no depth).
+                    if (f.isTryException || f.antecedents.size == 1) flow = f.antecedents[0]
                     else return f.antecedents.any { isAssignedAtFlow(it, varName, visited, depth + 1) }
                 }
                 // FlowLoopLabel back-edges are pointers to post-iteration flow that
