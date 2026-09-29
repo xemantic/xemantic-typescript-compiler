@@ -67599,10 +67599,14 @@ interface DataView {
                 val excessIdx = if (expanded != null) firstExcessArgIndex(expanded, info.maxParams) else info.maxParams
                 emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, excessIdx, source, fileName)
             } else if (argCount < info.minParams) {
-                if (info.hasRest) {
-                    emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName, info.parameters)
+                // (CHK.176)(b) a trailing `void`-accepting parameter may be omitted.
+                val callMin = callMinArgumentCount(info)
+                if (argCount >= callMin) {
+                    // correct arity
+                } else if (info.hasRest) {
+                    emitTS2555TooFew(callMin, argCount, expr.expression, source, fileName, info.parameters)
                 } else {
-                    emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
+                    emitTS2554TooFew(callMin, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
                 }
             } else if (info.hasRest && expr.typeArguments.isNullOrEmpty()) {
                 // B170: rest param typed `Parameters<Fn>` where another param is typed
@@ -67666,6 +67670,7 @@ interface DataView {
             // generic ones, changing the applicable arity — out of scope here).
             val argCount = expr.arguments.size
             val spreads = expr.arguments.filterIsInstance<SpreadElement>()
+            var overloadMin = info.minParams
             if (expanded != null) {
                 // B270: spread-of-array-literal args have a knowable effective count;
                 // overflow inside the spread squiggles the spread argument itself.
@@ -67687,12 +67692,18 @@ interface DataView {
                         ))
                     }
                 }
-            } else if (argCount < info.minParams && spreads.isEmpty()) {
-                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
+            } else if (argCount < info.minParams && spreads.isEmpty() &&
+                argCount < overloadCallMin(info).also { overloadMin = it }
+            ) {
+                // (CHK.176)(b) the void-trimmed minimum over the overloads.
+                emitTS2554TooFew(overloadMin, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
             } else if (!info.hasRest && argCount > info.maxParams) {
                 emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
             } else if (spreads.isEmpty() && info.overloadSigs.isNotEmpty() &&
-                info.overloadSigs.none { argCount >= it.minParams && (it.hasRest || argCount <= it.maxParams) }
+                info.overloadSigs.none {
+                    (argCount >= it.minParams || argCount >= callMinArgumentCount(it.minParams, it.parameters)) &&
+                        (it.hasRest || argCount <= it.maxParams)
+                }
             ) {
                 // B270: TS2575 — argCount falls in a GAP between overload arities
                 // (within the global range but accepted by no signature). Neighbors
@@ -67701,7 +67712,7 @@ interface DataView {
                 var below = -1
                 var above = Int.MAX_VALUE
                 for (sig in info.overloadSigs) {
-                    val mc = sig.minParams
+                    val mc = callMinArgumentCount(sig.minParams, sig.parameters)
                     if (mc < argCount && mc > below) below = mc
                     else if (argCount < mc && mc < above) above = mc
                 }
@@ -67731,7 +67742,7 @@ interface DataView {
             }
             if (applicable.isNotEmpty()) {
                 val argCount = expr.arguments.size
-                val gMin = applicable.minOf { it.minParams }
+                val gMin = applicable.minOf { callMinArgumentCount(it.minParams, it.parameters) }
                 val gMax = applicable.maxOf { it.maxParams }
                 val gRest = applicable.any { it.hasRest }
                 // TS6210 "argument for 'x' not provided" only when the applicable subset
@@ -67800,11 +67811,14 @@ interface DataView {
                 // not just the class identifier — matches TypeScript. Pass info.parameters
                 // so the TS6210 "argument for 'x' not provided" related info fires (it points
                 // at the ctor's param at the missing index; for an inherited ctor that's the
-                // base class's param).
-                if (info.hasRest) {
-                    emitTS2555TooFew(info.minParams, argCount, expr, source, fileName, info.parameters)
+                // base class's param). (CHK.176)(b): the void-trimmed minimum.
+                val callMin = callMinArgumentCount(info)
+                if (argCount >= callMin) {
+                    // correct arity
+                } else if (info.hasRest) {
+                    emitTS2555TooFew(callMin, argCount, expr, source, fileName, info.parameters)
                 } else {
-                    emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr, source, fileName, info.parameters, info.declSource, info.declFileName)
+                    emitTS2554TooFew(callMin, info.maxParams, argCount, expr, source, fileName, info.parameters, info.declSource, info.declFileName)
                 }
             }
         }
@@ -149679,6 +149693,12 @@ interface DataView {
         for ((i, param) in params.withIndex()) {
             val ptpName = ((param.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
             if (ptpName !in map) continue
+            // (CHK.176)(c) a parameter typed by an EXPLICITLY supplied type argument
+            // (`g<string>(1)`) is related by the ordinary argument reader
+            // ([checkArgumentsAgainstSignature]), which reported it once already; only a
+            // DEFAULT-resolved one (`<T, U = T>` called `h<number>(1, "x")`) is this
+            // walker's own row.
+            if (tps.indexOfFirst { it.name.text == ptpName } < typeArgs.size) continue
             val resolvedNode = resolveTpNode(ptpName) ?: continue
             // Avoid re-resolving to another TP (would not be a concrete primitive anyway).
             val pType = getTypeFromTypeNode(resolvedNode)
@@ -162971,8 +162991,12 @@ interface DataView {
                 }
                 if (anyRest) return@run
                 val argCount = expr.arguments.size
-                if (signatures.any { argCount >= it.minArgumentCount && argCount <= it.parameters.size }) return@run
-                val minA = signatures.minOf { it.minArgumentCount }
+                // (CHK.176)(b) a trailing void-accepting parameter may be omitted.
+                if (signatures.any {
+                        (argCount >= it.minArgumentCount || argCount >= relationMinArgumentCount(it)) &&
+                            argCount <= it.parameters.size
+                    }) return@run
+                val minA = signatures.minOf { relationMinArgumentCount(it) }
                 val maxA = signatures.maxOf { it.parameters.size }
                 if (argCount > maxA) {
                     emitTS2554TooMany(minA, maxA, argCount, expr.arguments, maxA, source, fileName)
@@ -162981,7 +163005,7 @@ interface DataView {
                 if (argCount < minA) {
                     val nameNode = callee.name
                     if (nameNode.text.isEmpty()) return@run
-                    val bestSig = signatures.firstOrNull { it.minArgumentCount == minA } ?: return@run
+                    val bestSig = signatures.firstOrNull { relationMinArgumentCount(it) == minA } ?: return@run
                     val relatedInfo = mutableListOf<Diagnostic>()
                     val missingParam = bestSig.parameters.getOrNull(argCount)?.valueDeclaration as? Parameter
                     val pname = missingParam?.name as? Identifier
@@ -164270,8 +164294,8 @@ interface DataView {
      * the first parameter that is not void-accepting, so a `void` in the MIDDLE is still
      * required. `strictNullChecks` plays no part.
      *
-     * Only the relation reads this. CALL arity (`g()` for `g(x: void)`) is a separate reader
-     * that tsgo decides through `hasCorrectArity`'s own `acceptsVoid` loop, and is not changed.
+     * CALL arity reads the same rule through [callMinArgumentCount], which works from the
+     * DECLARATION's parameter list (a binding pattern keeps its position there).
      *
      * Answers the raw [Signature.minArgumentCount] whenever the positions cannot be trusted:
      * [getParameterSymbols] DROPS a binding-pattern parameter, so when the declaration's own
@@ -164289,13 +164313,7 @@ interface DataView {
         for (i in min - 1 downTo 0) {
             val p = params[i]
             if ((p.valueDeclaration as? Parameter)?.dotDotDotToken == true) break
-            val t = getTypeOfSymbol(p)
-            val acceptsVoid = if (t is Type.Union) {
-                t.types.any { it.flags.hasAny(TypeFlags.Void) }
-            } else {
-                t.flags.hasAny(TypeFlags.Void)
-            }
-            if (!acceptsVoid) break
+            if (!typeAcceptsVoid(getTypeOfSymbol(p))) break
             min = i
         }
         return min
@@ -164345,7 +164363,9 @@ interface DataView {
         val declared = sigs.map { signatureDeclaredArity(it) }
         val anyRest = sigs.indices.any { sigHasRestParameter(sigs[it]) || declared[it]?.hasRest == true }
         val maxParams = sigs.indices.maxOf { maxOf(sigs[it].parameters.size, declared[it]?.maxParams ?: 0) }
-        val minParams = sigs.minOf { it.minArgumentCount }
+        var minParams = sigs.minOf { it.minArgumentCount }
+        // (CHK.176)(b) the void-trimmed minimum, asked only on a too-few path.
+        if (args.size < minParams) minParams = sigs.minOf { relationMinArgumentCount(it) }
         if (!anyRest && args.size > maxParams) {
             emitTS2554TooMany(minParams, maxParams, args.size, args, maxParams, source, fileName)
             return true
@@ -164356,8 +164376,11 @@ interface DataView {
             // wrong there, and it was reachable BEFORE this round — `sigHasRestParameter`
             // already answered true for a rest-bearing member whose leading parameter is a
             // binding pattern, because the surviving rest symbol is still the list's last.
-            if (anyRest) emitTS2555TooFew(minParams, args.size, calleeExpr, source, fileName)
-            else emitTS2554TooFew(minParams, maxParams, args.size, calleeExpr, source, fileName)
+            // (CHK.176) tsgo anchors a too-few row at a property access's NAME (`u.m()` at
+            // `m`, as [checkTs2554ForPropertyAccessCall] does), not at the receiver.
+            val anchor = (calleeExpr as? PropertyAccessExpression)?.name ?: calleeExpr
+            if (anyRest) emitTS2555TooFew(minParams, args.size, anchor, source, fileName)
+            else emitTS2554TooFew(minParams, maxParams, args.size, anchor, source, fileName)
             return true
         }
         return false
@@ -164889,6 +164912,11 @@ interface DataView {
             emitTS2554TooMany(minParams, maxParams, argCount, expr.arguments, excessIdx, source, fileName)
             return
         }
+        // (CHK.176)(b) the void-trimmed minimum decides a too-few verdict and its wording.
+        // A signature with no declared list (`f.call`'s synthesized one) reads the same rule
+        // off its own parameter symbols.
+        val callMin = declInfo?.let { callMinArgumentCount(it, sig) } ?: relationMinArgumentCount(sig)
+        if (argCount >= callMin) return
         val nameNode = callee.name
         val start = nameNode.pos
         val length = nameNode.text.length
@@ -164920,7 +164948,7 @@ interface DataView {
         // `Expected 1 arguments, but got 0.` for the first before.
         if (hasRest) {
             diagnostics.add(Diagnostic(
-                message = "Expected at least $minParams arguments, but got $argCount.",
+                message = "Expected at least $callMin arguments, but got $argCount.",
                 category = DiagnosticCategory.Error,
                 code = 2555,
                 fileName = fileName,
@@ -164933,7 +164961,7 @@ interface DataView {
             return
         }
         diagnostics.add(Diagnostic(
-            message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $argCount.",
+            message = "Expected ${formatExpectedArgs(callMin, maxParams)} arguments, but got $argCount.",
             category = DiagnosticCategory.Error,
             code = 2554,
             fileName = fileName,
@@ -169906,23 +169934,53 @@ interface DataView {
         while (true) root = (root as? NodeBase)?.parent ?: break
         if ((root as? SourceFile)?.fileName?.let { isJsLikeFileName(it) } != false) return false
         if (tooMany) return true
-        val positional = info.parameters.filter {
+        return n < callMinArgumentCount(info, sig)
+    }
+
+    /**
+     * (CHK.176)(b) tsgo's `getMinArgumentCount` for a CALL (relater.go `getMinArgumentCountEx`,
+     * no flags): [info]'s required count less its trailing run of `void`-accepting parameters
+     * ([typeAcceptsVoid]), so `g("a")` for `g(s: string, v: void)` has correct arity and
+     * `g()` reads `Expected 1-2 arguments`. tsgo's `hasCorrectArity` then walks the missing
+     * positions with the same `acceptsVoid` test, which is implied: the last position of the
+     * trimmed count is not void-accepting, so a call is too short exactly when it is below it.
+     *
+     * The ONE home of the call-side rule, shared by [callArityFails] and every arity emitter
+     * that holds a [FuncParamInfo] (the name-based walkers and the property-access reader).
+     * Call it only on a too-few path: it resolves parameter types. A parameter's type is its
+     * [sig] symbol's where one is given (an instantiated signature), else its annotation's;
+     * an un-annotated parameter ends the run (no `void` reaches it here).
+     */
+    private fun callMinArgumentCount(info: FuncParamInfo, sig: Signature? = null): Int =
+        callMinArgumentCount(info.minParams, info.parameters, sig)
+
+    /** [callMinArgumentCount] over an overload set: the smallest trimmed minimum (the set's
+     *  own [FuncParamInfo.minParams] when no per-overload shape was collected). */
+    private fun overloadCallMin(info: FuncParamInfo): Int =
+        if (info.overloadSigs.isEmpty()) callMinArgumentCount(info)
+        else info.overloadSigs.minOf { callMinArgumentCount(it.minParams, it.parameters) }
+
+    private fun callMinArgumentCount(minParams: Int, parameters: List<Parameter>, sig: Signature? = null): Int {
+        var min = minParams
+        if (min <= 0) return min
+        val positional = parameters.filter {
             !it.dotDotDotToken && !((it.name as? Identifier)?.text == "this")
         }
-        for (i in n until info.minParams) {
-            val p = positional.getOrNull(i) ?: return false
-            val t = sig.parameters.firstOrNull { it.valueDeclaration === p }?.let { getTypeOfSymbol(it) }
-            val acceptsVoid = if (t != null) {
-                t === voidType || (t is Type.Union && t.types.any { it === voidType })
-            } else {
-                val tn = p.type
-                (tn is KeywordTypeNode && tn.kind == SyntaxKind.VoidKeyword) ||
-                    (tn is UnionType && tn.types.any { it is KeywordTypeNode && it.kind == SyntaxKind.VoidKeyword })
-            }
-            if (!acceptsVoid) return true
+        for (i in min - 1 downTo 0) {
+            val p = positional.getOrNull(i) ?: break
+            val t = sig?.parameters?.firstOrNull { it.valueDeclaration === p }?.let { getTypeOfSymbol(it) }
+                ?: p.type?.let { getTypeFromTypeNode(it) }
+                ?: break
+            if (!typeAcceptsVoid(t)) break
+            min = i
         }
-        return false
+        return min
     }
+
+    /** (CHK.176) tsgo's `acceptsVoid` over a type or any union constituent — the rule
+     *  [relationMinArgumentCount] and [callMinArgumentCount] share. */
+    private fun typeAcceptsVoid(t: Type): Boolean =
+        if (t is Type.Union) t.types.any { it.flags.hasAny(TypeFlags.Void) } else t.flags.hasAny(TypeFlags.Void)
 
     private fun checkArgumentsAgainstSignatureCore(
         args: List<Expression>,
