@@ -1,5 +1,12 @@
 
 
+**(P18.229) — (CHK.173) B6: LOCAL VARIABLES NOW GET "'x' IS POSSIBLY 'null' / 'undefined'" AS tsgo DOES — THE NULL-CHECK ARC IS COMPLETE; +53 TRUE ROWS, 0 FALSE, +0 EVERYWHERE, 21,848 / 0 / 44 (2026-09-30).**
+`let y: number | null = null; y.toFixed()` inside a function reported nothing. After six preparation rounds that closed
+the narrowing gaps, body locals now reach the check. The grid caught 10 false rows in the first build (all closed), and a
+measured 2-2.5% warm slowdown was traced by profiling to one needless narrowing walk (a generic assertion overload tsgo
+never picks) and removed; warm A/B now within the ordering artefact. 30 pins. Screen 0; grid 8x0; libs 0.
+
+
 **(P18.228) — (CHK.173) G1 ARC B5e: CODE IN `catch` / `finally` NOW SEES WHAT THE `try` ASSIGNED (IT SAW THE PRE-`try` TYPE), AS tsgo DOES; +0 EVERYWHERE, 21,818 / 0 / 44 (2026-09-29).**
 `let x = null; try { x = 1; … } finally { x }` typed `x` as `null` inside `finally` — wrong types in catch and finally
 blocks and a shipped false "possibly null". The binder now ports tsgo's try exception label; tsgo's return label was

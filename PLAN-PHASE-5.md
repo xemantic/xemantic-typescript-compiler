@@ -25,6 +25,28 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.234) — (CHK.178): the TS2345 chain names the FIRST failing union constituent, a cast receiver `(u as U).a` reports the missing member, and an object-literal member mismatch anchors at the member — all three to tsgo's rows, +0 rows on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent; every changed row measured against tsgo 7.0.2 on the (CHK.177) census cells (65
+cells: only m13, x07, m20 and f11 moved, all to tsgo's rows). **Where the queue item was wrong**: (a) (LEGACY.0a) had
+already switched four of the five chain pickers to FIRST — only the argument chain still picked LAST, and flipping it
+moved 0 baselines (the ignored rows included, `--include ''` identical), so no `LogicalParityDivergence` was needed;
+(b) the gap is not the union walker's receiver gate but `narrowingEligible`, which admits only a reference path, so
+EVERY cast receiver dropped out except a base-less named interface — casts to a type-literal alias were silent too;
+(c) the axis is the member VALUE's type (an object, or a union holding one, against a simple target member hit a
+`continue`). **Mechanism**: (a) the argument picker loop had no `break` (Checker.kt ~172674); (b) new
+`cmamCheckCastUnionOrObjectReceiver` — a union cast goes through the existing union-receiver block, a single
+anonymous object must pass `cmamAllMissingTrustedMember`, PROPERTY access only (an element access `u["a"]` is an
+ours-only TS2339 where tsgo says TS7053 — pre-existing in the interface slice too, queued); `AliasCarrierDisplay`
+learned that a cast supplies its own annotation, so `(u as U).a` prints `'U'`; (c) new
+`objLitMemberVsSimpleTargetChain` drills to the key and names the first failing constituent, refusing anything it
+cannot vouch for. **Pins**: `Chk178UnionChainCastReceiverObjLitDrillTest`, 16 full-text tsgo rows; ablation a1 3 / a2 4
+/ a3 2 / a4 4 / a5 1 / a6 1 (the index-signature negative control) / a7 1 RED. **Gates**: full suite 21,899 / 0 / 44
+(+16); corpus screen 8725 / 0; `cost_gate.py` 0 (every counter +0.00%); `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 — raw captures byte-identical on all 11 targets, so
+the grid is a CONTROL (none of the changed paths fire there) and the corpus plus the pins are the gate; warning gate with
+probe: probe only. `Checker.kt` +79. Residues -> (CHK.179).
+
 ### Round (P18.233) — (CHK.177) S1: a relation-error source or TS2339 receiver annotated with a union ALIAS prints the alias name as tsgo does (`Type 'U' …`, was `'A | B'`); two shipped wrong names fixed; display only, +0 rows everywhere (2026-09-30)
 
 Specified by (P18.232)'s read-only census (`build/scratch-p18232-census/`), which corrected the queue item twice: the
@@ -327,35 +349,6 @@ grid 8x `added=0 removed=0` (chain control OK), libraries 0; warning gate clean.
 `a = o?.r` (k11), a `Record` element read (k07), an unconstrained / nullable-constrained type parameter in the union
 (t03 / t05); tsgo FILTERS a union RHS where this rule only removes nullish (text-only, no false row seen). **Successor**:
 B5c (N4).
-
-### Round (P18.224) — (CHK.173) G1 arc B5a: assignment narrowing falls back to the engine's return type for a call it used to give up on (lib / interface methods, generic callees); 8 false positives removed, 2 texts to tsgo's, +0 everywhere (2026-09-29)
-
-Orchestrated: one implementation subagent (the brief's new "no command over ~8 minutes" rule held — no stall); the
-orchestrator re-ran every gate. **Mechanism**: `resolvedCallReturnTypeForFlow` keeps its `?.` guards (on the call and on
-the callee chain) and returns `annotatedCallReturnTypeForFlow(call) ?: engineCallReturnTypeForFlow(call)` — the old
-annotation read moved verbatim, then `getReturnTypeOfCallExpression`, refusing `any`/`error`/`unknown` and anything
-with an unresolved type parameter. `conditionalCallBranchesReducedTypeForFlow` (from the plain `=` arm, after
-`resolvedAssignedTypeForFlow`) types each branch of a conditional with at least one CALL branch and keeps the declared
-union's members some branch constituent is assignable to (tsgo's `getAssignmentReducedType`), refusing when a
-constituent relates to no member or the reduction removes nothing. **Where the brief was wrong**: "route each
-conditional branch through the same arm" added nothing — the conditional arm already asks the engine for the whole
-ternary; what blocked it is round 463's refusal of any UNION answer, hence the separate reduction; the type-parameter
-guard is not free — it refuses an in-scope `T` exactly as it refuses a failed inference (`s = first(a)` with `a: T[]`
-prints `T | undefined`, tsgo `T`) but is load-bearing (without it `const n: number = s` goes silent where tsgo reports
-TS2322 — the declaration reader never reports a bare `T` against `number`).
-
-**Measured**: 30 cells 28 -> 20 rows (tsgo 20): 8 FPs removed — census n8c / n8p (both SHIPPED), `substring`, `trim`,
-explicit type arguments, `id(first(a))`, two conditionals of calls; 2 texts now tsgo's (n14/b6 `'string'`, `'A | B'`);
-every true row kept (`re.exec` keeps TS18047; the `?.` / `any` / `mk()` refusals); 31 census cell sets change exactly as
-predicted; the 2,160-cell matrix byte-identical. **Pins**: `FlowEngineCallArmTest` (24). **Ablation**: A1 no fallback 10
-RED, A2 no `?.` guard 3, A3 no type-parameter guard 1 (after a dedicated `pick(a, x => x)` pin; 0 before it), A4 `any`
-accepted 1, A5 no conditional arm 3; the conditional's "every constituent relates" guard is unpinned (it only matters for
-an ill-typed assignment that already reports TS2322). **Gates**: full suite **21,700 / 0 / 44** (+24); corpus screen 0
-of 8,725; cost_gate PASS (`typeOfExpr.calls` +0.22%); huge_methods 0; grid 8x `added=0 removed=0` (chain control OK),
-libraries 0; warning gate clean (positive control live); warm A/B 2 pairs per order, both noisy (sds > 1%), the after arm
-lower in both — no regression signal. **Residues**: c18 / t06 / t08 (`T` vs a failed inference), c20 (an annotated
-declaration returns its annotation before the call arm), c22 (a conditional with a literal branch refused).
-**Successor**: B5b (N13).
 
 ## QUEUE
 
@@ -955,7 +948,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.178) THREE DISPLAY/ANCHOR/ROW DEFECTS FROM THE (CHK.177) CENSUS (cells under `build/scratch-p18232-census/cells/`, each measured against tsgo 7.0.2).** (a) the TS2345 elaboration CHAIN picks a union source's LAST failing constituent (pristine, (CHK.83)) where tsgo picks the FIRST — m13 prints `Type 'B'` for tsgo's `Type 'A'`, x07 `Type 'B'` for `Type 'undefined'`; (b) `(u as U).a` on a union with the member absent reports NO TS2339 at all (m20, a missing row); (c) an object-literal member mismatch anchors at the whole literal where tsgo drills to the member `p` (f11). Measure each first; (b) is row-adding and needs the grid.
+- [ ] **(CHK.179) RESIDUES OF (CHK.178), each measured against tsgo 7.0.2 (fixtures under `build/bench/p18234-agent/`).** (a) an element access `u["a"]` on a union identifier reports an ours-only TS2339 where tsgo reports TS7053 under strict and NOTHING without it — in both configurations, and the cast-interface slice (B98.r100) has the same defect; (b) TS2352 (`A as B` may be a mistake) is never emitted (b11); (c) still-silent receivers: `u!.a`, `(u satisfies U).a`, and `const v = u as U; v.a` (b27); (d) the object-literal member drill at OTHER positions — `return { p: u }` still anchors at the whole literal, `g({ p: u })` reports NOTHING, and a primitive-union member value (`{ p: string | boolean }` against `number`) has no chain line where tsgo prints `Type 'string' …`. (a) removes false positives and is the first to take.
+
+- [x] **(CHK.178) DONE 2026-09-30 ((P18.234) note). THREE DISPLAY/ANCHOR/ROW DEFECTS FROM THE (CHK.177) CENSUS (cells under `build/scratch-p18232-census/cells/`, each measured against tsgo 7.0.2).** (a) the TS2345 elaboration CHAIN picks a union source's LAST failing constituent (pristine, (CHK.83)) where tsgo picks the FIRST — m13 prints `Type 'B'` for tsgo's `Type 'A'`, x07 `Type 'B'` for `Type 'undefined'`; (b) `(u as U).a` on a union with the member absent reports NO TS2339 at all (m20, a missing row); (c) an object-literal member mismatch anchors at the whole literal where tsgo drills to the member `p` (f11). Measure each first; (b) is row-adding and needs the grid.
 
 - [ ] **(CHK.177) S1 LANDED 2026-09-30 ((P18.233) note: identifier sources whose declaration — local, parameter, global or imported — is annotated with a union alias print the alias at the four relation emitters and the TS2339 union-receiver carrier). OPEN — S2: resolve the DECLARED type for property-access / call / element-access / destructured / unannotated-const sources (census cells m03 m04 h02 h04 h05 f10), conditionals (h09), qualified `NS.U` references, and retire B416, whose all-interface table over-names an inline union (g01 g02 g06); x05 (our flow under-narrows, so `U` where tsgo prints `B`) belongs to the narrowing, not the display. ORIGINAL: AN ALIAS-NAMED UNION DISPLAYS EXPANDED WHERE tsgo PRINTS THE ALIAS NAME — `type U = A | B; declare const u: U; const n: number = u` prints `Type 'A | B' …` (tsgo `Type 'U' …`), on ANY read, no narrowing needed (found by (P18.222)'s builder, cells `build/bench/p18222-agent/d/d01`-`d04` and c06/c07).** A display parity defect in every relation message naming such a value. CLAUDE.md has several entries on why (grep "tsc's UNION-ALIAS DISPLAY IS *IDENTITY PRESERVATION*" and "`aliasDisplayMap` IS AN *ID-KEYED GLOBAL*"): tsc keys its union cache by member list PLUS alias and ours interns by members alone, so a naive fix is known to be structurally blocked — census which reads lose the alias (declared type vs flow type vs a narrowed-back-to-whole union), whether the flow walk's join rebuilds the union without its alias, and whether a per-READ alias carrier (the declaration's type node) can restore it without touching interning. Direction: DISPLAY only (no row added or removed) — the grid is blind to it (every profile row is `Cannot find name`); the corpus screen and pins are the gate.
 

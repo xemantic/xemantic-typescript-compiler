@@ -1,3 +1,32 @@
+### Round (P18.224) — (CHK.173) G1 arc B5a: assignment narrowing falls back to the engine's return type for a call it used to give up on (lib / interface methods, generic callees); 8 false positives removed, 2 texts to tsgo's, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent (the brief's new "no command over ~8 minutes" rule held — no stall); the
+orchestrator re-ran every gate. **Mechanism**: `resolvedCallReturnTypeForFlow` keeps its `?.` guards (on the call and on
+the callee chain) and returns `annotatedCallReturnTypeForFlow(call) ?: engineCallReturnTypeForFlow(call)` — the old
+annotation read moved verbatim, then `getReturnTypeOfCallExpression`, refusing `any`/`error`/`unknown` and anything
+with an unresolved type parameter. `conditionalCallBranchesReducedTypeForFlow` (from the plain `=` arm, after
+`resolvedAssignedTypeForFlow`) types each branch of a conditional with at least one CALL branch and keeps the declared
+union's members some branch constituent is assignable to (tsgo's `getAssignmentReducedType`), refusing when a
+constituent relates to no member or the reduction removes nothing. **Where the brief was wrong**: "route each
+conditional branch through the same arm" added nothing — the conditional arm already asks the engine for the whole
+ternary; what blocked it is round 463's refusal of any UNION answer, hence the separate reduction; the type-parameter
+guard is not free — it refuses an in-scope `T` exactly as it refuses a failed inference (`s = first(a)` with `a: T[]`
+prints `T | undefined`, tsgo `T`) but is load-bearing (without it `const n: number = s` goes silent where tsgo reports
+TS2322 — the declaration reader never reports a bare `T` against `number`).
+
+**Measured**: 30 cells 28 -> 20 rows (tsgo 20): 8 FPs removed — census n8c / n8p (both SHIPPED), `substring`, `trim`,
+explicit type arguments, `id(first(a))`, two conditionals of calls; 2 texts now tsgo's (n14/b6 `'string'`, `'A | B'`);
+every true row kept (`re.exec` keeps TS18047; the `?.` / `any` / `mk()` refusals); 31 census cell sets change exactly as
+predicted; the 2,160-cell matrix byte-identical. **Pins**: `FlowEngineCallArmTest` (24). **Ablation**: A1 no fallback 10
+RED, A2 no `?.` guard 3, A3 no type-parameter guard 1 (after a dedicated `pick(a, x => x)` pin; 0 before it), A4 `any`
+accepted 1, A5 no conditional arm 3; the conditional's "every constituent relates" guard is unpinned (it only matters for
+an ill-typed assignment that already reports TS2322). **Gates**: full suite **21,700 / 0 / 44** (+24); corpus screen 0
+of 8,725; cost_gate PASS (`typeOfExpr.calls` +0.22%); huge_methods 0; grid 8x `added=0 removed=0` (chain control OK),
+libraries 0; warning gate clean (positive control live); warm A/B 2 pairs per order, both noisy (sds > 1%), the after arm
+lower in both — no regression signal. **Residues**: c18 / t06 / t08 (`T` vs a failed inference), c20 (an annotated
+declaration returns its annotation before the call arm), c22 (a conditional with a literal branch refused).
+**Successor**: B5b (N13).
+
 ### Round (P18.223) — (CHK.176)(a): a signature-based arity reader reports tsgo's TS2554 / TS2555 / TS2556 / TS2575 for calls the name walker never reached (callbacks, real-lib members, overloaded constructors, optional-chain calls, tuple rests); 24 -> 73 of 87 cells agree, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent beside the (third, finally non-stalling) G1 census; the orchestrator re-ran
