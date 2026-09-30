@@ -69,7 +69,6 @@ class SetupPhasePartitionTest {
         "init:mergeLibGlobals",
         "init:wireGlobalArrayTypes",
         "init:collectUmdGlobalsAndModuleFiles",
-        "init:mergeSharedKeepNames",
         "init:mergeFileLocalsIntoGlobals",
         "init:moduleTypeNameIndex",
         "init:snapshotPreAugGlobalKeys",
@@ -148,14 +147,13 @@ class SetupPhasePartitionTest {
     fun `buildFileLocalTypeMaps is the setup pass that does type-system work`() {
         recordSetup()
         // Round 802's finding, pinned as a SHAPE rather than as a millisecond
-        // figure: of the sixteen setup passes exactly one resolves declaration
+        // figure: of the fifteen setup passes exactly one resolves declaration
         // types, which is why it is 65% of the phase. The purely structural ones
         // must stay at zero — a new eager resolution added to any of them shows
         // up here before it shows up in the cost gate.
         val structural = listOf(
             "init:mergeLibGlobals",
             "init:collectUmdGlobalsAndModuleFiles",
-            "init:mergeSharedKeepNames",
             "init:mergeFileLocalsIntoGlobals",
             "init:moduleTypeNameIndex",
             "init:snapshotPreAugGlobalKeys",

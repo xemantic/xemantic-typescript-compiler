@@ -7444,29 +7444,6 @@ class Checker(
         FrontEnd.section(FrontEnd.CHK_F_LIB) { parseBuiltinLib() }
 
     /**
-     * INV.3(d): names with a legitimate NON-module global meaning at merge
-     * time — every SCRIPT-file local name.
-     *
-     * **(CHK.49) the LIB key set is deliberately NOT in here.** It used to be,
-     * which made a MODULE file's own `interface Text` merge INTO the DOM
-     * `Text` — in both directions and program-wide, since [mergeSingleSymbol]
-     * ADOPTS (round 884: `globals[name]` IS the binder's object, so the lib
-     * symbol itself grew the module's declarations and EVERY file then saw the
-     * fusion). Retiring it here alone is round 510's 861-FP disaster and is
-     * re-measured as **969** on the compiler profile; it is sound only
-     * TOGETHER with [computePerFileVisibility] no longer seeding
-     * `nonModuleVisible` with the lib keys, which routes such a name through
-     * [perFileScope] — the declaring file gets its own symbol, every other file
-     * gets the pristine lib one. The two are ONE observable (round 927): each
-     * alone is worse than the pair.
-     *
-     * Computed at init step 0e, before the step-1 merge; consumed by
-     * [moduleLocalContributesGlobally]. Declared before `init` (the Kotlin
-     * init-order gotcha).
-     */
-    internal var mergeSharedKeepNames: Set<String> = emptySet()
-
-    /**
      * 17.33: UMD global names registered via `export as namespace X;` in
      * .d.ts files. Used to upgrade TS2304 → TS2686 when an identifier
      * resolution fails AND the name is a UMD global AND the current file
@@ -8852,19 +8829,10 @@ class Checker(
         // keep-predicate ([moduleLocalContributesGlobally]) — the misparsed
         // `export as namespace X` namespace must keep merging globally.
         pass("init:collectUmdGlobalsAndModuleFiles") { collectUmdGlobalsAndModuleFiles() }
-        // 0e. INV.3(d): names with a legitimate NON-module global meaning —
-        // script-file locals. (CHK.49) retired the LIB half of this set: a
-        // module file's own top-level declaration of a lib name is module-scoped
-        // in real tsc, and merging it corrupted the lib symbol program-wide.
-        // See [mergeSharedKeepNames]'s KDoc for why that retire is sound only
-        // together with the [computePerFileVisibility] half.
-        pass("init:mergeSharedKeepNames") {
-        mergeSharedKeepNames = HashSet<String>().also { keep ->
-            for (result in binderResults) {
-                if (!isModuleFile(result.sourceFile.statements)) keep.addAll(result.locals.keys)
-            }
-        }
-        }
+        // 0e. (CHK.186) RETIRED: `init:mergeSharedKeepNames` kept a MODULE file's local
+        // merging into [globals] whenever a SCRIPT file declared the same name, which fused
+        // the two program-wide ((CHK.49)'s defect for script names). Such a name is now
+        // module-only and resolved per file — see [NameResolver.ensurePerFileVisibility].
         // 1. Merge file-level symbols into globals — INV.3(d): a MODULE file's
         // MODULE-ONLY top-level locals (no lib/script/global-contribution
         // meaning) are module-scoped in real tsc and no longer merge (the
@@ -30063,11 +30031,15 @@ class Checker(
         // `namespace X` clodule provides a value); a namespace holding only an uninstantiated
         // nested namespace (`Mod { namespace Nested { interface I } }`) must NOT become a value.
         val moduleInstantiated = HashSet<String>()
+        // (CHK.186) a file-level TYPE-only declaration of a name some global (lib or
+        // script) ALSO declares as a VALUE hides only the type meaning: `new D()` beside a
+        // module's `interface D` reaches the global `class D`, as it does in tsgo.
+        val globalValueShadows = libValueShadows()
         for (stmt in result.sourceFile.statements) {
             when (stmt) {
                 is InterfaceDeclaration -> {
                     val n = stmt.name.text
-                    if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
+                    if (n !in valueNames && n !in KNOWN_GLOBALS && n !in globalValueShadows) typeOnlyNames.add(n)
                     if (libExcludesEs2015 && n !in valueNames &&
                         n in FORWARD_DECLARABLE_LIB_TYPES_ES2015) {
                         forwardLibTypeNames.add(n)
@@ -30076,7 +30048,7 @@ class Checker(
                 }
                 is TypeAliasDeclaration -> {
                     val n = stmt.name.text
-                    if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
+                    if (n !in valueNames && n !in KNOWN_GLOBALS && n !in globalValueShadows) typeOnlyNames.add(n)
                 }
                 is ModuleDeclaration -> {
                     val n = (stmt.name as? Identifier)?.text ?: continue
@@ -42233,6 +42205,10 @@ class Checker(
             // globals chimera carried the Type flag and suppressed this implicitly.
             if (fileResults[fileName]?.sourceFile
                     ?.let { typeSideImportFallback(it, name) } != null) return false
+            // (CHK.186) a module's VALUE-only declaration hides only the value meaning of
+            // a same-named global: the TYPE meaning of a script/lib `interface D` survives.
+            if (nameResolver.fileShadowsGlobal(fileName, name) &&
+                globals[name]?.flags?.hasAny(SymbolFlags.Type) == true) return false
             // Only fire when symbol is unambiguously a value (Variable/Function/etc.).
             return sym.flags.hasAny(SymbolFlags.Value)
         }
@@ -166097,6 +166073,8 @@ interface DataView {
         run {
             val ce = expr.expression as? Identifier ?: return@run
             val sym = globals[ce.text] ?: return@run
+            // (CHK.186) a MODULE file's own declaration shadows that script global.
+            if (nameResolver.fileShadowsGlobal(fileName, ce.text)) return@run
             if (!sym.flags.hasAny(SymbolFlags.Variable)) return@run
             if (sym.flags.hasAny(
                     SymbolFlags.Class or SymbolFlags.Function or SymbolFlags.Module or
@@ -166136,7 +166114,8 @@ interface DataView {
             // class symbol — definitively a "new on instance" case.
             val ce = expr.expression
             if (ce is Identifier) {
-                val sym = globals[ce.text]
+                // (CHK.186) not the script global a module's own declaration shadows.
+                val sym = if (nameResolver.fileShadowsGlobal(fileName, ce.text)) null else globals[ce.text]
                 val isVarOrParam = sym != null && sym.flags.hasAny(SymbolFlags.Variable) &&
                     !sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Function)
                 if (isVarOrParam && calleeType is Type.Interface) {

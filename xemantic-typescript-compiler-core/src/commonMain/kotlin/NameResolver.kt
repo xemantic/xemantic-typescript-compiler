@@ -873,6 +873,13 @@ internal class NameResolver(
      *  init-order trap. */
     private val perFileScopeOwnLocals: MutableMap<String, SymbolTable> = HashMap()
 
+    /** (CHK.186) the own-locals layer of a SCRIPT file's per-file scope: EMPTY, because a
+     *  script file's top-level locals ARE the global namespace — every one of them is
+     *  already in `sharedBase` as the MERGED instance (`mergeSymbolTable` adopts the
+     *  first declarer and appends the rest). Layering the file's own binder symbol would
+     *  answer a second script file's UN-merged copy for a name a module also declares. */
+    private val emptyScriptOwnLocals: SymbolTable = symbolTable()
+
     /**
      * INV.3(b)(ii): names whose ONLY declarations are module-file top-level
      * locals — the conflation candidates. A `globals` hit on such a name is a
@@ -971,6 +978,17 @@ internal class NameResolver(
         return moduleOnlyGlobalNames
     }
 
+    /**
+     * (CHK.186) does [fileName]'s OWN module-scoped top-level declaration of [name] shadow
+     * a same-named GLOBAL (lib or script) one? True only for a MODULE file declaring a
+     * [moduleOnlyGlobalNames] name; then a raw `globals[name]` consult made on that file's
+     * behalf answers the global the file cannot see, and must defer to the file's local.
+     */
+    fun fileShadowsGlobal(fileName: String?, name: String): Boolean {
+        if (fileName == null || name !in moduleOnlyGlobals() || globals[name] == null) return false
+        return perFileScopeOwnLocals[fileName]?.containsKey(name) == true
+    }
+
     /** (INC.71) [libValueShadowNames], built on first ask. */
     fun libValueShadows(): Set<String> {
         ensurePerFileVisibility()
@@ -1039,7 +1057,8 @@ internal class NameResolver(
         perFileScopeOwnLocals.clear()
         perFileScope.clear()
         for (result in binderResults) {
-            perFileScopeOwnLocals[result.sourceFile.fileName] = result.locals
+            perFileScopeOwnLocals[result.sourceFile.fileName] =
+                if (checker.isModuleFile(result.sourceFile.statements)) result.locals else emptyScriptOwnLocals
         }
         // (WARM.23) round 896 — [perFileScopeOf]'s memo could go stale here and at
         // [buildPerFileScopeFor]'s store; both clear it. A new write site must too.
@@ -1150,14 +1169,17 @@ internal class NameResolver(
         perFileVisibilityComputed = true
         EagerIndexCensus.perFileVisibilityBuilds++
         val moduleLocalNames = HashSet<String>()
-        // (CHK.49) the LIB key set is deliberately NOT seeded here — see
-        // [mergeSharedKeepNames]'s KDoc. A lib name a MODULE file declares now
+        // (CHK.49) the LIB key set is deliberately NOT seeded here, and (CHK.186) nor are
+        // SCRIPT-file locals: the merge no longer fuses a module's local with a same-named
+        // global, and the two halves are ONE observable (each alone is worse than both —
+        // 969 errors on the compiler profile for the lib half). A lib name a MODULE file declares now
         // falls into [moduleOnlyGlobalNames] and is resolved through
         // [perFileScope], which already seeds every file with the lib symbol and
         // lets the declaring file's own local override it. The INV.3(a)
         // classifier below is still handed the OLD taxonomy (lib keys included)
         // so its SHARED/CONFLATED counts stay comparable across rounds.
         val nonModuleVisible = HashSet<String>()
+        val scriptLocalNames = HashSet<String>()
         for (result in binderResults) {
             if (checker.isModuleFile(result.sourceFile.statements)) {
                 // INV.3(d): entries the retired merge deliberately KEEPS global
@@ -1168,7 +1190,7 @@ internal class NameResolver(
                     else moduleLocalNames.add(name)
                 }
             } else {
-                nonModuleVisible.addAll(result.locals.keys)
+                scriptLocalNames.addAll(result.locals.keys)
             }
         }
         for (key in globals.keys) {
@@ -1184,10 +1206,13 @@ internal class NameResolver(
         libValueShadowNames =
             if (moduleOnlyGlobalNames.isEmpty()) emptySet()
             else moduleOnlyGlobalNames.filterTo(HashSet()) { n ->
-                checker.libGlobals[n]?.valueDeclaration != null
+                globals[n]?.valueDeclaration != null
             }
         classifierModuleLocalNames = moduleLocalNames
-        classifierNonModuleVisible = HashSet(nonModuleVisible).apply { addAll(checker.libGlobals.keys) }
+        classifierNonModuleVisible = HashSet(nonModuleVisible).apply {
+            addAll(scriptLocalNames)
+            addAll(checker.libGlobals.keys)
+        }
     }
 
     /**
@@ -1393,9 +1418,8 @@ internal class NameResolver(
         // the INV.3(c)(iv) leg below — and MEASURED REDUNDANT: (CHK.49) keeps the
         // LIB key set out of `nonModuleVisible`, so a lib name a MODULE file also
         // declares IS module-only and never took this path to begin with, and the
-        // only other way to be shared is a SCRIPT-file collision, which
-        // `mergeSharedKeepNames` merges so that `globals[name]` already carries
-        // both declarations. Ablated: the clause plus its index moved neither the
+        // only other way to be shared was a SCRIPT-file collision, which (CHK.186) made
+        // module-only as well. Ablated: the clause plus its index moved neither the
         // `Node`-collision project fixture nor any pin. The fast path stays one probe.
         val moduleOnly = name in moduleOnlyGlobals()
         if (!moduleOnly && (moduleImportAliasNames.isEmpty() || name !in moduleImportAliasNames)) return globals[name]
@@ -1496,10 +1520,13 @@ internal class NameResolver(
      * symbol, and at the callee site the two coincide only for a file that does
      * NOT declare the name — where both branches go on to call
      * `getTypeOfSymbol(lib)`.
+     *
+     * (CHK.186) the global is read from [globals], not only from the lib: a SCRIPT file's
+     * `class D` is equally a value a module's `interface D` does not hide.
      */
     fun libValueBehindTypeOnlyShadow(name: String, local: Symbol): Symbol? {
         if (name !in libValueShadows()) return null
-        val lib = checker.libGlobals[name] ?: return null
+        val lib = globals[name] ?: return null
         var resolved = local
         if (resolved.flags.hasAny(SymbolFlags.Alias)) {
             resolved = resolveImportedSymbolGeneral(resolved) ?: resolved
@@ -1817,7 +1844,6 @@ internal class NameResolver(
     fun moduleLocalContributesGlobally(name: String, symbol: Symbol): Boolean {
         if (name == "global") return true
         if (name in checker.umdGlobalNames) return true
-        if (name in checker.mergeSharedKeepNames) return true
         return symbol.declarations.any { it is ModuleDeclaration && it.name is StringLiteralNode }
     }
 
@@ -2381,6 +2407,12 @@ internal class NameResolver(
                 if (sym != null && !symbolHasTypeSideDeclaration(sym)) {
                     owningSourceFile(node)?.let { owner ->
                         typeSideImportFallback(owner, node.text)?.let { return it }
+                        // (CHK.186) a module's VALUE-only declaration (`function D`) hides
+                        // only the value meaning of a same-named global: the TYPE meaning
+                        // is still the script/lib one (`interface D` in a script file).
+                        if (fileShadowsGlobal(owner.fileName, node.text)) {
+                            globals[node.text]?.takeIf { symbolHasTypeSideDeclaration(it) }?.let { return it }
+                        }
                     }
                 }
                 sym
