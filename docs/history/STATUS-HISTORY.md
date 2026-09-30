@@ -1,5 +1,10 @@
 
 
+**(P18.238) — (CHK.181): A REST PARAMETER TYPED AS A TUPLE NOW GETS tsgo's ARGUMENT-COUNT ERRORS — `Expected 1-2 arguments` FOR OPTIONAL ELEMENTS, `at least N` FOR A TUPLE WITH ITS OWN REST, AND THE "rest parameter not provided" NOTE; +13 PINS, 21,978 / 0 / 44 (2026-09-30).**
+Four wrong or missing rows from one misreading, now shared by both argument-count readers. Screen 0; grid 8x0; libraries
+unchanged. The cost-counter baseline is refreshed to the values (P18.236) accepted.
+
+
 **(P18.237) — (INV.0) EXTRACTION: THE REST OF THE ARITY FAMILY MOVES OUT OF `Checker.kt` (−548 LINES) INTO `SignatureArity.kt`, VERBATIM; 21,965 / 0 / 44 (2026-09-30).**
 A pure move: all pass rows, counters and diagnostics byte-identical against the pre-move binary; screen 0; grid 8x0;
 libraries unchanged; warm A/B shows only the known second-arm artefact. The move also halves the members the

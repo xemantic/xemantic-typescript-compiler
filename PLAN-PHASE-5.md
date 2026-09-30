@@ -25,6 +25,33 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.243) — (CHK.188): a type-only GLOBAL read as a value from another file reports tsgo's TS2693 (TS2585 for an ES2015 constructor name), and a global non-instantiated namespace reports TS2708; every measured cell matches tsgo on those codes bar one shorthand position; +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent. **Where the queue item was wrong**: (a) not only interfaces and type aliases — a script's
+non-instantiated `namespace N`, and an interface merged with one, are the same missing consult with TS2708 (tsgo asks
+the namespace question first, `onFailedToResolveSymbol`, checker.go:1569); (b) the EMBEDDED test lib declares
+`interface String`/`Array`/… without their `declare var`s, so a naive global consult added a false TS2693 to 50 corpus
+baselines — names that lib declares are excluded when `useRealLibs` is off; (c) the binder records EVERY
+`declare namespace` as NamespaceModule / NonInstantiated (`Binder.kt:603`, `:859`), so `declare namespace M { function
+f() }` looked value-less and gave 2 false TS2708 in the corpus — a syntactic instance-state check that ignores
+`declare` answers instead; (d) the ES2015 constructor names (Promise / Symbol / Map / WeakMap / Set / WeakSet) go to
+TS2585 (`isES2015OrLaterConstructorName`); (e) a plain `=` target (`N = 1`) needed covering. **Mechanism**: the
+per-file table `tavBuildFileRoot` still lists only the file's own declarations; the new path in
+`spineTavIdentifierCore` runs after the own-file `typeOnlyHit`, only when no tav level has the name as a value, and
+`tavGlobalValueless` answers nothing if any lexical scope binds the name (`spineScopeLookup`), else asks
+`NameResolver.globalValuelessKind` (reads `globalsForFile`: namespace-only first via `namespaceHasValue`, then
+type-only); the candidate gate widens by `NameResolver.globalValuelessNames` (built once per checker, minus the
+embedded lib's names). `emitTS2708` extracted and shared. `Checker.kt` +52 net, `NameResolver.kt` +74. **Matrix**
+(`build/bench/p18243-agent/cells`): every cell's TS2693 / TS2708 / TS2585 rows now agree with tsgo (e.g. script
+interface 0 -> 12 of 12, lib names 0 -> 8 of 8, namespace 0 -> 5 of 5, the queue's own `x1` 0 -> 2 of 2); silent
+controls (a `declare var` merge, a module / parameter shadow, module-local names) stay 0 = 0. **Pins**:
+`GlobalTypeOnlyValueUseTest`, 15 tests; ablation a1 10 / a2 9 / a3 1 / a5 1 / a6 1 / a7 1 / a8 1 / a10 1 RED; a4 (a
+tav-level namespace test inside the global check) read 0 and was REMOVED as redundant; a9 (raw `globals`) is redundant
+by construction and kept as the per-file-correct call. **Gates**: full suite 22,066 / 0 / 44 (+15); corpus screen
+8725 / 0; `cost_gate.py` 0 (as (P18.242) bar one lookup); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0
++ chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 (none reaches the new path — a control; the pins are the gate); warning
+gate with probe: probe only. Residues -> (CHK.189).
+
 ### Round (P18.242) — (CHK.186): a MODULE declaration no longer fuses with a same-named SCRIPT declaration — (CHK.49)'s rule extended from lib names to script names, `init:mergeSharedKeepNames` deleted; a 22-cell matrix goes from 20 cells diverging from tsgo to 0 (bar one older cross-file TS2693 gap); +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **Where the queue item was wrong**: (a) no new "shared" visibility class was needed —
@@ -270,35 +297,6 @@ cannot vouch for. **Pins**: `Chk178UnionChainCastReceiverObjLitDrillTest`, 16 fu
 added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 — raw captures byte-identical on all 11 targets, so
 the grid is a CONTROL (none of the changed paths fire there) and the corpus plus the pins are the gate; warning gate with
 probe: probe only. `Checker.kt` +79. Residues -> (CHK.179).
-
-### Round (P18.233) — (CHK.177) S1: a relation-error source or TS2339 receiver annotated with a union ALIAS prints the alias name as tsgo does (`Type 'U' …`, was `'A | B'`); two shipped wrong names fixed; display only, +0 rows everywhere (2026-09-30)
-
-Specified by (P18.232)'s read-only census (`build/scratch-p18232-census/`), which corrected the queue item twice: the
-finder's cells were TS2339 on a PARAMETER receiver, not TS2322 reads; and the axis is an ANONYMOUS member (an
-all-interface union was already named through B416). The name is lost only at DISPLAY — the declared union and an
-inline `A | B` are one interned object — so the fix is PER READ and touches no interning. **Mechanism**: new
-`AliasCarrierDisplay.kt` (`AliasCarrierDisplay(checker)`): identifier (through parens / `!`) -> declaration by the
-scope-correct parent walk `lexicalReturnIdentifierDecl` (now `internal`) -> a `VariableDeclaration` / `Parameter`
-annotated with ONE bare non-generic union alias plus optional `null` / `undefined` (a `?` counts as `undefined`) ->
-the alias name iff the displayed member-id set equals the alias's (nullish parts appended in tsgo's
-`U | null | undefined` order), else null and the old render stands. The member-set test is also the literal-widening
-guard (measured: arm a1 reddens m07). Called before `relationErrorSourceRender` at the four relation emitters
-(var-decl, argument, return, assignment), and it REPLACES the TS2339 union-receiver carrier in
-`cmamCheckUnionReceiverNarrowing`, whose text lookup named a narrowed SUBSET (f04) and the WRONG alias under shadowing
-(g04, g05). **Orchestrator addition**: the builder flagged that the old carrier's `globals` lookup had named a GLOBAL
-script `const` declared in another file, which the lexical walk alone answers null for — a display regression the
-corpus cannot see; measured (cell y01) and closed by a fallback when the walk finds no binding or an import:
-`lookupPerFileForNode` / `globals` -> `resolveAlias` (now `internal`) -> the target's declaration, which also newly
-names an IMPORTED binding as tsgo does (y02). **Pins**: `AliasCarrierSourceDisplayTest`, 35 full-text pins (26
-positive, 9 negative controls), every expectation tsgo 7.0.2's text; ablation a1 4 / a2 20 / a3 8 / a4 18 / a5 16 /
-a6 2 / a7 1 / a8 1 / a9 7 RED (builder), cross-file fallback 2 RED (orchestrator). **Gates**: full suite
-21,883 / 0 / 44 (+35); corpus screen 8725 / 0 (a control — the 7 corpus rows naming a union alias were already
-green); `cost_gate.py` every counter +0.00%; `huge_methods.py --fail-over 0` 0 (cmam shrank); grid 8 x added=0
-removed=0 + chain OK (blind to display — a control), rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe:
-probe only. `Checker.kt` -1. Residues queued: S2 (property-access / call / element / destructured / unannotated
-sources, conditionals, `NS.U`, B416 retirement — m03 m04 h02 h04 h05 f10 h09 g01 g02 g06), x05 (our under-narrowing
-now prints `U` where tsgo prints `B`; the row was already wrong), and (CHK.178) for three separate defects the census
-found.
 
 ## QUEUE
 
@@ -898,7 +896,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.188) A SCRIPT-FILE `interface D` USED AS A VALUE FROM ANOTHER FILE (`new D()`, `D()`) REPORTS NOTHING — tsgo reports TS2693 `'D' only refers to a type, but is being used as a value here.` (found by (P18.242); control cell `x1` in `build/bench/p18242-agent/cells`, 0 of 2 rows, with or without any name collision).** The per-file TS2693 table in `tavBuildFileRoot` lists only the file's OWN declarations; a type-only GLOBAL (a script interface, a type alias, a lib interface with no value) is never consulted. Measure the matrix (interface / type alias / lib type-only name; `new`, call, property read, `typeof`) and extend the table to type-only globals the file does not shadow. Row-adding — grid it; every added row a tsgo row.
+- [ ] **(CHK.189) RESIDUES OF (CHK.188) (cells `build/bench/p18243-agent/cells`).** (a) **ours-only FOLLOW-ON errors after a TS2693 / TS2708** — tsgo types the value read as an ERROR type and stays silent after it, we keep the interface type and add TS2349 on `D()`, TS2339 on `D.x`, TS2351 on `new PropertyKey()`, TS2365 on `D += 1` (same-file too: cell `ss`, so it predates (P18.243)); the fix is `getTypeOfIdentifierConventional` answering an error type for a symbol with no value meaning — broad, measure its blast radius on the corpus first; (b) own-file `new N()` on a non-instantiated namespace skips TS2708 by a deliberate rule, and a shorthand `({ N } = …)` never reaches the pass because the reach logic does not descend into shorthand properties (cells `nss`, `nsm`, `ao`, `as`); (c) display: a const imported from a module prints `'number'` where tsgo prints `'1'` (cell `im`).
+
+- [x] **(CHK.188) DONE 2026-09-30 ((P18.243) note). A SCRIPT-FILE `interface D` USED AS A VALUE FROM ANOTHER FILE (`new D()`, `D()`) REPORTS NOTHING — tsgo reports TS2693 `'D' only refers to a type, but is being used as a value here.` (found by (P18.242); control cell `x1` in `build/bench/p18242-agent/cells`, 0 of 2 rows, with or without any name collision).** The per-file TS2693 table in `tavBuildFileRoot` lists only the file's OWN declarations; a type-only GLOBAL (a script interface, a type alias, a lib interface with no value) is never consulted. Measure the matrix (interface / type alias / lib type-only name; `new`, call, property read, `typeof`) and extend the table to type-only globals the file does not shadow. Row-adding — grid it; every added row a tsgo row.
 
 - [x] **(CHK.186) DONE 2026-09-30 ((P18.242) note). A MODULE-LOCAL DECLARATION IS STILL FUSED WITH A SAME-NAMED *SCRIPT* DECLARATION — (CHK.49)'s defect, fixed for LIB names, is live for SCRIPT names (found by (P18.241)): `init:mergeSharedKeepNames` merges a module-local declaration into the global symbol whenever a script file declares the same name, so a module's `class D` carries a script's `interface D` members — measured, `z.q` types `string` (a false TS2322 on `const qq: number = z.q`) where tsgo reports `TS2339 Property 'q' does not exist`** (cells c6/c7 in `build/bench/p18241-agent/cells`). WRONG TYPES, not only silence. The fix needs a "shared" visibility class in `lookupPerFileForNode` / `globalsForFile` (`NameResolver.kt` ~1380, where a non-module-only name returns `globals[name]` for every file), not just removing the merge — CHK.49-sized; read CLAUDE.md "A LIB GLOBAL NAME DECLARED TOP-LEVEL IN A *MODULE* FILE IS MODULE-SCOPED" (the two sets are ONE observable, and seeding only one is worse than both) before designing.
 

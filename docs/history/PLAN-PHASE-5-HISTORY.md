@@ -1,3 +1,32 @@
+### Round (P18.233) — (CHK.177) S1: a relation-error source or TS2339 receiver annotated with a union ALIAS prints the alias name as tsgo does (`Type 'U' …`, was `'A | B'`); two shipped wrong names fixed; display only, +0 rows everywhere (2026-09-30)
+
+Specified by (P18.232)'s read-only census (`build/scratch-p18232-census/`), which corrected the queue item twice: the
+finder's cells were TS2339 on a PARAMETER receiver, not TS2322 reads; and the axis is an ANONYMOUS member (an
+all-interface union was already named through B416). The name is lost only at DISPLAY — the declared union and an
+inline `A | B` are one interned object — so the fix is PER READ and touches no interning. **Mechanism**: new
+`AliasCarrierDisplay.kt` (`AliasCarrierDisplay(checker)`): identifier (through parens / `!`) -> declaration by the
+scope-correct parent walk `lexicalReturnIdentifierDecl` (now `internal`) -> a `VariableDeclaration` / `Parameter`
+annotated with ONE bare non-generic union alias plus optional `null` / `undefined` (a `?` counts as `undefined`) ->
+the alias name iff the displayed member-id set equals the alias's (nullish parts appended in tsgo's
+`U | null | undefined` order), else null and the old render stands. The member-set test is also the literal-widening
+guard (measured: arm a1 reddens m07). Called before `relationErrorSourceRender` at the four relation emitters
+(var-decl, argument, return, assignment), and it REPLACES the TS2339 union-receiver carrier in
+`cmamCheckUnionReceiverNarrowing`, whose text lookup named a narrowed SUBSET (f04) and the WRONG alias under shadowing
+(g04, g05). **Orchestrator addition**: the builder flagged that the old carrier's `globals` lookup had named a GLOBAL
+script `const` declared in another file, which the lexical walk alone answers null for — a display regression the
+corpus cannot see; measured (cell y01) and closed by a fallback when the walk finds no binding or an import:
+`lookupPerFileForNode` / `globals` -> `resolveAlias` (now `internal`) -> the target's declaration, which also newly
+names an IMPORTED binding as tsgo does (y02). **Pins**: `AliasCarrierSourceDisplayTest`, 35 full-text pins (26
+positive, 9 negative controls), every expectation tsgo 7.0.2's text; ablation a1 4 / a2 20 / a3 8 / a4 18 / a5 16 /
+a6 2 / a7 1 / a8 1 / a9 7 RED (builder), cross-file fallback 2 RED (orchestrator). **Gates**: full suite
+21,883 / 0 / 44 (+35); corpus screen 8725 / 0 (a control — the 7 corpus rows naming a union alias were already
+green); `cost_gate.py` every counter +0.00%; `huge_methods.py --fail-over 0` 0 (cmam shrank); grid 8 x added=0
+removed=0 + chain OK (blind to display — a control), rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe:
+probe only. `Checker.kt` -1. Residues queued: S2 (property-access / call / element / destructured / unannotated
+sources, conditionals, `NS.U`, B416 retirement — m03 m04 h02 h04 h05 f10 h09 g01 g02 g06), x05 (our under-narrowing
+now prints `U` where tsgo prints `B`; the row was already wrong), and (CHK.178) for three separate defects the census
+found.
+
 ### Round (P18.232) — (INV.0) extraction: the (CHK.176)(a) signature-based ARITY reader moves VERBATIM out of `Checker.kt` into `SignatureArity.kt` (12 declarations, `Checker.kt` -344); every deterministic receipt byte-identical against pristine (2026-09-30)
 
 One implementation subagent (the queue's successor to (P18.230)); a read-only (CHK.177) census ran beside it on frozen
