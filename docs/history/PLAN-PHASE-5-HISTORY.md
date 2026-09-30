@@ -1,3 +1,34 @@
+### Round (P18.222) — (CHK.173) the B1 CONDITION leak: a condition / assertion call / `switch` on a same-named INNER binding no longer narrows the outer variable; 5 -> 37 rows against tsgo's 37, 0 false, every counter +0.00%, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent beside the relaunched G1 census; the orchestrator re-ran every gate incl.
+the warning gate. **Mechanism**: after `applyConditionNarrowing` / `narrowByAssertCall` / `narrowBySwitchClause`
+changes the type, `flowSiteReadsOtherBinding` runs (P18.216)'s scope test on the SITE (the condition expression, the
+assertion call, the switch discriminant): a site inside a same-named block-scoped binding whose scope does not contain
+the walk's read tests a DIFFERENT variable, so the antecedent is the answer. Both walks gated (core + FollowLoopEntry
+mirror). `FlowShadowScope.readsOtherBinding` shares B1's per-node memo, and the ascent now skips a `SwitchStatement`
+reached from its DISCRIMINANT — a pre-existing defect that also affected B1's assignment test (`switch (s) { case null:
+return; default: const s = 1 }` must still narrow the outer `s`). **Where the brief was wrong**: B1's g01/g02 pins are
+NOT blinded (the new test runs after the condition's nested walk; (P18.216)'s A7 still reddens them); the cost worry was
+unfounded — asking only after a site actually narrowed the walked name means 26,139 checks per compiler-profile compile
+out of 297,043 condition visits (8.8%), 10 refused, and `cost_gate.py` reads **+0.00% on every counter**; the leak also
+ran through assertion calls and `switch` clauses (c15, c42, c39).
+
+**Measured**: 44 cells 5 -> 37 rows (tsgo 37): `if (!s)` / `=== null` / `== undefined` / `typeof` / `instanceof` / `in`,
+discriminant `if` and `switch`, `&&` / `||` chains, for-header / for-of / catch-variable shadows, nested blocks,
+assertion calls, property paths, a case-clause `const`, `while` / `do`, throw / else-return, one or both branches, a
+file-level `let`, destructured shadows, an aliased condition, and the declaration / argument / return readers; 9
+controls silent in all three (the condition on the outer binding, an inner `var`, `?.`, …); (P18.216)'s e07 now reports;
+every other cell set unchanged (the 2,160-cell matrix, B1-B4 and census cells, 106 cell dirs of (P18.217)-(P18.221)).
+**Pins**: `FlowShadowConditionTest` (44: 33 report, 9 controls, 2 cost pins — `siteAsks == 0` for a condition on
+another name, and a positive control). **Ablation**: a1 core-walk gate 6 RED, a2 mirror gate 23, a3 switch gate 1, a4
+assertion gate 1+1, a5 discriminant rule 1, a6 always asked 1 (cost pin), (P18.216) A7 still 2. **Gates**: full suite
+**21,652 / 0 / 44** (+44); corpus screen 0 of 8,725; cost_gate +0.00%; huge_methods 0; grid 8x `added=0 removed=0`
+(chain control OK), libraries 0; warning gate clean (positive control live); warm A/B (builder, both orders) noise
+both ways with a census JVM beside it — the deterministic counters are the evidence. **Residues**: (CHK.177) filed —
+an alias-named union displays EXPANDED where tsgo prints the alias (on any read, not only after narrowing); `switch
+(true)` case-clause shadows; aliased-condition initializers not separately scope-tested (c34 agrees anyway); still open
+from (P18.216): e09, e18, N8, TS2454 d01/d03/d13/e26/z1. **Successor**: the G1 arc (census in flight).
+
 ### Round (P18.221) — (CHK.173) Round B4: the member-access walker carries a type-parameter scope and substitutes a nullable constraint, so a `T extends X | null` receiver reports TS18047/8/9 / TS2531 as tsgo; +75 true rows, 0 false; the full suite caught 3 real regressions and a countdown, all fixed (2026-09-29)
 
 Orchestrated: one implementation subagent, sent back once with the full-suite failures; the orchestrator re-ran every

@@ -1,5 +1,12 @@
 
 
+**(P18.227) — (CHK.173) G1 ARC B5f: `new X!()` NOW PARSES AS tsgo PARSES IT; THE FALSE "not constructable" ERROR ON A NULLABLE CONSTRUCTOR IS GONE, AND `new o.x!.y!(1)` NO LONGER EMITS A DIFFERENT PROGRAM; +0 EVERYWHERE, 21,804 / 0 / 44 (2026-09-29).**
+The parser read `new W!()` as `(new W)!()`, so every non-null-asserted constructor lost its arguments — a false TS2351
+in the checker and, in emitted JavaScript, `(new o.x).y(1)` instead of `new o.x.y(1)`. A nullable `new` callee without
+`!` now reports tsgo's "possibly undefined". 11 pins, 9 of 9 arms RED. Screen 0 on both channels; emit diff of tsc's
+sources identical; grid 8x0; libs 0. Next: B5e.
+
+
 **(P18.226) — (CHK.173) G1 ARC B5c: `if (!o.x) return; const { x } = o` NOW TYPES `x` AS NON-NULL, AS tsgo DOES; 19 FALSE ROWS REMOVED, +0 EVERYWHERE, 21,793 / 0 / 44 (2026-09-29).**
 A destructured variable took its type from the initializer's declared (nullable) type, ignoring an earlier guard — which
 shipped false "not assignable" errors at call arguments. It now reads tsgo's synthetic reference (`o.x`) narrowed at the

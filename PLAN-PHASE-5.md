@@ -25,6 +25,28 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.232) — (INV.0) extraction: the (CHK.176)(a) signature-based ARITY reader moves VERBATIM out of `Checker.kt` into `SignatureArity.kt` (12 declarations, `Checker.kt` -344); every deterministic receipt byte-identical against pristine (2026-09-30)
+
+One implementation subagent (the queue's successor to (P18.230)); a read-only (CHK.177) census ran beside it on frozen
+classes (`build/scratch-p18232-census/`, specifies the next round). **What moved**: `callArityFails`, `arityDeclTrusted`,
+`endsInTupleRest`, `CallArity`, `callArity`, `reportSignatureArity`, `reportSpreadSignatureArity`,
+`arityIdentifierCalleeTrusted`, `arityOverloadSetComplete`, `arityBindingIn`, `arityBindingOwns`, `arityRowAt` — one
+contiguous run below `checkArgumentsAgainstSignature` (ledger row 13's "not contiguous" was wrong) — into
+`internal class SignatureArity(private val checker: Checker, private val options: CompilerOptions)`, field
+`signatureArity` declared above `init` beside `nullishReceivers`; 7 call sites call it directly. NOT moved: the
+call-side minimum (`callMinArgumentCount` x2, `overloadCallMin`, `typeAcceptsVoid`, 7 callers incl. the relation) —
+the follow-on is to move it together with the name-based arity walkers as one family. **Verbatim proof**: stripping
+`checker.` and re-privatising reproduces the original span byte-identically. 15 members widened `private` ->
+`internal` (none a property with a custom accessor — the (P18.229) trap was checked); ledger row 14: 18 ambient reads
+over 27 sites, no writes. **Receipts** (orchestrator-retaken, pristine `b1157f4c` vs `e324d30b`): per-pass
+`--passTiming` table — all pass rows, counters and the 30 listed diagnostics identical once the ms column and the
+node-kind histogram (unstable A-vs-A) are dropped; PrintInlining on `checkArgumentsAgainstSignature` row-for-row
+identical, `callArityFails` same verdicts, new accessor hops `inline` (builder, both name forms); full suite
+21,848 / 0 / 44 unchanged; corpus screen 8725 / 0; `cost_gate.py` control 0; `huge_methods.py --fail-over 0` 0; grid
+8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe control: probe only;
+warm A/B both orders inside the band (-0.17% 2/2; reversed run noise-dominated, -0.55% with a 1.78% arm sd). Builder's
+arity ablation (31 classes, 596 tests green): a1 35 / a2 66 / a3 2 / a4 23 RED. tsgo matrix 8/8 identical.
+
 ### Round (P18.231) — the detached setter reattached: `currentClassForThis` bumps its expression epoch again (the (P18.229) insertion had moved its `set(v)` onto `bodyLocalVetoDeclared`); diagnostics unchanged everywhere, receipt in `epochBumps`/`epochNoops` (2026-09-30)
 
 Orchestrator-only round (one line moved, one KDoc). `Checker.kt`: the two B6 veto fields now sit AFTER
@@ -347,37 +369,6 @@ optional-chained member on `X | undefined`, a call result, an IIFE, a parameter 
 `new Promise((r) => r(1, 2))`, for-of bindings); f02 (an alias of an overload set keeps one — tsgo TS2575); name-walker
 shadow FPs e12 (catch variable) / e15 (`any` parameter shadowing a class for `new`); TS2393 never emitted; (d)-(f).
 **Successor**: the G1 arc, round B5a (census below).
-
-### Round (P18.222) — (CHK.173) the B1 CONDITION leak: a condition / assertion call / `switch` on a same-named INNER binding no longer narrows the outer variable; 5 -> 37 rows against tsgo's 37, 0 false, every counter +0.00%, +0 everywhere (2026-09-29)
-
-Orchestrated: one implementation subagent beside the relaunched G1 census; the orchestrator re-ran every gate incl.
-the warning gate. **Mechanism**: after `applyConditionNarrowing` / `narrowByAssertCall` / `narrowBySwitchClause`
-changes the type, `flowSiteReadsOtherBinding` runs (P18.216)'s scope test on the SITE (the condition expression, the
-assertion call, the switch discriminant): a site inside a same-named block-scoped binding whose scope does not contain
-the walk's read tests a DIFFERENT variable, so the antecedent is the answer. Both walks gated (core + FollowLoopEntry
-mirror). `FlowShadowScope.readsOtherBinding` shares B1's per-node memo, and the ascent now skips a `SwitchStatement`
-reached from its DISCRIMINANT — a pre-existing defect that also affected B1's assignment test (`switch (s) { case null:
-return; default: const s = 1 }` must still narrow the outer `s`). **Where the brief was wrong**: B1's g01/g02 pins are
-NOT blinded (the new test runs after the condition's nested walk; (P18.216)'s A7 still reddens them); the cost worry was
-unfounded — asking only after a site actually narrowed the walked name means 26,139 checks per compiler-profile compile
-out of 297,043 condition visits (8.8%), 10 refused, and `cost_gate.py` reads **+0.00% on every counter**; the leak also
-ran through assertion calls and `switch` clauses (c15, c42, c39).
-
-**Measured**: 44 cells 5 -> 37 rows (tsgo 37): `if (!s)` / `=== null` / `== undefined` / `typeof` / `instanceof` / `in`,
-discriminant `if` and `switch`, `&&` / `||` chains, for-header / for-of / catch-variable shadows, nested blocks,
-assertion calls, property paths, a case-clause `const`, `while` / `do`, throw / else-return, one or both branches, a
-file-level `let`, destructured shadows, an aliased condition, and the declaration / argument / return readers; 9
-controls silent in all three (the condition on the outer binding, an inner `var`, `?.`, …); (P18.216)'s e07 now reports;
-every other cell set unchanged (the 2,160-cell matrix, B1-B4 and census cells, 106 cell dirs of (P18.217)-(P18.221)).
-**Pins**: `FlowShadowConditionTest` (44: 33 report, 9 controls, 2 cost pins — `siteAsks == 0` for a condition on
-another name, and a positive control). **Ablation**: a1 core-walk gate 6 RED, a2 mirror gate 23, a3 switch gate 1, a4
-assertion gate 1+1, a5 discriminant rule 1, a6 always asked 1 (cost pin), (P18.216) A7 still 2. **Gates**: full suite
-**21,652 / 0 / 44** (+44); corpus screen 0 of 8,725; cost_gate +0.00%; huge_methods 0; grid 8x `added=0 removed=0`
-(chain control OK), libraries 0; warning gate clean (positive control live); warm A/B (builder, both orders) noise
-both ways with a census JVM beside it — the deterministic counters are the evidence. **Residues**: (CHK.177) filed —
-an alias-named union displays EXPANDED where tsgo prints the alias (on any read, not only after narrowing); `switch
-(true)` case-clause shadows; aliased-condition initializers not separately scope-tested (c34 agrees anyway); still open
-from (P18.216): e09, e18, N8, TS2454 d01/d03/d13/e26/z1. **Successor**: the G1 arc (census in flight).
 
 ## QUEUE
 
