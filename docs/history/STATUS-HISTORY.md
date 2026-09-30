@@ -1,5 +1,11 @@
 
 
+**(P18.231) — THE DETACHED SETTER REATTACHED: `currentClassForThis` BUMPS ITS EPOCH AGAIN; NO DIAGNOSTIC MOVES ANYWHERE, 21,848 / 0 / 44 (2026-09-30).**
+A one-line repair of the defect the previous extraction exposed: two fields had been inserted between a property and its
+epoch-bumping setter, so Kotlin attached the setter to the wrong field. The epoch counters now charge the right
+property; screen 0, grid 8x0, libraries unchanged, every cost counter +0.00%.
+
+
 **(P18.230) — (INV.0) EXTRACTION: THE NULL-CHECK FAMILY MOVES OUT OF `Checker.kt` (−570 LINES) INTO `NullishReceiverChecks.kt`, VERBATIM; 21,848 / 0 / 44 UNCHANGED (2026-09-30).**
 A pure move at the end of the null-check arc, to offset its growth: every deterministic receipt (418 pass rows, 46
 diagnostics, all counters) byte-identical against the pre-move binary; inlining verdicts preserved; warm A/B within

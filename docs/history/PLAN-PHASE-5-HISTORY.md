@@ -1,3 +1,39 @@
+### Round (P18.226) — (CHK.173) G1 arc B5c (N4): a destructured leaf is typed from the FLOW-NARROWED initializer path, as tsgo's `getFlowTypeOfDestructuring`; 19 false rows removed (N4 already SHIPPED), 7 true added, +12 true on the 2,160-cell matrix, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism**: `bindingElementType` (the
+leaf computation EVERY reader shares — the change is global, and measured +0 on the grid) narrows the slot through
+`destructuringFlowNarrowed` before the default merges: `destructuringReferencePath` builds tsgo's synthetic reference
+(`init.x`, `init[i]`, `init.p.q` for nested patterns; the root must be an identifier / property access / literal element
+access — `(o)`, `o!`, `o as T` are not narrowed, as tsgo), and `narrowSyntheticReference` walks the OWNING file's flow
+graph (the arith pass installs none and the symbol half may hold another file's) with a new walk kind `WK_DESTRUCTURE`
+and a per-walk `NarrowFlowMemo.syntheticLeaf` flag under which a write to a strict PREFIX of the path resets it
+(`flowAssignmentWritesPathPrefix`: `o = o2`, `o.p = q`) and a property path does not cross into a closure; and
+`bindingPatternSourceType` narrows the pattern's SOURCE (`const o = mkU(); if (!o) return; const {name} = o`,
+discriminated unions). A grid run of the intermediate build caught +5 false TS2339 on harness / server / services
+(textChanges.ts:1321-1324, `const { options = {} } = change`) — our default join has no subtype reduction — fixed by
+`emptyObjectDefaultIsSubsumed` (an empty-object default beside a WEAK object slot is dropped, as tsgo), which also
+removes a false positive HEAD shipped (d5). **Where the brief was wrong**: its example (`if (!o.p) return; const { a } =
+o.p`) already worked; the census cells are `if (!o.x) return; const { x } = o`; tsgo has TWO mechanisms (the synthetic
+leaf reference, and the source's own flow type); N4 was not a future G1 false positive only — it SHIPPED false TS2345 at
+call arguments, a false TS18047 on a file-level leaf, wrong TS2322 text and missing TS2362; `bindingElementDeclaredType`
+was the wrong place (every reader goes through `bindingElementType`); the ordinary property-path walk lacks the
+prefix-write reset (r7) and lets `o.x` cross into a closure (rd) — both pre-existing false negatives, hence the per-walk
+flag rather than a general change.
+
+**Measured** (diff lines vs tsgo): m1 (62 cells) 50 -> 26, m2 (17) 26 -> 5, m4 (16) 18 -> **0**, m5 11 -> 9, m3 (plain-read
+controls) unchanged; 19 false rows removed (TS2345 x17, TS18047, TS2339), 7 true TS2362 added, ~20 TS2322 texts
+corrected; the 2,160-cell matrix +12 rows, every one tsgo's (`D34destrFromLocalNarrowed…`), none removed; census cells
+byte-identical; forced G1 arm: tsbuildPublic 7 FPs -> **0**, checker 2 -> 1 (8637 gone; only 43917 = N11 left).
+**Pins**: `DestructuringFlowNarrowedLeafTest` (26). **Ablation**: A1 leaf narrowing off 12 RED, A2 parent off 1, A3 no
+prefix reset 2, A4 closure crossing 1, A6 installed graph 1, A8 empty-object subsumption off 3; A5 (`(o)` / `o!` root)
+and A7 (rest guard) 0 — redundant pairs (the `flowAt == null` refusal one layer later; `destructuringReferencePath`
+refuses rest itself). **Gates**: full suite **21,793 / 0 / 44** (+26); corpus screen 0 of 8,725; cost_gate PASS
+(`narrow.walks` +0.27%); huge_methods 0; grid 8x `added=0 removed=0` (chain control OK), libraries 0; warning gate
+clean. **Residues**: a literal-index element access is not narrowed by truthiness / equality (`t[0]`, `o['a-b']` —
+r4 / r5 on plain reads); `const { x } = this` (p3); the plain property-path walk's prefix-reset / closure gaps (r7, rd —
+the per-walk flag could become the general rule); the member-access reader misses TS2339 on a correctly typed leaf
+(k*c); default-join display (no subtype reduction: d2 / d3 / d5 / d6). **Successor**: B5d (N11, checker 43917).
+
 ### Round (P18.225) — (CHK.173) G1 arc B5b (N13): an assignment whose right-hand side is a union with no nullish member removes null / undefined from the declared type; a much wider shipped false-positive class than the census named; 0 false added, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent (no stall); the orchestrator re-ran every gate. **Mechanism**:
