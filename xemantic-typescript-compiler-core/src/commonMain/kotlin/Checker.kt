@@ -696,16 +696,16 @@ class Checker(
     internal var nonNullChainReceiverReads = false
 
     internal var currentClassForThis: ClassDeclaration? = null
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentClassForThis") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentClassForThis") }
     /** (CHK.173) B6: the receiver (and its declared type) whose veto
      *  [NullishReceiverChecks.bodyLocalAssignmentsVeto] the emitters run only once narrowing has
-     *  kept a nullish member — it can only suppress. They stay HERE, not in the collaborator,
-     *  because of the (P18.230) finding: B6 inserted them between [currentClassForThis] and its
-     *  epoch-bumping setter, so that `set(v)` below now belongs to [bodyLocalVetoDeclared] and
-     *  [currentClassForThis] bumps no epoch. The extraction preserves that verbatim; the fix
-     *  (move the setter back) is a behaviour change for its own round. */
+     *  kept a nullish member — it can only suppress. They live on [Checker] beside the other walk
+     *  ambients. (P18.231): B6 had inserted them between [currentClassForThis] and its
+     *  epoch-bumping setter, which silently re-attached that setter to [bodyLocalVetoDeclared];
+     *  the setter is back on [currentClassForThis] — never insert a field between a property and
+     *  its accessor. */
     internal var bodyLocalVetoPending: Identifier? = null
     internal var bodyLocalVetoDeclared: Type? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentClassForThis") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentClassForThis") }
 
     /** B-interfaceClassMerging: the enclosing class symbol whose method-body return type
      *  is currently being inferred. Set around method-return inference (both the lazy
