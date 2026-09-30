@@ -25,6 +25,33 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.240) — (CHK.184): a guard on an OPTIONAL property narrows the union by tsgo's `narrowTypeByDiscriminant` — the shipped false TS18048 (and a false TS2339 on `never` from `!in`) is gone, 109 -> 3 mismatched cells of a 480-cell matrix, 83 false rows removed, (CHK.180)'s union refusal LIFTED; +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent. **Where the queue item was wrong**: (a) not only truthy / `!` / `&&` — `=== undefined`,
+`!== undefined` and `typeof w.a === 'undefined'` gave the same false row, and the `in` operator was WORSE: its `!in`
+side produced `never`, i.e. a false TS18048 plus a false `TS2339 Property 'b' does not exist on type 'never'`; (b) a
+PRIMITIVE `T` is not a false positive for truthiness (`""` is falsy — tsgo reports too, and we matched); (c) a THIRD
+cause: once `w` narrowed correctly, a three-member union LOST tsgo's own TS18048, because the B81.1c suppression asked
+`getPropertyOfType` of the narrowed union, which answers for ONE constituent (CLAUDE.md's
+"`getPropertyOfType`'s UNION ARM" trap); (d) the machinery was mostly present (`isDiscriminantPropertyOfUnion`) — what
+was missing is the round-425 gap: optionality was never folded into the property type. **Mechanism**: new
+`DiscriminantFactsNarrowing.kt` (131 lines) ports `narrowTypeByDiscriminant` — each member's property type with
+`| undefined` folded in when optional (`?: never` -> `undefined`), tsgo's discriminant gate (not uniform, at least one
+literal / unit type; generic / `any` / `unknown` refuses), the operator's own narrowing over those property types, and
+a member dropped only when CERTAINLY disjoint (nullish vs non-nullish, or unequal literals). Hooks: truthiness (after
+`pDiscriminant`), equality with `undefined`/`null` (in `narrowByDiscriminantProperty`, before the round-425 literal
+filter), `typeof` (new `typeofDiscriminantNarrow`); none on a `?.` access. `narrowByInOperator` keeps a member whose
+property is optional on the `!in` side (tsgo's `isTypePresencePossible`), for unions and a single object. B81.1c
+suppresses only when EVERY constituent of the narrowed union declares the property required and never `undefined`.
+`WrittenReceiverTypes`' written-union refusal is removed (-7) and the corpus screen stays 0 with it lifted.
+**Matrix** (8 union shapes x 10 guards x 3 receivers x exactOptionalPropertyTypes on/off): 109 / 109 mismatched ->
+3 / 0; the 3 are PRE-EXISTING misses (`?: never` under `in`, where we used to emit two false rows and are now silent);
+every ours-only row gone; rows that must still report still do. **Pins**: `Chk184OptionalUndefinedDiscriminantTest`,
+16 tests; ablation a1 8 / a2 1 / a3 1 / a4 1 / a5 2 / a6 1 / a7 1 / a8 1 RED; 209 related classes (2,289 tests)
+green. **Gates**: full suite 22,014 / 0 / 44 (+16); corpus screen 8725 / 0; `cost_gate.py` 0 (all within 0.15%);
+`huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning
+gate with probe: probe only. Residues -> (CHK.185).
+
 ### Round (P18.239) — (CHK.180) stage 1: `this` and written-type `const` body locals reach the member / element-access / nullish readers per access, as tsgo types them — 45 -> 27 missing of a 104-cell matrix, 0 ours-only, every new row tsgo's exact text; +0 on corpus, grid and libraries (2026-09-30)
 
 **Out-of-order pick, stated**: taken ahead of (CHK.183) / (CHK.182) because a read-only census had fully specified and
@@ -254,40 +281,6 @@ counter +0.00%; `huge_methods.py --fail-over 0` = 0; grid 8 profiles x added=0 r
 marked 0/0, cronstrue 1/1 (Checker.class 07071524 -> b1157f4c); warning gate with the probe control: the probe's
 warning only. No pin: the effect is a probe counter, and an `epochNoops` assertion would pin instrumentation, not
 behaviour — the CLAUDE.md entry (P18.230) is the guard. Ledger note updated (FIXED at (P18.231)).
-
-### Round (P18.230) — (INV.0) extraction: the (CHK.173) null-check family moves VERBATIM out of `Checker.kt` into `NullishReceiverChecks.kt` (21 declarations, `Checker.kt` -570); every deterministic receipt byte-identical against pristine; it also exposed a DETACHED SETTER that (P18.229) introduced (2026-09-30)
-
-Orchestrated at the natural boundary after the null-check arc (this session had grown `Checker.kt` 201,043 -> 203,588):
-one implementation subagent; the orchestrator re-took every receipt. **What moved**: Checker.kt 155313-155893 (581 lines
-minus the 9-line pre-(CHK.173) `ReceiverInfo`, which stays with its one user B81.1c) into `internal class
-NullishReceiverChecks(private val checker: Checker)` (the `EnumSemantics` pattern), field `nullishReceivers` (no
-colliding local); the 9 call sites of its 6 entry points call it directly (no stubs); it owns B6's per-file memo and
-`bodyLocalLeafTyped`. **Verbatim proof**: stripping `checker.` and re-privatising the 6 entry points reproduces the
-original 572 lines (two comment lines differ only where the strip ate part of "checker.ts"). 17 `Checker` members
-widened `private` -> `internal` (`bindingElementDeclaredType`, `getFlowAt`, `getLineAndCharacterOfPosition`,
-`getNarrowedTypeForReferenceFollowLoopEntry`, `getTypeOfIdentifier`, `isNullishConstituent`, `lexicalScopeSymbol`,
-`typeIncludesExplicitUndefined`, `typeIncludesNull`; `diagnostics` (keeps JvmName `diagnostics_`), `captureRecorder`,
-`currentLocalTypes`, `currentShadowedNames`, `currentParamBindingNames`, `nonNullChainReceiverReads`, and the veto pair);
-ledger row 13: 28 ambient reads over 83 sites, 5 scoped writes. NOT moved: the (P18.223) arity reader (not contiguous;
-`callMinArgumentCount` has 14 callers across call checking) and B81.1c.
-
-**The defect it exposed — (P18.229) B6 DETACHED `currentClassForThis`'s setter**: B6 inserted the two veto fields between
-`internal var currentClassForThis` and its epoch-bumping `set(v)` block, and Kotlin attaches a custom accessor to the
-IMMEDIATELY preceding property — so assigning `currentClassForThis` bumps NO expression epoch, and assigning the veto's
-declared type bumps the `"currentClassForThis"` epoch. The move PRESERVED it (fixing it moves `epochBumps`, a behaviour
-change); the veto pair stays on `Checker` with a KDoc note; filed as (P18.231)'s fix. CLAUDE.md entry added.
-
-**Receipts**: `--passTiming` on the compiler profile — all 509 deterministic lines (418 pass rows, 46 diagnostics, the
-emission census, every counter incl. `epochBumps`) BYTE-IDENTICAL against the rebuilt pristine (908da6dd); the only
-moving lines are the node-kind histogram and its total, which an A/A control proved unstable (the SAME pristine binary
-read 869,078 then 850,859 nodes; before-vs-after differed by 1.5k); corpus screen 0 of 8,725; huge_methods 0; spine
-closure audit OK; PrintInlining — each moved entry point keeps its verdict (`typeParamsToBaseConstraints` `inline (hot)`
-x4 in both arms), `checkArgumentsAgainstSignature` row-for-row identical but for the known single-run swap, 101
-`access$get…$p` + 303 `access$set…` trampolines replaced one-for-one by the mangled accessors; warm A/B (ABBA) +0.76%
-with arm spreads 1.8-2.3% — noise; grid 8x `added=0 removed=0` (chain control OK), libraries 0; full suite **21,848 /
-0 / 44** (unchanged — a verbatim move); warning gate clean (positive control live). Ablation (the collaborator is live):
-a1 identifier call site dropped 91 of 204 RED, a2 veto reading a collaborator-local copy 4. **Successor**: (P18.231),
-reattach the setter (a behaviour change with an epoch receipt), then the remaining (CHK.173) residues / (INV.0).
 
 ## QUEUE
 
@@ -887,7 +880,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.184) TRUTHINESS NARROWING ON A UNION WHOSE MEMBERS CARRY `?: undefined` PROPERTIES IS A SHIPPED FALSE TS18048 (found by (P18.239)): `type U = { a: T; b?: undefined } | { b: T; a?: undefined }; function p(w: U) { w.a ? … : w.b.toString() }` — tsgo is silent, we report `'w.b' is possibly 'undefined'`, on parameters and file-level consts today; `discriminateWithOptionalProperty4(exactoptionalpropertytypes=false)` is the corpus witness once a body local reaches the reader.** Removing it lets (CHK.180)'s union refusal in `WrittenReceiverTypes.kt` be lifted. Measure the matrix (truthy / falsy / `!` / `&&` / `in` guards, exactOptionalPropertyTypes on/off) against tsgo; the false-positive direction makes it the first (CHK.180) successor to take.
+- [ ] **(CHK.185) RESIDUES OF (CHK.184) (matrix `build/bench/p18240-agent/`).** (a) `a?: never` WITHOUT exactOptionalPropertyTypes: a union read of `w.a` should be `string[] | undefined` and we drop the `undefined` — the 3 remaining matrix cells, where tsgo reports `'w.a' is possibly 'undefined'` under an `in` guard; (b) DISPLAY: a single union member printed alone shows `a?: undefined | undefined` where tsgo prints `a?: undefined` — pre-existing on an `===` narrowing, now reachable on more paths, no gate sees it (a relation-message TEXT-DIFF); (c) `checkDiscriminateOptionalProperty4`, the corpus pin walker for the `"a" in z` row, may now be REDUNDANT — PassLab-ablate it and retire it if the corpus stays green (CLAUDE.md "A BASELINE SERVED BY A WIPE-AND-PIN WALKER CANNOT BE CLOSED BY AN ENGINE RULE"); (d) not ported: tsgo's `removeNullable` on `?.` discriminant accesses, and equality with NON-nullish literals (the old path still owns it).
+
+- [x] **(CHK.184) DONE 2026-09-30 ((P18.240) note). TRUTHINESS NARROWING ON A UNION WHOSE MEMBERS CARRY `?: undefined` PROPERTIES IS A SHIPPED FALSE TS18048 (found by (P18.239)): `type U = { a: T; b?: undefined } | { b: T; a?: undefined }; function p(w: U) { w.a ? … : w.b.toString() }` — tsgo is silent, we report `'w.b' is possibly 'undefined'`, on parameters and file-level consts today; `discriminateWithOptionalProperty4(exactoptionalpropertytypes=false)` is the corpus witness once a body local reaches the reader.** Removing it lets (CHK.180)'s union refusal in `WrittenReceiverTypes.kt` be lifted. Measure the matrix (truthy / falsy / `!` / `&&` / `in` guards, exactOptionalPropertyTypes on/off) against tsgo; the false-positive direction makes it the first (CHK.180) successor to take.
 
 - [ ] **(CHK.183) RESIDUES OF (CHK.181) (cells `build/bench/p18238-agent/m/`).** (a) a tuple ALIAS rest (`type T = [string, number?]; f(...a: T)`, m5) is recognised by neither arity reader — both rows missing (tsgo `Expected 1-2 arguments, but got 3.` / `got 0`); `restTupleOf` would need to resolve the reference, or read the range off the checker's tuple type, which has no per-element optional flag today (only `tupleRestIndex`); (b) m16 `f16("a")` with `...a: [...number[], boolean]`: tsgo reports TS2345 `Argument of type '[]' is not assignable to parameter of type '[...number[], boolean]'.` (the relation for a middle-rest tuple, not arity) — measure; (c) B170's existing TS6236 on the `Parameters<Fn>` path (`Checker.kt` ~67786) still spans `restParam.end - restParam.pos`, likely one character past the parameter — check its corpus baseline before touching.
 

@@ -1,5 +1,11 @@
 
 
+**(P18.235) — (CHK.179)(a): `obj["missing"]` NO LONGER REPORTS "property does not exist" (TS2339) IN EVERY CONFIGURATION — IT IS SILENT WITHOUT `noImplicitAny` AND REPORTS tsgo's TS7053 / TS7015 / TS7052 WITH IT; +20 PINS, 21,919 / 0 / 44 (2026-09-30).**
+A false-positive class covering any receiver kind, not only unions as the queue said. Screen 0; grid 8x0 and libraries
+unchanged (none contain the shape, so the pins are the gate). Still silent where tsgo reports: string-typed keys and a
+few receiver kinds, queued.
+
+
 **(P18.234) — (CHK.178): THREE MISMATCHES WITH tsgo FIXED — THE ARGUMENT ERROR NAMES THE FIRST FAILING UNION MEMBER, `(u as U).a` REPORTS THE MISSING PROPERTY, AND AN OBJECT-LITERAL MISMATCH POINTS AT THE MEMBER; +16 PINS, 21,899 / 0 / 44 (2026-09-30).**
 No corpus baseline moved, and the grid and libraries are byte-identical (none of these paths fire there), so the corpus
 and the pins are the gate. Residues queued as (CHK.179), first a false-positive TS2339 on `u["a"]`.

@@ -1,3 +1,37 @@
+### Round (P18.230) — (INV.0) extraction: the (CHK.173) null-check family moves VERBATIM out of `Checker.kt` into `NullishReceiverChecks.kt` (21 declarations, `Checker.kt` -570); every deterministic receipt byte-identical against pristine; it also exposed a DETACHED SETTER that (P18.229) introduced (2026-09-30)
+
+Orchestrated at the natural boundary after the null-check arc (this session had grown `Checker.kt` 201,043 -> 203,588):
+one implementation subagent; the orchestrator re-took every receipt. **What moved**: Checker.kt 155313-155893 (581 lines
+minus the 9-line pre-(CHK.173) `ReceiverInfo`, which stays with its one user B81.1c) into `internal class
+NullishReceiverChecks(private val checker: Checker)` (the `EnumSemantics` pattern), field `nullishReceivers` (no
+colliding local); the 9 call sites of its 6 entry points call it directly (no stubs); it owns B6's per-file memo and
+`bodyLocalLeafTyped`. **Verbatim proof**: stripping `checker.` and re-privatising the 6 entry points reproduces the
+original 572 lines (two comment lines differ only where the strip ate part of "checker.ts"). 17 `Checker` members
+widened `private` -> `internal` (`bindingElementDeclaredType`, `getFlowAt`, `getLineAndCharacterOfPosition`,
+`getNarrowedTypeForReferenceFollowLoopEntry`, `getTypeOfIdentifier`, `isNullishConstituent`, `lexicalScopeSymbol`,
+`typeIncludesExplicitUndefined`, `typeIncludesNull`; `diagnostics` (keeps JvmName `diagnostics_`), `captureRecorder`,
+`currentLocalTypes`, `currentShadowedNames`, `currentParamBindingNames`, `nonNullChainReceiverReads`, and the veto pair);
+ledger row 13: 28 ambient reads over 83 sites, 5 scoped writes. NOT moved: the (P18.223) arity reader (not contiguous;
+`callMinArgumentCount` has 14 callers across call checking) and B81.1c.
+
+**The defect it exposed — (P18.229) B6 DETACHED `currentClassForThis`'s setter**: B6 inserted the two veto fields between
+`internal var currentClassForThis` and its epoch-bumping `set(v)` block, and Kotlin attaches a custom accessor to the
+IMMEDIATELY preceding property — so assigning `currentClassForThis` bumps NO expression epoch, and assigning the veto's
+declared type bumps the `"currentClassForThis"` epoch. The move PRESERVED it (fixing it moves `epochBumps`, a behaviour
+change); the veto pair stays on `Checker` with a KDoc note; filed as (P18.231)'s fix. CLAUDE.md entry added.
+
+**Receipts**: `--passTiming` on the compiler profile — all 509 deterministic lines (418 pass rows, 46 diagnostics, the
+emission census, every counter incl. `epochBumps`) BYTE-IDENTICAL against the rebuilt pristine (908da6dd); the only
+moving lines are the node-kind histogram and its total, which an A/A control proved unstable (the SAME pristine binary
+read 869,078 then 850,859 nodes; before-vs-after differed by 1.5k); corpus screen 0 of 8,725; huge_methods 0; spine
+closure audit OK; PrintInlining — each moved entry point keeps its verdict (`typeParamsToBaseConstraints` `inline (hot)`
+x4 in both arms), `checkArgumentsAgainstSignature` row-for-row identical but for the known single-run swap, 101
+`access$get…$p` + 303 `access$set…` trampolines replaced one-for-one by the mangled accessors; warm A/B (ABBA) +0.76%
+with arm spreads 1.8-2.3% — noise; grid 8x `added=0 removed=0` (chain control OK), libraries 0; full suite **21,848 /
+0 / 44** (unchanged — a verbatim move); warning gate clean (positive control live). Ablation (the collaborator is live):
+a1 identifier call site dropped 91 of 204 RED, a2 veto reading a collaborator-local copy 4. **Successor**: (P18.231),
+reattach the setter (a behaviour change with an epoch receipt), then the remaining (CHK.173) residues / (INV.0).
+
 ### Round (P18.229) — (CHK.173) B6, the final G1 round: a BODY LOCAL receiver reports TS18047 / TS18048 / TS18049 as tsgo (`let y: number | null = null; y.toFixed()`); +53 true / 0 false over 383 cell projects, +0 everywhere; a measured 2-2.5% warm cost found and removed before landing (2026-09-30)
 
 Orchestrated: one implementation subagent, sent back once on COST; the orchestrator re-ran every gate, a positive-control
