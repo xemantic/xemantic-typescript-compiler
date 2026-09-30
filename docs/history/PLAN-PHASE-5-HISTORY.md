@@ -1,3 +1,25 @@
+### Round (P18.232) — (INV.0) extraction: the (CHK.176)(a) signature-based ARITY reader moves VERBATIM out of `Checker.kt` into `SignatureArity.kt` (12 declarations, `Checker.kt` -344); every deterministic receipt byte-identical against pristine (2026-09-30)
+
+One implementation subagent (the queue's successor to (P18.230)); a read-only (CHK.177) census ran beside it on frozen
+classes (`build/scratch-p18232-census/`, specifies the next round). **What moved**: `callArityFails`, `arityDeclTrusted`,
+`endsInTupleRest`, `CallArity`, `callArity`, `reportSignatureArity`, `reportSpreadSignatureArity`,
+`arityIdentifierCalleeTrusted`, `arityOverloadSetComplete`, `arityBindingIn`, `arityBindingOwns`, `arityRowAt` — one
+contiguous run below `checkArgumentsAgainstSignature` (ledger row 13's "not contiguous" was wrong) — into
+`internal class SignatureArity(private val checker: Checker, private val options: CompilerOptions)`, field
+`signatureArity` declared above `init` beside `nullishReceivers`; 7 call sites call it directly. NOT moved: the
+call-side minimum (`callMinArgumentCount` x2, `overloadCallMin`, `typeAcceptsVoid`, 7 callers incl. the relation) —
+the follow-on is to move it together with the name-based arity walkers as one family. **Verbatim proof**: stripping
+`checker.` and re-privatising reproduces the original span byte-identically. 15 members widened `private` ->
+`internal` (none a property with a custom accessor — the (P18.229) trap was checked); ledger row 14: 18 ambient reads
+over 27 sites, no writes. **Receipts** (orchestrator-retaken, pristine `b1157f4c` vs `e324d30b`): per-pass
+`--passTiming` table — all pass rows, counters and the 30 listed diagnostics identical once the ms column and the
+node-kind histogram (unstable A-vs-A) are dropped; PrintInlining on `checkArgumentsAgainstSignature` row-for-row
+identical, `callArityFails` same verdicts, new accessor hops `inline` (builder, both name forms); full suite
+21,848 / 0 / 44 unchanged; corpus screen 8725 / 0; `cost_gate.py` control 0; `huge_methods.py --fail-over 0` 0; grid
+8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe control: probe only;
+warm A/B both orders inside the band (-0.17% 2/2; reversed run noise-dominated, -0.55% with a 1.78% arm sd). Builder's
+arity ablation (31 classes, 596 tests green): a1 35 / a2 66 / a3 2 / a4 23 RED. tsgo matrix 8/8 identical.
+
 ### Round (P18.231) — the detached setter reattached: `currentClassForThis` bumps its expression epoch again (the (P18.229) insertion had moved its `set(v)` onto `bodyLocalVetoDeclared`); diagnostics unchanged everywhere, receipt in `epochBumps`/`epochNoops` (2026-09-30)
 
 Orchestrator-only round (one line moved, one KDoc). `Checker.kt`: the two B6 veto fields now sit AFTER

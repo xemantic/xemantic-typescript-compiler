@@ -73,7 +73,7 @@ i.e. within 1.3% of round 801's 24,806 — the box was quiet):
 | `init:mergeModuleAugmentations` | 0.5 | |
 | `init:wireGlobalArrayTypes` | 0.4 | |
 | `init:mergeLibGlobals` | 0.3 | |
-| `init:mergeSharedKeepNames`, `init:snapshotPreAugGlobalKeys`, `init:flowDisabledTs2454Retraction`, `init:tpTargetReturnDedup` | ≤ 0.1 each | |
+| `init:mergeSharedKeepNames` (deleted at (P18.242), (CHK.186)), `init:snapshotPreAugGlobalKeys`, `init:flowDisabledTs2454Retraction`, `init:tpTargetReturnDedup` | ≤ 0.1 each | |
 | **residual `outside-pass`** | **144** | 15% |
 | **total** | **~925** | (round 801 measured the whole row at 975) |
 

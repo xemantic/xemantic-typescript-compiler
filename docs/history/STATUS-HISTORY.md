@@ -1,5 +1,11 @@
 
 
+**(P18.237) — (INV.0) EXTRACTION: THE REST OF THE ARITY FAMILY MOVES OUT OF `Checker.kt` (−548 LINES) INTO `SignatureArity.kt`, VERBATIM; 21,965 / 0 / 44 (2026-09-30).**
+A pure move: all pass rows, counters and diagnostics byte-identical against the pre-move binary; screen 0; grid 8x0;
+libraries unchanged; warm A/B shows only the known second-arm artefact. The move also halves the members the
+collaborator needed widened (15 -> 7). It surfaced one small arity defect, queued as (CHK.181).
+
+
 **(P18.236) — (CHK.179)(a2)+(c): `obj[k]` WITH `k: string` ON A TYPE WITHOUT AN INDEX SIGNATURE NOW REPORTS tsgo's TS7053 UNDER `noImplicitAny`, AND `u!.a` / `(u satisfies U).a` / A CAST STORED IN A `const` REPORT THE MISSING MEMBER; +37 PINS, 21,956 / 0 / 44 (2026-09-30).**
 Every added row is a tsgo row; the first cut added false rows on tsc's own sources, which the grid caught and which
 located the real rule (the key's type decides). Screen 0; grid 8x0; libraries unchanged. Next gap: `this` and

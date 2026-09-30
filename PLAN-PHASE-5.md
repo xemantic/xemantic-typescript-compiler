@@ -25,6 +25,35 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.242) — (CHK.186): a MODULE declaration no longer fuses with a same-named SCRIPT declaration — (CHK.49)'s rule extended from lib names to script names, `init:mergeSharedKeepNames` deleted; a 22-cell matrix goes from 20 cells diverging from tsgo to 0 (bar one older cross-file TS2693 gap); +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent. **Where the queue item was wrong**: (a) no new "shared" visibility class was needed —
+(CHK.49)'s pattern carries over: a name declared by both a script and a module becomes MODULE-ONLY, and the existing
+per-file scope resolves it (the declaring module sees its own symbol, every other file the global one); (b) the scope
+was understated — the fusion leaked PROGRAM-WIDE (the script and every third module saw the module's members; 20 of
+22 cells diverged), EVERY declaration-kind pair collided, and removing the fusion alone introduced false positives in
+six cross-meaning cells, so the value half and the type half each needed its own fix; (c) a SCRIPT file's per-file
+scope was wrong too — its own un-merged binder symbol shadowed the merged global, so a second script `interface D`
+lost its merge partner's members. **Mechanism**: `moduleLocalContributesGlobally` answered true for every script
+local name (`mergeSharedKeepNames`), so `mergeSingleSymbol` ADOPTED the module's declaration into the global symbol;
+`ensurePerFileVisibility` kept script locals in `nonModuleVisible` (the two are one observable, (CHK.49)); four
+downstream sites assumed the fused symbol — the value second chance `libValueBehindTypeOnlyShadow` (read only
+`libGlobals`), the TS2693 table in `tavBuildFileRoot`, two raw `globals[…]` consults in the `new` emitters ((CHK.137),
+17.170), and the TS2749 gate `isValueOnlyTypeRef` / `resolveTypeNameToSymbol`. **Change** (`NameResolver.kt` +~40,
+`Checker.kt` -31): the merge clause removed; script names out of `nonModuleVisible`; script files get an EMPTY own
+layer (`emptyScriptOwnLocals`); new `fileShadowsGlobal`; the value second chance and `libValueShadowNames` read
+`globals`; a type-meaning fallback in `resolveTypeNameToSymbol`; `mergeSharedKeepNames` and its pass deleted (no
+reader left; `SetupPhasePartitionTest`'s lists 16 -> 15); the TS2693 table skips `libValueShadows()`; the two `new`
+emitters and the TS2749 gate defer to the module's own declaration. Duplicate-identifier rows now match tsgo (none
+between a module and a script, TS2451 between two scripts). **Pins**: `ScriptGlobalModuleShadowTest`, 22 tsgo rows;
+ablation a0 (whole revert) 19 / a1 18 / a2 13 / a3 1 / a4 3 / a10 3 / a5 3 / a6 1 / a7 1 / a8 1 / a9 1 RED (a6 read 0
+until a script const holding an INSTANCE was added; a4 / a10 are one observable, a round-927 pair). **Gates**: full
+suite 22,051 / 0 / 44 (+22); corpus screen 8725 / 0 — a real gate here, script fixtures are common in the corpus;
+`cost_gate.py` 0 (`globals.lookups` +0.44%: the per-file scope now resolves these names itself);
+`huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK (all-module profiles — a control), rxjs 0/0,
+marked 0/0, cronstrue 1/1; warning gate with probe: probe only. CLAUDE.md's (CHK.49) entry and
+`docs/perf/setup-phase-and-huge-methods.md` updated for the deleted pass. Residue -> (CHK.188).
+
 ### Round (P18.241) — (CHK.182): a class whose NAME matches an interface anywhere in the program no longer silences its TS2339 / TS2551 — a program-wide name refusal is replaced by reading the interfaces actually merged into the class's own symbol; 23 silenced rows restored across a 30-cell matrix, all tsgo rows; +0 on corpus, grid and libraries (2026-09-30)
 
 **Out-of-order pick, stated**: taken ahead of (CHK.185) / (CHK.183) (both small residues) because it silenced whole
@@ -270,28 +299,6 @@ probe only. `Checker.kt` -1. Residues queued: S2 (property-access / call / eleme
 sources, conditionals, `NS.U`, B416 retirement — m03 m04 h02 h04 h05 f10 h09 g01 g02 g06), x05 (our under-narrowing
 now prints `U` where tsgo prints `B`; the row was already wrong), and (CHK.178) for three separate defects the census
 found.
-
-### Round (P18.232) — (INV.0) extraction: the (CHK.176)(a) signature-based ARITY reader moves VERBATIM out of `Checker.kt` into `SignatureArity.kt` (12 declarations, `Checker.kt` -344); every deterministic receipt byte-identical against pristine (2026-09-30)
-
-One implementation subagent (the queue's successor to (P18.230)); a read-only (CHK.177) census ran beside it on frozen
-classes (`build/scratch-p18232-census/`, specifies the next round). **What moved**: `callArityFails`, `arityDeclTrusted`,
-`endsInTupleRest`, `CallArity`, `callArity`, `reportSignatureArity`, `reportSpreadSignatureArity`,
-`arityIdentifierCalleeTrusted`, `arityOverloadSetComplete`, `arityBindingIn`, `arityBindingOwns`, `arityRowAt` — one
-contiguous run below `checkArgumentsAgainstSignature` (ledger row 13's "not contiguous" was wrong) — into
-`internal class SignatureArity(private val checker: Checker, private val options: CompilerOptions)`, field
-`signatureArity` declared above `init` beside `nullishReceivers`; 7 call sites call it directly. NOT moved: the
-call-side minimum (`callMinArgumentCount` x2, `overloadCallMin`, `typeAcceptsVoid`, 7 callers incl. the relation) —
-the follow-on is to move it together with the name-based arity walkers as one family. **Verbatim proof**: stripping
-`checker.` and re-privatising reproduces the original span byte-identically. 15 members widened `private` ->
-`internal` (none a property with a custom accessor — the (P18.229) trap was checked); ledger row 14: 18 ambient reads
-over 27 sites, no writes. **Receipts** (orchestrator-retaken, pristine `b1157f4c` vs `e324d30b`): per-pass
-`--passTiming` table — all pass rows, counters and the 30 listed diagnostics identical once the ms column and the
-node-kind histogram (unstable A-vs-A) are dropped; PrintInlining on `checkArgumentsAgainstSignature` row-for-row
-identical, `callArityFails` same verdicts, new accessor hops `inline` (builder, both name forms); full suite
-21,848 / 0 / 44 unchanged; corpus screen 8725 / 0; `cost_gate.py` control 0; `huge_methods.py --fail-over 0` 0; grid
-8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe control: probe only;
-warm A/B both orders inside the band (-0.17% 2/2; reversed run noise-dominated, -0.55% with a 1.78% arm sd). Builder's
-arity ablation (31 classes, 596 tests green): a1 35 / a2 66 / a3 2 / a4 23 RED. tsgo matrix 8/8 identical.
 
 ## QUEUE
 
@@ -891,7 +898,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.186) A MODULE-LOCAL DECLARATION IS STILL FUSED WITH A SAME-NAMED *SCRIPT* DECLARATION — (CHK.49)'s defect, fixed for LIB names, is live for SCRIPT names (found by (P18.241)): `init:mergeSharedKeepNames` merges a module-local declaration into the global symbol whenever a script file declares the same name, so a module's `class D` carries a script's `interface D` members — measured, `z.q` types `string` (a false TS2322 on `const qq: number = z.q`) where tsgo reports `TS2339 Property 'q' does not exist`** (cells c6/c7 in `build/bench/p18241-agent/cells`). WRONG TYPES, not only silence. The fix needs a "shared" visibility class in `lookupPerFileForNode` / `globalsForFile` (`NameResolver.kt` ~1380, where a non-module-only name returns `globals[name]` for every file), not just removing the merge — CHK.49-sized; read CLAUDE.md "A LIB GLOBAL NAME DECLARED TOP-LEVEL IN A *MODULE* FILE IS MODULE-SCOPED" (the two sets are ONE observable, and seeding only one is worse than both) before designing.
+- [ ] **(CHK.188) A SCRIPT-FILE `interface D` USED AS A VALUE FROM ANOTHER FILE (`new D()`, `D()`) REPORTS NOTHING — tsgo reports TS2693 `'D' only refers to a type, but is being used as a value here.` (found by (P18.242); control cell `x1` in `build/bench/p18242-agent/cells`, 0 of 2 rows, with or without any name collision).** The per-file TS2693 table in `tavBuildFileRoot` lists only the file's OWN declarations; a type-only GLOBAL (a script interface, a type alias, a lib interface with no value) is never consulted. Measure the matrix (interface / type alias / lib type-only name; `new`, call, property read, `typeof`) and extend the table to type-only globals the file does not shadow. Row-adding — grid it; every added row a tsgo row.
+
+- [x] **(CHK.186) DONE 2026-09-30 ((P18.242) note). A MODULE-LOCAL DECLARATION IS STILL FUSED WITH A SAME-NAMED *SCRIPT* DECLARATION — (CHK.49)'s defect, fixed for LIB names, is live for SCRIPT names (found by (P18.241)): `init:mergeSharedKeepNames` merges a module-local declaration into the global symbol whenever a script file declares the same name, so a module's `class D` carries a script's `interface D` members — measured, `z.q` types `string` (a false TS2322 on `const qq: number = z.q`) where tsgo reports `TS2339 Property 'q' does not exist`** (cells c6/c7 in `build/bench/p18241-agent/cells`). WRONG TYPES, not only silence. The fix needs a "shared" visibility class in `lookupPerFileForNode` / `globalsForFile` (`NameResolver.kt` ~1380, where a non-module-only name returns `globals[name]` for every file), not just removing the merge — CHK.49-sized; read CLAUDE.md "A LIB GLOBAL NAME DECLARED TOP-LEVEL IN A *MODULE* FILE IS MODULE-SCOPED" (the two sets are ONE observable, and seeding only one is worse than both) before designing.
 
 - [ ] **(CHK.187) A MODULE-LOCAL BASE CLASS AND `new D()` INSIDE A MODULE STAY SILENT FOR TS2339 (found by (P18.241), cells k4 k5 k8 m4 m5 m8 in `build/bench/p18241-agent/cells`, tsgo 1 row each): `lookupInstanceMemberInResolvableChain`, `isStaticMemberOfClass`, `emitClassChainTs2551Suggestion` and the `new` branch resolve through `globals[...]`, which excludes module locals.** Resolve the declaring file's scope instead (`lookupPerFileForNode` / the class symbol's own declarations). Row-adding: every added row a tsgo row, grid it. Also: a merged interface with `extends` (m2) and a merged numeric index signature (n6) are refused on purpose and tsgo reports both.
 
