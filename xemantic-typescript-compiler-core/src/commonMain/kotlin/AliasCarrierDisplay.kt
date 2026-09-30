@@ -131,7 +131,7 @@ internal class AliasCarrierDisplay(private val checker: Checker) {
             else -> local
         }
         return when (decl) {
-            is VariableDeclaration -> decl.type to false
+            is VariableDeclaration -> (decl.type ?: checker.constCastAnnotation(decl)) to false
             is Parameter -> decl.type to decl.questionToken
             else -> null
         }

@@ -157383,13 +157383,32 @@ interface DataView {
         if (!sym.flags.hasAny(SymbolFlags.Variable)) return null
         if (sym.declarations.size != 1) return null
         val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
-        val ann = decl.type ?: return null
+        val ann = decl.type ?: constCastAnnotation(decl) ?: return null
         val t = getTypeFromTypeNode(ann)
         if (t === anyType || t === errorType || t === unknownType) return null
         if (typeContainsUnresolvedTypeParam(t)) return null
         if (typeHasNullishConstituent(t)) return null
         if (t !is Type.Union) return null
         return t
+    }
+
+    /**
+     * (CHK.179)(c) `const v = x as U` - an unannotated `const` whose initializer is a cast
+     * (through parentheses) is typed by the written type exactly as an annotation would type
+     * it, so the cast's type node stands in for the missing annotation. `as const` and a
+     * `let` are refused (a literal type / a re-assignable binding).
+     */
+    internal fun constCastAnnotation(decl: VariableDeclaration): TypeNode? {
+        val list = (decl as NodeBase).parent as? VariableDeclarationList ?: return null
+        if (list.flags != SyntaxKind.ConstKeyword) return null
+        var init = decl.initializer ?: return null
+        while (init is ParenthesizedExpression) init = init.expression
+        val t = when (init) {
+            is AsExpression -> init.type
+            is TypeAssertionExpression -> init.type
+            else -> return null
+        }
+        return if (objLitIsConstTypeRef(t)) null else t
     }
 
     /**
@@ -158876,8 +158895,11 @@ interface DataView {
         run {
             var castInner: Expression = objectExpr
             while (castInner is ParenthesizedExpression) castInner = castInner.expression
+            // (CHK.179)(c) `u!.a` / `(u satisfies U).a` on a union reference: see [cmamWrappedUnionReceiver].
+            if (cmamWrappedUnionReceiver(castInner, propName, diagStart, diagLength, source, fileName)) return true
             if ((castInner is AsExpression || castInner is TypeAssertionExpression) &&
-                propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
+                propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES &&
+                (elementAccess || propName[0] !in '0'..'9')) {
                 val castType = getTypeOfExpression(objectExpr)
                 if (castType is Type.Interface && castType.symbol != null &&
                     castType.baseTypes.isNullOrEmpty() &&
@@ -158900,12 +158922,42 @@ interface DataView {
                 // PROPERTY access only: for `(u as U)["a"]` tsgo reports TS7053 (strict) or
                 // nothing, and the element-access TS2339 this family emits for an IDENTIFIER
                 // receiver (`u["a"]`) is a pre-existing ours-only row not to be extended.
-                if (!elementAccess && cmamCheckCastUnionOrObjectReceiver(
+                if (cmamCheckCastUnionOrObjectReceiver(
                         castType, objectExpr, propName, diagStart, diagLength, source, fileName,
                     )) return true
             }
         }
         return false
+    }
+
+    /**
+     * (CHK.179)(c) a NON-NULL assertion `u!.a` or a `satisfies` `(u satisfies U).a` whose
+     * operand is a reference to a UNION: tsgo types the wrapper as the operand's (non-nullable)
+     * flow type and reports the missing member exactly as for `u.a`, while the wrapper is not a
+     * reference, so [cmamGeneralReceiverType]'s `narrowingEligible` dropped it. The operand
+     * itself is handed to the union-receiver block, which narrows it and names its alias.
+     */
+    private fun cmamWrappedUnionReceiver(
+        wrapped: Expression, propName: String,
+        diagStart: Int, diagLength: Int, source: String, fileName: String,
+    ): Boolean {
+        var inner = when (wrapped) {
+            is NonNullExpression -> wrapped.expression
+            is SatisfiesExpression -> wrapped.expression
+            else -> return false
+        }
+        while (inner is ParenthesizedExpression) inner = inner.expression
+        // An identifier only: the union block names the alias from the reference's own
+        // declaration, which a property path does not carry (it would print `A | B`).
+        if (inner !is Identifier) return false
+        if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
+        val declared = getTypeOfExpression(inner) as? Type.Union ?: return false
+        val union = if (wrapped is NonNullExpression) {
+            val kept = declared.types.filter { it !== nullType && it !== undefinedType }
+            if (kept.size < 2) return false
+            if (kept.size == declared.types.size) declared else getUnionType(kept) as? Type.Union ?: return false
+        } else declared
+        return cmamCheckUnionReceiverNarrowing(union, inner, propName, diagStart, diagLength, source, fileName)
     }
 
     /**
@@ -161015,6 +161067,8 @@ interface DataView {
         // the tsc TS7053 chain; fresh-receiver union keys deliberately fall through
         // to r167 (its domain).
         if (tryEmitNoImplicitAnyIndexAccess(expr, source, fileName)) return
+        // (CHK.179)(a2) a string- / number-typed key on an index-less receiver.
+        if (elementAccessMissing.nonLiteralKey(expr, source, fileName)) return
         // B98.r167: TS2339 for `{ objLit }[id]` where `id` has a UNION-of-literal
         // type and one literal is not a key of the FRESH object literal. Gated:
         // receiver resolves to a fresh Type.Object (own props, no index sig, no
