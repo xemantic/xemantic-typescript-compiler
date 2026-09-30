@@ -25,6 +25,31 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.238) — (CHK.181): a rest-tuple parameter's arity is read the way tsgo reads it — optional elements give a range (`Expected 1-2`), a tuple with its own rest element gives `at least N`, and a missing rest parameter relates TS6236 — in both arity readers; every changed row a tsgo row, +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent, beside a read-only (CHK.180) census. **Where the queue item was wrong**: the defect was
+broader than the too-many row — the same misreading made a fixed tuple rest after a parameter print `at least 1`
+where tsgo prints `Expected 2-3` / `1-3` (too few), dropped the TS2555 row entirely for a tuple with its own rest
+element (`[string, ...number[]]`, BOTH readers), and related a missing rest parameter with TS6210 where tsgo gives
+TS6236 `Arguments for the rest parameter 'a' were not provided.` spanning the parameter. The signature-based reader
+already had the fixed-tuple range right; the name walker drew its wrong row first on the same span, and the reader
+skips a span that already has a row. tsgo's minimum counts only the required elements BEFORE the first rest element
+(`[string, ...number[], boolean]` is `at least 1`). **Mechanism**: `spineArgCallEnter` passed the tuple's `maxArgs`
+as both bounds and used `minParams`/`hasRest` for too-few (a tuple rest read as an unbounded rest);
+`SignatureArity.callArity`'s tuple branch understood only rest-less tuples; `callArityFails`' fast path let rest-element
+tuples skip the check; the too-few emitters had no missing-rest arm. **Change**: `SignatureArity.kt` +73/-22 —
+`restTupleOf` (the one tuple-annotation unwrapper), `tupleRestArity` (the range), `tupleRestCallRange` (the name
+walker's entry, so the two readers agree by construction), `endsInAnyTupleRest` (fast path only),
+`restParameterNotProvided` (the TS6236 row, trimming `Node.end`'s overshoot); `Checker.kt` +12. **Matrix**
+(`build/bench/p18238-agent/m/`): every cell ours == tsgo after, bar two residues; no call emits two arity rows.
+**Pins**: `RestTupleArityRangeTest`, 13 tsgo rows; ablation a1 6 / a2 2 / a3 3 / a4 2 / a5 1 / a6 1 RED; 25 touching
+classes (520 tests) green. **Gates**: full suite 21,978 / 0 / 44 (+13); corpus screen 8725 / 0; `cost_gate.py` 0 —
+the deltas against the recorded baseline are EXACTLY (P18.236)'s (this round and (P18.237) move no counter), so the
+baseline is refreshed here to (P18.236)'s accepted values (largest `mapped.hits` +0.93%, `narrow.walks` +0.58%: the
+string-keyed element-access rule typing keys and receivers); `huge_methods.py --fail-over 0` 0
+(`spineArgCallEnter` 3,576 -> 3,743); grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1;
+warning gate with probe: probe only. Residues -> (CHK.183).
+
 ### Round (P18.237) — (INV.0) extraction: the REST of the arity family (23 declarations — the TS2554/TS2555/TS2556 emitters, the spread-arity view, `signatureDeclaredArity`, the call-side minimum) moves VERBATIM into `SignatureArity.kt`; `Checker.kt` -548; the collaborator's widenings fall 15 -> 7; every deterministic receipt byte-identical (2026-09-30)
 
 One implementation subagent, beside a read-only (CHK.180) census on frozen classes. **Where the (P18.232) reasoning
@@ -291,39 +316,6 @@ inference left as `U | undefined` (k01 / n6); a receiver named after a lib globa
 in object-literal / class-expression methods refused; **next**: type body-local RHSs in `resolvedAssignedRawTypeForFlow`
 (retires B3's guard; the N20 / N21 "full recording" arc). **(CHK.173)'s identifier-receiver TS18047/8/9 arc is now
 complete** apart from those residues.
-
-### Round (P18.228) — (CHK.173) G1 arc B5e (N16): the binder ports tsgo's try EXCEPTION label — every mutation inside `try` reaches the `catch` / `finally` entry; catch and finally code saw the variable's PRE-TRY type before; 10 wrong types and a shipped false TS18047 fixed, +0 everywhere (2026-09-29)
-
-Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Where the census was wrong**: not the
-`&&` right operand and not the `return` — the CATCH entry was the pre-try flow alone and the FINALLY entry the pre-try
-flow plus normal completion, so any read in `catch` / `finally` saw the pre-try type (`null`) whatever the `try` did;
-already visible on HEAD without the forced arm (a PARAMETER version of the census cell t1 was a shipped false TS18047).
-**Mechanism** (`Flow.kt`): `bindTryStatement` is a port of tsgo's `binder.go` `bindTryStatement` minus the return label
-and ReduceLabel — the exception label starts with the pre-try flow and `newAssignment` adds every `FlowAssignment` to the
-current `exceptionTarget`; the catch entry is the exception label and the catch gets its own (a second try block); the
-finally entry joins normal completion and the last exception label; an ENCLOSING try's exception target receives the
-inner finally's end flow (standing in for tsgo's ReduceLabel — a superset of tsgo's answer); `bindFunctionLikeBody`
-saves / clears / restores `exceptionTarget` at every function boundary (tsgo); `FlowBranchLabel.isTryException` marks the
-label, and `Checker.isAssignedAtFlow` (the OR-semantics TS2454 walk) follows only `antecedents[0]` of an exception label
-(else TS2454 regressed in `finally`, c16). **tsgo's RETURN label was built and ablated: 0 of 18 pins moved** — every
-state a return path carries is the pre-try flow or a mutation already in the exception label, only narrowed further, so
-the union is unchanged — dropped, the measurement recorded in the code comment.
-
-**Measured**: 35 tsgo-verified cells — return / throw / break in `try` -> `finally`, `try` assignment -> `catch`, every
-`try` assignment -> `catch` (`string | number | null`), nested inner return -> outer finally, inner exception -> outer
-catch, a closure assignment kept out, `catch` return -> `finally` now tsgo's types; the parameter twin of N16 silent;
-TS18047 in `catch` and `finally` now report; TS2454 in `finally` kept. Forced G1 arm: corpus
-`tryCatchFinallyControlFlow` 13:26 GONE (n16 t1 closed, t6 still true). **Pins**: `TryExceptionReturnFlowTest` (14).
-**Ablation** (18 pins): a0 whole change reverted 11 RED, a1 mutations not added 10, a3 no function-boundary reset 1, a4
-TS2454 walk ignores the label 1, a5 no enclosing propagation 1, a6 catch without its own label 1, a7 finally takes the
-pre-try flow 5; a2 (return label) 0 — redundant, removed. **Gates**: full suite **21,818 / 0 / 44** (+14); corpus
-screen 0 of 8,725; cost_gate PASS (`narrow.memoServed` +0.55%, `narrow.walks` +0.27% cumulative); huge_methods 0; grid 8x
-`added=0 removed=0` (chain control OK; a control — reads in catch/finally not counted), libraries 0; warning gate clean.
-**Residues**: a ReduceLabel for post-finally flow (c11 — the finally's own assignment not seen after the statement) and
-exact nested propagation: a new flow-node kind across ~9 walker sites that CONFLICTS with `NarrowFlowMemo`'s flow-node-id
-key (nodes inside the finally would answer per context) — its own round; the loop-label declared type through a finally
-(c10 / c34); TS2454 AND-semantics in catch / finally (c26 / c32); reads in unreachable code (c12). **Successor**: B6,
-the final G1 round (N11 folded in).
 
 ## QUEUE
 
@@ -923,9 +915,13 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.181) A TUPLE REST'S OPTIONAL ELEMENTS ARE IGNORED BY THE NAME-BASED TOO-MANY ARITY ROW (found by (P18.237)): `function tup(...a: [string, number?])` called `tup("a", 1, 2)` reads `Expected 2 arguments, but got 3.` where tsgo reads `Expected 1-2 arguments, but got 3.`** The name walker passes the tuple's element count as both bounds (`signatureArity.emitTS2554TooMany(maxArgs, maxArgs, …)`, `Checker.kt` ~67711). Measure the neighbouring shapes (rest tuples with optional and rest elements, too-few direction) against tsgo, fix at the call site, pin tsgo's rows. Small.
+- [ ] **(CHK.183) RESIDUES OF (CHK.181) (cells `build/bench/p18238-agent/m/`).** (a) a tuple ALIAS rest (`type T = [string, number?]; f(...a: T)`, m5) is recognised by neither arity reader — both rows missing (tsgo `Expected 1-2 arguments, but got 3.` / `got 0`); `restTupleOf` would need to resolve the reference, or read the range off the checker's tuple type, which has no per-element optional flag today (only `tupleRestIndex`); (b) m16 `f16("a")` with `...a: [...number[], boolean]`: tsgo reports TS2345 `Argument of type '[]' is not assignable to parameter of type '[...number[], boolean]'.` (the relation for a middle-rest tuple, not arity) — measure; (c) B170's existing TS6236 on the `Parameters<Fn>` path (`Checker.kt` ~67786) still spans `restParam.end - restParam.pos`, likely one character past the parameter — check its corpus baseline before touching.
 
-- [ ] **(CHK.180) THE PROPERTY-ACCESS WALK TYPES `this` AND BODY-LOCAL RECEIVERS AS `any` (found by (P18.236)) — so every element-access and member rule is blind on `this[k]`, `const self: D = this; self[k]`, and any receiver declared in a function body.** Measure against tsgo which rows go missing (TS2339 / TS7053 / TS18048 on such receivers), find where the walk resolves the receiver (the cpa / cmam receiver ladder vs `implicitAnyScopes` / `currentLocalTypes`; CLAUDE.md "PORTING tsgo's *LITERAL SHAPE* CAN BE WRONG HERE BECAUSE ITS RECEIVER RESOLUTION IS **ONE** MECHANISM AND OURS IS **TWO**"), and price it on the grid — typing receivers that were `any` exposes every masked gap behind them (CLAUDE.md "MAKING A B83.5 NAME RESOLVE IN *VALUE* POSITION COSTS 19-20 OURS-ONLY ROWS"), so expect a staged round.
+- [ ] **(CHK.182) AN `interface D` IN ONE MODULE FILE AND A `class D` IN ANOTHER SILENCE EVERY TS2339 ON A `D` RECEIVER IN THE CLASS'S FILE — parameters, file-level consts and body locals alike (found by the (CHK.180) census; repro `build/scratch-p18237-census/coll/`: tsgo 3 rows, ours 0).** Interface+interface and class+class are fine. Module-scoped names must not merge across files (INV.3(d)); find where the class file's `D` is resolved against, or merged with, the other file's interface (CLAUDE.md "A MODULE-LOCAL `interface` WHOSE NAME MATCHES A LIB GLOBAL IS **MERGED INTO** THE LIB SYMBOL", "A MERGED `interface`'s SAME-NAMED MEMBER"), fix, pin tsgo's rows, grid it (a silencing defect: expect added rows, each must be a tsgo row).
+
+- [x] **(CHK.181) DONE 2026-09-30 ((P18.238) note). A TUPLE REST'S OPTIONAL ELEMENTS ARE IGNORED BY THE NAME-BASED TOO-MANY ARITY ROW (found by (P18.237)): `function tup(...a: [string, number?])` called `tup("a", 1, 2)` reads `Expected 2 arguments, but got 3.` where tsgo reads `Expected 1-2 arguments, but got 3.`** The name walker passes the tuple's element count as both bounds (`signatureArity.emitTS2554TooMany(maxArgs, maxArgs, …)`, `Checker.kt` ~67711). Measure the neighbouring shapes (rest tuples with optional and rest elements, too-few direction) against tsgo, fix at the call site, pin tsgo's rows. Small.
+
+- [ ] **(CHK.180) CENSUSED 2026-09-30 (read-only, `build/scratch-p18237-census/README.txt`: 100 cells, 45 missing, 0 ours-only; stage 1 = `this` + written-type `const` body locals read PER ACCESS, predicted 45 -> 29 and +0 on grid/libraries; every broader arm adds ONLY ours-only rows, causes R1-R7 ranked for stage 2 — R1 mutable-local flow narrowing 49, R4 guard/discriminant supertype 11, R2 no subtype reduction on `||`/`?:` 7, R5 function expando 7, R3 generic inference 3, R6 spread drops optionals 3). THE PROPERTY-ACCESS WALK TYPES `this` AND BODY-LOCAL RECEIVERS AS `any` (found by (P18.236)) — so every element-access and member rule is blind on `this[k]`, `const self: D = this; self[k]`, and any receiver declared in a function body.** Measure against tsgo which rows go missing (TS2339 / TS7053 / TS18048 on such receivers), find where the walk resolves the receiver (the cpa / cmam receiver ladder vs `implicitAnyScopes` / `currentLocalTypes`; CLAUDE.md "PORTING tsgo's *LITERAL SHAPE* CAN BE WRONG HERE BECAUSE ITS RECEIVER RESOLUTION IS **ONE** MECHANISM AND OURS IS **TWO**"), and price it on the grid — typing receivers that were `any` exposes every masked gap behind them (CLAUDE.md "MAKING A B83.5 NAME RESOLVE IN *VALUE* POSITION COSTS 19-20 OURS-ONLY ROWS"), so expect a staged round.
 
 - [ ] **(CHK.179) (a) + (a2) + (c) LANDED 2026-09-30 ((P18.235), (P18.236) notes). OPEN (a3), the tsgo rows still silent: keys typed by INFERENCE (unannotated consts, `let` with a literal, for-of variables), `any`, template-literal, enum, `key!`, narrowed-from-`unknown`, property-access keys; property-access receivers (`m.o[k]`, `gm2.m["zz"]`), object-literal variables, intersections, `{}`, function types, unions holding an index-signature member, enum objects; TS2536 for a generic key; `let v = x as U`; `b!.a` on a single non-union type; `o.u!.a`; cast-tuple TS2493; unconstrained `T` with a literal key. And ONE pre-existing ours-only row: the r167 block reports a false TS2339 for a union-of-literals key on a non-fresh type literal in LOOSE mode (tsgo silent in both). (b) and (d) as below. EARLIER: (a) LANDED 2026-09-30 ((P18.235) note: literal-key element access restated in tsgo's terms, silent without `noImplicitAny`). OPEN: (a2) the tsgo-only rows (a) left SILENT — string-typed keys `u[k]` (TS7053 + the `No index signature with a parameter of type 'string'` chain, the largest family), cast-union / intersection / heritage-interface / property-access (`gm2.m["zz"]`) receivers, unconstrained `T`, template-literal keys, tuples (TS2493, out-of-range union TS2339), arrays and enum objects with a string key (TS7015), const enums (TS2339); (b) TS2352 is emitted only for primitive-typed identifier casts — tsgo's `checkAssertionWorker` comparability rule is missing for literal / object / class / array / function / `P | null` sources (8 of 11 probe rows); (c) and (d) below. RESIDUES OF (CHK.178), each measured against tsgo 7.0.2 (fixtures under `build/bench/p18234-agent/`).** (a) an element access `u["a"]` on a union identifier reports an ours-only TS2339 where tsgo reports TS7053 under strict and NOTHING without it — in both configurations, and the cast-interface slice (B98.r100) has the same defect; (b) TS2352 (`A as B` may be a mistake) is never emitted (b11); (c) still-silent receivers: `u!.a`, `(u satisfies U).a`, and `const v = u as U; v.a` (b27); (d) the object-literal member drill at OTHER positions — `return { p: u }` still anchors at the whole literal, `g({ p: u })` reports NOTHING, and a primitive-union member value (`{ p: string | boolean }` against `number`) has no chain line where tsgo prints `Type 'string' …`. (a) removes false positives and is the first to take.
 

@@ -1,5 +1,11 @@
 
 
+**(P18.233) — (CHK.177) S1: TYPE-MISMATCH ERRORS NOW PRINT A UNION'S ALIAS NAME (`Type 'U' …`) WHERE tsgo DOES, INSTEAD OF EXPANDING IT TO `'A | B'`; TWO SHIPPED WRONG NAMES FIXED; +35 PINS, 21,883 / 0 / 44 (2026-09-30).**
+Display only — no error is added or removed anywhere (screen 0, grid 8x0, libraries unchanged, counters +0.00%).
+Covers identifier sources declared locally, as parameters, as global script declarations in another file, and through
+imports. Property-access, call and destructured sources are the next round (S2).
+
+
 **(P18.232) — (INV.0) EXTRACTION: THE SIGNATURE-BASED ARITY READER MOVES OUT OF `Checker.kt` (−344 LINES) INTO `SignatureArity.kt`, VERBATIM; 21,848 / 0 / 44 UNCHANGED (2026-09-30).**
 A pure move: every deterministic receipt (all pass rows, counters, diagnostics) byte-identical against the pre-move
 binary, inlining verdicts preserved, warm A/B inside noise both orders, screen 0, grid 8x0, libraries unchanged. The

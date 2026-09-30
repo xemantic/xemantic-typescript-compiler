@@ -1,3 +1,36 @@
+### Round (P18.228) — (CHK.173) G1 arc B5e (N16): the binder ports tsgo's try EXCEPTION label — every mutation inside `try` reaches the `catch` / `finally` entry; catch and finally code saw the variable's PRE-TRY type before; 10 wrong types and a shipped false TS18047 fixed, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Where the census was wrong**: not the
+`&&` right operand and not the `return` — the CATCH entry was the pre-try flow alone and the FINALLY entry the pre-try
+flow plus normal completion, so any read in `catch` / `finally` saw the pre-try type (`null`) whatever the `try` did;
+already visible on HEAD without the forced arm (a PARAMETER version of the census cell t1 was a shipped false TS18047).
+**Mechanism** (`Flow.kt`): `bindTryStatement` is a port of tsgo's `binder.go` `bindTryStatement` minus the return label
+and ReduceLabel — the exception label starts with the pre-try flow and `newAssignment` adds every `FlowAssignment` to the
+current `exceptionTarget`; the catch entry is the exception label and the catch gets its own (a second try block); the
+finally entry joins normal completion and the last exception label; an ENCLOSING try's exception target receives the
+inner finally's end flow (standing in for tsgo's ReduceLabel — a superset of tsgo's answer); `bindFunctionLikeBody`
+saves / clears / restores `exceptionTarget` at every function boundary (tsgo); `FlowBranchLabel.isTryException` marks the
+label, and `Checker.isAssignedAtFlow` (the OR-semantics TS2454 walk) follows only `antecedents[0]` of an exception label
+(else TS2454 regressed in `finally`, c16). **tsgo's RETURN label was built and ablated: 0 of 18 pins moved** — every
+state a return path carries is the pre-try flow or a mutation already in the exception label, only narrowed further, so
+the union is unchanged — dropped, the measurement recorded in the code comment.
+
+**Measured**: 35 tsgo-verified cells — return / throw / break in `try` -> `finally`, `try` assignment -> `catch`, every
+`try` assignment -> `catch` (`string | number | null`), nested inner return -> outer finally, inner exception -> outer
+catch, a closure assignment kept out, `catch` return -> `finally` now tsgo's types; the parameter twin of N16 silent;
+TS18047 in `catch` and `finally` now report; TS2454 in `finally` kept. Forced G1 arm: corpus
+`tryCatchFinallyControlFlow` 13:26 GONE (n16 t1 closed, t6 still true). **Pins**: `TryExceptionReturnFlowTest` (14).
+**Ablation** (18 pins): a0 whole change reverted 11 RED, a1 mutations not added 10, a3 no function-boundary reset 1, a4
+TS2454 walk ignores the label 1, a5 no enclosing propagation 1, a6 catch without its own label 1, a7 finally takes the
+pre-try flow 5; a2 (return label) 0 — redundant, removed. **Gates**: full suite **21,818 / 0 / 44** (+14); corpus
+screen 0 of 8,725; cost_gate PASS (`narrow.memoServed` +0.55%, `narrow.walks` +0.27% cumulative); huge_methods 0; grid 8x
+`added=0 removed=0` (chain control OK; a control — reads in catch/finally not counted), libraries 0; warning gate clean.
+**Residues**: a ReduceLabel for post-finally flow (c11 — the finally's own assignment not seen after the statement) and
+exact nested propagation: a new flow-node kind across ~9 walker sites that CONFLICTS with `NarrowFlowMemo`'s flow-node-id
+key (nodes inside the finally would answer per context) — its own round; the loop-label declared type through a finally
+(c10 / c34); TS2454 AND-semantics in catch / finally (c26 / c32); reads in unreachable code (c12). **Successor**: B6,
+the final G1 round (N11 folded in).
+
 ### Round (P18.227) — (CHK.173) G1 arc B5f (N1): `new X!()` PARSES as tsgo parses it (it was `(new X)!()`), which removes every shipped false TS2351 on a nullable constructor and fixes a silent EMIT defect; a nullable `new` callee reports TS18047 / TS18048 as tsgo; +0 everywhere (2026-09-29)
 
 Orchestrated: the first builder STALLED mid-round (and a `SendMessage` resume took effect ~1 hour LATE, so it edited the
