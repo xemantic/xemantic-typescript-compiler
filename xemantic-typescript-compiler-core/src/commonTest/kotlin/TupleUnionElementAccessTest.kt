@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -57,15 +58,23 @@ class TupleUnionElementAccessTest {
     }
 
     @Test
-    fun `negative control - a non-tuple union member missing the numeric prop still fires TS2339`() {
-        diagnose("""
+    fun `negative control - a non-tuple union member missing the numeric prop still reports the missing member`() {
+        // (CHK.179)(a): an ELEMENT access reports tsgo 7.0.2's TS7053 at the whole access
+        // (with the `Property … does not exist` chain line), never the key-anchored TS2339
+        // the property-access funnel used to leave here.
+        val rows = diagnose("""
             interface A { a: string; }
             interface B { 1: string; other: number; }
             function neg(v: A | B) {
                 return v[1];
             }
-        """.trimIndent()) should {
-            have(any { it.code == 2339 })
+        """.trimIndent()).map { d ->
+            (listOf("${d.line},${d.character}: TS${d.code} ${d.message}") + d.messageChain.map { it.trim() })
+                .joinToString(" | ")
         }
+        assert(rows == listOf(
+            "4,12: TS7053 Element implicitly has an 'any' type because expression of type '1' can't be used to index type 'A | B'. | " +
+                "Property '1' does not exist on type 'A | B'.",
+        ))
     }
 }

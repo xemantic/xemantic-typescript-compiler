@@ -466,6 +466,7 @@ class Checker(
 
     /** (INV.0) (P18.232) — the signature-based arity reader; see `SignatureArity.kt`. */
     private val signatureArity = SignatureArity(this, options)
+    private val elementAccessMissing = ElementAccessMissingMember(this, options)
 
     /** (CHK.177) S1 — the alias-name source display; see `AliasCarrierDisplay.kt`. */
     private val aliasCarrier = AliasCarrierDisplay(this)
@@ -112409,7 +112410,7 @@ interface DataView {
      * instantiated prop type. Returns null if the object type isn't a generic instance
      * or if resolution fails.
      */
-    private fun resolveGenericPropertyType(objType: Type.Object, propSym: Symbol): Type? {
+    internal fun resolveGenericPropertyType(objType: Type.Object, propSym: Symbol): Type? {
         val ref = objType as? Type.Reference ?: return null
         // Cache result per (objType.id, propSym.id). With Type.Reference interning,
         // logically-identical Refs share an id, so repeated calls during deep generic
@@ -160421,7 +160422,7 @@ interface DataView {
      * the compound assignment operators, and postfix/prefix `++`/`--`. Mirrors
      * tsc's isAssignmentTarget for the TS7052 get/set suggestion selection.
      */
-    private fun elementAccessIsWriteContext(source: String, accessEnd: Int, recvStart: Int): Boolean {
+    internal fun elementAccessIsWriteContext(source: String, accessEnd: Int, recvStart: Int): Boolean {
         var i = accessEnd
         while (i < source.length && (source[i] == ' ' || source[i] == '\t')) i++
         if (i + 1 < source.length) {
@@ -160441,7 +160442,7 @@ interface DataView {
     }
 
     /** B290: tsc tryGetPropertyAccessOrIdentifierToString — identifier / dotted chain only. */
-    private fun entityPathOf(e: Expression): String? = when (e) {
+    internal fun entityPathOf(e: Expression): String? = when (e) {
         is Identifier -> e.text
         is PropertyAccessExpression -> entityPathOf(e.expression)?.let { "$it.${e.name.text}" }
         else -> null
@@ -161192,6 +161193,7 @@ interface DataView {
             if (cb < source.length) cb + 1 else diagStart + diagLength
         }
         val fullLength = fullEnd - fullStart
+        val rowsBefore = diagnostics.size
         checkMemberAccessMissing(
             objectExprIn = expr.expression,
             propName = propName,
@@ -161204,6 +161206,9 @@ interface DataView {
             keySuggestion = keySuggestion,
             ts2576SquiggleStart = fullStart,
             ts2576SquiggleLength = fullLength,
+        )
+        elementAccessMissing.restate(
+            expr, propName, rowsBefore, diagStart, diagLength, fullStart, fullLength, source, fileName,
         )
     }
 
@@ -173425,7 +173430,7 @@ interface DataView {
         bivariantParams: Boolean = false,
     ): Boolean = relater.signatureRelatedTo(source, target, relation, bivariantParams)
 
-    private fun isTypeAssignableTo(source: Type, target: Type): Boolean =
+    internal fun isTypeAssignableTo(source: Type, target: Type): Boolean =
         relater.isTypeAssignableTo(source, target)
 
     /**
