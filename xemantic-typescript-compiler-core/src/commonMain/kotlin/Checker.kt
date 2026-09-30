@@ -467,6 +467,9 @@ class Checker(
     /** (INV.0) (P18.232) — the signature-based arity reader; see `SignatureArity.kt`. */
     private val signatureArity = SignatureArity(this, options)
 
+    /** (CHK.177) S1 — the alias-name source display; see `AliasCarrierDisplay.kt`. */
+    private val aliasCarrier = AliasCarrierDisplay(this)
+
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
     // while mutable state is clearly grouped in CheckerState.
@@ -15001,7 +15004,7 @@ class Checker(
     private fun resolveImportTargetFallback(spec: String, contextFile: String?): String? =
         nameResolver.resolveImportTargetFallback(spec, contextFile)
 
-    private fun resolveAlias(symbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol =
+    internal fun resolveAlias(symbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol =
         nameResolver.resolveAlias(symbol, visited)
 
     private fun resolveNamePath(path: String, result: BinderResult): Symbol? =
@@ -107129,7 +107132,8 @@ interface DataView {
         // collapsed to the bare class name, render the source as `typeof C`
         // (matches tsc — `var x: number = C` → "Type 'typeof C' ..."). typeName1.
         val displaySource = run {
-            val base = relationErrorSourceRender(displaySourceType, nullStrippedTarget)
+            val base = aliasCarrier.display(init, displaySourceType)
+                ?: relationErrorSourceRender(displaySourceType, nullStrippedTarget)
             if (init is Identifier && base == init.text) {
                 val s = currentFileLocals?.get(init.text) ?: globals[init.text]
                 if (s != null && s.flags.hasAny(SymbolFlags.Class) &&
@@ -109597,7 +109601,8 @@ interface DataView {
         val displaySourceType = relationErrorSourceDisplayType(
             relationErrorSourceLiteral(expr, sourceType, nullStrippedReturn), nullStrippedReturn,
         )
-        val displaySource = relationErrorSourceRender(displaySourceType, nullStrippedReturn)
+        val displaySource = aliasCarrier.display(expr, displaySourceType)
+            ?: relationErrorSourceRender(displaySourceType, nullStrippedReturn)
         val displayTarget = if (nullStrippedReturn !== targetType) typeToString(nullStrippedReturn)
             // (CHK.92)(c): a STRIPPED target is no longer the type the annotation spells, so
             // it is rendered from the type — the var-decl head's own rule.
@@ -111088,7 +111093,8 @@ interface DataView {
             // both print fully qualified — see [enumCollisionQualifiedDisplays].
             val enumQualified =
                 enumCollisionQualifiedDisplays(displaySourceType, tt, displaySourceRaw, displayTargetRaw)
-            val displaySource = relationErrorSourceQualified(displaySourceType, tt)
+            val displaySource = aliasCarrier.display(expr.right, displaySourceType)
+                ?: relationErrorSourceQualified(displaySourceType, tt)
                 ?: enumQualified?.first ?: displaySourceRaw
             val displayTarget = enumQualified?.second ?: displayTargetRaw
             val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
@@ -149415,7 +149421,7 @@ interface DataView {
      * Returns the binding node whatever its kind; [returnIdentifierType] types only the
      * two kinds it can, and every other kind stops the walk on today's `?: anyType`.
      */
-    private fun lexicalReturnIdentifierDecl(id: Identifier, bindingPatterns: Boolean = false): Node? {
+    internal fun lexicalReturnIdentifierDecl(id: Identifier, bindingPatterns: Boolean = false): Node? {
         val name = id.text
         var node: Node? = (id as NodeBase).parent
         var hops = 0
@@ -159078,19 +159084,10 @@ interface DataView {
                 // product) already carries; the old `sortedBy { id }` mimicked tsc's PRE-7 order.
                 val orderedMissing = if (allWellResolved) missingMembers.sortedWith(stableOrdering.comparator) else missingMembers
                 val missingMember = orderedMissing.first()
-                // Receiver annotated with a bare alias-of-union reference displays
-                // the ALIAS name (tsc shows 'AB', not 'A | B').
-                val aliasName: String? = run {
-                    val recvId = objectExpr as? Identifier ?: return@run null
-                    val rsym = currentFileLocals?.get(recvId.text) ?: globals[recvId.text] ?: return@run null
-                    val vd = rsym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
-                    val ann = vd?.type as? TypeReference ?: return@run null
-                    if (ann.typeArguments != null) return@run null
-                    val annName = (ann.typeName as? Identifier)?.text ?: return@run null
-                    val asym = currentFileLocals?.get(annName) ?: globals[annName] ?: return@run null
-                    val alias = asym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
-                    if (alias?.type is UnionType) annName else null
-                }
+                // (CHK.177) S1: a receiver whose declaration names a union alias displays the
+                // ALIAS when the shown (non-nullish) member set is exactly the alias's — see
+                // `AliasCarrierDisplay.kt` (lexical, shadow-correct, subset-aware).
+                val aliasName = aliasCarrier.display(objectExpr, members)
                 // (CHK.173) Round B3 (G6): tsgo reports the member on the receiver's
                 // NON-NULL part (`checkNonNullExpression`), so a nullish constituent is
                 // never named here — `'string'`, not `'string | null'`, and a single
@@ -172509,9 +172506,11 @@ interface DataView {
         val paramDisplayType = nullableTargetDisplay(
             paramType, argType, isOptionalParameterSymbol(params.getOrNull(i)),
         )
-        val argTypeStr = relationErrorSourceDisplay(
+        val argDisplayType = relationErrorSourceDisplayType(
             relationErrorSourceLiteral(arg, argType, paramDisplayType), paramDisplayType,
         )
+        val argTypeStr = aliasCarrier.display(arg, argDisplayType)
+            ?: relationErrorSourceRender(argDisplayType, paramDisplayType)
         val paramTypeStr = relationErrorTargetDisplay(paramDisplayType)
         val start = arg.pos
         // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
