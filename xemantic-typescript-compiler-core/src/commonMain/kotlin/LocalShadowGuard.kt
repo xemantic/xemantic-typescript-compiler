@@ -334,7 +334,7 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
 
         /**
          * (CHK.173) Round A — the binding guard of the identifier-receiver TS1804x arm
-         * ([Checker] `emitTs1804xForNullableIdentifierReceiver`). Until G5 S2 lands the
+         * ([NullishReceiverChecks.emitTs1804xForNullableIdentifierReceiver]). Until G5 S2 lands the
          * cpa frame answers a BLOCK-scoped shadow of a nullable name with the OUTER
          * binding's type, and the arm would turn that wrong type into a confident false
          * positive. True — REFUSE — when the INNERMOST syntactic binding of [name] above

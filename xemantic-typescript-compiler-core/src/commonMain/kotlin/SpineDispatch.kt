@@ -6666,7 +6666,7 @@ object CpaSections {
     const val Q_TS18048_OPT = 4
     /** `emitTs18048ForClosureCapturedUndefinedReceiver`. */
     const val Q_TS18048_CLO = 5
-    /** (CHK.173) Round A: `emitTs1804xForNullableIdentifierReceiver`. */
+    /** (CHK.173) Round A: `NullishReceiverChecks.emitTs1804xForNullableIdentifierReceiver`. */
     const val Q_TS1804X_ID = 6
     /** The `super.X` cluster: TS2340/TS2855 + `emitTs2339ForMissingSuperMember`. */
     const val Q_SUPER = 7

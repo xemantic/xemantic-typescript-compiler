@@ -24,7 +24,7 @@ package com.xemantic.typescript.compiler
 
 /**
  * (CHK.173) B6 — the assignments of a name that REACH a read, for the unresolved-RHS
- * veto of the body-local TS1804x arm (`Checker.bodyLocalReceiverDeclaredType`).
+ * veto of the body-local TS1804x arm (`NullishReceiverChecks.bodyLocalReceiverDeclaredType`).
  *
  * A breadth-first walk over the flow graph backwards from the read's flow node,
  * crossing a closure's [FlowStart.outerFlow] into the enclosing function (a captured

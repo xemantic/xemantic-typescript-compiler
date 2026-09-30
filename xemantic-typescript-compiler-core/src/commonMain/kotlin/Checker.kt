@@ -437,7 +437,7 @@ class Checker(
      *  Read by [getUnionType] at every union mint, so it must precede `init`. */
     private val stableOrdering = StableTypeOrdering(this, binderResults)
     /** (INV.0) step 8 — the TYPE-CAPTURE collaborator; see `CaptureRecorder.kt`. */
-    private val captureRecorder = CaptureRecorder(this)
+    internal val captureRecorder = CaptureRecorder(this)
 
     /** (INV.0) steps 4a + 4b-i — the name/module-resolution and per-file-lookup
      *  collaborator; see `NameResolver.kt`. */
@@ -460,6 +460,9 @@ class Checker(
 
     /** (INV.0) step 6b — the MEMBER-NAME / late-binding collaborator; see `MemberNames.kt`. */
     private val memberNamer = MemberNames(this, enumSemantics, fileResults)
+
+    /** (INV.0) (P18.230) — the (CHK.173) nullish-receiver family; see `NullishReceiverChecks.kt`. */
+    private val nullishReceivers = NullishReceiverChecks(this)
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -493,7 +496,7 @@ class Checker(
      */
     private var diagnosticsView: MutableList<Diagnostic>? = null
 
-    @get:JvmName("diagnostics_") private val diagnostics
+    @get:JvmName("diagnostics_") internal val diagnostics
         get() = diagnosticsView ?: state.diagnostics
 
     /**
@@ -690,18 +693,18 @@ class Checker(
 
     /** (CHK.173) Round B3: set only around the compound receiver arm's own typing ask —
      *  see [Checker.computeRawTypeOfPropertyAccess]'s optional-chain exception. */
-    private var nonNullChainReceiverReads = false
+    internal var nonNullChainReceiverReads = false
 
     internal var currentClassForThis: ClassDeclaration? = null
-    /** (CHK.173) B6: the receiver whose declared type [bodyLocalReceiverDeclaredType] took from a destructured leaf. */
-    private var bodyLocalLeafTyped: Identifier? = null
-    /** (CHK.173) B6: [bodyLocalReceiverDeclaredType]'s per-declaration memo (nodeId -> type, [errorType] = refused), per file. */
-    private var bodyLocalDeclMemo: IntKeyMap<Type>? = null
-    private var bodyLocalDeclMemoFile: SourceFile? = null
-    /** (CHK.173) B6: the receiver (and its declared type) whose veto [bodyLocalAssignmentsVeto]
-     *  the emitters run only once narrowing has kept a nullish member — it can only suppress. */
-    private var bodyLocalVetoPending: Identifier? = null
-    private var bodyLocalVetoDeclared: Type? = null
+    /** (CHK.173) B6: the receiver (and its declared type) whose veto
+     *  [NullishReceiverChecks.bodyLocalAssignmentsVeto] the emitters run only once narrowing has
+     *  kept a nullish member — it can only suppress. They stay HERE, not in the collaborator,
+     *  because of the (P18.230) finding: B6 inserted them between [currentClassForThis] and its
+     *  epoch-bumping setter, so that `set(v)` below now belongs to [bodyLocalVetoDeclared] and
+     *  [currentClassForThis] bumps no epoch. The extraction preserves that verbatim; the fix
+     *  (move the setter back) is a behaviour change for its own round. */
+    internal var bodyLocalVetoPending: Identifier? = null
+    internal var bodyLocalVetoDeclared: Type? = null
         set(v) { if (field !== v) { field = v; bumpExprEpoch("currentClassForThis") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentClassForThis") }
 
     /** B-interfaceClassMerging: the enclosing class symbol whose method-body return type
@@ -869,7 +872,7 @@ class Checker(
     // Perf: HashMap not LinkedHashMap — this is a pure lookup map (name → type); its
     // iteration order is never consumed, and it is COPIED per function-body scope entry,
     // so LinkedHashMap's afterNodeInsertion + ordered-copy overhead is pure waste.
-    private var currentLocalTypes: MutableMap<String, Type> = HashMap()
+    internal var currentLocalTypes: MutableMap<String, Type> = HashMap()
         set(v) { if (field !== v) { field = v; bumpExprEpoch("currentLocalTypes(swap)") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentLocalTypes(swap)") }
 
     /**
@@ -893,7 +896,7 @@ class Checker(
      * body in BOTH the assignability and property-access passes.
      */
     // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
-    private var currentShadowedNames: MutableSet<String> = HashSet()
+    internal var currentShadowedNames: MutableSet<String> = HashSet()
         set(v) { if (field !== v) { field = v; bumpExprEpoch("currentShadowedNames(swap)") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentShadowedNames(swap)") }
 
     /**
@@ -989,7 +992,7 @@ class Checker(
      *  file-level `var x = call(...)`. Saved/restored alongside `currentLocalTypes`
      *  at function-body entry. NOT used for type resolution — membership-only. */
     // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
-    private var currentParamBindingNames: MutableSet<String> = HashSet()
+    internal var currentParamBindingNames: MutableSet<String> = HashSet()
         set(v) { if (field !== v) { field = v; bumpExprEpoch("currentParamBindingNames(swap)") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentParamBindingNames(swap)") }
 
     /** Round 477: memo for [resolveNamespaceQualifiedTypeAlias], key `"file|ns|member"`
@@ -11251,7 +11254,7 @@ class Checker(
     }
 
     /** B86.7d: symmetric to [typeIncludesUndefined] for the `null` constituent. */
-    private fun typeIncludesNull(t: Type): Boolean {
+    internal fun typeIncludesNull(t: Type): Boolean {
         if (t === anyType || t === unknownType) return true
         if (t.flags.hasAny(TypeFlags.Null)) return true
         if (t is Type.Union) return t.types.any { typeIncludesNull(it) }
@@ -11260,7 +11263,7 @@ class Checker(
 
     /** B86.7c: True for a single (non-union) type that is exactly `null`,
      *  `undefined`, or `void` — i.e. a nullish constituent of a union. */
-    private fun isNullishConstituent(t: Type): Boolean =
+    internal fun isNullishConstituent(t: Type): Boolean =
         t !is Type.Union && t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
 
     // -----------------------------------------------------------------------
@@ -20251,7 +20254,7 @@ class Checker(
     private fun lineStartsFor(source: String): IntArray =
         lineStartsCache.getOrPut(source) { computeLineStarts(source) }
 
-    private fun getLineAndCharacterOfPosition(source: String, position: Int): Pair<Int, Int> {
+    internal fun getLineAndCharacterOfPosition(source: String, position: Int): Pair<Int, Int> {
         // Byte-for-byte equivalent to the former linear scan: line = 1 + (# of `\n` in
         // [0, min(position, len))), lineStart = index after that last `\n`, character
         // uses the ORIGINAL (un-coerced) position. Binary-search the greatest lineStart
@@ -105655,7 +105658,7 @@ interface DataView {
      * namespace-level) destructured name answers to every consumer that resolves it
      * through its symbol, the argument gate and the TS2367 reader included.
      */
-    private fun bindingElementDeclaredType(elem: BindingElement, depth: Int): Type? {
+    internal fun bindingElementDeclaredType(elem: BindingElement, depth: Int): Type? {
         if (depth > 16) return null
         val pattern = (elem as NodeBase).parent ?: return null
         val parent: Type = when (val owner = (pattern as NodeBase).parent) {
@@ -119149,7 +119152,7 @@ interface DataView {
      * element in an exhausted `default`, which is the corpus's
      * `arrayDestructuringInSwitch2`. Free where no such element was recorded.
      */
-    private fun getTypeOfIdentifier(id: Identifier): Type {
+    internal fun getTypeOfIdentifier(id: Identifier): Type {
         val t = getTypeOfIdentifierCore(id)
         if (t is Type.Union && discriminantCarryNames.isNotEmpty() && id.text in discriminantCarryNames) {
             return destructuredDiscriminantCarry(id, t) ?: t
@@ -119402,7 +119405,7 @@ interface DataView {
     }
 
     /** Look up the [FlowNode] recorded for a node's reference position. */
-    private fun getFlowAt(node: Node): FlowNode? {
+    internal fun getFlowAt(node: Node): FlowNode? {
         val graph = currentFlowGraph ?: return null
         return graph.flowAt(node)
     }
@@ -119972,7 +119975,7 @@ interface DataView {
      * tracked) — see B78.2 / FlowLoopLabel-back-edge gotcha for the
      * underlying soundness concern.
      */
-    private fun getNarrowedTypeForReferenceFollowLoopEntry(
+    internal fun getNarrowedTypeForReferenceFollowLoopEntry(
         declaredType: Type, expr: Expression,
     ): Type {
         val path = getReferencePath(expr) ?: return declaredType
@@ -121437,7 +121440,7 @@ interface DataView {
 
     /** (CHK.173) B5b: [t] is a union none of whose members is nullish / `void` / `any` /
      *  `unknown`, where a bare type-parameter member is read through its base constraint
-     *  ([typeParamsToBaseConstraints]; an unconstrained one may be instantiated nullish and
+     *  ([NullishReceiverChecks.typeParamsToBaseConstraints]; an unconstrained one may be instantiated nullish and
      *  refuses). */
     private fun isNonNullishUnionAssignedType(t: Type?): Boolean {
         if (t !is Type.Union) return false
@@ -121445,7 +121448,7 @@ interface DataView {
             TypeFlags.Any or TypeFlags.Unknown
         return t.types.none { m ->
             if (m is Type.TypeParam) {
-                val b = typeParamsToBaseConstraints(m) ?: return false
+                val b = nullishReceivers.typeParamsToBaseConstraints(m) ?: return false
                 b.flags.hasAny(nullishFlags) || (b is Type.Union && b.types.any { it.flags.hasAny(nullishFlags) })
             } else m.flags.hasAny(nullishFlags)
         }
@@ -151195,7 +151198,7 @@ interface DataView {
      * pre-existing paths, so consumers see lexical symbols exactly where they
      * previously synthesized transients (B83.5 shapes).
      */
-    private fun lexicalScopeSymbol(node: Node, name: String): Symbol? =
+    internal fun lexicalScopeSymbol(node: Node, name: String): Symbol? =
         lexicalResolver.symbolAt(
             node, name, currentLexicalScopes ?: return null,
             startAtParent = true, hopCap = 0,
@@ -154888,7 +154891,7 @@ interface DataView {
         if (narrowed.types.all { it === undefinedType || it === nullType || it === neverType }) return false
         val (line, ch) = getLineAndCharacterOfPosition(source, recv.pos)
         // (CHK.173) Round A: a surviving `null | undefined` is TS18049 in tsgo, not 18048.
-        val (code, kind) = nullishReceiverCode(typeIncludesNull(narrowed), hasUndef = true)
+        val (code, kind) = nullishReceivers.nullishReceiverCode(typeIncludesNull(narrowed), hasUndef = true)
         diagnostics.add(Diagnostic(
             message = "'$root' is possibly $kind.",
             category = DiagnosticCategory.Error, code = code,
@@ -155010,10 +155013,10 @@ interface DataView {
         // whose bare-identifier receiver is declared nullable and stays so after narrowing.
         // No return: tsgo continues on the non-null type, so a TS2339 on `p` still follows. ===
         CpaSections.atQ(CpaSections.Q_TS1804X_ID)
-        emitTs1804xForNullableIdentifierReceiver(expr, source, fileName)
+        nullishReceivers.emitTs1804xForNullableIdentifierReceiver(expr, source, fileName)
         // (CHK.173) Round B3: a MEMBER / parenthesized receiver — `o.p.length`, `this.x.length`,
         // `o['p'].length`, `(x).length`. B81.1c above owns an OPTIONAL member it resolved.
-        if (!optionalMemberHandled && !expr.questionDotToken) emitTs1804xForNullableCompoundReceiver(expr.expression, source, fileName)
+        if (!optionalMemberHandled && !expr.questionDotToken) nullishReceivers.emitTs1804xForNullableCompoundReceiver(expr.expression, source, fileName)
 
         // === TS2855: super property access restriction. (LEGACY.1)(j2): the `<= ES5` arm
         // (TS2340 `Only public and protected methods of the base class are accessible via
@@ -155306,181 +155309,8 @@ interface DataView {
         if (length <= 0) return true
         // (CHK.173) Round B3: tsgo's `reportObjectPossiblyNullOrUndefinedError` — an ENTITY
         // receiver (`foo.a`) is named, anything else (`foo['a']`, `a[0].b`) is "Object".
-        reportNullishReceiver(recvExpr, hasNull, hasUndef, info.spanStart, length, source, fileName)
+        nullishReceivers.reportNullishReceiver(recvExpr, hasNull, hasUndef, info.spanStart, length, source, fileName)
         return true
-    }
-
-    /**
-     * (CHK.173) Round B3 — tsgo's `reportObjectPossiblyNullOrUndefinedError`: an entity
-     * name expression (an identifier, or a property access of one — never `this`, an
-     * element access or a parenthesis) shorter than 100 characters is named in
-     * TS18047/18048/18049; every other receiver is TS2531/2532/2533 "Object is possibly …".
-     */
-    private fun reportNullishReceiver(
-        recv: Expression, hasNull: Boolean, hasUndef: Boolean, start: Int, length: Int,
-        source: String, fileName: String,
-    ) {
-        val (code, kind) = nullishReceiverCode(hasNull, hasUndef)
-        val entity = entityNameExpressionText(recv)?.takeIf { it.length < 100 }
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
-        diagnostics.add(Diagnostic(
-            message = if (entity != null) "'$entity' is possibly $kind." else "Object is possibly $kind.",
-            category = DiagnosticCategory.Error,
-            code = if (entity != null) code else code - 18047 + 2531,
-            fileName = fileName, line = line, character = character,
-            start = start, length = length,
-        ))
-    }
-
-    /**
-     * tsgo `IsEntityNameExpression` + `entityNameToString`: `a`, `a.b.c`, and `a?.b` as
-     * `a.b` (the question dot is not part of an entity name's text); else null.
-     */
-    private fun entityNameExpressionText(e: Expression): String? = when (e) {
-        is Identifier -> if (e.text == "this" || e.text == "super") null else e.text
-        is PropertyAccessExpression ->
-            if (e.name.text.startsWith("#")) null
-            else entityNameExpressionText(e.expression)?.let { "$it.${e.name.text}" }
-        else -> null
-    }
-
-    /**
-     * (CHK.173) Round B3 (G5 + G4p): TS1804x / TS2531-2533 for an access whose receiver
-     * is a MEMBER (`o.p.length`, `this.x.length`, `o['p'].length`, `a[0].p.length`,
-     * `this.#x.length`) or a PARENTHESIZED expression (`(x).length`, `(y as T | null).s`)
-     * whose type carries `null` / `undefined` that survives narrowing — tsgo's
-     * `checkNonNullExpression` on the receiver. A bare identifier is Round A's; an
-     * OPTIONAL member B81.1c resolved is B81.1c's (the caller skips this then). A receiver
-     * inside an optional chain (`o?.p.length`, `o.a?.p.q.length`) is reported like any
-     * other — the chain's own `undefined` never reaches the member's type here. Skipped
-     * for a call / `new` core (`host.getX?.().y` — the census's one real false positive
-     * was a call core, unmeasured otherwise), and where
-     * a guard on the receiver-of-receiver narrows it to a type whose member is non-nullish
-     * (the round-412 rule B81.1c carries). `this` is typed through [currentClassForThis],
-     * installed from [CaptureRecorder.typeCaptureThisClass] for this ask only (Round B2's
-     * carrier). Does NOT return anything: tsgo continues on the non-null type.
-     */
-
-    private fun emitTs1804xForNullableCompoundReceiver(recv: Expression, source: String, fileName: String) {
-        if (!strictNullChecks) return
-        var core = recv
-        var paren = false
-        while (core is ParenthesizedExpression) {
-            if (core.instantiationEnd != null) return
-            paren = true; core = core.expression
-        }
-        when (core) {
-            is PropertyAccessExpression, is ElementAccessExpression -> {}
-            is Identifier, is AsExpression, is TypeAssertionExpression, is NonNullExpression -> if (!paren) return
-            else -> return
-        }
-        val savedThis = currentClassForThis
-        if (savedThis == null) currentClassForThis = captureRecorder.typeCaptureThisClass(core)
-        try {
-            val declared = compoundReceiverDeclaredType(core)?.let { typeParamsToBaseConstraints(it) } ?: return
-            if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
-            val path = getReferencePath(core)
-            val narrowed = if (path != null) getNarrowedTypeForReferenceFollowLoopEntry(declared, core) else declared
-            if (narrowed === anyType || narrowed === unknownType || narrowed === errorType) return
-            val hasNull = typeIncludesNull(narrowed)
-            val hasUndef = typeIncludesExplicitUndefined(narrowed)
-            if (!hasNull && !hasUndef) return
-            // (Round A's binding guard is NOT applied to the path root: measured redundant
-            // here — 0 of the pins and 0 of seven block / catch / case / nested-function
-            // shadow shapes move without it, as the Round B census's arm found.)
-            if (path != null && optionalChainGuardsRef(core, path)) return
-            if (core is Identifier && bodyLocalVetoes(core)) return
-            if (path != null && path.startsWith("this.") && thisMemberAssignedInFunction(core, path)) return
-            if (core is PropertyAccessExpression || core is ElementAccessExpression) {
-                if (receiverOfReceiverGuardClears(core)) return
-            }
-            val start = recv.pos
-            val length = expressionTrueEnd(recv) - start
-            if (length <= 0) return
-            reportNullishReceiver(if (paren) recv else core, hasNull, hasUndef, start, length, source, fileName)
-        } finally {
-            currentClassForThis = savedThis
-        }
-    }
-
-    /**
-     * (CHK.173) Round B3 — an interim guard for a `this.x` receiver: true when the
-     * function that binds this `this` (arrows are transparent) ASSIGNS the same member
-     * path anywhere. The narrowing then rests on the assigned value's type, and this
-     * checker still reads many such values as `any` where tsgo types them (a destructured
-     * body local — G1 — as in rxjs WebSocketSubject's `const { WebSocketCtor } =
-     * this._config; socket = new WebSocketCtor!(url); this._socket = socket;
-     * this._socket.binaryType = …`, the one false row a real library showed). Asked only
-     * at a site about to fire; an explicit stack, so a deep binary chain cannot recurse.
-     *
-     * (CHK.173) B5f measured it NOT retirable yet: `new WebSocketCtor!(…)` now types, but
-     * the rxjs row survives the guard's removal because `this._socket = socket` reads the
-     * BODY LOCAL `socket` un-narrowed (`let socket: T | null = null; socket = s;
-     * this._socket = socket; this._socket.p` is a false TS2531 with no `new` at all) — the
-     * G1 gap, B6's round.
-     */
-    private fun thisMemberAssignedInFunction(core: Expression, path: String): Boolean {
-        var fn: Node? = (core as NodeBase).parent
-        while (fn != null && fn !is SourceFile) {
-            if (fn is FunctionDeclaration || fn is FunctionExpression || fn is MethodDeclaration ||
-                fn is Constructor || fn is GetAccessor || fn is SetAccessor ||
-                fn is PropertyDeclaration || fn is ClassStaticBlockDeclaration) break
-            fn = (fn as NodeBase).parent
-        }
-        if (fn == null || fn is SourceFile) return false
-        val stack = ArrayDeque<Node>()
-        stack.addLast(fn)
-        while (stack.isNotEmpty()) {
-            val n = stack.removeLast()
-            if (n is BinaryExpression && isAssignmentOperator(n.operator) &&
-                getReferencePath(unwrapParensExpr(n.left)) == path) return true
-            forEachChild(n) { stack.addLast(it) }
-        }
-        return false
-    }
-
-    /**
-     * The declared type of a Round B3 receiver core: an identifier through Round A /
-     * B2's reader, anything else through [getTypeOfExpression] (whose property path
-     * already narrows a UNION receiver-of-receiver and adds `| undefined` for an optional
-     * member). Null to stay silent.
-     */
-    private fun compoundReceiverDeclaredType(core: Expression): Type? {
-        if (core is Identifier) {
-            val name = core.text
-            if (name == "this" || name == "super" || name == "arguments" || name == "undefined" || name == "null") return null
-            return nullableIdentifierReceiverType(core, name, getTypeOfIdentifier(core))
-        }
-        val saved = nonNullChainReceiverReads
-        nonNullChainReceiverReads = true
-        val t = try { getTypeOfExpression(core) } finally { nonNullChainReceiverReads = saved }
-        return if (t === anyType || t === errorType || t === unknownType) null else t
-    }
-
-    /**
-     * B81.1c's round-412 rule for a Round B3 member receiver: a guard on the
-     * receiver-of-receiver PATH (`if (isDefined(state)) state.p.x`) narrows it to a type
-     * whose member is present and non-nullish — our reference-path walk of `state.p` does
-     * not see a guard written on `state`. True = stay silent.
-     */
-    private fun receiverOfReceiverGuardClears(core: Expression): Boolean {
-        val (inner, name) = when (core) {
-            is PropertyAccessExpression -> core.expression to core.name.text
-            is ElementAccessExpression -> core.expression to ((core.argumentExpression as? StringLiteralNode)?.text ?: return false)
-            else -> return false
-        }
-        val innerPath = getReferencePath(inner) ?: return false
-        val innerType = thisReceiverCarrierType(inner) ?: getTypeOfExpression(inner)
-        if (innerType === anyType || innerType === errorType) return false
-        val innerNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(innerType, inner)
-        if (innerNarrowed === innerType) return false
-        val parts = (innerNarrowed as? Type.Union)?.types ?: listOf(innerNarrowed)
-        for (c in parts) {
-            if (isNullishConstituent(c)) continue
-            val t = resolveMemberPropertyType(c, name) ?: return false
-            if (t === anyType || t === errorType || typeIncludesNull(t) || typeIncludesExplicitUndefined(t)) return false
-        }
-        return innerPath.isNotEmpty()
     }
 
     /** Internal carrier for [emitTs18048ForOptionalPropertyAccessReceiver]. */
@@ -155491,406 +155321,6 @@ interface DataView {
         val spanEnd: Int,
         val narrowExpr: Expression,
     )
-
-    /**
-     * B98.r124 (Blocker #1 substep): TS18047/18048/18049 for an element access `x[...]`
-     * whose BARE-IDENTIFIER receiver has a declared nullish-union type that SURVIVES flow
-     * narrowing at that position. Pairs with the for-in body NonNullable narrowing (Flow.kt)
-     * so `for (k in x) { x[k] }` does NOT fire (x narrowed to non-null inside the body) while
-     * `x[...]` outside the loop DOES. Consults `getNarrowedTypeForReferenceFollowLoopEntry`
-     * (loop-aware), so every guard we model (`if (x)`, `x != null`, truthy `&&`, for-in body,
-     * …) suppresses it. Gated to strictNullChecks + a non-`?.` access + a bare Identifier
-     * receiver whose declared type is a Union actually carrying a nullish constituent. The
-     * code/message follow which nullish members survive (both → 18049, null → 18047,
-     * undefined → 18048).
-     */
-    private fun emitTs1804xForNullishElementAccessReceiver(
-        expr: ElementAccessExpression, source: String, fileName: String,
-    ) {
-        if (!strictNullChecks) return
-        if (expr.questionDotToken) return
-        val recv = expr.expression as? Identifier ?: return
-        val declared = typeParamsToBaseConstraints(getTypeOfIdentifier(recv)) ?: return
-        if (declared === anyType || declared === errorType) return
-        if (declared !is Type.Union) return
-        if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
-        val narrowed = getNarrowedTypeForReferenceFollowLoopEntry(declared, recv)
-        val hasNull = typeIncludesNull(narrowed)
-        val hasUndef = typeIncludesExplicitUndefined(narrowed)
-        if (!hasNull && !hasUndef) return
-        // (CHK.173) S-G1c: `t?.[t['length'] - 1]`, `d?.m(d['p'])` — a later part of an
-        // optional chain guarded by the receiver (tsgo's optional-chain condition).
-        if (optionalChainGuardsRef(recv, recv.text)) return
-        val (code, kind) = nullishReceiverCode(hasNull, hasUndef)
-        val (line, character) = getLineAndCharacterOfPosition(source, recv.pos)
-        diagnostics.add(Diagnostic(
-            message = "'${recv.text}' is possibly $kind.",
-            category = DiagnosticCategory.Error,
-            code = code,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = recv.pos,
-            length = recv.text.length,
-        ))
-    }
-
-    /**
-     * (CHK.173) The one TS1804x code/message chooser, shared by the element arm, B464 and
-     * Round A's identifier arm: which nullish constituents SURVIVE narrowing decide it.
-     */
-    private fun nullishReceiverCode(hasNull: Boolean, hasUndef: Boolean): Pair<Int, String> = when {
-        hasNull && hasUndef -> 18049 to "'null' or 'undefined'"
-        hasNull -> 18047 to "'null'"
-        else -> 18048 to "'undefined'"
-    }
-
-    /**
-     * (CHK.173) Round A: TS18047/18048/18049 for `x.p` (read, write, call) whose BARE
-     * identifier receiver is declared a union carrying `null`/`undefined` that SURVIVES
-     * flow narrowing — the property twin of [emitTs1804xForNullishElementAccessReceiver],
-     * reading the same two types. Gates: strictNullChecks (our declared types keep
-     * `| null` without it); no `?.`; no paren unwrap (`(x).p` is tsgo's TS2531); not
-     * `this`/`super`/`arguments`/`undefined`; not a later part of an optional chain
-     * guarded by `x`; and [LocalShadowGuard.nullableReceiverBindingRefused] until G5 S2
-     * makes a block-scoped shadow's type right. Runs after B464, which returns when it
-     * fires, so a closure-captured `undefined` is reported once. Does NOT return.
-     */
-    private fun emitTs1804xForNullableIdentifierReceiver(
-        expr: PropertyAccessExpression, source: String, fileName: String,
-    ) {
-        if (!strictNullChecks) return
-        if (expr.questionDotToken) return
-        val recv = expr.expression as? Identifier ?: return
-        val name = recv.text
-        if (name == "this" || name == "super" || name == "arguments" || name == "undefined") return
-        val declared = nullableIdentifierReceiverType(recv, name, getTypeOfIdentifier(recv)) ?: return
-        if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
-        // (CHK.173) Round B2: the cpa walk does not thread `this`, so a guarded
-        // reassignment from `this.m()` / `this.p` ([resolvePropertyMethodDecl]'s
-        // carrier) proved nothing and the reference kept its `| undefined`
-        // (`if (!sf) sf = this.getSourceFile(); sf.text`, tsc services.ts).
-        val savedThis = currentClassForThis
-        if (savedThis == null) currentClassForThis = captureRecorder.typeCaptureThisClass(recv)
-        val narrowed = try {
-            getNarrowedTypeForReferenceFollowLoopEntry(declared, recv)
-        } finally {
-            currentClassForThis = savedThis
-        }
-        if (narrowed === anyType || narrowed === unknownType || narrowed === errorType) return
-        val hasNull = typeIncludesNull(narrowed)
-        val hasUndef = typeIncludesExplicitUndefined(narrowed)
-        if (!hasNull && !hasUndef) return
-        if (optionalChainGuardsRef(recv, name)) return
-        if (bodyLocalVetoes(recv)) return
-        // (CHK.173) B6: a destructured body-local leaf typed by [bodyLocalReceiverDeclaredType]
-        // is the innermost binding the lexical symbol names — the guard's R3 existed only
-        // because the cpa frame could not type one.
-        if (bodyLocalLeafTyped !== recv && LocalShadowGuard.nullableReceiverBindingRefused(recv, name)) return
-        val (code, kind) = nullishReceiverCode(hasNull, hasUndef)
-        val (line, character) = getLineAndCharacterOfPosition(source, recv.pos)
-        diagnostics.add(Diagnostic(
-            message = "'$name' is possibly $kind.",
-            category = DiagnosticCategory.Error,
-            code = code,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = recv.pos,
-            length = name.length,
-        ))
-    }
-
-    /**
-     * (CHK.173) Round B2 — the declared type Round A's identifier arm reads, or null to
-     * stay silent: a nullable UNION (Round A); an OPTIONAL parameter `x?: T` not shadowed
-     * by a local, as `T | undefined` (G2 — [populateParameterLocalTypes] records the bare
-     * `T`, tsgo's declared type carries `undefined`; the lexical symbol RETURNS the
-     * parameter itself, so the shadow test is declaration identity, never null); and a
-     * non-union `null` / `undefined` (G3b) unless the receiver is the `null` keyword,
-     * which parses as an Identifier and is tsgo's TS18050.
-     */
-    private fun nullableIdentifierReceiverType(recv: Identifier, name: String, toi00: Type): Type? {
-        // (CHK.173) B6: a body local reads `any` in the cpa frame — resolve its declared type here.
-        val toi0 = if (toi00 === anyType) bodyLocalReceiverDeclaredType(recv, name) ?: return null else toi00
-        if (toi0 === anyType || toi0 === errorType || toi0 === unknownType) return null
-        val toi = typeParamsToBaseConstraints(toi0) ?: return null
-        val p = LocalShadowGuard.optionalParameterBinding(recv, name)
-        if (p != null && lexicalScopeSymbol(recv, name).let { it == null || it.valueDeclaration === p }) {
-            return if (typeIncludesExplicitUndefined(toi)) toi else getUnionType(listOf(toi, undefinedType))
-        }
-        if (toi is Type.Union) return toi
-        if ((toi === nullType || toi === undefinedType) && name != "null") return toi
-        return null
-    }
-
-    /**
-     * (CHK.173) B6 — the declared type of a BODY LOCAL receiver the cpa frame reads as
-     * `any` (it records only call / element initializers), or null to stay silent. The
-     * lexical symbol must be a single-declaration `VariableDeclaration` / `BindingElement`
-     * (never a parameter, never a name a walk table already holds); the type is the
-     * annotation, else the initializer — an identifier / property path narrowed at the
-     * initializer, an `&&` / `||` / `??` with its left operand narrowed there (N11,
-     * checker.ts 43917: `const r = p && fi(p)`), anything else [getTypeOfExpression] —
-     * or a destructured leaf's [bindingElementDeclaredType] (B5c narrows it). Refused
-     * per read: a read inside an object-literal / class-expression method (tsgo extends
-     * the flow container there, this flow graph does not), an initializer naming a
-     * binding the read's scope shadows, a leaf after an element-access guard (B5c's
-     * residue r4 / r5). The UNRESOLVED-RHS VETO ([bodyLocalAssignmentsVeto]) runs only in the emitters, for a read whose narrowed type kept a nullish member ([bodyLocalVetoes]) — it can only suppress.
-     */
-    private fun bodyLocalReceiverDeclaredType(recv: Identifier, name: String): Type? {
-        bodyLocalLeafTyped = null
-        bodyLocalVetoPending = null
-        bodyLocalVetoDeclared = null
-        if (name in currentLocalTypes || name in currentShadowedNames || name in currentParamBindingNames) return null
-        val sym = lexicalScopeSymbol(recv, name) ?: return null
-        if (sym.declarations.size != 1) return null
-        val vd = sym.valueDeclaration ?: return null
-        if (vd !is VariableDeclaration && vd !is BindingElement) return null
-        // Cheapest first: the per-declaration memo answers every repeat read, and most
-        // body locals are not nullable at all.
-        val declared = bodyLocalDeclaredTypeMemo(recv, vd) ?: return null
-        if (BodyLocalAssignments.readCrossesUnmodeledContainer(recv, vd)) return null
-        if (vd is BindingElement) {
-            val root = bindingElementInitializerRoot(vd)
-            val flow = getFlowAt(recv)
-            if (root != null && flow != null && BodyLocalAssignments.conditionTestsElementOf(flow, root)) return null
-            bodyLocalLeafTyped = recv
-        }
-        bodyLocalVetoPending = recv
-        bodyLocalVetoDeclared = declared
-        return declared
-    }
-
-    /** B6: the veto, asked by an emitter only for a read about to fire. True = stay silent. */
-    private fun bodyLocalVetoes(recv: Identifier): Boolean {
-        if (bodyLocalVetoPending !== recv) return false
-        val declared = bodyLocalVetoDeclared ?: return false
-        return bodyLocalAssignmentsVeto(recv, recv.text, declared)
-    }
-
-    /** B6: the `VariableDeclaration` a body-local declaration (or a destructured leaf of one) belongs to. */
-    private fun bodyLocalOwnerDeclaration(vd: Node): VariableDeclaration? {
-        var n: Node? = vd
-        var hops = 0
-        while (n != null && n !is VariableDeclaration && hops++ < 32) n = (n as NodeBase).parent
-        return n as? VariableDeclaration
-    }
-
-    /**
-     * B6: [vd]'s declared type for the receiver arm — nullish, not `any` — or null. A
-     * function of the declaration alone (an initializer is narrowed at ITS position,
-     * never the read's), so memoized per file by node id: a body local is read many times.
-     * The FIRST computation types the initializer in the read's ambient, so it is refused
-     * (and not memoized) where an identifier of the initializer names a different binding
-     * there (a nested function's parameter shadowing it).
-     */
-    private fun bodyLocalDeclaredTypeMemo(recv: Identifier, vd: Node): Type? {
-        var sf: Node? = recv
-        var hops = 0
-        while (sf != null && sf !is SourceFile && hops++ < 100_000) sf = (sf as NodeBase).parent
-        val id = (vd as NodeBase).nodeId
-        val memo = if (sf is SourceFile && id >= 0) {
-            if (bodyLocalDeclMemoFile !== sf) { bodyLocalDeclMemoFile = sf; bodyLocalDeclMemo = IntKeyMap(64) }
-            bodyLocalDeclMemo
-        } else null
-        memo?.get(id)?.let { return if (it === errorType) null else it }
-        val owner = bodyLocalOwnerDeclaration(vd) ?: return null
-        val init = owner.initializer
-        if (owner.type == null && init != null && rhsBindingsDiverge(init, recv)) return null
-        val t = bodyLocalDeclaredTypeCompute(vd)
-        memo?.set(id, t ?: errorType)
-        return t
-    }
-
-    private fun bodyLocalDeclaredTypeCompute(vd: Node): Type? {
-        val declared: Type = when (vd) {
-            is VariableDeclaration -> {
-                val ann = vd.type
-                if (ann != null) getTypeFromTypeNode(ann)
-                else bodyLocalInitializerType(vd.initializer ?: return null)
-            }
-            is BindingElement -> bindingElementDeclaredType(vd, 0) ?: return null
-            else -> return null
-        }
-        if (declared === anyType || declared === errorType || declared === unknownType) return null
-        // Nullishness through a type parameter's base constraint, as the caller reads it.
-        val probe = typeParamsToBaseConstraints(declared) ?: return null
-        if (!typeIncludesNull(probe) && !typeIncludesExplicitUndefined(probe)) return null
-        // (No N6 type-parameter refusal: the caller reads a type parameter through its BASE
-        // constraint, so a failed inference's unconstrained `U` is silent there already, and
-        // the census's refusal measured 0 on every pin, cell set, profile and library while
-        // costing an in-scope constrained `T`'s true row.)
-        return declared
-    }
-
-    /** B6's initializer type: a reference narrowed at its own position; N11's logical operators. */
-    private fun bodyLocalInitializerType(init: Expression, depth: Int = 0): Type {
-        if (depth > 8) return getTypeOfExpression(init)
-        if (init is Identifier || init is PropertyAccessExpression) {
-            val t = getTypeOfExpression(init)
-            return if (t === anyType || t === errorType) t else getNarrowedTypeForReference(t, init)
-        }
-        if (init is ParenthesizedExpression) return bodyLocalInitializerType(init.expression, depth + 1)
-        if (init is ConditionalExpression) {
-            val a = bodyLocalInitializerType(init.whenTrue, depth + 1)
-            val b = bodyLocalInitializerType(init.whenFalse, depth + 1)
-            if (a === anyType || a === errorType || a === unknownType) return a
-            if (b === anyType || b === errorType || b === unknownType) return b
-            return getUnionType(listOf(a, b))
-        }
-        if (init is BinaryExpression && (init.operator == SyntaxKind.AmpersandAmpersand ||
-                init.operator == SyntaxKind.BarBar || init.operator == SyntaxKind.QuestionQuestion)) {
-            val lt = bodyLocalInitializerType(init.left, depth + 1)
-            if (lt === anyType || lt === errorType || lt === unknownType) return lt
-            val parts = (lt as? Type.Union)?.types ?: listOf(lt)
-            val nullish = parts.filter { isNullishConstituent(it) }
-            val rest = parts.filterNot { isNullishConstituent(it) }
-            // tsgo (checker.ts 43917 `const r = p && fi(p)`, N11): an all-nullish left
-            // short-circuits; a nullish-free `??` left never reads the right.
-            if (rest.isEmpty() && init.operator == SyntaxKind.AmpersandAmpersand) return lt
-            if (nullish.isEmpty() && init.operator == SyntaxKind.QuestionQuestion) return lt
-            val rt = bodyLocalInitializerType(init.right, depth + 1)
-            if (rt === anyType || rt === errorType || rt === unknownType) return rt
-            return when (init.operator) {
-                // the definitely-falsy part of the left, or the right — only its NULLISH part
-                // matters to the receiver arm.
-                SyntaxKind.AmpersandAmpersand -> getUnionType(nullish + listOf(rt))
-                // `??` and `||` drop the nullish part (`||`'s other falsy parts are never nullish).
-                else -> if (rest.isEmpty()) rt else getUnionType(rest + listOf(rt))
-            }
-        }
-        return getTypeOfExpression(init)
-    }
-
-    /**
-     * B6's UNRESOLVED-RHS VETO, true to stay silent: some assignment of [name] reaching
-     * [recv] ([BodyLocalAssignments], crossing into the enclosing function for a closure
-     * read) has a right-hand side typing `any` / `error` / `unknown` — the narrowing then
-     * rests on a value this checker cannot type (rxjs `inner = source.subscribe(…)`
-     * through a generic contextual parameter, N17; `new X!()` results, `this.x`) — or
-     * EVERY reaching assignment is non-nullish (a missing initializer counts as
-     * `undefined`), so the variable cannot hold null / undefined at the read (marked
-     * `Instance.ts`, N3). The right-hand sides are typed with [name]'s own
-     * [declared] type installed, or `s &&= s.trim()` reads `s` as `any` and vetoes a
-     * true row.
-     */
-    private fun bodyLocalAssignmentsVeto(recv: Identifier, name: String, declared: Type): Boolean {
-        val flow = getFlowAt(recv) ?: return false
-        val reaching = BodyLocalAssignments.reaching(flow, name)
-        val comparands = BodyLocalAssignments.optionalChainComparands(flow, name)
-        if (reaching.isEmpty() && comparands.isEmpty()) return false
-        val installed = name !in currentLocalTypes
-        if (installed) currentLocalTypes[name] = declared
-        val savedThis = currentClassForThis
-        if (savedThis == null) currentClassForThis = captureRecorder.typeCaptureThisClass(recv)
-        try {
-            // N10: `x?.p === y` narrows `x` by `y`'s type, which must be typeable here.
-            for (c in comparands) {
-                val t = getTypeOfExpression(c)
-                if (t === anyType || t === errorType || t === unknownType) return true
-            }
-            if (reaching.isEmpty()) return false
-            var allNonNullish = true
-            for (r in reaching) {
-                val rhs = r.rhs
-                if (rhs == null) { allNonNullish = false; continue }
-                // Typed in the READ's ambient: an identifier the right-hand side binds
-                // differently (`{ const s = 'x'; t = s }`) would be typed as the outer one.
-                if (rhsBindingsDiverge(rhs, recv)) return true
-                val t0 = getTypeOfExpression(rhs)
-                if (t0 === anyType || t0 === errorType || t0 === unknownType) return true
-                // A type parameter through its base constraint; an unconstrained one may be nullish.
-                val t = typeParamsToBaseConstraints(t0)
-                if (t == null || typeIncludesNull(t) || typeIncludesExplicitUndefined(t) ||
-                    ((t as? Type.Union)?.types ?: listOf(t)).any { isNullishConstituent(it) }) allNonNullish = false
-            }
-            return allNonNullish
-        } finally {
-            currentClassForThis = savedThis
-            if (installed) currentLocalTypes.remove(name)
-        }
-    }
-
-    /** B6: the identifier a destructured leaf's pattern is initialized from (through property / element paths), or null. */
-    private fun bindingElementInitializerRoot(elem: BindingElement): String? {
-        var n: Node? = (elem as NodeBase).parent
-        var hops = 0
-        while (n != null && n !is VariableDeclaration && hops++ < 32) n = (n as NodeBase).parent
-        var r: Expression = (n as? VariableDeclaration)?.initializer ?: return null
-        while (true) r = when (r) {
-            is PropertyAccessExpression -> r.expression
-            is ElementAccessExpression -> r.expression
-            is ParenthesizedExpression -> r.expression
-            is NonNullExpression -> r.expression
-            else -> break
-        }
-        return (r as? Identifier)?.text
-    }
-
-    /**
-     * B6: true when a value identifier in [rhs] (not inside a nested function or class)
-     * names a different lexical binding at [rhs] than at [read] — the veto types the
-     * right-hand side in the read's ambient, which would then read the wrong binding.
-     */
-    private fun rhsBindingsDiverge(rhs: Expression, read: Identifier): Boolean {
-        val stack = ArrayDeque<Node>()
-        stack.addLast(rhs)
-        while (stack.isNotEmpty()) {
-            val n = stack.removeLast()
-            when (n) {
-                is ArrowFunction, is FunctionExpression, is ClassExpression -> continue
-                is Identifier -> {
-                    val p = (n as NodeBase).parent
-                    val isName = (p is PropertyAccessExpression && p.name === n) || (p is PropertyAssignment && p.name === n)
-                    if (!isName && lexicalScopeSymbol(n, n.text) !== lexicalScopeSymbol(read, n.text)) return true
-                    continue
-                }
-                else -> {}
-            }
-            forEachChild(n) { stack.addLast(it) }
-        }
-        return false
-    }
-
-    /**
-     * (CHK.173) Round B4 (G3a) — [t] with every type parameter (bare, or a union member)
-     * replaced by its BASE constraint, the type whose null / undefined tsgo's
-     * `checkNonNullType` reads through `getTypeFacts` (an instantiable type's facts are its
-     * base constraint's). [t] itself when it names no type parameter; null when one has no
-     * constraint (an unconstrained `T` is `unknown`-faceted and tsgo reports no TS1804x for
-     * it) or the chain is circular.
-     */
-    private fun typeParamsToBaseConstraints(t: Type, depth: Int = 0): Type? {
-        // A constraint may name a type parameter again, directly or inside a union
-        // (`<T extends U | null, U extends T>` is a TS2313 cycle): bounded, never recursive
-        // without limit.
-        if (depth > 8) return null
-        fun base(tp: Type.TypeParam): Type? {
-            var cur: Type = tp
-            var hops = 0
-            while (cur is Type.TypeParam) {
-                cur = cur.constraint ?: return null
-                if (++hops > 32) return null
-            }
-            return typeParamsToBaseConstraints(cur, depth + 1)
-        }
-        return when (t) {
-            is Type.TypeParam -> base(t)
-            is Type.Union -> {
-                if (t.types.none { it is Type.TypeParam }) return t
-                val parts = ArrayList<Type>(t.types.size)
-                for (m in t.types) {
-                    if (m is Type.TypeParam) {
-                        val b = base(m) ?: return null
-                        if (b is Type.Union) parts.addAll(b.types) else parts.add(b)
-                    } else parts.add(m)
-                }
-                getUnionType(parts)
-            }
-            else -> t
-        }
-    }
 
     /**
      * 17.44: Walk a synthetic-paren receiver (or its inner expression) to find the
@@ -156095,7 +155525,7 @@ interface DataView {
      * True when [t] is `undefined` or a Union that explicitly includes `undefined`.
      * Does NOT match `any`/`unknown` — TypeScript doesn't emit TS2532 for those.
      */
-    private fun typeIncludesExplicitUndefined(t: Type): Boolean {
+    internal fun typeIncludesExplicitUndefined(t: Type): Boolean {
         if (t === undefinedType) return true
         if (t.flags.hasAny(TypeFlags.Undefined)) return true
         if (t is Type.Union) return t.types.any { typeIncludesExplicitUndefined(it) }
@@ -161283,9 +160713,9 @@ interface DataView {
         // until TS7053 is modelled. The property-access half is admitted through
         // [jsAccessReceiverIsExpandoImmune]; see its KDoc.
         if (isJsLikeFileName(fileName)) return
-        emitTs1804xForNullishElementAccessReceiver(expr, source, fileName)
+        nullishReceivers.emitTs1804xForNullishElementAccessReceiver(expr, source, fileName)
         // (CHK.173) Round B3: a member / parenthesized receiver (`o.p['x']`, `(y)['length']`).
-        if (!expr.questionDotToken) emitTs1804xForNullableCompoundReceiver(expr.expression, source, fileName)
+        if (!expr.questionDotToken) nullishReceivers.emitTs1804xForNullableCompoundReceiver(expr.expression, source, fileName)
         val arg = expr.argumentExpression
         // 17.93: TS2538 "Type 'null'/'undefined' cannot be used as an index type." for
         // element-access indices that resolve to null/undefined. Mirrors TypeScript's
@@ -167107,7 +166537,7 @@ interface DataView {
     /**
      * (CHK.173) B5f (N1) — tsgo's `resolveNewExpression` reads its callee through
      * `checkNonNullExpression`: a `null` / `undefined` member of the callee type is reported
-     * (TS18047/8/9 for an entity name, TS2531/2/3 otherwise — [reportNullishReceiver]) and
+     * (TS18047/8/9 for an entity name, TS2531/2/3 otherwise — [NullishReceiverChecks.reportNullishReceiver]) and
      * the resolution continues on the NON-NULL type. This emitter read the raw union, so
      * `new W()` on a `(new () => S) | undefined` was TS2351 "Not all constituents …" — also
      * after `if (W)`, since [getCalleeType] does not flow-narrow (the call path's
@@ -167133,7 +166563,7 @@ interface DataView {
                     if (ce is Identifier || ce is PropertyAccessExpression) {
                         val start = ce.pos
                         val length = expressionTrueEnd(ce) - start
-                        if (length > 0) reportNullishReceiver(
+                        if (length > 0) nullishReceivers.reportNullishReceiver(
                             ce, nullish.any { it.flags.hasAny(TypeFlags.Null) },
                             nullish.any { it.flags.hasAny(TypeFlags.Undefined) }, start, length, source, fileName,
                         )
