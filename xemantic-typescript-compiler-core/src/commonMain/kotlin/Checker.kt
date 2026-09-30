@@ -693,6 +693,15 @@ class Checker(
     private var nonNullChainReceiverReads = false
 
     internal var currentClassForThis: ClassDeclaration? = null
+    /** (CHK.173) B6: the receiver whose declared type [bodyLocalReceiverDeclaredType] took from a destructured leaf. */
+    private var bodyLocalLeafTyped: Identifier? = null
+    /** (CHK.173) B6: [bodyLocalReceiverDeclaredType]'s per-declaration memo (nodeId -> type, [errorType] = refused), per file. */
+    private var bodyLocalDeclMemo: IntKeyMap<Type>? = null
+    private var bodyLocalDeclMemoFile: SourceFile? = null
+    /** (CHK.173) B6: the receiver (and its declared type) whose veto [bodyLocalAssignmentsVeto]
+     *  the emitters run only once narrowing has kept a nullish member — it can only suppress. */
+    private var bodyLocalVetoPending: Identifier? = null
+    private var bodyLocalVetoDeclared: Type? = null
         set(v) { if (field !== v) { field = v; bumpExprEpoch("currentClassForThis") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentClassForThis") }
 
     /** B-interfaceClassMerging: the enclosing class symbol whose method-body return type
@@ -8507,6 +8516,24 @@ class Checker(
      *  here for exactly the reason it is sound there: a request walks one file's flow
      *  graph. Declared before `init` (init runs the check pipeline). */
     private val flowCallDivergesCache: MutableMap<Long, Boolean> = mutableMapOf()
+
+    /** (CHK.173) B6: [narrowByAssertCall]'s answer per (flow node, antecedent type, reference),
+     *  memoized for ONE outermost narrowing request and cleared with [flowCallDivergesCache].
+     *  A walk through nested loops revisits the same `FlowCall` many times with the same
+     *  antecedent, and each visit re-resolved the assertion callee's generic signature —
+     *  tsc's `visitorPublic.ts` `updated` read (`Debug.assertEachNode(updated, test)` in a
+     *  double loop) cost 16,978 bypassed type-node resolutions in ONE walk. Keyed by the
+     *  `FlowCall` object itself (a plain class, so identity), never by a position. */
+    private val narrowAssertCallCache: HashMap<NarrowAssertKey, Type?> = HashMap()
+    private data class NarrowAssertKey(val flow: FlowCall, val typeId: Int, val name: String)
+
+    private fun narrowByAssertCallMemo(t: Type, flow: FlowCall, name: String): Type? {
+        val key = NarrowAssertKey(flow, t.id, name)
+        if (narrowAssertCallCache.containsKey(key)) return narrowAssertCallCache[key]
+        val r = narrowByAssertCall(t, flow.node, name)
+        narrowAssertCallCache[key] = r
+        return r
+    }
 
     /** Round 426 (faithful TS2563, replacing the B399 per-file node-count proxy):
      *  per-file container RANGES where a flow walk tripped the 2000-recursion depth
@@ -120528,6 +120555,7 @@ interface DataView {
             narrowVisitsLeft = NARROW_VISIT_BUDGET
             narrowWalkDeclCache.clear()
             flowCallDivergesCache.clear()
+            narrowAssertCallCache.clear()
         }
         // M3.4 (round 413) — tsc-faithful budget consumption (checker.ts
         // `getTypeAtFlowNode`'s `while(true)` loop): follow LINEAR pass-through
@@ -120736,7 +120764,7 @@ interface DataView {
                 // `function assertX(x): asserts x is T`, after the call returns, x is
                 // narrowed to T.
                 val tR = NarrowSections.t()
-                val r0 = narrowByAssertCall(antecedent, node.node, name)
+                val r0 = narrowByAssertCallMemo(antecedent, node, name)
                 val r = if (r0 == null || r0 === antecedent || flowSiteReadsOtherBinding(node.node, name)) antecedent else r0
                 NarrowSections.close(NarrowSections.S_ASSERT, tR)
                 r
@@ -124089,6 +124117,19 @@ interface DataView {
         val targetIsOwnTpArray = arrayWrap != 0 && tpName != null &&
             calleeTps != null && calleeTps.any { it.name.text == tpName }
         var targetType = getTypeFromTypeNode(targetTypeNode)
+        // (CHK.173) B6: a target naming the callee's OWN type parameter through anything
+        // but the bare / array forms the recovery below binds (`asserts nodes is
+        // NodeArray<U>` — tsc's first `Debug.assertEachNode` overload, whose `U` this call
+        // never binds when `test` is no type guard, where tsgo picks a later, non-asserting
+        // overload) narrows to an unbound generic: nothing. Deciding it cost a structural
+        // `Node[]` -> `NodeArray<U>` relation of ~17k bypassed type-node resolutions in one
+        // walk (tsc `visitorPublic.ts`), for a type that was never the answer.
+        if (targetType !== errorType && targetType !== anyType && !targetIsOwnTpArray && calleeTps != null &&
+            expr.typeArguments.isNullOrEmpty()) {
+            val ownTps = calleeTps.map { it.name.text }.toSet()
+            if (typeNodeNamesAny(targetTypeNode, ownTps) &&
+                !assertTypeParamGuardBindable(params, paramIdx, expr, ownTps)) return null
+        }
         if (targetType === errorType || targetType === anyType || targetIsOwnTpArray) {
             // M1.12 (round 424): `asserts node is U` where U is the callee's own
             // INFERRED type param (tsc `Debug.assertNode<T extends Node, U extends
@@ -124194,6 +124235,36 @@ interface DataView {
         }
         val matches = checkTypeRelatedTo(t, targetType, assignableRelation)
         return if (matches) t else targetType
+    }
+
+    /** (CHK.173) B6: true when some OTHER parameter is a `(…) => x is U` guard over one of
+     *  [names] and its argument resolves to a guard — the one way this call can bind `U`. */
+    private fun assertTypeParamGuardBindable(
+        params: List<Parameter>, paramIdx: Int, expr: CallExpression, names: Set<String>,
+    ): Boolean {
+        for ((i, p) in params.withIndex()) {
+            if (i == paramIdx) continue
+            val ft = p.type as? FunctionType ?: continue
+            val pred = ft.type as? TypePredicate ?: continue
+            if (pred.assertsModifier) continue
+            if (((pred.type as? TypeReference)?.typeName as? Identifier)?.text !in names) continue
+            val arg = expr.arguments.getOrNull(i) ?: continue
+            if (predicateTargetTypeOfGuardExpr(arg) != null) return true
+        }
+        return false
+    }
+
+    /** (CHK.173) B6: true when [node] contains a type reference whose name is one of [names]. */
+    private fun typeNodeNamesAny(node: Node, names: Set<String>): Boolean {
+        if (names.isEmpty()) return false
+        val stack = ArrayDeque<Node>()
+        stack.addLast(node)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeLast()
+            if (n is TypeReference && (n.typeName as? Identifier)?.text in names) return true
+            forEachChild(n) { stack.addLast(it) }
+        }
+        return false
     }
 
     /**
@@ -155318,6 +155389,7 @@ interface DataView {
             // here — 0 of the pins and 0 of seven block / catch / case / nested-function
             // shadow shapes move without it, as the Round B census's arm found.)
             if (path != null && optionalChainGuardsRef(core, path)) return
+            if (core is Identifier && bodyLocalVetoes(core)) return
             if (path != null && path.startsWith("this.") && thisMemberAssignedInFunction(core, path)) return
             if (core is PropertyAccessExpression || core is ElementAccessExpression) {
                 if (receiverOfReceiverGuardClears(core)) return
@@ -155510,7 +155582,11 @@ interface DataView {
         val hasUndef = typeIncludesExplicitUndefined(narrowed)
         if (!hasNull && !hasUndef) return
         if (optionalChainGuardsRef(recv, name)) return
-        if (LocalShadowGuard.nullableReceiverBindingRefused(recv, name)) return
+        if (bodyLocalVetoes(recv)) return
+        // (CHK.173) B6: a destructured body-local leaf typed by [bodyLocalReceiverDeclaredType]
+        // is the innermost binding the lexical symbol names — the guard's R3 existed only
+        // because the cpa frame could not type one.
+        if (bodyLocalLeafTyped !== recv && LocalShadowGuard.nullableReceiverBindingRefused(recv, name)) return
         val (code, kind) = nullishReceiverCode(hasNull, hasUndef)
         val (line, character) = getLineAndCharacterOfPosition(source, recv.pos)
         diagnostics.add(Diagnostic(
@@ -155534,7 +155610,9 @@ interface DataView {
      * non-union `null` / `undefined` (G3b) unless the receiver is the `null` keyword,
      * which parses as an Identifier and is tsgo's TS18050.
      */
-    private fun nullableIdentifierReceiverType(recv: Identifier, name: String, toi0: Type): Type? {
+    private fun nullableIdentifierReceiverType(recv: Identifier, name: String, toi00: Type): Type? {
+        // (CHK.173) B6: a body local reads `any` in the cpa frame — resolve its declared type here.
+        val toi0 = if (toi00 === anyType) bodyLocalReceiverDeclaredType(recv, name) ?: return null else toi00
         if (toi0 === anyType || toi0 === errorType || toi0 === unknownType) return null
         val toi = typeParamsToBaseConstraints(toi0) ?: return null
         val p = LocalShadowGuard.optionalParameterBinding(recv, name)
@@ -155544,6 +155622,235 @@ interface DataView {
         if (toi is Type.Union) return toi
         if ((toi === nullType || toi === undefinedType) && name != "null") return toi
         return null
+    }
+
+    /**
+     * (CHK.173) B6 — the declared type of a BODY LOCAL receiver the cpa frame reads as
+     * `any` (it records only call / element initializers), or null to stay silent. The
+     * lexical symbol must be a single-declaration `VariableDeclaration` / `BindingElement`
+     * (never a parameter, never a name a walk table already holds); the type is the
+     * annotation, else the initializer — an identifier / property path narrowed at the
+     * initializer, an `&&` / `||` / `??` with its left operand narrowed there (N11,
+     * checker.ts 43917: `const r = p && fi(p)`), anything else [getTypeOfExpression] —
+     * or a destructured leaf's [bindingElementDeclaredType] (B5c narrows it). Refused
+     * per read: a read inside an object-literal / class-expression method (tsgo extends
+     * the flow container there, this flow graph does not), an initializer naming a
+     * binding the read's scope shadows, a leaf after an element-access guard (B5c's
+     * residue r4 / r5). The UNRESOLVED-RHS VETO ([bodyLocalAssignmentsVeto]) runs only in the emitters, for a read whose narrowed type kept a nullish member ([bodyLocalVetoes]) — it can only suppress.
+     */
+    private fun bodyLocalReceiverDeclaredType(recv: Identifier, name: String): Type? {
+        bodyLocalLeafTyped = null
+        bodyLocalVetoPending = null
+        bodyLocalVetoDeclared = null
+        if (name in currentLocalTypes || name in currentShadowedNames || name in currentParamBindingNames) return null
+        val sym = lexicalScopeSymbol(recv, name) ?: return null
+        if (sym.declarations.size != 1) return null
+        val vd = sym.valueDeclaration ?: return null
+        if (vd !is VariableDeclaration && vd !is BindingElement) return null
+        // Cheapest first: the per-declaration memo answers every repeat read, and most
+        // body locals are not nullable at all.
+        val declared = bodyLocalDeclaredTypeMemo(recv, vd) ?: return null
+        if (BodyLocalAssignments.readCrossesUnmodeledContainer(recv, vd)) return null
+        if (vd is BindingElement) {
+            val root = bindingElementInitializerRoot(vd)
+            val flow = getFlowAt(recv)
+            if (root != null && flow != null && BodyLocalAssignments.conditionTestsElementOf(flow, root)) return null
+            bodyLocalLeafTyped = recv
+        }
+        bodyLocalVetoPending = recv
+        bodyLocalVetoDeclared = declared
+        return declared
+    }
+
+    /** B6: the veto, asked by an emitter only for a read about to fire. True = stay silent. */
+    private fun bodyLocalVetoes(recv: Identifier): Boolean {
+        if (bodyLocalVetoPending !== recv) return false
+        val declared = bodyLocalVetoDeclared ?: return false
+        return bodyLocalAssignmentsVeto(recv, recv.text, declared)
+    }
+
+    /** B6: the `VariableDeclaration` a body-local declaration (or a destructured leaf of one) belongs to. */
+    private fun bodyLocalOwnerDeclaration(vd: Node): VariableDeclaration? {
+        var n: Node? = vd
+        var hops = 0
+        while (n != null && n !is VariableDeclaration && hops++ < 32) n = (n as NodeBase).parent
+        return n as? VariableDeclaration
+    }
+
+    /**
+     * B6: [vd]'s declared type for the receiver arm — nullish, not `any` — or null. A
+     * function of the declaration alone (an initializer is narrowed at ITS position,
+     * never the read's), so memoized per file by node id: a body local is read many times.
+     * The FIRST computation types the initializer in the read's ambient, so it is refused
+     * (and not memoized) where an identifier of the initializer names a different binding
+     * there (a nested function's parameter shadowing it).
+     */
+    private fun bodyLocalDeclaredTypeMemo(recv: Identifier, vd: Node): Type? {
+        var sf: Node? = recv
+        var hops = 0
+        while (sf != null && sf !is SourceFile && hops++ < 100_000) sf = (sf as NodeBase).parent
+        val id = (vd as NodeBase).nodeId
+        val memo = if (sf is SourceFile && id >= 0) {
+            if (bodyLocalDeclMemoFile !== sf) { bodyLocalDeclMemoFile = sf; bodyLocalDeclMemo = IntKeyMap(64) }
+            bodyLocalDeclMemo
+        } else null
+        memo?.get(id)?.let { return if (it === errorType) null else it }
+        val owner = bodyLocalOwnerDeclaration(vd) ?: return null
+        val init = owner.initializer
+        if (owner.type == null && init != null && rhsBindingsDiverge(init, recv)) return null
+        val t = bodyLocalDeclaredTypeCompute(vd)
+        memo?.set(id, t ?: errorType)
+        return t
+    }
+
+    private fun bodyLocalDeclaredTypeCompute(vd: Node): Type? {
+        val declared: Type = when (vd) {
+            is VariableDeclaration -> {
+                val ann = vd.type
+                if (ann != null) getTypeFromTypeNode(ann)
+                else bodyLocalInitializerType(vd.initializer ?: return null)
+            }
+            is BindingElement -> bindingElementDeclaredType(vd, 0) ?: return null
+            else -> return null
+        }
+        if (declared === anyType || declared === errorType || declared === unknownType) return null
+        // Nullishness through a type parameter's base constraint, as the caller reads it.
+        val probe = typeParamsToBaseConstraints(declared) ?: return null
+        if (!typeIncludesNull(probe) && !typeIncludesExplicitUndefined(probe)) return null
+        // (No N6 type-parameter refusal: the caller reads a type parameter through its BASE
+        // constraint, so a failed inference's unconstrained `U` is silent there already, and
+        // the census's refusal measured 0 on every pin, cell set, profile and library while
+        // costing an in-scope constrained `T`'s true row.)
+        return declared
+    }
+
+    /** B6's initializer type: a reference narrowed at its own position; N11's logical operators. */
+    private fun bodyLocalInitializerType(init: Expression, depth: Int = 0): Type {
+        if (depth > 8) return getTypeOfExpression(init)
+        if (init is Identifier || init is PropertyAccessExpression) {
+            val t = getTypeOfExpression(init)
+            return if (t === anyType || t === errorType) t else getNarrowedTypeForReference(t, init)
+        }
+        if (init is ParenthesizedExpression) return bodyLocalInitializerType(init.expression, depth + 1)
+        if (init is ConditionalExpression) {
+            val a = bodyLocalInitializerType(init.whenTrue, depth + 1)
+            val b = bodyLocalInitializerType(init.whenFalse, depth + 1)
+            if (a === anyType || a === errorType || a === unknownType) return a
+            if (b === anyType || b === errorType || b === unknownType) return b
+            return getUnionType(listOf(a, b))
+        }
+        if (init is BinaryExpression && (init.operator == SyntaxKind.AmpersandAmpersand ||
+                init.operator == SyntaxKind.BarBar || init.operator == SyntaxKind.QuestionQuestion)) {
+            val lt = bodyLocalInitializerType(init.left, depth + 1)
+            if (lt === anyType || lt === errorType || lt === unknownType) return lt
+            val parts = (lt as? Type.Union)?.types ?: listOf(lt)
+            val nullish = parts.filter { isNullishConstituent(it) }
+            val rest = parts.filterNot { isNullishConstituent(it) }
+            // tsgo (checker.ts 43917 `const r = p && fi(p)`, N11): an all-nullish left
+            // short-circuits; a nullish-free `??` left never reads the right.
+            if (rest.isEmpty() && init.operator == SyntaxKind.AmpersandAmpersand) return lt
+            if (nullish.isEmpty() && init.operator == SyntaxKind.QuestionQuestion) return lt
+            val rt = bodyLocalInitializerType(init.right, depth + 1)
+            if (rt === anyType || rt === errorType || rt === unknownType) return rt
+            return when (init.operator) {
+                // the definitely-falsy part of the left, or the right — only its NULLISH part
+                // matters to the receiver arm.
+                SyntaxKind.AmpersandAmpersand -> getUnionType(nullish + listOf(rt))
+                // `??` and `||` drop the nullish part (`||`'s other falsy parts are never nullish).
+                else -> if (rest.isEmpty()) rt else getUnionType(rest + listOf(rt))
+            }
+        }
+        return getTypeOfExpression(init)
+    }
+
+    /**
+     * B6's UNRESOLVED-RHS VETO, true to stay silent: some assignment of [name] reaching
+     * [recv] ([BodyLocalAssignments], crossing into the enclosing function for a closure
+     * read) has a right-hand side typing `any` / `error` / `unknown` — the narrowing then
+     * rests on a value this checker cannot type (rxjs `inner = source.subscribe(…)`
+     * through a generic contextual parameter, N17; `new X!()` results, `this.x`) — or
+     * EVERY reaching assignment is non-nullish (a missing initializer counts as
+     * `undefined`), so the variable cannot hold null / undefined at the read (marked
+     * `Instance.ts`, N3). The right-hand sides are typed with [name]'s own
+     * [declared] type installed, or `s &&= s.trim()` reads `s` as `any` and vetoes a
+     * true row.
+     */
+    private fun bodyLocalAssignmentsVeto(recv: Identifier, name: String, declared: Type): Boolean {
+        val flow = getFlowAt(recv) ?: return false
+        val reaching = BodyLocalAssignments.reaching(flow, name)
+        val comparands = BodyLocalAssignments.optionalChainComparands(flow, name)
+        if (reaching.isEmpty() && comparands.isEmpty()) return false
+        val installed = name !in currentLocalTypes
+        if (installed) currentLocalTypes[name] = declared
+        val savedThis = currentClassForThis
+        if (savedThis == null) currentClassForThis = captureRecorder.typeCaptureThisClass(recv)
+        try {
+            // N10: `x?.p === y` narrows `x` by `y`'s type, which must be typeable here.
+            for (c in comparands) {
+                val t = getTypeOfExpression(c)
+                if (t === anyType || t === errorType || t === unknownType) return true
+            }
+            if (reaching.isEmpty()) return false
+            var allNonNullish = true
+            for (r in reaching) {
+                val rhs = r.rhs
+                if (rhs == null) { allNonNullish = false; continue }
+                // Typed in the READ's ambient: an identifier the right-hand side binds
+                // differently (`{ const s = 'x'; t = s }`) would be typed as the outer one.
+                if (rhsBindingsDiverge(rhs, recv)) return true
+                val t0 = getTypeOfExpression(rhs)
+                if (t0 === anyType || t0 === errorType || t0 === unknownType) return true
+                // A type parameter through its base constraint; an unconstrained one may be nullish.
+                val t = typeParamsToBaseConstraints(t0)
+                if (t == null || typeIncludesNull(t) || typeIncludesExplicitUndefined(t) ||
+                    ((t as? Type.Union)?.types ?: listOf(t)).any { isNullishConstituent(it) }) allNonNullish = false
+            }
+            return allNonNullish
+        } finally {
+            currentClassForThis = savedThis
+            if (installed) currentLocalTypes.remove(name)
+        }
+    }
+
+    /** B6: the identifier a destructured leaf's pattern is initialized from (through property / element paths), or null. */
+    private fun bindingElementInitializerRoot(elem: BindingElement): String? {
+        var n: Node? = (elem as NodeBase).parent
+        var hops = 0
+        while (n != null && n !is VariableDeclaration && hops++ < 32) n = (n as NodeBase).parent
+        var r: Expression = (n as? VariableDeclaration)?.initializer ?: return null
+        while (true) r = when (r) {
+            is PropertyAccessExpression -> r.expression
+            is ElementAccessExpression -> r.expression
+            is ParenthesizedExpression -> r.expression
+            is NonNullExpression -> r.expression
+            else -> break
+        }
+        return (r as? Identifier)?.text
+    }
+
+    /**
+     * B6: true when a value identifier in [rhs] (not inside a nested function or class)
+     * names a different lexical binding at [rhs] than at [read] — the veto types the
+     * right-hand side in the read's ambient, which would then read the wrong binding.
+     */
+    private fun rhsBindingsDiverge(rhs: Expression, read: Identifier): Boolean {
+        val stack = ArrayDeque<Node>()
+        stack.addLast(rhs)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeLast()
+            when (n) {
+                is ArrowFunction, is FunctionExpression, is ClassExpression -> continue
+                is Identifier -> {
+                    val p = (n as NodeBase).parent
+                    val isName = (p is PropertyAccessExpression && p.name === n) || (p is PropertyAssignment && p.name === n)
+                    if (!isName && lexicalScopeSymbol(n, n.text) !== lexicalScopeSymbol(read, n.text)) return true
+                    continue
+                }
+                else -> {}
+            }
+            forEachChild(n) { stack.addLast(it) }
+        }
+        return false
     }
 
     /**
@@ -155830,6 +156137,7 @@ interface DataView {
             narrowVisitsLeft = NARROW_VISIT_BUDGET
             narrowWalkDeclCache.clear()
             flowCallDivergesCache.clear()
+            narrowAssertCallCache.clear()
         }
         var flowNode = flowNodeIn
         while (true) {
@@ -155938,7 +156246,7 @@ interface DataView {
                 // round 43 iter4: assert-function narrowing mirror (see iter3 in
                 // narrowTypeFromFlow's FlowCall branch). Loop-entry variant gets
                 // the same assert-call narrowing applied after the call returns.
-                val r = narrowByAssertCall(antecedent, node.node, name)
+                val r = narrowByAssertCallMemo(antecedent, node, name)
                 if (r == null || r === antecedent || flowSiteReadsOtherBinding(node.node, name)) antecedent else r
             }
             is FlowSwitchClause -> {
@@ -190588,12 +190896,8 @@ interface DataView {
      * `const ok = a && b && c` alias narrowing destructured discriminant-union bindings). We
      * don't model this CFA feature, and the test currently emits NOTHING → purely additive.
      * Corpus-unique (only this file has BOTH `UseQueryResult` and `getArrayResult`). Two
-     * AST-derived rules reproduce its 6 errors:
-     *  - TS18048: a name destructured by a `let` VariableStatement, read as the receiver of
-     *    `.toExponential()`, stays possibly-undefined — the alias narrowing does NOT flow into a
-     *    reassignable `let` binding (a `const` binding narrows → no error; a PARAMETER binding is
-     *    never collected here → no error). Innermost-first scope lookup distinguishes the nested
-     *    `let data1` from the top-level `const data1` of the same name.
+     * AST-derived rules reproduced its 6 errors; the 4 TS18048 rows on a `let`-destructured
+     * `.toExponential()` receiver are now the body-local TS1804x arm's ((CHK.173) B6), so only:
      *  - TS1360: `<Identifier> satisfies string` (the operand was destructured from the nested
      *    `Nested` union before the `type === 'string'` guard, so it stays `string | number`); a
      *    `resp.resp.data satisfies string` re-reads through the narrowed receiver → `string` → no
@@ -190651,17 +190955,9 @@ interface DataView {
 
     private fun cfadWalkExpr(expr: Expression, frames: ArrayDeque<MutableMap<String, Boolean>>, source: String, fileName: String) {
         when (expr) {
-            is PropertyAccessExpression -> {
-                val recv = expr.expression
-                if (expr.name.text == "toExponential" && recv is Identifier &&
-                    frames.lastOrNull { it.containsKey(recv.text) }?.get(recv.text) == true) {
-                    val (l, c) = getLineAndCharacterOfPosition(source, recv.pos)
-                    diagnostics.add(Diagnostic(message = "'${recv.text}' is possibly 'undefined'.",
-                        category = DiagnosticCategory.Error, code = 18048, fileName = fileName,
-                        line = l, character = c, start = recv.pos, length = recv.text.length))
-                }
-                cfadWalkExpr(recv, frames, source, fileName)
-            }
+            // (CHK.173) B6: the TS18048 on `x.toExponential` was deleted — the body-local
+            // TS1804x arm reports those rows (tsgo's `checkNonNullExpression`).
+            is PropertyAccessExpression -> cfadWalkExpr(expr.expression, frames, source, fileName)
             is CallExpression -> {
                 cfadWalkExpr(expr.expression, frames, source, fileName)
                 expr.arguments.forEach { cfadWalkExpr(it, frames, source, fileName) }
