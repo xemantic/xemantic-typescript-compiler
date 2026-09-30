@@ -1,3 +1,64 @@
+### Round (P18.229) — (CHK.173) B6, the final G1 round: a BODY LOCAL receiver reports TS18047 / TS18048 / TS18049 as tsgo (`let y: number | null = null; y.toFixed()`); +53 true / 0 false over 383 cell projects, +0 everywhere; a measured 2-2.5% warm cost found and removed before landing (2026-09-30)
+
+Orchestrated: one implementation subagent, sent back once on COST; the orchestrator re-ran every gate, a positive-control
+CLI probe (the parent reports only the call-initialized `x`; B6 adds exactly tsgo's second row for an annotated `let
+y`) and its own warm A/B in both orders. **Mechanism**: when `nullableIdentifierReceiverType` answers `any`,
+`bodyLocalReceiverDeclaredType` requires a SINGLE-declaration `VariableDeclaration` / `BindingElement` from the lexical
+symbol not already in a walk table; `bodyLocalDeclaredTypeMemo` (per file x node id, checked FIRST so repeat reads and
+non-nullable locals skip everything else) computes the declared type — annotation; else `bodyLocalInitializerType` with
+every operand of `&&` / `||` / `??` / `?:` narrowed at its own position (N11 generalised); else the leaf via B5c — and
+nullishness is read through a type parameter's base constraint; per-read refusals (`readCrossesUnmodeledContainer` —
+object-literal / class-expression methods, where our flow graph has no outer flow; an element-access guard; initializer
+binding divergence); then, only for a read ABOUT TO FIRE (`bodyLocalVetoes`, in the two emitters after narrowing kept a
+nullish member), the veto `bodyLocalAssignmentsVeto`: a reaching RHS or optional-chain comparand typing `any` / `error`
+/ `unknown` or naming a divergent binding, or every reaching assignment non-nullish (a missing initializer counts as
+`undefined`), RHSs typed with the target's own type and `this` carried — the flow walks live in the new
+`BodyLocalAssignments.kt` (reaching assignments across `FlowStart.outerFlow`, element guards, comparands, container
+crossing). R3 retired for the forced leaf; `cfadWalkExpr`'s TS18048 arm deleted (TS1360 kept). **Where the census was
+wrong**: the N6 type-parameter refusal is REDUNDANT and costs true rows (it silenced an in-scope constrained `T` tsgo
+reports) — dropped; the design let three FP classes through it never measured — the first build added **10 false rows
+on harness / services** (a `??` / `?:` initializer with a narrowed right operand — `completions.ts:5963`; an
+optional-chain comparison with no reaching assignment — `fourslashImpl.ts:1708`, a comparand veto added; an RHS typed in
+the READ's ambient), plus an element-access-guarded destructured leaf and a class-expression method read — all closed;
+the veto must read a type parameter through its base constraint.
+
+**COST — found, attributed, removed.** The first landed candidate measured **+2.46% (quiet arms) and, swapped, the parent
+2.03% faster** — a real 2-2.5% steady-state regression, with `typeNode.bypassed` +10.85% (+16.9k). Sent back with the
+numbers; the builder PROFILED rather than guessed: only 141 of the 16.9k came from B6's own annotation typing — **16,978
+came from ONE narrowing walk**, the newly typed body local `updated` at `visitorPublic.ts:357` (`Debug.assertEachNode(updated,
+test)`): this checker picked `assertEachNode`'s first overload (an assertion `nodes is NodeArray<U>` whose `test` argument
+cannot bind `U`) and ran a structural `Node[]` -> `NodeArray<U>` relation with every member through the bypass path, to
+produce a meaningless narrowing that tsgo (which picks the later, non-asserting overload) never makes. Fixes:
+`narrowByAssertCall` returns null for an UNBINDABLE generic assertion target (no explicit type arguments, no guard
+argument can bind it — `assertTypeParamGuardBindable`; new pin `assertunbound` now gains tsgo's TS18048 the parent
+MISSED; the guard-bound case still narrows — `destructuring.ts:602` depends on it, an unconditional refusal added a false
+TS2345 there); cheapest gate first; the veto only for a read about to fire; a per-request `narrowByAssertCall` memo
+(unproven — moves no counter). Result vs pristine: `typeNode.bypassed` **-1.53%**, `narrow.walks` **+2.68%** (the
+feature's inherent cost — ~715 newly typed body-local receivers narrowed plus each nullable declaration's initializer
+once — the same accounting as Round A's +3%, accepted and re-baselined in this commit), `typeOfExpr.calls` +0.77%;
+warm A/B (orchestrator, 2 pairs per order): **+2.42% and, swapped, -1.38%** — the orders now DISAGREE in sign (the
+second-run arm pays ~1.9%, B3's ordering artefact), net ~+0.5%, where before the fix they agreed on 2-2.5%; the builder's
+10 single pairs pooled to ~0.
+
+**Measured**: 383 content-unique cell projects (~6,660 files: every census set, the 2,160-cell matrix, every
+(P18.216)-(P18.228) agent cell dir) ours 4,715 -> 4,768 rows, agree 4,370 -> 4,423 (tsgo 6,120): **+53 true, 0 false, 0
+removed**; the matrix byte-identical; positive control on the profiles: services 691 receivers typed / 208 vetoed,
+harness 771 / 237 — the grid was a real gate. **B3's `thisMemberAssignedInFunction` guard CANNOT be retired** (removed:
+rxjs `WebSocketSubject.ts:271:9` returns + 6 cell FPs) — its cause is now `resolvedAssignedRawTypeForFlow`'s Identifier
+arm typing a body-local RHS (`this._socket = socket`) as `any`. **Pins**: `BodyLocalNullableReceiverTest` (30).
+**Ablation** (18 arms): a1 whole B6 15 RED, a2 veto 4, a3 veto self-typing 1, a4 comparand veto 1, a5 RHS divergence 1,
+a6 element guard 1, a7 class-expression refusal 1, a8 R3 kept 2, a9 logical arm 2, a10 conditional arm 1, a11 N6
+re-added 2, a13 initializer divergence 1, a14 missing initializer 2, a15 initializer not narrowed 3, a16 / a17 base
+constraint 1 each, assert refusal off 1, assert refusal unconditional 1; a12 (all-non-nullish veto) 0 on pins — marked
+discriminates it (10 false TS18049 in `Instance.ts` without it); a18 cfad arm kept -> the 4 predicted corpus duplicates.
+**Gates**: full suite **21,848 / 0 / 44** (+30); corpus screen 0 of 8,725; huge_methods 0; grid 8x `added=0 removed=0`
+(chain control OK), rxjs / marked / cronstrue / strict cronstrue +0; warning gate clean. **Size**: `Checker.kt` +317 /
+-21 plus `BodyLocalAssignments.kt` 236. **Residues**: a genuine `any` RHS (`s = anyv`) refused by the veto; a generic
+inference left as `U | undefined` (k01 / n6); a receiver named after a lib global (`top`, wrong on the parent too); reads
+in object-literal / class-expression methods refused; **next**: type body-local RHSs in `resolvedAssignedRawTypeForFlow`
+(retires B3's guard; the N20 / N21 "full recording" arc). **(CHK.173)'s identifier-receiver TS18047/8/9 arc is now
+complete** apart from those residues.
+
 ### Round (P18.228) — (CHK.173) G1 arc B5e (N16): the binder ports tsgo's try EXCEPTION label — every mutation inside `try` reaches the `catch` / `finally` entry; catch and finally code saw the variable's PRE-TRY type before; 10 wrong types and a shipped false TS18047 fixed, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Where the census was wrong**: not the

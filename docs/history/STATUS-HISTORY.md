@@ -1,5 +1,10 @@
 
 
+**(P18.234) — (CHK.178): THREE MISMATCHES WITH tsgo FIXED — THE ARGUMENT ERROR NAMES THE FIRST FAILING UNION MEMBER, `(u as U).a` REPORTS THE MISSING PROPERTY, AND AN OBJECT-LITERAL MISMATCH POINTS AT THE MEMBER; +16 PINS, 21,899 / 0 / 44 (2026-09-30).**
+No corpus baseline moved, and the grid and libraries are byte-identical (none of these paths fire there), so the corpus
+and the pins are the gate. Residues queued as (CHK.179), first a false-positive TS2339 on `u["a"]`.
+
+
 **(P18.233) — (CHK.177) S1: TYPE-MISMATCH ERRORS NOW PRINT A UNION'S ALIAS NAME (`Type 'U' …`) WHERE tsgo DOES, INSTEAD OF EXPANDING IT TO `'A | B'`; TWO SHIPPED WRONG NAMES FIXED; +35 PINS, 21,883 / 0 / 44 (2026-09-30).**
 Display only — no error is added or removed anywhere (screen 0, grid 8x0, libraries unchanged, counters +0.00%).
 Covers identifier sources declared locally, as parameters, as global script declarations in another file, and through

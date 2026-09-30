@@ -25,6 +25,39 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.239) — (CHK.180) stage 1: `this` and written-type `const` body locals reach the member / element-access / nullish readers per access, as tsgo types them — 45 -> 27 missing of a 104-cell matrix, 0 ours-only, every new row tsgo's exact text; +0 on corpus, grid and libraries (2026-09-30)
+
+**Out-of-order pick, stated**: taken ahead of (CHK.183) / (CHK.182) because a read-only census had fully specified and
+priced it (`build/scratch-p18237-census/README.txt`); (CHK.182) is next. One implementation subagent. **Where the
+census / brief was wrong**: (a) predicted 29 missing, landed 27 — the two `as`-local KEY cells close too once
+`annotatedReceiver` takes an `as` initializer; (b) the constructor key cell is not a `this` problem — any class that
+declares a constructor carries a construct signature on its instance type ((CHK.73)), which `plainIndexless` refuses,
+for a plain `d: D` parameter too; (c) **the stage-1 spec as written reddened the corpus** —
+`discriminateWithOptionalProperty4(exactoptionalpropertytypes=false)` grew a false `TS18048 'zWorkAround.b'`, invisible
+to the grid and to the census's instrument — whose cause is an EXISTING narrowing gap (truthiness narrowing on a union
+whose members carry `?: undefined` properties), already a shipped false positive on parameters and file-level consts
+(queued (CHK.184)); a WRITTEN UNION of two or more non-nullish constituents is therefore refused; (d) with (c) in, the
+frame-lifetime install (arm a6) no longer reddens the corpus — the shape it does break (a false TS2341 on `({ x } =
+this)` after a `this.p` read) is pinned; (e) only one of the census's four tsgo-silent controls reproduced as written —
+static and class-expression `this` are NOT tsgo-silent, the `let` shape needed a class with `this.tokenizer.*`, the
+marked `Instance.ts:77` shape reproduces only verbatim (removing its two comment lines stops it — unexplained, recorded
+in the pin's KDoc), and the object-literal-method crossing is unreachable because the property-access walk never
+enters such a body. **Mechanism**: new `WrittenReceiverTypes.kt` (131 lines) — `this` through
+`enclosingInstanceThisTypeForFlow`; a single-declaration `const` whose type is WRITTEN (annotation, `as T`, `<T>`, a
+parenthesised cast; not `as const`); refused when the root is not `any`, already in `currentLocalTypes`, a parameter
+binding or a shadowed name, `any` / error / `unknown`, a multi-constituent union, `readCrossesUnmodeledContainer`, or a
+nullish type the `bodyLocalAssignmentsVeto` silences; installed for ONE `checkSingle*` call and removed
+(`Checker.kt` wrapper, two call sites, +25). `ElementAccessMissingMember.annotatedReceiver` accepts a cast initializer.
+Five refusal pins in `AnnotatedBodyLocalReceiverTest` now CLOSE, byte-identical to tsgo, and were converted to tsgo-row
+pins (`… - closed by CHK-180`). **Pins**: `Chk180WrittenReceiverTypeTest`, 20 tests (one `residue - …` countdown for the
+construct-signature case); ablation a1 4 / a2 1 / a3 1 / a4 3 / a4k 3 / a5 1 / a6 1 / a7 1 RED (a2, a3, a5 confirmed
+LIVE on marked, reproducing its 44 / 12 ours-only rows). **Gates**: full suite 21,998 / 0 / 44 (+20); corpus screen
+8725 / 0; `cost_gate.py` — every counter FELL (`narrow.walks` -3.30%, `mapped.hits` -2.17%, `globals.lookups` -1.83%,
+`typeOfExpr.calls` -0.33%; the before binary reproduces the recorded baseline exactly, so they are real: a receiver
+with a written type installed takes shorter resolution paths than the `any` fallback it replaces), baseline updated;
+`huge_methods.py --fail-over 0` 0 (`checkPropertyAccessInExpr` 5,123, `cpaSpineLeave` 7,308); grid 8 x added=0
+removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only.
+
 ### Round (P18.238) — (CHK.181): a rest-tuple parameter's arity is read the way tsgo reads it — optional elements give a range (`Expected 1-2`), a tuple with its own rest element gives `at least N`, and a missing rest parameter relates TS6236 — in both arity readers; every changed row a tsgo row, +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent, beside a read-only (CHK.180) census. **Where the queue item was wrong**: the defect was
@@ -255,67 +288,6 @@ with arm spreads 1.8-2.3% — noise; grid 8x `added=0 removed=0` (chain control 
 0 / 44** (unchanged — a verbatim move); warning gate clean (positive control live). Ablation (the collaborator is live):
 a1 identifier call site dropped 91 of 204 RED, a2 veto reading a collaborator-local copy 4. **Successor**: (P18.231),
 reattach the setter (a behaviour change with an epoch receipt), then the remaining (CHK.173) residues / (INV.0).
-
-### Round (P18.229) — (CHK.173) B6, the final G1 round: a BODY LOCAL receiver reports TS18047 / TS18048 / TS18049 as tsgo (`let y: number | null = null; y.toFixed()`); +53 true / 0 false over 383 cell projects, +0 everywhere; a measured 2-2.5% warm cost found and removed before landing (2026-09-30)
-
-Orchestrated: one implementation subagent, sent back once on COST; the orchestrator re-ran every gate, a positive-control
-CLI probe (the parent reports only the call-initialized `x`; B6 adds exactly tsgo's second row for an annotated `let
-y`) and its own warm A/B in both orders. **Mechanism**: when `nullableIdentifierReceiverType` answers `any`,
-`bodyLocalReceiverDeclaredType` requires a SINGLE-declaration `VariableDeclaration` / `BindingElement` from the lexical
-symbol not already in a walk table; `bodyLocalDeclaredTypeMemo` (per file x node id, checked FIRST so repeat reads and
-non-nullable locals skip everything else) computes the declared type — annotation; else `bodyLocalInitializerType` with
-every operand of `&&` / `||` / `??` / `?:` narrowed at its own position (N11 generalised); else the leaf via B5c — and
-nullishness is read through a type parameter's base constraint; per-read refusals (`readCrossesUnmodeledContainer` —
-object-literal / class-expression methods, where our flow graph has no outer flow; an element-access guard; initializer
-binding divergence); then, only for a read ABOUT TO FIRE (`bodyLocalVetoes`, in the two emitters after narrowing kept a
-nullish member), the veto `bodyLocalAssignmentsVeto`: a reaching RHS or optional-chain comparand typing `any` / `error`
-/ `unknown` or naming a divergent binding, or every reaching assignment non-nullish (a missing initializer counts as
-`undefined`), RHSs typed with the target's own type and `this` carried — the flow walks live in the new
-`BodyLocalAssignments.kt` (reaching assignments across `FlowStart.outerFlow`, element guards, comparands, container
-crossing). R3 retired for the forced leaf; `cfadWalkExpr`'s TS18048 arm deleted (TS1360 kept). **Where the census was
-wrong**: the N6 type-parameter refusal is REDUNDANT and costs true rows (it silenced an in-scope constrained `T` tsgo
-reports) — dropped; the design let three FP classes through it never measured — the first build added **10 false rows
-on harness / services** (a `??` / `?:` initializer with a narrowed right operand — `completions.ts:5963`; an
-optional-chain comparison with no reaching assignment — `fourslashImpl.ts:1708`, a comparand veto added; an RHS typed in
-the READ's ambient), plus an element-access-guarded destructured leaf and a class-expression method read — all closed;
-the veto must read a type parameter through its base constraint.
-
-**COST — found, attributed, removed.** The first landed candidate measured **+2.46% (quiet arms) and, swapped, the parent
-2.03% faster** — a real 2-2.5% steady-state regression, with `typeNode.bypassed` +10.85% (+16.9k). Sent back with the
-numbers; the builder PROFILED rather than guessed: only 141 of the 16.9k came from B6's own annotation typing — **16,978
-came from ONE narrowing walk**, the newly typed body local `updated` at `visitorPublic.ts:357` (`Debug.assertEachNode(updated,
-test)`): this checker picked `assertEachNode`'s first overload (an assertion `nodes is NodeArray<U>` whose `test` argument
-cannot bind `U`) and ran a structural `Node[]` -> `NodeArray<U>` relation with every member through the bypass path, to
-produce a meaningless narrowing that tsgo (which picks the later, non-asserting overload) never makes. Fixes:
-`narrowByAssertCall` returns null for an UNBINDABLE generic assertion target (no explicit type arguments, no guard
-argument can bind it — `assertTypeParamGuardBindable`; new pin `assertunbound` now gains tsgo's TS18048 the parent
-MISSED; the guard-bound case still narrows — `destructuring.ts:602` depends on it, an unconditional refusal added a false
-TS2345 there); cheapest gate first; the veto only for a read about to fire; a per-request `narrowByAssertCall` memo
-(unproven — moves no counter). Result vs pristine: `typeNode.bypassed` **-1.53%**, `narrow.walks` **+2.68%** (the
-feature's inherent cost — ~715 newly typed body-local receivers narrowed plus each nullable declaration's initializer
-once — the same accounting as Round A's +3%, accepted and re-baselined in this commit), `typeOfExpr.calls` +0.77%;
-warm A/B (orchestrator, 2 pairs per order): **+2.42% and, swapped, -1.38%** — the orders now DISAGREE in sign (the
-second-run arm pays ~1.9%, B3's ordering artefact), net ~+0.5%, where before the fix they agreed on 2-2.5%; the builder's
-10 single pairs pooled to ~0.
-
-**Measured**: 383 content-unique cell projects (~6,660 files: every census set, the 2,160-cell matrix, every
-(P18.216)-(P18.228) agent cell dir) ours 4,715 -> 4,768 rows, agree 4,370 -> 4,423 (tsgo 6,120): **+53 true, 0 false, 0
-removed**; the matrix byte-identical; positive control on the profiles: services 691 receivers typed / 208 vetoed,
-harness 771 / 237 — the grid was a real gate. **B3's `thisMemberAssignedInFunction` guard CANNOT be retired** (removed:
-rxjs `WebSocketSubject.ts:271:9` returns + 6 cell FPs) — its cause is now `resolvedAssignedRawTypeForFlow`'s Identifier
-arm typing a body-local RHS (`this._socket = socket`) as `any`. **Pins**: `BodyLocalNullableReceiverTest` (30).
-**Ablation** (18 arms): a1 whole B6 15 RED, a2 veto 4, a3 veto self-typing 1, a4 comparand veto 1, a5 RHS divergence 1,
-a6 element guard 1, a7 class-expression refusal 1, a8 R3 kept 2, a9 logical arm 2, a10 conditional arm 1, a11 N6
-re-added 2, a13 initializer divergence 1, a14 missing initializer 2, a15 initializer not narrowed 3, a16 / a17 base
-constraint 1 each, assert refusal off 1, assert refusal unconditional 1; a12 (all-non-nullish veto) 0 on pins — marked
-discriminates it (10 false TS18049 in `Instance.ts` without it); a18 cfad arm kept -> the 4 predicted corpus duplicates.
-**Gates**: full suite **21,848 / 0 / 44** (+30); corpus screen 0 of 8,725; huge_methods 0; grid 8x `added=0 removed=0`
-(chain control OK), rxjs / marked / cronstrue / strict cronstrue +0; warning gate clean. **Size**: `Checker.kt` +317 /
--21 plus `BodyLocalAssignments.kt` 236. **Residues**: a genuine `any` RHS (`s = anyv`) refused by the veto; a generic
-inference left as `U | undefined` (k01 / n6); a receiver named after a lib global (`top`, wrong on the parent too); reads
-in object-literal / class-expression methods refused; **next**: type body-local RHSs in `resolvedAssignedRawTypeForFlow`
-(retires B3's guard; the N20 / N21 "full recording" arc). **(CHK.173)'s identifier-receiver TS18047/8/9 arc is now
-complete** apart from those residues.
 
 ## QUEUE
 
@@ -915,13 +887,15 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
+- [ ] **(CHK.184) TRUTHINESS NARROWING ON A UNION WHOSE MEMBERS CARRY `?: undefined` PROPERTIES IS A SHIPPED FALSE TS18048 (found by (P18.239)): `type U = { a: T; b?: undefined } | { b: T; a?: undefined }; function p(w: U) { w.a ? … : w.b.toString() }` — tsgo is silent, we report `'w.b' is possibly 'undefined'`, on parameters and file-level consts today; `discriminateWithOptionalProperty4(exactoptionalpropertytypes=false)` is the corpus witness once a body local reaches the reader.** Removing it lets (CHK.180)'s union refusal in `WrittenReceiverTypes.kt` be lifted. Measure the matrix (truthy / falsy / `!` / `&&` / `in` guards, exactOptionalPropertyTypes on/off) against tsgo; the false-positive direction makes it the first (CHK.180) successor to take.
+
 - [ ] **(CHK.183) RESIDUES OF (CHK.181) (cells `build/bench/p18238-agent/m/`).** (a) a tuple ALIAS rest (`type T = [string, number?]; f(...a: T)`, m5) is recognised by neither arity reader — both rows missing (tsgo `Expected 1-2 arguments, but got 3.` / `got 0`); `restTupleOf` would need to resolve the reference, or read the range off the checker's tuple type, which has no per-element optional flag today (only `tupleRestIndex`); (b) m16 `f16("a")` with `...a: [...number[], boolean]`: tsgo reports TS2345 `Argument of type '[]' is not assignable to parameter of type '[...number[], boolean]'.` (the relation for a middle-rest tuple, not arity) — measure; (c) B170's existing TS6236 on the `Parameters<Fn>` path (`Checker.kt` ~67786) still spans `restParam.end - restParam.pos`, likely one character past the parameter — check its corpus baseline before touching.
 
 - [ ] **(CHK.182) AN `interface D` IN ONE MODULE FILE AND A `class D` IN ANOTHER SILENCE EVERY TS2339 ON A `D` RECEIVER IN THE CLASS'S FILE — parameters, file-level consts and body locals alike (found by the (CHK.180) census; repro `build/scratch-p18237-census/coll/`: tsgo 3 rows, ours 0).** Interface+interface and class+class are fine. Module-scoped names must not merge across files (INV.3(d)); find where the class file's `D` is resolved against, or merged with, the other file's interface (CLAUDE.md "A MODULE-LOCAL `interface` WHOSE NAME MATCHES A LIB GLOBAL IS **MERGED INTO** THE LIB SYMBOL", "A MERGED `interface`'s SAME-NAMED MEMBER"), fix, pin tsgo's rows, grid it (a silencing defect: expect added rows, each must be a tsgo row).
 
 - [x] **(CHK.181) DONE 2026-09-30 ((P18.238) note). A TUPLE REST'S OPTIONAL ELEMENTS ARE IGNORED BY THE NAME-BASED TOO-MANY ARITY ROW (found by (P18.237)): `function tup(...a: [string, number?])` called `tup("a", 1, 2)` reads `Expected 2 arguments, but got 3.` where tsgo reads `Expected 1-2 arguments, but got 3.`** The name walker passes the tuple's element count as both bounds (`signatureArity.emitTS2554TooMany(maxArgs, maxArgs, …)`, `Checker.kt` ~67711). Measure the neighbouring shapes (rest tuples with optional and rest elements, too-few direction) against tsgo, fix at the call site, pin tsgo's rows. Small.
 
-- [ ] **(CHK.180) CENSUSED 2026-09-30 (read-only, `build/scratch-p18237-census/README.txt`: 100 cells, 45 missing, 0 ours-only; stage 1 = `this` + written-type `const` body locals read PER ACCESS, predicted 45 -> 29 and +0 on grid/libraries; every broader arm adds ONLY ours-only rows, causes R1-R7 ranked for stage 2 — R1 mutable-local flow narrowing 49, R4 guard/discriminant supertype 11, R2 no subtype reduction on `||`/`?:` 7, R5 function expando 7, R3 generic inference 3, R6 spread drops optionals 3). THE PROPERTY-ACCESS WALK TYPES `this` AND BODY-LOCAL RECEIVERS AS `any` (found by (P18.236)) — so every element-access and member rule is blind on `this[k]`, `const self: D = this; self[k]`, and any receiver declared in a function body.** Measure against tsgo which rows go missing (TS2339 / TS7053 / TS18048 on such receivers), find where the walk resolves the receiver (the cpa / cmam receiver ladder vs `implicitAnyScopes` / `currentLocalTypes`; CLAUDE.md "PORTING tsgo's *LITERAL SHAPE* CAN BE WRONG HERE BECAUSE ITS RECEIVER RESOLUTION IS **ONE** MECHANISM AND OURS IS **TWO**"), and price it on the grid — typing receivers that were `any` exposes every masked gap behind them (CLAUDE.md "MAKING A B83.5 NAME RESOLVE IN *VALUE* POSITION COSTS 19-20 OURS-ONLY ROWS"), so expect a staged round.
+- [ ] **(CHK.180) STAGE 1 LANDED 2026-09-30 ((P18.239) note: `this` + written-type `const` body locals, 45 -> 27 missing, 0 ours-only). OPEN — stage 2 by rows unblocked: R1 mutable-local flow narrowing (49), R4 guard/discriminant supertype (11), R2 no subtype reduction on `||`/`?:` (7), R5 function expando (7), R3 generic inference (3), R6 spread drops optionals (3); then un-annotated initializers through the B6 reader; `let`/`var`, object-literal and static `this`, a `this:` parameter, destructured leaves, for-of; plus the residues (P18.239) found — the constructor construct signature on the instance type blocks TS7053 for any class declaring a constructor ((CHK.73)); a body-local `const k: string` KEY reads `any` (`identifierKeyType`, the getter cell); a class-expression getter reading a narrowed union already gives a false TS2339; class-expression TS2339 displays `(Anonymous class)` where tsgo says the class name; an `as const` local stays missing. EARLIER: CENSUSED 2026-09-30 (read-only, `build/scratch-p18237-census/README.txt`: 100 cells, 45 missing, 0 ours-only; stage 1 = `this` + written-type `const` body locals read PER ACCESS, predicted 45 -> 29 and +0 on grid/libraries; every broader arm adds ONLY ours-only rows, causes R1-R7 ranked for stage 2 — R1 mutable-local flow narrowing 49, R4 guard/discriminant supertype 11, R2 no subtype reduction on `||`/`?:` 7, R5 function expando 7, R3 generic inference 3, R6 spread drops optionals 3). THE PROPERTY-ACCESS WALK TYPES `this` AND BODY-LOCAL RECEIVERS AS `any` (found by (P18.236)) — so every element-access and member rule is blind on `this[k]`, `const self: D = this; self[k]`, and any receiver declared in a function body.** Measure against tsgo which rows go missing (TS2339 / TS7053 / TS18048 on such receivers), find where the walk resolves the receiver (the cpa / cmam receiver ladder vs `implicitAnyScopes` / `currentLocalTypes`; CLAUDE.md "PORTING tsgo's *LITERAL SHAPE* CAN BE WRONG HERE BECAUSE ITS RECEIVER RESOLUTION IS **ONE** MECHANISM AND OURS IS **TWO**"), and price it on the grid — typing receivers that were `any` exposes every masked gap behind them (CLAUDE.md "MAKING A B83.5 NAME RESOLVE IN *VALUE* POSITION COSTS 19-20 OURS-ONLY ROWS"), so expect a staged round.
 
 - [ ] **(CHK.179) (a) + (a2) + (c) LANDED 2026-09-30 ((P18.235), (P18.236) notes). OPEN (a3), the tsgo rows still silent: keys typed by INFERENCE (unannotated consts, `let` with a literal, for-of variables), `any`, template-literal, enum, `key!`, narrowed-from-`unknown`, property-access keys; property-access receivers (`m.o[k]`, `gm2.m["zz"]`), object-literal variables, intersections, `{}`, function types, unions holding an index-signature member, enum objects; TS2536 for a generic key; `let v = x as U`; `b!.a` on a single non-union type; `o.u!.a`; cast-tuple TS2493; unconstrained `T` with a literal key. And ONE pre-existing ours-only row: the r167 block reports a false TS2339 for a union-of-literals key on a non-fresh type literal in LOOSE mode (tsgo silent in both). (b) and (d) as below. EARLIER: (a) LANDED 2026-09-30 ((P18.235) note: literal-key element access restated in tsgo's terms, silent without `noImplicitAny`). OPEN: (a2) the tsgo-only rows (a) left SILENT — string-typed keys `u[k]` (TS7053 + the `No index signature with a parameter of type 'string'` chain, the largest family), cast-union / intersection / heritage-interface / property-access (`gm2.m["zz"]`) receivers, unconstrained `T`, template-literal keys, tuples (TS2493, out-of-range union TS2339), arrays and enum objects with a string key (TS7015), const enums (TS2339); (b) TS2352 is emitted only for primitive-typed identifier casts — tsgo's `checkAssertionWorker` comparability rule is missing for literal / object / class / array / function / `P | null` sources (8 of 11 probe rows); (c) and (d) below. RESIDUES OF (CHK.178), each measured against tsgo 7.0.2 (fixtures under `build/bench/p18234-agent/`).** (a) an element access `u["a"]` on a union identifier reports an ours-only TS2339 where tsgo reports TS7053 under strict and NOTHING without it — in both configurations, and the cast-interface slice (B98.r100) has the same defect; (b) TS2352 (`A as B` may be a mistake) is never emitted (b11); (c) still-silent receivers: `u!.a`, `(u satisfies U).a`, and `const v = u as U; v.a` (b27); (d) the object-literal member drill at OTHER positions — `return { p: u }` still anchors at the whole literal, `g({ p: u })` reports NOTHING, and a primitive-union member value (`{ p: string | boolean }` against `number`) has no chain line where tsgo prints `Type 'string' …`. (a) removes false positives and is the first to take.
 
