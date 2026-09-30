@@ -64,18 +64,12 @@ internal class AliasCarrierDisplay(private val checker: Checker) {
                 else -> break
             }
         }
-        val id = e as? Identifier ?: return null
-        val decl = when (val local = checker.lexicalReturnIdentifierDecl(id)) {
-            // No binding in scope, or an import: the name is a file-level or cross-file
-            // symbol (a global script declaration, or an import's target) — the lexical walk
-            // already proved nothing closer shadows it, so a symbol lookup is shadow-correct.
-            null, is ImportDeclaration -> crossFileDeclaration(id) ?: return null
-            else -> local
-        }
-        val (annotation, optional) = when (decl) {
-            is VariableDeclaration -> decl.type to false
-            is Parameter -> decl.type to decl.questionToken
-            else -> return null
+        // (CHK.178)(b) a CAST carries its own annotation: `(u as U)` / `<U>u` is typed by the
+        // written `U`, so tsgo names the alias exactly as for a `u: U` declaration.
+        val (annotation, optional) = when (e) {
+            is AsExpression -> e.type to false
+            is TypeAssertionExpression -> e.type to false
+            else -> declaredAnnotation(e as? Identifier ?: return null) ?: return null
         }
         if (annotation == null) return null
         val ann = unparen(annotation)
@@ -124,6 +118,22 @@ internal class AliasCarrierDisplay(private val checker: Checker) {
             sawNull -> "$name | null"
             sawUndefined -> "$name | undefined"
             else -> name
+        }
+    }
+
+    /** The annotation (and optionality) of [id]'s declaration, or null when not annotatable. */
+    private fun declaredAnnotation(id: Identifier): Pair<TypeNode?, Boolean>? {
+        val decl = when (val local = checker.lexicalReturnIdentifierDecl(id)) {
+            // No binding in scope, or an import: the name is a file-level or cross-file
+            // symbol (a global script declaration, or an import's target) — the lexical walk
+            // already proved nothing closer shadows it, so a symbol lookup is shadow-correct.
+            null, is ImportDeclaration -> crossFileDeclaration(id) ?: return null
+            else -> local
+        }
+        return when (decl) {
+            is VariableDeclaration -> decl.type to false
+            is Parameter -> decl.type to decl.questionToken
+            else -> null
         }
     }
 

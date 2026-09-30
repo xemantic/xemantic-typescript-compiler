@@ -158414,6 +158414,7 @@ interface DataView {
         // (JIT.1)(b): R_OT_PRE — the namespace-member / enum-member / cast gates.
         if (cmamCheckCastAndNamespaceReceiver(
                 objectExpr, propName, diagStart, diagLength, source, fileName,
+                elementAccess = keySuggestion != null && !keySuggestion.startsWith("."),
             )) return null
         // Phase 17 / Blocker #1 step 2c: narrowed-to-never on receiver emits
         // TS2339 with 'never' display. Walks the flow graph from the receiver
@@ -158843,6 +158844,7 @@ interface DataView {
         diagLength: Int,
         source: String,
         fileName: String,
+        elementAccess: Boolean,
     ): Boolean {
         // Narrow: `ns.Class.prop` — namespace import alias + class in target module's
         // locals + prop is not a static member. Emits TS2339 with `typeof Class` display.
@@ -158893,9 +158895,53 @@ interface DataView {
                         return true
                     }
                 }
+                // (CHK.178)(b) a cast to a UNION or to a trusted anonymous OBJECT type — a
+                // PROPERTY access only: for `(u as U)["a"]` tsgo reports TS7053 (strict) or
+                // nothing, and the element-access TS2339 this family emits for an IDENTIFIER
+                // receiver (`u["a"]`) is a pre-existing ours-only row not to be extended.
+                if (!elementAccess && cmamCheckCastUnionOrObjectReceiver(
+                        castType, objectExpr, propName, diagStart, diagLength, source, fileName,
+                    )) return true
             }
         }
         return false
+    }
+
+    /**
+     * (CHK.178)(b) THE REST OF THE CAST RECEIVER `(x as T).p` / `<T>x.p`. The slice above
+     * owns a simple named INTERFACE; every other cast fell to `narrowingEligible` in
+     * [cmamGeneralReceiverType], which admits only a reference path, so `(u as U).a` on a
+     * union lacking `a` and `(o as B).a` on a type-literal alias were SILENT where tsgo
+     * reports TS2339 (measured on 11 shapes). A cast is not a reference, so no flow
+     * narrowing applies: a UNION goes through the union-receiver block with itself as the
+     * declared type (its walks answer the declared union, so it decides by the same
+     * partial/all-missing trust rules an identifier receiver meets), and a single anonymous
+     * OBJECT must pass [cmamAllMissingTrustedMember] — the gate the nested-access twin
+     * [cmamCheckNestedObjectReceiver] uses — before a missing member is believed.
+     */
+    private fun cmamCheckCastUnionOrObjectReceiver(
+        castType: Type, objectExpr: Expression, propName: String,
+        diagStart: Int, diagLength: Int, source: String, fileName: String,
+    ): Boolean {
+        if (castType is Type.Union) {
+            return cmamCheckUnionReceiverNarrowing(
+                castType, objectExpr, propName, diagStart, diagLength, source, fileName,
+            )
+        }
+        if (castType !is Type.Object || castType is Type.Interface) return false
+        if (isGlobalObjectOrFunctionType(castType)) return false
+        if (!cmamAllMissingTrustedMember(castType, propName)) return false
+        if (castType.numberIndexInfo != null) return false
+        if (getPropertyOfType(castType, propName) != null) return false
+        if (getPropertyOfType(getApparentType(castType), propName) != null) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '${typeToString(castType)}'.",
+            category = DiagnosticCategory.Error, code = 2339,
+            fileName = fileName, line = line, character = character,
+            start = diagStart, length = diagLength,
+        ))
+        return true
     }
 
     /**
@@ -172625,11 +172671,13 @@ interface DataView {
             chain.add("  " + ts4104Message(argType, paramType))
         }
         if (argType is Type.Union) {
-            // Find the last failing constituent (matches TypeScript's behavior)
+            // (CHK.178)(a) the FIRST failing constituent in the stable order, as the four
+            // assignment-shaped chains do since (LEGACY.0a) (tsgo's `eachTypeRelatedToType`).
             var lastFailing: Type? = null
             for (constituent in argType.types) {
                 if (!checkTypeRelatedTo(constituent, paramType, assignableRelation)) {
                     lastFailing = constituent
+                    break
                 }
             }
             if (lastFailing != null) {
@@ -177348,6 +177396,8 @@ interface DataView {
                 if (srcSimple) null
                 else if (sourcePropType is Type.Object && targetPropType is Type.Object) {
                     getPropertyElaborationChain(sourcePropType, targetPropType)?.takeIf { it.isNotEmpty() } ?: continue
+                } else if (isSimpleCheckableType(targetPropType)) {
+                    objLitMemberVsSimpleTargetChain(sourcePropType, targetPropType) ?: continue
                 } else continue
             } else null
             // (PARITY.1)(b-residue): the object-literal MEMBER display takes the same
@@ -177373,10 +177423,14 @@ interface DataView {
             val displayTargetPropType = nullableTargetDisplay(
                 targetPropType, sourcePropType, isOptionalProperty(targetProp),
             )
-            val displaySource = relationErrorSourceDisplay(
+            // (CHK.178)(c) a member value that is a reference to a union-alias-annotated
+            // binding names the alias, as the (CHK.177) S1 declaration/argument heads do.
+            val displaySourceType = relationErrorSourceDisplayType(
                 objLitMemberDisplaySource(freshVal, sourcePropType, targetPropType),
                 displayTargetPropType,
             )
+            val displaySource = aliasCarrier.display(freshVal, displaySourceType)
+                ?: relationErrorSourceRender(displaySourceType, displayTargetPropType)
             val displayTargetProp = relationErrorTargetDisplay(displayTargetPropType)
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
             val related = mutableListOf<Diagnostic>()
@@ -177416,6 +177470,31 @@ interface DataView {
             emitted = true
         }
         return emitted
+    }
+
+    /**
+     * (CHK.178)(c) the chain for an object-literal MEMBER whose value is an OBJECT (or a
+     * union of objects and primitives) against a SIMPLE target member: tsgo drills to the
+     * member key exactly as it does for a primitive value (`{ p: u }` against `{ p: number }`
+     * reports `Type 'U' is not assignable to type 'number'.` at `p`, not the whole literal
+     * at the variable), and a union source's chain names its FIRST failing constituent in
+     * the stable order, as every relation-error chain here does. A plain object source has
+     * no chain (a primitive target has no members to elaborate). Null refuses the drill —
+     * any constituent this rule cannot vouch for (`any`, a type parameter, an intersection)
+     * keeps the whole-literal report.
+     */
+    private fun objLitMemberVsSimpleTargetChain(sourcePropType: Type, targetPropType: Type): List<String>? {
+        fun vouched(t: Type): Boolean =
+            t is Type.Object || isSimpleCheckableType(t)
+        if (sourcePropType is Type.Union) {
+            if (!sourcePropType.types.all { vouched(it) }) return null
+            val failing = sourcePropType.types.firstOrNull {
+                !checkTypeRelatedTo(it, targetPropType, assignableRelation)
+            } ?: return null
+            val tgt = relationErrorTargetDisplay(targetPropType)
+            return listOf("  Type '${relationErrorConstituentDisplay(failing, targetPropType)}' is not assignable to type '$tgt'.")
+        }
+        return if (sourcePropType is Type.Object) emptyList() else null
     }
 
     /**
