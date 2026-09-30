@@ -1,3 +1,52 @@
+### Round (P18.220) — (CHK.173) Round B3: nullable MEMBER receivers (`o.p.length`, `this.x.length`, `o['p'].length`), `(x).p` -> TS2531, and the non-null continuation; +53 true rows, 0 false, 9 rows corrected to tsgo's text / span; +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent (a long round — the grid was a REAL gate and caught two design errors, both
+fixed before the final run); the orchestrator re-ran every gate, replicated the warm A/B with the arms swapped, and
+ran the warning gate with a live positive control. **Mechanism**: `emitTs1804xForNullableCompoundReceiver`, called from
+`checkSinglePropertyAccess` (when B81.1c did not handle the access and it has no `?.`) and `checkSingleElementAccess`:
+peels parentheses, accepts member / element / paren-identifier / `as` / `!` receivers (call and `new` receivers
+excluded), declared type by `getTypeOfExpression` with B2's `this` carrier (paren-identifiers through
+`nullableIdentifierReceiverType`), then loop-entry narrowing and `optionalChainGuardsRef`; guards
+`receiverOfReceiverGuardClears` (round 412: an assertion predicate on `s` clears `s.p`) and the INTERIM
+`thisMemberAssignedInFunction`. `reportNullishReceiver` is tsgo's `reportObjectPossiblyNullOrUndefinedError`: an
+entity path is named in TS18047/8/9, anything else is TS2531/2/3 "Object is possibly …"; B81.1c now returns a handled
+flag, picks its code from both surviving nullish parts and uses it. **G6**: `nonNullReceiverPart` in
+`computeRawTypeOfPropertyAccess` (optional chains exempt except while the new arm asks — `nonNullChainReceiverReads`);
+the union TS2339 names the non-null part. Also: TS2721-2723 anchor at the whole callee (tsgo), and a truthy `x?.[0]`
+narrows `x` (a pre-existing FP the new element reach would have spread).
+
+**Where the brief / census were wrong**: G5 is +27 on the cells, not +19 (the census arm could not type `this.x`, so
+the six this-rooted cells were uncounted); "skip receivers inside an optional chain" is the wrong rule — the one real FP
+(`host.getSymlinkCache?.().getSymlinked…`) has a CALL receiver, and a receiver inside a chain gets the right row named
+as an entity path without the `?` (`o?.p.length` -> `'o.p'`) — skipping would lose 4 true rows; G6 CANNOT be a global
+type change (stripping nullish for every access added 3 false rows on tsc's sources — optional-chain values compared
+with a nested function's `any` result), hence confined; G4p is +9 (a paren-receiver write, h24h); B81.1c was already
+shipping two wrong rows (`o['p'].length` printed `TS18048 'o['p']'`, tsgo TS2532; `p?: T | null` printed 18048, tsgo
+18049); `this.x` exposed the G1/N1 gap on rxjs (`WebSocketSubject.ts:271` a false TS2531) — hence the interim guard;
+Round A's binding guard measured redundant for member receivers (0 pins, 0 of seven shadow shapes) and was dropped
+there.
+
+**Measured**: g5 4 -> 31 (tsgo 38), g4 28 -> 37 (58), g6 18 -> 21 (24) + 3 texts, Round A p / q / t 32 / 19 / 22 -> 33 /
+22 / 23; every other set byte-identical (the 2,160-cell matrix, Round B g1-g3 / lk / leak / nar / cfad, the (P18.216) /
+(P18.217) cells): **53 true added, 0 false added, 0 true lost, 9 wrong-text / wrong-span rows replaced**. **Pins**:
+`NullableMemberReceiverTest` (97). **Ablation** (20 arms, all RED): A1 no compound arm 40, A2 outer `?.` not skipped
+7, A3 entity text refuses `?.` 3, A3b chain-skip rule 4, A4 never an entity 24, A5 no `this` carrier 6, A6 no round-412
+guard 1, A7 no B81.1c dedupe 3, A8 B81.1c ignores null 2, A10 no G6 strip 7, A10b G6 on chains everywhere 2, A10c arm
+flag never set 4, A11 display not stripped 5, A12 member chain kept 1, A13 old callee span 2, A14 no paren peel 10, A15
+no element call site 2, A16 no `optionalChainGuardsRef` 1, A18 no `this.x` assignment guard 1, A19 no element narrowing
+arm 2. **Gates**: full suite **21,515 / 0 / 44** (+97); corpus screen 0 of 8,725; huge_methods 0; grid 8x `added=0
+removed=0` (chain control OK), libraries 0; warning gate clean (positive control live); **cost_gate over tolerance on
+`narrow.memoServed` +2.21%** (≈1,100 more narrowing asks, all memo-served) with `typeOfExpr.calls` +1.65% (+10.7k,
+`typeOfExpr.distinct` flat — the new arm re-typing compound receivers) — accounted, re-baselined in this commit;
+**warm A/B: +1.66% (B 0/2) and, with the arms SWAPPED, the BEFORE arm +1.69% slower** — both batches charge the
+SECOND-run arm ~1.7%, an ordering artefact, not a cost of the change (net ~0). **Residues**: property narrowing carried
+into a closure (s01 / s19 — tsgo does not carry it), a reassigned receiver-of-receiver keeps the member narrowed (s12),
+aliased narrowing (s25), G1 body locals (m36), TS2551 on a single non-null member (e04), TS2322 on a write through a
+nullable receiver (e05), optional chains still `any` outside the arm (v09), call / `new` receivers unmeasured, `this.x`
+in a function that assigns `this.x` refused until G1, static `this`, y2 (an outer `if (o.p)` leaking into an inner
+same-named destructured `o`); pre-existing TS2351 on `new c!()` with a union callee. **Successor**: B4 (G3a
+type-parameter scope in cpa) or the G1 / N1 arc, which now blocks the global G6 and the `this.x` guard.
+
 ### Round (P18.219) — (CHK.176) (b) + (c): a trailing `void` parameter is optional to every arity reader (a false TS2554 on legal code removed, `Expected 1-2 arguments` wording), and the B498 walker stops doubling TS2345; (a) refused after measurement; 4 -> 21 of 26 cells agree, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate incl. the warning gate with a live

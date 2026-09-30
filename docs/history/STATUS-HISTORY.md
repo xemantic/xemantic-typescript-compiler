@@ -1,5 +1,12 @@
 
 
+**(P18.225) — (CHK.173) G1 ARC B5b: `a = u` / `a ??= o.p` / `a = arr[0]` WITH A NON-NULLABLE UNION VALUE NOW REMOVE `undefined` FROM `a`; +0 EVERYWHERE, 21,767 / 0 / 44 (2026-09-29).**
+An assignment of a union value kept the variable's declared `| undefined`, so the next read reported a false
+"possibly undefined" — for parameters this shipped in many forms. The value's nullish-free union now removes only
+null / undefined, as tsgo does (literal unions filter exactly; an optional parameter counts as `| undefined`). 67 pins,
+10 of 11 arms RED. Screen 0; grid 8x0; libs 0; cost_gate +0.23%. Next: B5c.
+
+
 **(P18.224) — (CHK.173) G1 ARC B5a: `if (!s) s = first(a)` / `s = s.trim()` NOW NARROW `s` — THE ASSIGNMENT'S RETURN TYPE COMES FROM THE ENGINE WHEN THE CALLEE HAS NO ANNOTATION; 8 FALSE POSITIVES GONE, +0 EVERYWHERE, 21,700 / 0 / 44 (2026-09-29).**
 Narrowing an assignment from a lib method or a generic function gave up and kept the variable's nullable type, so a
 following read reported a false "possibly undefined" (2 such false positives shipped). 24 pins, 5 of 5 arms RED. Screen
