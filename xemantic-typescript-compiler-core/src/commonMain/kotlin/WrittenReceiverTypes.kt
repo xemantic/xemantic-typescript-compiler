@@ -95,13 +95,6 @@ internal class WrittenReceiverTypes(
         if (checker.getTypeOfIdentifier(id) !== anyType) return null
         val t = checker.getTypeFromTypeNode(typeNode)
         if (t === anyType || t === errorType || t === unknownType) return null
-        // A union of two or more non-nullish constituents is refused: its narrowing (by a
-        // discriminant, by the truthiness of an optional `?: undefined` member, by `in`) is
-        // where this checker's flow answer differs from tsgo's — `w.a ? … : w.b.toString()`
-        // over `{ a: T; b?: undefined } | { b: T; a?: undefined }` is a false TS18048 on a
-        // PARAMETER today (`discriminateWithOptionalProperty4`), so a union written on a
-        // body local would inherit it.
-        if (t is Type.Union && t.types.count { !checker.isNullishConstituent(it) } >= 2) return null
         if (BodyLocalAssignments.readCrossesUnmodeledContainer(id, decl)) return null
         if ((checker.typeIncludesNull(t) || checker.typeIncludesExplicitUndefined(t)) &&
             checker.nullishReceivers.bodyLocalAssignmentsVeto(id, name, t)

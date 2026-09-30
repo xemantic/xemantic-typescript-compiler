@@ -257,12 +257,12 @@ class Chk180WrittenReceiverTypeTest {
 
     /**
      * `discriminateWithOptionalProperty4`'s workaround local: a written union of two object
-     * types is refused, because narrowing it by the truthiness of an optional `?: undefined`
-     * member is a false TS18048 in this checker — on a PARAMETER of the same type too (a
-     * pre-existing residue, (P18.239) note). tsgo is silent.
+     * types, narrowed by the truthiness of an optional `?: undefined` member. Refused until
+     * (CHK.184) made that narrowing tsgo's; now installed, and still silent as tsgo is
+     * (`Chk184OptionalUndefinedDiscriminantTest` pins the rows the install adds).
      */
     @Test
-    fun `negative control - a written union of object types on a body local is not installed`() {
+    fun `a written union of object types on a body local narrows by an optional undefined member`() {
         val r = rows("""
             type U = { a: string[]; b?: undefined } | { b: string[]; a?: undefined };
             declare const g: U;

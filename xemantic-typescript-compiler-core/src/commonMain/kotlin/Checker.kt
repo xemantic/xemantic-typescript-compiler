@@ -467,6 +467,7 @@ class Checker(
 
     /** (CHK.180) stage 1 — the per-access written receiver type; see `WrittenReceiverTypes.kt`. */
     private val writtenReceivers = WrittenReceiverTypes(this)
+    private val discriminantFacts = DiscriminantFactsNarrowing(this)
 
     /** (INV.0) (P18.232) — the signature-based arity reader; see `SignatureArity.kt`. */
     private val signatureArity = SignatureArity(this, options)
@@ -122909,6 +122910,11 @@ interface DataView {
                     var narrowed = if (expr.name.text.isNotEmpty())
                         pDiscriminant(t, expr.name.text, truthy = isTrue)
                     else t
+                    // (CHK.184): a discriminant whose value set holds `undefined` (`a?: undefined`).
+                    if (narrowed === t && !expr.questionDotToken) {
+                        discriminantFacts.narrow(t, expr.name.text) { narrowByTruthiness(it, isTrue) }
+                            ?.let { narrowed = it }
+                    }
                     if (expr.questionDotToken && isTrue) narrowed = pExcludeNullish(narrowed)
                     narrowed
                 }
@@ -126111,7 +126117,8 @@ interface DataView {
             val filtered = if (hasProp) {
                 t.types.filter { typeHasOwnProperty(it, propName) }
             } else {
-                t.types.filter { !typeHasOwnProperty(it, propName) }
+                // (CHK.184): tsgo `isTypePresencePossible` — an OPTIONAL member survives `!in`.
+                t.types.filter { !typeHasOwnProperty(it, propName) || typeHasOptionalOwnProperty(it, propName) }
             }
             return getUnionType(filtered)
         }
@@ -126119,6 +126126,8 @@ interface DataView {
         val present = typeHasOwnProperty(t, propName)
         return when {
             present == hasProp -> t
+            // (CHK.184): an OPTIONAL member may be absent, so `!in` proves nothing.
+            !hasProp && typeHasOptionalOwnProperty(t, propName) -> t
             // present=true, hasProp=false: source HAS the prop but we're in
             // the !in branch — contradiction → never. Mirrors instanceof/typeof.
             !hasProp -> neverType
@@ -126138,6 +126147,12 @@ interface DataView {
     private fun typeHasOwnProperty(type: Type, propName: String): Boolean {
         if (type !is Type.Object) return false
         return getPropertyOfType(type, propName) != null || tupleInheritsArrayMember(type, propName)
+    }
+
+    /** (CHK.184): [type] declares [propName] as an OPTIONAL property. */
+    private fun typeHasOptionalOwnProperty(type: Type, propName: String): Boolean {
+        if (type !is Type.Object) return false
+        return getPropertyOfType(type, propName)?.let { isOptionalProperty(it) } == true
     }
 
     /**
@@ -126909,6 +126924,14 @@ interface DataView {
 
         val literalType = literalTypeOfExpression(literalSide)
             ?: constStringCaseLiteralType(literalSide)
+        // (CHK.184): a nullish tested value over a discriminant whose value set holds
+        // `undefined` — the optionality fold the round-425 rule below lacks.
+        if (!propAccess.questionDotToken && (literalType === undefinedType || literalType === nullType)) {
+            val loose = expr.operator == SyntaxKind.EqualsEquals || expr.operator == SyntaxKind.ExclamationEquals
+            discriminantFacts.narrow(t, propName) {
+                DiscriminantFactsNarrowing.nullishEquality(it, literalType === nullType, loose, equal, this)
+            }?.let { return it }
+        }
         if (literalType == null) {
             // No literal/enum member-filtering possible — but the optional-chain receiver
             // proof above still narrows (drops nullish) on its own.
@@ -127111,11 +127134,11 @@ interface DataView {
     }
 
     /** (CHK.142)(b) tsgo's `t != firstType`, by VALUE for a literal — see restatement 1. */
-    private fun sameTypeForDiscriminant(a: Type, b: Type): Boolean =
+    internal fun sameTypeForDiscriminant(a: Type, b: Type): Boolean =
         a === b || literalsEqualForDiscriminant(a, b)
 
     /** (CHK.142)(b) tsgo's `isLiteralType` (`checker.go:25301`) — see restatements 2 and 3. */
-    private fun isLiteralTypeForDiscriminant(t: Type): Boolean = when {
+    internal fun isLiteralTypeForDiscriminant(t: Type): Boolean = when {
         t === booleanType -> true
         isLiteralKindForDiscriminant(t) -> true
         t.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null) -> true
@@ -127127,11 +127150,11 @@ interface DataView {
     private fun isUnitTypeForDiscriminant(t: Type): Boolean =
         isLiteralKindForDiscriminant(t) || t.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null)
 
-    private fun isLiteralKindForDiscriminant(t: Type): Boolean =
+    internal fun isLiteralKindForDiscriminant(t: Type): Boolean =
         t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral ||
             t === trueType || t === falseType
 
-    private fun literalsEqualForDiscriminant(a: Type, b: Type): Boolean = when {
+    internal fun literalsEqualForDiscriminant(a: Type, b: Type): Boolean = when {
         a is Type.StringLiteral && b is Type.StringLiteral -> a.value == b.value
         a is Type.NumberLiteral && b is Type.NumberLiteral -> a.value == b.value
         a is Type.BigIntLiteral && b is Type.BigIntLiteral -> a.value == b.value
@@ -128010,6 +128033,7 @@ interface DataView {
         val rightTypeofRef = isTypeOfRef(expr.right, name)
         if (!leftTypeofRef && !rightTypeofRef) {
             return typeofOptionalChainNonNullish(t, expr, equal, name)
+                ?: typeofDiscriminantNarrow(t, expr, equal, name)
         }
         val literalSide = unwrapParensExpr(if (leftTypeofRef) expr.right else expr.left)
         val guard = when (literalSide) {
@@ -128018,6 +128042,21 @@ interface DataView {
             else -> return null
         }
         return narrowByTypeOfGuard(t, guard, isMatch = equal)
+    }
+
+    /** (CHK.184): `typeof w.a === "<tag>"` over a discriminant property of the union [t]. */
+    private fun typeofDiscriminantNarrow(t: Type, expr: BinaryExpression, equal: Boolean, name: String): Type? {
+        val left = unwrapParensExpr(expr.left)
+        val right = unwrapParensExpr(expr.right)
+        val typeofSide = (left as? TypeOfExpression) ?: (right as? TypeOfExpression) ?: return null
+        val access = unwrapParensExpr(typeofSide.expression) as? PropertyAccessExpression ?: return null
+        if (access.questionDotToken || getReferencePath(access.expression) != name) return null
+        val guard = when (val lit = if (typeofSide === left) right else left) {
+            is StringLiteralNode -> lit.text
+            is NoSubstitutionTemplateLiteralNode -> lit.text
+            else -> return null
+        }
+        return discriminantFacts.narrow(t, access.name.text) { narrowByTypeOfGuard(it, guard, isMatch = equal) }
     }
 
     /**
@@ -154890,13 +154929,15 @@ interface DataView {
             val recvNarrowed = flowWalkWithTripCheck(info.recvOfRecv, WK_RECV_OF_RECV, recvOfRecvType.id.toLong() shl 32 or (recvPath.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(recvPath)) {
                 narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, NarrowSeen(), 0)
             } ?: recvOfRecvType
-            if (recvNarrowed !== recvOfRecvType) {
-                val np = getPropertyOfType(getApparentType(recvNarrowed), info.propName)
-                if (np != null && !isOptionalProperty(np)) {
-                    val npType = getTypeOfSymbol(np)
-                    if (npType !== anyType && npType !== errorType && !typeIncludesExplicitUndefined(npType)) return true
+            // (CHK.184): EVERY constituent of a narrowed union must declare it required and
+            // non-undefined — `getPropertyOfType` on a union answers ONE constituent's symbol.
+            if (recvNarrowed !== recvOfRecvType &&
+                ((recvNarrowed as? Type.Union)?.types ?: listOf(recvNarrowed)).all { c ->
+                    val np = getPropertyOfType(getApparentType(c), info.propName)
+                    val npType = if (np == null || isOptionalProperty(np)) null else getTypeOfSymbol(np)
+                    npType != null && npType !== anyType && npType !== errorType && !typeIncludesExplicitUndefined(npType)
                 }
-            }
+            ) return true
         }
         // Compute the receiver's declared type as `propType | undefined`, then
         // consult loop-aware flow narrowing. If a nullish constituent survives, report.
