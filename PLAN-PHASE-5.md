@@ -25,6 +25,34 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.235) — (CHK.179)(a): a literal-key element access on a receiver lacking the member is restated in tsgo's terms — SILENT without `noImplicitAny`, TS7053 / TS7015 / TS7052 with it — removing an ours-only TS2339 that fired in EVERY configuration; +0 rows on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent. **Where the queue item was wrong**: (a) is not specific to unions or casts — ANY
+literal-key element access (`r["p"]`, `r[0]`) whose receiver lacks the member reported TS2339 at the key (unions,
+aliases, interfaces, class instances, `this`, function types, `typeof NS`, generic `T`, `Map`, optional chains), in
+every configuration; tsgo is silent without `noImplicitAny` and with it emits TS7053 at the whole access plus the chain
+`Property 'p' does not exist on type 'R'.`, TS7015 at the key for a number-indexed receiver, TS7052 `Did you mean to
+call 'x.get'/'x.set'?` when an accessor matches, or keeps TS2551 / TS2576 (which we also emitted in LOOSE mode, false
+positives). (b) TS2352 IS emitted — for primitive-typed identifier casts only (3 of 11 probe rows); the general
+comparability rule touches every shape-specific walker and stays queued. **Mechanism**: `checkSingleElementAccess`
+routes a literal key into the shared property-access funnel `checkMemberAccessMissing`; the one pre-existing TS7053
+route (`tryEmitNoImplicitAnyIndexAccess`) covers anonymous receivers only; tsgo's rule is
+`getPropertyTypeForIndexType` (checker.go:26867-27050). New `ElementAccessMissingMember.kt` (185 lines): `restate()`
+runs right after the funnel call and rewrites the rows it just added for this access — tsgo's noImplicitAny test
+(on unless `noImplicitAny`/`strict` explicitly false), drop when off, else TS2551/TS2576 stand and TS2339 becomes
+TS7015 / TS7052 (accessor via `getPropertyOfType` + `resolveGenericPropertyType` + key assignability) / TS7053 with
+the chain; a type-parameter receiver is read through its apparent type. Three guards for tsgo's own TS2339 arms (a
+numeric key on an all-tuple receiver, a const-enum object, `globalThis`) are UNREACHABLE today (arm a8 0 RED — the
+funnel emits nothing there) and are recorded as such. `Checker.kt` +5 (one field, one call, four `private` ->
+`internal`). `TupleUnionElementAccessTest`'s "non-tuple member still fires TS2339" was a countdown pin; it now asserts
+tsgo's full TS7053 row. **Matrix** (`build/bench/p18235-agent/{m,m2,m3,c,b}`): 36 strict cells 18 rows -> 18 all
+agreeing (16 were TS2339-at-key); 36 loose cells 18 false positives -> 0 (tsgo 0); 22 edge shapes strict 8 wrong -> 0,
+loose 13 false positives -> 0; 0 ours-only rows after. **Pins**: `Chk179ElementAccessMissingMemberTest`, 20 tsgo rows;
+ablation a1 14 / a2 4 / a3 2 / a4 2 / a5 2 / a6 1 / a7 2 / a8 0 (dead guard) RED; 70-class sweep 1,653 tests green.
+**Gates**: full suite 21,919 / 0 / 44 (+20); corpus screen 8725 / 0 (a control here); `cost_gate.py` 0, every counter
++0.00%; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1
+(none of these corpora hold a missing-member element access — a control); warning gate with probe: probe only.
+
 ### Round (P18.234) — (CHK.178): the TS2345 chain names the FIRST failing union constituent, a cast receiver `(u as U).a` reports the missing member, and an object-literal member mismatch anchors at the member — all three to tsgo's rows, +0 rows on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent; every changed row measured against tsgo 7.0.2 on the (CHK.177) census cells (65
@@ -315,40 +343,6 @@ clean. **Residues**: a literal-index element access is not narrowed by truthines
 r4 / r5 on plain reads); `const { x } = this` (p3); the plain property-path walk's prefix-reset / closure gaps (r7, rd —
 the per-walk flag could become the general rule); the member-access reader misses TS2339 on a correctly typed leaf
 (k*c); default-join display (no subtype reduction: d2 / d3 / d5 / d6). **Successor**: B5d (N11, checker 43917).
-
-### Round (P18.225) — (CHK.173) G1 arc B5b (N13): an assignment whose right-hand side is a union with no nullish member removes null / undefined from the declared type; a much wider shipped false-positive class than the census named; 0 false added, +0 everywhere (2026-09-29)
-
-Orchestrated: one implementation subagent (no stall); the orchestrator re-ran every gate. **Mechanism**:
-`resolvedAssignedTypeForFlow` is a thin wrapper over `resolvedAssignedRawTypeForFlow` (which keeps unions, so the RHS is
-typed once); `nonNullishUnionOverwrite` (from the `=` arm after B5a's conditional reducer, and the `??=` / `||=` arm)
-answers the declared type minus its nullish members when the declared type has one and the RHS passes
-`isNonNullishUnionAssignedType` (no null / undefined / void / any / unknown member; a type parameter read through its
-base constraint — unconstrained or nullable-constrained refuses) — it REMOVES nullish only and never filters other
-members (round 463's rule kept); the declaration arm does the same against its own annotation; `literalUnionReducedType`
-applies tsgo's filter to a LITERAL union (safe: literals relate exactly); `withOptionalParameterUndefined` adds
-`| undefined` when the value (or a conditional / `||` / `??` / `&&` / `,` operand) is a bare OPTIONAL PARAMETER,
-scope-exactly through `LocalShadowGuard.innermostOptionalParameter` (B83.5 hides block shadows from the lexical symbol).
-**Where the census was wrong**: the class is much WIDER than the `??=`-of-a-conditional shape — `a = u`, `a ??= o.p`,
-`a ||= u`, `a = arr[0]`, a union ternary with no call branch and an annotated declaration with a union initializer all
-kept the declared `| undefined`, and EVERY parameter form was a SHIPPED false TS18048; the literal arm had the same gap
-(`a = c ? "x" : 1`, shipped); parser 9651 is NOT N13 (a BODY-LOCAL receiver typed `any` in the cpa ambient — the G1 gap);
-and a hazard found mid-round: `getTypeOfIdentifier` answers an optional parameter `v?: T` as bare `T`, so `a = v`
-claimed non-nullish — an older false negative the union rule first widened, now fixed.
-
-**Measured**: n13 1 -> 0 (tsgo 0; u2 was shipped), m1 32 -> 16 (tsgo 17; p19's TS2322 missing before and after,
-unrelated), m2 6 -> 2 (2), m3 21 -> 16 (16), m4 exact, m5 6 -> 3 (4; t02 missed before and after, t03 / t05 conservative
-refusals); census cell sets: only n13 u2 moved (a FP removed); the 2,160-cell matrix byte-identical; forced G1 arm
-program.ts 49 -> 46 (1788 / 1789 / 1794 gone). **Pins**: `FlowUnionRhsAssignmentTest` (67). **Ablation**: A1 union rule
-off 31 RED, A2 declaration rule 2, A3 literal reduction 4, A4 optional-parameter `| undefined` 7, A5 nullish accepted
-15, A6 type-parameter constraint check 3, A8 optional parameter in a branch 1, A9 shadow check by name only 1, A10
-conditional arm without the optional check 1, A11 literal filter nullish-only 2; A7 ("every constituent relates") 0 —
-only matters for ill-typed code, unpinned as in B5a. **Gates**: full suite **21,767 / 0 / 44** (+67); corpus screen 0
-of 8,725; cost_gate PASS (`typeOfExpr.calls` +0.23% cumulative); huge_methods 0 (`narrowByAssignmentRhs` ~2.9k);
-grid 8x `added=0 removed=0` (chain control OK), libraries 0; warning gate clean. **Residues**: the BODY-LOCAL RHS typed
-`any` in the cpa ambient (s06, q10, parser 9651, r01-r04) — now the main assignment-narrowing FP source and what B6 needs;
-`a = o?.r` (k11), a `Record` element read (k07), an unconstrained / nullable-constrained type parameter in the union
-(t03 / t05); tsgo FILTERS a union RHS where this rule only removes nullish (text-only, no false row seen). **Successor**:
-B5c (N4).
 
 ## QUEUE
 
@@ -948,7 +942,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.179) RESIDUES OF (CHK.178), each measured against tsgo 7.0.2 (fixtures under `build/bench/p18234-agent/`).** (a) an element access `u["a"]` on a union identifier reports an ours-only TS2339 where tsgo reports TS7053 under strict and NOTHING without it — in both configurations, and the cast-interface slice (B98.r100) has the same defect; (b) TS2352 (`A as B` may be a mistake) is never emitted (b11); (c) still-silent receivers: `u!.a`, `(u satisfies U).a`, and `const v = u as U; v.a` (b27); (d) the object-literal member drill at OTHER positions — `return { p: u }` still anchors at the whole literal, `g({ p: u })` reports NOTHING, and a primitive-union member value (`{ p: string | boolean }` against `number`) has no chain line where tsgo prints `Type 'string' …`. (a) removes false positives and is the first to take.
+- [ ] **(CHK.179) (a) LANDED 2026-09-30 ((P18.235) note: literal-key element access restated in tsgo's terms, silent without `noImplicitAny`). OPEN: (a2) the tsgo-only rows (a) left SILENT — string-typed keys `u[k]` (TS7053 + the `No index signature with a parameter of type 'string'` chain, the largest family), cast-union / intersection / heritage-interface / property-access (`gm2.m["zz"]`) receivers, unconstrained `T`, template-literal keys, tuples (TS2493, out-of-range union TS2339), arrays and enum objects with a string key (TS7015), const enums (TS2339); (b) TS2352 is emitted only for primitive-typed identifier casts — tsgo's `checkAssertionWorker` comparability rule is missing for literal / object / class / array / function / `P | null` sources (8 of 11 probe rows); (c) and (d) below. RESIDUES OF (CHK.178), each measured against tsgo 7.0.2 (fixtures under `build/bench/p18234-agent/`).** (a) an element access `u["a"]` on a union identifier reports an ours-only TS2339 where tsgo reports TS7053 under strict and NOTHING without it — in both configurations, and the cast-interface slice (B98.r100) has the same defect; (b) TS2352 (`A as B` may be a mistake) is never emitted (b11); (c) still-silent receivers: `u!.a`, `(u satisfies U).a`, and `const v = u as U; v.a` (b27); (d) the object-literal member drill at OTHER positions — `return { p: u }` still anchors at the whole literal, `g({ p: u })` reports NOTHING, and a primitive-union member value (`{ p: string | boolean }` against `number`) has no chain line where tsgo prints `Type 'string' …`. (a) removes false positives and is the first to take.
 
 - [x] **(CHK.178) DONE 2026-09-30 ((P18.234) note). THREE DISPLAY/ANCHOR/ROW DEFECTS FROM THE (CHK.177) CENSUS (cells under `build/scratch-p18232-census/cells/`, each measured against tsgo 7.0.2).** (a) the TS2345 elaboration CHAIN picks a union source's LAST failing constituent (pristine, (CHK.83)) where tsgo picks the FIRST — m13 prints `Type 'B'` for tsgo's `Type 'A'`, x07 `Type 'B'` for `Type 'undefined'`; (b) `(u as U).a` on a union with the member absent reports NO TS2339 at all (m20, a missing row); (c) an object-literal member mismatch anchors at the whole literal where tsgo drills to the member `p` (f11). Measure each first; (b) is row-adding and needs the grid.
 

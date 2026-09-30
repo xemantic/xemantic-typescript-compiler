@@ -1,5 +1,12 @@
 
 
+**(P18.230) — (INV.0) EXTRACTION: THE NULL-CHECK FAMILY MOVES OUT OF `Checker.kt` (−570 LINES) INTO `NullishReceiverChecks.kt`, VERBATIM; 21,848 / 0 / 44 UNCHANGED (2026-09-30).**
+A pure move at the end of the null-check arc, to offset its growth: every deterministic receipt (418 pass rows, 46
+diagnostics, all counters) byte-identical against the pre-move binary; inlining verdicts preserved; warm A/B within
+noise. It also exposed a detached property setter the previous round introduced (assigning `currentClassForThis` stopped
+bumping its epoch) — preserved by the verbatim move and queued as the next fix. Screen 0; grid 8x0; libs 0.
+
+
 **(P18.229) — (CHK.173) B6: LOCAL VARIABLES NOW GET "'x' IS POSSIBLY 'null' / 'undefined'" AS tsgo DOES — THE NULL-CHECK ARC IS COMPLETE; +53 TRUE ROWS, 0 FALSE, +0 EVERYWHERE, 21,848 / 0 / 44 (2026-09-30).**
 `let y: number | null = null; y.toFixed()` inside a function reported nothing. After six preparation rounds that closed
 the narrowing gaps, body locals now reach the check. The grid caught 10 false rows in the first build (all closed), and a

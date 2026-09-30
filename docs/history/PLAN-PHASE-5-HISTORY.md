@@ -1,3 +1,37 @@
+### Round (P18.225) — (CHK.173) G1 arc B5b (N13): an assignment whose right-hand side is a union with no nullish member removes null / undefined from the declared type; a much wider shipped false-positive class than the census named; 0 false added, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent (no stall); the orchestrator re-ran every gate. **Mechanism**:
+`resolvedAssignedTypeForFlow` is a thin wrapper over `resolvedAssignedRawTypeForFlow` (which keeps unions, so the RHS is
+typed once); `nonNullishUnionOverwrite` (from the `=` arm after B5a's conditional reducer, and the `??=` / `||=` arm)
+answers the declared type minus its nullish members when the declared type has one and the RHS passes
+`isNonNullishUnionAssignedType` (no null / undefined / void / any / unknown member; a type parameter read through its
+base constraint — unconstrained or nullable-constrained refuses) — it REMOVES nullish only and never filters other
+members (round 463's rule kept); the declaration arm does the same against its own annotation; `literalUnionReducedType`
+applies tsgo's filter to a LITERAL union (safe: literals relate exactly); `withOptionalParameterUndefined` adds
+`| undefined` when the value (or a conditional / `||` / `??` / `&&` / `,` operand) is a bare OPTIONAL PARAMETER,
+scope-exactly through `LocalShadowGuard.innermostOptionalParameter` (B83.5 hides block shadows from the lexical symbol).
+**Where the census was wrong**: the class is much WIDER than the `??=`-of-a-conditional shape — `a = u`, `a ??= o.p`,
+`a ||= u`, `a = arr[0]`, a union ternary with no call branch and an annotated declaration with a union initializer all
+kept the declared `| undefined`, and EVERY parameter form was a SHIPPED false TS18048; the literal arm had the same gap
+(`a = c ? "x" : 1`, shipped); parser 9651 is NOT N13 (a BODY-LOCAL receiver typed `any` in the cpa ambient — the G1 gap);
+and a hazard found mid-round: `getTypeOfIdentifier` answers an optional parameter `v?: T` as bare `T`, so `a = v`
+claimed non-nullish — an older false negative the union rule first widened, now fixed.
+
+**Measured**: n13 1 -> 0 (tsgo 0; u2 was shipped), m1 32 -> 16 (tsgo 17; p19's TS2322 missing before and after,
+unrelated), m2 6 -> 2 (2), m3 21 -> 16 (16), m4 exact, m5 6 -> 3 (4; t02 missed before and after, t03 / t05 conservative
+refusals); census cell sets: only n13 u2 moved (a FP removed); the 2,160-cell matrix byte-identical; forced G1 arm
+program.ts 49 -> 46 (1788 / 1789 / 1794 gone). **Pins**: `FlowUnionRhsAssignmentTest` (67). **Ablation**: A1 union rule
+off 31 RED, A2 declaration rule 2, A3 literal reduction 4, A4 optional-parameter `| undefined` 7, A5 nullish accepted
+15, A6 type-parameter constraint check 3, A8 optional parameter in a branch 1, A9 shadow check by name only 1, A10
+conditional arm without the optional check 1, A11 literal filter nullish-only 2; A7 ("every constituent relates") 0 —
+only matters for ill-typed code, unpinned as in B5a. **Gates**: full suite **21,767 / 0 / 44** (+67); corpus screen 0
+of 8,725; cost_gate PASS (`typeOfExpr.calls` +0.23% cumulative); huge_methods 0 (`narrowByAssignmentRhs` ~2.9k);
+grid 8x `added=0 removed=0` (chain control OK), libraries 0; warning gate clean. **Residues**: the BODY-LOCAL RHS typed
+`any` in the cpa ambient (s06, q10, parser 9651, r01-r04) — now the main assignment-narrowing FP source and what B6 needs;
+`a = o?.r` (k11), a `Record` element read (k07), an unconstrained / nullable-constrained type parameter in the union
+(t03 / t05); tsgo FILTERS a union RHS where this rule only removes nullish (text-only, no false row seen). **Successor**:
+B5c (N4).
+
 ### Round (P18.224) — (CHK.173) G1 arc B5a: assignment narrowing falls back to the engine's return type for a call it used to give up on (lib / interface methods, generic callees); 8 false positives removed, 2 texts to tsgo's, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent (the brief's new "no command over ~8 minutes" rule held — no stall); the
