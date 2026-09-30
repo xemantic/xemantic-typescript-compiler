@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.typescript.compiler.SignatureArity.SpreadArityView
 import kotlin.jvm.JvmName
 import kotlin.math.pow
 
@@ -35928,7 +35929,7 @@ class Checker(
                 val callee = call.expression as? Identifier ?: continue
                 if (callee.text !in callbackVars) continue
                 if (call.arguments.isEmpty()) continue
-                emitTS2554TooMany(0, 0, call.arguments.size, call.arguments, 0, source, fileName)
+                signatureArity.emitTS2554TooMany(0, 0, call.arguments.size, call.arguments, 0, source, fileName)
             }
         }
     }
@@ -67619,7 +67620,7 @@ interface DataView {
         return out
     }
 
-    private fun paramInfo(parameters: List<Parameter>, isJsFile: Boolean = false, jsDocRequiredNames: Set<String> = emptySet()): FuncParamInfo {
+    internal fun paramInfo(parameters: List<Parameter>, isJsFile: Boolean = false, jsDocRequiredNames: Set<String> = emptySet()): FuncParamInfo {
         var total = 0
         var hasRest = false
         var lastRequiredPos = -1  // 0-based index of last non-optional param
@@ -67669,7 +67670,7 @@ interface DataView {
         // left alone rather than reported twice.
         val hasSpreadArg = expr.arguments.any { it is SpreadElement }
         if (hasSpreadArg && "$fileName|${expr.pos}" in spreadNonIterableHandledCalls) return
-        val spreadView = if (hasSpreadArg) spreadArityView(expr.arguments) else null
+        val spreadView = if (hasSpreadArg) signatureArity.spreadArityView(expr.arguments) else null
         if (spreadView is SpreadArityView.Spread) {
             if (info != null) {
                 // An overload set is TS2556 only when NO candidate has correct arity —
@@ -67677,12 +67678,12 @@ interface DataView {
                 // arguments narrow the candidate set (B95b) and are left alone here.
                 val fails = when {
                     !info.isOverloaded ->
-                        spreadArityFails(spreadView, info.minParams, info.maxParams, info.hasRest)
+                        signatureArity.spreadArityFails(spreadView, info.minParams, info.maxParams, info.hasRest)
                     expr.typeArguments.isNullOrEmpty() && info.overloadSigs.isNotEmpty() ->
-                        info.overloadSigs.all { spreadArityFails(spreadView, it.minParams, it.maxParams, it.hasRest) }
+                        info.overloadSigs.all { signatureArity.spreadArityFails(spreadView, it.minParams, it.maxParams, it.hasRest) }
                     else -> false
                 }
-                if (fails) emitTS2556(spreadView.arg, source, fileName)
+                if (fails) signatureArity.emitTS2556(spreadView.arg, source, fileName)
             }
             return
         }
@@ -67694,20 +67695,20 @@ interface DataView {
         // ARGUMENT INDEX, not the expanded count — for `f2('abc', ...args)` the third
         // argument lives inside the spread, so tsc squiggles the spread itself.
         if (info != null && !info.isOverloaded && info.hasRest) {
-            val restTupleLen = fixedTupleLengthOfRestParam(info.parameters.lastOrNull())
+            val restTupleLen = signatureArity.fixedTupleLengthOfRestParam(info.parameters.lastOrNull())
             if (restTupleLen != null) {
                 val maxArgs = (info.parameters.size - 1) + restTupleLen
                 var expanded = 0
                 var excessIdx = -1
                 var allKnown = true
                 for ((i, a) in expr.arguments.withIndex()) {
-                    val n = argumentExpansionCount(a)
+                    val n = signatureArity.argumentExpansionCount(a)
                     if (n == null) { allKnown = false; break }
                     expanded += n
                     if (expanded > maxArgs && excessIdx < 0) excessIdx = i
                 }
                 if (allKnown && excessIdx >= 0) {
-                    emitTS2554TooMany(
+                    signatureArity.emitTS2554TooMany(
                         maxArgs, maxArgs, expanded, expr.arguments, excessIdx, source, fileName,
                     )
                     return
@@ -67717,17 +67718,17 @@ interface DataView {
         if (info != null && !info.isOverloaded) {
             val argCount = expanded?.count ?: expr.arguments.size
             if (!info.hasRest && argCount > info.maxParams) {
-                val excessIdx = if (expanded != null) firstExcessArgIndex(expanded, info.maxParams) else info.maxParams
-                emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, excessIdx, source, fileName)
+                val excessIdx = if (expanded != null) signatureArity.firstExcessArgIndex(expanded, info.maxParams) else info.maxParams
+                signatureArity.emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, excessIdx, source, fileName)
             } else if (argCount < info.minParams) {
                 // (CHK.176)(b) a trailing `void`-accepting parameter may be omitted.
-                val callMin = callMinArgumentCount(info)
+                val callMin = signatureArity.callMinArgumentCount(info)
                 if (argCount >= callMin) {
                     // correct arity
                 } else if (info.hasRest) {
-                    emitTS2555TooFew(callMin, argCount, expr.expression, source, fileName, info.parameters)
+                    signatureArity.emitTS2555TooFew(callMin, argCount, expr.expression, source, fileName, info.parameters)
                 } else {
-                    emitTS2554TooFew(callMin, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
+                    signatureArity.emitTS2554TooFew(callMin, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
                 }
             } else if (info.hasRest && expr.typeArguments.isNullOrEmpty()) {
                 // B170: rest param typed `Parameters<Fn>` where another param is typed
@@ -67814,15 +67815,15 @@ interface DataView {
                     }
                 }
             } else if (argCount < info.minParams && spreads.isEmpty() &&
-                argCount < overloadCallMin(info).also { overloadMin = it }
+                argCount < signatureArity.overloadCallMin(info).also { overloadMin = it }
             ) {
                 // (CHK.176)(b) the void-trimmed minimum over the overloads.
-                emitTS2554TooFew(overloadMin, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
+                signatureArity.emitTS2554TooFew(overloadMin, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
             } else if (!info.hasRest && argCount > info.maxParams) {
-                emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
+                signatureArity.emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
             } else if (spreads.isEmpty() && info.overloadSigs.isNotEmpty() &&
                 info.overloadSigs.none {
-                    (argCount >= it.minParams || argCount >= callMinArgumentCount(it.minParams, it.parameters)) &&
+                    (argCount >= it.minParams || argCount >= signatureArity.callMinArgumentCount(it.minParams, it.parameters)) &&
                         (it.hasRest || argCount <= it.maxParams)
                 }
             ) {
@@ -67833,7 +67834,7 @@ interface DataView {
                 var below = -1
                 var above = Int.MAX_VALUE
                 for (sig in info.overloadSigs) {
-                    val mc = callMinArgumentCount(sig.minParams, sig.parameters)
+                    val mc = signatureArity.callMinArgumentCount(sig.minParams, sig.parameters)
                     if (mc < argCount && mc > below) below = mc
                     else if (argCount < mc && mc < above) above = mc
                 }
@@ -67863,16 +67864,16 @@ interface DataView {
             }
             if (applicable.isNotEmpty()) {
                 val argCount = expr.arguments.size
-                val gMin = applicable.minOf { callMinArgumentCount(it.minParams, it.parameters) }
+                val gMin = applicable.minOf { signatureArity.callMinArgumentCount(it.minParams, it.parameters) }
                 val gMax = applicable.maxOf { it.maxParams }
                 val gRest = applicable.any { it.hasRest }
                 // TS6210 "argument for 'x' not provided" only when the applicable subset
                 // is unambiguous (single signature) — matches TypeScript's hint.
                 val relParams = if (applicable.size == 1) applicable[0].parameters else emptyList()
                 if (argCount < gMin) {
-                    emitTS2554TooFew(gMin, gMax, argCount, expr.expression, source, fileName, relParams)
+                    signatureArity.emitTS2554TooFew(gMin, gMax, argCount, expr.expression, source, fileName, relParams)
                 } else if (!gRest && argCount > gMax) {
-                    emitTS2554TooMany(gMin, gMax, argCount, expr.arguments, gMax, source, fileName)
+                    signatureArity.emitTS2554TooMany(gMin, gMax, argCount, expr.arguments, gMax, source, fileName)
                 }
             }
         }
@@ -67906,7 +67907,7 @@ interface DataView {
                 (if (libFeatureAvailable(ScriptTarget.ES2022)) 1 else 0)
             val minArgs = if (isAggregate) 1 else 0
             if (argCount > maxArgs) {
-                emitTS2554TooMany(minArgs, maxArgs, argCount, expr.arguments ?: emptyList(), maxArgs, source, fileName)
+                signatureArity.emitTS2554TooMany(minArgs, maxArgs, argCount, expr.arguments ?: emptyList(), maxArgs, source, fileName)
             }
         }
         val info = classCtorParams[className].also { FrontEnd.noteArgLookup(it != null) }
@@ -67915,31 +67916,31 @@ interface DataView {
             // (CHK.98)(d) the same spread arity as [spineArgCallEnter]: tsc's
             // `resolveNewExpression` hands the construct signatures to the very
             // `resolveCall` a call goes through, so `new C(...xs)` is TS2556 there too.
-            val spreadView = if (args.any { it is SpreadElement }) spreadArityView(args) else null
+            val spreadView = if (args.any { it is SpreadElement }) signatureArity.spreadArityView(args) else null
             if (spreadView is SpreadArityView.Spread) {
-                if (spreadArityFails(spreadView, info.minParams, info.maxParams, info.hasRest)) {
-                    emitTS2556(spreadView.arg, source, fileName)
+                if (signatureArity.spreadArityFails(spreadView, info.minParams, info.maxParams, info.hasRest)) {
+                    signatureArity.emitTS2556(spreadView.arg, source, fileName)
                 }
                 return
             }
             val expanded = spreadView as SpreadArityView.Expanded?
             val argCount = expanded?.count ?: args.size
             if (!info.hasRest && argCount > info.maxParams) {
-                val excessIdx = if (expanded != null) firstExcessArgIndex(expanded, info.maxParams) else info.maxParams
-                emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, excessIdx, source, fileName)
+                val excessIdx = if (expanded != null) signatureArity.firstExcessArgIndex(expanded, info.maxParams) else info.maxParams
+                signatureArity.emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, excessIdx, source, fileName)
             } else if (argCount < info.minParams) {
                 // B95c (round 82): squiggle the WHOLE `new X(...)` (expr.pos .. after `)`),
                 // not just the class identifier — matches TypeScript. Pass info.parameters
                 // so the TS6210 "argument for 'x' not provided" related info fires (it points
                 // at the ctor's param at the missing index; for an inherited ctor that's the
                 // base class's param). (CHK.176)(b): the void-trimmed minimum.
-                val callMin = callMinArgumentCount(info)
+                val callMin = signatureArity.callMinArgumentCount(info)
                 if (argCount >= callMin) {
                     // correct arity
                 } else if (info.hasRest) {
-                    emitTS2555TooFew(callMin, argCount, expr, source, fileName, info.parameters)
+                    signatureArity.emitTS2555TooFew(callMin, argCount, expr, source, fileName, info.parameters)
                 } else {
-                    emitTS2554TooFew(callMin, info.maxParams, argCount, expr, source, fileName, info.parameters, info.declSource, info.declFileName)
+                    signatureArity.emitTS2554TooFew(callMin, info.maxParams, argCount, expr, source, fileName, info.parameters, info.declSource, info.declFileName)
                 }
             }
         }
@@ -67971,7 +67972,7 @@ interface DataView {
                 val pos = expr.template.end
                 val (line, character) = getLineAndCharacterOfPosition(source, pos)
                 diagnostics.add(Diagnostic(
-                    message = "Expected ${formatExpectedArgs(info.minParams, info.maxParams)} arguments, but got $argCount.",
+                    message = "Expected ${signatureArity.formatExpectedArgs(info.minParams, info.maxParams)} arguments, but got $argCount.",
                     category = DiagnosticCategory.Error,
                     code = 2554,
                     fileName = fileName,
@@ -67983,13 +67984,6 @@ interface DataView {
             }
         }
     }
-
-    /**
-     * Emit TS2554 for too many arguments.
-     * Squiggle covers args[expectedCount] through args.last().
-     */
-    private fun formatExpectedArgs(minParams: Int, maxParams: Int): String =
-        if (minParams != maxParams) "$minParams-$maxParams" else "$maxParams"
 
     /**
      * B279: counts assignment-LIKE occurrences of [name] in [source] — `name =` (incl.
@@ -68035,185 +68029,6 @@ interface DataView {
             idx = srcIndexOf(source, name, idx + 1)
         }
         return count
-    }
-
-    internal fun emitTS2554TooMany(
-        minParams: Int,
-        maxParams: Int,
-        actual: Int,
-        args: List<Expression>,
-        firstExcessIdx: Int,
-        source: String,
-        fileName: String,
-    ) {
-        if (firstExcessIdx >= args.size) return
-        val firstExcess = args[firstExcessIdx]
-        val lastArg = args.last()
-        val start = firstExcess.pos
-        // Node.end includes the next token's scan position (always 1 char: ',' or ')'),
-        // so subtract 1 to get the actual end of the argument text.
-        val length = lastArg.end - 1 - start
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
-        diagnostics.add(Diagnostic(
-            message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $actual.",
-            category = DiagnosticCategory.Error,
-            code = 2554,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = start,
-            length = length,
-        ))
-    }
-
-    internal fun emitTS2554TooFew(
-        minParams: Int,
-        maxParams: Int,
-        actual: Int,
-        calleeExpr: Expression,
-        source: String,
-        fileName: String,
-        parameters: List<Parameter> = emptyList(),
-        // B434: when the callee is declared in ANOTHER (script-mode) file, the param-related
-        // TS6210/TS6211 positions must resolve against the DECLARING file's source/name.
-        relSource: String? = null,
-        relFileName: String? = null,
-    ) {
-        val start = calleeExpr.pos
-        val length = expressionTrueEnd(calleeExpr) - start
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
-        val rSource = relSource ?: source
-        val rFileName = relFileName ?: fileName
-        // Check if the first missing parameter is a binding pattern → emit TS6211 related info
-        val relatedInfo = mutableListOf<Diagnostic>()
-        if (parameters.isNotEmpty()) {
-            // Find the first missing parameter (at index `actual`, skipping `this` params)
-            val nonThisParams = parameters.filter {
-                !(it.name is Identifier && (it.name).text == "this")
-            }
-            if (actual < nonThisParams.size) {
-                val missingParam = nonThisParams[actual]
-                when (val paramName = missingParam.name) {
-                    is ObjectBindingPattern, is ArrayBindingPattern -> {
-                        val paramStart = paramName.pos
-                        val paramLen = paramName.end - paramStart
-                        val (relLine, relChar) = getLineAndCharacterOfPosition(rSource, paramStart)
-                        relatedInfo.add(Diagnostic(
-                            message = "An argument matching this binding pattern was not provided.",
-                            category = DiagnosticCategory.Message,
-                            code = 6211,
-                            fileName = rFileName,
-                            line = relLine,
-                            character = relChar,
-                            start = paramStart,
-                            length = paramLen,
-                        ))
-                    }
-                    is Identifier -> {
-                        // TS6210: "An argument for 'x' was not provided."
-                        // B95c (round 82): anchor at the PARAMETER's pos (Parameter.pos is captured
-                        // before modifiers, so for a parameter-property `public n` it points at
-                        // `public` — matching TypeScript), not the name's pos. For a plain param,
-                        // Parameter.pos == name.pos so function-call TS6210 is unaffected.
-                        val paramStart = missingParam.pos
-                        val paramLen = (paramName.pos + paramName.text.length - paramStart).coerceAtLeast(1)
-                        val (relLine, relChar) = getLineAndCharacterOfPosition(rSource, paramStart)
-                        relatedInfo.add(Diagnostic(
-                            message = "An argument for '${paramName.text}' was not provided.",
-                            category = DiagnosticCategory.Message,
-                            code = 6210,
-                            fileName = rFileName,
-                            line = relLine,
-                            character = relChar,
-                            start = paramStart,
-                            length = paramLen,
-                        ))
-                    }
-                    else -> {}
-                }
-            }
-        }
-        diagnostics.add(Diagnostic(
-            message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $actual.",
-            category = DiagnosticCategory.Error,
-            code = 2554,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = start,
-            length = length,
-            relatedInformation = relatedInfo.ifEmpty { emptyList() },
-        ))
-    }
-
-    /**
-     * Emit TS2555 for too few arguments when function has rest parameters.
-     * "Expected at least N arguments, but got M."
-     */
-    internal fun emitTS2555TooFew(
-        minParams: Int,
-        actual: Int,
-        calleeExpr: Expression,
-        source: String,
-        fileName: String,
-        parameters: List<Parameter> = emptyList(),
-    ) {
-        val start = calleeExpr.pos
-        val length = expressionTrueEnd(calleeExpr) - start
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
-        val relatedInfo = mutableListOf<Diagnostic>()
-        if (parameters.isNotEmpty()) {
-            val nonThisParams = parameters.filter {
-                !(it.name is Identifier && (it.name).text == "this")
-            }
-            if (actual < nonThisParams.size) {
-                val missingParam = nonThisParams[actual]
-                when (val paramName = missingParam.name) {
-                    is Identifier -> {
-                        val paramStart = paramName.pos
-                        val paramLen = paramName.text.length
-                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
-                        relatedInfo.add(Diagnostic(
-                            message = "An argument for '${paramName.text}' was not provided.",
-                            category = DiagnosticCategory.Message,
-                            code = 6210,
-                            fileName = fileName,
-                            line = relLine,
-                            character = relChar,
-                            start = paramStart,
-                            length = paramLen,
-                        ))
-                    }
-                    is ObjectBindingPattern, is ArrayBindingPattern -> {
-                        val paramStart = paramName.pos
-                        val paramLen = paramName.end - paramStart
-                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
-                        relatedInfo.add(Diagnostic(
-                            message = "An argument matching this binding pattern was not provided.",
-                            category = DiagnosticCategory.Message,
-                            code = 6211,
-                            fileName = fileName,
-                            line = relLine,
-                            character = relChar,
-                            start = paramStart,
-                            length = paramLen,
-                        ))
-                    }
-                    else -> {}
-                }
-            }
-        }
-        diagnostics.add(Diagnostic(
-            message = "Expected at least $minParams arguments, but got $actual.",
-            category = DiagnosticCategory.Error,
-            code = 2555,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = start,
-            length = length,
-            relatedInformation = relatedInfo.ifEmpty { emptyList() },
-        ))
     }
 
     // -----------------------------------------------------------------------
@@ -128338,260 +128153,6 @@ interface DataView {
      */
     /** Round 471: true when [t] is an Array/ReadonlyArray reference — the contexts in
      *  which a fresh array literal's elements are contextually typed by the element type. */
-    /** (M3.0-gap-4) The element count of a rest parameter annotated with a fixed tuple
-     *  (`...args: readonly [string, string]` → 2). Null for an array rest, a tuple with a
-     *  rest element of its own, or anything unrecognised — all of which keep the rest
-     *  parameter's usual unbounded treatment. */
-    internal fun fixedTupleLengthOfRestParam(param: Parameter?): Int? {
-        if (param == null || !param.dotDotDotToken) return null
-        var annotation: TypeNode? = param.type
-        while (annotation is TypeOperator || annotation is ParenthesizedType) {
-            annotation = when (annotation) {
-                is TypeOperator -> annotation.type
-                is ParenthesizedType -> annotation.type
-            }
-        }
-        val tuple = annotation as? TupleType ?: return null
-        if (tuple.elements.any { it is RestType }) return null
-        return tuple.elements.size
-    }
-
-    /** (M3.0-gap-4) How many arguments one argument expression contributes: 1 normally,
-     *  a tuple spread's element count for `...tup`. Null when a spread's length is not
-     *  known, so the caller skips the whole call rather than guessing. */
-    private fun argumentExpansionCount(arg: Expression): Int? {
-        val spread = arg as? SpreadElement ?: return 1
-        if (spread.expression is ArrayLiteralExpression) {
-            return spread.expression.elements.size
-        }
-        (getTypeOfExpression(spread.expression) as? Type.Object)?.tupleElementTypes
-            ?.let { return it.size }
-        val id = spread.expression as? Identifier ?: return null
-        var owner: Node? = (id as NodeBase).parent
-        var hops = 0
-        while (owner != null && hops++ < 64) {
-            val ownerParams = when (owner) {
-                is FunctionDeclaration -> owner.parameters
-                is FunctionExpression -> owner.parameters
-                is ArrowFunction -> owner.parameters
-                is MethodDeclaration -> owner.parameters
-                is Constructor -> owner.parameters
-                else -> null
-            }
-            val match = ownerParams?.firstOrNull { (it.name as? Identifier)?.text == id.text }
-            if (match != null) return fixedTupleLengthOfRestParam(match)
-            owner = (owner as? NodeBase)?.parent
-        }
-        return null
-    }
-
-    /**
-     * (CHK.98)(d) tsc's ARITY view of an argument list carrying a spread —
-     * `getEffectiveCallArguments` (checker.ts:36260) followed by the spread clause of
-     * `hasCorrectArity` (:35672), and `getArgumentArityError`'s first line (:36411).
-     *
-     * A spread whose operand is a FIXED-length tuple (or an array literal, which tsc
-     * types as a tuple in that position) expands into that many ordinary arguments; a
-     * spread whose operand is anything else SURVIVES, and from then on the argument
-     * count is unknown, so the only arity question left is tsc's: the surviving
-     * spread's index must be at or past the signature's minimum, and either the
-     * signature has a rest parameter or the index is inside its parameter list.
-     * Otherwise the call is `A spread argument must either have a tuple type or be
-     * passed to a rest parameter.` (TS2556) — and NEVER a count (TS2554): measured on
-     * both references, `f(1, 2, ...xs)` against `f(a: number)` prints TS2556 alone,
-     * where this checker printed `Expected 1 arguments, but got 3.`, and `f(...xs)`
-     * against `f(a?: number, b?: number)` is legal (index 0 is at the minimum and
-     * inside the list), where this checker reported it.
-     *
-     * [Spread.decided] is what keeps the rule from inventing a row: an operand this
-     * checker cannot classify (an `any`, an unresolved name, a type parameter, an
-     * un-annotated body-local) makes [Spread.index] a LOWER BOUND, and the only
-     * verdict a lower bound licenses is "already past the parameter list of a
-     * signature with no rest parameter", which no expansion can undo. Everything else
-     * stays silent, in the direction every gate here can see.
-     */
-    internal sealed class SpreadArityView {
-        /** No spread survives: [count] is the effective argument count and [expansion]
-         *  the per-ORIGINAL-argument expansion, so a too-many report can anchor on the
-         *  original argument whose expansion crosses the maximum. */
-        class Expanded(val count: Int, val expansion: List<Int>) : SpreadArityView()
-        /** A spread survives at effective [index], living in the original argument [arg]. */
-        class Spread(val index: Int, val arg: SpreadElement, val decided: Boolean) : SpreadArityView()
-    }
-
-    /** How one spread operand expands: a fixed number of elements, a fixed prefix
-     *  followed by a rest slot, positively not a tuple, or nothing this checker can say. */
-    private sealed class SpreadOperandShape {
-        class Fixed(val count: Int) : SpreadOperandShape()
-        class RestTail(val fixedBefore: Int) : SpreadOperandShape()
-        object NonTuple : SpreadOperandShape()
-        object Unknown : SpreadOperandShape()
-    }
-
-    internal fun spreadArityView(args: List<Expression>): SpreadArityView {
-        var effective = 0
-        val expansion = ArrayList<Int>(args.size)
-        for (arg in args) {
-            if (arg !is SpreadElement) { effective++; expansion.add(1); continue }
-            when (val shape = classifySpreadOperand(arg.expression)) {
-                is SpreadOperandShape.Fixed -> { effective += shape.count; expansion.add(shape.count) }
-                is SpreadOperandShape.RestTail ->
-                    return SpreadArityView.Spread(effective + shape.fixedBefore, arg, decided = true)
-                SpreadOperandShape.NonTuple -> return SpreadArityView.Spread(effective, arg, decided = true)
-                SpreadOperandShape.Unknown -> return SpreadArityView.Spread(effective, arg, decided = false)
-            }
-        }
-        return SpreadArityView.Expanded(effective, expansion)
-    }
-
-    /** The spread clause of tsc's `hasCorrectArity`, inverted: true when the call MUST be
-     *  reported as TS2556 against a signature with [minParams] required parameters,
-     *  [paramCount] parameters in all and, when [hasRest], a rest parameter. */
-    internal fun spreadArityFails(
-        view: SpreadArityView.Spread, minParams: Int, paramCount: Int, hasRest: Boolean,
-    ): Boolean =
-        if (view.decided) !(view.index >= minParams && (hasRest || view.index < paramCount))
-        else !hasRest && view.index >= paramCount
-
-    /** The ORIGINAL argument index at which an expanded count first exceeds [maxParams]
-     *  — where tsc's too-many report anchors (a synthetic argument carries its spread's
-     *  span). */
-    private fun firstExcessArgIndex(view: SpreadArityView.Expanded, maxParams: Int): Int {
-        var running = 0
-        for ((i, n) in view.expansion.withIndex()) {
-            running += n
-            if (running > maxParams) return i
-        }
-        return view.expansion.size
-    }
-
-    internal fun emitTS2556(spread: SpreadElement, source: String, fileName: String) {
-        val start = spread.pos
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
-        diagnostics.add(Diagnostic(
-            message = "A spread argument must either have a tuple type or be passed to a rest parameter.",
-            category = DiagnosticCategory.Error, code = 2556, fileName = fileName,
-            line = line, character = character, start = start,
-            length = (expressionTrueEnd(spread.expression) - start).coerceAtLeast(1),
-        ))
-    }
-
-    /**
-     * What a spread operand expands to. THREE routes, in an order that is load-bearing:
-     * an array literal is syntactic (tsc types it as a tuple in this position); an
-     * IDENTIFIER that names an enclosing parameter or a scope-space local is classified
-     * by that DECLARATION's annotation — the arity walkers run at the spine hook, under
-     * the FILE-LEVEL ambient (round 911), where `getTypeOfExpression` answers a rest
-     * parameter `any` and a body-local by whatever same-named file-level binding exists,
-     * i.e. the one way this rule could invent a row (a file-level `number[]` shadowed
-     * by a body-local tuple); only a name with no such binding is read from its type.
-     */
-    private fun classifySpreadOperand(operand: Expression): SpreadOperandShape {
-        if (operand is ArrayLiteralExpression) {
-            return if (operand.elements.any { it is SpreadElement }) SpreadOperandShape.Unknown
-            else SpreadOperandShape.Fixed(operand.elements.size)
-        }
-        if (operand is Identifier) {
-            spreadOperandDeclaration(operand)?.let { decl ->
-                val annotation = when (decl) {
-                    is Parameter -> decl.type
-                    is VariableDeclaration -> decl.type
-                    else -> null
-                }
-                if (annotation != null) return classifySpreadAnnotation(annotation)
-                // An un-annotated local whose initializer is a plain array literal is an
-                // ARRAY in tsc (no contextual type, so no tuple), never a tuple.
-                val init = (decl as? VariableDeclaration)?.initializer
-                return if (init is ArrayLiteralExpression && init.elements.none { it is SpreadElement })
-                    SpreadOperandShape.NonTuple else SpreadOperandShape.Unknown
-            }
-        }
-        return spreadShapeOfType(getTypeOfExpression(operand))
-    }
-
-    /**
-     * The enclosing-function PARAMETER or enclosing-block LOCAL an operand identifier
-     * names — the declarations the file-level ambient cannot see — or null for neither.
-     * A SYNTACTIC innermost-first walk of the enclosing statement lists (round 935's
-     * shape), because (INV.0)'s scope-space consult is override-only and gated, and what
-     * this needs is the DECLARATION's annotation, not a resolved type: measured, a
-     * body-local `const t: [number, number]` shadowing a file-level `number[]` read the
-     * file-level array through the resolver route and reported a false TS2556.
-     */
-    private fun spreadOperandDeclaration(id: Identifier): Node? {
-        var cur: Node? = (id as NodeBase).parent
-        var hops = 0
-        while (cur != null && hops++ < 64) {
-            when (cur) {
-                is Block -> for (st in cur.statements) {
-                    val vs = st as? VariableStatement ?: continue
-                    vs.declarationList.declarations.firstOrNull { (it.name as? Identifier)?.text == id.text }
-                        ?.let { return it }
-                }
-                is FunctionDeclaration -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
-                is FunctionExpression -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
-                is ArrowFunction -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
-                is MethodDeclaration -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
-                is Constructor -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
-                else -> {}
-            }
-            cur = (cur as? NodeBase)?.parent
-        }
-        return null
-    }
-
-    /** [classifySpreadOperand] for an ANNOTATION: a tuple type node is read element by
-     *  element (a `readonly` operator and parentheses are transparent, an optional
-     *  element COUNTS — tsc pushes one synthetic argument per element), an array type
-     *  node is positively not a tuple, and anything else is resolved and classified as
-     *  a type. */
-    private fun classifySpreadAnnotation(node: TypeNode): SpreadOperandShape {
-        var annotation: TypeNode = node
-        while (true) {
-            annotation = when {
-                annotation is TypeOperator && annotation.operator == SyntaxKind.ReadonlyKeyword -> annotation.type
-                annotation is ParenthesizedType -> annotation.type
-                else -> break
-            }
-        }
-        return when (annotation) {
-            is ArrayType -> SpreadOperandShape.NonTuple
-            is TupleType -> {
-                for ((i, e) in annotation.elements.withIndex()) {
-                    val rest = e is RestType || (e is NamedTupleMember && e.dotDotDotToken)
-                    if (rest) {
-                        val inner = if (e is RestType) e.type else (e as NamedTupleMember).type
-                        return if (inner is TupleType) SpreadOperandShape.Unknown
-                        else SpreadOperandShape.RestTail(i)
-                    }
-                }
-                SpreadOperandShape.Fixed(annotation.elements.size)
-            }
-            else -> getTypeFromTypeNodeSafe(annotation)?.let { spreadShapeOfType(it) }
-                ?: SpreadOperandShape.Unknown
-        }
-    }
-
-    /** [classifySpreadOperand] for a resolved TYPE. A union is not a tuple in tsc even
-     *  when every constituent is one (`isTupleType` is false for it), but one carrying a
-     *  type parameter or an `any` may be a resolution failure of ours, so it is refused. */
-    private fun spreadShapeOfType(t: Type): SpreadOperandShape {
-        if (t === anyType || t === errorType || t is Type.TypeParam) return SpreadOperandShape.Unknown
-        if (t is Type.Union || t is Type.Intersection) {
-            val parts = if (t is Type.Union) t.types else (t as Type.Intersection).types
-            return if (parts.any { it === anyType || it === errorType || it is Type.TypeParam })
-                SpreadOperandShape.Unknown else SpreadOperandShape.NonTuple
-        }
-        if (t is Type.Object && t !is Type.Interface) {
-            val elems = t.tupleElementTypes
-            if (elems != null) {
-                return if (t.tupleHasRest) SpreadOperandShape.RestTail(t.tupleRestIndex)
-                else SpreadOperandShape.Fixed(elems.size)
-            }
-        }
-        return SpreadOperandShape.NonTuple
-    }
-
     internal fun isArrayLikeReference(t: Type): Boolean =
         t is Type.Reference &&
             (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray")
@@ -146550,7 +146111,7 @@ interface DataView {
         }
     }
 
-    private fun getTypeFromTypeNodeSafe(typeNode: TypeNode): Type? {
+    internal fun getTypeFromTypeNodeSafe(typeNode: TypeNode): Type? {
         return getTypeFromTypeNode(typeNode)
     }
 
@@ -163525,7 +163086,7 @@ interface DataView {
                 val minA = signatures.minOf { relationMinArgumentCount(it) }
                 val maxA = signatures.maxOf { it.parameters.size }
                 if (argCount > maxA) {
-                    emitTS2554TooMany(minA, maxA, argCount, expr.arguments, maxA, source, fileName)
+                    signatureArity.emitTS2554TooMany(minA, maxA, argCount, expr.arguments, maxA, source, fileName)
                     return
                 }
                 if (argCount < minA) {
@@ -163546,7 +163107,7 @@ interface DataView {
                     }
                     val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                     diagnostics.add(Diagnostic(
-                        message = "Expected ${formatExpectedArgs(minA, maxA)} arguments, but got $argCount.",
+                        message = "Expected ${signatureArity.formatExpectedArgs(minA, maxA)} arguments, but got $argCount.",
                         category = DiagnosticCategory.Error, code = 2554,
                         fileName = fileName, line = line, character = character,
                         start = nameNode.pos, length = nameNode.text.length,
@@ -164091,7 +163652,7 @@ interface DataView {
                     if (len == 0 || tuples.any { it.size != len }) return@run
                     val args = expr.arguments
                     if (args.size > len) {
-                        emitTS2554TooMany(len, len, args.size, args, len, source, fileName); return null
+                        signatureArity.emitTS2554TooMany(len, len, args.size, args, len, source, fileName); return null
                     }
                     for (i in 0 until minOf(args.size, len)) {
                         val combined = reduceIntersectionForWriteType(tuples.map { it[i] })
@@ -164751,70 +164312,6 @@ interface DataView {
     }
 
     /**
-     * (CHK.33) The arity [sig]'s own DECLARATION states, or null where the declaration is
-     * absent or not function-like.
-     *
-     * **`Signature.parameters` IS NOT THE DECLARATION'S PARAMETER LIST.**
-     * [getParameterSymbols] drops every `ObjectBindingPattern` / `ArrayBindingPattern`
-     * parameter (its `forSignatureDisplay` opt-in is the only place a placeholder is
-     * minted), while [requiredParameterCount] — and so [Signature.minArgumentCount] —
-     * COUNTS it. Any reader that takes its MAXIMUM from `parameters.size` and its MINIMUM
-     * from `minArgumentCount` therefore prints an IMPOSSIBLE range for
-     * `m({ text }: T): R`: `Expected 1-0 arguments, but got 1.` on a call that is legal
-     * TypeScript, which is self-evidently broken output needing no reference to
-     * adjudicate. Round 446 recovered the true arity at the property-access reader
-     * ([checkTs2554ForPropertyAccessCall]); this is that block extracted so the UNION
-     * reader ([unionCalleeArityDiagnostic]) shares it rather than carrying a fourth copy
-     * of the declaration-to-parameters map.
-     *
-     * [paramInfo] is the right computation to reuse: it skips the `this` pseudo-parameter
-     * and the rest tail exactly as [requiredParameterCount] does, counts a binding-pattern
-     * parameter as an ordinary one, and reports `hasRest` — so `minParams`/`maxParams`
-     * are the arity the user WROTE.
-     *
-     * NOT a fix at [getParameterSymbols]: widening `Signature.parameters`' MEMBERSHIP is
-     * a repo-wide blast radius for a local defect, and CLAUDE.md records that exclusion as
-     * deliberate. The prescription there is the one applied here — *read `sig.declaration`'s
-     * own list*.
-     *
-     * **The kind list is round 446's PLUS `FunctionType` / `ConstructorType`, and the two
-     * additions are a MEASURED false-positive fix rather than tidiness.** A member whose
-     * type is written as a function TYPE carries that node as its signature's declaration
-     * ([buildSignatureForFunctionLikeTypeNode]), and such a node may perfectly well spell a
-     * binding pattern — `declare const host: { m: ({ a }: O) => void }; host.m(o)` is legal
-     * TypeScript that tsgo 7.0.2 accepts in silence and that this compiler answered
-     * `Expected 1-0 arguments, but got 1.` before the arms were added. An options-bag
-     * callback property is one of the commonest shapes in real TypeScript, so the omission
-     * was not academic.
-     *
-     * `GetAccessor` / `SetAccessor` are round 446's own arms and are kept VERBATIM, but a
-     * census of every `Signature(` construction in this module says they are DEAD: no
-     * signature is ever built with an accessor declaration (an accessor resolves into a
-     * Property symbol instead, `MemberResolver`). Recorded rather than deleted — an arm
-     * proved unreachable today is a barrier tomorrow, and deleting it would make the
-     * extraction no longer verbatim.
-     *
-     * Still NOT covered, and measured: `IndexSignature`. There is no `MethodSignature` /
-     * `CallSignature` / `ConstructSignature` node class in this codebase — the parser
-     * reuses `MethodDeclaration` for an interface method, a call signature (name `""`) and
-     * a construct signature (name `"new"`) alike — so those three are already covered by the
-     * `MethodDeclaration` arm.
-     */
-    internal fun signatureDeclaredArity(sig: Signature): FuncParamInfo? =
-        when (val d = sig.declaration) {
-            is FunctionDeclaration -> d.parameters
-            is MethodDeclaration -> d.parameters
-            is FunctionExpression -> d.parameters
-            is ArrowFunction -> d.parameters
-            is Constructor -> d.parameters
-            is FunctionType -> d.parameters
-            is ConstructorType -> d.parameters
-            is GetAccessor -> d.parameters
-            is SetAccessor -> d.parameters
-            else -> null
-        }?.let { paramInfo(it) }
-
-    /**
      * (CHK.154) The MINIMUM argument count a signature demands when it is RELATED to another
      * signature — tsgo's `getMinArgumentCount` (relater.go `getMinArgumentCountEx` with no
      * flags): a trailing run of REQUIRED parameters whose type is `void`, or a union with a
@@ -164836,14 +164333,14 @@ interface DataView {
         var min = sig.minArgumentCount
         val params = sig.parameters
         if (min <= 0 || min > params.size) return min
-        val declared = signatureDeclaredArity(sig)?.parameters
+        val declared = signatureArity.signatureDeclaredArity(sig)?.parameters
         if (declared != null &&
             declared.count { (it.name as? Identifier)?.text != "this" } != params.size
         ) return min
         for (i in min - 1 downTo 0) {
             val p = params[i]
             if ((p.valueDeclaration as? Parameter)?.dotDotDotToken == true) break
-            if (!typeAcceptsVoid(getTypeOfSymbol(p))) break
+            if (!signatureArity.typeAcceptsVoid(getTypeOfSymbol(p))) break
             min = i
         }
         return min
@@ -164890,14 +164387,14 @@ interface DataView {
         // parameter whose own name is a binding pattern is dropped from [Signature.parameters]
         // too, so [sigHasRestParameter] — which inspects that list's LAST entry — answers
         // FALSE and a legal two-argument call is measured against a maximum of ZERO.
-        val declared = sigs.map { signatureDeclaredArity(it) }
+        val declared = sigs.map { signatureArity.signatureDeclaredArity(it) }
         val anyRest = sigs.indices.any { sigHasRestParameter(sigs[it]) || declared[it]?.hasRest == true }
         val maxParams = sigs.indices.maxOf { maxOf(sigs[it].parameters.size, declared[it]?.maxParams ?: 0) }
         var minParams = sigs.minOf { it.minArgumentCount }
         // (CHK.176)(b) the void-trimmed minimum, asked only on a too-few path.
         if (args.size < minParams) minParams = sigs.minOf { relationMinArgumentCount(it) }
         if (!anyRest && args.size > maxParams) {
-            emitTS2554TooMany(minParams, maxParams, args.size, args, maxParams, source, fileName)
+            signatureArity.emitTS2554TooMany(minParams, maxParams, args.size, args, maxParams, source, fileName)
             return true
         }
         if (args.size < minParams) {
@@ -164909,8 +164406,8 @@ interface DataView {
             // (CHK.176) tsgo anchors a too-few row at a property access's NAME (`u.m()` at
             // `m`, as [checkTs2554ForPropertyAccessCall] does), not at the receiver.
             val anchor = (calleeExpr as? PropertyAccessExpression)?.name ?: calleeExpr
-            if (anyRest) emitTS2555TooFew(minParams, args.size, anchor, source, fileName)
-            else emitTS2554TooFew(minParams, maxParams, args.size, anchor, source, fileName)
+            if (anyRest) signatureArity.emitTS2555TooFew(minParams, args.size, anchor, source, fileName)
+            else signatureArity.emitTS2554TooFew(minParams, maxParams, args.size, anchor, source, fileName)
             return true
         }
         return false
@@ -165403,7 +164900,7 @@ interface DataView {
         // contributes its element count. Unreachable before (CHK.98)(a) — the receiver
         // `f` was `any` at this reader, so no signature resolved and the check never ran
         // (the corpus's `bindingPatternCannotBeOnlyInferenceSource`).
-        val spreadView = if (expr.arguments.any { it is SpreadElement }) spreadArityView(expr.arguments) else null
+        val spreadView = if (expr.arguments.any { it is SpreadElement }) signatureArity.spreadArityView(expr.arguments) else null
         // B241: a SOFT later-lib member (Array.flat/flatMap under a pre-es2019 lib)
         // errors TS2550 at the property access instead — suppress the arity check.
         run {
@@ -165417,7 +164914,7 @@ interface DataView {
         // `sig.parameters` DROPS it — recovered from the DECLARATION by
         // [signatureDeclaredArity], which is this block extracted verbatim so the UNION
         // reader can share it.
-        val declInfo = signatureDeclaredArity(sig)
+        val declInfo = signatureArity.signatureDeclaredArity(sig)
         val hasRest = declInfo?.hasRest
             ?: ((params.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true)
         val minParams = declInfo?.minParams ?: sig.minArgumentCount
@@ -165427,8 +164924,8 @@ interface DataView {
             // parameter COUNT is not tsc's, so its arity verdict cannot be either.
             val sigDecl = sig.declaration
             if (sigDecl != null && sigDecl in builtinLibMemberDecls) return
-            if (spreadArityFails(spreadView, minParams, maxParams, hasRest)) {
-                emitTS2556(spreadView.arg, source, fileName)
+            if (signatureArity.spreadArityFails(spreadView, minParams, maxParams, hasRest)) {
+                signatureArity.emitTS2556(spreadView.arg, source, fileName)
             }
             return
         }
@@ -165442,14 +164939,14 @@ interface DataView {
             // (toLocaleString(locales?, options?), forEach(cb, thisArg?)) → FP surface.
             val sigDecl = sig.declaration
             if (sigDecl != null && sigDecl in builtinLibMemberDecls) return
-            val excessIdx = if (expanded != null) firstExcessArgIndex(expanded, maxParams) else maxParams
-            emitTS2554TooMany(minParams, maxParams, argCount, expr.arguments, excessIdx, source, fileName)
+            val excessIdx = if (expanded != null) signatureArity.firstExcessArgIndex(expanded, maxParams) else maxParams
+            signatureArity.emitTS2554TooMany(minParams, maxParams, argCount, expr.arguments, excessIdx, source, fileName)
             return
         }
         // (CHK.176)(b) the void-trimmed minimum decides a too-few verdict and its wording.
         // A signature with no declared list (`f.call`'s synthesized one) reads the same rule
         // off its own parameter symbols.
-        val callMin = declInfo?.let { callMinArgumentCount(it, sig) } ?: relationMinArgumentCount(sig)
+        val callMin = declInfo?.let { signatureArity.callMinArgumentCount(it, sig) } ?: relationMinArgumentCount(sig)
         if (argCount >= callMin) return
         val nameNode = callee.name
         val start = nameNode.pos
@@ -165495,7 +164992,7 @@ interface DataView {
             return
         }
         diagnostics.add(Diagnostic(
-            message = "Expected ${formatExpectedArgs(callMin, maxParams)} arguments, but got $argCount.",
+            message = "Expected ${signatureArity.formatExpectedArgs(callMin, maxParams)} arguments, but got $argCount.",
             category = DiagnosticCategory.Error,
             code = 2554,
             fileName = fileName,
@@ -170518,51 +170015,6 @@ interface DataView {
             CallSections.noteImplRelatedVerifiedAll(deferred != implementationRelated)
         }
     }
-
-    /**
-     * (CHK.176)(b) tsgo's `getMinArgumentCount` for a CALL (relater.go `getMinArgumentCountEx`,
-     * no flags): [info]'s required count less its trailing run of `void`-accepting parameters
-     * ([typeAcceptsVoid]), so `g("a")` for `g(s: string, v: void)` has correct arity and
-     * `g()` reads `Expected 1-2 arguments`. tsgo's `hasCorrectArity` then walks the missing
-     * positions with the same `acceptsVoid` test, which is implied: the last position of the
-     * trimmed count is not void-accepting, so a call is too short exactly when it is below it.
-     *
-     * The ONE home of the call-side rule, shared by [SignatureArity.callArityFails] and every arity emitter
-     * that holds a [FuncParamInfo] (the name-based walkers and the property-access reader).
-     * Call it only on a too-few path: it resolves parameter types. A parameter's type is its
-     * [sig] symbol's where one is given (an instantiated signature), else its annotation's;
-     * an un-annotated parameter ends the run (no `void` reaches it here).
-     */
-    internal fun callMinArgumentCount(info: FuncParamInfo, sig: Signature? = null): Int =
-        callMinArgumentCount(info.minParams, info.parameters, sig)
-
-    /** [callMinArgumentCount] over an overload set: the smallest trimmed minimum (the set's
-     *  own [FuncParamInfo.minParams] when no per-overload shape was collected). */
-    private fun overloadCallMin(info: FuncParamInfo): Int =
-        if (info.overloadSigs.isEmpty()) callMinArgumentCount(info)
-        else info.overloadSigs.minOf { callMinArgumentCount(it.minParams, it.parameters) }
-
-    private fun callMinArgumentCount(minParams: Int, parameters: List<Parameter>, sig: Signature? = null): Int {
-        var min = minParams
-        if (min <= 0) return min
-        val positional = parameters.filter {
-            !it.dotDotDotToken && !((it.name as? Identifier)?.text == "this")
-        }
-        for (i in min - 1 downTo 0) {
-            val p = positional.getOrNull(i) ?: break
-            val t = sig?.parameters?.firstOrNull { it.valueDeclaration === p }?.let { getTypeOfSymbol(it) }
-                ?: p.type?.let { getTypeFromTypeNode(it) }
-                ?: break
-            if (!typeAcceptsVoid(t)) break
-            min = i
-        }
-        return min
-    }
-
-    /** (CHK.176) tsgo's `acceptsVoid` over a type or any union constituent — the rule
-     *  [relationMinArgumentCount] and [callMinArgumentCount] share. */
-    private fun typeAcceptsVoid(t: Type): Boolean =
-        if (t is Type.Union) t.types.any { it.flags.hasAny(TypeFlags.Void) } else t.flags.hasAny(TypeFlags.Void)
 
     private fun checkArgumentsAgainstSignatureCore(
         args: List<Expression>,
