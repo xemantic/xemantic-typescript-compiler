@@ -25,6 +25,35 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.233) — (CHK.177) S1: a relation-error source or TS2339 receiver annotated with a union ALIAS prints the alias name as tsgo does (`Type 'U' …`, was `'A | B'`); two shipped wrong names fixed; display only, +0 rows everywhere (2026-09-30)
+
+Specified by (P18.232)'s read-only census (`build/scratch-p18232-census/`), which corrected the queue item twice: the
+finder's cells were TS2339 on a PARAMETER receiver, not TS2322 reads; and the axis is an ANONYMOUS member (an
+all-interface union was already named through B416). The name is lost only at DISPLAY — the declared union and an
+inline `A | B` are one interned object — so the fix is PER READ and touches no interning. **Mechanism**: new
+`AliasCarrierDisplay.kt` (`AliasCarrierDisplay(checker)`): identifier (through parens / `!`) -> declaration by the
+scope-correct parent walk `lexicalReturnIdentifierDecl` (now `internal`) -> a `VariableDeclaration` / `Parameter`
+annotated with ONE bare non-generic union alias plus optional `null` / `undefined` (a `?` counts as `undefined`) ->
+the alias name iff the displayed member-id set equals the alias's (nullish parts appended in tsgo's
+`U | null | undefined` order), else null and the old render stands. The member-set test is also the literal-widening
+guard (measured: arm a1 reddens m07). Called before `relationErrorSourceRender` at the four relation emitters
+(var-decl, argument, return, assignment), and it REPLACES the TS2339 union-receiver carrier in
+`cmamCheckUnionReceiverNarrowing`, whose text lookup named a narrowed SUBSET (f04) and the WRONG alias under shadowing
+(g04, g05). **Orchestrator addition**: the builder flagged that the old carrier's `globals` lookup had named a GLOBAL
+script `const` declared in another file, which the lexical walk alone answers null for — a display regression the
+corpus cannot see; measured (cell y01) and closed by a fallback when the walk finds no binding or an import:
+`lookupPerFileForNode` / `globals` -> `resolveAlias` (now `internal`) -> the target's declaration, which also newly
+names an IMPORTED binding as tsgo does (y02). **Pins**: `AliasCarrierSourceDisplayTest`, 35 full-text pins (26
+positive, 9 negative controls), every expectation tsgo 7.0.2's text; ablation a1 4 / a2 20 / a3 8 / a4 18 / a5 16 /
+a6 2 / a7 1 / a8 1 / a9 7 RED (builder), cross-file fallback 2 RED (orchestrator). **Gates**: full suite
+21,883 / 0 / 44 (+35); corpus screen 8725 / 0 (a control — the 7 corpus rows naming a union alias were already
+green); `cost_gate.py` every counter +0.00%; `huge_methods.py --fail-over 0` 0 (cmam shrank); grid 8 x added=0
+removed=0 + chain OK (blind to display — a control), rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe:
+probe only. `Checker.kt` -1. Residues queued: S2 (property-access / call / element / destructured / unannotated
+sources, conditionals, `NS.U`, B416 retirement — m03 m04 h02 h04 h05 f10 h09 g01 g02 g06), x05 (our under-narrowing
+now prints `U` where tsgo prints `B`; the row was already wrong), and (CHK.178) for three separate defects the census
+found.
+
 ### Round (P18.232) — (INV.0) extraction: the (CHK.176)(a) signature-based ARITY reader moves VERBATIM out of `Checker.kt` into `SignatureArity.kt` (12 declarations, `Checker.kt` -344); every deterministic receipt byte-identical against pristine (2026-09-30)
 
 One implementation subagent (the queue's successor to (P18.230)); a read-only (CHK.177) census ran beside it on frozen
@@ -327,48 +356,6 @@ libraries 0; warning gate clean (positive control live); warm A/B 2 pairs per or
 lower in both — no regression signal. **Residues**: c18 / t06 / t08 (`T` vs a failed inference), c20 (an annotated
 declaration returns its annotation before the call arm), c22 (a conditional with a literal branch refused).
 **Successor**: B5b (N13).
-
-### Round (P18.223) — (CHK.176)(a): a signature-based arity reader reports tsgo's TS2554 / TS2555 / TS2556 / TS2575 for calls the name walker never reached (callbacks, real-lib members, overloaded constructors, optional-chain calls, tuple rests); 24 -> 73 of 87 cells agree, +0 everywhere (2026-09-29)
-
-Orchestrated: one implementation subagent beside the (third, finally non-stalling) G1 census; the orchestrator re-ran
-every gate. **Mechanism**: `checkArgumentsAgainstSignature` now REPORTS when `callArityFails` is true (it used to
-return silently), under a `reportArity` flag false for the per-candidate calls inside `checkArgumentsAgainstOverloads`
-(which reports when every overload fails arity, and before its generic-overload bail) and for the explicit-type-argument
-path unless there is one generic candidate. `reportSignatureArity` follows tsgo's `getArgumentArityError` (too many:
-squiggle args[max..]; too few: at the callee — the name for a property access, the whole expression for `new` — with
-TS6210; TS2575 for an overload gap; TS2555 with a rest), `reportSpreadSignatureArity` emits TS2556, `callArity` applies
-the void trim and expands a fixed-tuple rest (`TupleType.elementOptional`); `arityRowAt` dedupes against the name
-walker's rows by (file, start, length); `arityDeclTrusted` extracts the embedded-lib / JS exclusion. **Two typing gaps
-the new reader exposed needed refusals**: a callee bound through an `any`-annotated / destructured / method parameter or
-a function expression's own name resolved to the OUTER function (`arityIdentifierCalleeTrusted` / `arityBindingIn` /
-`arityBindingOwns` — a syntactic nearest-binding check, which also refuses a global name with two function
-implementations), and an alias of an overload set (`export import extname = ts.getAnyExtensionFromPath`) keeps only the
-first overload — the FIRST GRID RUN caught 3 false rows in tsc's `src/harness/vpathUtil.ts`, closed by
-`arityOverloadSetComplete`. **Where the item was wrong**: a09 / b04 / b06 / b07 / b10 were not one gap — b07 (`o?.m` on
-`T | undefined`), a generic callback, `mk()(…)`, an IIFE and `const g = cb; g(…)` get NO argument checking at all (the
-callee types `any`), which an arity reader cannot fix. **Countdowns**: six `Inv4SpineBatch26Test` "negative control …
-unreached" pins (a `new` callee, a parameter default, `extends mix()`, object-literal accessors, a shorthand
-destructuring default, depth > 200) asserted silence where tsgo reports — re-pointed; `SpreadArgumentTupleTest`'s
-"residue - a variable callee is not arity-checked" closed.
-
-**Measured**: 87 cells 24 -> 73 agree (callback parameters incl. TS2555 / optional / void trim, array elements,
-call-signature overloads and TS2575, generic overload sets, construct-signature variables, overloaded constructors,
-`f?.()`, `o.m?.()`, `o?.["m"]()`, tuple rests, TS2556 spreads, `parseInt` / `charAt` / `JSON.parse` / `new Date(…8)` /
-`new Map(1, 2)` / `p.then` x3, imported functions, `this.cb`, `g.call`, nested calls, `h()()`, explicit type arguments on
-a variable, the six previously unreached positions). **Pins**: `SignatureArityReaderTest` (24). **Ablation** (14 arms):
-A1 no emission 22 RED, A2 no dedupe 59, A3 dedupe by start only 1, A4 binding check off 7, A5 report per candidate 2, A6
-tuple expansion off 1, A7 generic-overload arm off 1, A8 spread reporter off 2, A10 duplicate-implementation refusal 1,
-A11 `: any` trusted 4, A12 overload emission off 3, A13 tuple fast path 1, A14 overload-completeness guard 1; **A9
-(argument-list identity check) 0 — redundant, kept**; the explicit-type-argument `genericCandidates.size == 1` gate has
-no arm and no pin. **Gates**: full suite **21,676 / 0 / 44** (+24); corpus screen 0 of 8,725; cost_gate PASS (flat);
-huge_methods 0 (`checkSingleNewExpressionTypesCore` 6,760, `checkSingleCallExpressionTypesCore` 6,056); grid 8x
-`added=0 removed=0` (a REAL gate — its first run caught the alias FPs), libraries 0; warning gate clean. **Cost to the
-(INV.0) metric**: `Checker.kt` +370 lines (about half KDoc) — the builder judged the logic too entangled with private
-Checker helpers to move out; a future extraction candidate. **Residues**: callee typing (a `T`-mentioning callback, an
-optional-chained member on `X | undefined`, a call result, an IIFE, a parameter alias, contextual callback parameters
-`new Promise((r) => r(1, 2))`, for-of bindings); f02 (an alias of an overload set keeps one — tsgo TS2575); name-walker
-shadow FPs e12 (catch variable) / e15 (`any` parameter shadowing a class for `new`); TS2393 never emitted; (d)-(f).
-**Successor**: the G1 arc, round B5a (census below).
 
 ## QUEUE
 
@@ -968,7 +955,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.177) AN ALIAS-NAMED UNION DISPLAYS EXPANDED WHERE tsgo PRINTS THE ALIAS NAME — `type U = A | B; declare const u: U; const n: number = u` prints `Type 'A | B' …` (tsgo `Type 'U' …`), on ANY read, no narrowing needed (found by (P18.222)'s builder, cells `build/bench/p18222-agent/d/d01`-`d04` and c06/c07).** A display parity defect in every relation message naming such a value. CLAUDE.md has several entries on why (grep "tsc's UNION-ALIAS DISPLAY IS *IDENTITY PRESERVATION*" and "`aliasDisplayMap` IS AN *ID-KEYED GLOBAL*"): tsc keys its union cache by member list PLUS alias and ours interns by members alone, so a naive fix is known to be structurally blocked — census which reads lose the alias (declared type vs flow type vs a narrowed-back-to-whole union), whether the flow walk's join rebuilds the union without its alias, and whether a per-READ alias carrier (the declaration's type node) can restore it without touching interning. Direction: DISPLAY only (no row added or removed) — the grid is blind to it (every profile row is `Cannot find name`); the corpus screen and pins are the gate.
+- [ ] **(CHK.178) THREE DISPLAY/ANCHOR/ROW DEFECTS FROM THE (CHK.177) CENSUS (cells under `build/scratch-p18232-census/cells/`, each measured against tsgo 7.0.2).** (a) the TS2345 elaboration CHAIN picks a union source's LAST failing constituent (pristine, (CHK.83)) where tsgo picks the FIRST — m13 prints `Type 'B'` for tsgo's `Type 'A'`, x07 `Type 'B'` for `Type 'undefined'`; (b) `(u as U).a` on a union with the member absent reports NO TS2339 at all (m20, a missing row); (c) an object-literal member mismatch anchors at the whole literal where tsgo drills to the member `p` (f11). Measure each first; (b) is row-adding and needs the grid.
+
+- [ ] **(CHK.177) S1 LANDED 2026-09-30 ((P18.233) note: identifier sources whose declaration — local, parameter, global or imported — is annotated with a union alias print the alias at the four relation emitters and the TS2339 union-receiver carrier). OPEN — S2: resolve the DECLARED type for property-access / call / element-access / destructured / unannotated-const sources (census cells m03 m04 h02 h04 h05 f10), conditionals (h09), qualified `NS.U` references, and retire B416, whose all-interface table over-names an inline union (g01 g02 g06); x05 (our flow under-narrows, so `U` where tsgo prints `B`) belongs to the narrowing, not the display. ORIGINAL: AN ALIAS-NAMED UNION DISPLAYS EXPANDED WHERE tsgo PRINTS THE ALIAS NAME — `type U = A | B; declare const u: U; const n: number = u` prints `Type 'A | B' …` (tsgo `Type 'U' …`), on ANY read, no narrowing needed (found by (P18.222)'s builder, cells `build/bench/p18222-agent/d/d01`-`d04` and c06/c07).** A display parity defect in every relation message naming such a value. CLAUDE.md has several entries on why (grep "tsc's UNION-ALIAS DISPLAY IS *IDENTITY PRESERVATION*" and "`aliasDisplayMap` IS AN *ID-KEYED GLOBAL*"): tsc keys its union cache by member list PLUS alias and ours interns by members alone, so a naive fix is known to be structurally blocked — census which reads lose the alias (declared type vs flow type vs a narrowed-back-to-whole union), whether the flow walk's join rebuilds the union without its alias, and whether a per-READ alias carrier (the declaration's type node) can restore it without touching interning. Direction: DISPLAY only (no row added or removed) — the grid is blind to it (every profile row is `Cannot find name`); the corpus screen and pins are the gate.
 
 - [ ] **(CHK.176) (a) LANDED 2026-09-29 ((P18.223) note: signature-based arity reader, 24 -> 73 of 87 cells). OPEN: callee typing residues (a callee typed `any`: `T` callbacks, `X | undefined` members, call results, IIFEs, aliases, contextual callback params, for-of bindings), f02, e12 / e15, TS2393, (d)-(f). (b) + (c) LANDED 2026-09-29 ((P18.219) note: void-trimmed minimum in seven arity emitters; B498 skips explicit type arguments). OPEN: (a) needs a NEW signature-based TS2554 emitter at `checkArgumentsAgainstSignature` (row-adding; deduplicate against the name walker), (d)-(f), and the contextual-`void` parameter case. THE ARITY RESIDUES (CHK.175) MEASURED — two FALSE POSITIVES first, then missing rows (all pre-existing, cells under `build/bench/p18218-agent/m/` and `x/`).** (b) FALSE TS2554: the name-based arity walker (`spineArgCallEnter` / `paramInfo`) ignores `void`-accepting trailing parameters (b01 / b02 — tsgo reports only TS2345); (c) DUPLICATE TS2345: the B498 pin walker `checkGenericDefaultParamCall` repeats the main reader's TS2345 when arity is CORRECT (`g<string>(1)` prints it twice); (a) MISSING TS2554 where the name-based walker does not reach — a call through a function-typed parameter (a09), real-lib functions and members (b04 `parseInt`, `charAt`), an overloaded constructor (b06), an optional-chain call (b07), a tuple rest (b10) — a signature-based TS2554 reader could share `callArityFails`; (d) JS: untyped JS parameters are treated as optional ("1-2") where TypeScript 7 makes them required (x/j1), and JS argument relation never fires (b05 / j2); (e) a tagged template's TS2554 at the wrong column (a14); (f) decorators: TS1241 never emitted (a31). Measure each against tsgo first.
 

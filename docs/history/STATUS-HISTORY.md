@@ -1,5 +1,12 @@
 
 
+**(P18.228) — (CHK.173) G1 ARC B5e: CODE IN `catch` / `finally` NOW SEES WHAT THE `try` ASSIGNED (IT SAW THE PRE-`try` TYPE), AS tsgo DOES; +0 EVERYWHERE, 21,818 / 0 / 44 (2026-09-29).**
+`let x = null; try { x = 1; … } finally { x }` typed `x` as `null` inside `finally` — wrong types in catch and finally
+blocks and a shipped false "possibly null". The binder now ports tsgo's try exception label; tsgo's return label was
+measured unnecessary and left out. 14 pins, 6 of 7 arms RED. Screen 0; grid 8x0; libs 0. Next: B6, the final body-local
+round.
+
+
 **(P18.227) — (CHK.173) G1 ARC B5f: `new X!()` NOW PARSES AS tsgo PARSES IT; THE FALSE "not constructable" ERROR ON A NULLABLE CONSTRUCTOR IS GONE, AND `new o.x!.y!(1)` NO LONGER EMITS A DIFFERENT PROGRAM; +0 EVERYWHERE, 21,804 / 0 / 44 (2026-09-29).**
 The parser read `new W!()` as `(new W)!()`, so every non-null-asserted constructor lost its arguments — a false TS2351
 in the checker and, in emitted JavaScript, `(new o.x).y(1)` instead of `new o.x.y(1)`. A nullable `new` callee without

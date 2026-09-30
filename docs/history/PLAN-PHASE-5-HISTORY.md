@@ -1,3 +1,45 @@
+### Round (P18.223) — (CHK.176)(a): a signature-based arity reader reports tsgo's TS2554 / TS2555 / TS2556 / TS2575 for calls the name walker never reached (callbacks, real-lib members, overloaded constructors, optional-chain calls, tuple rests); 24 -> 73 of 87 cells agree, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent beside the (third, finally non-stalling) G1 census; the orchestrator re-ran
+every gate. **Mechanism**: `checkArgumentsAgainstSignature` now REPORTS when `callArityFails` is true (it used to
+return silently), under a `reportArity` flag false for the per-candidate calls inside `checkArgumentsAgainstOverloads`
+(which reports when every overload fails arity, and before its generic-overload bail) and for the explicit-type-argument
+path unless there is one generic candidate. `reportSignatureArity` follows tsgo's `getArgumentArityError` (too many:
+squiggle args[max..]; too few: at the callee — the name for a property access, the whole expression for `new` — with
+TS6210; TS2575 for an overload gap; TS2555 with a rest), `reportSpreadSignatureArity` emits TS2556, `callArity` applies
+the void trim and expands a fixed-tuple rest (`TupleType.elementOptional`); `arityRowAt` dedupes against the name
+walker's rows by (file, start, length); `arityDeclTrusted` extracts the embedded-lib / JS exclusion. **Two typing gaps
+the new reader exposed needed refusals**: a callee bound through an `any`-annotated / destructured / method parameter or
+a function expression's own name resolved to the OUTER function (`arityIdentifierCalleeTrusted` / `arityBindingIn` /
+`arityBindingOwns` — a syntactic nearest-binding check, which also refuses a global name with two function
+implementations), and an alias of an overload set (`export import extname = ts.getAnyExtensionFromPath`) keeps only the
+first overload — the FIRST GRID RUN caught 3 false rows in tsc's `src/harness/vpathUtil.ts`, closed by
+`arityOverloadSetComplete`. **Where the item was wrong**: a09 / b04 / b06 / b07 / b10 were not one gap — b07 (`o?.m` on
+`T | undefined`), a generic callback, `mk()(…)`, an IIFE and `const g = cb; g(…)` get NO argument checking at all (the
+callee types `any`), which an arity reader cannot fix. **Countdowns**: six `Inv4SpineBatch26Test` "negative control …
+unreached" pins (a `new` callee, a parameter default, `extends mix()`, object-literal accessors, a shorthand
+destructuring default, depth > 200) asserted silence where tsgo reports — re-pointed; `SpreadArgumentTupleTest`'s
+"residue - a variable callee is not arity-checked" closed.
+
+**Measured**: 87 cells 24 -> 73 agree (callback parameters incl. TS2555 / optional / void trim, array elements,
+call-signature overloads and TS2575, generic overload sets, construct-signature variables, overloaded constructors,
+`f?.()`, `o.m?.()`, `o?.["m"]()`, tuple rests, TS2556 spreads, `parseInt` / `charAt` / `JSON.parse` / `new Date(…8)` /
+`new Map(1, 2)` / `p.then` x3, imported functions, `this.cb`, `g.call`, nested calls, `h()()`, explicit type arguments on
+a variable, the six previously unreached positions). **Pins**: `SignatureArityReaderTest` (24). **Ablation** (14 arms):
+A1 no emission 22 RED, A2 no dedupe 59, A3 dedupe by start only 1, A4 binding check off 7, A5 report per candidate 2, A6
+tuple expansion off 1, A7 generic-overload arm off 1, A8 spread reporter off 2, A10 duplicate-implementation refusal 1,
+A11 `: any` trusted 4, A12 overload emission off 3, A13 tuple fast path 1, A14 overload-completeness guard 1; **A9
+(argument-list identity check) 0 — redundant, kept**; the explicit-type-argument `genericCandidates.size == 1` gate has
+no arm and no pin. **Gates**: full suite **21,676 / 0 / 44** (+24); corpus screen 0 of 8,725; cost_gate PASS (flat);
+huge_methods 0 (`checkSingleNewExpressionTypesCore` 6,760, `checkSingleCallExpressionTypesCore` 6,056); grid 8x
+`added=0 removed=0` (a REAL gate — its first run caught the alias FPs), libraries 0; warning gate clean. **Cost to the
+(INV.0) metric**: `Checker.kt` +370 lines (about half KDoc) — the builder judged the logic too entangled with private
+Checker helpers to move out; a future extraction candidate. **Residues**: callee typing (a `T`-mentioning callback, an
+optional-chained member on `X | undefined`, a call result, an IIFE, a parameter alias, contextual callback parameters
+`new Promise((r) => r(1, 2))`, for-of bindings); f02 (an alias of an overload set keeps one — tsgo TS2575); name-walker
+shadow FPs e12 (catch variable) / e15 (`any` parameter shadowing a class for `new`); TS2393 never emitted; (d)-(f).
+**Successor**: the G1 arc, round B5a (census below).
+
 ### Round (P18.222) — (CHK.173) the B1 CONDITION leak: a condition / assertion call / `switch` on a same-named INNER binding no longer narrows the outer variable; 5 -> 37 rows against tsgo's 37, 0 false, every counter +0.00%, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent beside the relaunched G1 census; the orchestrator re-ran every gate incl.
