@@ -25,6 +25,34 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.241) — (CHK.182): a class whose NAME matches an interface anywhere in the program no longer silences its TS2339 / TS2551 — a program-wide name refusal is replaced by reading the interfaces actually merged into the class's own symbol; 23 silenced rows restored across a 30-cell matrix, all tsgo rows; +0 on corpus, grid and libraries (2026-09-30)
+
+**Out-of-order pick, stated**: taken ahead of (CHK.185) / (CHK.183) (both small residues) because it silenced whole
+families of rows. One implementation subagent. **Where the queue item was wrong**: (a) not "two module files" — the
+silence hit ANY class whose name matched an interface in ANY file: two modules in either order, a module with a
+script either way round, two scripts, and a genuine same-scope merge (`interface D` + `class D` in one file);
+(b) "interface+interface and class+class are fine" said nothing about the cause — neither shape enters the
+class-instance path; (c) `moduleInterfaceNames` / `multiFileModuleTypeNames` are innocent (read only by the
+object-literal / `nodeTypes` / lib-phantom paths); (d) the binder DOES merge class+interface now — a stale KDoc saying
+it did not was what justified the refusal. **Mechanism**: `classNamesWithSiblingInterfaces()` built a program-wide set
+of names used by both a class and an interface, and `lookupInstanceMemberInResolvableChain` answered "unsafe" for any
+class in it — every class-instance TS2339/TS2551 emitter goes through it (`tryEmitClassInstanceMissingTs2339`, the
+`new C().x` and chained `o.d.x` branches, both `this.x` branches); independently, `tryEmitClassInstanceMissingTs2339`
+counted a merged interface as a shape declaration, so `shapeDecls != 1` bailed on every genuine merge. **Change**
+(`Checker.kt` +22 net): the name set and its cache are deleted; `mergedInterfaceHasMember(classSym, propName)` reads
+the interfaces on the class's OWN symbol and answers true / false / null (null — refuse — for a lib interface, an
+`extends` list, or any member that is not a plain named property / method / accessor); the chain walker takes the
+symbol and finds a base's class declaration by kind; `shapeDecls` no longer counts interfaces; the `new` and chained
+branches no longer refuse a merged interface; the TS2551 suggestion pool includes merged-interface members. **Pins**:
+`ClassInterfaceNameCollisionTest`, 15 tests; ablation a1 11 / a2 4 / a3 5 / a4 1 / a5 1 / a6 1 / a7 1 / a8 1 / a9 1 /
+a10 **0** (the lib-interface refusal is unpinned, not proven necessary — a lib interface's members are readable
+anyway; its only added case is lib + `extends`, which the `extends` refusal already covers). **Gates**: full suite
+22,029 / 0 / 44 (+15); corpus screen 8725 / 0; `cost_gate.py` 0 (counters identical to (P18.240)'s — this round moves
+none); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1
+(none of these corpora holds such a collision — the grid is a CONTROL; the matrix and pins are the gate); warning gate
+with probe: probe only. The final `Checker.class` (`b69eb37e`) differs from the gridded builder binary only by a KDoc
+(`javap -c -p` minus line numbers identical). Residues -> (CHK.186), (CHK.187).
+
 ### Round (P18.240) — (CHK.184): a guard on an OPTIONAL property narrows the union by tsgo's `narrowTypeByDiscriminant` — the shipped false TS18048 (and a false TS2339 on `never` from `!in`) is gone, 109 -> 3 mismatched cells of a 480-cell matrix, 83 false rows removed, (CHK.180)'s union refusal LIFTED; +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **Where the queue item was wrong**: (a) not only truthy / `!` / `&&` — `=== undefined`,
@@ -264,23 +292,6 @@ identical, `callArityFails` same verdicts, new accessor hops `inline` (builder, 
 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe control: probe only;
 warm A/B both orders inside the band (-0.17% 2/2; reversed run noise-dominated, -0.55% with a 1.78% arm sd). Builder's
 arity ablation (31 classes, 596 tests green): a1 35 / a2 66 / a3 2 / a4 23 RED. tsgo matrix 8/8 identical.
-
-### Round (P18.231) — the detached setter reattached: `currentClassForThis` bumps its expression epoch again (the (P18.229) insertion had moved its `set(v)` onto `bodyLocalVetoDeclared`); diagnostics unchanged everywhere, receipt in `epochBumps`/`epochNoops` (2026-09-30)
-
-Orchestrator-only round (one line moved, one KDoc). `Checker.kt`: the two B6 veto fields now sit AFTER
-`currentClassForThis`'s accessor block, so the epoch-bumping setter is back on the property it was written for, and
-assigning the veto type no longer bumps an epoch it has nothing to do with. **Receipt** (`--passTiming`, compiler
-profile, pre-fix classes `07071524` vs `b1157f4c`): `epochNoops currentClassForThis` 13,627 -> **168,238** (the
-same-value writes are now counted on the right property — the 13,627 before were VETO writes mislabelled), `epochBlame
-currentClassForThis` 1 -> 9 (it is now the last bump before 9 invalidated repeats, which previously blamed
-`currentFlowGraph` 166 -> 158); `walkMiss epochInvalidated` 211 both arms; 30 listed diagnostics md5-identical. So the
-detached setter had been costing correctness nothing measurable (the memo's structural check caught every repeat) but
-had made the `this`-class memo key stale-able; the fix restores the invariant rather than moving a row.
-**Gates**: full suite 21,848 / 0 / 44 (unchanged); corpus screen TOTAL 8725, 0 mismatches; `cost_gate.py` every
-counter +0.00%; `huge_methods.py --fail-over 0` = 0; grid 8 profiles x added=0 removed=0 + chain control OK, rxjs 0/0,
-marked 0/0, cronstrue 1/1 (Checker.class 07071524 -> b1157f4c); warning gate with the probe control: the probe's
-warning only. No pin: the effect is a probe counter, and an `epochNoops` assertion would pin instrumentation, not
-behaviour — the CLAUDE.md entry (P18.230) is the guard. Ledger note updated (FIXED at (P18.231)).
 
 ## QUEUE
 
@@ -880,13 +891,17 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
+- [ ] **(CHK.186) A MODULE-LOCAL DECLARATION IS STILL FUSED WITH A SAME-NAMED *SCRIPT* DECLARATION — (CHK.49)'s defect, fixed for LIB names, is live for SCRIPT names (found by (P18.241)): `init:mergeSharedKeepNames` merges a module-local declaration into the global symbol whenever a script file declares the same name, so a module's `class D` carries a script's `interface D` members — measured, `z.q` types `string` (a false TS2322 on `const qq: number = z.q`) where tsgo reports `TS2339 Property 'q' does not exist`** (cells c6/c7 in `build/bench/p18241-agent/cells`). WRONG TYPES, not only silence. The fix needs a "shared" visibility class in `lookupPerFileForNode` / `globalsForFile` (`NameResolver.kt` ~1380, where a non-module-only name returns `globals[name]` for every file), not just removing the merge — CHK.49-sized; read CLAUDE.md "A LIB GLOBAL NAME DECLARED TOP-LEVEL IN A *MODULE* FILE IS MODULE-SCOPED" (the two sets are ONE observable, and seeding only one is worse than both) before designing.
+
+- [ ] **(CHK.187) A MODULE-LOCAL BASE CLASS AND `new D()` INSIDE A MODULE STAY SILENT FOR TS2339 (found by (P18.241), cells k4 k5 k8 m4 m5 m8 in `build/bench/p18241-agent/cells`, tsgo 1 row each): `lookupInstanceMemberInResolvableChain`, `isStaticMemberOfClass`, `emitClassChainTs2551Suggestion` and the `new` branch resolve through `globals[...]`, which excludes module locals.** Resolve the declaring file's scope instead (`lookupPerFileForNode` / the class symbol's own declarations). Row-adding: every added row a tsgo row, grid it. Also: a merged interface with `extends` (m2) and a merged numeric index signature (n6) are refused on purpose and tsgo reports both.
+
 - [ ] **(CHK.185) RESIDUES OF (CHK.184) (matrix `build/bench/p18240-agent/`).** (a) `a?: never` WITHOUT exactOptionalPropertyTypes: a union read of `w.a` should be `string[] | undefined` and we drop the `undefined` — the 3 remaining matrix cells, where tsgo reports `'w.a' is possibly 'undefined'` under an `in` guard; (b) DISPLAY: a single union member printed alone shows `a?: undefined | undefined` where tsgo prints `a?: undefined` — pre-existing on an `===` narrowing, now reachable on more paths, no gate sees it (a relation-message TEXT-DIFF); (c) `checkDiscriminateOptionalProperty4`, the corpus pin walker for the `"a" in z` row, may now be REDUNDANT — PassLab-ablate it and retire it if the corpus stays green (CLAUDE.md "A BASELINE SERVED BY A WIPE-AND-PIN WALKER CANNOT BE CLOSED BY AN ENGINE RULE"); (d) not ported: tsgo's `removeNullable` on `?.` discriminant accesses, and equality with NON-nullish literals (the old path still owns it).
 
 - [x] **(CHK.184) DONE 2026-09-30 ((P18.240) note). TRUTHINESS NARROWING ON A UNION WHOSE MEMBERS CARRY `?: undefined` PROPERTIES IS A SHIPPED FALSE TS18048 (found by (P18.239)): `type U = { a: T; b?: undefined } | { b: T; a?: undefined }; function p(w: U) { w.a ? … : w.b.toString() }` — tsgo is silent, we report `'w.b' is possibly 'undefined'`, on parameters and file-level consts today; `discriminateWithOptionalProperty4(exactoptionalpropertytypes=false)` is the corpus witness once a body local reaches the reader.** Removing it lets (CHK.180)'s union refusal in `WrittenReceiverTypes.kt` be lifted. Measure the matrix (truthy / falsy / `!` / `&&` / `in` guards, exactOptionalPropertyTypes on/off) against tsgo; the false-positive direction makes it the first (CHK.180) successor to take.
 
 - [ ] **(CHK.183) RESIDUES OF (CHK.181) (cells `build/bench/p18238-agent/m/`).** (a) a tuple ALIAS rest (`type T = [string, number?]; f(...a: T)`, m5) is recognised by neither arity reader — both rows missing (tsgo `Expected 1-2 arguments, but got 3.` / `got 0`); `restTupleOf` would need to resolve the reference, or read the range off the checker's tuple type, which has no per-element optional flag today (only `tupleRestIndex`); (b) m16 `f16("a")` with `...a: [...number[], boolean]`: tsgo reports TS2345 `Argument of type '[]' is not assignable to parameter of type '[...number[], boolean]'.` (the relation for a middle-rest tuple, not arity) — measure; (c) B170's existing TS6236 on the `Parameters<Fn>` path (`Checker.kt` ~67786) still spans `restParam.end - restParam.pos`, likely one character past the parameter — check its corpus baseline before touching.
 
-- [ ] **(CHK.182) AN `interface D` IN ONE MODULE FILE AND A `class D` IN ANOTHER SILENCE EVERY TS2339 ON A `D` RECEIVER IN THE CLASS'S FILE — parameters, file-level consts and body locals alike (found by the (CHK.180) census; repro `build/scratch-p18237-census/coll/`: tsgo 3 rows, ours 0).** Interface+interface and class+class are fine. Module-scoped names must not merge across files (INV.3(d)); find where the class file's `D` is resolved against, or merged with, the other file's interface (CLAUDE.md "A MODULE-LOCAL `interface` WHOSE NAME MATCHES A LIB GLOBAL IS **MERGED INTO** THE LIB SYMBOL", "A MERGED `interface`'s SAME-NAMED MEMBER"), fix, pin tsgo's rows, grid it (a silencing defect: expect added rows, each must be a tsgo row).
+- [x] **(CHK.182) DONE 2026-09-30 ((P18.241) note). AN `interface D` IN ONE MODULE FILE AND A `class D` IN ANOTHER SILENCE EVERY TS2339 ON A `D` RECEIVER IN THE CLASS'S FILE — parameters, file-level consts and body locals alike (found by the (CHK.180) census; repro `build/scratch-p18237-census/coll/`: tsgo 3 rows, ours 0).** Interface+interface and class+class are fine. Module-scoped names must not merge across files (INV.3(d)); find where the class file's `D` is resolved against, or merged with, the other file's interface (CLAUDE.md "A MODULE-LOCAL `interface` WHOSE NAME MATCHES A LIB GLOBAL IS **MERGED INTO** THE LIB SYMBOL", "A MERGED `interface`'s SAME-NAMED MEMBER"), fix, pin tsgo's rows, grid it (a silencing defect: expect added rows, each must be a tsgo row).
 
 - [x] **(CHK.181) DONE 2026-09-30 ((P18.238) note). A TUPLE REST'S OPTIONAL ELEMENTS ARE IGNORED BY THE NAME-BASED TOO-MANY ARITY ROW (found by (P18.237)): `function tup(...a: [string, number?])` called `tup("a", 1, 2)` reads `Expected 2 arguments, but got 3.` where tsgo reads `Expected 1-2 arguments, but got 3.`** The name walker passes the tuple's element count as both bounds (`signatureArity.emitTS2554TooMany(maxArgs, maxArgs, …)`, `Checker.kt` ~67711). Measure the neighbouring shapes (rest tuples with optional and rest elements, too-few direction) against tsgo, fix at the call site, pin tsgo's rows. Small.
 

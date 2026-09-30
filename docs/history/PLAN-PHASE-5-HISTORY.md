@@ -1,3 +1,20 @@
+### Round (P18.231) — the detached setter reattached: `currentClassForThis` bumps its expression epoch again (the (P18.229) insertion had moved its `set(v)` onto `bodyLocalVetoDeclared`); diagnostics unchanged everywhere, receipt in `epochBumps`/`epochNoops` (2026-09-30)
+
+Orchestrator-only round (one line moved, one KDoc). `Checker.kt`: the two B6 veto fields now sit AFTER
+`currentClassForThis`'s accessor block, so the epoch-bumping setter is back on the property it was written for, and
+assigning the veto type no longer bumps an epoch it has nothing to do with. **Receipt** (`--passTiming`, compiler
+profile, pre-fix classes `07071524` vs `b1157f4c`): `epochNoops currentClassForThis` 13,627 -> **168,238** (the
+same-value writes are now counted on the right property — the 13,627 before were VETO writes mislabelled), `epochBlame
+currentClassForThis` 1 -> 9 (it is now the last bump before 9 invalidated repeats, which previously blamed
+`currentFlowGraph` 166 -> 158); `walkMiss epochInvalidated` 211 both arms; 30 listed diagnostics md5-identical. So the
+detached setter had been costing correctness nothing measurable (the memo's structural check caught every repeat) but
+had made the `this`-class memo key stale-able; the fix restores the invariant rather than moving a row.
+**Gates**: full suite 21,848 / 0 / 44 (unchanged); corpus screen TOTAL 8725, 0 mismatches; `cost_gate.py` every
+counter +0.00%; `huge_methods.py --fail-over 0` = 0; grid 8 profiles x added=0 removed=0 + chain control OK, rxjs 0/0,
+marked 0/0, cronstrue 1/1 (Checker.class 07071524 -> b1157f4c); warning gate with the probe control: the probe's
+warning only. No pin: the effect is a probe counter, and an `epochNoops` assertion would pin instrumentation, not
+behaviour — the CLAUDE.md entry (P18.230) is the guard. Ledger note updated (FIXED at (P18.231)).
+
 ### Round (P18.230) — (INV.0) extraction: the (CHK.173) null-check family moves VERBATIM out of `Checker.kt` into `NullishReceiverChecks.kt` (21 declarations, `Checker.kt` -570); every deterministic receipt byte-identical against pristine; it also exposed a DETACHED SETTER that (P18.229) introduced (2026-09-30)
 
 Orchestrated at the natural boundary after the null-check arc (this session had grown `Checker.kt` 201,043 -> 203,588):

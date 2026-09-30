@@ -1,5 +1,11 @@
 
 
+**(P18.236) — (CHK.179)(a2)+(c): `obj[k]` WITH `k: string` ON A TYPE WITHOUT AN INDEX SIGNATURE NOW REPORTS tsgo's TS7053 UNDER `noImplicitAny`, AND `u!.a` / `(u satisfies U).a` / A CAST STORED IN A `const` REPORT THE MISSING MEMBER; +37 PINS, 21,956 / 0 / 44 (2026-09-30).**
+Every added row is a tsgo row; the first cut added false rows on tsc's own sources, which the grid caught and which
+located the real rule (the key's type decides). Screen 0; grid 8x0; libraries unchanged. Next gap: `this` and
+body-local receivers are typed `any` in this walk ((CHK.180)).
+
+
 **(P18.235) — (CHK.179)(a): `obj["missing"]` NO LONGER REPORTS "property does not exist" (TS2339) IN EVERY CONFIGURATION — IT IS SILENT WITHOUT `noImplicitAny` AND REPORTS tsgo's TS7053 / TS7015 / TS7052 WITH IT; +20 PINS, 21,919 / 0 / 44 (2026-09-30).**
 A false-positive class covering any receiver kind, not only unions as the queue said. Screen 0; grid 8x0 and libraries
 unchanged (none contain the shape, so the pins are the gate). Still silent where tsgo reports: string-typed keys and a
