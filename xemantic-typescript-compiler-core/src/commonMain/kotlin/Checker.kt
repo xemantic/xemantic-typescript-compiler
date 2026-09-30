@@ -7128,6 +7128,8 @@ class Checker(
      * block's own subtree, i.e. strictly after the block's enter.
      */
     private val spineTavCandidates = HashSet<String>()
+    /** (CHK.188) [NameResolver.globalValuelessNames] — the second half of the candidate gate. */
+    private var spineTavGlobalValueless: Set<String> = emptySet()
 
     /** True for a file that is EXPLICITLY non-strict (`strict: false` with
      *  `alwaysStrict` not true, no module/"use strict"; an explicit
@@ -29237,6 +29239,35 @@ class Checker(
         root.typeOnly?.let { spineTavCandidates.addAll(it) }
         root.nsOnly?.let { spineTavCandidates.addAll(it) }
         spineTavCandidates.addAll(TYPE_ONLY_KEYWORDS)
+        spineTavGlobalValueless = nameResolver.globalValuelessNames(if (options.useRealLibs) null else builtinLibSourceFile)
+    }
+
+    /**
+     * (CHK.188) a GLOBAL with no value meaning read as a value: nothing in this file binds
+     * [name] (the caller has ruled out every tav level's values and typeOnly; the lexical
+     * scope chain covers the rest, the file's own locals and imports included — which makes
+     * a tav-level nsOnly test here MEASURED REDUNDANT), so
+     * [NameResolver.globalValuelessKind] decides from the global this file sees.
+     */
+    private fun tavGlobalValueless(name: String): Int {
+        if (name !in spineTavGlobalValueless) return 0
+        if (spineScopeLookup(name) != null) return 0
+        return nameResolver.globalValuelessKind(spineFileName, name)
+    }
+
+    private fun emitTS2708(name: String, id: Identifier) {
+        val start = id.pos
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot use namespace '$name' as a value.",
+            category = DiagnosticCategory.Error,
+            code = 2708,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = name.length,
+        ))
     }
 
     private fun spineTavTeardown() {
@@ -29736,7 +29767,7 @@ class Checker(
         // `--tavGateOff` keeps the pre-874 path in the same binary (round 795),
         // which is what makes the capture a controlled row rather than a
         // two-build difference.
-        if (!TavGate.off && id.text !in spineTavCandidates) {
+        if (!TavGate.off && id.text !in spineTavCandidates && id.text !in spineTavGlobalValueless) {
             FrontEnd.addTavRefused()
             return
         }
@@ -29764,6 +29795,23 @@ class Checker(
             emitTS2693(name, id, spineSource, spineFileName)
             return
         }
+        // (CHK.188) a GLOBAL the file does not bind: tsgo's `onFailedToResolveSymbol` asks
+        // the namespace question BEFORE the type one, and in every value position — a
+        // plain-`=` target included, since `checkConstAssignment`'s TS2708 covers only the
+        // file's OWN names (measured: `N = 1` on a script namespace was otherwise silent).
+        val globalKind = tavGlobalValueless(name)
+        if (globalKind == NameResolver.GLOBAL_NAMESPACE_ONLY) {
+            FrontEnd.addTavExit(unreached = false, valueHit = false, inert = false)
+            FrontEnd.addTavEmit()
+            emitTS2708(name, id)
+            return
+        }
+        if (globalKind == NameResolver.GLOBAL_TYPE_ONLY) {
+            FrontEnd.addTavExit(unreached = false, valueHit = false, inert = false)
+            FrontEnd.addTavEmit()
+            emitTS2693(name, id, spineSource, spineFileName, global = true)
+            return
+        }
         if (isNewCtor) {
             if (FrontEnd.tavInertCensus) FrontEnd.addTavExit(
                 unreached = false, valueHit = false, inert = !tavCensusCouldEmit(level, name),
@@ -29780,18 +29828,7 @@ class Checker(
         if (tavIsNsOnly(level, name)) {
             FrontEnd.addTavExit(unreached = false, valueHit = false, inert = false)
             FrontEnd.addTavEmit()
-            val start = id.pos
-            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
-            diagnostics.add(Diagnostic(
-                message = "Cannot use namespace '$name' as a value.",
-                category = DiagnosticCategory.Error,
-                code = 2708,
-                fileName = spineFileName,
-                line = line,
-                character = character,
-                start = start,
-                length = name.length,
-            ))
+            emitTS2708(name, id)
         } else {
             // Reached this line = neither typeOnly nor nsOnly hit, i.e. INERT by
             // construction: no reordering of the tests could have emitted here.
@@ -64335,13 +64372,19 @@ interface DataView {
         return leftmost to names.joinToString(".")
     }
 
-    private fun emitTS2693(name: String, node: Node, source: String, fileName: String) {
+    /** (CHK.188) tsgo's `isES2015OrLaterConstructorName`. */
+    private fun isEs2015OrLaterConstructorName(s: String): Boolean =
+        s == "Promise" || s == "Symbol" || s == "Map" || s == "WeakMap" || s == "Set" || s == "WeakSet"
+
+    private fun emitTS2693(name: String, node: Node, source: String, fileName: String, global: Boolean = false) {
         val start = node.pos
         val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         // Forward-declarable lib types (Promise, Symbol, Map, …) under restrictive @lib
         // get the more specific TS2585 with a lib-hint message instead of TS2693.
-        val (code, message) = if (name in currentForwardLibTypeNames) {
+        // (CHK.188) a GLOBAL type-only name takes tsgo's `isES2015OrLaterConstructorName`.
+        val (code, message) = if (name in currentForwardLibTypeNames ||
+            (global && isEs2015OrLaterConstructorName(name))) {
             2585 to "'$name' only refers to a type, but is being used as a value here. Do you need to change your target library? Try changing the 'lib' compiler option to es2015 or later."
         } else {
             2693 to "'$name' only refers to a type, but is being used as a value here."

@@ -989,6 +989,72 @@ internal class NameResolver(
         return perFileScopeOwnLocals[fileName]?.containsKey(name) == true
     }
 
+    /**
+     * (CHK.188) every [globals] name whose symbol has NO value meaning but a TYPE meaning
+     * (a script-file or `declare global` `interface`/`type`; a lib type-only name such as
+     * `PropertyKey`, `Partial`, a DOM interface with no `declare var`) or only a
+     * NON-instantiated namespace meaning. tsgo reports TS2693 (resp. TS2708) for such a
+     * name read as a value from ANY file that does not bind it itself
+     * (`checkAndReportErrorForUsingTypeAsValue`: a Type-meaning resolution whose
+     * `getSymbolFlags` carries no Value). Built on first ask — the spine's TS2693 pass asks
+     * once per checker, after `init` has finished merging [globals].
+     *
+     * [embeddedLib] is the EMBEDDED test lib's file (null under `useRealLibs`): that lib
+     * declares `interface String` & co. WITHOUT their `declare var`s, so a name any of whose
+     * declarations it holds has no trustworthy value meaning and is left out — measured, 50
+     * corpus baselines otherwise grow a false TS2693 on `String`/`Array`/`Number`.
+     */
+    fun globalValuelessNames(embeddedLib: SourceFile?): Set<String> = globalValuelessNamesMemo ?: HashSet<String>().also { out ->
+        for ((name, sym) in globals) {
+            val f = sym.flags
+            if (f.hasAny(SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.NamespaceModule) &&
+                !f.hasAny(SymbolFlags.Value or SymbolFlags.Alias) &&
+                (embeddedLib == null || sym.declarations.none { (it as NodeBase).parent === embeddedLib })
+            ) out.add(name)
+        }
+        globalValuelessNamesMemo = out
+    }
+
+    private var globalValuelessNamesMemo: Set<String>? = null
+
+    /**
+     * (CHK.188) what the global [name] seen from [fileName] is when read as a VALUE by a
+     * file that does not bind it: [GLOBAL_NAMESPACE_ONLY] (TS2708 — asked FIRST, as tsgo's
+     * `onFailedToResolveSymbol` does, so an `interface` merged with a type-only namespace is
+     * the namespace), [GLOBAL_TYPE_ONLY] (TS2693), or 0 (it has a value, or is unknown).
+     * [globalsForFile] keeps a foreign MODULE's local out.
+     */
+    fun globalValuelessKind(fileName: String, name: String): Int {
+        val sym = globalsForFile(fileName, name) ?: return 0
+        val f = sym.flags
+        if (f.hasAny(SymbolFlags.Value or SymbolFlags.Alias)) return 0
+        if (f.hasAny(SymbolFlags.NamespaceModule)) {
+            return if (sym.declarations.all { it !is ModuleDeclaration || !namespaceHasValue(it) }) {
+                GLOBAL_NAMESPACE_ONLY
+            } else 0
+        }
+        return if (f.hasAny(SymbolFlags.Interface or SymbolFlags.TypeAlias)) GLOBAL_TYPE_ONLY else 0
+    }
+
+    /** (CHK.188) tsgo's module instance state with `declare` IGNORED: the binder records every
+     *  `declare namespace` as NON-instantiated ([Binder]'s `computeModuleInstanceState`),
+     *  which would read `declare namespace M { function f(): void }` as value-less. Anything
+     *  not provably type-only (a const enum, a re-export) counts as a value — silence. */
+    private fun namespaceHasValue(decl: ModuleDeclaration): Boolean = when (val body = decl.body) {
+        is ModuleBlock -> body.statements.any { st ->
+            when (st) {
+                is InterfaceDeclaration, is TypeAliasDeclaration, is ImportDeclaration -> false
+                is ImportEqualsDeclaration -> ModifierFlag.Export in st.modifiers
+                is ExportDeclaration -> !st.isTypeOnly
+                is ModuleDeclaration -> namespaceHasValue(st)
+                else -> true
+            }
+        }
+        is ModuleDeclaration -> namespaceHasValue(body)
+        null -> false
+        else -> true
+    }
+
     /** (INC.71) [libValueShadowNames], built on first ask. */
     fun libValueShadows(): Set<String> {
         ensurePerFileVisibility()
@@ -1908,7 +1974,11 @@ internal class NameResolver(
      * `function foo` is answered by `currentLocalTypes` above, never by this ascent
      * skipping past it.
      */
-    private companion object {
+    companion object {
+        /** (CHK.188) [globalValuelessKind]'s answers. */
+        const val GLOBAL_TYPE_ONLY = 1
+        const val GLOBAL_NAMESPACE_ONLY = 2
+
         /**
          * (INV.0) step 10b — what ENDS [lexicalValueSymbolForNode]'s ascent: any
          * scope-space binding that occupies the name in VALUE space, whether or not it
@@ -1916,7 +1986,7 @@ internal class NameResolver(
          * because a nested import (TS1232) still binds, and no TYPE-space flag is,
          * because the two spaces do not compete for a name.
          */
-        val VALUE_SPACE_BINDING = SymbolFlags.Value or SymbolFlags.Alias
+        private val VALUE_SPACE_BINDING = SymbolFlags.Value or SymbolFlags.Alias
     }
 
     fun lexicalValueSymbolForNode(node: Node, name: String): Symbol? {

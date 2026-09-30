@@ -55,10 +55,9 @@ import kotlin.test.Test
  *    declaration ([NameResolver.fileShadowsGlobal]).
  *
  * Every expectation is tsgo 7.0.2's output for the same files, row for row; the fixtures
- * are the (P18.242) matrix (`build/bench/p18242-agent/cells`). Two tsgo rows are left out
- * on purpose, together with the source that produces them: a script-file `interface` used
- * as a VALUE from another MODULE file is TS2693 in tsgo and silent here with or without
- * any collision — a pre-existing cross-file TS2693 gap, not this defect.
+ * are the (P18.242) matrix (`build/bench/p18242-agent/cells`). The cross-file shape — a
+ * script-file `interface` used as a VALUE from another MODULE file, TS2693 in tsgo — was a
+ * separate gap, closed by (CHK.188) and pinned in [GlobalTypeOnlyValueUseTest].
  */
 class ScriptGlobalModuleShadowTest {
 
