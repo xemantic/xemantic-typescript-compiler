@@ -463,7 +463,10 @@ class Checker(
     private val memberNamer = MemberNames(this, enumSemantics, fileResults)
 
     /** (INV.0) (P18.230) — the (CHK.173) nullish-receiver family; see `NullishReceiverChecks.kt`. */
-    private val nullishReceivers = NullishReceiverChecks(this)
+    internal val nullishReceivers = NullishReceiverChecks(this)
+
+    /** (CHK.180) stage 1 — the per-access written receiver type; see `WrittenReceiverTypes.kt`. */
+    private val writtenReceivers = WrittenReceiverTypes(this)
 
     /** (INV.0) (P18.232) — the signature-based arity reader; see `SignatureArity.kt`. */
     private val signatureArity = SignatureArity(this, options)
@@ -121358,7 +121361,7 @@ interface DataView {
      *  non-static method / constructor / accessor / property of a class DECLARATION — or
      *  null. The class symbol is [callWalkClassSymbol]'s ((CHK.169): tsgo's
      *  `tryGetThisTypeAtEx` reads the class's OWN symbol). */
-    private fun enclosingInstanceThisTypeForFlow(node: Node): Type? {
+    internal fun enclosingInstanceThisTypeForFlow(node: Node): Type? {
         var cur: Node? = (node as NodeBase).parent
         while (cur != null) {
             val member: Node = when (cur) {
@@ -152702,7 +152705,7 @@ interface DataView {
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
                 // Now check this property access
                 CpaSections.atP(CpaSections.P_SINGLE_PA)
-                checkSinglePropertyAccess(expr, source, fileName, enclosingClassType)
+                checkSingleAccessWithWrittenReceiver(expr, source, fileName, enclosingClassType)
                 CpaSections.atP(CpaSections.P_DISPATCH)
             }
             is CallExpression -> {
@@ -152800,7 +152803,7 @@ interface DataView {
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
                 checkPropertyAccessInExpr(expr.argumentExpression, source, fileName, enclosingClassType)
                 CpaSections.atP(CpaSections.P_SINGLE_EA)
-                checkSingleElementAccess(expr, source, fileName, enclosingClassType)
+                checkSingleAccessWithWrittenReceiver(expr, source, fileName, enclosingClassType)
                 CpaSections.atP(CpaSections.P_DISPATCH)
             }
             is AsExpression -> {
@@ -154502,6 +154505,24 @@ interface DataView {
                 start != null && start.container === c && outerFlowForCapturedName(start, name) != null
             },
         )
+
+    /**
+     * (CHK.180) stage 1: [checkSinglePropertyAccess] / [checkSingleElementAccess] with the
+     * access root's WRITTEN type ([WrittenReceiverTypes]) installed for this one call and
+     * removed after — never for the frame's lifetime (see that class for why).
+     */
+    private fun checkSingleAccessWithWrittenReceiver(
+        expr: Expression, source: String, fileName: String, enclosingClassType: Type?,
+    ) {
+        val locals = currentLocalTypes
+        val installed = writtenReceivers.install(expr)
+        try {
+            if (expr is PropertyAccessExpression) checkSinglePropertyAccess(expr, source, fileName, enclosingClassType)
+            else checkSingleElementAccess(expr as ElementAccessExpression, source, fileName, enclosingClassType)
+        } finally {
+            if (installed != null) locals.remove(installed)
+        }
+    }
 
     private fun checkSinglePropertyAccess(
         expr: PropertyAccessExpression, source: String, fileName: String,

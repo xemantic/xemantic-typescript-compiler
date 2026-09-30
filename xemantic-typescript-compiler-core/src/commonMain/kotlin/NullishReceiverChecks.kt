@@ -501,7 +501,7 @@ internal class NullishReceiverChecks(
      * [declared] type installed, or `s &&= s.trim()` reads `s` as `any` and vetoes a
      * true row.
      */
-    private fun bodyLocalAssignmentsVeto(recv: Identifier, name: String, declared: Type): Boolean {
+    internal fun bodyLocalAssignmentsVeto(recv: Identifier, name: String, declared: Type): Boolean {
         val flow = checker.getFlowAt(recv) ?: return false
         val reaching = BodyLocalAssignments.reaching(flow, name)
         val comparands = BodyLocalAssignments.optionalChainComparands(flow, name)

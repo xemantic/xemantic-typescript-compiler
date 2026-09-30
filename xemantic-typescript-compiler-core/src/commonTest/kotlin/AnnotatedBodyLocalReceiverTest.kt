@@ -279,13 +279,16 @@ class AnnotatedBodyLocalReceiverTest {
      * which is (CHK.45)'s arm a9 — the class's own member table is not evidence
      * this walker trusts. Both references report
      * `Property 'zzzNope' does not exist on type 'ZzzK'.`
+     *
+     * CLOSED by (CHK.180) stage 1 ((P18.239)): the written type now reaches the general TS2339 path for the one access; the expectation is tsgo 7.0.2's row.
      */
     @Test
-    fun `refusal - a CLASS instance annotation stays silent`() {
+    fun `a CLASS instance annotation reports - closed by CHK-180`() {
         val d = diagnose(
             prelude + "export function f(): void { const v: ZzzK = new ZzzK(); v.zzzNope; }"
         )
-        assert(d.none { it.code == 2339 })
+        val rows = d.map { "${it.line},${it.character}: TS${it.code} ${it.message}" }
+        assert(rows == listOf("16,59: TS2339 Property 'zzzNope' does not exist on type 'ZzzK'."))
     }
 
     /**
@@ -302,13 +305,14 @@ class AnnotatedBodyLocalReceiverTest {
         assert(d.none { it.code == 2339 })
     }
 
-    /** REFUSAL. A user GENERIC instantiation, refused by the same `Type.Reference` line. */
+    /** REFUSAL. A user GENERIC instantiation, refused by the same `Type.Reference` line. CLOSED by (CHK.180) stage 1 ((P18.239)): the written type now reaches the general TS2339 path for the one access; the expectation is tsgo 7.0.2's row. */
     @Test
-    fun `refusal - a GENERIC instantiation annotation stays silent`() {
+    fun `a GENERIC instantiation annotation reports - closed by CHK-180`() {
         val d = diagnose(
             prelude + "export function f(): void { const v: ZzzBox<number> = zzzBoxV; v.zzzNope; }"
         )
-        assert(d.none { it.code == 2339 })
+        val rows = d.map { "${it.line},${it.character}: TS${it.code} ${it.message}" }
+        assert(rows == listOf("16,66: TS2339 Property 'zzzNope' does not exist on type 'ZzzBox<number>'."))
     }
 
     /** REFUSAL. An INTERSECTION, refused by the trust predicate's `Type.Intersection` line. */
@@ -343,13 +347,16 @@ class AnnotatedBodyLocalReceiverTest {
      * MEASURED: arm a4 drops the helper's own `t !is Type.Object` gate and this pin
      * reads 0 RED — that tail is what refuses it, so this test discriminates the
      * DECISION and not the gate.
+     *
+     * CLOSED by (CHK.180) stage 1 ((P18.239)): the written type now reaches the general TS2339 path for the one access; the expectation is tsgo 7.0.2's row.
      */
     @Test
-    fun `refusal - a PRIMITIVE annotation stays silent`() {
+    fun `a PRIMITIVE annotation reports - closed by CHK-180`() {
         val d = diagnose(
             prelude + "export function f(): void { const v: string = \"s\"; v.zzzNope; }"
         )
-        assert(d.none { it.code == 2339 })
+        val rows = d.map { "${it.line},${it.character}: TS${it.code} ${it.message}" }
+        assert(rows == listOf("16,54: TS2339 Property 'zzzNope' does not exist on type 'string'."))
     }
 
     /**
@@ -362,13 +369,16 @@ class AnnotatedBodyLocalReceiverTest {
      * MEASURED: like the primitive above, arm a4 reads 0 RED — a `Type.Union` answer
      * is dropped by the caller's tail too, so the helper's `Type.Object` gate is a
      * statement of intent here and not what this pin sees.
+     *
+     * CLOSED by (CHK.180) stage 1 ((P18.239)): the written type now reaches the general TS2339 path for the one access; the expectation is tsgo 7.0.2's row.
      */
     @Test
-    fun `refusal - a NULLISH union annotation stays silent`() {
+    fun `a NULLISH union annotation reports both rows - closed by CHK-180`() {
         val d = diagnose(
             prelude + "export function f(): void { const v: { a: number } | undefined = zzzOptV; v.zzzNope; }"
         )
-        assert(d.none { it.code == 2339 })
+        val rows = d.map { "${it.line},${it.character}: TS${it.code} ${it.message}" }
+        assert(rows == listOf("16,75: TS18048 'v' is possibly 'undefined'.", "16,77: TS2339 Property 'zzzNope' does not exist on type '{ a: number; }'."))
     }
 
     /**
@@ -391,13 +401,16 @@ class AnnotatedBodyLocalReceiverTest {
      * its `slice`/`map`/`filter` through the global `Array` interface and
      * `getApparentType` does not supply those here, which is
      * `cmamCheckNestedObjectReceiver`'s measured reason. Both references report.
+     *
+     * CLOSED by (CHK.180) stage 1 ((P18.239)): the written type now reaches the general TS2339 path for the one access; the expectation is tsgo 7.0.2's row.
      */
     @Test
-    fun `refusal - a TUPLE annotation stays silent`() {
+    fun `a TUPLE annotation reports - closed by CHK-180`() {
         val d = diagnose(
             prelude + "export function f(): void { const v: [number, string] = [1, \"a\"]; v.zzzNope; }"
         )
-        assert(d.none { it.code == 2339 })
+        val rows = d.map { "${it.line},${it.character}: TS${it.code} ${it.message}" }
+        assert(rows == listOf("16,69: TS2339 Property 'zzzNope' does not exist on type '[number, string]'."))
     }
 
     /**

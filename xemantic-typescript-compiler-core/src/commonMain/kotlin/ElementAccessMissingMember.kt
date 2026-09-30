@@ -236,12 +236,24 @@ internal class ElementAccessMissingMember(
                 if (e.text == "globalThis" || e.text == "undefined") return false
                 when (val d = checker.lexicalReturnIdentifierDecl(e)) {
                     is Parameter -> d.type != null
-                    is VariableDeclaration -> d.type != null
+                    is VariableDeclaration -> d.type != null || castInitializer(d.initializer)
                     else -> false
                 }
             }
             else -> false
         }
+    }
+
+    /** (CHK.180) An `as T` / `<T>` initializer — a WRITTEN type — but not `as const`. */
+    private fun castInitializer(init0: Expression?): Boolean {
+        var init = init0
+        while (init is ParenthesizedExpression) init = init.expression
+        val t = when (init) {
+            is AsExpression -> init.type
+            is TypeAssertionExpression -> init.type
+            else -> return false
+        }
+        return !WrittenReceiverTypes.isConstTypeRef(t)
     }
 
     /** `string`, `number` or `string | number` — else null (literal, `any`, template, enum, ...). */
