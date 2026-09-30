@@ -67708,8 +67708,10 @@ interface DataView {
                     if (expanded > maxArgs && excessIdx < 0) excessIdx = i
                 }
                 if (allKnown && excessIdx >= 0) {
+                    // (CHK.181) the minimum counts only the tuple's REQUIRED elements.
+                    val minArgs = signatureArity.tupleRestCallRange(info)?.first ?: maxArgs
                     signatureArity.emitTS2554TooMany(
-                        maxArgs, maxArgs, expanded, expr.arguments, excessIdx, source, fileName,
+                        minArgs, maxArgs, expanded, expr.arguments, excessIdx, source, fileName,
                     )
                     return
                 }
@@ -67717,9 +67719,19 @@ interface DataView {
         }
         if (info != null && !info.isOverloaded) {
             val argCount = expanded?.count ?: expr.arguments.size
+            val tupleRange = signatureArity.tupleRestCallRange(info)
             if (!info.hasRest && argCount > info.maxParams) {
                 val excessIdx = if (expanded != null) signatureArity.firstExcessArgIndex(expanded, info.maxParams) else info.maxParams
                 signatureArity.emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, excessIdx, source, fileName)
+            } else if (tupleRange != null) {
+                // (CHK.181) a rest parameter typed as a tuple literal expands into positions:
+                // its required elements are required arguments, and a FIXED tuple is a
+                // bounded range (`Expected 1-3 arguments`), never `at least`.
+                val (tMin, tMax, tRest) = tupleRange
+                if (argCount < tMin) {
+                    if (tRest) signatureArity.emitTS2555TooFew(tMin, argCount, expr.expression, source, fileName, info.parameters)
+                    else signatureArity.emitTS2554TooFew(tMin, tMax, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
+                }
             } else if (argCount < info.minParams) {
                 // (CHK.176)(b) a trailing `void`-accepting parameter may be omitted.
                 val callMin = signatureArity.callMinArgumentCount(info)

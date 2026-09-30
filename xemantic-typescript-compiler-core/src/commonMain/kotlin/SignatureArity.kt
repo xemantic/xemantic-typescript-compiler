@@ -72,7 +72,7 @@ internal class SignatureArity(
         // can only be wider (a binding pattern is dropped from `parameters` but counted in
         // `minArgumentCount`), so the answer is `false` either way — except for a rest
         // parameter typed as a fixed TUPLE, which tsgo expands into required positions.
-        if (n >= sig.minArgumentCount && n <= sig.parameters.size && !endsInTupleRest(sig)) return false
+        if (n >= sig.minArgumentCount && n <= sig.parameters.size && !endsInAnyTupleRest(sig)) return false
         if (args.any { it is SpreadElement }) return false
         val info = signatureDeclaredArity(sig) ?: return false
         if (!arityDeclTrusted(sig)) return false
@@ -97,6 +97,14 @@ internal class SignatureArity(
         return p.dotDotDotToken && fixedTupleLengthOfRestParam(p) != null
     }
 
+    /** (CHK.181) Does [sig] end in a rest parameter annotated with ANY tuple literal — a
+     *  fixed one or one carrying a rest element (`...a: [string, ...number[]]`), whose
+     *  leading required elements are required call arguments all the same. */
+    private fun endsInAnyTupleRest(sig: Signature): Boolean {
+        val p = sig.parameters.lastOrNull()?.valueDeclaration as? Parameter ?: return false
+        return p.dotDotDotToken && restTupleOf(p) != null
+    }
+
     /** (CHK.176)(a) tsgo's call arity of one signature: `getMinArgumentCount` (void-trimmed),
      *  `getParameterCount` and `hasEffectiveRestParameter`, with a fixed-tuple rest expanded
      *  into its elements (`...a: [string, number?]` is one required and one optional). */
@@ -105,27 +113,40 @@ internal class SignatureArity(
     }
 
     private fun callArity(info: FuncParamInfo, sig: Signature?, trimBelow: Int): CallArity {
-        if (info.hasRest) {
-            val rest = info.parameters.lastOrNull { it.dotDotDotToken }
-            var ann: TypeNode? = rest?.type
-            while (ann is TypeOperator || ann is ParenthesizedType) {
-                ann = if (ann is TypeOperator) ann.type else (ann as ParenthesizedType).type
-            }
-            val tuple = ann as? TupleType
-            if (tuple != null && tuple.elements.none { it is RestType }) {
-                // The parser records a `?` element in [TupleType.elementOptional].
-                val opt = tuple.elementOptional
-                val required = tuple.elements.indices.indexOfLast { opt?.getOrNull(it) != true } + 1
-                val min = if (required > 0) info.maxParams + required
-                    else if (trimBelow < info.minParams) callMinArgumentCount(info, sig) else info.minParams
-                return CallArity(min, info.maxParams + tuple.elements.size, hasRest = false)
-            }
-        }
+        tupleRestArity(info, sig, trimBelow)?.let { return it }
         // The void trim resolves parameter types — only below the declared minimum
         // ([trimBelow] = the argument count, or -1 for the reported range).
         val min = if (trimBelow < info.minParams) callMinArgumentCount(info, sig) else info.minParams
         return CallArity(min, info.maxParams, info.hasRest)
     }
+
+    /**
+     * (CHK.176)(a) / (CHK.181) The call arity of a signature whose rest parameter is
+     * annotated with a tuple LITERAL, or null for any other signature: tsgo expands the tuple
+     * into positions (`getParameterCount` / `getMinArgumentCount` over the tuple's
+     * `fixedLength` / `minLength`). The minimum counts the REQUIRED elements before the
+     * first rest element (the parser records a `?` in [TupleType.elementOptional]) — a
+     * trailing element AFTER a rest element counts for nothing (measured: tsgo reads
+     * `[string, ...number[], boolean]` as `at least 1`); the maximum is the fixed prefix,
+     * unbounded ([CallArity.hasRest]) when the tuple has a rest element of its own.
+     */
+    private fun tupleRestArity(info: FuncParamInfo, sig: Signature?, trimBelow: Int): CallArity? {
+        if (!info.hasRest) return null
+        val tuple = restTupleOf(info.parameters.lastOrNull { it.dotDotDotToken }) ?: return null
+        val restAt = tuple.elements.indexOfFirst { it is RestType }
+        val head = if (restAt < 0) tuple.elements.size else restAt
+        val opt = tuple.elementOptional
+        val required = (0 until head).count { opt?.getOrNull(it) != true }
+        val min = if (required > 0) info.maxParams + required
+            else if (trimBelow < info.minParams) callMinArgumentCount(info, sig) else info.minParams
+        return CallArity(min, info.maxParams + head, hasRest = restAt >= 0)
+    }
+
+    /** (CHK.181) [tupleRestArity] for the name-based arity walker: the reported range
+     *  (`min`, `max`, `hasRest`) of a callee whose rest parameter is a tuple literal, or
+     *  null. Same numbers the signature reader reports, so the two agree by construction. */
+    internal fun tupleRestCallRange(info: FuncParamInfo): Triple<Int, Int, Boolean>? =
+        tupleRestArity(info, null, trimBelow = -1)?.let { Triple(it.min, it.max, it.hasRest) }
 
     /**
      * (CHK.176)(a) tsgo's `getArgumentArityError` for a call every one of whose [sigs] fails
@@ -479,7 +500,9 @@ internal class SignatureArity(
                             length = paramLen,
                         ))
                     }
-                    is Identifier -> {
+                    is Identifier -> if (missingParam.dotDotDotToken) {
+                        relatedInfo.add(restParameterNotProvided(missingParam, paramName, rSource, rFileName))
+                    } else {
                         // TS6210: "An argument for 'x' was not provided."
                         // B95c (round 82): anchor at the PARAMETER's pos (Parameter.pos is captured
                         // before modifiers, so for a parameter-property `public n` it points at
@@ -516,6 +539,26 @@ internal class SignatureArity(
         ))
     }
 
+    /** (CHK.181) tsgo's related row when the first missing position IS the rest parameter —
+     *  only a tuple rest can be (`getArgumentArityError`'s `isRestParameter` arm, checker.go
+     *  9762): TS6236 over the whole parameter, where TS6210 would name one argument. */
+    private fun restParameterNotProvided(param: Parameter, name: Identifier, relSource: String, relFileName: String): Diagnostic {
+        val (relLine, relChar) = checker.getLineAndCharacterOfPosition(relSource, param.pos)
+        // `Node.end` runs past the NEXT token (`)` / `,`) — trim back to the parameter's text.
+        var end = param.end
+        while (end > param.pos && relSource.getOrNull(end - 1)?.let { it.isWhitespace() || it == ')' || it == ',' } == true) end--
+        return Diagnostic(
+            message = "Arguments for the rest parameter '${name.text}' were not provided.",
+            category = DiagnosticCategory.Message,
+            code = 6236,
+            fileName = relFileName,
+            line = relLine,
+            character = relChar,
+            start = param.pos,
+            length = (end - param.pos).coerceAtLeast(1),
+        )
+    }
+
     /**
      * Emit TS2555 for too few arguments when function has rest parameters.
      * "Expected at least N arguments, but got M."
@@ -539,7 +582,9 @@ internal class SignatureArity(
             if (actual < nonThisParams.size) {
                 val missingParam = nonThisParams[actual]
                 when (val paramName = missingParam.name) {
-                    is Identifier -> {
+                    is Identifier -> if (missingParam.dotDotDotToken) {
+                        relatedInfo.add(restParameterNotProvided(missingParam, paramName, source, fileName))
+                    } else {
                         val paramStart = paramName.pos
                         val paramLen = paramName.text.length
                         val (relLine, relChar) = checker.getLineAndCharacterOfPosition(source, paramStart)
@@ -591,6 +636,14 @@ internal class SignatureArity(
      *  rest element of its own, or anything unrecognised — all of which keep the rest
      *  parameter's usual unbounded treatment. */
     internal fun fixedTupleLengthOfRestParam(param: Parameter?): Int? {
+        val tuple = restTupleOf(param) ?: return null
+        if (tuple.elements.any { it is RestType }) return null
+        return tuple.elements.size
+    }
+
+    /** The tuple LITERAL a rest parameter is annotated with (through `readonly` and
+     *  parentheses), or null — an alias, an array rest or anything else. */
+    private fun restTupleOf(param: Parameter?): TupleType? {
         if (param == null || !param.dotDotDotToken) return null
         var annotation: TypeNode? = param.type
         while (annotation is TypeOperator || annotation is ParenthesizedType) {
@@ -599,9 +652,7 @@ internal class SignatureArity(
                 is ParenthesizedType -> annotation.type
             }
         }
-        val tuple = annotation as? TupleType ?: return null
-        if (tuple.elements.any { it is RestType }) return null
-        return tuple.elements.size
+        return annotation as? TupleType
     }
 
     /** (M3.0-gap-4) How many arguments one argument expression contributes: 1 normally,
