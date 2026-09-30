@@ -987,12 +987,6 @@ class Checker(
      *  Declared before [init] (init-order). */
     private var currentScopeStatements: List<Statement>? = null
 
-    /** Cache for [classNamesWithSiblingInterfaces]. Declared BEFORE [init] so the
-     *  field exists (as `null`) during init-time helper calls — accessing a `by
-     *  lazy {}` property before its declaration line has run produces NPEs because
-     *  the Lazy<T> backing field is itself uninitialized. */
-    private var classNamesWithSiblingInterfacesCache: Set<String>? = null
-
     /** Current function's parameters — set during implicit-return checking to enable exhaustive
      *  switch detection for literal-type parameters (e.g., `bar: "a" | "b"`). */
     private var currentFunctionParams: List<Parameter> = emptyList()
@@ -156488,7 +156482,9 @@ interface DataView {
                     // keeps instance-side access checkable — `new C2().unrelated` is TS2339
                     // even though `C2.unrelated` (static side) is fine.
                     if (ctorSym.declarations.count { it is ClassDeclaration } > 1) return true
-                    if (ctorSym.declarations.any { it !is ClassDeclaration && it !is ModuleDeclaration }) return true
+                    // (CHK.182) a merged INTERFACE is read by the chain walk below
+                    // ([mergedInterfaceHasMember]), which refuses what it cannot read.
+                    if (ctorSym.declarations.any { it !is ClassDeclaration && it !is ModuleDeclaration && it !is InterfaceDeclaration }) return true
                     val classDecl = ctorSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
                     if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
                         // Walk own members + extends chain. `false` means the chain
@@ -156498,7 +156494,7 @@ interface DataView {
                         // class declares it. `null` means the chain has parts we
                         // can't safely walk (complex extends like `Foo.Bar`,
                         // generic call form, ambient base, IndexSignature) — bail.
-                        val chainResult = lookupInstanceMemberInResolvableChain(classDecl, propName)
+                        val chainResult = lookupInstanceMemberInResolvableChain(classDecl, ctorSym, propName)
                         val isCircular = classHasCircularBase(classDecl)
                         // B419: a JS-file class declares instance properties via
                         // `this.X = expr` in its constructor — those are real members
@@ -156729,11 +156725,12 @@ interface DataView {
                 !propertyAccessChainIsNamespaceQualified(objectExpr)) {
                 val tsym = recvType.symbol
                 if (tsym != null && tsym.flags.hasAny(SymbolFlags.Class)) {
-                    val mergedWithTypeShape = tsym.declarations.any { it is InterfaceDeclaration || it is TypeAliasDeclaration }
+                    // (CHK.182) a merged INTERFACE is read by the chain walk below.
+                    val mergedWithTypeShape = tsym.declarations.any { it is TypeAliasDeclaration }
                     val classDecl = tsym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
                     if (!mergedWithTypeShape && classDecl != null && classDecl.typeParameters.isNullOrEmpty()) {
                         if (tryEmitStaticAccessTs2576(tsym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, recvType)) return true
-                        if (lookupInstanceMemberInResolvableChain(classDecl, propName) == false &&
+                        if (lookupInstanceMemberInResolvableChain(classDecl, tsym, propName) == false &&
                             !isStaticMemberOfClass(classDecl, propName) && propName !in RUNTIME_PROPERTIES) {
                             val typeName = classDecl.name?.text ?: tsym.name
                             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
@@ -159616,7 +159613,7 @@ interface DataView {
                     // `NewExpression` branch above) — calling here would FP-fire on
                     // value-position class references. Display: bare `C`, not `typeof C`.
                     if (!isThisAccess) return
-                    val chainResult = lookupInstanceMemberInResolvableChain(classDecl, propName)
+                    val chainResult = lookupInstanceMemberInResolvableChain(classDecl, ctorClassSym, propName)
                     if (chainResult != false) return
                     // (LEGACY.0b) J4: a GENERIC class's instance type displays with its own
                     // type parameters — `C1<T, V>`, tsc's `ClassName<A, B, C>` format, which
@@ -159664,7 +159661,7 @@ interface DataView {
             // swallowed — genericRecursiveImplicitConstructorErrors3's `this.isArray()` on
             // `PullTypeSymbol extends PullSymbol`, both in `namespace TypeScript`).
             val thisEnclosingNs = objectType.symbol?.parent?.takeIf { it.flags.hasAny(SymbolFlags.Module) }
-            if (classDecl != null && lookupInstanceMemberInResolvableChain(classDecl, propName, enclosingNs = thisEnclosingNs) == false
+            if (classDecl != null && lookupInstanceMemberInResolvableChain(classDecl, objectType.symbol, propName, enclosingNs = thisEnclosingNs) == false
                 && !isStaticMemberOfClass(classDecl, propName)
             ) {
                 val baseName = classDecl.name?.text ?: objectType.symbol?.name
@@ -159673,7 +159670,7 @@ interface DataView {
                     val className = if (!tps.isNullOrEmpty())
                         "$baseName<${tps.joinToString(", ") { it.name.text }}>"
                     else baseName
-                    if (emitClassChainTs2551Suggestion(classDecl, propName, className, diagStart, diagLength, source, fileName)) return
+                    if (emitClassChainTs2551Suggestion(classDecl, objectType.symbol, propName, className, diagStart, diagLength, source, fileName)) return
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
                         message = "Property '$propName' does not exist on type '$className'.",
@@ -161031,47 +161028,56 @@ interface DataView {
      *  chain manually. Implements clauses are intentionally NOT followed —
      *  per [resolveBaseTypesLazy], implements is a structural constraint, not
      *  a source of inherited members. */
-    /** Set of class names that have a sibling [InterfaceDeclaration] with the
-     *  same name in any binderResult. Our binder's `canMerge` does not include
-     *  Class+Interface, so the second-bound declaration silently overwrites
-     *  the first, and `symbol.declarations` ends up holding only one — but the
-     *  AST still contains both, and TypeScript treats them as a merged
-     *  declaration with combined member sets. The chain walker must bail for
-     *  these names because it can't see members contributed by the
-     *  non-canonical sibling declaration. Computed on first access (during init)
-     *  via [classNamesWithSiblingInterfacesCache] — cannot use `by lazy {}`
-     *  because that would declare the property after init and the Lazy backing
-     *  field would be null during init-time access. */
-    private fun classNamesWithSiblingInterfaces(): Set<String> {
-        classNamesWithSiblingInterfacesCache?.let { return it }
-        val byName = mutableMapOf<String, MutableSet<String>>()
-        for (binderResult in binderResults) {
-            for (stmt in binderResult.sourceFile.statements) {
-                when (stmt) {
-                    is ClassDeclaration -> {
-                        val n = stmt.name?.text ?: continue
-                        byName.getOrPut(n) { mutableSetOf() }.add("C")
-                    }
-                    is InterfaceDeclaration -> {
-                        byName.getOrPut(stmt.name.text) { mutableSetOf() }.add("I")
-                    }
-                    else -> {}
-                }
+    /** (CHK.182) What the [InterfaceDeclaration]s merged into a class's OWN symbol say
+     *  about [propName]: `true` = one of them declares it, `false` = none does (or the
+     *  symbol carries no interface at all), `null` = a merged interface this walk cannot
+     *  read in full — a lib declaration, an `extends` list (its bases would contribute
+     *  members), or a member that is not a plain named property / method / accessor
+     *  (an index, call or construct signature, a computed name).
+     *
+     *  This replaced a program-wide NAME set ("a class named like ANY interface in ANY
+     *  file"), which made every class named like an interface in some OTHER module file
+     *  report nothing at all — module-scoped names never merge (INV.3(d)), so asking the
+     *  symbol is both the sound question and the complete one. It also reads a genuine
+     *  same-scope merge (`interface D` + `class D` in one scope — the binder does merge
+     *  them into one symbol) instead of refusing it, which is what tsgo reports. */
+    private fun mergedInterfaceHasMember(classSym: Symbol, propName: String): Boolean? {
+        var found = false
+        for (d in classSym.declarations) {
+            if (d !is InterfaceDeclaration) continue
+            if (d in builtinLibDecls) return null
+            if (!d.heritageClauses.isNullOrEmpty()) return null
+            for (m in d.members) {
+                val name = when (m) {
+                    is PropertyDeclaration -> classMemberNameText(m.name)
+                    is MethodDeclaration -> classMemberNameText(m.name)
+                    is GetAccessor -> classMemberNameText(m.name)
+                    is SetAccessor -> classMemberNameText(m.name)
+                    is SemicolonClassElement -> continue
+                    else -> return null
+                } ?: return null
+                if (name.isEmpty()) return null
+                if (name == propName) found = true
             }
         }
-        val result = byName.filterValues { "C" in it && "I" in it }.keys
-        classNamesWithSiblingInterfacesCache = result
-        return result
+        return found
     }
 
     private fun lookupInstanceMemberInResolvableChain(
-        classDecl: ClassDeclaration, propName: String, visited: MutableSet<String>? = null,
+        classDecl: ClassDeclaration, classSym: Symbol?, propName: String, visited: MutableSet<String>? = null,
         enclosingNs: Symbol? = null,
     ): Boolean? {
         val v = visited ?: mutableSetOf()
         val className = classDecl.name?.text ?: return null
         if (!v.add(className)) return false
-        if (className in classNamesWithSiblingInterfaces()) return null
+        // (CHK.182) the class's OWN merged interfaces, read off its symbol. A caller
+        // without one cannot rule a merge out, so it gets the old refusal.
+        if (classSym == null) return null
+        when (mergedInterfaceHasMember(classSym, propName)) {
+            null -> return null
+            true -> return true
+            false -> {}
+        }
         if (classDecl.members.any { it is IndexSignature }) return null
         if (ModifierFlag.Declare in classDecl.modifiers) return null
         for (m in classDecl.members) {
@@ -161109,11 +161115,13 @@ interface DataView {
         // fully-resolvable chain, so this stays FP-safe (uncertainty → null → bail). `enclosingNs`
         // is null for the non-`this` callers → globals-only (unchanged).
         val baseSym = enclosingNs?.exports?.get(baseExpr.text) ?: globals[baseExpr.text] ?: return null
-        val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration ?: return null
+        // (CHK.182) the CLASS among the base's declarations — a merged interface may be
+        // declared first, and the recursion reads it off [baseSym] anyway.
+        val baseDecl = baseSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return null
         // Recurse in the base's OWN namespace (a sibling class shares this one; a base pulled
         // from globals resets to null).
         val baseNs = baseSym.parent?.takeIf { it.flags.hasAny(SymbolFlags.Module) } ?: enclosingNs
-        return lookupInstanceMemberInResolvableChain(baseDecl, propName, v, baseNs)
+        return lookupInstanceMemberInResolvableChain(baseDecl, baseSym, propName, v, baseNs)
     }
 
     private fun hasInstanceMemberNamed(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
@@ -161167,19 +161175,17 @@ interface DataView {
      *
      *  Conservative gates defend against false positives:
      *   - propName not in [RUNTIME_PROPERTIES];
-     *   - symbol has exactly 1 declaration (no interface/namespace augmentation
-     *     contributing extra members);
+     *   - symbol has exactly 1 class / type-alias / namespace declaration (a merged
+     *     INTERFACE is read by the chain walk — (CHK.182));
      *   - class is non-generic (TypeParam constraints could supply members we
      *     don't yet check structurally);
      *   - chain walk via [lookupInstanceMemberInResolvableChain] returns `false`
      *     (own + entire extends chain resolved cleanly, no member found). The
      *     helper itself bails (`null`) on hazardous shapes — non-Identifier
      *     extends (`Foo.Bar`, `q<T>()`), unresolvable Identifier bases, ambient
-     *     bases (`declare class`), index signatures, or sibling
-     *     [InterfaceDeclaration]s of the same name in any binderResult (since
-     *     our binder's `canMerge` does not include Class+Interface, those
-     *     declarations would silently overwrite each other and the helper can't
-     *     see members from the lost declaration);
+     *     bases (`declare class`), index signatures, or a merged
+     *     [InterfaceDeclaration] on the class's OWN symbol it cannot read in full
+     *     ([mergedInterfaceHasMember], (CHK.182));
      *   - flow narrowing yields the same type (e.g., `if (c instanceof D) c.bar()`
      *     narrows `c` from C to D which may have `bar` — the narrowed type
      *     differs and we bail).
@@ -161198,9 +161204,10 @@ interface DataView {
         // global merge step (see CLAUDE.md "ALL file locals merged into globals" gotcha), but
         // they don't contribute members to the class shape. Pre-fix: `declarations.size != 1`
         // bailed whenever a class was imported into any file, over-suppressing TS2339.
+        // (CHK.182) merged INTERFACES are not counted: the chain walk below reads them
+        // off [typeSym] ([mergedInterfaceHasMember]) and refuses the ones it cannot read.
         val shapeDecls = typeSym.declarations.count { d ->
-            d is ClassDeclaration || d is InterfaceDeclaration ||
-                d is TypeAliasDeclaration || d is ModuleDeclaration
+            d is ClassDeclaration || d is TypeAliasDeclaration || d is ModuleDeclaration
         }
         if (shapeDecls != 1) return
         val classDecl = typeSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return
@@ -161212,13 +161219,13 @@ interface DataView {
         // ambient base, etc.); `true` means a base in the chain declares the
         // property; only `false` means "genuinely missing across the entire
         // resolvable instance side".
-        if (lookupInstanceMemberInResolvableChain(classDecl, propName) != false) return
+        if (lookupInstanceMemberInResolvableChain(classDecl, typeSym, propName) != false) return
         if (isStaticMemberOfClass(classDecl, propName)) return
         val narrowed = getNarrowedTypeForReference(rawType, objectExpr)
         if (narrowed !== rawType) return
         val typeName = classDecl.name?.text ?: typeSym.name
         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-        if (emitClassChainTs2551Suggestion(classDecl, propName, typeName, diagStart, diagLength, source, fileName)) return
+        if (emitClassChainTs2551Suggestion(classDecl, typeSym, propName, typeName, diagStart, diagLength, source, fileName)) return
         diagnostics.add(Diagnostic(
             message = "Property '$propName' does not exist on type '$typeName'.",
             category = DiagnosticCategory.Error, code = 2339,
@@ -161232,27 +161239,42 @@ interface DataView {
      *  (`this.method1(2)` on B whose base A parsed empty,
      *  constructorWithIncompleteTypeAnnotation). Returns true when the TS2551 was emitted. */
     private fun emitClassChainTs2551Suggestion(
-        classDecl: ClassDeclaration, propName: String, typeName: String,
+        classDecl: ClassDeclaration, classSym: Symbol?, propName: String, typeName: String,
         diagStart: Int, diagLength: Int, source: String, fileName: String,
     ): Boolean {
         val pool = mutableMapOf<String, Identifier>()
         var cur: ClassDeclaration? = classDecl
+        var curSym: Symbol? = classSym
         var hops = 0
         while (cur != null && hops++ < 10) {
-            for (m in cur.members) {
-                val nameId = when (m) {
-                    is MethodDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                    is PropertyDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                    is GetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                    is SetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                    else -> null
+            // (CHK.182) an interface merged into this hop's class contributes candidates
+            // too, in the symbol's declaration order ([mergedInterfaceHasMember] has
+            // already refused every merge it cannot read in full).
+            val shapes: List<Node> = curSym?.declarations
+                ?.filter { it === cur || (it is InterfaceDeclaration && it !in builtinLibDecls) }
+                ?.takeIf { cur in it } ?: listOf(cur)
+            for (shape in shapes) {
+                val members = when (shape) {
+                    is ClassDeclaration -> shape.members
+                    is InterfaceDeclaration -> shape.members
+                    else -> continue
                 }
-                if (nameId != null && nameId.text.isNotEmpty() && nameId.text !in pool) pool[nameId.text] = nameId
+                for (m in members) {
+                    val nameId = when (m) {
+                        is MethodDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                        is PropertyDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                        is GetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                        is SetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                        else -> null
+                    }
+                    if (nameId != null && nameId.text.isNotEmpty() && nameId.text !in pool) pool[nameId.text] = nameId
+                }
             }
             val baseName = (cur.heritageClauses
                 ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
                 ?.types?.firstOrNull()?.expression as? Identifier)?.text
-            cur = baseName?.let { globals[it]?.declarations?.firstOrNull { d -> d is ClassDeclaration } as? ClassDeclaration }
+            curSym = baseName?.let { globals[it] }
+            cur = curSym?.declarations?.firstOrNull { d -> d is ClassDeclaration } as? ClassDeclaration
         }
         val suggestion = getSpellingSuggestionFromNames(propName, pool.keys) ?: return false
         val suggNode = pool[suggestion] ?: return false
