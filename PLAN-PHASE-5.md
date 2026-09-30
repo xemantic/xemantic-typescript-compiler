@@ -25,6 +25,31 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.237) — (INV.0) extraction: the REST of the arity family (23 declarations — the TS2554/TS2555/TS2556 emitters, the spread-arity view, `signatureDeclaredArity`, the call-side minimum) moves VERBATIM into `SignatureArity.kt`; `Checker.kt` -548; the collaborator's widenings fall 15 -> 7; every deterministic receipt byte-identical (2026-09-30)
+
+One implementation subagent, beside a read-only (CHK.180) census on frozen classes. **Where the (P18.232) reasoning
+was wrong**: it kept the call-side minimum on `Checker` because of its 7 callers there — but a caller that STAYS needs
+no widening to call an `internal` collaborator, while a callee left behind costs one widening per member, so the whole
+family moves cleanly. Five self-contained spans (544 lines); 48 `Checker` call sites call `signatureArity.x(…)`
+directly; `SpreadArityView` reached through one import so the `Checker` text naming it is unchanged. **Verbatim proof**
+both ways (moved block with `checker.` stripped and six members re-privatised == the original spans; residue with
+`signatureArity.` stripped, the import dropped and two widenings reverted == the original minus the spans). Widenings:
+10 un-widened, 2 new (`paramInfo`, `getTypeFromTypeNodeSafe`), 5 kept. Ledger row 15: 14 ambient reads, now including
+type reads (`getTypeOfExpression`, `getTypeOfSymbol`, …) — the honest ambient, since tsgo resolves parameter types
+there too. **Receipts** (orchestrator-retaken, pristine `3409e404` vs `a1953110`): per-pass `--passTiming` table — all
+pass rows, counters and the 30 listed diagnostics identical once the leading ms column, every embedded wall-clock
+figure and the node-kind histogram are dropped; `cost_gate.py` deltas identical to (P18.236)'s against the same
+baseline (the split moves no counter); PrintInlining (builder, both name forms) — `checkArgumentsAgainstSignature`'s
+rows identical bar its `$default` bridge 6 -> 7 `too large` (known run-to-run instability), each newly non-private
+method +7 bytes per non-null parameter and still inlined; full suite 21,965 / 0 / 44 (+9, `ArityFamilyCollaboratorTest`
+— tsgo rows); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs
+0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only; warm A/B both orders — the SECOND arm was slower
+in each (+1.7% noise-dominated, then +3.0% with the arms swapped), i.e. the known position artefact and no effect.
+Builder ablation over 35 arity classes (648 tests green): a1 22 / a2 24 / a3 27 / a4 16 RED. **Found, not pinned
+(a pin would assert the wrong answer)**: the name walker passes a tuple rest's element count as BOTH minimum and
+maximum (`Checker.kt` ~67711), so `tup("a",1,2)` for `...a: [string, number?]` reads `Expected 2 arguments` where tsgo
+reads `Expected 1-2` — queued as (CHK.181).
+
 ### Round (P18.236) — (CHK.179)(a2)+(c): a string / number-typed key on an index-less written receiver reports tsgo's TS7053 / TS7015 / TS7052 under `noImplicitAny`; a cast receiver's literal key is restated too; `u!.a`, `(u satisfies U).a` and `const v = x as U; v.a` report the missing member; every added row a tsgo row, +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **The grid was a REAL gate this round**: the first cut added 4-10 false TS7053 per profile
@@ -299,43 +324,6 @@ exact nested propagation: a new flow-node kind across ~9 walker sites that CONFL
 key (nodes inside the finally would answer per context) — its own round; the loop-label declared type through a finally
 (c10 / c34); TS2454 AND-semantics in catch / finally (c26 / c32); reads in unreachable code (c12). **Successor**: B6,
 the final G1 round (N11 folded in).
-
-### Round (P18.227) — (CHK.173) G1 arc B5f (N1): `new X!()` PARSES as tsgo parses it (it was `(new X)!()`), which removes every shipped false TS2351 on a nullable constructor and fixes a silent EMIT defect; a nullable `new` callee reports TS18047 / TS18048 as tsgo; +0 everywhere (2026-09-29)
-
-Orchestrated: the first builder STALLED mid-round (and a `SendMessage` resume took effect ~1 hour LATE, so it edited the
-tree concurrently with a fresh builder until 18:45 — caught by the orchestrator, stopped, and the fresh builder re-audited
-the tree and re-ran every result after 18:46); the orchestrator re-ran every gate plus an emit-mode `diff -r`.
-**Mechanism**: the PARSER's member loop had no `!` arm, so `new W!()` parsed as `(new W)!()` — every nullable
-constructor was read as `new W` with no arguments, the source of the false TS2351, and `new o.x!.y!(1)` EMITTED
-`(new o.x).y(1)`, a DIFFERENT PROGRAM (now `new o.x.y(1)`, tsgo's output); `Parser.parseMemberAccessOnly` gets an
-`Exclamation` arm (no preceding line break — tsgo's `parseMemberExpressionRest`) and TS1209 moves into the parser at a `?.`
-straight after the `new` callee (`new C?.()` is TS1209 for every `?.` form; the old checker TS1209 block is deleted).
-Checker: `getReturnTypeOfNewExpression` strips null / undefined from the callee and reads a MEMBER callee's value type
-(`new o.W!()`, `new K.make!()`, `new arr[0]!()` typed `any` before — `newCalleeMemberValueType`);
-`constructSignaturesForNewCtx` strips too; `checkSingleNewExpressionTypesCore` goes through `newCalleeNonNullType`
-(flow-narrows an identifier / property-path callee and reports tsgo's TS18047 / TS18048 on the non-null remainder;
-other callees strip silently; a primitive callee is TS2351 with "Type 'Number' has no construct signatures."); TS2511
-sees through `!`. **Where the brief was wrong**: the parser change IS required; without `!`, tsgo reports TS18047/8 (not a
-TS2722-family row) and still types the instance and arguments; the previous builder's two red tests were one wrong pin
-(column 77 -> 78, tsgo-confirmed) and one closed countdown (`NewExprImplicitAnyNonIdentifierCalleeTest`'s `residue - a
-construct-signature property…` now gets tsgo's TS2322 — inverted to a positive pin). **B3's interim
-`thisMemberAssignedInFunction` guard STAYS** (arm A8 reddens a B3 pin and rxjs `WebSocketSubject.ts:271:9` returns as a
-false TS2531) — for a DIFFERENT reason than before: a cell with no `new` at all reproduces it (`let socket: Sock | null
-= null; socket = mk(); this._socket = socket; this._socket.p` — the body-local `socket` read un-narrowed, the G1 / B6
-gap); recorded in the guard's KDoc.
-
-**Measured**: census n1 6 ours-only -> 0 and ng n1a-c 3 TS2351 -> 0 (tsgo 0); 35 agent cells 32 wrong/missing -> 4
-missing; contextual-argument cells x1 / x2 now tsgo's TS2322. **Pins**: `NullableNewCalleeTest` (11, full-text tsgo
-rows). **Ablation** (9 arms, 139 pins each): A1 parser `!` arm 8 RED, A2 parser TS1209 1, A3 TS2351 reads the raw
-callee 4, A4 instance not stripped 4, A5 member value type dropped 3, A6 contextual reader not stripped 1 (needed a new
-no-`!` pin), A7 TS2511 `!` 1, A9 callee narrowing 1, A8 B3 guard removed 1 + an rxjs FP. **Gates**: full suite
-**21,804 / 0 / 44** (+11); corpus screen 0 of 8,725 on BOTH channels (the emit fix is gated there); an emit-mode `diff -r`
-of the compiler profile's 78 emitted files byte-identical (no such shape in tsc's sources); cost_gate PASS; huge_methods
-0; grid 8x `added=0 removed=0` (chain control OK), libraries 0; warning gate clean. **Residues** (all missing rows,
-none new): c32 `new arr[0]()` missing TS2532 (a non-name callee strips silently by design); c10 / k1 `abstract new () =>
-S` misses TS2511; c35 / k2 a generic construct signature not inferred; c14 / k4 `new (o?.W)!()` untyped; x3 a contextual
-TS2322 under a block-less `if`; emit form `new (W!)()` -> `new W()` where tsgo keeps `new (W)()`. **Successor**: B5e
-(N16), then B6.
 
 ## QUEUE
 
@@ -934,6 +922,8 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   7 of the library's remaining 17, the single largest cause left.** Direction: closing it REMOVES
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
+
+- [ ] **(CHK.181) A TUPLE REST'S OPTIONAL ELEMENTS ARE IGNORED BY THE NAME-BASED TOO-MANY ARITY ROW (found by (P18.237)): `function tup(...a: [string, number?])` called `tup("a", 1, 2)` reads `Expected 2 arguments, but got 3.` where tsgo reads `Expected 1-2 arguments, but got 3.`** The name walker passes the tuple's element count as both bounds (`signatureArity.emitTS2554TooMany(maxArgs, maxArgs, …)`, `Checker.kt` ~67711). Measure the neighbouring shapes (rest tuples with optional and rest elements, too-few direction) against tsgo, fix at the call site, pin tsgo's rows. Small.
 
 - [ ] **(CHK.180) THE PROPERTY-ACCESS WALK TYPES `this` AND BODY-LOCAL RECEIVERS AS `any` (found by (P18.236)) — so every element-access and member rule is blind on `this[k]`, `const self: D = this; self[k]`, and any receiver declared in a function body.** Measure against tsgo which rows go missing (TS2339 / TS7053 / TS18048 on such receivers), find where the walk resolves the receiver (the cpa / cmam receiver ladder vs `implicitAnyScopes` / `currentLocalTypes`; CLAUDE.md "PORTING tsgo's *LITERAL SHAPE* CAN BE WRONG HERE BECAUSE ITS RECEIVER RESOLUTION IS **ONE** MECHANISM AND OURS IS **TWO**"), and price it on the grid — typing receivers that were `any` exposes every masked gap behind them (CLAUDE.md "MAKING A B83.5 NAME RESOLVE IN *VALUE* POSITION COSTS 19-20 OURS-ONLY ROWS"), so expect a staged round.
 

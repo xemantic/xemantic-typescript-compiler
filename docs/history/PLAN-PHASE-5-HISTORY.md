@@ -1,3 +1,40 @@
+### Round (P18.227) — (CHK.173) G1 arc B5f (N1): `new X!()` PARSES as tsgo parses it (it was `(new X)!()`), which removes every shipped false TS2351 on a nullable constructor and fixes a silent EMIT defect; a nullable `new` callee reports TS18047 / TS18048 as tsgo; +0 everywhere (2026-09-29)
+
+Orchestrated: the first builder STALLED mid-round (and a `SendMessage` resume took effect ~1 hour LATE, so it edited the
+tree concurrently with a fresh builder until 18:45 — caught by the orchestrator, stopped, and the fresh builder re-audited
+the tree and re-ran every result after 18:46); the orchestrator re-ran every gate plus an emit-mode `diff -r`.
+**Mechanism**: the PARSER's member loop had no `!` arm, so `new W!()` parsed as `(new W)!()` — every nullable
+constructor was read as `new W` with no arguments, the source of the false TS2351, and `new o.x!.y!(1)` EMITTED
+`(new o.x).y(1)`, a DIFFERENT PROGRAM (now `new o.x.y(1)`, tsgo's output); `Parser.parseMemberAccessOnly` gets an
+`Exclamation` arm (no preceding line break — tsgo's `parseMemberExpressionRest`) and TS1209 moves into the parser at a `?.`
+straight after the `new` callee (`new C?.()` is TS1209 for every `?.` form; the old checker TS1209 block is deleted).
+Checker: `getReturnTypeOfNewExpression` strips null / undefined from the callee and reads a MEMBER callee's value type
+(`new o.W!()`, `new K.make!()`, `new arr[0]!()` typed `any` before — `newCalleeMemberValueType`);
+`constructSignaturesForNewCtx` strips too; `checkSingleNewExpressionTypesCore` goes through `newCalleeNonNullType`
+(flow-narrows an identifier / property-path callee and reports tsgo's TS18047 / TS18048 on the non-null remainder;
+other callees strip silently; a primitive callee is TS2351 with "Type 'Number' has no construct signatures."); TS2511
+sees through `!`. **Where the brief was wrong**: the parser change IS required; without `!`, tsgo reports TS18047/8 (not a
+TS2722-family row) and still types the instance and arguments; the previous builder's two red tests were one wrong pin
+(column 77 -> 78, tsgo-confirmed) and one closed countdown (`NewExprImplicitAnyNonIdentifierCalleeTest`'s `residue - a
+construct-signature property…` now gets tsgo's TS2322 — inverted to a positive pin). **B3's interim
+`thisMemberAssignedInFunction` guard STAYS** (arm A8 reddens a B3 pin and rxjs `WebSocketSubject.ts:271:9` returns as a
+false TS2531) — for a DIFFERENT reason than before: a cell with no `new` at all reproduces it (`let socket: Sock | null
+= null; socket = mk(); this._socket = socket; this._socket.p` — the body-local `socket` read un-narrowed, the G1 / B6
+gap); recorded in the guard's KDoc.
+
+**Measured**: census n1 6 ours-only -> 0 and ng n1a-c 3 TS2351 -> 0 (tsgo 0); 35 agent cells 32 wrong/missing -> 4
+missing; contextual-argument cells x1 / x2 now tsgo's TS2322. **Pins**: `NullableNewCalleeTest` (11, full-text tsgo
+rows). **Ablation** (9 arms, 139 pins each): A1 parser `!` arm 8 RED, A2 parser TS1209 1, A3 TS2351 reads the raw
+callee 4, A4 instance not stripped 4, A5 member value type dropped 3, A6 contextual reader not stripped 1 (needed a new
+no-`!` pin), A7 TS2511 `!` 1, A9 callee narrowing 1, A8 B3 guard removed 1 + an rxjs FP. **Gates**: full suite
+**21,804 / 0 / 44** (+11); corpus screen 0 of 8,725 on BOTH channels (the emit fix is gated there); an emit-mode `diff -r`
+of the compiler profile's 78 emitted files byte-identical (no such shape in tsc's sources); cost_gate PASS; huge_methods
+0; grid 8x `added=0 removed=0` (chain control OK), libraries 0; warning gate clean. **Residues** (all missing rows,
+none new): c32 `new arr[0]()` missing TS2532 (a non-name callee strips silently by design); c10 / k1 `abstract new () =>
+S` misses TS2511; c35 / k2 a generic construct signature not inferred; c14 / k4 `new (o?.W)!()` untyped; x3 a contextual
+TS2322 under a block-less `if`; emit form `new (W!)()` -> `new W()` where tsgo keeps `new (W)()`. **Successor**: B5e
+(N16), then B6.
+
 ### Round (P18.226) — (CHK.173) G1 arc B5c (N4): a destructured leaf is typed from the FLOW-NARROWED initializer path, as tsgo's `getFlowTypeOfDestructuring`; 19 false rows removed (N4 already SHIPPED), 7 true added, +12 true on the 2,160-cell matrix, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate. **Mechanism**: `bindingElementType` (the

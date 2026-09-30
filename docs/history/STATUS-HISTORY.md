@@ -1,5 +1,11 @@
 
 
+**(P18.232) — (INV.0) EXTRACTION: THE SIGNATURE-BASED ARITY READER MOVES OUT OF `Checker.kt` (−344 LINES) INTO `SignatureArity.kt`, VERBATIM; 21,848 / 0 / 44 UNCHANGED (2026-09-30).**
+A pure move: every deterministic receipt (all pass rows, counters, diagnostics) byte-identical against the pre-move
+binary, inlining verdicts preserved, warm A/B inside noise both orders, screen 0, grid 8x0, libraries unchanged. The
+call-side minimum stays in `Checker` for a later round that moves the whole arity family. Next: (CHK.177) S1.
+
+
 **(P18.231) — THE DETACHED SETTER REATTACHED: `currentClassForThis` BUMPS ITS EPOCH AGAIN; NO DIAGNOSTIC MOVES ANYWHERE, 21,848 / 0 / 44 (2026-09-30).**
 A one-line repair of the defect the previous extraction exposed: two fields had been inserted between a property and its
 epoch-bumping setter, so Kotlin attached the setter to the wrong field. The epoch counters now charge the right
