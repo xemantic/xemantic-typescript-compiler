@@ -1,5 +1,11 @@
 
 
+**(P18.224) — (CHK.173) G1 ARC B5a: `if (!s) s = first(a)` / `s = s.trim()` NOW NARROW `s` — THE ASSIGNMENT'S RETURN TYPE COMES FROM THE ENGINE WHEN THE CALLEE HAS NO ANNOTATION; 8 FALSE POSITIVES GONE, +0 EVERYWHERE, 21,700 / 0 / 44 (2026-09-29).**
+Narrowing an assignment from a lib method or a generic function gave up and kept the variable's nullable type, so a
+following read reported a false "possibly undefined" (2 such false positives shipped). 24 pins, 5 of 5 arms RED. Screen
+0; grid 8x0; libs 0; cost_gate +0.22%. First of the six preparation rounds before body locals get the null check.
+
+
 **(P18.223) — (CHK.176)(a): "Expected N arguments" NOW REACHES CALLBACKS, LIB FUNCTIONS, OVERLOADED CONSTRUCTORS AND OPTIONAL-CHAIN CALLS; 24 -> 73 OF 87 CELLS MATCH tsgo, +0 EVERYWHERE, 21,676 / 0 / 44 (2026-09-29).**
 `cb(1, 2)` for `cb: (n: number) => void`, `parseInt("1", 2, 3)`, `new Map(1, 2)`, `o?.m(1, 2)` reported nothing. A
 signature-based reader now reports tsgo's TS2554 / TS2555 / TS2556 / TS2575, deduplicated against the older walker.

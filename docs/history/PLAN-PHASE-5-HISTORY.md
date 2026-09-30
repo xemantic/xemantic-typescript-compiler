@@ -1,3 +1,32 @@
+### Round (P18.219) — (CHK.176) (b) + (c): a trailing `void` parameter is optional to every arity reader (a false TS2554 on legal code removed, `Expected 1-2 arguments` wording), and the B498 walker stops doubling TS2345; (a) refused after measurement; 4 -> 21 of 26 cells agree, +0 everywhere (2026-09-29)
+
+Orchestrated: one implementation subagent; the orchestrator re-ran every gate incl. the warning gate with a live
+positive control. **Where the item was wrong**: (b) was a false TS2554 on LEGAL code (`function g(s: string, v: void)
+{}; g("a")`), not only an extra row beside a correct TS2345, and SEVEN emitters ignored the rule — the name-based call
+walker, the `new` walker, the overload walker, the explicit-type-argument overload branch (B95b), the property-access
+reader (`checkTs2554ForPropertyAccessCall`, incl. the synthesized `f.call` signature), the method-overload reader and
+the union reader (`unionCalleeArityDiagnostic`); tsgo also words it with the trimmed minimum (`Expected 1-2
+arguments`). (c) is NOT a plain duplicate — built with B498 off, `h<number>(1, "x")`'s default-resolved TS2345 (c02) is
+lost (the main reader does not resolve `<T, U = T>` defaults) — so the walker stays and skips only parameters whose type
+parameter was EXPLICITLY supplied. **Mechanism**: tsgo's `getMinArgumentCount` (`relater.go:1708`) drops a trailing run
+of required parameters typed `void` (or a union containing it), which is exactly why `hasCorrectArity`'s `acceptsVoid`
+loop works; one shared `callMinArgumentCount(minParams, parameters, sig?)` + `overloadCallMin` and `typeAcceptsVoid`
+(also used by `relationMinArgumentCount`) now serve `callArityFails` and all seven too-few emitters, in the check and the
+message; the union reader's too-few row now anchors on the member name (`u.m()` at `m`, as tsgo — wrong before for
+non-void unions too).
+
+**Measured**: 26 cells 4 -> 21 agree (false TS2554 removed on v00 v02 v04 v06 v09 v10 v13-v16 v18; wording on v03 v12
+v19 v20; duplicate TS2345 removed c01 c03; c02 kept; controls v05 v07 v08 v11 unchanged); the 5 left are (a). **Pins**:
+`CallArityTrailingVoidTest` (19). **Ablation** (12 arms, all RED): A1 no trim 14, A2 call walker 9, A3 `new` 1, A4
+property-access 2, A5 `f.call` fallback 1, A6 overload walker 1, A7 B95b 1, A8 method overload 1, A9 union reader 1, A10
+union anchor 1, A11 B498 skip 2, A12 union arm of `typeAcceptsVoid` 2. **Gates**: full suite **21,418 / 0 / 44** (+19);
+corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0 (`spineArgCallEnter` 3,514); grid 8x `added=0 removed=0` (a
+control), libraries 0; warning gate clean (positive control live). **(a) REFUSED**: `cb(1, 2)` through a function-typed
+parameter, real-lib members, an overloaded constructor, an optional-chain call and a tuple rest are reached by NO
+TS2554 emitter — they need a new signature-based TS2554 emitter at `checkArgumentsAgainstSignature`, deduplicated
+against the name walker's `funcParams`; a separate, row-ADDING round. Also unmeasured: an un-annotated parameter with a
+CONTEXTUAL `void` type still counts as required. (d)-(f) untouched. **Successor**: (CHK.173) B3.
+
 ### Round (P18.218) — (CHK.175): an arity-failed call relates no argument — `g(1, 2)` for `g(s: string)` reports only tsgo's TS2554 (was: plus a false TS2345, or a false TS2769 on an overload set); 12 -> 38 of 48 matrix cells agree, +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent; the orchestrator re-ran every gate and ran the WARNING GATE properly
