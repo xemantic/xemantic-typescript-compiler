@@ -96,6 +96,11 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.231) — THE DETACHED SETTER REATTACHED: `currentClassForThis` BUMPS ITS EPOCH AGAIN; NO DIAGNOSTIC MOVES ANYWHERE, 21,848 / 0 / 44 (2026-09-30).**
+A one-line repair of the defect the previous extraction exposed: two fields had been inserted between a property and its
+epoch-bumping setter, so Kotlin attached the setter to the wrong field. The epoch counters now charge the right
+property; screen 0, grid 8x0, libraries unchanged, every cost counter +0.00%.
+
 **(P18.230) — (INV.0) EXTRACTION: THE NULL-CHECK FAMILY MOVES OUT OF `Checker.kt` (−570 LINES) INTO `NullishReceiverChecks.kt`, VERBATIM; 21,848 / 0 / 44 UNCHANGED (2026-09-30).**
 A pure move at the end of the null-check arc, to offset its growth: every deterministic receipt (418 pass rows, 46
 diagnostics, all counters) byte-identical against the pre-move binary; inlining verdicts preserved; warm A/B within
@@ -119,9 +124,3 @@ The parser read `new W!()` as `(new W)!()`, so every non-null-asserted construct
 in the checker and, in emitted JavaScript, `(new o.x).y(1)` instead of `new o.x.y(1)`. A nullable `new` callee without
 `!` now reports tsgo's "possibly undefined". 11 pins, 9 of 9 arms RED. Screen 0 on both channels; emit diff of tsc's
 sources identical; grid 8x0; libs 0. Next: B5e.
-
-**(P18.226) — (CHK.173) G1 ARC B5c: `if (!o.x) return; const { x } = o` NOW TYPES `x` AS NON-NULL, AS tsgo DOES; 19 FALSE ROWS REMOVED, +0 EVERYWHERE, 21,793 / 0 / 44 (2026-09-29).**
-A destructured variable took its type from the initializer's declared (nullable) type, ignoring an earlier guard — which
-shipped false "not assignable" errors at call arguments. It now reads tsgo's synthetic reference (`o.x`) narrowed at the
-declaration. The 8-profile grid caught 5 false rows in an intermediate build (empty-object defaults), fixed. 26 pins.
-Screen 0; grid 8x0; libs 0. Next: B5d.

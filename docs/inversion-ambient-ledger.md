@@ -668,7 +668,7 @@ epoch-bumping `set(v)`, so since that commit the setter belongs to
 assigning the veto's declared type bumps the `currentClassForThis` epoch. The move
 PRESERVES this verbatim (the pair stays on `Checker` beside a note) because fixing it is
 a behaviour change — the `--passTiming` `epochBumps` counters would move — and belongs in
-its own round with its own receipt.
+its own round with its own receipt. **FIXED at (P18.231)**: the setter is back on `currentClassForThis`.
 
 **What did not move, and why.** The (P18.223) arity reader (`callArityFails`,
 `reportSignatureArity`, `arityRowAt`, `callMinArgumentCount`) is not one span and

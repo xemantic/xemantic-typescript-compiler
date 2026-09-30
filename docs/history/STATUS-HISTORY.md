@@ -1,5 +1,12 @@
 
 
+**(P18.226) — (CHK.173) G1 ARC B5c: `if (!o.x) return; const { x } = o` NOW TYPES `x` AS NON-NULL, AS tsgo DOES; 19 FALSE ROWS REMOVED, +0 EVERYWHERE, 21,793 / 0 / 44 (2026-09-29).**
+A destructured variable took its type from the initializer's declared (nullable) type, ignoring an earlier guard — which
+shipped false "not assignable" errors at call arguments. It now reads tsgo's synthetic reference (`o.x`) narrowed at the
+declaration. The 8-profile grid caught 5 false rows in an intermediate build (empty-object defaults), fixed. 26 pins.
+Screen 0; grid 8x0; libs 0. Next: B5d.
+
+
 **(P18.225) — (CHK.173) G1 ARC B5b: `a = u` / `a ??= o.p` / `a = arr[0]` WITH A NON-NULLABLE UNION VALUE NOW REMOVE `undefined` FROM `a`; +0 EVERYWHERE, 21,767 / 0 / 44 (2026-09-29).**
 An assignment of a union value kept the variable's declared `| undefined`, so the next read reported a false
 "possibly undefined" — for parameters this shipped in many forms. The value's nullish-free union now removes only

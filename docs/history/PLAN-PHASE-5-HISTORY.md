@@ -1,3 +1,47 @@
+### Round (P18.221) — (CHK.173) Round B4: the member-access walker carries a type-parameter scope and substitutes a nullable constraint, so a `T extends X | null` receiver reports TS18047/8/9 / TS2531 as tsgo; +75 true rows, 0 false; the full suite caught 3 real regressions and a countdown, all fixed (2026-09-29)
+
+Orchestrated: one implementation subagent, sent back once with the full-suite failures; the orchestrator re-ran every
+gate and caught and removed a compiler WARNING the builder's last fix introduced (a redundant cast — the warning gate
+with its positive control is what saw it). **Mechanism**: `CpaFrame.tpScope` built by `cpaTpScope` (reusing
+`ctaBuildTpScope`: enclosing scope + class type parameters, not in static members — tsgo — + own), installed by
+`cpaAmbientEnterScopes` / `…Exit`; the legacy walker (generic arrows, function expressions, class-expression members,
+function declarations nested in a statement) gets `cpaWithOwnTps`; `typeParamsToBaseConstraints` replaces a type
+parameter (bare or in a union) with its base constraint (null when unconstrained; a hop guard and depth limit 8) at the
+identifier (incl. `x?: T`), element and compound arms. **Where the census was wrong**: "+8" — the same two causes cover
+class / method / constructor / setter type parameters, generic arrows and function expressions, `this.x: T` and
+`x["a"]` receivers; both halves were needed (scope alone makes `x` read `T`, but `T` is not a union); the first
+constraint walk OVERFLOWED on `<T extends U | null, U extends T>` (one TS2589 replacing the whole program's
+diagnostics) — now bounded and pinned (f02).
+
+**The full suite caught four failures the builder's targeted runs missed** (the scope made `T`-typed receivers visible
+to the TS2339 readers): #3 a COUNTDOWN (`function f<T extends { foo: number }>(t: T) { t.bar }` — tsgo reports
+`Property 'bar' does not exist on type 'T'.` at 1:49; `M04TypeParamTypedOpsSpineMigrationTest`'s negative control
+re-pointed and renamed); #1/#2 REAL — a type-guard-narrowed `T` got a false TS2339 because `cmamFlowSuppresses` looked
+the member up with `getPropertyOfType(getApparentType(…))`, blind inside an intersection (`T & StringLiteral`) — now
+also asks `resolveMemberPropertyType` (can only remove a row); #4 REAL — a DOUBLE emission, the older type-parameter
+walker `spineTpoEnterNode` now stands down (`spineTpoCpaOwns`) when the cpa frame has the receiver typed as a
+type parameter with a REAL constraint (unconstrained / `extends any` stays its).
+
+**Measured**: census g3 13 -> 24 (tsgo 27), new cell sets p18221_tp 4 -> 36 (45), tp2 0 -> 16 (20), tp3 0 -> 3, tp4 2 ->
+4, tp5 0 -> 5, plus Round A c14 / g2 p18 / q1: **+75 true, 0 false, 0 lost**; the 2,160-cell matrix and every earlier
+cell set unchanged. **Pins**: `TypeParamNullableReceiverTest` (93). **Ablation**: A1 no frame scope 52 RED, A2 no
+identifier substitution 50, A3 statics keep class TPs 2, A4 legacy arrow/fn-expr own TPs 5, A5 legacy class member 3,
+A6 element arm 2, A7 compound arm 4, A8 union members 3, A9 no depth bound 1, A10 method TPs dropped 3, A11 legacy
+fn-decl 1, A12 constructor 1, A13 setter 1, A14 fn-decl frame own TPs 43, B1 no intersection lookup 2, B2 no dedupe 1;
+A15/A16 (spine arrow / fn-expr frame TPs) 0 — redundant, the legacy walker owns those emissions, kept for parity.
+**Gates**: full suite **21,608 / 0 / 44** (+93); corpus screen 0 of 8,725; huge_methods 0 (`cpaSpineLeave` 7,898 ->
+7,308 — the scope install moved out of the inline); spine closure audit OK; grid 8x `added=0 removed=0` (chain control
+OK), libraries 0; warning gate clean after the fix; **cost_gate over tolerance on the type-node counters** —
+`typeNode.bypassed` +2.23%, `cacheHits` -2.25%, `mapped.keyed` +11.5%, `mapped.hits` +39.7%: ~3,400 type-node
+resolutions moved from the plain cache to INV.5(c)'s scoped path because type-parameter scopes are now installed where
+they were not, the mapped cache picking up ~3,000 hits; `typeOfExpr.calls` / `narrow.walks` flat — accepted and
+re-baselined; **warm A/B in BOTH orders: after 1.65% faster, then 0.39% faster** — no regression. **Residues**: TS2339 /
+TS2551 / TS2322 against a constraint that lacks the member (`T extends object`, `T[K]`, `x.lenght`), a pre-existing
+`TS2339 … 'T | null'` beside the correct TS1804x row (t06, a32), TS2313 with swapped / missing names (f01 / f02), TS2302
+on a class-expression static, TS18048 on a `Record` receiver (a47 / c01), re-narrowing after `x = v as T` (a25), body
+locals typed `T` (G1), `for…of` over `T[]` (G4), object-literal method bodies (c18), `this: T` (c23), TS2721 for a
+`T`-typed callee (c21). **Successor**: the G1 arc (census relaunched).
+
 ### Round (P18.220) — (CHK.173) Round B3: nullable MEMBER receivers (`o.p.length`, `this.x.length`, `o['p'].length`), `(x).p` -> TS2531, and the non-null continuation; +53 true rows, 0 false, 9 rows corrected to tsgo's text / span; +0 everywhere (2026-09-29)
 
 Orchestrated: one implementation subagent (a long round — the grid was a REAL gate and caught two design errors, both
