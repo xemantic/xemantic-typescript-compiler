@@ -1,5 +1,11 @@
 
 
+**(P18.247) — (CHK.191): `this.s` ON A STATIC INHERITED FROM A BASE, `new N.C().x`, AND BASES WRITTEN AS `ns.B` OR `declare class` NOW GET tsgo's ERRORS — AND A CYCLE GUARD THAT SKIPPED ANY BASE SHARING ITS SUBCLASS's NAME IS FIXED; 62 MORE tsgo ROWS ON A 53-CELL MATRIX; +13 PINS, 22,122 / 0 / 44 (2026-10-01).**
+The full suite caught a false error the builder's sweep missed and named its cause. Screen 0; grid 8x0; libraries
+unchanged. Queued next: an import-specifier collision that silently gives one file another file's type ((CHK.192)),
+then named re-exports ((CHK.190)).
+
+
 **(P18.246) — (CHK.187): A MISSING PROPERTY ON A CLASS WHOSE BASE IS DECLARED IN A MODULE, IMPORTED OR BLOCK-SCOPED — AND ON `new D().x` INSIDE A MODULE — NOW REPORTS AS IN tsgo; 57 MORE tsgo ROWS ON A 37-CELL MATRIX, NONE OF OURS ALONE; +12 PINS, 22,109 / 0 / 44 (2026-10-01).**
 Screen 0; grid 8x0; libraries unchanged. Found and verified along the way: a NAMED re-export (`export { B } from "./m"`)
 leaves the importer's binding typed `any` — every type through a barrel file — queued at the top as (CHK.190).

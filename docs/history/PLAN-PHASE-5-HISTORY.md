@@ -1,3 +1,32 @@
+### Round (P18.242) — (CHK.186): a MODULE declaration no longer fuses with a same-named SCRIPT declaration — (CHK.49)'s rule extended from lib names to script names, `init:mergeSharedKeepNames` deleted; a 22-cell matrix goes from 20 cells diverging from tsgo to 0 (bar one older cross-file TS2693 gap); +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent. **Where the queue item was wrong**: (a) no new "shared" visibility class was needed —
+(CHK.49)'s pattern carries over: a name declared by both a script and a module becomes MODULE-ONLY, and the existing
+per-file scope resolves it (the declaring module sees its own symbol, every other file the global one); (b) the scope
+was understated — the fusion leaked PROGRAM-WIDE (the script and every third module saw the module's members; 20 of
+22 cells diverged), EVERY declaration-kind pair collided, and removing the fusion alone introduced false positives in
+six cross-meaning cells, so the value half and the type half each needed its own fix; (c) a SCRIPT file's per-file
+scope was wrong too — its own un-merged binder symbol shadowed the merged global, so a second script `interface D`
+lost its merge partner's members. **Mechanism**: `moduleLocalContributesGlobally` answered true for every script
+local name (`mergeSharedKeepNames`), so `mergeSingleSymbol` ADOPTED the module's declaration into the global symbol;
+`ensurePerFileVisibility` kept script locals in `nonModuleVisible` (the two are one observable, (CHK.49)); four
+downstream sites assumed the fused symbol — the value second chance `libValueBehindTypeOnlyShadow` (read only
+`libGlobals`), the TS2693 table in `tavBuildFileRoot`, two raw `globals[…]` consults in the `new` emitters ((CHK.137),
+17.170), and the TS2749 gate `isValueOnlyTypeRef` / `resolveTypeNameToSymbol`. **Change** (`NameResolver.kt` +~40,
+`Checker.kt` -31): the merge clause removed; script names out of `nonModuleVisible`; script files get an EMPTY own
+layer (`emptyScriptOwnLocals`); new `fileShadowsGlobal`; the value second chance and `libValueShadowNames` read
+`globals`; a type-meaning fallback in `resolveTypeNameToSymbol`; `mergeSharedKeepNames` and its pass deleted (no
+reader left; `SetupPhasePartitionTest`'s lists 16 -> 15); the TS2693 table skips `libValueShadows()`; the two `new`
+emitters and the TS2749 gate defer to the module's own declaration. Duplicate-identifier rows now match tsgo (none
+between a module and a script, TS2451 between two scripts). **Pins**: `ScriptGlobalModuleShadowTest`, 22 tsgo rows;
+ablation a0 (whole revert) 19 / a1 18 / a2 13 / a3 1 / a4 3 / a10 3 / a5 3 / a6 1 / a7 1 / a8 1 / a9 1 RED (a6 read 0
+until a script const holding an INSTANCE was added; a4 / a10 are one observable, a round-927 pair). **Gates**: full
+suite 22,051 / 0 / 44 (+22); corpus screen 8725 / 0 — a real gate here, script fixtures are common in the corpus;
+`cost_gate.py` 0 (`globals.lookups` +0.44%: the per-file scope now resolves these names itself);
+`huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK (all-module profiles — a control), rxjs 0/0,
+marked 0/0, cronstrue 1/1; warning gate with probe: probe only. CLAUDE.md's (CHK.49) entry and
+`docs/perf/setup-phase-and-huge-methods.md` updated for the deleted pass. Residue -> (CHK.188).
+
 ### Round (P18.241) — (CHK.182): a class whose NAME matches an interface anywhere in the program no longer silences its TS2339 / TS2551 — a program-wide name refusal is replaced by reading the interfaces actually merged into the class's own symbol; 23 silenced rows restored across a 30-cell matrix, all tsgo rows; +0 on corpus, grid and libraries (2026-09-30)
 
 **Out-of-order pick, stated**: taken ahead of (CHK.185) / (CHK.183) (both small residues) because it silenced whole
