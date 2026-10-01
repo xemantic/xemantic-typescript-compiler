@@ -1,3 +1,28 @@
+### Round (P18.237) — (INV.0) extraction: the REST of the arity family (23 declarations — the TS2554/TS2555/TS2556 emitters, the spread-arity view, `signatureDeclaredArity`, the call-side minimum) moves VERBATIM into `SignatureArity.kt`; `Checker.kt` -548; the collaborator's widenings fall 15 -> 7; every deterministic receipt byte-identical (2026-09-30)
+
+One implementation subagent, beside a read-only (CHK.180) census on frozen classes. **Where the (P18.232) reasoning
+was wrong**: it kept the call-side minimum on `Checker` because of its 7 callers there — but a caller that STAYS needs
+no widening to call an `internal` collaborator, while a callee left behind costs one widening per member, so the whole
+family moves cleanly. Five self-contained spans (544 lines); 48 `Checker` call sites call `signatureArity.x(…)`
+directly; `SpreadArityView` reached through one import so the `Checker` text naming it is unchanged. **Verbatim proof**
+both ways (moved block with `checker.` stripped and six members re-privatised == the original spans; residue with
+`signatureArity.` stripped, the import dropped and two widenings reverted == the original minus the spans). Widenings:
+10 un-widened, 2 new (`paramInfo`, `getTypeFromTypeNodeSafe`), 5 kept. Ledger row 15: 14 ambient reads, now including
+type reads (`getTypeOfExpression`, `getTypeOfSymbol`, …) — the honest ambient, since tsgo resolves parameter types
+there too. **Receipts** (orchestrator-retaken, pristine `3409e404` vs `a1953110`): per-pass `--passTiming` table — all
+pass rows, counters and the 30 listed diagnostics identical once the leading ms column, every embedded wall-clock
+figure and the node-kind histogram are dropped; `cost_gate.py` deltas identical to (P18.236)'s against the same
+baseline (the split moves no counter); PrintInlining (builder, both name forms) — `checkArgumentsAgainstSignature`'s
+rows identical bar its `$default` bridge 6 -> 7 `too large` (known run-to-run instability), each newly non-private
+method +7 bytes per non-null parameter and still inlined; full suite 21,965 / 0 / 44 (+9, `ArityFamilyCollaboratorTest`
+— tsgo rows); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs
+0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only; warm A/B both orders — the SECOND arm was slower
+in each (+1.7% noise-dominated, then +3.0% with the arms swapped), i.e. the known position artefact and no effect.
+Builder ablation over 35 arity classes (648 tests green): a1 22 / a2 24 / a3 27 / a4 16 RED. **Found, not pinned
+(a pin would assert the wrong answer)**: the name walker passes a tuple rest's element count as BOTH minimum and
+maximum (`Checker.kt` ~67711), so `tup("a",1,2)` for `...a: [string, number?]` reads `Expected 2 arguments` where tsgo
+reads `Expected 1-2` — queued as (CHK.181).
+
 ### Round (P18.236) — (CHK.179)(a2)+(c): a string / number-typed key on an index-less written receiver reports tsgo's TS7053 / TS7015 / TS7052 under `noImplicitAny`; a cast receiver's literal key is restated too; `u!.a`, `(u satisfies U).a` and `const v = x as U; v.a` report the missing member; every added row a tsgo row, +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **The grid was a REAL gate this round**: the first cut added 4-10 false TS7053 per profile

@@ -1,5 +1,11 @@
 
 
+**(P18.242) — (CHK.186): A CLASS, INTERFACE OR OTHER DECLARATION IN A MODULE NO LONGER FUSES WITH A SAME-NAMED DECLARATION IN A GLOBAL SCRIPT FILE — IT GOT THE OTHER FILE'S MEMBERS AND WRONG TYPES, PROGRAM-WIDE; +22 PINS, 22,051 / 0 / 44 (2026-09-30).**
+Every declaration-kind pair was affected, not only class/interface; a 22-cell matrix now matches tsgo except one older
+gap (a script interface used as a value from another file, queued as (CHK.188)). The merge pass that caused it is
+deleted. Screen 0; grid 8x0; libraries unchanged.
+
+
 **(P18.241) — (CHK.182): A CLASS THAT SHARES ITS NAME WITH AN INTERFACE ANYWHERE IN THE PROGRAM NO LONGER LOSES ITS "property does not exist" ERRORS — 23 SILENCED ROWS RESTORED, ALL tsgo ROWS; +15 PINS, 22,029 / 0 / 44 (2026-09-30).**
 The cause was a program-wide name refusal, much broader than the two-module shape the queue named. Screen 0; grid 8x0;
 libraries unchanged. Two related defects queued: a module class still fuses with a same-named SCRIPT interface

@@ -25,6 +25,31 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.247) — (CHK.191): `this.s` on a static inherited from a base reports TS2576 (and the own-class `this["s"]` row is tsgo's), qualified `new N.C().x` receivers resolve, an `ns.B` base and a program `declare class` base are walked — and the chain walks' NAME-keyed cycle guard is replaced by declaration identity; 53-cell agreement 68 -> 130 of 166 tsgo rows, ours-only 5 -> 3 (all pre-existing); +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent (resumed once), beside the read-only (CHK.190) census. **Where the queue item was wrong**:
+(a) two defects, not one — the `this` path was silent for a static on a base, AND the existing own-class `this["s"]`
+TS2576 anchored at the key and printed `C.s` where tsgo prints `C["s"]`; a constructor-fallback hunk read 0 RED and was
+removed; (b) (P18.246)'s type-agreement guard is NOT enough for a qualified callee — under `function f(N: { C: new () =>
+{ z: number } })` this checker types `new N.C()` as the OUTER namespace's class (a pre-existing wrong type), so a
+shadowed head is refused by syntax (`LocalShadowGuard.innermostBindingIsVariable`); (c) an `ns.B` base needed no new
+resolver (`resolveHeritageBaseSymbol` resolves dotted names), and `declare class` needs refusing only for lib / `.d.ts`
+/ ambient-module declarations. **The full suite caught a false TS2339** (`NamespaceImportHeritageTest`, `net.Server`
+through a star-re-exporting ambient module) that no sweep had seen — **root cause: the three chain walks' cycle guard
+remembered visited classes BY NAME**, so a base called `Server` under a subclass called `Server` read as "already
+walked" and its members as missing; once dotted bases made such a base reachable the guard went live (in plain modules
+too: 3 false TS2339 + a TS2339 for tsgo's TS2576). Fixed by keying the visited set on the declaration object (arm a9:
+3 RED). **Mechanism**: `tryEmitThisStaticTs2576` (called from the B15.1 `this` site and the own-member site, with the
+squiggle / key threaded through `cmamCheckResolvedObjectType` / `cmamEmitMissingProperty`); `resolveBaseClassSymbol`
+takes any expression (dotted -> `resolveHeritageBaseSymbol`), `entityNameBaseOf` feeds the walks; a property-access arm
+in `newExpressionClassSymbol`; `isProgramSourceDeclaration`. `ClassInstanceMembers.kt` +90 net, `Checker.kt` +5.
+**Pins**: `ThisInheritedStaticAndQualifiedNewTest`, 13 tsgo rows; ablation a1 6 / a3 1 / a4 2 / a5 1 / a6 1 / a7 1 /
+a9 3 RED; a8 (`hasInstanceMemberNamed` inside the new emitter) 0 — recorded as a redundant guard. **Gates**: full suite
+22,122 / 0 / 44 (+13, after the fix; 1 red before it); corpus screen 8725 / 0; `cost_gate.py` 0; `huge_methods.py
+--fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe:
+probe only. Residues -> (CHK.193). The (CHK.190) census reported meanwhile — its specification refines (CHK.190) and
+it found the import-specifier COLLISION, queued as (CHK.192).
+
 ### Round (P18.246) — (CHK.187): a module-local, imported or block-scoped BASE class and `new D()` inside a module resolve for the class missing-member checks; the `new` branch reports TS2576 / TS2551 as tsgo does (script files too); 37-cell agreement 7 -> 64 of 83 tsgo rows, ours-only 2 -> 0; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent, on the collaborator extracted the round before (`ClassInstanceMembers.kt`). **Where the
@@ -266,31 +291,6 @@ baseline is refreshed here to (P18.236)'s accepted values (largest `mapped.hits`
 string-keyed element-access rule typing keys and receivers); `huge_methods.py --fail-over 0` 0
 (`spineArgCallEnter` 3,576 -> 3,743); grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1;
 warning gate with probe: probe only. Residues -> (CHK.183).
-
-### Round (P18.237) — (INV.0) extraction: the REST of the arity family (23 declarations — the TS2554/TS2555/TS2556 emitters, the spread-arity view, `signatureDeclaredArity`, the call-side minimum) moves VERBATIM into `SignatureArity.kt`; `Checker.kt` -548; the collaborator's widenings fall 15 -> 7; every deterministic receipt byte-identical (2026-09-30)
-
-One implementation subagent, beside a read-only (CHK.180) census on frozen classes. **Where the (P18.232) reasoning
-was wrong**: it kept the call-side minimum on `Checker` because of its 7 callers there — but a caller that STAYS needs
-no widening to call an `internal` collaborator, while a callee left behind costs one widening per member, so the whole
-family moves cleanly. Five self-contained spans (544 lines); 48 `Checker` call sites call `signatureArity.x(…)`
-directly; `SpreadArityView` reached through one import so the `Checker` text naming it is unchanged. **Verbatim proof**
-both ways (moved block with `checker.` stripped and six members re-privatised == the original spans; residue with
-`signatureArity.` stripped, the import dropped and two widenings reverted == the original minus the spans). Widenings:
-10 un-widened, 2 new (`paramInfo`, `getTypeFromTypeNodeSafe`), 5 kept. Ledger row 15: 14 ambient reads, now including
-type reads (`getTypeOfExpression`, `getTypeOfSymbol`, …) — the honest ambient, since tsgo resolves parameter types
-there too. **Receipts** (orchestrator-retaken, pristine `3409e404` vs `a1953110`): per-pass `--passTiming` table — all
-pass rows, counters and the 30 listed diagnostics identical once the leading ms column, every embedded wall-clock
-figure and the node-kind histogram are dropped; `cost_gate.py` deltas identical to (P18.236)'s against the same
-baseline (the split moves no counter); PrintInlining (builder, both name forms) — `checkArgumentsAgainstSignature`'s
-rows identical bar its `$default` bridge 6 -> 7 `too large` (known run-to-run instability), each newly non-private
-method +7 bytes per non-null parameter and still inlined; full suite 21,965 / 0 / 44 (+9, `ArityFamilyCollaboratorTest`
-— tsgo rows); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs
-0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only; warm A/B both orders — the SECOND arm was slower
-in each (+1.7% noise-dominated, then +3.0% with the arms swapped), i.e. the known position artefact and no effect.
-Builder ablation over 35 arity classes (648 tests green): a1 22 / a2 24 / a3 27 / a4 16 RED. **Found, not pinned
-(a pin would assert the wrong answer)**: the name walker passes a tuple rest's element count as BOTH minimum and
-maximum (`Checker.kt` ~67711), so `tup("a",1,2)` for `...a: [string, number?]` reads `Expected 2 arguments` where tsgo
-reads `Expected 1-2` — queued as (CHK.181).
 
 ## QUEUE
 
@@ -890,9 +890,13 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.190) A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
+- [ ] **(CHK.192) AN IMPORT SPECIFIER RESOLVES THROUGH ANOTHER FILE's IMPORT STATEMENT WHEN THE TWO SPECIFIERS SIT AT THE SAME OFFSETS — a SILENT WRONG TYPE (found by the (CHK.190) census, `build/scratch-p18247-census/README.txt` § 0): `ImportSpecifier` nodes are data classes, two specifiers with the same name and `pos`/`end` in different files are EQUAL, and `enclosingImportIndex` keys on that equality — `coll/k1`: `b.ts`'s `import { B } from "./m2"` gets `m1`'s type (we print `Type 'number'`, tsgo `Type 'string'`); `build/scratch-reexport/y2` resolves an import through ITSELF.** A rough census found 179 colliding keys on the harness profile (47 with different targets) — (INC.81)'s "no real project exercises the multi-entry path" is REFUTED for collisions. Take a specifier's import statement from its PARENT CHAIN, or key the index by identity / `(file, pos, end)`, keeping its measured fast path; audit every other structurally-keyed import-node table. Price on the corpus, the 8 profiles (harness WILL move — each row must be a tsgo row), the libraries; `cost_gate.py`.
 
-- [ ] **(CHK.191) RESIDUES OF (CHK.187) (cells `build/bench/p18246-agent/cells`).** (a) `this.s` reading a static inherited from a base gives no TS2576 in a subclass method, script files too (`sa3`) — the B15.1 `this` path gets no `suggestionKey` / TS2576 offsets; (b) qualified `new` receivers (`new N.C().x`, `new ns.B().x`) are not handled by the `new` branch; (c) still refused by design, all reported by tsgo: a class-expression base, a mixin base, an `ns.B` base, a `declare class` base, an interface extending a class / a type alias / a lib interface.
+- [ ] **(CHK.190) CENSUSED 2026-10-01 (read-only, `build/scratch-p18247-census/README.txt`). Stage 1: one helper `importedExport(target, exportedName)` over `exportedSymbolsThroughStars` (importer-visible names, null = unknowable -> today's lookup), plus `followExportSpecifier` (from-clause resolved relative to the declaring file, `.js` leg included; local clause in the declaring scope), wired into a new `resolveAlias` arm for MODULE-level `ExportSpecifier`s, the three `resolveAlias` lookup sites, `computeImportedSymbolGeneral` and the namespace / function-like / enum flow resolvers — predicted +45 tsgo rows over 12 cells, +5 on a real rxjs consumer (1 -> 6 of 11), 0 on the profiles / libraries / corpus; EVERY fixture must shift the importer by a line or it measures (CHK.192). Refused: keying by the declared name, `locals` first, a namespace-clause arm (it exposes a namespace export-table gap: `namespacesWithTypeAliasOnlyExportsMerge` +4 ours-only TS2694), replacing `createModuleSymbol`'s table. Stage 2 and the census's separate items (TS2303 on a named cycle, TS1362 for an `export type` name used as a value, value positions through `export * as M`, clause-exported names in a namespace table, TS2305 vs TS2614) follow. ORIGINAL: A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
+
+- [ ] **(CHK.193) RESIDUES OF (CHK.191) (cells `build/bench/p18247-agent/cells`) — two FALSE POSITIVES first.** (a) ours-only TS2416: an instance member is compared against a BASE STATIC (`class A { static s = 1 } class B extends A { s = "x" }`, cell a4 — tsgo is silent); (b) ours-only TS2339 on an UNRESOLVED import: `l.nope` where `import { L } from "lib"` does not resolve (tsgo types it `any`, cell c10); (c) a WRONG TYPE under a shadowing parameter: `new N.C()` inside `function f(N: {...})` types as the outer namespace's class (`'C'` where tsgo prints `'{ z: number; }'`, cell b6); (d) the TS2551 suggestion pool does not follow interface `extends` (cell c8), which blocks following a merged interface's class / alias / lib `extends` (c5-c7); (e) still refused, all reported by tsgo: a class-expression base (c1), a mixin base (c2), a `.d.ts` `declare class` base (c11); `new ns.default().nope` waits on (CHK.190).
+
+- [x] **(CHK.191) DONE 2026-10-01 ((P18.247) note). RESIDUES OF (CHK.187) (cells `build/bench/p18246-agent/cells`).** (a) `this.s` reading a static inherited from a base gives no TS2576 in a subclass method, script files too (`sa3`) — the B15.1 `this` path gets no `suggestionKey` / TS2576 offsets; (b) qualified `new` receivers (`new N.C().x`, `new ns.B().x`) are not handled by the `new` branch; (c) still refused by design, all reported by tsgo: a class-expression base, a mixin base, an `ns.B` base, a `declare class` base, an interface extending a class / a type alias / a lib interface.
 
 - [ ] **(CHK.189) (a) + (b) LANDED 2026-10-01 ((P18.244) note). OPEN: (c) `const E = 1; E.x` prints `'number'` where tsgo prints `'1'` (the primitive-receiver display widens the literal — not import-specific), and `import * as M; M.D.z` misses TS2339; (d) TS2708 on a `for (N of …)` target, TS2693 in an object-literal method's parameter default (`m(x = IN)`), TS2588 on `({ c } = …)` for a const; (e) the callee path has NO local-shadow guard — `function h(D: any) { D() }` resolved `D()` to an outer interface (an ours-only TS2349, now MASKED only because that symbol is value-less; with an outer CLASS it is still wrong); (f) a module's type-only local shadowing a script's `declare var X` now answers silence where tsgo resolves the value past the local; (g) `TAV_REACHED_NONS` is computed and no longer read. EARLIER: RESIDUES OF (CHK.188) (cells `build/bench/p18243-agent/cells`).** (a) **ours-only FOLLOW-ON errors after a TS2693 / TS2708** — tsgo types the value read as an ERROR type and stays silent after it, we keep the interface type and add TS2349 on `D()`, TS2339 on `D.x`, TS2351 on `new PropertyKey()`, TS2365 on `D += 1` (same-file too: cell `ss`, so it predates (P18.243)); the fix is `getTypeOfIdentifierConventional` answering an error type for a symbol with no value meaning — broad, measure its blast radius on the corpus first; (b) own-file `new N()` on a non-instantiated namespace skips TS2708 by a deliberate rule, and a shorthand `({ N } = …)` never reaches the pass because the reach logic does not descend into shorthand properties (cells `nss`, `nsm`, `ao`, `as`); (c) display: a const imported from a module prints `'number'` where tsgo prints `'1'` (cell `im`).
 
