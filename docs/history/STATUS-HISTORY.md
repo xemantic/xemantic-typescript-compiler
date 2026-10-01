@@ -1,5 +1,11 @@
 
 
+**(P18.248) — (CHK.192): A FILE NO LONGER SILENTLY GETS ANOTHER FILE's TYPE WHEN TWO IMPORTS SIT AT THE SAME CHARACTER OFFSETS — EACH IMPORT NOW RESOLVES THROUGH ITS OWN STATEMENT; +14 PINS, 22,136 / 0 / 44 (2026-10-01).**
+The faster path also removes an index that used to be built on every program. The fix exposed one corpus case that
+had passed by accident, so the simplest named re-export (`export { X } from`) is followed too. Screen 0; grid 8x0;
+libraries unchanged.
+
+
 **(P18.247) — (CHK.191): `this.s` ON A STATIC INHERITED FROM A BASE, `new N.C().x`, AND BASES WRITTEN AS `ns.B` OR `declare class` NOW GET tsgo's ERRORS — AND A CYCLE GUARD THAT SKIPPED ANY BASE SHARING ITS SUBCLASS's NAME IS FIXED; 62 MORE tsgo ROWS ON A 53-CELL MATRIX; +13 PINS, 22,122 / 0 / 44 (2026-10-01).**
 The full suite caught a false error the builder's sweep missed and named its cause. Screen 0; grid 8x0; libraries
 unchanged. Queued next: an import-specifier collision that silently gives one file another file's type ((CHK.192)),

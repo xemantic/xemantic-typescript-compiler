@@ -1,3 +1,30 @@
+### Round (P18.243) — (CHK.188): a type-only GLOBAL read as a value from another file reports tsgo's TS2693 (TS2585 for an ES2015 constructor name), and a global non-instantiated namespace reports TS2708; every measured cell matches tsgo on those codes bar one shorthand position; +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent. **Where the queue item was wrong**: (a) not only interfaces and type aliases — a script's
+non-instantiated `namespace N`, and an interface merged with one, are the same missing consult with TS2708 (tsgo asks
+the namespace question first, `onFailedToResolveSymbol`, checker.go:1569); (b) the EMBEDDED test lib declares
+`interface String`/`Array`/… without their `declare var`s, so a naive global consult added a false TS2693 to 50 corpus
+baselines — names that lib declares are excluded when `useRealLibs` is off; (c) the binder records EVERY
+`declare namespace` as NamespaceModule / NonInstantiated (`Binder.kt:603`, `:859`), so `declare namespace M { function
+f() }` looked value-less and gave 2 false TS2708 in the corpus — a syntactic instance-state check that ignores
+`declare` answers instead; (d) the ES2015 constructor names (Promise / Symbol / Map / WeakMap / Set / WeakSet) go to
+TS2585 (`isES2015OrLaterConstructorName`); (e) a plain `=` target (`N = 1`) needed covering. **Mechanism**: the
+per-file table `tavBuildFileRoot` still lists only the file's own declarations; the new path in
+`spineTavIdentifierCore` runs after the own-file `typeOnlyHit`, only when no tav level has the name as a value, and
+`tavGlobalValueless` answers nothing if any lexical scope binds the name (`spineScopeLookup`), else asks
+`NameResolver.globalValuelessKind` (reads `globalsForFile`: namespace-only first via `namespaceHasValue`, then
+type-only); the candidate gate widens by `NameResolver.globalValuelessNames` (built once per checker, minus the
+embedded lib's names). `emitTS2708` extracted and shared. `Checker.kt` +52 net, `NameResolver.kt` +74. **Matrix**
+(`build/bench/p18243-agent/cells`): every cell's TS2693 / TS2708 / TS2585 rows now agree with tsgo (e.g. script
+interface 0 -> 12 of 12, lib names 0 -> 8 of 8, namespace 0 -> 5 of 5, the queue's own `x1` 0 -> 2 of 2); silent
+controls (a `declare var` merge, a module / parameter shadow, module-local names) stay 0 = 0. **Pins**:
+`GlobalTypeOnlyValueUseTest`, 15 tests; ablation a1 10 / a2 9 / a3 1 / a5 1 / a6 1 / a7 1 / a8 1 / a10 1 RED; a4 (a
+tav-level namespace test inside the global check) read 0 and was REMOVED as redundant; a9 (raw `globals`) is redundant
+by construction and kept as the per-file-correct call. **Gates**: full suite 22,066 / 0 / 44 (+15); corpus screen
+8725 / 0; `cost_gate.py` 0 (as (P18.242) bar one lookup); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0
++ chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 (none reaches the new path — a control; the pins are the gate); warning
+gate with probe: probe only. Residues -> (CHK.189).
+
 ### Round (P18.242) — (CHK.186): a MODULE declaration no longer fuses with a same-named SCRIPT declaration — (CHK.49)'s rule extended from lib names to script names, `init:mergeSharedKeepNames` deleted; a 22-cell matrix goes from 20 cells diverging from tsgo to 0 (bar one older cross-file TS2693 gap); +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **Where the queue item was wrong**: (a) no new "shared" visibility class was needed —
