@@ -29255,6 +29255,30 @@ class Checker(
         return nameResolver.globalValuelessKind(spineFileName, name)
     }
 
+    /**
+     * (CHK.189) the const-assignment pass ([spineCaBinaryEnter] / [spineCaIncDecEnter])
+     * already reports TS2708 for [id] — the DIRECT target of an assignment or of `++` /
+     * `--` whose name its frame tracks — so this pass must not report it again (measured:
+     * `N += 1`, `N++`, `--N` were each TS2708 twice). Asked with the SAME frame and reach
+     * the const pass uses, so a target it does not own keeps this row: an outer namespace
+     * inside a function body (whose fresh frame is empty — `N = 1` there used to be
+     * silent under the old blanket plain-`=` suppression), and a destructuring target
+     * nested in the LHS (`[N] = …`, `({ N } = …)`), which it never inspects.
+     */
+    private fun tavConstAssignOwnsTarget(id: Identifier, parent: Node?): Boolean {
+        val anchor: Expression = when {
+            parent is BinaryExpression && parent.left === id &&
+                parent.operator in ASSIGNMENT_OPERATORS -> parent
+            parent is PrefixUnaryExpression && parent.operand === id &&
+                (parent.operator == SyntaxKind.PlusPlus || parent.operator == SyntaxKind.MinusMinus) -> parent
+            parent is PostfixUnaryExpression && parent.operand === id &&
+                (parent.operator == SyntaxKind.PlusPlus || parent.operator == SyntaxKind.MinusMinus) -> parent
+            else -> return false
+        }
+        if (spineCaStatus(anchor) != CA_EXPR) return false
+        return spineCaFrames.lastOrNull()?.consts?.containsKey(id.text) == true
+    }
+
     private fun emitTS2708(name: String, id: Identifier) {
         val start = id.pos
         val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
@@ -29624,8 +29648,12 @@ class Checker(
         is ObjectLiteralExpression -> when (child) {
             is PropertyAssignment, is SpreadAssignment, is MethodDeclaration,
             is GetAccessor, is SetAccessor -> TAV_CONT
-            else -> TAV_STOP // shorthand properties: never walked
+            // (CHK.189) a shorthand's NAME is a value reference (a read in `{ N }`, a
+            // destructuring target in `({ N } = …)`) — tsgo reports TS2693 / TS2708 there.
+            is ShorthandPropertyAssignment -> TAV_CONT
+            else -> TAV_STOP
         }
+        is ShorthandPropertyAssignment -> if (child === parent.name) TAV_CONT else TAV_STOP
         is PropertyAssignment ->
             if (child === parent.initializer || child is ComputedPropertyName) TAV_CONT else TAV_STOP
         is SpreadAssignment -> if (child === parent.expression) TAV_CONT else TAV_STOP
@@ -29812,21 +29840,19 @@ class Checker(
             emitTS2693(name, id, spineSource, spineFileName, global = true)
             return
         }
-        if (isNewCtor) {
+        // (CHK.189) `new N()` on a value-less namespace is TS2708 as in every other value
+        // position (tsgo; the migrated walker simply had no namespace arm for a ctor).
+        if (isNewCtor && !tavIsNsOnly(level, name)) {
             if (FrontEnd.tavInertCensus) FrontEnd.addTavExit(
                 unreached = false, valueHit = false, inert = !tavCensusCouldEmit(level, name),
             )
             return
         }
-        // A plain-`=` assignment target: checkConstAssignment owns TS2708 there.
-        if (status == TAV_REACHED_NONS) {
-            if (FrontEnd.tavInertCensus) FrontEnd.addTavExit(
-                unreached = false, valueHit = false, inert = !tavCensusCouldEmit(level, name),
-            )
-            return
-        }
+        // An assignment / `++` / `--` target the const-assignment pass reports TS2708 for
+        // is left to it — [tavConstAssignOwnsTarget], asked in the namespace arm below.
         if (tavIsNsOnly(level, name)) {
             FrontEnd.addTavExit(unreached = false, valueHit = false, inert = false)
+            if (tavConstAssignOwnsTarget(id, parent)) return
             FrontEnd.addTavEmit()
             emitTS2708(name, id)
         } else {
@@ -119132,6 +119158,12 @@ interface DataView {
                     ?.let { return getTypeOfSymbol(it) }
             }
         }
+        // (CHK.189) a file-level symbol with NO value meaning read as a value types as
+        // tsgo's `errorType` — see [valuelessValueRead]. Asked before the type map, which
+        // holds an `interface`'s type under its name.
+        currentFileLocals?.get(id.text)?.let { local ->
+            if (valuelessValueRead(id, local)) return errorType
+        }
         // Check pre-built file-level type map (covers annotated file-level declarations)
         currentCheckFileName?.let { fn ->
             val fltm = fileLocalTypeMapFor(fn)?.get(id.text)
@@ -119172,7 +119204,71 @@ interface DataView {
         // per-file probe answers the declaring file's own TYPE-space
         // symbol for a shadowed lib name.
         libValueBehindTypeOnlyShadow(id.text, symbol)?.let { return getTypeOfSymbol(it) }
+        if (valuelessValueRead(id, symbol)) return errorType
         return getTypeOfSymbol(symbol)
+    }
+
+    /**
+     * (CHK.189) [sym], the symbol a value read of [id] resolved to, has NO value meaning
+     * ([NameResolver.symbolValuelessKind]: an `interface` / `type` / non-instantiated
+     * namespace) — the read is the one the spine's TS2693 / TS2708 pass reports, and tsgo's
+     * `checkIdentifier` types it as `errorType`, so nothing downstream reports again (no
+     * TS2349 on `D()`, TS2339 on `D.x`, TS2351 on `new D()`, TS2365 on `D += 1`).
+     */
+    private fun valuelessValueRead(id: Identifier, sym: Symbol): Boolean {
+        // Only where [id] is READ AS A VALUE: the identifier typer is also asked about a
+        // type reference, an import specifier or an alias NAME by the type capture (hover),
+        // which must keep reporting the declared type (GenericAliasDeclaredTypeTest).
+        if (!isValueReadPosition(id)) return false
+        val lib = if (options.useRealLibs) null else builtinLibSourceFile
+        if (nameResolver.symbolValuelessKind(sym, lib) == 0) return false
+        // A block-scoped `class` / `function` / `enum` (B83.5, in no conventional table)
+        // is the value this read means; the callers' scope-space override must still see a
+        // non-error answer to replace (measured: `new D("x")` on a nested class lost TS2345).
+        if (id.text in lexicalBlockScopedValueNames &&
+            nameResolver.lexicalValueSymbolForNode(id, id.text) != null
+        ) return false
+        return true
+    }
+
+    /**
+     * (CHK.189) [id] sits where the program reads it as a VALUE — an operand of an
+     * expression, a statement's expression, an initializer, a shorthand property — as
+     * opposed to a declaration name, a type reference, an import / export specifier, a
+     * heritage clause or `export default`, where a type-only name is legal. Syntactic and
+     * positive: an unlisted parent is not a value read.
+     */
+    private fun isValueReadPosition(id: Identifier): Boolean {
+        return when (val p = (id as NodeBase).parent) {
+            is PropertyAccessExpression -> p.expression === id
+            is ArrowFunction -> p.body === id
+            is FunctionExpression, is ClassExpression, is MetaProperty,
+            is ObjectBindingPattern, is ArrayBindingPattern,
+            is JsxElement, is JsxSelfClosingElement, is JsxFragment -> false
+            is Expression -> true
+            is ShorthandPropertyAssignment -> p.name === id
+            is PropertyAssignment -> p.initializer === id
+            is SpreadAssignment -> p.expression === id
+            is VariableDeclaration -> p.initializer === id
+            is Parameter -> p.initializer === id
+            is PropertyDeclaration -> p.initializer === id
+            is EnumMember -> p.initializer === id
+            is ExpressionStatement -> p.expression === id
+            is ReturnStatement -> p.expression === id
+            is ThrowStatement -> p.expression === id
+            is IfStatement -> p.expression === id
+            is WhileStatement -> p.expression === id
+            is DoStatement -> p.expression === id
+            is SwitchStatement -> p.expression === id
+            is CaseClause -> p.expression === id
+            is WithStatement -> p.expression === id
+            is TemplateSpan -> p.expression === id
+            is Decorator -> p.expression === id
+            is ForStatement -> p.initializer === id || p.condition === id || p.incrementor === id
+            is ForInStatement -> p.initializer === id || p.expression === id
+            is ForOfStatement -> p.initializer === id || p.expression === id
+            else -> false
+        }
     }
 
     /** If a containing namespace was pushed by [pushInferenceNamespaceFor], walk its
@@ -158297,6 +158393,9 @@ interface DataView {
 
         CpaSections.atR(CpaSections.R_OT_IDENT)
         val otT0 = CpaSections.t()
+        // (CHK.189) a receiver with no value meaning is TS2693 / TS2708 at the name and an
+        // `errorType` to tsgo, so its member is never looked up. See [valuelessValueRead].
+        if (identSymbol != null && valuelessValueRead(objectExpr, identSymbol)) return null
         if (identSymbol != null) {
             // Hoisted verbatim out of the type-gates section below (a pure function
             // of `keySuggestion`) because both gate helpers read it.
@@ -167570,6 +167669,8 @@ interface DataView {
         // the value meaning by accident; it now answers the shadowing
         // TYPE, so the value half is restored here.
         libValueBehindTypeOnlyShadow(expr.text, symbol)?.let { return getTypeOfSymbol(it) }
+        // (CHK.189) the callee twin of [getTypeOfIdentifierOuter]'s value-less answer.
+        if (valuelessValueRead(expr, symbol)) return errorType
         return getTypeOfSymbol(symbol)
     }
 

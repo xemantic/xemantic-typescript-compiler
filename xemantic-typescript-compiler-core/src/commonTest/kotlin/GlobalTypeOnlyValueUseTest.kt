@@ -43,9 +43,8 @@ import kotlin.test.Test
  *
  * Every expectation is tsgo 7.0.2's output for the same files; the fixtures are the
  * (P18.243) matrix (`build/bench/p18243-agent/cells`). Only the family's codes are
- * compared: after a TS2693 tsgo types the read as `error` and stays silent, where this
- * checker still types it as the interface and adds a TS2349 / TS2339 / TS2351 — a
- * pre-existing follow-on residue that the same-FILE case has as well.
+ * compared here; that nothing ELSE follows such a read (tsgo types it as `error`) is
+ * [TypeOnlyValueFollowOnTest]'s, since (CHK.189).
  */
 class GlobalTypeOnlyValueUseTest {
 
@@ -206,8 +205,7 @@ class GlobalTypeOnlyValueUseTest {
 
     @Test
     fun `assignment targets are value reads too - as`() {
-        // tsgo also reports the shorthand `({ N } = …)` target (col 37); this checker's reach
-        // classifier never descends into a shorthand property, the same-FILE case included.
+        // The shorthand `({ N } = …)` target (col 37) since (CHK.189).
         val rows = rowsOf(
             """
             // @Filename: s.ts
@@ -218,7 +216,7 @@ class GlobalTypeOnlyValueUseTest {
             D = 1; N = 1; D += 1; [D] = [1]; ({ N } = { N: 1 }); D++;
             """.trimIndent(),
         )
-        assert(rows == (ts2693("u.ts", 2, 1, 15, 24, 54) + ts2708("u.ts", 2, 8, name = "N")).sorted())
+        assert(rows == (ts2693("u.ts", 2, 1, 15, 24, 54) + ts2708("u.ts", 2, 8, 37, name = "N")).sorted())
     }
 
     @Test

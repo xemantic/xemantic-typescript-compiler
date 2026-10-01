@@ -397,13 +397,15 @@ class Inv4SpineBatch20Test {
     }
 
     @Test
-    fun `negative control - shorthand property is not walked`() {
-        diagnose("""
+    fun `a shorthand property name is a value read - CHK_189`() {
+        // Was a negative control pinning the migrated walker's reach; tsgo 7.0.2 reports
+        // TS2693 at the shorthand name (column 11), and so does this checker since (CHK.189).
+        val d = diagnose("""
             interface IM {}
             let o = { IM };
-        """) should {
-            have(none { it.code == 2693 })
-        }
+        """)
+        val rows = d.filter { it.code == 2693 }.map { "${it.character}: ${it.message}" }
+        assert(rows == listOf("11: 'IM' only refers to a type, but is being used as a value here."))
     }
 
     @Test

@@ -1026,8 +1026,21 @@ internal class NameResolver(
      */
     fun globalValuelessKind(fileName: String, name: String): Int {
         val sym = globalsForFile(fileName, name) ?: return 0
+        return symbolValuelessKind(sym, null)
+    }
+
+    /**
+     * (CHK.189) [globalValuelessKind]'s classification of one [sym]: TS2708's namespace-only,
+     * TS2693's type-only, or 0. [embeddedLib] (the EMBEDDED test lib, null under
+     * `useRealLibs`) answers 0 for a symbol it declares, for [globalValuelessNames]' reason.
+     * The identifier typer asks it so a value read of such a symbol types as tsgo's
+     * `errorType` (`checkIdentifier`: a failed Value resolution) instead of the interface.
+     */
+    fun symbolValuelessKind(sym: Symbol, embeddedLib: SourceFile?): Int {
         val f = sym.flags
         if (f.hasAny(SymbolFlags.Value or SymbolFlags.Alias)) return 0
+        if (!f.hasAny(SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.NamespaceModule)) return 0
+        if (embeddedLib != null && sym.declarations.any { (it as NodeBase).parent === embeddedLib }) return 0
         if (f.hasAny(SymbolFlags.NamespaceModule)) {
             return if (sym.declarations.all { it !is ModuleDeclaration || !namespaceHasValue(it) }) {
                 GLOBAL_NAMESPACE_ONLY
