@@ -476,6 +476,9 @@ class Checker(
     /** (CHK.177) S1 — the alias-name source display; see `AliasCarrierDisplay.kt`. */
     private val aliasCarrier = AliasCarrierDisplay(this)
 
+    /** (INV.0) (P18.245) — the class-instance missing-member family; see `ClassInstanceMembers.kt`. */
+    private val classInstanceMembers = ClassInstanceMembers(this)
+
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
     // while mutable state is clearly grouped in CheckerState.
@@ -42737,7 +42740,7 @@ class Checker(
      * Simple spelling suggestion among a set of names.
      * Uses Damerau-Levenshtein distance (same as TS2552) with TypeScript's threshold.
      */
-    private fun getSpellingSuggestionFromNames(name: String, candidates: Set<String>): String? {
+    internal fun getSpellingSuggestionFromNames(name: String, candidates: Set<String>): String? {
         var bestDistance10 = (name.length * 0.4).toInt() * 10 + 10
         var bestSuggestion: String? = null
         val maximumLengthDifference = maxOf(2, (name.length * 0.34).toInt())
@@ -57844,7 +57847,7 @@ class Checker(
 
         /** Runtime properties that exist on all objects/functions but aren't declared in types.
          *  Skip these in TS2339 checks to avoid false positives. */
-        private val RUNTIME_PROPERTIES = setOf(
+        internal val RUNTIME_PROPERTIES = setOf(
             "prototype", "constructor", "__proto__", "toString", "valueOf",
             "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
             "toLocaleString", "length", "name", "caller", "arguments", "apply",
@@ -117733,7 +117736,7 @@ interface DataView {
 
     /** B451: a computed member/property name `[<literal>]` whose inner expression is a
      *  numeric, string or no-substitution template literal; see `MemberNames.kt`. */
-    private fun computedLiteralKey(name: NameNode): String? = memberNamer.computedLiteralKey(name)
+    internal fun computedLiteralKey(name: NameNode): String? = memberNamer.computedLiteralKey(name)
 
     /** Round 936: a computed key naming a well-known symbol through a dotted path;
      *  see `MemberNames.kt`. */
@@ -117741,7 +117744,7 @@ interface DataView {
 
     /** Round 935 — LATE BINDING: the member name a computed key spells when its
      *  expression has a statically known value; see `MemberNames.kt`. */
-    private fun lateBoundComputedKeyName(name: NameNode): String? =
+    internal fun lateBoundComputedKeyName(name: NameNode): String? =
         memberNamer.lateBoundComputedKeyName(name)
 
     /** The dotted path a (possibly qualified) module declaration's name spells;
@@ -156609,7 +156612,7 @@ interface DataView {
                         // class declares it. `null` means the chain has parts we
                         // can't safely walk (complex extends like `Foo.Bar`,
                         // generic call form, ambient base, IndexSignature) — bail.
-                        val chainResult = lookupInstanceMemberInResolvableChain(classDecl, ctorSym, propName)
+                        val chainResult = classInstanceMembers.lookupInstanceMemberInResolvableChain(classDecl, ctorSym, propName)
                         val isCircular = classHasCircularBase(classDecl)
                         // B419: a JS-file class declares instance properties via
                         // `this.X = expr` in its constructor — those are real members
@@ -156844,9 +156847,9 @@ interface DataView {
                     val mergedWithTypeShape = tsym.declarations.any { it is TypeAliasDeclaration }
                     val classDecl = tsym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
                     if (!mergedWithTypeShape && classDecl != null && classDecl.typeParameters.isNullOrEmpty()) {
-                        if (tryEmitStaticAccessTs2576(tsym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, recvType)) return true
-                        if (lookupInstanceMemberInResolvableChain(classDecl, tsym, propName) == false &&
-                            !isStaticMemberOfClass(classDecl, propName) && propName !in RUNTIME_PROPERTIES) {
+                        if (classInstanceMembers.tryEmitStaticAccessTs2576(tsym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, recvType)) return true
+                        if (classInstanceMembers.lookupInstanceMemberInResolvableChain(classDecl, tsym, propName) == false &&
+                            !classInstanceMembers.isStaticMemberOfClass(classDecl, propName) && propName !in RUNTIME_PROPERTIES) {
                             val typeName = classDecl.name?.text ?: tsym.name
                             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                             diagnostics.add(Diagnostic(
@@ -156904,7 +156907,7 @@ interface DataView {
         if (isThisAccess && inStaticClassMethod && enclosingClassType is Type.Object) {
             val classSymbol = enclosingClassType.symbol ?: return true
             val classDecl = classSymbol.declarations.firstOrNull() as? ClassDeclaration ?: return true
-            if (isStaticMemberOfClass(classDecl, propName)) return true
+            if (classInstanceMembers.isStaticMemberOfClass(classDecl, propName)) return true
             if (classSymbol.exports?.containsKey(propName) == true) return true
             if (propName in RUNTIME_PROPERTIES) return true
             val typeName = "typeof ${classSymbol.name}"
@@ -158521,8 +158524,8 @@ interface DataView {
                     // the static members as properties and falls through to normal
                     // property-missing checks (TS2339) below.
                     if (exprType is Type.Interface) {
-                        if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return null
-                        tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
+                        if (classInstanceMembers.tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return null
+                        classInstanceMembers.tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
                         return null
                     }
                 }
@@ -158590,8 +158593,8 @@ interface DataView {
             val typeSym = exprType.symbol
             if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
                 if (exprType is Type.Interface) {
-                    if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return null
-                    tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
+                    if (classInstanceMembers.tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return null
+                    classInstanceMembers.tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
                     return null
                 }
             }
@@ -159068,7 +159071,7 @@ interface DataView {
             if (classSym != null && classSym.flags.hasAny(SymbolFlags.Class)) {
                 val classType = getDeclaredTypeOfSymbol(classSym)
                 if (classType is Type.Interface) {
-                    tryEmitClassInstanceMissingTs2339(classSym, classType, propName, objectExpr, diagStart, diagLength, source, fileName)
+                    classInstanceMembers.tryEmitClassInstanceMissingTs2339(classSym, classType, propName, objectExpr, diagStart, diagLength, source, fileName)
                 }
             }
         }
@@ -159223,7 +159226,7 @@ interface DataView {
             val hasExtends = classDecl?.heritageClauses?.any {
                 it.token == SyntaxKind.ExtendsKeyword
             } == true
-            if (isPureClass && !hasExtends && !isStaticMemberOfClass(classDecl, propName)) {
+            if (isPureClass && !hasExtends && !classInstanceMembers.isStaticMemberOfClass(classDecl, propName)) {
                 if (identSymbol.exports?.containsKey(propName) != true) {
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
@@ -159707,7 +159710,7 @@ interface DataView {
             if (ctorClassSym != null && ctorClassSym.flags.hasAny(SymbolFlags.Class)) {
                 val classDecl = ctorClassSym.declarations.firstOrNull() as? ClassDeclaration
                 if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
-                    if (isStaticMemberOfClass(classDecl, propName)) return
+                    if (classInstanceMembers.isStaticMemberOfClass(classDecl, propName)) return
                     if (objectType !is Type.Interface) {
                         // Constructor side (`typeof C`): static-member check above already
                         // rejected static hits. The class shape is the static side, which
@@ -159731,7 +159734,7 @@ interface DataView {
                     // `NewExpression` branch above) — calling here would FP-fire on
                     // value-position class references. Display: bare `C`, not `typeof C`.
                     if (!isThisAccess) return
-                    val chainResult = lookupInstanceMemberInResolvableChain(classDecl, ctorClassSym, propName)
+                    val chainResult = classInstanceMembers.lookupInstanceMemberInResolvableChain(classDecl, ctorClassSym, propName)
                     if (chainResult != false) return
                     // (LEGACY.0b) J4: a GENERIC class's instance type displays with its own
                     // type parameters — `C1<T, V>`, tsc's `ClassName<A, B, C>` format, which
@@ -159779,8 +159782,8 @@ interface DataView {
             // swallowed — genericRecursiveImplicitConstructorErrors3's `this.isArray()` on
             // `PullTypeSymbol extends PullSymbol`, both in `namespace TypeScript`).
             val thisEnclosingNs = objectType.symbol?.parent?.takeIf { it.flags.hasAny(SymbolFlags.Module) }
-            if (classDecl != null && lookupInstanceMemberInResolvableChain(classDecl, objectType.symbol, propName, enclosingNs = thisEnclosingNs) == false
-                && !isStaticMemberOfClass(classDecl, propName)
+            if (classDecl != null && classInstanceMembers.lookupInstanceMemberInResolvableChain(classDecl, objectType.symbol, propName, enclosingNs = thisEnclosingNs) == false
+                && !classInstanceMembers.isStaticMemberOfClass(classDecl, propName)
             ) {
                 val baseName = classDecl.name?.text ?: objectType.symbol?.name
                 if (baseName != null) {
@@ -159788,7 +159791,7 @@ interface DataView {
                     val className = if (!tps.isNullOrEmpty())
                         "$baseName<${tps.joinToString(", ") { it.name.text }}>"
                     else baseName
-                    if (emitClassChainTs2551Suggestion(classDecl, objectType.symbol, propName, className, diagStart, diagLength, source, fileName)) return
+                    if (classInstanceMembers.emitClassChainTs2551Suggestion(classDecl, objectType.symbol, propName, className, diagStart, diagLength, source, fileName)) return
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
                         message = "Property '$propName' does not exist on type '$className'.",
@@ -159991,8 +159994,8 @@ interface DataView {
             if (isThisAccess && !inStaticClassMethod) {
                 val classDecl = objectType.symbol?.declarations?.firstOrNull() as? ClassDeclaration
                 if (classDecl != null
-                    && isStaticMemberOfClass(classDecl, propName)
-                    && !hasInstanceMemberNamed(classDecl, propName)
+                    && classInstanceMembers.isStaticMemberOfClass(classDecl, propName)
+                    && !classInstanceMembers.hasInstanceMemberNamed(classDecl, propName)
                 ) {
                     val baseName = classDecl.name?.text ?: objectType.symbol?.name
                     if (baseName != null) {
@@ -161114,386 +161117,6 @@ interface DataView {
                     // exports every leaf; before this the loop saw only Identifier names.
                     if (propName in bindingPatternNames(d.name)) return true
                 }
-            }
-        }
-        return false
-    }
-
-    /** Check if `name` is a static member of `classDecl` (including inherited). */
-    /**
-     * Returns true if [classDecl] (or a base class) declares an INSTANCE member named [name].
-     * Instance members include:
-     *  - non-static PropertyDeclaration / MethodDeclaration / GetAccessor / SetAccessor
-     *  - Constructor parameter properties (parameters with an access modifier or readonly)
-     * Used to suppress TS2576 "did you mean static" for `this.X` when the class has
-     * BOTH an instance member X and a static member X. `this.X` in an instance method
-     * legitimately resolves to the instance member.
-     */
-    /** Walk [classDecl]'s instance-side member set + extends chain looking for a
-     *  member named [propName]. Returns:
-     *
-     *  - `true` — member found in this class or any safely-resolvable base.
-     *  - `false` — chain fully resolved (terminates at a class with no extends or
-     *    a cycle) without finding the member.
-     *  - `null` — chain has un-resolvable parts (non-Identifier extends like
-     *    `Foo.Bar` or `q<T>()`, an Identifier base whose symbol isn't a
-     *    [ClassDeclaration] in [globals], an `IndexSignature` member that would
-     *    accept any property name, or a `declare class` whose lib augmentations
-     *    we can't see). Caller MUST treat `null` as "unsafe to emit" and bail.
-     *
-     *  Used by TS2339 emitters that need to ask "is this property genuinely
-     *  missing from the entire instance-side view?" without re-walking the
-     *  chain manually. Implements clauses are intentionally NOT followed —
-     *  per [resolveBaseTypesLazy], implements is a structural constraint, not
-     *  a source of inherited members. */
-    /** (CHK.182) What the [InterfaceDeclaration]s merged into a class's OWN symbol say
-     *  about [propName]: `true` = one of them declares it, `false` = none does (or the
-     *  symbol carries no interface at all), `null` = a merged interface this walk cannot
-     *  read in full — a lib declaration, an `extends` list (its bases would contribute
-     *  members), or a member that is not a plain named property / method / accessor
-     *  (an index, call or construct signature, a computed name).
-     *
-     *  This replaced a program-wide NAME set ("a class named like ANY interface in ANY
-     *  file"), which made every class named like an interface in some OTHER module file
-     *  report nothing at all — module-scoped names never merge (INV.3(d)), so asking the
-     *  symbol is both the sound question and the complete one. It also reads a genuine
-     *  same-scope merge (`interface D` + `class D` in one scope — the binder does merge
-     *  them into one symbol) instead of refusing it, which is what tsgo reports. */
-    private fun mergedInterfaceHasMember(classSym: Symbol, propName: String): Boolean? {
-        var found = false
-        for (d in classSym.declarations) {
-            if (d !is InterfaceDeclaration) continue
-            if (d in builtinLibDecls) return null
-            if (!d.heritageClauses.isNullOrEmpty()) return null
-            for (m in d.members) {
-                val name = when (m) {
-                    is PropertyDeclaration -> classMemberNameText(m.name)
-                    is MethodDeclaration -> classMemberNameText(m.name)
-                    is GetAccessor -> classMemberNameText(m.name)
-                    is SetAccessor -> classMemberNameText(m.name)
-                    is SemicolonClassElement -> continue
-                    else -> return null
-                } ?: return null
-                if (name.isEmpty()) return null
-                if (name == propName) found = true
-            }
-        }
-        return found
-    }
-
-    private fun lookupInstanceMemberInResolvableChain(
-        classDecl: ClassDeclaration, classSym: Symbol?, propName: String, visited: MutableSet<String>? = null,
-        enclosingNs: Symbol? = null,
-    ): Boolean? {
-        val v = visited ?: mutableSetOf()
-        val className = classDecl.name?.text ?: return null
-        if (!v.add(className)) return false
-        // (CHK.182) the class's OWN merged interfaces, read off its symbol. A caller
-        // without one cannot rule a merge out, so it gets the old refusal.
-        if (classSym == null) return null
-        when (mergedInterfaceHasMember(classSym, propName)) {
-            null -> return null
-            true -> return true
-            false -> {}
-        }
-        if (classDecl.members.any { it is IndexSignature }) return null
-        if (ModifierFlag.Declare in classDecl.modifiers) return null
-        for (m in classDecl.members) {
-            when (m) {
-                is PropertyDeclaration -> {
-                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == propName) return true
-                }
-                is MethodDeclaration -> {
-                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == propName) return true
-                }
-                is GetAccessor -> {
-                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == propName) return true
-                }
-                is SetAccessor -> {
-                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == propName) return true
-                }
-                is Constructor -> {
-                    for (p in m.parameters) {
-                        if (p.modifiers.isEmpty()) continue
-                        if ((p.name as? Identifier)?.text == propName) return true
-                    }
-                }
-                else -> {}
-            }
-        }
-        val baseExpr = classDecl.heritageClauses
-            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-            ?.types?.firstOrNull()?.expression ?: return false
-        if (baseExpr !is Identifier) return null
-        // Resolve the base via the enclosing namespace's exports first (a namespace-local
-        // base is not in `globals`), falling back to `globals`. Without this a namespace-local
-        // base returns `null` (uncertain → the caller bails), which — now that
-        // getTypeFromBaseTypeExpression populates baseTypes for namespace-local bases — would
-        // swallow a genuinely-missing-member TS2339. `false` still propagates ONLY through a
-        // fully-resolvable chain, so this stays FP-safe (uncertainty → null → bail). `enclosingNs`
-        // is null for the non-`this` callers → globals-only (unchanged).
-        val baseSym = enclosingNs?.exports?.get(baseExpr.text) ?: globals[baseExpr.text] ?: return null
-        // (CHK.182) the CLASS among the base's declarations — a merged interface may be
-        // declared first, and the recursion reads it off [baseSym] anyway.
-        val baseDecl = baseSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return null
-        // Recurse in the base's OWN namespace (a sibling class shares this one; a base pulled
-        // from globals resets to null).
-        val baseNs = baseSym.parent?.takeIf { it.flags.hasAny(SymbolFlags.Module) } ?: enclosingNs
-        return lookupInstanceMemberInResolvableChain(baseDecl, baseSym, propName, v, baseNs)
-    }
-
-    private fun hasInstanceMemberNamed(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
-        val v = visited ?: mutableSetOf()
-        val className = classDecl.name?.text ?: return false
-        if (!v.add(className)) return false
-        for (m in classDecl.members) {
-            when (m) {
-                is PropertyDeclaration -> {
-                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == name) return true
-                }
-                is MethodDeclaration -> {
-                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == name) return true
-                }
-                is GetAccessor -> {
-                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == name) return true
-                }
-                is SetAccessor -> {
-                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == name) return true
-                }
-                is Constructor -> {
-                    for (p in m.parameters) {
-                        if (p.modifiers.isEmpty()) continue
-                        if ((p.name as? Identifier)?.text == name) return true
-                    }
-                }
-                else -> {}
-            }
-        }
-        val baseExpr = classDecl.heritageClauses
-            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-            ?.types?.firstOrNull()?.expression
-        if (baseExpr is Identifier) {
-            val baseSym = globals[baseExpr.text]
-            if (baseSym != null) {
-                val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration
-                if (baseDecl != null && hasInstanceMemberNamed(baseDecl, name, v)) return true
-            }
-        }
-        return false
-    }
-
-    /** TS2576 when `instance.X` / `instance["X"]` accesses a STATIC-only member of the class.
-     *  Returns true if emitted (caller should return early).
-     *
-     *  Only fires for INSTANCE-side access: skip when the receiver type already carries the
-     *  property (e.g. `const k2: typeof K; k2.bar` — k2's type is the constructor side, so
-     *  `bar` resolves there and `k2.bar` is legitimate). */
-    /** TS2339 when a class-instance receiver accesses a property that is genuinely
-     *  absent from the class hierarchy.
-     *
-     *  Conservative gates defend against false positives:
-     *   - propName not in [RUNTIME_PROPERTIES];
-     *   - symbol has exactly 1 class / type-alias / namespace declaration (a merged
-     *     INTERFACE is read by the chain walk — (CHK.182));
-     *   - class is non-generic (TypeParam constraints could supply members we
-     *     don't yet check structurally);
-     *   - chain walk via [lookupInstanceMemberInResolvableChain] returns `false`
-     *     (own + entire extends chain resolved cleanly, no member found). The
-     *     helper itself bails (`null`) on hazardous shapes — non-Identifier
-     *     extends (`Foo.Bar`, `q<T>()`), unresolvable Identifier bases, ambient
-     *     bases (`declare class`), index signatures, or a merged
-     *     [InterfaceDeclaration] on the class's OWN symbol it cannot read in full
-     *     ([mergedInterfaceHasMember], (CHK.182));
-     *   - flow narrowing yields the same type (e.g., `if (c instanceof D) c.bar()`
-     *     narrows `c` from C to D which may have `bar` — the narrowed type
-     *     differs and we bail).
-     *
-     *  Implements clauses are NOT inherited members per [resolveBaseTypesLazy]'s
-     *  skip-implements rule, so this fires correctly for
-     *  `class C implements A {}; let c: C; c.bar()` where A has only `static bar()`. */
-    private fun tryEmitClassInstanceMissingTs2339(
-        typeSym: Symbol, rawType: Type, propName: String, objectExpr: Expression,
-        diagStart: Int, diagLength: Int, source: String, fileName: String,
-    ) {
-        if (propName.isEmpty()) return
-        if (propName in RUNTIME_PROPERTIES) return
-        // 17.130: Count only "shape-defining" declarations (Class/Interface/TypeAlias/Module).
-        // Import-specifier and alias declarations are appended via `mergeSymbolTable` at init's
-        // global merge step (see CLAUDE.md "ALL file locals merged into globals" gotcha), but
-        // they don't contribute members to the class shape. Pre-fix: `declarations.size != 1`
-        // bailed whenever a class was imported into any file, over-suppressing TS2339.
-        // (CHK.182) merged INTERFACES are not counted: the chain walk below reads them
-        // off [typeSym] ([mergedInterfaceHasMember]) and refuses the ones it cannot read.
-        val shapeDecls = typeSym.declarations.count { d ->
-            d is ClassDeclaration || d is TypeAliasDeclaration || d is ModuleDeclaration
-        }
-        if (shapeDecls != 1) return
-        val classDecl = typeSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return
-        if (!classDecl.typeParameters.isNullOrEmpty()) return
-        // Walk own + extends chain. The helper itself bails on IndexSignature
-        // and `declare class` (in this class OR any base), so those gates need
-        // not be repeated at this level. `null` means chain isn't safely
-        // resolvable (complex extends like `Foo.Bar`, unresolved Identifier,
-        // ambient base, etc.); `true` means a base in the chain declares the
-        // property; only `false` means "genuinely missing across the entire
-        // resolvable instance side".
-        if (lookupInstanceMemberInResolvableChain(classDecl, typeSym, propName) != false) return
-        if (isStaticMemberOfClass(classDecl, propName)) return
-        val narrowed = getNarrowedTypeForReference(rawType, objectExpr)
-        if (narrowed !== rawType) return
-        val typeName = classDecl.name?.text ?: typeSym.name
-        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-        if (emitClassChainTs2551Suggestion(classDecl, typeSym, propName, typeName, diagStart, diagLength, source, fileName)) return
-        diagnostics.add(Diagnostic(
-            message = "Property '$propName' does not exist on type '$typeName'.",
-            category = DiagnosticCategory.Error, code = 2339,
-            fileName = fileName, line = line, character = character,
-            start = diagStart, length = diagLength,
-        ))
-    }
-
-    /** Spelling suggestion over a class's resolvable extends chain's instance member names —
-     *  tsc emits TS2551 "… Did you mean 'method2'?" + TS2728 related at the member
-     *  (`this.method1(2)` on B whose base A parsed empty,
-     *  constructorWithIncompleteTypeAnnotation). Returns true when the TS2551 was emitted. */
-    private fun emitClassChainTs2551Suggestion(
-        classDecl: ClassDeclaration, classSym: Symbol?, propName: String, typeName: String,
-        diagStart: Int, diagLength: Int, source: String, fileName: String,
-    ): Boolean {
-        val pool = mutableMapOf<String, Identifier>()
-        var cur: ClassDeclaration? = classDecl
-        var curSym: Symbol? = classSym
-        var hops = 0
-        while (cur != null && hops++ < 10) {
-            // (CHK.182) an interface merged into this hop's class contributes candidates
-            // too, in the symbol's declaration order ([mergedInterfaceHasMember] has
-            // already refused every merge it cannot read in full).
-            val shapes: List<Node> = curSym?.declarations
-                ?.filter { it === cur || (it is InterfaceDeclaration && it !in builtinLibDecls) }
-                ?.takeIf { cur in it } ?: listOf(cur)
-            for (shape in shapes) {
-                val members = when (shape) {
-                    is ClassDeclaration -> shape.members
-                    is InterfaceDeclaration -> shape.members
-                    else -> continue
-                }
-                for (m in members) {
-                    val nameId = when (m) {
-                        is MethodDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                        is PropertyDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                        is GetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                        is SetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                        else -> null
-                    }
-                    if (nameId != null && nameId.text.isNotEmpty() && nameId.text !in pool) pool[nameId.text] = nameId
-                }
-            }
-            val baseName = (cur.heritageClauses
-                ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                ?.types?.firstOrNull()?.expression as? Identifier)?.text
-            curSym = baseName?.let { globals[it] }
-            cur = curSym?.declarations?.firstOrNull { d -> d is ClassDeclaration } as? ClassDeclaration
-        }
-        val suggestion = getSpellingSuggestionFromNames(propName, pool.keys) ?: return false
-        val suggNode = pool[suggestion] ?: return false
-        val (declFile, declSource) = resolveDeclarationSourceFile(suggNode.pos)
-        val relFile = declFile ?: fileName
-        val relSource = declSource ?: source
-        val (relLine, relChar) = getLineAndCharacterOfPosition(relSource, suggNode.pos)
-        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-        diagnostics.add(Diagnostic(
-            message = "Property '$propName' does not exist on type '$typeName'. Did you mean '$suggestion'?",
-            category = DiagnosticCategory.Error, code = 2551,
-            fileName = fileName, line = line, character = character,
-            start = diagStart, length = diagLength,
-            relatedInformation = listOf(Diagnostic(
-                message = "'$suggestion' is declared here.",
-                category = DiagnosticCategory.Message, code = 2728,
-                fileName = relFile, line = relLine, character = relChar,
-                start = suggNode.pos, length = suggestion.length,
-            )),
-        ))
-        return true
-    }
-
-    private fun tryEmitStaticAccessTs2576(
-        typeSym: Symbol, propName: String, diagStart: Int, diagLength: Int,
-        suggestionKey: String, source: String, fileName: String,
-        receiverType: Type? = null,
-    ): Boolean {
-        if (propName.isEmpty()) return false
-        if (propName in RUNTIME_PROPERTIES) return false
-        // Only fire for INSTANCE-side access (Type.Interface). Constructor-side receivers
-        // (`typeof C`, Type.Object built by `getTypeOfSymbolForTypeQuery`) carry static
-        // members as actual properties and should fall through to normal TS2339 checking.
-        // NOTE: Type.Interface extends Type.Object so `is Type.Object` alone matches both.
-        if (receiverType != null && receiverType !is Type.Interface && receiverType is Type.Object) return false
-        val classDecl = typeSym.declarations.firstOrNull() as? ClassDeclaration ?: return false
-        if (!isStaticMemberOfClass(classDecl, propName)) return false
-        if (hasInstanceMemberNamed(classDecl, propName)) return false
-        val baseName = classDecl.name?.text ?: typeSym.name
-        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-        diagnostics.add(Diagnostic(
-            message = "Property '$propName' does not exist on type '$baseName'. Did you mean to access the static member '$baseName$suggestionKey' instead?",
-            category = DiagnosticCategory.Error, code = 2576,
-            fileName = fileName, line = line, character = character,
-            start = diagStart, length = diagLength,
-        ))
-        return true
-    }
-
-    private fun classMemberNameText(nameNode: Node?): String? = when (nameNode) {
-        is Identifier -> nameNode.text
-        is StringLiteralNode -> nameNode.text
-        is NumericLiteralNode -> nameNode.text
-        // B451: a computed member name `[2]`/`["4"]` with a literal inner is a STATIC key,
-        // so `z[2]` resolves against the instance member rather than FP'ing TS2339.
-        // Round 933: DELEGATED to [computedLiteralKey] rather than re-spelling its `when`.
-        // The two copies had drifted — this one still refused a backtick-quoted key after
-        // the type-building site accepted it, so a class's own `` [`cp`] `` member resolved
-        // for TS2322 and simultaneously FP'd TS2339 from this walker, in ONE compile.
-        // The archive's B451 entry is explicit that this family has >= 5 independent
-        // extraction sites; one shared definition is the only thing that keeps them level.
-        // Round 937 — (CHK.5)(a): and LATE-BOUND keys for the same reason, one round on.
-        // `class C { [K]: number }` with `const K = "p"` declares `p` at the type-building
-        // site now, so a walker that still refused the key would answer "definitely no such
-        // member" for a member the type HAS — which is precisely the TS2339 false positive
-        // this stage exists to close (`c.p`, measured against tsc 7.0.2, which reads it as
-        // `number`). [lookupInstanceMemberInResolvableChain] is that firewall's entry.
-        is ComputedPropertyName -> computedLiteralKey(nameNode) ?: lateBoundComputedKeyName(nameNode)
-        else -> null
-    }
-
-    private fun isStaticMemberOfClass(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
-        val v = visited ?: mutableSetOf()
-        val className = classDecl.name?.text ?: return false
-        if (!v.add(className)) return false
-        for (m in classDecl.members) {
-            val memberName = when (m) {
-                is PropertyDeclaration -> classMemberNameText(m.name)
-                is MethodDeclaration -> classMemberNameText(m.name)
-                is GetAccessor -> classMemberNameText(m.name)
-                is SetAccessor -> classMemberNameText(m.name)
-                else -> null
-            }
-            if (memberName != name) continue
-            val isStatic = when (m) {
-                is PropertyDeclaration -> ModifierFlag.Static in m.modifiers
-                is MethodDeclaration -> ModifierFlag.Static in m.modifiers
-                is GetAccessor -> ModifierFlag.Static in m.modifiers
-                is SetAccessor -> ModifierFlag.Static in m.modifiers
-                else -> false
-            }
-            if (isStatic) return true
-        }
-        val baseExpr = classDecl.heritageClauses
-            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-            ?.types?.firstOrNull()?.expression
-        if (baseExpr is Identifier) {
-            val baseSym = globals[baseExpr.text]
-            if (baseSym != null) {
-                val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration
-                if (baseDecl != null && isStaticMemberOfClass(baseDecl, name, v)) return true
             }
         }
         return false
@@ -182053,7 +181676,7 @@ interface DataView {
      */
     private fun libFileOfDecl(decl: Node?): String? = decl?.let { realLibDeclFile[it] }
 
-    private fun resolveDeclarationSourceFile(declPos: Int): Pair<String?, String?> {
+    internal fun resolveDeclarationSourceFile(declPos: Int): Pair<String?, String?> {
         if (declPos < 0) return Pair(null, null)
         for (result in binderResults) {
             val sf = result.sourceFile
