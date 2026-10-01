@@ -12909,6 +12909,10 @@ class Checker(
             }
 
             if (!processedSpecifiers.add(specifier)) continue
+            // (CHK.193)(b) an augmentation no leg can target (TS2664) merges into nothing in
+            // tsgo; publishing its exports into `globals` made an unresolved import's
+            // bindings — and every bare use of the name — read the block's declarations.
+            if (parentLookupScope == null && nameResolver.isUntargetedAugmentation(specifier)) continue
 
             // Find the augmentation module symbol — check parent scope first (for nested),
             // then fall back to globals (for top-level `declare module "X"`)
@@ -42756,6 +42760,9 @@ class Checker(
             if (candidate.isEmpty()) continue
             val lenDiff = kotlin.math.abs(candidate.length - name.length)
             if (lenDiff > maximumLengthDifference) continue
+            // (CHK.193)(d) tsgo `GetSpellingSuggestion`: a candidate shorter than 3 characters
+            // is considered only when it differs from the name by CASE alone.
+            if (candidate.length < 3 && !candidate.equals(name, ignoreCase = true)) continue
             val dist10 = weightedLevenshteinDistance10(name, candidate, bestDistance10)
             if (dist10 < bestDistance10) {
                 bestDistance10 = dist10
@@ -51009,7 +51016,7 @@ class Checker(
                 for (stmt in result.sourceFile.statements) {
                     if (stmt is ModuleDeclaration) {
                         val name = stmt.name
-                        if (name is StringLiteralNode) {
+                        if (name is StringLiteralNode && !nameResolver.isUntargetedAugmentation(name.text)) { // (CHK.193)(b)
                             ambientModuleNames.add(name.text)
                         }
                     }
@@ -52517,7 +52524,7 @@ class Checker(
      * [resolveModuleSpecifier] intentionally does not try JS extensions (they would change the
      * behavior of TS2307 and cross-file type lookups elsewhere in non-desirable ways).
      */
-    private fun resolvesAsJsOrJsx(specifier: String): Boolean {
+    internal fun resolvesAsJsOrJsx(specifier: String): Boolean {
         if (!options.allowJs && !options.checkJs) return false
         val baseName = specifier.removePrefix("./").removePrefix("../")
         val isRelative = specifier.startsWith("./") || specifier.startsWith("../")
@@ -134897,8 +134904,17 @@ interface DataView {
             // genuine qualified class resolves — qualified functions/namespaces/vars fall
             // through to anyType (prior behavior), keeping the FP surface minimal.
             is PropertyAccessExpression -> {
-                val sym = resolveQualifiedValueSymbol(callee)
-                if (sym != null && sym.flags.hasAny(SymbolFlags.Class)) {
+                // (CHK.193)(c) the qualified resolver reads the dotted ROOT from the file's
+                // tables, so `new N.C()` under a parameter / local `N` resolved the OUTER
+                // namespace's class. A variable-like innermost binding of the root makes the
+                // callee an ordinary member read of that value.
+                var root: Expression = callee
+                while (root is PropertyAccessExpression) root = root.expression
+                val rootShadowed = root is Identifier && LocalShadowGuard.innermostBindingIsVariable(root, root.text)
+                val sym = if (rootShadowed) null else resolveQualifiedValueSymbol(callee)
+                if (rootShadowed) {
+                    newCalleeMemberValueType(callee) ?: return anyType
+                } else if (sym != null && sym.flags.hasAny(SymbolFlags.Class)) {
                     getDeclaredTypeOfSymbol(sym)
                 } else {
                     // B511: a clodule `declare namespace M { class C; function C }` — class+function
@@ -147674,6 +147690,15 @@ interface DataView {
         ))
     }
 
+    /** (CHK.193)(a) A class element carrying `static` (property / method / accessor). */
+    private fun isStaticClassElement(d: Node): Boolean = when (d) {
+        is PropertyDeclaration -> ModifierFlag.Static in d.modifiers
+        is MethodDeclaration -> ModifierFlag.Static in d.modifiers
+        is GetAccessor -> ModifierFlag.Static in d.modifiers
+        is SetAccessor -> ModifierFlag.Static in d.modifiers
+        else -> false
+    }
+
     private fun emitTS2676(nameNode: NameNode, source: String, fileName: String) {
         val len = (nameNode as? Identifier)?.text?.length ?: 1
         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
@@ -147862,6 +147887,18 @@ interface DataView {
                     if (member is MethodDeclaration && (overloadedMethods[memberName] ?: 0) > 1) continue
 
                     val basePropSymbol = baseMembers[memberName] ?: continue
+                    // (CHK.193)(a): the instance member table still carries a class's STATICS
+                    // (dual population, MemberResolver), so a base `static s` would be compared
+                    // against a derived INSTANCE `s`. tsgo keeps the two sides apart (statics
+                    // meet statics in TS2417), so a base member declared only statically is
+                    // not an instance-side override target. (The table is LAST-WINS across the
+                    // two sides, so a base declaring BOTH `s` and `static s` may surface the
+                    // static here; that pair keeps today's comparison rather than losing the row.)
+                    if (basePropSymbol.declarations.isNotEmpty() &&
+                        basePropSymbol.declarations.all { isStaticClassElement(it) } &&
+                        (baseSymbol.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration)
+                            ?.let { classInstanceMembers.hasInstanceMemberNamed(it, memberName) } != true
+                    ) continue
 
                     // Skip if base member has multiple declarations (overloads)
                     if (basePropSymbol.declarations.size > 1) {

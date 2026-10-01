@@ -219,6 +219,39 @@ internal class NameResolver(
      * Relative specifiers are excluded from it outright: theirs is a per-directory
      * meaning, and the earlier legs already resolve them exactly.
      */
+    /** Lazily-built answer of [isUntargetedAugmentation]; fixed once the program is bound. */
+    private var untargetedAugmentationSpecs: Set<String>? = null
+
+    /**
+     * (CHK.193)(b) `true` when EVERY top-level `declare module "<spec>"` in the program is an
+     * AUGMENTATION (a non-`.d.ts` MODULE file) whose target no leg resolves — exactly the
+     * blocks [Checker.checkAmbientModuleAugmentations] reports as TS2664. Such a block
+     * defines no module: tsgo drops it, so an import of `<spec>` is TS2307 and its
+     * bindings are `any`. The binder still publishes it under `globals[spec]`, which is
+     * why every ambient-module second chance and the TS2307 `ambientModuleNames` gate
+     * must ask this first. One script / `.d.ts` declaration of the name (a real ambient
+     * module) makes the answer `false`.
+     */
+    fun isUntargetedAugmentation(spec: String): Boolean {
+        val set = untargetedAugmentationSpecs ?: run {
+            val augmentations = HashSet<String>()
+            val definitions = HashSet<String>()
+            for ((fn, result) in fileResults) {
+                val statements = result.sourceFile.statements
+                val isAugmentingFile = !checker.isDtsFile(fn) && checker.isModuleFile(statements)
+                for (stmt in statements) {
+                    if (stmt !is ModuleDeclaration) continue
+                    val name = (stmt.name as? StringLiteralNode)?.text ?: continue
+                    if (isAugmentingFile && augmentationTargetFile(name, fn) == null &&
+                        !checker.resolvesAsJsOrJsx(name)
+                    ) augmentations.add(name) else definitions.add(name)
+                }
+            }
+            (augmentations - definitions).also { untargetedAugmentationSpecs = it }
+        }
+        return spec in set
+    }
+
     fun augmentationTargetFile(spec: String, declaringFileName: String): String? {
         resolveModuleSpecifierRelativeJsAware(spec, declaringFileName)?.let { return it }
         resolveImportTargetFallback(spec, declaringFileName)?.let { return it }
@@ -336,7 +369,7 @@ internal class NameResolver(
                                     // file, so resolveModuleSpecifier returns null. Resolve the
                                     // alias to that ambient module symbol so `import m1 =
                                     // require("mod1"); var x: m1.Foo` finds mod1's exported Foo.
-                                    val ambient = globals[specifier]
+                                    val ambient = globals[specifier]?.takeUnless { isUntargetedAugmentation(specifier) }
                                     if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module) &&
                                         ambient.exports != null) {
                                         // (CHK.81) …unless the block's surface is `export = <value>`,
@@ -386,7 +419,7 @@ internal class NameResolver(
                             // Gated to a NAMESPACE import so no other import form's
                             // established resolution moves.
                             if (decl.importClause?.namedBindings is NamespaceImport) {
-                                val ambient = globals[specifier]
+                                val ambient = globals[specifier]?.takeUnless { isUntargetedAugmentation(specifier) }
                                 if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module) &&
                                     ambient.exports != null
                                 ) {
@@ -536,7 +569,7 @@ internal class NameResolver(
                                 }
                             if (targetFile2 == null) {
                                 // Ambient module fallback — `declare module "X"` in a .d.ts file.
-                                val ambient = globals[specifier2]
+                                val ambient = globals[specifier2]?.takeUnless { isUntargetedAugmentation(specifier2) }
                                 if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) {
                                     ambient.exports?.get(originalName)?.let { target ->
                                         setSymbolTarget(symbol, target)

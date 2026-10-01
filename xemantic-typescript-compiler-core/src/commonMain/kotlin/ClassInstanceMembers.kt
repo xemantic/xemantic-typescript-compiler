@@ -122,6 +122,20 @@ internal class ClassInstanceMembers(
                 val baseId = t.expression as? Identifier ?: return null
                 val baseSym = resolveBaseClassSymbol(baseId) ?: return null
                 if (!visited.add(baseSym.id)) continue
+                // (CHK.193)(d) an interface may extend a CLASS (`interface C extends B {}`
+                // merged into `class C`): its instance side is read by the class chain walk,
+                // which itself reads any interface merged into that class.
+                val baseClass = baseSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+                if (baseClass != null &&
+                    baseSym.declarations.all { it === baseClass || it is InterfaceDeclaration }
+                ) {
+                    when (lookupInstanceMemberInResolvableChain(baseClass, baseSym, propName)) {
+                        null -> return null
+                        true -> return true
+                        false -> {}
+                    }
+                    continue
+                }
                 if (baseSym.declarations.isEmpty() || baseSym.declarations.any { it !is InterfaceDeclaration }) return null
                 for (bd in baseSym.declarations) {
                     when (interfaceChainHasMember(bd as InterfaceDeclaration, propName, visited)) {
@@ -417,23 +431,11 @@ internal class ClassInstanceMembers(
             val shapes: List<Node> = curSym?.declarations
                 ?.filter { it === cur || (it is InterfaceDeclaration && it !in checker.builtinLibDecls) }
                 ?.takeIf { cur in it } ?: listOf(cur)
-            for (shape in shapes) {
-                val members = when (shape) {
-                    is ClassDeclaration -> shape.members
-                    is InterfaceDeclaration -> shape.members
-                    else -> continue
-                }
-                for (m in members) {
-                    val nameId = when (m) {
-                        is MethodDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                        is PropertyDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                        is GetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                        is SetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
-                        else -> null
-                    }
-                    if (nameId != null && nameId.text.isNotEmpty() && nameId.text !in pool) pool[nameId.text] = nameId
-                }
-            }
+            for (shape in shapes) addShapeNames(shape, pool)
+            // (CHK.193)(d) …and so does what a merged interface EXTENDS: a base interface's
+            // members and a base class's whole instance chain ([interfaceChainHasMember] has
+            // read the same edges for the presence verdict).
+            for (shape in shapes) if (shape is InterfaceDeclaration) addInterfaceBaseNames(shape, pool, HashSet())
             curSym = entityNameBaseOf(cur)?.let { resolveBaseClassSymbol(it) }
             cur = curSym?.declarations?.firstOrNull { d -> d is ClassDeclaration } as? ClassDeclaration
         }
@@ -457,6 +459,52 @@ internal class ClassInstanceMembers(
             )),
         ))
         return true
+    }
+
+    /** The non-static named members of one class / interface [shape], first-wins into [pool]. */
+    private fun addShapeNames(shape: Node, pool: MutableMap<String, Identifier>) {
+        val members = when (shape) {
+            is ClassDeclaration -> shape.members
+            is InterfaceDeclaration -> shape.members
+            else -> return
+        }
+        for (m in members) {
+            val nameId = when (m) {
+                is MethodDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                is PropertyDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                is GetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                is SetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                else -> null
+            }
+            if (nameId != null && nameId.text.isNotEmpty() && nameId.text !in pool) pool[nameId.text] = nameId
+        }
+    }
+
+    /** (CHK.193)(d) The candidates an interface's `extends` list contributes: each Identifier
+     *  base's program interfaces (recursively) and, for a class base, its instance chain with
+     *  the interfaces merged into each hop. Unresolvable bases contribute nothing. */
+    private fun addInterfaceBaseNames(d: InterfaceDeclaration, pool: MutableMap<String, Identifier>, visited: MutableSet<Int>) {
+        for (clause in d.heritageClauses.orEmpty()) {
+            if (clause.token != SyntaxKind.ExtendsKeyword) continue
+            for (t in clause.types) {
+                val baseId = t.expression as? Identifier ?: continue
+                val baseSym = resolveBaseClassSymbol(baseId) ?: continue
+                if (!visited.add(baseSym.id)) continue
+                var hopSym: Symbol? = baseSym
+                var hops = 0
+                while (hopSym != null && hops++ < 10) {
+                    val hopClass = hopSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+                    for (bd in hopSym.declarations) {
+                        if (bd is InterfaceDeclaration && bd in checker.builtinLibDecls) continue
+                        if (bd !is InterfaceDeclaration && bd !== hopClass) continue
+                        addShapeNames(bd, pool)
+                        if (bd is InterfaceDeclaration) addInterfaceBaseNames(bd, pool, visited)
+                    }
+                    hopSym = hopClass?.let { c -> entityNameBaseOf(c)?.let { resolveBaseClassSymbol(it) } }
+                    if (hopSym != null && !visited.add(hopSym.id)) break
+                }
+            }
+        }
     }
 
     fun tryEmitStaticAccessTs2576(
