@@ -7981,7 +7981,11 @@ class Checker(
      *  semantics byte-identical to the scans. Built EAGERLY from the frozen
      *  [binderResults] and never mutated afterwards — read-only shareable across future
      *  parallel checker workers (Tier 1 in docs/parallel-caching.md). Declared before
-     *  `init` per the init-order trap. */
+     *  `init` per the init-order trap.
+     *  (CHK.192) Now the FALLBACK only, for a specifier with no parent chain: structural
+     *  keys collide across files that spell one import at one offset, and the first-match
+     *  semantics above handed such a specifier ANOTHER file's statement. An ordinary
+     *  program never builds it — [enclosingImportsOf] asks the parent chain first. */
     private val enclosingImportIndex: Map<ImportSpecifier, Any>
         by lazy(LazyThreadSafetyMode.NONE) {
             FrontEnd.section(FrontEnd.CHK_F_EII) {
@@ -125115,14 +125119,38 @@ interface DataView {
      * A statement is listed once even if it contains structural duplicates of [spec].
      */
     @Suppress("UNCHECKED_CAST")
-    internal fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> =
-        when (val entry = enclosingImportIndex[spec]) {
+    internal fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> {
+        // (CHK.192) A specifier's OWN statement, through the INV.2(a) parent chain. The
+        // structural index below cannot tell two files' specifiers apart when they
+        // spell the same name at the same offsets (`ImportSpecifier` is a data class),
+        // and handed `b.ts`'s `import { B } from "./m2"` the `./m1` statement of an
+        // `a.ts` that happened to start the same way — a silent wrong type. TOP-LEVEL
+        // statements only, as the index held: a `declare module` block's import is
+        // [blockLevelImportOf]'s, and callers fall back to it on an empty answer.
+        ownTopLevelImportOf(spec)?.let { return listOf(it) }
+        return when (val entry = enclosingImportIndex[spec]) {
             null -> emptyList()
             // (INC.81) the one-entry representation, which is essentially the whole
             // population — see the index's own build.
             is Pair<*, *> -> listOf(entry as Pair<String, ImportDeclaration>)
             else -> entry as List<Pair<String, ImportDeclaration>>
         }
+    }
+
+    /**
+     * (CHK.192) The top-level ImportDeclaration owning [spec] by IDENTITY (`ImportSpecifier`
+     * → `NamedImports` → `ImportClause` → `ImportDeclaration` → `SourceFile`), with its
+     * file. Null for an unindexed (copied/synthesized) node, or one not at a file's top
+     * level — the structural [enclosingImportIndex] is then the fallback, and it is
+     * never built for an ordinary program.
+     */
+    private fun ownTopLevelImportOf(spec: ImportSpecifier): Pair<String, ImportDeclaration>? {
+        val named = (spec as NodeBase).parent as? NamedImports ?: return null
+        val clause = (named as NodeBase).parent as? ImportClause ?: return null
+        val decl = (clause as NodeBase).parent as? ImportDeclaration ?: return null
+        val file = (decl as NodeBase).parent as? SourceFile ?: return null
+        return file.fileName to decl
+    }
 
     /**
      * M1.12 (round 424): resolve property [seg] on [cur] for the prefix-path

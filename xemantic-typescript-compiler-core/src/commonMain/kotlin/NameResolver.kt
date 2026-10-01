@@ -578,6 +578,27 @@ internal class NameResolver(
                             return resolveAlias(target, visited)
                         }
                     }
+                    // (CHK.192) A SAME-NAME from-clause re-export, `export { X } from "m"`: the
+                    // barrel's `locals[X]` is this specifier's alias and nothing followed it, so
+                    // an importer of `X` read `any`. The structural import index used to hide
+                    // that for an importer whose specifier COLLIDED with another file's
+                    // `import { X } from "m"` — it resolved through THAT statement straight to
+                    // `m` (corpus `constEnumNoEmitReexport`). A renaming clause is keyed by its
+                    // DECLARED name and is (CHK.190)'s; it is left alone here.
+                    is ExportSpecifier -> {
+                        if (decl.propertyName != null) continue
+                        val named = (decl as NodeBase).parent as? NamedExports ?: continue
+                        val exportDecl = (named as NodeBase).parent as? ExportDeclaration ?: continue
+                        val specifier = (exportDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                        val targetFile = resolveModuleSpecifier(specifier, exportDecl)
+                            ?: owningSourceFile(exportDecl)?.fileName?.let {
+                                resolveModuleSpecifierRelative(specifier, it)
+                            }
+                            ?: continue
+                        val target = fileResults[targetFile]?.locals?.get(decl.name.text) ?: continue
+                        setSymbolTarget(symbol, target)
+                        return resolveAlias(target, visited)
+                    }
                     else -> {}
                 }
             }

@@ -30,28 +30,16 @@ import com.xemantic.typescript.compiler.ProjectCompiler
 import kotlin.test.Test
 
 /**
- * (INC.81) `Checker.enclosingImportIndex` stores ONE entry per key directly and promotes
- * to a list only when a second statement claims the same key — and this pins the
- * promotion, which no real project reaches.
+ * (INC.81) pinned `Checker.enclosingImportIndex`'s one-entry representation and its
+ * promotion to a list when byte-identical importers share one STRUCTURAL key
+ * (`ImportSpecifier` is a data class, so equal text at equal offsets is one key).
  *
- * ## Why the promotion needs a fixture rather than a corpus
- *
- * The index is keyed STRUCTURALLY: `ImportSpecifier` is a data class whose components
- * include `pos` and `end`, so two files reach the same key exactly when they spell the
- * same import at the same offsets. Censused on a 2,401-file project the build inserts
- * **9,401 specifiers under 9,401 distinct keys and not one key is reached from two
- * files** — which is what made the per-key `MutableList` pure waste, and equally what
- * means nothing in this repo exercises the multi-entry path. Two byte-identical files
- * do.
- *
- * ## What the pins are
- *
- * `enclosingImportMultiFileKeys` is the regime: 0 for the ordinary shape (so the
- * one-entry representation really is what a project uses) and non-zero for the twin
- * fixture (so the promotion really is reached). The VALUE half is that both files still
- * resolve their import — the index feeds `resolveAlias`, so a lost or mis-promoted entry
- * degrades an imported callee to `any` and DELETES a diagnostic, which is the silent
- * direction.
+ * (CHK.192) That sharing was the defect: a specifier colliding with another file's took
+ * the FIRST file's statement, so two files importing the same name from DIFFERENT modules
+ * at the same offsets resolved one of them through the wrong module. A specifier's own
+ * statement now comes from its parent chain, and the structural index survives only as
+ * the fallback for an unindexed node — so the pins are now that an ordinary project and
+ * the twin fixture both resolve their imports WITHOUT building the index at all.
  */
 class ProjectEnclosingImportIndexTest {
 
@@ -86,31 +74,35 @@ class ProjectEnclosingImportIndexTest {
     )
 
     private fun buildAndCount(vfs: InMemoryVfs): Pair<List<String>, Int> {
-        EagerIndexCensus.enclosingImportMultiFileKeys = -1
-        val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        val rows = result.diagnostics
-            .filter { it.fileName?.startsWith("/proj/src/") == true }
-            .map { "${it.fileName}:${it.code}" }
-            .sorted()
-        return rows to EagerIndexCensus.enclosingImportMultiFileKeys
+        val before = EagerIndexCensus.enclosingImportBuilds
+        try {
+            EagerIndexCensus.enclosingImportBuilds = 0
+            val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
+            val rows = result.diagnostics
+                .filter { it.fileName?.startsWith("/proj/src/") == true }
+                .map { "${it.fileName}:${it.code}" }
+                .sorted()
+            return rows to EagerIndexCensus.enclosingImportBuilds
+        } finally {
+            EagerIndexCensus.enclosingImportBuilds = before
+        }
     }
 
     @Test
-    fun `distinct importers reach no key twice and both calls are checked`() {
-        val (rows, multi) = buildAndCount(plainVfs())
-        assert(multi == 0)
+    fun `distinct importers build no structural index and both calls are checked`() {
+        val (rows, builds) = buildAndCount(plainVfs())
+        assert(builds == 0)
         assert(rows == listOf("/proj/src/a.ts:2345", "/proj/src/b.ts:2345"))
     }
 
     /**
-     * THE PROMOTION PIN. Byte-identical importers share one key, so the index must hold
-     * BOTH entries — and both files must still see `helper` as `(n: number) => number`,
-     * which is the half a mis-promotion loses silently.
+     * Byte-identical importers share one structural key, which the parent chain makes
+     * irrelevant: both files must still see `helper` as `(n: number) => number`.
      */
     @Test
-    fun `byte-identical importers share a key and both are still checked`() {
-        val (rows, multi) = buildAndCount(twinVfs())
-        assert(multi > 0)
+    fun `byte-identical importers build no structural index and both are still checked`() {
+        val (rows, builds) = buildAndCount(twinVfs())
+        assert(builds == 0)
         assert(rows == listOf("/proj/src/a.ts:2345", "/proj/src/b.ts:2345"))
     }
 }
