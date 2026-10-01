@@ -426,7 +426,9 @@ internal class NameResolver(
                         if (decl.importClause?.name != null &&
                             symbol.name == decl.importClause.name.text) {
                             // Look for "default" export in target — first check locals["default"]
-                            val defaultSymbol = targetResult.locals["default"]
+                            // (CHK.190) importer-visible: `locals["default"]` is also where
+                            // `export { default as D } from` binds its (declared-name) alias.
+                            val defaultSymbol = importedExport(targetResult, "default", visited)
                             if (defaultSymbol != null) {
                                 setSymbolTarget(symbol, defaultSymbol)
                                 return resolveAlias(defaultSymbol, visited)
@@ -476,7 +478,7 @@ internal class NameResolver(
                                             val resolvedTarget: Symbol? = if (fromSpec != null) {
                                                 val fromFile = resolveModuleSpecifier(fromSpec, stmt)
                                                 val fromResult = fromFile?.let { fileResults[it] }
-                                                fromResult?.locals?.get(originalName)
+                                                fromResult?.let { importedExport(it, originalName, visited) }
                                             } else {
                                                 targetResult.locals[originalName]
                                             }
@@ -503,7 +505,7 @@ internal class NameResolver(
                         }
 
                         // Named import: import { X } from "mod"
-                        val target = targetResult.locals[symbol.name] ?: continue
+                        val target = importedExport(targetResult, symbol.name, visited) ?: continue
                         setSymbolTarget(symbol, target)
                         return resolveAlias(target, visited)
                     }
@@ -573,29 +575,19 @@ internal class NameResolver(
                                 continue
                             }
                             val targetResult2 = fileResults[targetFile2] ?: continue
-                            val target = targetResult2.locals[originalName] ?: continue
+                            val target = importedExport(targetResult2, originalName, visited) ?: continue
                             setSymbolTarget(symbol, target)
                             return resolveAlias(target, visited)
                         }
                     }
-                    // (CHK.192) A SAME-NAME from-clause re-export, `export { X } from "m"`: the
-                    // barrel's `locals[X]` is this specifier's alias and nothing followed it, so
-                    // an importer of `X` read `any`. The structural import index used to hide
-                    // that for an importer whose specifier COLLIDED with another file's
-                    // `import { X } from "m"` — it resolved through THAT statement straight to
-                    // `m` (corpus `constEnumNoEmitReexport`). A renaming clause is keyed by its
-                    // DECLARED name and is (CHK.190)'s; it is left alone here.
+                    // (CHK.192)/(CHK.190) An `export { … }` clause specifier's alias — the barrel's
+                    // `locals[X]` for a from-clause re-export (keyed by the DECLARED name, so
+                    // `export { default as D } from` binds `default`). Nothing followed it, so
+                    // an importer read `any`. [exportSpecifierTarget] resolves the clause's
+                    // module and asks [importedExport] for the IMPORTER-visible name there.
                     is ExportSpecifier -> {
-                        if (decl.propertyName != null) continue
-                        val named = (decl as NodeBase).parent as? NamedExports ?: continue
-                        val exportDecl = (named as NodeBase).parent as? ExportDeclaration ?: continue
-                        val specifier = (exportDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                        val targetFile = resolveModuleSpecifier(specifier, exportDecl)
-                            ?: owningSourceFile(exportDecl)?.fileName?.let {
-                                resolveModuleSpecifierRelative(specifier, it)
-                            }
-                            ?: continue
-                        val target = fileResults[targetFile]?.locals?.get(decl.name.text) ?: continue
+                        val target = exportSpecifierTarget(decl, visited) ?: continue
+                        if (target === symbol) continue
                         setSymbolTarget(symbol, target)
                         return resolveAlias(target, visited)
                     }
@@ -739,6 +731,96 @@ internal class NameResolver(
             ?: (if (specifier.endsWith(".mjs")) resolveModuleSpecifierRelative(specifier.removeSuffix(".mjs"), contextFileName) else null)
             ?: (if (specifier.endsWith(".cjs")) resolveModuleSpecifierRelative(specifier.removeSuffix(".cjs"), contextFileName) else null)
 
+    /** (CHK.190) fileName -> whether [importedExport] may consult the importer-keyed
+     *  export table for that file (not JS, no `export =` / `export import`). The file's
+     *  statements are frozen, so one scan per file. */
+    private val exportTableAnswers: HashMap<String, Boolean> = HashMap()
+
+    /**
+     * (CHK.190) The symbol module [tr] exports under the IMPORTER-visible [exportedName] —
+     * the one question every import→export resolver asks.
+     *
+     * `tr.locals` is the wrong table for it three ways: keyed by the DECLARED name (so
+     * `export { a as b }` has no `b` and `export { default as D } from` binds `default`),
+     * star-blind, and holding names the file does not export. [Checker.exportedSymbolsThroughStars]
+     * is the importer-keyed table (own exports shadow stars, `default` excluded from
+     * stars, cycle-guarded, memoized per file), so it answers first. A local-clause entry
+     * is the DECLARED symbol, often an import alias — callers hop it as before.
+     *
+     * Today's ladder (`locals`, then the star walk) is kept for every case the table cannot
+     * speak to: the table is NULL (an unknowable star — bare, unresolvable, `export =`), the
+     * file is JS (CommonJS exports are on no clause), carries `export =` / `export import`,
+     * the name is `default` (an `export default <expr>` names no declaration), or the
+     * name IS exported but the table could not name its symbol (a bare-specifier from
+     * clause). Only a name the file provably does NOT export answers ABSENT — `export {
+     * n0 as n }` read through `n0`, which tsgo reports TS2460 for and types `any` — and
+     * never one a module AUGMENTATION in another file merged into `locals`.
+     *
+     * An ExportSpecifier-declared alias reached through the ladder is followed one hop
+     * ([exportSpecifierTarget]); [visited] (alias ids) guards a named re-export cycle.
+     */
+    fun importedExport(tr: BinderResult, exportedName: String, visited: MutableSet<Int>): Symbol? {
+        val sf = tr.sourceFile
+        val tableAnswers = exportTableAnswers.getOrPut(sf.fileName) {
+            !checker.isJsLikeFileName(sf.fileName) && sf.statements.none {
+                (it is ExportAssignment && it.isExportEquals) ||
+                    (it is ImportEqualsDeclaration && ModifierFlag.Export in it.modifiers)
+            }
+        }
+        if (tableAnswers) {
+            val table = checker.exportedSymbolsThroughStars(sf)
+            if (table != null) {
+                table[exportedName]?.let { return it }
+                if (exportedName != "default") {
+                    val names = checker.moduleExportsFollowingStarsOf(sf)
+                    // ABSENT only when nothing outside this file contributes the name: a
+                    // `declare module "./x"` AUGMENTATION merges its declarations into the
+                    // target's `locals`, and neither the table nor the name set sees them.
+                    if (names != null && exportedName !in names &&
+                        tr.locals[exportedName]?.declarations?.all { owningSourceFile(it) === sf } != false
+                    ) return null
+                }
+            }
+        }
+        // A clause alias is bound under its DECLARED name, so `export { default as D }`
+        // puts an alias at `locals["default"]` that exports `D`, not `default`: not an answer.
+        val raw = tr.locals[exportedName]?.takeUnless { sym ->
+            (sym.declarations.singleOrNull() as? ExportSpecifier)?.let { it.name.text != exportedName } == true
+        }
+            ?: checker.resolveExportedSymbolThroughStars(sf, exportedName)
+            ?: return null
+        val spec = raw.declarations.singleOrNull() as? ExportSpecifier ?: return raw
+        if (!visited.add(raw.id)) return raw
+        return exportSpecifierTarget(spec, visited) ?: raw
+    }
+
+    /**
+     * (CHK.190) One hop of an `export { … }` clause specifier: a FROM clause resolves its
+     * module relative to the DECLARING file (`.js` leg and the crawl's answer included)
+     * and asks [importedExport] for `propertyName ?: name` there; a LOCAL clause answers
+     * the declaring file's own binding of the declared name. MODULE-level clauses only —
+     * a namespace's `export { … }` names the namespace's members, whose exports table this
+     * checker does not build from clauses (refused this round). Null when unresolvable.
+     */
+    fun exportSpecifierTarget(spec: ExportSpecifier, visited: MutableSet<Int>): Symbol? {
+        val named = (spec as NodeBase).parent as? NamedExports ?: return null
+        val exportDecl = (named as NodeBase).parent as? ExportDeclaration ?: return null
+        val file = (exportDecl as NodeBase).parent as? SourceFile ?: return null
+        val declared = spec.propertyName?.text ?: spec.name.text
+        val specifier = (exportDecl.moduleSpecifier as? StringLiteralNode)?.text
+        if (specifier == null) {
+            val local = fileResults[file.fileName]?.locals?.get(declared) ?: return null
+            return local.takeIf { s -> s.declarations.none { it === spec } }
+        }
+        val targetFile = resolveModuleSpecifier(specifier, exportDecl)
+            ?: resolveModuleSpecifierRelative(specifier, file.fileName)
+            ?: resolveAliasJsModuleSpecifier(specifier, file.fileName)
+            ?: resolveImportTargetFallback(specifier, file.fileName)
+            ?: return null
+        val tr = fileResults[targetFile] ?: return null
+        return importedExport(tr, declared, visited)
+    }
+
     /** Resolve an import alias to its target symbol, with cycle detection. */
     fun resolveAliasTarget(symbol: Symbol): Symbol? {
         // Use the checker-local LinkStore target if available
@@ -804,8 +886,7 @@ internal class NameResolver(
                 ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
-            val sym = tr.locals[originalName]
-                ?: checker.resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+            val sym = importedExport(tr, originalName, visited)
                 ?: exportEqualsSurfaceMember(tr, originalName)
                 ?: continue
             // [mergeSymbolTable] pollutes same-named symbols' FLAGS (and

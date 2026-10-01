@@ -54410,6 +54410,9 @@ class Checker(
      * Memoized per top-level file only — a cycle member's sub-result computed during
      * another file's walk would be incomplete for the member itself.
      */
+    /** (CHK.190) [getModuleExportsFollowingStars] for [NameResolver.importedExport]'s "provably absent" test. */
+    internal fun moduleExportsFollowingStarsOf(file: SourceFile): Set<String>? = getModuleExportsFollowingStars(file)
+
     private fun getModuleExportsFollowingStars(file: SourceFile): Set<String>? {
         val key = file.fileName
         if (moduleStarExportsCache.containsKey(key)) return moduleStarExportsCache[key]
@@ -125023,9 +125026,8 @@ interface DataView {
                 ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
-            val sym = tr.locals[originalName]
-                ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
-                ?: continue
+            // (CHK.190) the importer-visible export, ExportSpecifier hops followed.
+            val sym = nameResolver.importedExport(tr, originalName, visited) ?: continue
             if (sym.flags.hasAny(moduleFlags)) return sym
             if (sym.flags.hasAny(SymbolFlags.Alias)) computeImportedNamespaceSymbol(sym, visited)?.let { return it }
         }
@@ -125085,9 +125087,8 @@ interface DataView {
                 ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
-            val sym = tr.locals[originalName]
-                ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
-                ?: continue
+            // (CHK.190) the importer-visible export, ExportSpecifier hops followed.
+            val sym = nameResolver.importedExport(tr, originalName, visited) ?: continue
             val d = sym.valueDeclaration
                 ?: sym.declarations.firstOrNull { it is FunctionDeclaration || it is MethodDeclaration }
                 ?: sym.declarations.firstOrNull()
@@ -127742,9 +127743,8 @@ interface DataView {
                 ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
-            val sym = tr.locals[originalName]
-                ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
-                ?: continue
+            // (CHK.190) the importer-visible export, ExportSpecifier hops followed.
+            val sym = nameResolver.importedExport(tr, originalName, visited) ?: continue
             if (sym.flags.hasAny(SymbolFlags.Enum)) return sym
             if (sym.flags.hasAny(SymbolFlags.Alias)) computeImportedEnumSymbol(sym, visited)?.let { return it }
         }
