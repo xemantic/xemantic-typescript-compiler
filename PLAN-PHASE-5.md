@@ -25,6 +25,32 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.244) — (CHK.189)(a)+(b): a value read of a type-only symbol is an ERROR type at every reader (identifier typer, callee, member-access receiver), so the ours-only follow-on rows after TS2693 / TS2708 are gone; own-file `new N()`, shorthand and destructuring targets on a namespace report TS2708; 37 cells: 0 tsgo rows lost, +37 gained, 32 ours-only removed; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent (resumed once). **Where the queue item was wrong**: (a) THREE readers, not one — the
+identifier typer owned only TS2365 and part of TS2351; TS2349 came from `calleeTypeOfIdentifierConventional` and TS2339
+from `cmamGeneralReceiverType`, which re-resolves the receiver itself (fixing the typer alone left 21 of 24 rows); an
+errorType answer has a TRAP — `getTypeOfIdentifierCore` / `getCalleeType` stop early on it and skip the B83.5 lookup,
+so a nested `class D` shadowing a global `interface D` lost tsgo's TS2345 (the answer steps aside when a block-scoped
+value binding exists); (b) the own-file `new N()` skip was NOT deliberate (verbatim from round 529's migrated walker,
+which had no namespace branch), and the blanket plain-`=` suppression hid TS2708 on every destructuring target,
+`N.x = 1`, `(N) = 1`, `N[0] = 1` and `N = 1` inside a function, while compound / increment targets were reported TWICE.
+**Mechanism**: `NameResolver.symbolValuelessKind` (interface / type alias / non-instantiated namespace, minus the
+embedded test lib); `Checker.valuelessValueRead` consulted at the file-locals and per-file rungs of the identifier
+typer, the callee path and the member-access receiver (silence there); `spineTavEdge` walks into shorthand properties;
+`new` on a value-less namespace is no longer skipped; the plain-`=` suppression is replaced by
+`tavConstAssignOwnsTarget`, which defers only where the const-assignment pass actually emits. **The full suite caught
+what the builder's 176-class sweep missed**: 8 type-CAPTURE tests rendered `any` — the identifier typer is also the
+capture's typer, asked about type references, import specifiers and alias names — fixed by `isValueReadPosition`, a
+syntactic allow-list on the identifier's parent consulted by all four sites (arm a12: exactly those 8 RED). **Pins**:
+`TypeOnlyValueFollowOnTest`, 18 tsgo rows; two countdown pins repaired to tsgo's rows (`GlobalTypeOnlyValueUseTest`'s
+col-37 shorthand, `Inv4SpineBatch20Test`'s shorthand "not walked" control); ablation a1 2 / a2 5 / a3 5 / a4 1 (screen
+5) / a7 3 / a8 6 / a9 4 / a10 4 / a11 1 / a12 8 RED; two guards read 0 and were REMOVED. **Gates**: full suite
+22,082 / 0 / 44 (+16, after the capture fix; 8 red before it); corpus screen 8725 / 0 (`--include ''` 38 / 38
+identical); `cost_gate.py` 0 (unchanged from (P18.243)); `huge_methods.py --fail-over 0` 0; spine closure audit 0; grid
+8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 (a control — the paths do not fire there);
+warning gate with probe: probe only. `Checker.kt` +~75. Residues -> the (CHK.189) item.
+
 ### Round (P18.243) — (CHK.188): a type-only GLOBAL read as a value from another file reports tsgo's TS2693 (TS2585 for an ES2015 constructor name), and a global non-instantiated namespace reports TS2708; every measured cell matches tsgo on those codes bar one shorthand position; +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **Where the queue item was wrong**: (a) not only interfaces and type aliases — a script's
@@ -275,28 +301,6 @@ ablation a1 14 / a2 4 / a3 2 / a4 2 / a5 2 / a6 1 / a7 2 / a8 0 (dead guard) RED
 **Gates**: full suite 21,919 / 0 / 44 (+20); corpus screen 8725 / 0 (a control here); `cost_gate.py` 0, every counter
 +0.00%; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1
 (none of these corpora hold a missing-member element access — a control); warning gate with probe: probe only.
-
-### Round (P18.234) — (CHK.178): the TS2345 chain names the FIRST failing union constituent, a cast receiver `(u as U).a` reports the missing member, and an object-literal member mismatch anchors at the member — all three to tsgo's rows, +0 rows on corpus, grid and libraries (2026-09-30)
-
-One implementation subagent; every changed row measured against tsgo 7.0.2 on the (CHK.177) census cells (65
-cells: only m13, x07, m20 and f11 moved, all to tsgo's rows). **Where the queue item was wrong**: (a) (LEGACY.0a) had
-already switched four of the five chain pickers to FIRST — only the argument chain still picked LAST, and flipping it
-moved 0 baselines (the ignored rows included, `--include ''` identical), so no `LogicalParityDivergence` was needed;
-(b) the gap is not the union walker's receiver gate but `narrowingEligible`, which admits only a reference path, so
-EVERY cast receiver dropped out except a base-less named interface — casts to a type-literal alias were silent too;
-(c) the axis is the member VALUE's type (an object, or a union holding one, against a simple target member hit a
-`continue`). **Mechanism**: (a) the argument picker loop had no `break` (Checker.kt ~172674); (b) new
-`cmamCheckCastUnionOrObjectReceiver` — a union cast goes through the existing union-receiver block, a single
-anonymous object must pass `cmamAllMissingTrustedMember`, PROPERTY access only (an element access `u["a"]` is an
-ours-only TS2339 where tsgo says TS7053 — pre-existing in the interface slice too, queued); `AliasCarrierDisplay`
-learned that a cast supplies its own annotation, so `(u as U).a` prints `'U'`; (c) new
-`objLitMemberVsSimpleTargetChain` drills to the key and names the first failing constituent, refusing anything it
-cannot vouch for. **Pins**: `Chk178UnionChainCastReceiverObjLitDrillTest`, 16 full-text tsgo rows; ablation a1 3 / a2 4
-/ a3 2 / a4 4 / a5 1 / a6 1 (the index-signature negative control) / a7 1 RED. **Gates**: full suite 21,899 / 0 / 44
-(+16); corpus screen 8725 / 0; `cost_gate.py` 0 (every counter +0.00%); `huge_methods.py --fail-over 0` 0; grid 8 x
-added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 — raw captures byte-identical on all 11 targets, so
-the grid is a CONTROL (none of the changed paths fire there) and the corpus plus the pins are the gate; warning gate with
-probe: probe only. `Checker.kt` +79. Residues -> (CHK.179).
 
 ## QUEUE
 
@@ -896,7 +900,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.189) RESIDUES OF (CHK.188) (cells `build/bench/p18243-agent/cells`).** (a) **ours-only FOLLOW-ON errors after a TS2693 / TS2708** — tsgo types the value read as an ERROR type and stays silent after it, we keep the interface type and add TS2349 on `D()`, TS2339 on `D.x`, TS2351 on `new PropertyKey()`, TS2365 on `D += 1` (same-file too: cell `ss`, so it predates (P18.243)); the fix is `getTypeOfIdentifierConventional` answering an error type for a symbol with no value meaning — broad, measure its blast radius on the corpus first; (b) own-file `new N()` on a non-instantiated namespace skips TS2708 by a deliberate rule, and a shorthand `({ N } = …)` never reaches the pass because the reach logic does not descend into shorthand properties (cells `nss`, `nsm`, `ao`, `as`); (c) display: a const imported from a module prints `'number'` where tsgo prints `'1'` (cell `im`).
+- [ ] **(CHK.189) (a) + (b) LANDED 2026-10-01 ((P18.244) note). OPEN: (c) `const E = 1; E.x` prints `'number'` where tsgo prints `'1'` (the primitive-receiver display widens the literal — not import-specific), and `import * as M; M.D.z` misses TS2339; (d) TS2708 on a `for (N of …)` target, TS2693 in an object-literal method's parameter default (`m(x = IN)`), TS2588 on `({ c } = …)` for a const; (e) the callee path has NO local-shadow guard — `function h(D: any) { D() }` resolved `D()` to an outer interface (an ours-only TS2349, now MASKED only because that symbol is value-less; with an outer CLASS it is still wrong); (f) a module's type-only local shadowing a script's `declare var X` now answers silence where tsgo resolves the value past the local; (g) `TAV_REACHED_NONS` is computed and no longer read. EARLIER: RESIDUES OF (CHK.188) (cells `build/bench/p18243-agent/cells`).** (a) **ours-only FOLLOW-ON errors after a TS2693 / TS2708** — tsgo types the value read as an ERROR type and stays silent after it, we keep the interface type and add TS2349 on `D()`, TS2339 on `D.x`, TS2351 on `new PropertyKey()`, TS2365 on `D += 1` (same-file too: cell `ss`, so it predates (P18.243)); the fix is `getTypeOfIdentifierConventional` answering an error type for a symbol with no value meaning — broad, measure its blast radius on the corpus first; (b) own-file `new N()` on a non-instantiated namespace skips TS2708 by a deliberate rule, and a shorthand `({ N } = …)` never reaches the pass because the reach logic does not descend into shorthand properties (cells `nss`, `nsm`, `ao`, `as`); (c) display: a const imported from a module prints `'number'` where tsgo prints `'1'` (cell `im`).
 
 - [x] **(CHK.188) DONE 2026-09-30 ((P18.243) note). A SCRIPT-FILE `interface D` USED AS A VALUE FROM ANOTHER FILE (`new D()`, `D()`) REPORTS NOTHING — tsgo reports TS2693 `'D' only refers to a type, but is being used as a value here.` (found by (P18.242); control cell `x1` in `build/bench/p18242-agent/cells`, 0 of 2 rows, with or without any name collision).** The per-file TS2693 table in `tavBuildFileRoot` lists only the file's OWN declarations; a type-only GLOBAL (a script interface, a type alias, a lib interface with no value) is never consulted. Measure the matrix (interface / type alias / lib type-only name; `new`, call, property read, `typeof`) and extend the table to type-only globals the file does not shadow. Row-adding — grid it; every added row a tsgo row.
 

@@ -1,5 +1,10 @@
 
 
+**(P18.239) — (CHK.180) STAGE 1: `this` AND BODY-LOCAL `const`s WITH A WRITTEN TYPE NOW GET "property does not exist", ELEMENT-ACCESS AND "possibly undefined" ERRORS AS tsgo DOES — 18 OF 45 MISSED CELLS CLOSED, NO FALSE ROWS; +20 PINS, 21,998 / 0 / 44 (2026-09-30).**
+Screen 0; grid 8x0; libraries unchanged; the cost counters all fell and are rebaselined. The corpus caught one
+false positive in the specification as written, which traced to an existing narrowing gap now queued as (CHK.184).
+
+
 **(P18.238) — (CHK.181): A REST PARAMETER TYPED AS A TUPLE NOW GETS tsgo's ARGUMENT-COUNT ERRORS — `Expected 1-2 arguments` FOR OPTIONAL ELEMENTS, `at least N` FOR A TUPLE WITH ITS OWN REST, AND THE "rest parameter not provided" NOTE; +13 PINS, 21,978 / 0 / 44 (2026-09-30).**
 Four wrong or missing rows from one misreading, now shared by both argument-count readers. Screen 0; grid 8x0; libraries
 unchanged. The cost-counter baseline is refreshed to the values (P18.236) accepted.

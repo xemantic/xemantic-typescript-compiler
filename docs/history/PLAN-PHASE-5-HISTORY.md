@@ -1,3 +1,25 @@
+### Round (P18.234) — (CHK.178): the TS2345 chain names the FIRST failing union constituent, a cast receiver `(u as U).a` reports the missing member, and an object-literal member mismatch anchors at the member — all three to tsgo's rows, +0 rows on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent; every changed row measured against tsgo 7.0.2 on the (CHK.177) census cells (65
+cells: only m13, x07, m20 and f11 moved, all to tsgo's rows). **Where the queue item was wrong**: (a) (LEGACY.0a) had
+already switched four of the five chain pickers to FIRST — only the argument chain still picked LAST, and flipping it
+moved 0 baselines (the ignored rows included, `--include ''` identical), so no `LogicalParityDivergence` was needed;
+(b) the gap is not the union walker's receiver gate but `narrowingEligible`, which admits only a reference path, so
+EVERY cast receiver dropped out except a base-less named interface — casts to a type-literal alias were silent too;
+(c) the axis is the member VALUE's type (an object, or a union holding one, against a simple target member hit a
+`continue`). **Mechanism**: (a) the argument picker loop had no `break` (Checker.kt ~172674); (b) new
+`cmamCheckCastUnionOrObjectReceiver` — a union cast goes through the existing union-receiver block, a single
+anonymous object must pass `cmamAllMissingTrustedMember`, PROPERTY access only (an element access `u["a"]` is an
+ours-only TS2339 where tsgo says TS7053 — pre-existing in the interface slice too, queued); `AliasCarrierDisplay`
+learned that a cast supplies its own annotation, so `(u as U).a` prints `'U'`; (c) new
+`objLitMemberVsSimpleTargetChain` drills to the key and names the first failing constituent, refusing anything it
+cannot vouch for. **Pins**: `Chk178UnionChainCastReceiverObjLitDrillTest`, 16 full-text tsgo rows; ablation a1 3 / a2 4
+/ a3 2 / a4 4 / a5 1 / a6 1 (the index-signature negative control) / a7 1 RED. **Gates**: full suite 21,899 / 0 / 44
+(+16); corpus screen 8725 / 0; `cost_gate.py` 0 (every counter +0.00%); `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 — raw captures byte-identical on all 11 targets, so
+the grid is a CONTROL (none of the changed paths fire there) and the corpus plus the pins are the gate; warning gate with
+probe: probe only. `Checker.kt` +79. Residues -> (CHK.179).
+
 ### Round (P18.233) — (CHK.177) S1: a relation-error source or TS2339 receiver annotated with a union ALIAS prints the alias name as tsgo does (`Type 'U' …`, was `'A | B'`); two shipped wrong names fixed; display only, +0 rows everywhere (2026-09-30)
 
 Specified by (P18.232)'s read-only census (`build/scratch-p18232-census/`), which corrected the queue item twice: the
