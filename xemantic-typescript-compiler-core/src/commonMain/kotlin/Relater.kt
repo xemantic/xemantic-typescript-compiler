@@ -1326,7 +1326,7 @@ internal class Relater(
             val targetName = targetProp.name
             // (CHK.142)(b) tsgo's `excludeProperties(properties, excludedProperties)`.
             if (excluded.isNotEmpty() && targetName in excluded) continue
-            if (targetStatics != null && targetStatics.containsKey(targetName)) continue
+            if (targetStatics != null && targetStatics[targetName] === targetProp) continue
             // Inherited Object prototype members (constructor, toString, valueOf, …)
             // are never "missing" — every JS object has them via the prototype chain.
             // Without this filter, an empty `{a:string}` fails to satisfy `Object` because
@@ -1429,6 +1429,16 @@ internal class Relater(
                     targetProp.declarations.any { it is MethodDeclaration } &&
                     methodSignaturesBivariantlyRelated(
                         sourcePropType, checker.getPropertyTypeForRelation(target, targetProp))
+                ) continue
+                // (CHK.194)(a): a class's STATIC member that shares the name with the instance
+                // one. The class VALUE is typed as its INSTANCE type ((CHK.73)), so a class
+                // source here may be `A` (whose `s` is the static) as well as `new A()` (whose
+                // `s` is the instance member) and the relation cannot tell which. Accepting when
+                // the static side relates is suppression-only: it refuses a false positive on a
+                // class-value source and costs at most a missed row on an instance source.
+                val srcStatic = checker.getStaticMembersOfType(source)?.get(targetName)
+                if (srcStatic != null && srcStatic !== sourceProp &&
+                    checkTypeRelatedTo(checker.getPropertyTypeForRelation(source, srcStatic), targetPropType, relation)
                 ) continue
                 // Round 435 (tsc contextual literal types): a FRESH object-literal prop
                 // keeps its literal type against a literal-containing target member —

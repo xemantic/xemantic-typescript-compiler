@@ -94193,7 +94193,7 @@ interface DataView {
         val sMembers = s.members ?: return null
         val tStatics = getStaticMembersOfType(t)
         for ((name, tProp) in tMembers) {
-            if (name in OBJECT_PROTOTYPE_PROPERTIES || (tStatics != null && name in tStatics)) continue
+            if (name in OBJECT_PROTOTYPE_PROPERTIES || (tStatics != null && tStatics[name] === tProp)) continue
             if (isOptionalProperty(tProp)) continue
             val tType = getTypeOfSymbol(tProp)
             if (tType === anyType || tType === errorType) continue
@@ -110751,7 +110751,7 @@ interface DataView {
                 val targetStatics2 = getStaticMembersOfType(tt)
                 val required = tt.properties.orEmpty().filter { p ->
                     !isOptionalProperty(p) &&
-                        targetStatics2?.containsKey(p.name) != true &&
+                        targetStatics2?.get(p.name) !== p &&
                         p.name !in OBJECT_PROTOTYPE_PROPERTIES
                 }
                 val staticNames = classMemberNamesTransitive(b175RhsClassSym, staticSide = true)
@@ -118712,6 +118712,45 @@ interface DataView {
         is Type.Interface -> type.staticMembers
         is Type.Reference -> type.target.staticMembers
         else -> null
+    }
+
+    // (CHK.194)(a): every static-side FILTER over a class's member table is an IDENTITY test
+    // (`statics[name] === prop`), never a name test — a static and an instance member of one
+    // name are two members, the instance one holds `members` and the static one lives in
+    // `staticMembers` alone, so "the name is in the static table" would drop the instance one.
+
+    /**
+     * (CHK.194)(a): the STATIC member [propName] of the class whose VALUE [receiver]
+     * denotes, when it is NOT the symbol the (instance-side) member table answers — i.e.
+     * exactly when a static and an instance member share the name and the instance one
+     * holds [Type.Object.members]. Null everywhere else, so every non-clashing read keeps
+     * today's resolution.
+     *
+     * The class VALUE is typed as its INSTANCE type here ((CHK.73)), so the receiver's
+     * TYPE cannot tell `A.s` from `new A().s`; the receiver's SYNTAX does: a bare (or
+     * parenthesized) identifier, or a namespace-qualified access, that resolves to the
+     * class symbol itself. A same-named parameter is a shadowing binding, not the class.
+     */
+    internal fun classValueStaticMember(receiver: Expression, objectType: Type, propName: String): Symbol? {
+        val obj = objectType as? Type.Interface ?: return null
+        // The member tables are LAZY — `staticMembers` is null until the first resolution.
+        resolveStructuredTypeMembers(obj)
+        val stat = obj.staticMembers?.get(propName) ?: return null
+        if (obj.members?.get(propName) === stat) return null
+        var e: Expression = receiver
+        while (e is ParenthesizedExpression) e = e.expression
+        val cls = obj.symbol ?: return null
+        var sym = when (e) {
+            is Identifier -> {
+                if (e.text in currentParamBindingNames || isShadowedByLocalBinding(e)) return null
+                lexicalScopeSymbol(e, e.text) ?: currentFileLocals?.get(e.text)
+                    ?: lookupPerFileForNode(e, e.text)
+            }
+            is PropertyAccessExpression -> resolvePropertyAccessToSymbol(e)
+            else -> null
+        } ?: return null
+        if (sym.flags.hasAny(SymbolFlags.Alias)) sym = resolveAlias(sym)
+        return if (sym === cls) stat else null
     }
 
     // -----------------------------------------------------------------------
@@ -135459,6 +135498,10 @@ interface DataView {
         }
         // If object resolved, check its apparent type for the property
         if (objectType !== anyType && objectType !== errorType) {
+            // (CHK.194)(a): `A.s` where a static and an instance member share the name.
+            classValueStaticMember(expr.expression, objectType, propName)?.let {
+                return optionalMemberAccessType(it, getTypeOfSymbol(it))
+            }
             val apparentType = getApparentType(objectType)
             val prop = getPropertyOfType(apparentType, propName)
             if (prop != null) {
@@ -135985,6 +136028,10 @@ interface DataView {
         // reach an element-access reference in the first place). A flow walk on this path
         // with no consultation that can observe it is the round-887 shape; the RECEIVER
         // narrowing above is what the pristine fixture actually needed.
+        // (CHK.194)(a): `A["s"]` where a static and an instance member share the name.
+        if (indexExpr is StringLiteralNode) {
+            classValueStaticMember(expr.expression, objectType, indexExpr.text)?.let { return getTypeOfSymbol(it) }
+        }
         return elementAccessResultType(objectType, indexExpr)
     }
 
@@ -173469,7 +173516,7 @@ interface DataView {
         return targetProps.any { p ->
             !isOptionalProperty(p) &&
                 p.name !in OBJECT_PROTOTYPE_PROPERTIES &&
-                (targetStatics == null || !targetStatics.containsKey(p.name)) &&
+                (targetStatics == null || targetStatics[p.name] !== p) &&
                 (srcMembers == null || p.name !in srcMembers)
         }
     }
@@ -173552,7 +173599,7 @@ interface DataView {
             if (isOptionalProperty(prop) || isRestTupleMember(prop)) continue
             // Skip target static members — they live on the class's static side and
             // are not part of the instance shape we're comparing against.
-            if (targetStatics != null && targetStatics.containsKey(prop.name)) continue
+            if (targetStatics != null && targetStatics[prop.name] === prop) continue
             val isPrototypeProp = prop.name in OBJECT_PROTOTYPE_PROPERTIES
             // B175: a source member declared ONLY static does NOT satisfy an instance-side
             // requirement (statics live in BOTH `members` and `staticMembers` per the
@@ -177998,7 +178045,7 @@ interface DataView {
         val srcIndex = source.stringIndexInfo
         val targetStatics = getStaticMembersOfType(target)
         for (targetProp in targetProps) {
-            if (targetStatics != null && targetStatics.containsKey(targetProp.name)) continue
+            if (targetStatics != null && targetStatics[targetProp.name] === targetProp) continue
             if (sourceMembers[targetProp.name] != null) continue
             if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
             // (CHK.111): a rest slot's member is never "missing" — see [isRestTupleMember].

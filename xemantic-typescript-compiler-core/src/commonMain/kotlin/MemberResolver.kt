@@ -428,6 +428,22 @@ internal class MemberResolver(
         // symbol's declaration group, keyed by (staticness, member name). A DUPLICATE
         // property is FIRST-WINS: see the guard in the PropertyDeclaration arm below.
         val ownPropertyDecls = HashMap<String, PropertyDeclaration>()
+        // (CHK.194)(a): a static and an instance member of ONE name are legal and are two
+        // members — `class A { s = 1; static s = true }` reads `number` on `new A().s` and
+        // `boolean` on `A.s` in tsgo. [members] is the instance table with the statics
+        // dual-populated into it, so the two collide on a name; THE INSTANCE ENTRY WINS
+        // there, and the static lives in [staticMembers] alone. An entry of [members] is a
+        // static exactly when it is the SAME symbol [staticMembers] holds for that name —
+        // true of an own static and of an inherited one (both tables inherit the base's
+        // symbols by identity). Static readers ask [staticMembers] for the clashing name
+        // (`Checker.classValueStaticMember`).
+        fun memberIsStatic(name: String): Boolean {
+            val cur = members[name] ?: return false
+            return staticMembers[name] === cur
+        }
+        // A static whose name an INSTANCE member already holds in [members] (own or
+        // inherited) is placed in [staticMembers] only.
+        fun instanceHolds(name: String): Boolean = members[name] != null && !memberIsStatic(name)
         // Collect members from all declarations of this symbol
         for (decl in symbol.declarations) {
             val classMembers = when (decl) {
@@ -504,11 +520,14 @@ internal class MemberResolver(
                         propSymbol.declarations.add(member)
                         propSymbol.valueDeclaration = member
                         propSymbol.parent = symbol
-                        members[name] = propSymbol
                         // Step 1 dual-population: mirror static members onto staticMembers
-                        // while keeping them in [members] (no behavior change yet).
+                        // while keeping them in [members] — unless an instance member holds
+                        // the name there ((CHK.194)(a)).
                         if (ModifierFlag.Static in member.modifiers) {
+                            if (!instanceHolds(name)) members[name] = propSymbol
                             staticMembers[name] = propSymbol
+                        } else {
+                            members[name] = propSymbol
                         }
                     }
                     is MethodDeclaration -> {
@@ -567,7 +586,15 @@ internal class MemberResolver(
                         // `declarations` list. Otherwise reuse the symbol to support
                         // overloaded methods declared on the same class.
                         val existingFromBase = name in inheritedMemberNames
-                        val methodSymbol = if (existingFromBase) {
+                        val isStaticMethod = ModifierFlag.Static in member.modifiers
+                        val methodSymbol = if (isStaticMethod && instanceHolds(name)) {
+                            // (CHK.194)(a): the instance side holds the name — the static
+                            // method (and its overloads) is its own symbol, static side only.
+                            val own = staticMembers[name]?.takeIf { it.parent === symbol && it !== members[name] }
+                            own ?: Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                        } else if (existingFromBase || (!isStaticMethod && memberIsStatic(name))) {
+                            // (CHK.194)(a): an instance method replacing a STATIC entry gets its
+                            // own symbol too, never the static's.
                             val fresh = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
                             members[name] = fresh
                             inheritedMemberNames.remove(name)
@@ -583,7 +610,7 @@ internal class MemberResolver(
                         }
                         if (methodSymbol.parent == null) methodSymbol.parent = symbol
                         // Step 1 dual-population: static methods also live on staticMembers.
-                        if (ModifierFlag.Static in member.modifiers) {
+                        if (isStaticMethod) {
                             staticMembers[name] = methodSymbol
                         }
                     }
@@ -610,7 +637,15 @@ internal class MemberResolver(
                     }
                     is GetAccessor -> {
                         val name = checker.declaredMemberName(member.name) ?: continue
-                        val existing = members[name]
+                        // (CHK.194)(a): an accessor pairs only with an accessor of its own
+                        // staticness; a static beside an instance holder is static-side only.
+                        val isStaticAccessor = ModifierFlag.Static in member.modifiers
+                        val staticOnly = isStaticAccessor && instanceHolds(name)
+                        val existing = when {
+                            staticOnly -> staticMembers[name]?.takeIf { it.parent === symbol && it !== members[name] }
+                            !isStaticAccessor && memberIsStatic(name) -> null
+                            else -> members[name]
+                        }
                         val sym = if (existing != null) {
                             // B54.6: accessor-pair declaration merging — if a SetAccessor was
                             // bound first, append this GetAccessor's declaration to the same
@@ -624,7 +659,7 @@ internal class MemberResolver(
                                 it.declarations.add(member)
                                 it.valueDeclaration = member
                                 it.parent = symbol
-                                members[name] = it
+                                if (!staticOnly) members[name] = it
                             }
                         }
                         if (ModifierFlag.Static in member.modifiers) {
@@ -633,7 +668,15 @@ internal class MemberResolver(
                     }
                     is SetAccessor -> {
                         val name = checker.declaredMemberName(member.name) ?: continue
-                        val existing = members[name]
+                        // (CHK.194)(a): an accessor pairs only with an accessor of its own
+                        // staticness; a static beside an instance holder is static-side only.
+                        val isStaticAccessor = ModifierFlag.Static in member.modifiers
+                        val staticOnly = isStaticAccessor && instanceHolds(name)
+                        val existing = when {
+                            staticOnly -> staticMembers[name]?.takeIf { it.parent === symbol && it !== members[name] }
+                            !isStaticAccessor && memberIsStatic(name) -> null
+                            else -> members[name]
+                        }
                         val sym = if (existing != null) {
                             // B54.6: see comment in GetAccessor branch.
                             if (member !in existing.declarations) existing.declarations.add(member)
@@ -643,7 +686,7 @@ internal class MemberResolver(
                                 it.declarations.add(member)
                                 it.valueDeclaration = member
                                 it.parent = symbol
-                                members[name] = it
+                                if (!staticOnly) members[name] = it
                             }
                         }
                         if (ModifierFlag.Static in member.modifiers) {

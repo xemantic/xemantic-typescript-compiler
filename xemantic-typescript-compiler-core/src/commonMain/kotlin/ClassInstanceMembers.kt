@@ -642,3 +642,38 @@ internal class ClassInstanceMembers(
         return false
     }
 }
+
+/**
+ * (CHK.194)(a): true when [ident] is bound by a FUNCTION-LOCAL declaration between it and the
+ * file level — a parameter, a block-level `var`/`let`/`const` or a `catch` variable of that
+ * spelling. Such a binding shadows a same-named class, so `A.s` reads the binding's member
+ * and not the class's STATIC one. A syntactic ascent, and only ever asked for a name that is
+ * both a static and an instance member of one class, so it costs nothing on ordinary code.
+ */
+internal fun isShadowedByLocalBinding(ident: Identifier): Boolean {
+    val name = ident.text
+    fun binds(n: Node?): Boolean = when (n) {
+        is Identifier -> n.text == name
+        else -> false
+    }
+    var cur: Node? = (ident as NodeBase).parent
+    while (cur != null && cur !is SourceFile) {
+        val params: List<Parameter>? = when (cur) {
+            is FunctionDeclaration -> cur.parameters
+            is FunctionExpression -> cur.parameters
+            is ArrowFunction -> cur.parameters
+            is MethodDeclaration -> cur.parameters
+            is Constructor -> cur.parameters
+            is GetAccessor -> cur.parameters
+            is SetAccessor -> cur.parameters
+            else -> null
+        }
+        if (params != null && params.any { binds(it.name) }) return true
+        if (cur is Block && cur.statements.any { st ->
+                st is VariableStatement && st.declarationList.declarations.any { binds(it.name) }
+            }) return true
+        if (cur is CatchClause && binds(cur.variableDeclaration?.name)) return true
+        cur = (cur as? NodeBase)?.parent
+    }
+    return false
+}
