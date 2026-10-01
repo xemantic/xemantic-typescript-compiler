@@ -1,3 +1,25 @@
+### Round (P18.246) — (CHK.187): a module-local, imported or block-scoped BASE class and `new D()` inside a module resolve for the class missing-member checks; the `new` branch reports TS2576 / TS2551 as tsgo does (script files too); 37-cell agreement 7 -> 64 of 83 tsgo rows, ours-only 2 -> 0; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent, on the collaborator extracted the round before (`ClassInstanceMembers.kt`). **Where the
+queue item was wrong**: (a) the `new` branch was wrong in SCRIPT files too — `new C().s` (a static on the base) and
+`new C().valu` (a near miss) printed plain TS2339 where tsgo prints TS2576 / TS2551 (cell `sa2`); fixing only the lookup
+would have spread that wrong code into modules (the first build had 2 ours-only rows); (b) `hasInstanceMemberNamed`
+also read `globals`; (c) (P18.241)'s two deliberate refusals were cheap — a merged interface's `extends` list is now
+followed (program interfaces only), and a `[k: number]` index signature no longer refuses identifier names (bar `NaN`
+/ `Infinity`); (d) generic bases need no refusal (members match by name; tsgo agrees 4 / 4). **Mechanism**:
+`ClassInstanceMembers.resolveBaseClassSymbol` (enclosing namespace exports, then `Checker.resolveHeritageBaseSymbol`:
+block scope, namespaces, the declaring file's scope; import aliases followed) for all four lookups;
+`newExpressionClassSymbol` resolves a `new` callee where written and adopts the class only if
+`getTypeOfExpression(new …)` IS that class's instance (a shadowing parameter / local stays silent); the `new` branch
+calls `tryEmitStaticAccessTs2576` and `emitClassChainTs2551Suggestion` before TS2339. `ClassInstanceMembers.kt` +84,
+`Checker.kt` +15. **Pins**: `ModuleLocalBaseClassMembersTest`, 12 tsgo rows; ablation a1 8 / a2 6 / a3 1 / a4 2 / a5 1
+/ a6 2 / a7 2 / a8 1 RED. **Gates**: full suite 22,109 / 0 / 44 (+12); corpus screen 8725 / 0; `cost_gate.py` 0;
+`huge_methods.py --fail-over 0` 0; grid (identity check now hashes `Checker` + `ClassInstanceMembers`, since a change
+confined to the collaborator would otherwise be refused) 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0,
+cronstrue 1/1; warning gate with probe: probe only. **Found, verified by the orchestrator, queued as (CHK.190)**: a
+NAMED re-export (`export { B } from "./m"`, and `import { B } from "./m"; export { B }`) leaves the importer's `B`
+typed `any` — ours 0 rows, tsgo 3 on two probes (`build/scratch-reexport/y1`, `y2`). Other residues -> (CHK.191).
+
 ### Round (P18.245) — (INV.0) extraction: the class-instance missing-member family (8 declarations — TS2339 / TS2551 / TS2576 on class instances, the merged-interface member read of (P18.241)) moves VERBATIM into `ClassInstanceMembers.kt`; `Checker.kt` -377; every deterministic receipt byte-identical; the warm A/B is below this box's A/A noise floor (2026-10-01)
 
 One implementation subagent. **Choice**: of the two candidates the type-only-value / TS2693 / TS2708 family was
