@@ -1,5 +1,10 @@
 
 
+**(P18.249) — (CHK.190) STAGE 1: TYPES NOW FLOW THROUGH BARREL FILES — RENAMED, DEFAULT AND CHAINED RE-EXPORTS (`export { a as b } from`, `export { default as x } from`, `.js` SPECIFIERS) RESOLVE TO THE REAL DECLARATION INSTEAD OF A SILENT `any`, AND HOVER FOLLOWS THEM; +21 PINS, 22,157 / 0 / 44 (2026-10-01).**
+The full suite caught names added by a module augmentation going missing on the first build; fixed before commit.
+Screen 0; grid 8x0; libraries unchanged.
+
+
 **(P18.248) — (CHK.192): A FILE NO LONGER SILENTLY GETS ANOTHER FILE's TYPE WHEN TWO IMPORTS SIT AT THE SAME CHARACTER OFFSETS — EACH IMPORT NOW RESOLVES THROUGH ITS OWN STATEMENT; +14 PINS, 22,136 / 0 / 44 (2026-10-01).**
 The faster path also removes an index that used to be built on every program. The fix exposed one corpus case that
 had passed by accident, so the simplest named re-export (`export { X } from`) is followed too. Screen 0; grid 8x0;

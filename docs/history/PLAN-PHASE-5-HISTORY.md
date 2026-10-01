@@ -1,3 +1,29 @@
+### Round (P18.244) — (CHK.189)(a)+(b): a value read of a type-only symbol is an ERROR type at every reader (identifier typer, callee, member-access receiver), so the ours-only follow-on rows after TS2693 / TS2708 are gone; own-file `new N()`, shorthand and destructuring targets on a namespace report TS2708; 37 cells: 0 tsgo rows lost, +37 gained, 32 ours-only removed; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent (resumed once). **Where the queue item was wrong**: (a) THREE readers, not one — the
+identifier typer owned only TS2365 and part of TS2351; TS2349 came from `calleeTypeOfIdentifierConventional` and TS2339
+from `cmamGeneralReceiverType`, which re-resolves the receiver itself (fixing the typer alone left 21 of 24 rows); an
+errorType answer has a TRAP — `getTypeOfIdentifierCore` / `getCalleeType` stop early on it and skip the B83.5 lookup,
+so a nested `class D` shadowing a global `interface D` lost tsgo's TS2345 (the answer steps aside when a block-scoped
+value binding exists); (b) the own-file `new N()` skip was NOT deliberate (verbatim from round 529's migrated walker,
+which had no namespace branch), and the blanket plain-`=` suppression hid TS2708 on every destructuring target,
+`N.x = 1`, `(N) = 1`, `N[0] = 1` and `N = 1` inside a function, while compound / increment targets were reported TWICE.
+**Mechanism**: `NameResolver.symbolValuelessKind` (interface / type alias / non-instantiated namespace, minus the
+embedded test lib); `Checker.valuelessValueRead` consulted at the file-locals and per-file rungs of the identifier
+typer, the callee path and the member-access receiver (silence there); `spineTavEdge` walks into shorthand properties;
+`new` on a value-less namespace is no longer skipped; the plain-`=` suppression is replaced by
+`tavConstAssignOwnsTarget`, which defers only where the const-assignment pass actually emits. **The full suite caught
+what the builder's 176-class sweep missed**: 8 type-CAPTURE tests rendered `any` — the identifier typer is also the
+capture's typer, asked about type references, import specifiers and alias names — fixed by `isValueReadPosition`, a
+syntactic allow-list on the identifier's parent consulted by all four sites (arm a12: exactly those 8 RED). **Pins**:
+`TypeOnlyValueFollowOnTest`, 18 tsgo rows; two countdown pins repaired to tsgo's rows (`GlobalTypeOnlyValueUseTest`'s
+col-37 shorthand, `Inv4SpineBatch20Test`'s shorthand "not walked" control); ablation a1 2 / a2 5 / a3 5 / a4 1 (screen
+5) / a7 3 / a8 6 / a9 4 / a10 4 / a11 1 / a12 8 RED; two guards read 0 and were REMOVED. **Gates**: full suite
+22,082 / 0 / 44 (+16, after the capture fix; 8 red before it); corpus screen 8725 / 0 (`--include ''` 38 / 38
+identical); `cost_gate.py` 0 (unchanged from (P18.243)); `huge_methods.py --fail-over 0` 0; spine closure audit 0; grid
+8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 (a control — the paths do not fire there);
+warning gate with probe: probe only. `Checker.kt` +~75. Residues -> the (CHK.189) item.
+
 ### Round (P18.243) — (CHK.188): a type-only GLOBAL read as a value from another file reports tsgo's TS2693 (TS2585 for an ES2015 constructor name), and a global non-instantiated namespace reports TS2708; every measured cell matches tsgo on those codes bar one shorthand position; +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **Where the queue item was wrong**: (a) not only interfaces and type aliases — a script's
