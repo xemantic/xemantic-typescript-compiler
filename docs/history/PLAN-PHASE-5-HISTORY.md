@@ -1,3 +1,28 @@
+### Round (P18.238) — (CHK.181): a rest-tuple parameter's arity is read the way tsgo reads it — optional elements give a range (`Expected 1-2`), a tuple with its own rest element gives `at least N`, and a missing rest parameter relates TS6236 — in both arity readers; every changed row a tsgo row, +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent, beside a read-only (CHK.180) census. **Where the queue item was wrong**: the defect was
+broader than the too-many row — the same misreading made a fixed tuple rest after a parameter print `at least 1`
+where tsgo prints `Expected 2-3` / `1-3` (too few), dropped the TS2555 row entirely for a tuple with its own rest
+element (`[string, ...number[]]`, BOTH readers), and related a missing rest parameter with TS6210 where tsgo gives
+TS6236 `Arguments for the rest parameter 'a' were not provided.` spanning the parameter. The signature-based reader
+already had the fixed-tuple range right; the name walker drew its wrong row first on the same span, and the reader
+skips a span that already has a row. tsgo's minimum counts only the required elements BEFORE the first rest element
+(`[string, ...number[], boolean]` is `at least 1`). **Mechanism**: `spineArgCallEnter` passed the tuple's `maxArgs`
+as both bounds and used `minParams`/`hasRest` for too-few (a tuple rest read as an unbounded rest);
+`SignatureArity.callArity`'s tuple branch understood only rest-less tuples; `callArityFails`' fast path let rest-element
+tuples skip the check; the too-few emitters had no missing-rest arm. **Change**: `SignatureArity.kt` +73/-22 —
+`restTupleOf` (the one tuple-annotation unwrapper), `tupleRestArity` (the range), `tupleRestCallRange` (the name
+walker's entry, so the two readers agree by construction), `endsInAnyTupleRest` (fast path only),
+`restParameterNotProvided` (the TS6236 row, trimming `Node.end`'s overshoot); `Checker.kt` +12. **Matrix**
+(`build/bench/p18238-agent/m/`): every cell ours == tsgo after, bar two residues; no call emits two arity rows.
+**Pins**: `RestTupleArityRangeTest`, 13 tsgo rows; ablation a1 6 / a2 2 / a3 3 / a4 2 / a5 1 / a6 1 RED; 25 touching
+classes (520 tests) green. **Gates**: full suite 21,978 / 0 / 44 (+13); corpus screen 8725 / 0; `cost_gate.py` 0 —
+the deltas against the recorded baseline are EXACTLY (P18.236)'s (this round and (P18.237) move no counter), so the
+baseline is refreshed here to (P18.236)'s accepted values (largest `mapped.hits` +0.93%, `narrow.walks` +0.58%: the
+string-keyed element-access rule typing keys and receivers); `huge_methods.py --fail-over 0` 0
+(`spineArgCallEnter` 3,576 -> 3,743); grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1;
+warning gate with probe: probe only. Residues -> (CHK.183).
+
 ### Round (P18.237) — (INV.0) extraction: the REST of the arity family (23 declarations — the TS2554/TS2555/TS2556 emitters, the spread-arity view, `signatureDeclaredArity`, the call-side minimum) moves VERBATIM into `SignatureArity.kt`; `Checker.kt` -548; the collaborator's widenings fall 15 -> 7; every deterministic receipt byte-identical (2026-09-30)
 
 One implementation subagent, beside a read-only (CHK.180) census on frozen classes. **Where the (P18.232) reasoning

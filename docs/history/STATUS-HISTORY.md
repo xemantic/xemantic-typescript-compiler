@@ -1,5 +1,11 @@
 
 
+**(P18.243) — (CHK.188): USING A GLOBAL INTERFACE, TYPE ALIAS OR TYPE-ONLY NAMESPACE AS A VALUE FROM ANOTHER FILE NOW REPORTS tsgo's "only refers to a type" (TS2693 / TS2585 / TS2708) — PREVIOUSLY SILENT; +15 PINS, 22,066 / 0 / 44 (2026-09-30).**
+The corpus caught two false-positive traps on the way (the embedded test lib and `declare namespace` bookkeeping),
+both handled. Screen 0; grid 8x0; libraries unchanged. Queued: the ours-only follow-on errors after such a row
+((CHK.189)).
+
+
 **(P18.242) — (CHK.186): A CLASS, INTERFACE OR OTHER DECLARATION IN A MODULE NO LONGER FUSES WITH A SAME-NAMED DECLARATION IN A GLOBAL SCRIPT FILE — IT GOT THE OTHER FILE'S MEMBERS AND WRONG TYPES, PROGRAM-WIDE; +22 PINS, 22,051 / 0 / 44 (2026-09-30).**
 Every declaration-kind pair was affected, not only class/interface; a 22-cell matrix now matches tsgo except one older
 gap (a script interface used as a value from another file, queued as (CHK.188)). The merge pass that caused it is
