@@ -1,5 +1,11 @@
 
 
+**(P18.241) — (CHK.182): A CLASS THAT SHARES ITS NAME WITH AN INTERFACE ANYWHERE IN THE PROGRAM NO LONGER LOSES ITS "property does not exist" ERRORS — 23 SILENCED ROWS RESTORED, ALL tsgo ROWS; +15 PINS, 22,029 / 0 / 44 (2026-09-30).**
+The cause was a program-wide name refusal, much broader than the two-module shape the queue named. Screen 0; grid 8x0;
+libraries unchanged. Two related defects queued: a module class still fuses with a same-named SCRIPT interface
+(wrong types, (CHK.186)), and module-local base classes stay silent ((CHK.187)).
+
+
 **(P18.240) — (CHK.184): A FALSE "possibly undefined" ERROR ON LEGAL CODE IS GONE — GUARDING A UNION BY ONE OF ITS OPTIONAL PROPERTIES (`w.a ? … : w.b`, `=== undefined`, `typeof`, `in`) NOW NARROWS IT AS tsgo DOES; 83 FALSE ROWS REMOVED ACROSS A 480-CELL MATRIX; +16 PINS, 22,014 / 0 / 44 (2026-09-30).**
 It also removes a false "does not exist on type 'never'" after `!("a" in w)`, and lets the last round's union refusal go.
 Screen 0; grid 8x0; libraries unchanged.

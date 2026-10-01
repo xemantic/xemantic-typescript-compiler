@@ -25,6 +25,28 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.246) — (CHK.187): a module-local, imported or block-scoped BASE class and `new D()` inside a module resolve for the class missing-member checks; the `new` branch reports TS2576 / TS2551 as tsgo does (script files too); 37-cell agreement 7 -> 64 of 83 tsgo rows, ours-only 2 -> 0; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent, on the collaborator extracted the round before (`ClassInstanceMembers.kt`). **Where the
+queue item was wrong**: (a) the `new` branch was wrong in SCRIPT files too — `new C().s` (a static on the base) and
+`new C().valu` (a near miss) printed plain TS2339 where tsgo prints TS2576 / TS2551 (cell `sa2`); fixing only the lookup
+would have spread that wrong code into modules (the first build had 2 ours-only rows); (b) `hasInstanceMemberNamed`
+also read `globals`; (c) (P18.241)'s two deliberate refusals were cheap — a merged interface's `extends` list is now
+followed (program interfaces only), and a `[k: number]` index signature no longer refuses identifier names (bar `NaN`
+/ `Infinity`); (d) generic bases need no refusal (members match by name; tsgo agrees 4 / 4). **Mechanism**:
+`ClassInstanceMembers.resolveBaseClassSymbol` (enclosing namespace exports, then `Checker.resolveHeritageBaseSymbol`:
+block scope, namespaces, the declaring file's scope; import aliases followed) for all four lookups;
+`newExpressionClassSymbol` resolves a `new` callee where written and adopts the class only if
+`getTypeOfExpression(new …)` IS that class's instance (a shadowing parameter / local stays silent); the `new` branch
+calls `tryEmitStaticAccessTs2576` and `emitClassChainTs2551Suggestion` before TS2339. `ClassInstanceMembers.kt` +84,
+`Checker.kt` +15. **Pins**: `ModuleLocalBaseClassMembersTest`, 12 tsgo rows; ablation a1 8 / a2 6 / a3 1 / a4 2 / a5 1
+/ a6 2 / a7 2 / a8 1 RED. **Gates**: full suite 22,109 / 0 / 44 (+12); corpus screen 8725 / 0; `cost_gate.py` 0;
+`huge_methods.py --fail-over 0` 0; grid (identity check now hashes `Checker` + `ClassInstanceMembers`, since a change
+confined to the collaborator would otherwise be refused) 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0,
+cronstrue 1/1; warning gate with probe: probe only. **Found, verified by the orchestrator, queued as (CHK.190)**: a
+NAMED re-export (`export { B } from "./m"`, and `import { B } from "./m"; export { B }`) leaves the importer's `B`
+typed `any` — ours 0 rows, tsgo 3 on two probes (`build/scratch-reexport/y1`, `y2`). Other residues -> (CHK.191).
+
 ### Round (P18.245) — (INV.0) extraction: the class-instance missing-member family (8 declarations — TS2339 / TS2551 / TS2576 on class instances, the merged-interface member read of (P18.241)) moves VERBATIM into `ClassInstanceMembers.kt`; `Checker.kt` -377; every deterministic receipt byte-identical; the warm A/B is below this box's A/A noise floor (2026-10-01)
 
 One implementation subagent. **Choice**: of the two candidates the type-only-value / TS2693 / TS2708 family was
@@ -269,35 +291,6 @@ Builder ablation over 35 arity classes (648 tests green): a1 22 / a2 24 / a3 27 
 (a pin would assert the wrong answer)**: the name walker passes a tuple rest's element count as BOTH minimum and
 maximum (`Checker.kt` ~67711), so `tup("a",1,2)` for `...a: [string, number?]` reads `Expected 2 arguments` where tsgo
 reads `Expected 1-2` — queued as (CHK.181).
-
-### Round (P18.236) — (CHK.179)(a2)+(c): a string / number-typed key on an index-less written receiver reports tsgo's TS7053 / TS7015 / TS7052 under `noImplicitAny`; a cast receiver's literal key is restated too; `u!.a`, `(u satisfies U).a` and `const v = x as U; v.a` report the missing member; every added row a tsgo row, +0 on corpus, grid and libraries (2026-09-30)
-
-One implementation subagent. **The grid was a REAL gate this round**: the first cut added 4-10 false TS7053 per profile
-(`nodeFactory.ts`, `core.ts`, `fourslashImpl.ts`, `harnessGlobals.ts`, `organizeImports.ts`), which located the true
-false-positive surface — the KEY's type, not the receiver: `key: keyof S` resolves to `string` here where tsgo keeps
-`keyof S`; a for-in variable over a generic `T` is `Extract<keyof T, string>` in tsgo; a for-in over an array is
-numeric (`isForInVariableForNumericPropertyNames`); and an INFERRED receiver is untrustworthy (`organizeImports.ts:441`,
-`groupBy` picks the wrong overload). Also measured: `if (k in o) o[k]` with `k: string` is NOT silent in tsgo (a
-non-literal key is not narrowed). **Mechanism**: `ElementAccessMissingMember.nonLiteralKey`, called after
-`tryEmitNoImplicitAnyIndexAccess`, only under `noImplicitAny`, with a conservative double gate — KEY: an identifier
-whose declaration is annotated `string` / `number` / `string | number` with no flow narrowing, a for-in variable over
-a written index-less non-generic object, `lit + x`, `String(x)`, or a `String.prototype` method on a `string`;
-RECEIVER: a written type (annotated parameter or variable, a cast, `this`), not narrowed; result TS7015 (array /
-tuple / string / number-index-only), TS7052 (a matching `get` accessor, user type or lib `Map`), else TS7053 + the
-`No index signature with a parameter of type 'K'` chain for a user-declared index-less object / class / union (an
-unconstrained `T` prints `'unknown'`); `.d.ts` / lib types, references, intersections, enums and callables are
-refused. The B98.r100 cast slice now also takes element accesses, and (P18.235)'s `restate` rewrites them. (c):
-`cmamWrappedUnionReceiver` unwraps `!` / `satisfies` around an identifier; `constCastAnnotation` lets
-`const v = x as U` stand in for a written annotation (receiver type and `AliasCarrierDisplay`). **Matrix** (all
-after-rows agree with tsgo): 42 string-key shapes strict 2 -> 24 (tsgo 38), 36 more 0 -> 16 (tsgo 29); cast literal
-keys 18 -> 36 (tsgo 36); (c) cells 1 -> 4 (tsgo 4). **Pins**: `Chk179StringKeyAndWrappedReceiverTest`, 37 tsgo rows /
-tsgo-silent controls; ablation a1 19 / a2 1 / a3 2 / a4 1 / a5 4 / a6 2 / a7 1 / a7b 1 / a8 4 / a9 2 / a10 2 / a11 1 /
-a12 1 RED (a12, the written-receiver gate, read 0 until the `groupBy` pin was added); 401-class sweep 5,342 green.
-**Gates**: full suite 21,956 / 0 / 44 (+37); corpus screen 8725 / 0 (`--include ''` byte-identical); `cost_gate.py` 0
-— every counter within tolerance, largest `mapped.hits` +0.93% / `narrow.walks` +0.58%: the new rule types
-element-access keys and receivers, accepted and not re-baselined; `huge_methods.py --fail-over 0` 0
-(`checkMemberAccessMissingCore` 6,443); grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1;
-warning gate with probe: probe only. `Checker.kt` +54. Residues -> the (CHK.179) item and (CHK.180).
 
 ## QUEUE
 
@@ -897,13 +890,17 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
+- [ ] **(CHK.190) A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
+
+- [ ] **(CHK.191) RESIDUES OF (CHK.187) (cells `build/bench/p18246-agent/cells`).** (a) `this.s` reading a static inherited from a base gives no TS2576 in a subclass method, script files too (`sa3`) — the B15.1 `this` path gets no `suggestionKey` / TS2576 offsets; (b) qualified `new` receivers (`new N.C().x`, `new ns.B().x`) are not handled by the `new` branch; (c) still refused by design, all reported by tsgo: a class-expression base, a mixin base, an `ns.B` base, a `declare class` base, an interface extending a class / a type alias / a lib interface.
+
 - [ ] **(CHK.189) (a) + (b) LANDED 2026-10-01 ((P18.244) note). OPEN: (c) `const E = 1; E.x` prints `'number'` where tsgo prints `'1'` (the primitive-receiver display widens the literal — not import-specific), and `import * as M; M.D.z` misses TS2339; (d) TS2708 on a `for (N of …)` target, TS2693 in an object-literal method's parameter default (`m(x = IN)`), TS2588 on `({ c } = …)` for a const; (e) the callee path has NO local-shadow guard — `function h(D: any) { D() }` resolved `D()` to an outer interface (an ours-only TS2349, now MASKED only because that symbol is value-less; with an outer CLASS it is still wrong); (f) a module's type-only local shadowing a script's `declare var X` now answers silence where tsgo resolves the value past the local; (g) `TAV_REACHED_NONS` is computed and no longer read. EARLIER: RESIDUES OF (CHK.188) (cells `build/bench/p18243-agent/cells`).** (a) **ours-only FOLLOW-ON errors after a TS2693 / TS2708** — tsgo types the value read as an ERROR type and stays silent after it, we keep the interface type and add TS2349 on `D()`, TS2339 on `D.x`, TS2351 on `new PropertyKey()`, TS2365 on `D += 1` (same-file too: cell `ss`, so it predates (P18.243)); the fix is `getTypeOfIdentifierConventional` answering an error type for a symbol with no value meaning — broad, measure its blast radius on the corpus first; (b) own-file `new N()` on a non-instantiated namespace skips TS2708 by a deliberate rule, and a shorthand `({ N } = …)` never reaches the pass because the reach logic does not descend into shorthand properties (cells `nss`, `nsm`, `ao`, `as`); (c) display: a const imported from a module prints `'number'` where tsgo prints `'1'` (cell `im`).
 
 - [x] **(CHK.188) DONE 2026-09-30 ((P18.243) note). A SCRIPT-FILE `interface D` USED AS A VALUE FROM ANOTHER FILE (`new D()`, `D()`) REPORTS NOTHING — tsgo reports TS2693 `'D' only refers to a type, but is being used as a value here.` (found by (P18.242); control cell `x1` in `build/bench/p18242-agent/cells`, 0 of 2 rows, with or without any name collision).** The per-file TS2693 table in `tavBuildFileRoot` lists only the file's OWN declarations; a type-only GLOBAL (a script interface, a type alias, a lib interface with no value) is never consulted. Measure the matrix (interface / type alias / lib type-only name; `new`, call, property read, `typeof`) and extend the table to type-only globals the file does not shadow. Row-adding — grid it; every added row a tsgo row.
 
 - [x] **(CHK.186) DONE 2026-09-30 ((P18.242) note). A MODULE-LOCAL DECLARATION IS STILL FUSED WITH A SAME-NAMED *SCRIPT* DECLARATION — (CHK.49)'s defect, fixed for LIB names, is live for SCRIPT names (found by (P18.241)): `init:mergeSharedKeepNames` merges a module-local declaration into the global symbol whenever a script file declares the same name, so a module's `class D` carries a script's `interface D` members — measured, `z.q` types `string` (a false TS2322 on `const qq: number = z.q`) where tsgo reports `TS2339 Property 'q' does not exist`** (cells c6/c7 in `build/bench/p18241-agent/cells`). WRONG TYPES, not only silence. The fix needs a "shared" visibility class in `lookupPerFileForNode` / `globalsForFile` (`NameResolver.kt` ~1380, where a non-module-only name returns `globals[name]` for every file), not just removing the merge — CHK.49-sized; read CLAUDE.md "A LIB GLOBAL NAME DECLARED TOP-LEVEL IN A *MODULE* FILE IS MODULE-SCOPED" (the two sets are ONE observable, and seeding only one is worse than both) before designing.
 
-- [ ] **(CHK.187) A MODULE-LOCAL BASE CLASS AND `new D()` INSIDE A MODULE STAY SILENT FOR TS2339 (found by (P18.241), cells k4 k5 k8 m4 m5 m8 in `build/bench/p18241-agent/cells`, tsgo 1 row each): `lookupInstanceMemberInResolvableChain`, `isStaticMemberOfClass`, `emitClassChainTs2551Suggestion` and the `new` branch resolve through `globals[...]`, which excludes module locals.** Resolve the declaring file's scope instead (`lookupPerFileForNode` / the class symbol's own declarations). Row-adding: every added row a tsgo row, grid it. Also: a merged interface with `extends` (m2) and a merged numeric index signature (n6) are refused on purpose and tsgo reports both.
+- [x] **(CHK.187) DONE 2026-10-01 ((P18.246) note). A MODULE-LOCAL BASE CLASS AND `new D()` INSIDE A MODULE STAY SILENT FOR TS2339 (found by (P18.241), cells k4 k5 k8 m4 m5 m8 in `build/bench/p18241-agent/cells`, tsgo 1 row each): `lookupInstanceMemberInResolvableChain`, `isStaticMemberOfClass`, `emitClassChainTs2551Suggestion` and the `new` branch resolve through `globals[...]`, which excludes module locals.** Resolve the declaring file's scope instead (`lookupPerFileForNode` / the class symbol's own declarations). Row-adding: every added row a tsgo row, grid it. Also: a merged interface with `extends` (m2) and a merged numeric index signature (n6) are refused on purpose and tsgo reports both.
 
 - [ ] **(CHK.185) RESIDUES OF (CHK.184) (matrix `build/bench/p18240-agent/`).** (a) `a?: never` WITHOUT exactOptionalPropertyTypes: a union read of `w.a` should be `string[] | undefined` and we drop the `undefined` — the 3 remaining matrix cells, where tsgo reports `'w.a' is possibly 'undefined'` under an `in` guard; (b) DISPLAY: a single union member printed alone shows `a?: undefined | undefined` where tsgo prints `a?: undefined` — pre-existing on an `===` narrowing, now reachable on more paths, no gate sees it (a relation-message TEXT-DIFF); (c) `checkDiscriminateOptionalProperty4`, the corpus pin walker for the `"a" in z` row, may now be REDUNDANT — PassLab-ablate it and retire it if the corpus stays green (CLAUDE.md "A BASELINE SERVED BY A WIPE-AND-PIN WALKER CANNOT BE CLOSED BY AN ENGINE RULE"); (d) not ported: tsgo's `removeNullable` on `?.` discriminant accesses, and equality with NON-nullish literals (the old path still owns it).
 

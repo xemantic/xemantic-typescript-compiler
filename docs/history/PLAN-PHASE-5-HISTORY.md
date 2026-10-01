@@ -1,3 +1,32 @@
+### Round (P18.236) — (CHK.179)(a2)+(c): a string / number-typed key on an index-less written receiver reports tsgo's TS7053 / TS7015 / TS7052 under `noImplicitAny`; a cast receiver's literal key is restated too; `u!.a`, `(u satisfies U).a` and `const v = x as U; v.a` report the missing member; every added row a tsgo row, +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent. **The grid was a REAL gate this round**: the first cut added 4-10 false TS7053 per profile
+(`nodeFactory.ts`, `core.ts`, `fourslashImpl.ts`, `harnessGlobals.ts`, `organizeImports.ts`), which located the true
+false-positive surface — the KEY's type, not the receiver: `key: keyof S` resolves to `string` here where tsgo keeps
+`keyof S`; a for-in variable over a generic `T` is `Extract<keyof T, string>` in tsgo; a for-in over an array is
+numeric (`isForInVariableForNumericPropertyNames`); and an INFERRED receiver is untrustworthy (`organizeImports.ts:441`,
+`groupBy` picks the wrong overload). Also measured: `if (k in o) o[k]` with `k: string` is NOT silent in tsgo (a
+non-literal key is not narrowed). **Mechanism**: `ElementAccessMissingMember.nonLiteralKey`, called after
+`tryEmitNoImplicitAnyIndexAccess`, only under `noImplicitAny`, with a conservative double gate — KEY: an identifier
+whose declaration is annotated `string` / `number` / `string | number` with no flow narrowing, a for-in variable over
+a written index-less non-generic object, `lit + x`, `String(x)`, or a `String.prototype` method on a `string`;
+RECEIVER: a written type (annotated parameter or variable, a cast, `this`), not narrowed; result TS7015 (array /
+tuple / string / number-index-only), TS7052 (a matching `get` accessor, user type or lib `Map`), else TS7053 + the
+`No index signature with a parameter of type 'K'` chain for a user-declared index-less object / class / union (an
+unconstrained `T` prints `'unknown'`); `.d.ts` / lib types, references, intersections, enums and callables are
+refused. The B98.r100 cast slice now also takes element accesses, and (P18.235)'s `restate` rewrites them. (c):
+`cmamWrappedUnionReceiver` unwraps `!` / `satisfies` around an identifier; `constCastAnnotation` lets
+`const v = x as U` stand in for a written annotation (receiver type and `AliasCarrierDisplay`). **Matrix** (all
+after-rows agree with tsgo): 42 string-key shapes strict 2 -> 24 (tsgo 38), 36 more 0 -> 16 (tsgo 29); cast literal
+keys 18 -> 36 (tsgo 36); (c) cells 1 -> 4 (tsgo 4). **Pins**: `Chk179StringKeyAndWrappedReceiverTest`, 37 tsgo rows /
+tsgo-silent controls; ablation a1 19 / a2 1 / a3 2 / a4 1 / a5 4 / a6 2 / a7 1 / a7b 1 / a8 4 / a9 2 / a10 2 / a11 1 /
+a12 1 RED (a12, the written-receiver gate, read 0 until the `groupBy` pin was added); 401-class sweep 5,342 green.
+**Gates**: full suite 21,956 / 0 / 44 (+37); corpus screen 8725 / 0 (`--include ''` byte-identical); `cost_gate.py` 0
+— every counter within tolerance, largest `mapped.hits` +0.93% / `narrow.walks` +0.58%: the new rule types
+element-access keys and receivers, accepted and not re-baselined; `huge_methods.py --fail-over 0` 0
+(`checkMemberAccessMissingCore` 6,443); grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1;
+warning gate with probe: probe only. `Checker.kt` +54. Residues -> the (CHK.179) item and (CHK.180).
+
 ### Round (P18.235) — (CHK.179)(a): a literal-key element access on a receiver lacking the member is restated in tsgo's terms — SILENT without `noImplicitAny`, TS7053 / TS7015 / TS7052 with it — removing an ours-only TS2339 that fired in EVERY configuration; +0 rows on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **Where the queue item was wrong**: (a) is not specific to unions or casts — ANY
