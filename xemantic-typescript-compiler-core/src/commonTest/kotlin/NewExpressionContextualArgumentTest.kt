@@ -458,16 +458,17 @@ class NewExpressionContextualArgumentTest {
         assert(d.none { it.code == 2322 })
     }
 
-    /** Both references: `Type 'string' is not assignable to type 'number'.` —
-     *  `getTypeOfExpressionCore` types a `ClassExpression` as `any` (a standing TODO),
-     *  so the callee is `any` and no construct signature exists to consult. */
+    /** Both references: `Type 'string' is not assignable to type 'number'.` — since
+     *  (CHK.196) stage 2 a `ClassExpression` value is its constructor side, so the
+     *  callee's construct signature types the callback. */
     @Test
-    fun `residue - a class expression callee is any`() {
+    fun `a class expression callee types the callback parameter`() {
         val d = diagnose("""
             const ZzzE = class { constructor(cb: (p: string) => void) {} };
             new ZzzE((p) => { const bad: number = p; });
         """)
-        assert(d.none { it.code == 2322 })
+        assert(d.map { "${it.line}:${it.character} TS${it.code} ${it.message}" } ==
+            listOf("2:25 TS2322 Type 'string' is not assignable to type 'number'."))
     }
 
     /** Both references: `Type 'T' is not assignable to type 'number'.` — the callback's

@@ -599,14 +599,13 @@ class FunctionBindTest {
     }
 
     @Test
-    fun `residue - a class value bound without partials displays its instance name`() {
-        // Both references: `Type 'typeof ZzzK' is not assignable to type 'string'.` — the
-        // class-value receiver reaches the miss path as the type this checker displays
-        // `ZzzK` ((CHK.73)'s class-value model); the bound constructor itself is right.
+    fun `a class value bound without partials displays typeof its class`() {
+        // Both references: `Type 'typeof ZzzK' is not assignable to type 'string'.` — since
+        // (CHK.196) stage 2 the class-value receiver is its constructor side.
         val d = d("class ZzzK { constructor(x: string) {} }\nconst zzzBK = ZzzK.bind(null);\nnew zzzBK(1);\nconst zzzBad: string = ZzzK.bind(null);")
         d should {
             have(any { it.code == 2345 && it.message == "Argument of type 'number' is not assignable to parameter of type 'string'." })
-            have(any { it.code == 2322 && it.message == "Type 'ZzzK' is not assignable to type 'string'." })
+            have(any { it.code == 2322 && it.message == "Type 'typeof ZzzK' is not assignable to type 'string'." })
         }
         assert(d.size == 2)
     }

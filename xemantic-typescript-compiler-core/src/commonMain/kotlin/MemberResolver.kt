@@ -765,8 +765,9 @@ internal class MemberResolver(
         // Step 1 dual-population: staticMembers is the static-side mirror. Empty
         // staticMembers stays empty (not null) for class declarations so callers
         // can distinguish "no static side" (pure interface — null) from "class
-        // without statics" (empty map). Only ClassDeclaration carries a static side.
-        type.staticMembers = if (symbol.declarations.any { it is ClassDeclaration }) {
+        // without statics" (empty map). A class declaration or (CHK.196) a class
+        // expression carries a static side.
+        type.staticMembers = if (symbol.declarations.any { it is ClassDeclaration || it is ClassExpression }) {
             staticMembers
         } else null
         // Inherited signatures first, then own — matches the implicit ordering before

@@ -1119,6 +1119,8 @@ class Checker(
      *  variables) without going through globals (which may have merge conflicts). */
     private var currentFileLocals: SymbolTable? = null
         set(v) { if (field !== v) { field = v; bumpExprEpoch("currentFileLocals") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentFileLocals") }
+    /** (CHK.196) the current file's local symbol named [name] (an import alias, for one). */
+    internal fun currentFileLocal(name: String): Symbol? = currentFileLocals?.get(name)
 
     /** INV.2(d): the current file's lexical scope tables ([BinderResult.lexicalScopes]),
      *  set per file by [checkPropertyAccess]. Consulted by [lexicalScopeSymbol] to resolve
@@ -100113,6 +100115,11 @@ interface DataView {
             // `getTypeOfSymbolForTypeQuery` — keep the existing skip there).
             val targetIsClassInstance = isClassOrInterfaceInstanceType(targetType)
             val sourceIsClassInstance = isClassOrInterfaceInstanceType(sourceType)
+            // (CHK.196) stage 2: a class's constructor side against a call-only target is
+            // decidable (it has no call signature — tsgo: "provides no match for the signature").
+            if (classConstructorTypes.isConstructorType(sourceType) &&
+                targetType.constructSignatures.isNullOrEmpty() &&
+                !targetType.callSignatures.isNullOrEmpty()) return true
             if (sourceType.constructSignatures.isNullOrEmpty() &&
                 !targetType.constructSignatures.isNullOrEmpty() && !targetIsClassInstance) return false
             if (!sourceType.constructSignatures.isNullOrEmpty() &&
@@ -108317,6 +108324,10 @@ interface DataView {
             is Type.Intersection -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
             is Type.Reference -> t.resolvedTypeArguments?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true
             is Type.Object -> {
+                // (CHK.196) stage 2: a class's constructor side binds the class's type
+                // parameters in its own construct signatures (tsgo), and its statics cannot
+                // mention them — nothing in it is an un-inferred type parameter.
+                if (classConstructorTypes.isConstructorType(t)) return false
                 // Round 591: an UNINSTANTIATED generic class/interface at a NESTED
                 // position (a raw Type.Interface with its OWN typeParameters
                 // unsubstituted — the services objectAllocator ctor-value sig
@@ -119115,7 +119126,8 @@ interface DataView {
             is CommaListExpression -> if (expr.elements.isNotEmpty()) getTypeOfExpression(expr.elements.last()) else anyType
 
             // Class expression
-            is ClassExpression -> anyType // TODO: class type
+            // (CHK.196) stage 2: a class expression's value is its constructor side.
+            is ClassExpression -> classConstructorTypes.classExpressionType(expr) ?: anyType
 
             // Spread
             is SpreadElement -> getTypeOfExpression(expr.expression)
@@ -119157,6 +119169,7 @@ interface DataView {
     internal fun getTypeOfIdentifier(id: Identifier): Type {
         val t = getTypeOfIdentifierCore(id)
         classConstructorTypes.instanceOf(t)?.let { if (classConstructorTypes.isDirectNewCallee(id)) return it }
+        classConstructorTypes.valueReadType(id, t)?.let { return it }
         if (t is Type.Union && discriminantCarryNames.isNotEmpty() && id.text in discriminantCarryNames) {
             return destructuredDiscriminantCarry(id, t) ?: t
         }
@@ -119361,7 +119374,7 @@ interface DataView {
      * heritage clause or `export default`, where a type-only name is legal. Syntactic and
      * positive: an unlisted parent is not a value read.
      */
-    private fun isValueReadPosition(id: Identifier): Boolean {
+    internal fun isValueReadPosition(id: Identifier): Boolean {
         return when (val p = (id as NodeBase).parent) {
             is PropertyAccessExpression -> p.expression === id
             is ArrowFunction -> p.body === id
@@ -135269,6 +135282,11 @@ interface DataView {
     /** Get the type of a property access expression (e.g., `obj.prop`). */
     private fun getTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
         val raw = computeRawTypeOfPropertyAccess(expr)
+        // (CHK.196) stage 2: `N.C` read as a value is the class's constructor side.
+        if (raw is Type.Interface) {
+            classConstructorTypes.qualifiedValueReadType(expr, raw)
+                ?.let { return it }
+        }
         // 17.34d: Apply flow-graph narrowing for expression-context property
         // reads (e.g. `A._a.length` after `if (A._a)` narrows `A._a` to `string`).
         // Conservative gate: only narrow Union types — narrowing a non-Union
@@ -149451,6 +149469,12 @@ interface DataView {
                             returnIdentifierDepth--
                         }
                     }
+            // (CHK.196) stage 2: `return A` of a class is its constructor side — when the
+            // identifier typer reads exactly THIS declaration's class as one.
+            is ClassDeclaration -> getTypeOfIdentifier(id).takeIf { t ->
+                classConstructorTypes.isConstructorType(t) &&
+                    (t as Type.Object).symbol?.declarations?.any { it === decl } == true
+            }
             else -> null
         } ?: return null
         if (t === anyType || t === errorType) return null

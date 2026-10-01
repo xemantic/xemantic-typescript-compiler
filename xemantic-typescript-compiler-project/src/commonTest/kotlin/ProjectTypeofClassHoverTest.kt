@@ -41,7 +41,7 @@ class ProjectTypeofClassHoverTest {
         """{ "compilerOptions": { "strict": true, "target": "es2022", "module": "esnext", "moduleResolution": "bundler", "noEmit": true, "lib": ["es2022"], "types": [] } }"""
 
     private val main =
-        "class A { static s = 1 }\ndeclare const t: typeof A;\nclass Box<T> { v!: T }\ndeclare const u: typeof Box;\nexport {}\n"
+        "class A { static s = 1 }\ndeclare const t: typeof A;\nclass Box<T> { v!: T }\ndeclare const u: typeof Box;\nconst c = A;\nconst g = Box;\nexport {}\n"
 
     private fun hoverOf(local: String): String? = Project.open(
         "/proj",
@@ -58,5 +58,14 @@ class ProjectTypeofClassHoverTest {
     fun `hover over a typeof binding of a generic class names typeof Box`() {
         val u = hoverOf("u")
         assert(u == "typeof Box")
+    }
+
+    /** (CHK.196) stage 2: a variable initialized from a class read names the constructor side. */
+    @Test
+    fun `hover over a variable holding a class names typeof A`() {
+        val c = hoverOf("c")
+        val g = hoverOf("g")
+        assert(c == "typeof A")
+        assert(g == "typeof Box")
     }
 }

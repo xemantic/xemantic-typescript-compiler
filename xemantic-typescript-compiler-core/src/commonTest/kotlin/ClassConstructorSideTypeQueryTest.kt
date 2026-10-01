@@ -33,9 +33,8 @@ import kotlin.test.Test
  * abstract-ness — and it prints `typeof A`. Every expectation is tsgo 7.0.2's own output over
  * the same source (the census cells under `build/scratch-p18252-census/cells` and `build/bench/p18253-agent/m`).
  *
- * Out of scope here and pinned as such nowhere: an identifier READ of a class (`const c = A`)
- * is still the instance type (stage 2), and a constructor type against a primitive or a
- * call-only target is still refused by `canUseTypeEngine` (stage 3).
+ * An identifier READ of a class (`const c = A`) is stage 2's, pinned in
+ * [ClassValueReadConstructorTypeTest].
  */
 class ClassConstructorSideTypeQueryTest {
 

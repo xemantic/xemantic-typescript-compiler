@@ -1808,9 +1808,10 @@ class KotlinExternalsGeneratorTest {
         // that: `public external val ctor: Any? /* xtsc: unmapped Box<T> */`,
         // the arity guard, and before (EXT.11a) `val ctor: Box`, a compile
         // error. The SECOND-hand value `again = ctor` names no class, so it
-        // still reaches the renderer's bare-name leg with type parameters
-        // declared: the arity guard is the negative control that both paths
-        // agree on refusing.
+        // still reaches the renderer's bare-name leg — since (CHK.196) stage 2
+        // typed as the class's CONSTRUCTOR side (`typeof Box`), which the
+        // renderer refuses as having no externals shape: the negative control
+        // that both paths agree on refusing.
         val result = generate(
             """
             export declare class Box<T> { value: T; }
@@ -1825,7 +1826,7 @@ class KotlinExternalsGeneratorTest {
 
             /* xtsc: skipped value ctor initialized by the class Box - a constructor value has no externals shape yet */
 
-            public external val again: Any? /* xtsc: unmapped Box<T> */
+            public external val again: Any? /* xtsc: unmapped typeof Box */
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         assert(rendered == expected)

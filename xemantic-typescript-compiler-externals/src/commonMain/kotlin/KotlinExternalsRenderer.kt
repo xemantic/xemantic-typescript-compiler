@@ -30,6 +30,7 @@ import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.Symbol
+import com.xemantic.typescript.compiler.SymbolFlags
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeFlags
 import com.xemantic.typescript.compiler.booleanType
@@ -1921,6 +1922,10 @@ private fun mappedText(type: Type, returnPosition: Boolean, scope: TypeScope): S
         // `resolvedTypeArguments == null` leg is the same question one
         // constructor over; a target without parameters keeps its bare name.
         if (type !is Type.Reference) {
+            // (CHK.196) stage 2: a class VALUE now types as the class's CONSTRUCTOR side —
+            // an anonymous object carrying the class symbol — which is not the class's
+            // instance type and has no externals shape yet; the bare name would be wrong.
+            if (type !is Type.Interface && (type as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Class) == true) return null
             if (type is Type.Interface && !type.typeParameters.isNullOrEmpty()) return null
             return name
         }
