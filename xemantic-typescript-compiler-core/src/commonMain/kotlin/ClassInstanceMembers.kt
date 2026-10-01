@@ -224,9 +224,18 @@ internal class ClassInstanceMembers(
                     checker.resolveHeritageBaseSymbol(ctor) else null
             }
             else -> null
-        } ?: return null
-        val sym = if (raw.flags.hasAny(SymbolFlags.Alias)) checker.resolveAlias(raw) else raw
-        if (!sym.flags.hasAny(SymbolFlags.Class)) return null
+        }
+        val resolved = raw?.let { if (it.flags.hasAny(SymbolFlags.Alias)) checker.resolveAlias(it) else it }
+        val sym = if (resolved != null && resolved.flags.hasAny(SymbolFlags.Class)) {
+            resolved
+        } else if (ctor is Identifier && (resolved == null || resolved.flags.hasAny(SymbolFlags.Variable))) {
+            // (P18.256) a VARIABLE or PARAMETER holding a class (`const c = A`, `t: typeof A`; a
+            // parameter is in no binder table, so [raw] is null for it): its type is the class's
+            // constructor side, which names the class it constructs. The instance agreement
+            // below still decides.
+            checker.classConstructorTypes.constructedClass(checker.getTypeOfExpression(ctor))?.symbol
+                ?: return null
+        } else return null
         val instanceSym = when (val t = checker.getTypeOfExpression(newExpr)) {
             is Type.Reference -> t.target.symbol
             is Type.Interface -> t.symbol

@@ -32,9 +32,9 @@ import kotlin.test.Test
  * probes under `build/bench/p18254-agent/p`).
  *
  * Deliberately NOT in this stage, and pinned as such only where the old answer is still
- * correct: a direct `new` callee keeps reading the instance (its typing is keyed on it), a
- * heritage expression and the right operand of `instanceof` too; a mixin class expression
- * keeps `any`.
+ * correct: a heritage expression and the right operand of `instanceof` keep reading the
+ * instance; a mixin class expression keeps `any`. (A direct `new` callee kept the instance
+ * here too until (P18.256), which made it an ordinary value read — `NewExpressionConstructorSideTest`.)
  */
 class ClassValueReadConstructorTypeTest {
 
@@ -265,7 +265,7 @@ class ClassValueReadConstructorTypeTest {
         ))
     }
 
-    /** a direct `new`, a heritage clause and `instanceof` keep reading the instance. */
+    /** a heritage clause and `instanceof` keep reading the instance, and `new` still builds one. */
     @Test
     fun `negative control - new, extends and instanceof are unchanged`() {
         assert(rows("""

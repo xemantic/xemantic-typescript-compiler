@@ -7222,7 +7222,7 @@ class Checker(
     private val FUNCTION_BUILTIN_STATIC_NAMES = setOf("name", "length", "caller", "arguments")
 
     /**
-     * (CHK.137) round (P18.128) — the alias-hop budget of [newCalleeVarHoldsClassValue].
+     * (CHK.137) round (P18.128) — the alias-hop budget of [newCalleeVarHoldsInstance].
      *
      * Four is `MemberNames.LATE_BIND_ALIAS_HOPS`' shape for the same job one seam over: it
      * terminates a `const a = b; const b = a` cycle, which is what the budget is FOR, and a
@@ -111896,7 +111896,7 @@ interface DataView {
             }
             is NewExpression -> {
                 val callee = retExpr.expression as? Identifier ?: return null
-                val calleeType = getTypeOfIdentifier(callee)
+                val calleeType = getTypeOfIdentifier(callee).let { classConstructorTypes.constructedClass(it) ?: it }
                 if (calleeType !is Type.Interface) return null
                 val typeParams = calleeType.typeParameters
                 val typeArgs = retExpr.typeArguments
@@ -118340,7 +118340,6 @@ interface DataView {
      */
     internal fun getTypeOfIdentifier(id: Identifier): Type {
         val t = getTypeOfIdentifierCore(id)
-        classConstructorTypes.instanceOf(t)?.let { if (classConstructorTypes.isDirectNewCallee(id)) return it }
         classConstructorTypes.valueReadType(id, t)?.let { return it }
         if (t is Type.Union && discriminantCarryNames.isNotEmpty() && id.text in discriminantCarryNames) {
             return destructuredDiscriminantCarry(id, t) ?: t
@@ -134221,7 +134220,7 @@ interface DataView {
             }
             is ElementAccessExpression -> newCalleeMemberValueType(callee) ?: return anyType
             else -> return anyType
-        }.let { narrowByExcludingNullUndefined(it) }
+        }.let { narrowByExcludingNullUndefined(it) }.let { classConstructorTypes.constructedClass(it) ?: it }
         if (calleeType === anyType || calleeType === errorType) return anyType
         // For new expressions, the return type is the class type itself.
         // 16.0: honor explicit type arguments (e.g. `new Test1<string>()`) by
@@ -151019,6 +151018,13 @@ interface DataView {
         // (CHK.173) B5f: the non-null callee, as the emitter and `resolveNewExpression`.
         val calleeType = narrowByExcludingNullUndefined(getCalleeType(expr.expression))
         if (calleeType === anyType || calleeType === errorType) return null
+        // (P18.256) a constructor-side callee (`const b = Box; new b(…)`, `t: typeof Box`):
+        // its construct signatures are already the class's own-or-inherited list, and the
+        // class's type parameters are the constructed instance's.
+        classConstructorTypes.constructedClass(calleeType)?.let { cls ->
+            val sigs = getConstructSignaturesOfType(calleeType)
+            return if (sigs.isEmpty()) null else Pair(sigs, cls.typeParameters)
+        }
         val classSym = (calleeType as? Type.Interface)?.symbol?.takeIf { it.flags.hasAny(SymbolFlags.Class) }
         if (classSym != null) {
             resolveStructuredTypeMembers(calleeType)
@@ -156009,7 +156015,9 @@ interface DataView {
                         val canEmit = (chainResult == false || isCircular) && !isJsExpando
                         if (canEmit) {
                             val typeArgs = classDecl.typeParameters?.size ?: 0
-                            val ctorName = (ctor as? Identifier)?.text ?: classDecl.name?.text ?: ctorSym.name
+                            // (P18.256) tsgo names the CLASS, not the callee's spelling: `new c()`
+                            // with `const c = A`, and `import { A as B }; new B()`, both say 'A'.
+                            val ctorName = classDecl.name?.text ?: ctorSym.name
                             val display = if (typeArgs > 0) {
                                 ctorName + "<" + List(typeArgs) { "unknown" }.joinToString(", ") + ">"
                             } else ctorName
@@ -164701,64 +164709,74 @@ interface DataView {
      * Check argument types for a NewExpression against the construct signature.
      */
     /**
-     * (CHK.137) round (P18.128) — does this variable symbol hold a CLASS VALUE (`true`),
-     * an INSTANCE (`false`), or is it undecidable from the declaration (`null`)?
+     * (CHK.137) round (P18.128) — does every declaration of this variable symbol hold an
+     * INSTANCE (`new X()`, or an alias chain ending in one)? Asked by
+     * [checkSingleNewExpressionTypes] for `const i = new Cls(); new i()`: a class that declares
+     * a constructor used to register a construct signature on its instance type, so the
+     * construct-signature read was silent where both references report TS2351.
      *
-     * Asked by [checkSingleNewExpressionTypes] and by nothing else. It exists because
-     * (CHK.73) makes the checker's own answer useless for the question: a class value and
-     * an instance of that class have the SAME type here, so `new c()` cannot be decided by
-     * reading construct signatures off it in either direction.
+     * (P18.256) The CLASS-VALUE half is retired: since (CHK.196) stage 2 a variable holding a
+     * class (`const c = Cls`) types as the class's constructor side, so the callee type is no
+     * longer the instance this branch was gated on — measured unreached on the corpus, the
+     * census matrix and the (CHK.137) pins before deletion.
      *
-     * **`null` is the answer whenever anything is unclear, and every `null` falls through
-     * to the pre-existing behaviour.** In particular an ANNOTATED declaration answers null:
-     * `const c: typeof Cls = Cls` is already correct today (the annotation types it as the
-     * static side, so the emitter never sees an instance interface) and `declare const i: Cls`
-     * is already the correct TS2351 — neither needs this, and claiming either would be a
-     * syntactic guess overriding a type the program actually wrote.
-     *
-     * The initializer ladder is the one the KIR lowering's `variableType` uses for the same
-     * quirk, plus one hop form the backend does not need:
-     *  - an `Identifier` — follow it, up to [NEW_CALLEE_CLASS_VALUE_HOPS] hops, so
-     *    `const a = Cls; const c = a` is decided (a real shape: a re-export alias chain);
-     *  - a `ClassExpression` — holds a class;
-     *  - a `NewExpression` — holds an instance, which is the FALSE-NEGATIVE half;
-     *  - anything else — null.
-     *
-     * **A `let` reassigned between two classes is still `true`, and that is correct rather
-     * than lucky**: every declaration considered must agree, so `let c = A; c = B` answers
-     * true from its declaration and both assignments store a class. A `let` whose
-     * declarations disagree, or that has more than one declaration of mixed kind, answers
-     * null and is left alone.
-     *
-     * The hop budget terminates the walk on a cycle (`const a = b; const b = a`, which the
-     * program is free to write and which no other guard here would stop).
+     * `false` whenever anything is unclear (an annotated declaration, any other initializer,
+     * a cycle past [NEW_CALLEE_CLASS_VALUE_HOPS]), which falls through to the pre-existing
+     * behaviour. A `let` reassigned between instances is decided from its declarations.
      */
-    private fun newCalleeVarHoldsClassValue(sym: Symbol, hops: Int = NEW_CALLEE_CLASS_VALUE_HOPS): Boolean? {
-        if (hops <= 0) return null
+    private fun newCalleeVarHoldsInstance(sym: Symbol, hops: Int = NEW_CALLEE_CLASS_VALUE_HOPS): Boolean {
+        if (hops <= 0) return false
         val decls = sym.declarations.filterIsInstance<VariableDeclaration>()
-        if (decls.isEmpty() || decls.size != sym.declarations.size) return null
-        var verdict: Boolean? = null
+        if (decls.isEmpty() || decls.size != sym.declarations.size) return false
         for (decl in decls) {
-            if (decl.type != null) return null
-            val answer = when (val init = decl.initializer) {
-                null -> return null
-                is ClassExpression -> true
-                is NewExpression -> false
+            if (decl.type != null) return false
+            when (val init = decl.initializer) {
+                is NewExpression -> {}
                 is Identifier -> {
-                    val target = globals[init.text] ?: return null
-                    when {
-                        target.flags.hasAny(SymbolFlags.Class) -> true
-                        target.flags.hasAny(SymbolFlags.Variable) &&
-                            !target.flags.hasAny(SymbolFlags.Function or SymbolFlags.Module or SymbolFlags.Enum or SymbolFlags.Alias) ->
-                            newCalleeVarHoldsClassValue(target, hops - 1) ?: return null
-                        else -> return null
-                    }
+                    val target = globals[init.text] ?: return false
+                    if (!target.flags.hasAny(SymbolFlags.Variable) ||
+                        target.flags.hasAny(SymbolFlags.Function or SymbolFlags.Module or SymbolFlags.Enum or SymbolFlags.Alias or SymbolFlags.Class)
+                    ) return false
+                    if (!newCalleeVarHoldsInstance(target, hops - 1)) return false
                 }
-                else -> return null
+                else -> return false
             }
-            if (verdict == null) verdict = answer else if (verdict != answer) return null
         }
-        return verdict
+        return true
+    }
+
+    /** (P18.256) TS2673 — tsgo `isConstructorAccessible` for a PRIVATE constructor used outside
+     *  its declaring class [declaring]: the whole `new` expression. */
+    private fun emitPrivateConstructorTs2673(expr: NewExpression, declaring: Symbol, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "Constructor of class '${declaring.name}' is private and only accessible within the class declaration.",
+            category = DiagnosticCategory.Error, code = 2673,
+            fileName = fileName, line = line, character = character,
+            start = expr.pos, length = expressionTrueEnd(expr) - expr.pos,
+        ))
+    }
+
+    /**
+     * (P18.256) TS2511 off the constructor type — tsgo `resolveNewExpression`'s
+     * `someSignature(constructSignatures, isAbstract)` — for the callees the name-based TS2511
+     * walker ([spineAiEnterNode], a bare identifier through `!`) cannot see: `new N.Ab()`,
+     * `new o.Ab()`, `new arr[0]()`, `new (Ab)()`. True when reported; tsgo stops there
+     * (`resolveErrorCall`), so the caller does not check the arguments.
+     */
+    private fun newExprAbstractConstructorTs2511(expr: NewExpression, calleeType: Type, source: String, fileName: String): Boolean {
+        var c = expr.expression
+        while (c is NonNullExpression) c = c.expression
+        if (c is Identifier) return false
+        if (getConstructSignaturesOfType(calleeType).none { it.isAbstract }) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "Cannot create an instance of an abstract class.",
+            category = DiagnosticCategory.Error, code = 2511,
+            fileName = fileName, line = line, character = character,
+            start = expr.pos, length = expressionTrueEnd(expr) - expr.pos,
+        ))
+        return true
     }
 
     private fun checkSingleNewExpressionTypes(expr: NewExpression, source: String, fileName: String) {
@@ -164858,17 +164876,24 @@ interface DataView {
         // with a resolvable class symbol.
         if (expr.expression is Identifier) {
             val ident = expr.expression
-            val classSym = globals[ident.text]
+            // (P18.256) the class a variable / parameter / module-local class callee constructs
+            // is read off its constructor side when it is not a script global class.
+            val classSym = globals[ident.text]?.takeIf { s -> s.declarations.any { it is ClassDeclaration } }
+                ?: getCalleeType(ident).let { ct ->
+                    classConstructorTypes.constructedClass(classConstructorTypes.newCalleeConstructorSide(ident, ct) ?: ct)?.symbol
+                }
             if (classSym != null && classSym.declarations.any { it is ClassDeclaration }) {
                 val ctorInfo = findEffectiveConstructorVisibility(classSym)
                 // (CHK.154)(b): tsgo `resolveNewExpression` returns `resolveErrorCall` when
                 // `isConstructorAccessible` fails, so an inaccessible constructor's
-                // ARGUMENTS are never checked. A PRIVATE one used outside its class stops
-                // here silently — its TS2673 is not modelled yet — rather than reaching
-                // the argument check below with a row tsgo never produces.
+                // ARGUMENTS are never checked. (P18.256) A PRIVATE one used outside its
+                // class is TS2673 over the whole `new` (tsgo `isConstructorAccessible`).
                 if (ctorInfo != null && ctorInfo.first == ModifierFlag.Private &&
                     callWalkerClassStack.none { it === ctorInfo.second }
-                ) return
+                ) {
+                    emitPrivateConstructorTs2673(expr, ctorInfo.second, source, fileName)
+                    return
+                }
                 if (ctorInfo != null && ctorInfo.first == ModifierFlag.Protected) {
                     val declaringClass = ctorInfo.second
                     val accessible = callWalkerClassStack.any { enclosing ->
@@ -164990,8 +165015,13 @@ interface DataView {
             ))
             return
         }
-        val calleeType = newCalleeNonNullType(expr, getCalleeType(expr.expression), source, fileName) ?: return
+        // (P18.256) a class callee is read as its CONSTRUCTOR side, as every value read of it
+        // is: the construct signatures below are the class's own (else the base's, else the
+        // zero-argument default), not the instance's hybrid list.
+        val calleeType = newCalleeNonNullType(expr, getCalleeType(expr.expression), source, fileName)
+            ?.let { classConstructorTypes.newCalleeConstructorSide(expr.expression, it) ?: it } ?: return
         if (calleeType === anyType || calleeType === errorType) return
+        if (newExprAbstractConstructorTs2511(expr, calleeType, source, fileName)) return
         // (LEGACY.0b) TS7009 for a callee that is NOT a bare identifier. tsc decides it
         // from the RESOLVED SIGNATURE's declaration - `checkCallExpression`'s
         // `declaration.kind !== Constructor && !== ConstructSignature && !== ConstructorType`
@@ -165111,19 +165141,12 @@ interface DataView {
         //   (a) all constituents non-constructable → "No constituent ... is constructable."
         //   (b) some non-constructable → "Not all constituents ... are constructable." + first missing display
         //   (c) all constructable but sigs differ structurally → "Each member ... has construct signatures, but none ... compatible..."
-        // (CHK.98)(a): this checker types a class VALUE as its INSTANCE type
-        // ((CHK.73)), so a union of class REFERENCES has no construct signatures for
-        // a reason that is a modelling artifact and not a fact about the program.
-        // Refuse rather than report — `[ConcreteA, AbstractA].map(cls => new cls())`
-        // is TS2511 in both references and NOTHING else. Unreachable before
-        // (CHK.98)(a): the callee was `any` at this reader, so the arm never saw a
-        // union of classes at all (the corpus's `abstractClassUnionInstantiation`).
-        if (calleeType is Type.Union &&
-            calleeType.types.none { c ->
-                val sym = (c as? Type.Interface)?.symbol
-                    ?: (c as? Type.Reference)?.target?.symbol
-                sym?.flags?.hasAny(SymbolFlags.Class) == true
-            }) {
+        // (CHK.98)(a)'s class-instance refusal is retired (P18.256): it existed because a
+        // class VALUE typed as its INSTANCE, so `[ConcreteA, AbstractA].map(cls => new cls())`
+        // read a union of instances. A class value is now its constructor side ((CHK.196)), so
+        // a union of class INSTANCES at a `new` really is unconstructable — `declare const
+        // u: A | B; new u()` is TS2351 in tsgo, and the refusal was suppressing it.
+        if (calleeType is Type.Union) {
             val constituents = calleeType.types
             val nonCtor = constituents.filter { getConstructSignaturesOfType(it).isEmpty() }
             val unionDisplay = typeToString(calleeType)
@@ -165203,7 +165226,10 @@ interface DataView {
         // (CHK.137) round (P18.128) — a variable that HOLDS A CLASS is constructable, and a
         // variable that holds an INSTANCE is not, and this checker's type cannot tell them
         // apart. Both directions are decided HERE, above the construct-signature read, and
-        // the read is what is wrong for both of them.
+        // the read is what is wrong for both of them. (P18.256): only the INSTANCE half is
+        // left — a class-holding variable now types as the constructor side ((CHK.196)), whose
+        // construct signatures the read below takes, so the class half was unreachable and is
+        // deleted. The history below is kept for the instance half's reasoning.
         //
         // The cause is (CHK.73): **a class VALUE types as its INSTANCE type**. So for
         // `class Cls {}; const c = Cls`, `c`'s type is the instance interface, which has no
@@ -165219,8 +165245,8 @@ interface DataView {
         // **Decided from the DECLARATION, syntactically, because the TYPE is the thing that
         // cannot be trusted here** — the same move (KIR.LOWER.6) had to make in the backend
         // for the same reason ((P18.127): `variableType` declines the checker's answer for a
-        // class-value initializer). [newCalleeVarHoldsClassValue] answers null wherever it
-        // cannot tell, and a null falls through to exactly the pre-existing behaviour, so the
+        // class-value initializer). [newCalleeVarHoldsInstance] answers false wherever it
+        // cannot tell, and a false falls through to exactly the pre-existing behaviour, so the
         // change is confined to the population the artifact damages.
         //
         // **The population is narrower than it looks and the narrowing is load-bearing.**
@@ -165245,21 +165271,17 @@ interface DataView {
             ) return@run
             val ti = calleeType as? Type.Interface ?: return@run
             if (ti.symbol?.flags?.hasAny(SymbolFlags.Class) != true) return@run
-            when (newCalleeVarHoldsClassValue(sym)) {
-                true -> return   // holds the class itself — constructable, say nothing
-                false -> {
-                    val typeName = ti.symbol?.name ?: typeToString(ti)
-                    val (line, character) = getLineAndCharacterOfPosition(source, ce.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "This expression is not constructable.",
-                        category = DiagnosticCategory.Error, code = 2351,
-                        fileName = fileName, line = line, character = character,
-                        start = ce.pos, length = ce.text.length,
-                        messageChain = listOf("  Type '$typeName' has no construct signatures."),
-                    ))
-                    return
-                }
-                null -> {}
+            if (newCalleeVarHoldsInstance(sym)) {
+                val typeName = ti.symbol?.name ?: typeToString(ti)
+                val (line, character) = getLineAndCharacterOfPosition(source, ce.pos)
+                diagnostics.add(Diagnostic(
+                    message = "This expression is not constructable.",
+                    category = DiagnosticCategory.Error, code = 2351,
+                    fileName = fileName, line = line, character = character,
+                    start = ce.pos, length = ce.text.length,
+                    messageChain = listOf("  Type '$typeName' has no construct signatures."),
+                ))
+                return
             }
         }
         // B497: the args-required early return was moved BELOW the union-callee branch
@@ -165345,7 +165367,7 @@ interface DataView {
         // means the call site can't actually access the type (e.g. inside a
         // static method, a class-level T is out of scope and TypeScript already
         // emits TS2302; emitting TS2345 too would double-fault).
-        val classTypeParams = (calleeType as? Type.Interface)?.typeParameters
+        val classTypeParams = (classConstructorTypes.constructedClass(calleeType) ?: calleeType as? Type.Interface)?.typeParameters
         val hasExplicitTypeArgs = !expr.typeArguments.isNullOrEmpty()
         val resolvedTypeArgs: List<Type>? = if (hasExplicitTypeArgs) {
             expr.typeArguments.map { tn ->

@@ -45,8 +45,9 @@ package com.xemantic.typescript.compiler
  * which therefore also feeds the module-object class carrier `m.Cls` and the object-literal
  * class-value source); since stage 2 every VALUE read of a class — an identifier
  * ([valueReadType]), `N.C` ([qualifiedValueReadType]), `return A`, a class expression
- * ([classExpressionType]). A direct `new` callee, a heritage expression and an `instanceof`
- * right operand keep the instance. `typeToString` renders a type minted here as
+ * ([classExpressionType]) and, since (P18.256), a direct `new` callee, whose readers take the
+ * constructed class back through [constructedClass]. A heritage expression and an
+ * `instanceof` right operand keep the instance. `typeToString` renders a type minted here as
  * `typeof Name` ([isConstructorType]).
  */
 internal class ClassConstructorTypes(
@@ -90,29 +91,44 @@ internal class ClassConstructorTypes(
     fun isConstructorType(type: Type): Boolean = type is Type.Object && type in minted
 
     /**
-     * The instance interface behind a type minted here, or null. A constructor-typed value
-     * that is the DIRECT callee of a `new` reads as that instance in stage 1, because
-     * `new`-expression typing (explicit type arguments, inference, the class exclusions) is
-     * keyed on a [Type.Interface] callee — measured: without it `new t(1).v` through
-     * `t: typeof Box` loses its inferred `number`. Stage 2 ports the `new` typing instead.
+     * The class a constructor type CONSTRUCTS — the instance interface every construct
+     * signature of a type minted here returns — or null for any other type. Since (P18.256)
+     * a `new` callee is an ordinary value read (a class identifier answers its constructor
+     * side like any other read), and the `new`-expression readers take the class from the
+     * constructor type through this: explicit type arguments, constructor-argument inference
+     * and the uninferred-default rule are keyed on the class's own type parameters, which
+     * live on the instance (`Checker.getReturnTypeOfNewExpression`,
+     * `constructSignaturesForNewCtx`, `inferSimpleReturnTypeFromBody`).
      */
-    fun instanceOf(type: Type): Type.Interface? = (type as? Type.Object)?.let { minted[it] }
+    fun constructedClass(type: Type): Type.Interface? = (type as? Type.Object)?.let { minted[it] }
 
-    /** [id] is (through parentheses and `!`) the callee expression of a `new`. */
-    fun isDirectNewCallee(id: Identifier): Boolean {
-        var self: Node = id
-        var p = id.parent
-        while (p is ParenthesizedExpression || p is NonNullExpression) { self = p; p = (p as NodeBase).parent }
-        return p is NewExpression && p.expression === self
+    /**
+     * (P18.256) The constructor side of a `new` callee whose conventional callee type is the
+     * class INSTANCE — a class identifier, `new (A)()`, `new A!()`, `new N.C()`: the same
+     * answer a value read of that expression gives ([valueReadType] /
+     * [qualifiedValueReadType]). Null keeps [t] (any other callee, or a callee already typed
+     * as a constructor).
+     */
+    fun newCalleeConstructorSide(callee: Expression, t: Type): Type? {
+        var e = callee
+        while (e is ParenthesizedExpression || e is NonNullExpression) {
+            e = if (e is ParenthesizedExpression) e.expression else (e as NonNullExpression).expression
+        }
+        return when (e) {
+            is Identifier -> valueReadType(e, t)
+            is PropertyAccessExpression -> qualifiedValueReadType(e, t)
+            else -> null
+        }
     }
 
     /**
      * (CHK.196) stage 2 — the type of an identifier READ of a class: when [t], what the
      * identifier typer answered for [id], is exactly the declared instance type of the class
      * [id] spells, and [id] sits in a value-read position, answer the class's constructor side.
-     * Never for a heritage expression (`extends A` reads the instance), the right operand of
-     * `instanceof` (the narrowing reads the instance), or a direct `new` callee — whose typing
-     * is still keyed on the instance (see [instanceOf]). Null keeps [t].
+     * Never for a heritage expression (`extends A` reads the instance) or the right operand
+     * of `instanceof` (the narrowing reads the instance). A direct `new` callee IS a value read
+     * since (P18.256): the `new` readers take the class back through [constructedClass].
+     * Null keeps [t].
      */
     fun valueReadType(id: Identifier, t: Type): Type? {
         val sym = classOfInstance(t, id.text) ?: importedClassOfInstance(id, t) ?: return null
@@ -168,12 +184,11 @@ internal class ClassConstructorTypes(
         return sym
     }
 
-    /** Not a heritage expression, a direct `new` callee or the right operand of `instanceof`. */
+    /** Not a heritage expression or the right operand of `instanceof`. */
     private fun isValueUse(node: Node): Boolean {
         var self: Node = node
         var p = (node as NodeBase).parent
         while (p is ParenthesizedExpression || p is NonNullExpression) { self = p; p = (p as NodeBase).parent }
-        if (p is NewExpression && p.expression === self) return false
         if (p is ExpressionWithTypeArguments || p is HeritageClause) return false
         if (p is BinaryExpression && p.right === self && p.operator == SyntaxKind.InstanceOfKeyword) return false
         return true
@@ -209,7 +224,20 @@ internal class ClassConstructorTypes(
                 )
             }
             if (sigs.isEmpty()) {
-                sigs += Signature(resolvedReturnType = iface, isAbstract = isAbstract)
+                sigs += Signature(resolvedReturnType = iface, isAbstract = isAbstract).also { sig ->
+                    // A class with an `extends` clause and no constructor inherits the base's
+                    // (an unresolvable base gives none here, which is not "zero parameters"),
+                    // so only a heritage-free class's default carries a trustworthy arity.
+                    val decl = symbol.declarations.firstOrNull { it is ClassDeclaration || it is ClassExpression }
+                    val heritage = when (decl) {
+                        is ClassDeclaration -> decl.heritageClauses
+                        is ClassExpression -> decl.heritageClauses
+                        else -> null
+                    }
+                    if (decl != null && heritage?.none { it.token == SyntaxKind.ExtendsKeyword } != false) {
+                        sig.defaultConstructorOf = decl
+                    }
+                }
             }
             val members = symbolTable()
             iface.staticMembers?.let { members.putAll(it) }

@@ -380,6 +380,17 @@ class Signature(
      * intersection parameter, which is a row this compiler used to report.
      */
     var fromUnionCombination: Boolean = false
+
+    /**
+     * (P18.256) The class declaration whose IMPLICIT zero-argument constructor this is — tsgo's
+     * `getDefaultConstructSignatures` for a class that declares no constructor and extends
+     * nothing (`ClassConstructorTypes.constructorTypeOfClass`). [declaration] stays null, as
+     * tsgo's does; this is what lets the signature-based arity reader
+     * (`SignatureArity.reportSignatureArity`) trust a count of zero (`new C(1)` through
+     * `const c = C` / `t: typeof C` / `new (C)(1)` is TS2554 in tsgo). Null on every other
+     * signature.
+     */
+    var defaultConstructorOf: Node? = null
 }
 
 // ---------------------------------------------------------------------------

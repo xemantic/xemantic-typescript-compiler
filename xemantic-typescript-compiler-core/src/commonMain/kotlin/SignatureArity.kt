@@ -84,7 +84,7 @@ internal class SignatureArity(
      *  JS (JSDoc `[p]` optionality is not in [paramInfo]'s reading), not an EMBEDDED-lib
      *  member (it simplifies optional parameters away, B279), and present at all. */
     private fun arityDeclTrusted(sig: Signature): Boolean {
-        val decl = sig.declaration ?: return false
+        val decl = sig.declaration ?: sig.defaultConstructorOf ?: return false
         if (!options.useRealLibs && (decl in checker.builtinLibDecls || decl in checker.builtinLibMemberDecls)) return false
         var root: Node = decl
         while (true) root = (root as? NodeBase)?.parent ?: break
@@ -296,7 +296,7 @@ internal class SignatureArity(
      */
     private fun arityIdentifierCalleeTrusted(callee: Identifier, sig: Signature): Boolean {
         val name = callee.text
-        val decl = sig.declaration ?: return false
+        val decl = sig.declaration ?: sig.defaultConstructorOf ?: return false
         var cur: Node? = (callee as NodeBase).parent
         while (cur != null) {
             val b = arityBindingIn(cur, name)
@@ -406,10 +406,24 @@ internal class SignatureArity(
                 (decl as NodeBase).parent === (b as NodeBase).parent
             is ClassDeclaration, is ClassExpression -> decl is Constructor || decl is ClassDeclaration || contains()
             is FunctionExpression -> decl === b
-            is VariableDeclaration -> contains() || annotated(b.type)
+            // (P18.256) `const c = C` — the variable holds the class whose constructor [decl] is.
+            is VariableDeclaration -> contains() || annotated(b.type) || initializerNamesClassOf(b, decl)
             is Parameter -> contains() || annotated(b.type)
             else -> contains()
         }
+    }
+
+    /** (P18.256) [b]'s initializer is a bare identifier spelling the name of the class that
+     *  declares [decl] (a constructor, or the class itself for an implicit default). */
+    private fun initializerNamesClassOf(b: VariableDeclaration, decl: Node): Boolean {
+        val init = b.initializer as? Identifier ?: return false
+        val cls = if (decl is Constructor) (decl as NodeBase).parent else decl
+        val name = when (cls) {
+            is ClassDeclaration -> cls.name?.text
+            is ClassExpression -> cls.name?.text
+            else -> null
+        }
+        return name != null && name == init.text
     }
 
     /** (CHK.176)(a) Is an arity row (TS2554 / 2555 / 2556 / 2575) already drawn over exactly
@@ -952,7 +966,8 @@ internal class SignatureArity(
             is ConstructorType -> d.parameters
             is GetAccessor -> d.parameters
             is SetAccessor -> d.parameters
-            else -> null
+            // (P18.256) a class's implicit default constructor takes nothing.
+            else -> if (sig.defaultConstructorOf != null) emptyList() else null
         }?.let { checker.paramInfo(it) }
 
     /**
