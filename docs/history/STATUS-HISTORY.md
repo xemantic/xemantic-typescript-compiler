@@ -1,5 +1,10 @@
 
 
+**(P18.252) — (CHK.190) RESIDUES: CIRCULAR RE-EXPORTS NOW REPORT tsgo's "circular definition", USING AN `import type` / `export type` NAME AS A VALUE IS REPORTED FOR THE FIRST TIME (TS1361 / TS1362 HAD NO CODE AT ALL), AND A MISSING IMPORTED MEMBER GETS tsgo's EXACT MESSAGE; +25 PINS, 22,207 / 0 / 44 (2026-10-01).**
+Screen 0; grid 8x0; libraries unchanged. Also queued: the census-specified plan for giving a class value a proper
+constructor-side type ((CHK.196)), stage 1 next.
+
+
 **(P18.251) — (CHK.194): WHEN A CLASS HAS AN INSTANCE MEMBER AND A STATIC OF THE SAME NAME, EACH NOW KEEPS ITS OWN TYPE (BEFORE, WHICHEVER WAS DECLARED LAST WON, SILENTLY); +15 PINS, 22,182 / 0 / 44 (2026-10-01).**
 A staged fix: the full answer is a proper type for the class value itself, queued. Screen 0; grid 8x0; libraries
 unchanged.

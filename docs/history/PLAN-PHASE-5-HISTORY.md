@@ -1,3 +1,28 @@
+### Round (P18.247) — (CHK.191): `this.s` on a static inherited from a base reports TS2576 (and the own-class `this["s"]` row is tsgo's), qualified `new N.C().x` receivers resolve, an `ns.B` base and a program `declare class` base are walked — and the chain walks' NAME-keyed cycle guard is replaced by declaration identity; 53-cell agreement 68 -> 130 of 166 tsgo rows, ours-only 5 -> 3 (all pre-existing); +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent (resumed once), beside the read-only (CHK.190) census. **Where the queue item was wrong**:
+(a) two defects, not one — the `this` path was silent for a static on a base, AND the existing own-class `this["s"]`
+TS2576 anchored at the key and printed `C.s` where tsgo prints `C["s"]`; a constructor-fallback hunk read 0 RED and was
+removed; (b) (P18.246)'s type-agreement guard is NOT enough for a qualified callee — under `function f(N: { C: new () =>
+{ z: number } })` this checker types `new N.C()` as the OUTER namespace's class (a pre-existing wrong type), so a
+shadowed head is refused by syntax (`LocalShadowGuard.innermostBindingIsVariable`); (c) an `ns.B` base needed no new
+resolver (`resolveHeritageBaseSymbol` resolves dotted names), and `declare class` needs refusing only for lib / `.d.ts`
+/ ambient-module declarations. **The full suite caught a false TS2339** (`NamespaceImportHeritageTest`, `net.Server`
+through a star-re-exporting ambient module) that no sweep had seen — **root cause: the three chain walks' cycle guard
+remembered visited classes BY NAME**, so a base called `Server` under a subclass called `Server` read as "already
+walked" and its members as missing; once dotted bases made such a base reachable the guard went live (in plain modules
+too: 3 false TS2339 + a TS2339 for tsgo's TS2576). Fixed by keying the visited set on the declaration object (arm a9:
+3 RED). **Mechanism**: `tryEmitThisStaticTs2576` (called from the B15.1 `this` site and the own-member site, with the
+squiggle / key threaded through `cmamCheckResolvedObjectType` / `cmamEmitMissingProperty`); `resolveBaseClassSymbol`
+takes any expression (dotted -> `resolveHeritageBaseSymbol`), `entityNameBaseOf` feeds the walks; a property-access arm
+in `newExpressionClassSymbol`; `isProgramSourceDeclaration`. `ClassInstanceMembers.kt` +90 net, `Checker.kt` +5.
+**Pins**: `ThisInheritedStaticAndQualifiedNewTest`, 13 tsgo rows; ablation a1 6 / a3 1 / a4 2 / a5 1 / a6 1 / a7 1 /
+a9 3 RED; a8 (`hasInstanceMemberNamed` inside the new emitter) 0 — recorded as a redundant guard. **Gates**: full suite
+22,122 / 0 / 44 (+13, after the fix; 1 red before it); corpus screen 8725 / 0; `cost_gate.py` 0; `huge_methods.py
+--fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe:
+probe only. Residues -> (CHK.193). The (CHK.190) census reported meanwhile — its specification refines (CHK.190) and
+it found the import-specifier COLLISION, queued as (CHK.192).
+
 ### Round (P18.246) — (CHK.187): a module-local, imported or block-scoped BASE class and `new D()` inside a module resolve for the class missing-member checks; the `new` branch reports TS2576 / TS2551 as tsgo does (script files too); 37-cell agreement 7 -> 64 of 83 tsgo rows, ours-only 2 -> 0; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent, on the collaborator extracted the round before (`ClassInstanceMembers.kt`). **Where the

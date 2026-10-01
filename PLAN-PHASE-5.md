@@ -25,6 +25,29 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.257) — (CHK.197): a named import from an `export =` module follows tsgo's per-specifier rule (the target's own name -> exactly one of TS2595 / TS2597 / TS2616, a member of the target -> legal, anything else -> TS2305), the doubled TS2595 + TS2616 under esnext is gone, and TS1192 / TS2613 name the resolved file as tsgo does; 45-cell matrix 0 -> 43 agreeing, (P18.255)'s 17 cells 12 -> 17, 0 ours-only; `Checker.kt` untouched (2026-10-01)
+
+One implementation subagent; the change is confined to `NamedImportExistence.kt` (+84 / -140), so `Checker.class` is
+byte-identical (ee09ad1f). **Where the item was wrong**: "export = value or class -> TS2305 in tsgo" holds only for
+names that are neither a member nor the target's own name — tsgo decides PER SPECIFIER (`getExternalModuleMember`,
+checker.go:14593, looks the name up as a property of the target's type with no Object / Function augmentation; on a
+miss `reportNonExportedMember` sends a target-file local that IS the `export =` target to
+`reportInvalidImportEqualsExportMember`, which picks ONE code — TS2595 for an ES2015+ `module`, TS2597 for a JS
+importer, TS2616 otherwise — and every other name to TS2305); TS1203 at the `export =` already existed, so under
+esnext the only defect was the doubled row; and the TS1192 / TS2613 module name is a CORRECTNESS fix, not form —
+tsgo prints the resolved file minus its extension, which agrees with the corpus (22 TS1192 + 2 TS2613 baselines,
+flat names). **Mechanism**: the three branches (plain-value TS2616, TS2595, class / function TS2616 / TS2597) that
+each fired for every specifier are one per-specifier loop; `exportEqualsMemberNames` decides what is importable (the
+class static side via `constructorTypeOfClass`, the existing `getExportEqualsMemberNames` for namespaces and annotated
+objects, the wrapper interface for a primitive, empty for a plain function) and answers UNKNOWN — reporting only the
+self-name row — for a class with `extends`, a function with expandos, an enum, an unannotated object or a
+non-identifier target; TS1192 / TS2613 strip tsgo's `extensionsToRemove`. **Pins**: `ExportEqualsNamedImportRuleTest`
+16; ablation a1 9 / a2 4 / a3 2 / a4 1 / a5 2 / a6 5 / a7 1 / a8 1 / a9 1 RED; at-risk sweep 30 classes / 504 tests
+green. **Gates**: full suite 22,287 / 0 / 44 (+16); corpus screen 8725 / 0 (the TS2616 / TS2595 / TS2597 / TS1192
+baselines are the real gate); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain
+OK, rxjs / marked / cronstrue unchanged (a CONTROL — no profile has an `export =` named import); warning gate with
+probe: probe only. Residues -> (CHK.198).
+
 ### Round (P18.256) — (CHK.196): a `new` callee is an ordinary value read — a class identifier answers its constructor-side type and the `new`-expression readers take the construct signatures and the class off it; stage 1's direct-`new` mappings, `newCalleeVarHoldsClassValue`'s class half and B60.15's class refusal are deleted; TS2673 is reported for the first time; round matrix 39 -> 57 agreeing with tsgo, census 59 -> 67, ours-only 0; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
 
 One implementation subagent. **Where the item was wrong**: (a) the mapping was TWO pieces (`getTypeOfIdentifier`'s
@@ -273,31 +296,6 @@ arm) 3 RED (and the corpus emit baseline). **Gates**: full suite 22,136 / 0 / 44
 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only. CLAUDE.md's
 (INC.81) entry and the archive's "do not optimise to identity keys" rule marked SUPERSEDED. Not fixed, same family, no
 observed case: `MemberResolver.jsFileClassDecls` and the lib declaration sets are structurally keyed `Set<Node>`s too.
-
-### Round (P18.247) — (CHK.191): `this.s` on a static inherited from a base reports TS2576 (and the own-class `this["s"]` row is tsgo's), qualified `new N.C().x` receivers resolve, an `ns.B` base and a program `declare class` base are walked — and the chain walks' NAME-keyed cycle guard is replaced by declaration identity; 53-cell agreement 68 -> 130 of 166 tsgo rows, ours-only 5 -> 3 (all pre-existing); +0 on corpus, grid and libraries (2026-10-01)
-
-One implementation subagent (resumed once), beside the read-only (CHK.190) census. **Where the queue item was wrong**:
-(a) two defects, not one — the `this` path was silent for a static on a base, AND the existing own-class `this["s"]`
-TS2576 anchored at the key and printed `C.s` where tsgo prints `C["s"]`; a constructor-fallback hunk read 0 RED and was
-removed; (b) (P18.246)'s type-agreement guard is NOT enough for a qualified callee — under `function f(N: { C: new () =>
-{ z: number } })` this checker types `new N.C()` as the OUTER namespace's class (a pre-existing wrong type), so a
-shadowed head is refused by syntax (`LocalShadowGuard.innermostBindingIsVariable`); (c) an `ns.B` base needed no new
-resolver (`resolveHeritageBaseSymbol` resolves dotted names), and `declare class` needs refusing only for lib / `.d.ts`
-/ ambient-module declarations. **The full suite caught a false TS2339** (`NamespaceImportHeritageTest`, `net.Server`
-through a star-re-exporting ambient module) that no sweep had seen — **root cause: the three chain walks' cycle guard
-remembered visited classes BY NAME**, so a base called `Server` under a subclass called `Server` read as "already
-walked" and its members as missing; once dotted bases made such a base reachable the guard went live (in plain modules
-too: 3 false TS2339 + a TS2339 for tsgo's TS2576). Fixed by keying the visited set on the declaration object (arm a9:
-3 RED). **Mechanism**: `tryEmitThisStaticTs2576` (called from the B15.1 `this` site and the own-member site, with the
-squiggle / key threaded through `cmamCheckResolvedObjectType` / `cmamEmitMissingProperty`); `resolveBaseClassSymbol`
-takes any expression (dotted -> `resolveHeritageBaseSymbol`), `entityNameBaseOf` feeds the walks; a property-access arm
-in `newExpressionClassSymbol`; `isProgramSourceDeclaration`. `ClassInstanceMembers.kt` +90 net, `Checker.kt` +5.
-**Pins**: `ThisInheritedStaticAndQualifiedNewTest`, 13 tsgo rows; ablation a1 6 / a3 1 / a4 2 / a5 1 / a6 1 / a7 1 /
-a9 3 RED; a8 (`hasInstanceMemberNamed` inside the new emitter) 0 — recorded as a redundant guard. **Gates**: full suite
-22,122 / 0 / 44 (+13, after the fix; 1 red before it); corpus screen 8725 / 0; `cost_gate.py` 0; `huge_methods.py
---fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe:
-probe only. Residues -> (CHK.193). The (CHK.190) census reported meanwhile — its specification refines (CHK.190) and
-it found the import-specifier COLLISION, queued as (CHK.192).
 
 ## QUEUE
 
@@ -903,7 +901,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [ ] **(CHK.196) STAGES 1-2 + the `new` port LANDED 2026-10-01 ((P18.253) `typeof A`; (P18.254) identifier value reads; (P18.256) `new` callees read the constructor type, census 59 -> 67, TS2673 added, B60.15 + `newCalleeVarHoldsClassValue`'s class half deleted). NEXT residues (`build/bench/p18256-agent/cells`): n05 a constructor-less class extending a generic base does not check `new H("s")` (inherited signature not instantiated); n08 `new arr[0](1)` misses the union-combined `never` parameter row; TS2339 missing on an anonymous `export default class`, a class expression and `o.A` / `arr[0]` receivers; the zero-argument default trusted only without `extends` (tsgo reports `new d(1, 2)` for `class D extends (any)`); TS2511 split between `spineAiEnterNode` (bare identifiers) and the type-based check — retire the walker; TS2348 (c29), `A.name` (c37), the `instanceof` exclusion (b14). Then stage 3. WAS: port `new`-expression typing to read construct signatures off the constructor type (retires stage 1's direct-`new` mapping, `newCalleeVarHoldsClassValue`'s class half and B60.15; makes the isAbstract / default-signature guards discriminable); measure the `instanceof` exclusion (undiscriminated, b14); then stage 3 (B175 + var-decl twin, inference through construct signatures c07 c08 c09 c34, the KIR `variableType` decline). Still separate: TS2339 on `new <variable>()` receivers, TS2673, TS2348, function members (`A.name`), anonymous `export default class` imports typing `any`. WAS stage 1 next: it must REPLACE stage 1's direct-`new`-callee mapping with properly ported `new`-expression typing (which also makes the isAbstract / default-signature guards discriminable); open on the `typeof` path: `t.prototype` and `keyof typeof A` lacking `"prototype"`, function members (`t.length`), `new t(1)` against a constructor-less class missing TS2554, inference through a constructor type (`make(t).x`, `g<T extends typeof A>(c)`), an abstract constructor side assigned to a non-abstract target (k11), a generic constructor type against a primitive target (k5, `canUseTypeEngine`). A CLASS VALUE's CONSTRUCTOR-SIDE TYPE ((CHK.73)) — CENSUSED 2026-10-01 (read-only, `build/scratch-p18252-census/README.txt`; `-javaagent` instrument in `agent/`).** This checker types a class VALUE as its INSTANCE type, and the instance is a HYBRID carrying the class's construct signatures and a copy of every static (`MemberResolver`), which is why `new A()` / `A.s` work off it; identifier reads hit `init:buildFileLocalTypeMaps`' pre-built map first; ~20 sites compensate (`canUseTypeEngine` refusals, `Relater`'s construct-signature skip and (P18.251)'s static retry, `classValueStaticMember`, B175 and two twins, the TS2339 `"typeof $rawTypeName"` prefix, `newCalleeVarHoldsClassValue`, B60.15, the KIR `variableType` decline, the externals (CHK.73b) skip). On a 49-cell matrix HEAD agrees on 36 rows, misses 51, has 12 ours-only. **Stage 1** — one memoized `constructorTypeOfClass(sym)` (statics incl. inherited, merged-namespace exports, construct signatures, NO `prototype` yet) routed into `typeof A`, module-object carriers and display, with `typeToString` printing `typeof Name` and the 160250 prefix deleted in the same commit: +8 tsgo rows, 0 regressions, 0 on profiles / libraries / a 232-case corpus sample. **Stage 2** — identifier VALUE reads (not heritage, not a direct `new` callee), + `prototype`, default imports, `N.C`, class expressions, `return A`, `canUseTypeEngine` accepting a constructor source: +8 more, ours-only 12 -> 1, one row lost (c30) — delete `newCalleeVarHoldsClassValue`'s class half, B60.15, the KIR / externals declines. **Stage 3** — open the relation gates, replace B175 + twins with the engine, delete the static retry. **Stage 4** — the tsgo end state (no statics / construct signatures on the instance), whose prerequisites are static `this` / `super` typing and the static TS2339 / TS2576 walkers. **Refused**: the worker-level answer in `getTypeOfSymbolWorker` (a false TS2684 on rxjs + corpus losses) until every reader of the pre-built map and `symbolTypes` is audited; stripping the instance early (24 false TS2339). Separate gaps found: TS2339 never reported on a `new <variable>()` receiver; TS2673 (private constructor) missing entirely; function members on a class value (`A.name`).
 
-- [ ] **(CHK.197) DEFAULT / NAMED IMPORT FROM AN `export =` MODULE (found by (P18.255)'s matrix, `build/bench/p18255-agent/matrix/`).** A named import from a `.ts` module whose surface is `export = <variable or class>` reads TS2616 where tsgo reads TS2305; under `module: esnext` the same import emits BOTH TS2595 and TS2616 (the "mutually exclusive" comment in `checkDefaultImports` is wrong for the plain-value TS2616 branch) where tsgo reads TS2305 + TS1203 at the `export =`; TS1192 / TS2613 name the module by its specifier (no `./`) where tsgo prints the resolved file path. The family now lives in `NamedImportExistence.kt`.
+- [ ] **(CHK.198) RESIDUES OF (CHK.197) / (P18.257) (`build/bench/p18257-agent/{matrix,matrix2}`).** (a) 15 tsgo rows still missing, all FN-safe: when the `export =` target's member set is UNKNOWN (inherited statics, an enum, a function with expandos, an unannotated object, an `export = {…}` literal) only the self-name row is reported and tsgo's TS2305 for other names is dropped; (b) `import type { … }` / `{ type x }` skip the whole check (the clause gate at the top of `checkDefaultImports`); (c) `export { x } from "./m"` against an `export =` module is silent where tsgo reports TS2305 / TS2616 (`checkNamedImportExistence` skips such targets); (d) a default import from an ambient module or a commonjs-importer `node_modules` package gets no TS1192 / TS2613 at all (pre-existing); (e) `Checker.getExportEqualsMemberNames`' KDoc still calls null "the TS2616 fallback".
+
+- [x] **(CHK.197) DONE 2026-10-01 ((P18.257) note: tsgo's per-specifier rule, 0 -> 43 of 45 cells; residues -> (CHK.198)). DEFAULT / NAMED IMPORT FROM AN `export =` MODULE (found by (P18.255)'s matrix, `build/bench/p18255-agent/matrix/`).** A named import from a `.ts` module whose surface is `export = <variable or class>` reads TS2616 where tsgo reads TS2305; under `module: esnext` the same import emits BOTH TS2595 and TS2616 (the "mutually exclusive" comment in `checkDefaultImports` is wrong for the plain-value TS2616 branch) where tsgo reads TS2305 + TS1203 at the `export =`; TS1192 / TS2613 name the module by its specifier (no `./`) where tsgo prints the resolved file path. The family now lives in `NamedImportExistence.kt`.
 
 - [ ] **(CHK.195) RESIDUES OF (CHK.190) / (P18.252) (cells `build/bench/p18252-agent/cells`).** (a) NAMESPACE-level `export { … }` — three mechanisms: a false TS2708 "Cannot use namespace 'N' as a value" in a clause-only ambient namespace, clause entries missing from the namespace export table (false TS2694 / TS2339; corpus shape `namespacesWithTypeAliasOnlyExportsMerge`), one missing tsgo row (`ns1` / `ns2`); (b) TS1362 through a type-only star (`export type * from`); (c) TS2693 for an imported type alias used as a value (t1) — never reported; (d) TS1361 / TS1362 deliberately silent inside a namespace and in JSX tags; (e) TS2303 cycles not followed through `export default <ident>` or stars; (f) a module namespace object displays `typeof import("m")` instead of the path, and a write to one of its members misses TS2540.
 
