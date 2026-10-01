@@ -25,6 +25,31 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.245) — (INV.0) extraction: the class-instance missing-member family (8 declarations — TS2339 / TS2551 / TS2576 on class instances, the merged-interface member read of (P18.241)) moves VERBATIM into `ClassInstanceMembers.kt`; `Checker.kt` -377; every deterministic receipt byte-identical; the warm A/B is below this box's A/A noise floor (2026-10-01)
+
+One implementation subagent. **Choice**: of the two candidates the type-only-value / TS2693 / TS2708 family was
+REFUSED for this round — it sits in three places and its helpers read the spine's own state (`spineScopeLookup`,
+`spineCaStatus`, `spineCaFrames`, `spineSource`, `spineFileName`, `spineTavGlobalValueless`), so moving it would expose
+spine internals; it stays the next candidate once that state is passed in explicitly. The class-instance family is one
+contiguous block (379 lines; the brief's list missed `hasInstanceMemberNamed`, `tryEmitStaticAccessTs2576`,
+`classMemberNameText`). `internal class ClassInstanceMembers(private val checker: Checker)`, field
+`classInstanceMembers`; 18 call sites call it directly; 9 ambient reads, writes `diagnostics` only; 5 widenings (4
+functions `internal`, the `RUNTIME_PROPERTIES` constant `internal val`); ledger row 16. **Verbatim proof** both ways.
+**Receipts** (orchestrator-retaken, `8b103e5a` vs `28b024af`): per-pass `--passTiming` table — all pass rows, counters
+and the 30 listed diagnostics identical, the one differing line being the narrowing walk's `>=1ms by kind` tally, a
+TIME-BUCKETED count; `cost_gate.py` deltas identical to (P18.244)'s (the split moves no counter); PrintInlining (builder,
+both name forms) — `checkArgumentsAgainstSignature` identical in 3 of 4 runs, the odd one the parent's own first run at
+the `$default` site (the known run-to-run instability), every moved method keeps its verdict (+16 bytes of parameter
+null checks); full suite 22,097 / 0 / 44 (+15, `ClassInstanceMembersCollaboratorTest`); corpus screen 8725 / 0;
+`huge_methods.py --fail-over 0` 0; spine closure audit clean; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked
+0/0, cronstrue 1/1; warning gate with probe: probe only; tsgo matrix 15 / 15 cells identical. **Warm A/B, recorded
+honestly**: before->after +1.5% (0/2), after->before showed the after-arm +2.9% (one arm sd 2.7%), a replicate +0.5%
+noise-dominated — and an **A/A control** (the before-arm against a byte-identical copy of itself) read **+2.4%, B wins
+0/2**, so on this box at this hour the warm A/B cannot resolve anything below ~2-3% and the deterministic receipts carry
+the split. Builder ablation over 9 pin classes (161 tests green): a1 6 / a2 5 / a3 4 / a4 1 / a5 7 / a6 1 / a7 1 RED.
+Noted, not changed (behaviour-preserving round): `emitClassChainTs2551Suggestion` and `isStaticMemberOfClass` still
+find a base class through `globals` only — that is (CHK.187)'s territory.
+
 ### Round (P18.244) — (CHK.189)(a)+(b): a value read of a type-only symbol is an ERROR type at every reader (identifier typer, callee, member-access receiver), so the ours-only follow-on rows after TS2693 / TS2708 are gone; own-file `new N()`, shorthand and destructuring targets on a namespace report TS2708; 37 cells: 0 tsgo rows lost, +37 gained, 32 ours-only removed; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent (resumed once). **Where the queue item was wrong**: (a) THREE readers, not one — the
@@ -273,34 +298,6 @@ a12 1 RED (a12, the written-receiver gate, read 0 until the `groupBy` pin was ad
 element-access keys and receivers, accepted and not re-baselined; `huge_methods.py --fail-over 0` 0
 (`checkMemberAccessMissingCore` 6,443); grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1;
 warning gate with probe: probe only. `Checker.kt` +54. Residues -> the (CHK.179) item and (CHK.180).
-
-### Round (P18.235) — (CHK.179)(a): a literal-key element access on a receiver lacking the member is restated in tsgo's terms — SILENT without `noImplicitAny`, TS7053 / TS7015 / TS7052 with it — removing an ours-only TS2339 that fired in EVERY configuration; +0 rows on corpus, grid and libraries (2026-09-30)
-
-One implementation subagent. **Where the queue item was wrong**: (a) is not specific to unions or casts — ANY
-literal-key element access (`r["p"]`, `r[0]`) whose receiver lacks the member reported TS2339 at the key (unions,
-aliases, interfaces, class instances, `this`, function types, `typeof NS`, generic `T`, `Map`, optional chains), in
-every configuration; tsgo is silent without `noImplicitAny` and with it emits TS7053 at the whole access plus the chain
-`Property 'p' does not exist on type 'R'.`, TS7015 at the key for a number-indexed receiver, TS7052 `Did you mean to
-call 'x.get'/'x.set'?` when an accessor matches, or keeps TS2551 / TS2576 (which we also emitted in LOOSE mode, false
-positives). (b) TS2352 IS emitted — for primitive-typed identifier casts only (3 of 11 probe rows); the general
-comparability rule touches every shape-specific walker and stays queued. **Mechanism**: `checkSingleElementAccess`
-routes a literal key into the shared property-access funnel `checkMemberAccessMissing`; the one pre-existing TS7053
-route (`tryEmitNoImplicitAnyIndexAccess`) covers anonymous receivers only; tsgo's rule is
-`getPropertyTypeForIndexType` (checker.go:26867-27050). New `ElementAccessMissingMember.kt` (185 lines): `restate()`
-runs right after the funnel call and rewrites the rows it just added for this access — tsgo's noImplicitAny test
-(on unless `noImplicitAny`/`strict` explicitly false), drop when off, else TS2551/TS2576 stand and TS2339 becomes
-TS7015 / TS7052 (accessor via `getPropertyOfType` + `resolveGenericPropertyType` + key assignability) / TS7053 with
-the chain; a type-parameter receiver is read through its apparent type. Three guards for tsgo's own TS2339 arms (a
-numeric key on an all-tuple receiver, a const-enum object, `globalThis`) are UNREACHABLE today (arm a8 0 RED — the
-funnel emits nothing there) and are recorded as such. `Checker.kt` +5 (one field, one call, four `private` ->
-`internal`). `TupleUnionElementAccessTest`'s "non-tuple member still fires TS2339" was a countdown pin; it now asserts
-tsgo's full TS7053 row. **Matrix** (`build/bench/p18235-agent/{m,m2,m3,c,b}`): 36 strict cells 18 rows -> 18 all
-agreeing (16 were TS2339-at-key); 36 loose cells 18 false positives -> 0 (tsgo 0); 22 edge shapes strict 8 wrong -> 0,
-loose 13 false positives -> 0; 0 ours-only rows after. **Pins**: `Chk179ElementAccessMissingMemberTest`, 20 tsgo rows;
-ablation a1 14 / a2 4 / a3 2 / a4 2 / a5 2 / a6 1 / a7 2 / a8 0 (dead guard) RED; 70-class sweep 1,653 tests green.
-**Gates**: full suite 21,919 / 0 / 44 (+20); corpus screen 8725 / 0 (a control here); `cost_gate.py` 0, every counter
-+0.00%; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1
-(none of these corpora hold a missing-member element access — a control); warning gate with probe: probe only.
 
 ## QUEUE
 
