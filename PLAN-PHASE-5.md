@@ -25,6 +25,34 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.251) — (CHK.194)(a): an instance member and a same-named static no longer overwrite each other — `new A().s` and `A.s` each read their own side in both declaration orders; 14 cells wrong -> tsgo, one swapped cell fixed; a STAGED fix (instance wins the shared table, class-value reads route to `staticMembers`), not the full separation; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent. **Where the brief was wrong**: (a) the class-value reads (`A.s`, a call, `A["s"]`) needed
+no per-path fix — all go through `getTypeOfPropertyAccess`, so one classifier at the member lookup covers reads, call
+return types and argument checks; (b) the real hazard was a NAME-keyed static filter (`staticMembers.containsKey(name)`)
+at 6 relation and missing-property sites — once the instance member wins it would drop the instance member too, so all
+6 are identity tests now (`statics[name] === prop`); (c) the class value is still typed as its INSTANCE type ((CHK.73)),
+so a relation cannot tell `A` from `new A()` as a source; (d) `staticMembers` is null until the member table is first
+resolved, so `A.m("x")` as a class's first use checked against the instance method. **Mechanism**: `MemberResolver` —
+a static never replaces an instance entry (it lives in `staticMembers` only), an instance member replaces a static
+entry with a fresh symbol, each side's methods / accessors get their own symbol (`memberIsStatic`, `instanceHolds`);
+`Checker.classValueStaticMember` answers only on a name clash, for an identifier or namespace-qualified receiver that
+resolves to the class symbol, refusing a same-named parameter / block binding (`isShadowedByLocalBinding`), consulted at
+`computeRawTypeOfPropertyAccess` and `getTypeOfElementAccess`; `Relater` retries a source's failing instance member
+with its static — **SUPPRESS-ONLY, a stopgap**: it removes a false positive on `const y: { s: boolean } = A` and could
+miss a row on an INSTANCE source; the corpus and grid read 0 moved, and it is to be replaced by a real constructor-side
+type ((CHK.73)). `Checker.kt` +52, `MemberResolver.kt` +53, `Relater.kt` +10, `ClassInstanceMembers.kt` +35.
+**Matrix**: m1 m2 m3 m4 m6 m9 m10 m14 m17 m18 m20 m21 m24 q3 wrong -> tsgo (q3 also gains the missing TS2741 / TS2322);
+m23 was a SWAP (`A.m("x")` reported, `new A().m(1)` not) -> tsgo; s4's TS2416 detail now `'number'`, p4 s6 s7 match;
+m13 line 4 has tsgo's code and head with the detail still `'number'` for `'boolean'` (the class-value relation).
+**Pins**: `StaticInstanceMemberSeparationTest`, 15 tests; ablation a1 10 / a2 1 / a3 1 / a4 7 / a5 1 / a6 1 / a7 2 / a8
+1 / a9 1 / a10 2 RED. **Gates**: full suite 22,182 / 0 / 44 (+15); corpus screen 8725 / 0; `cost_gate.py` 0;
+`huge_methods.py --fail-over 0` 0 (`resolveInterfaceMembersCore` 5,589); grid (identity hash now covers
+`MemberResolver` and `Relater`) 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 (a control — the
+clash shape is not in these programs); warning gate with probe: ONE real warning in the new test file (an unnecessary
+`orEmpty()` on a non-null list) — fixed by the orchestrator, gate re-run clean, class re-run 15 / 15. Residues -> the
+(CHK.194) item.
+
 ### Round (P18.250) — (CHK.193): two shipped false positives removed — an instance member is no longer compared against a BASE STATIC (false TS2416), and an import of an untargeted `declare module` in a module file no longer types as a real module (false TS2339, and tsgo's missing TS2307 now reports); a qualified `new N.C()` under a shadowing parameter types as the parameter's member; a merged interface's class base and its names reach the member check and the TS2551 pool; every moved row a tsgo row; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent. **Where the queue item was wrong**: (b) the import was not merely "unresolved" — a
@@ -261,34 +289,6 @@ suite 22,051 / 0 / 44 (+22); corpus screen 8725 / 0 — a real gate here, script
 `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK (all-module profiles — a control), rxjs 0/0,
 marked 0/0, cronstrue 1/1; warning gate with probe: probe only. CLAUDE.md's (CHK.49) entry and
 `docs/perf/setup-phase-and-huge-methods.md` updated for the deleted pass. Residue -> (CHK.188).
-
-### Round (P18.241) — (CHK.182): a class whose NAME matches an interface anywhere in the program no longer silences its TS2339 / TS2551 — a program-wide name refusal is replaced by reading the interfaces actually merged into the class's own symbol; 23 silenced rows restored across a 30-cell matrix, all tsgo rows; +0 on corpus, grid and libraries (2026-09-30)
-
-**Out-of-order pick, stated**: taken ahead of (CHK.185) / (CHK.183) (both small residues) because it silenced whole
-families of rows. One implementation subagent. **Where the queue item was wrong**: (a) not "two module files" — the
-silence hit ANY class whose name matched an interface in ANY file: two modules in either order, a module with a
-script either way round, two scripts, and a genuine same-scope merge (`interface D` + `class D` in one file);
-(b) "interface+interface and class+class are fine" said nothing about the cause — neither shape enters the
-class-instance path; (c) `moduleInterfaceNames` / `multiFileModuleTypeNames` are innocent (read only by the
-object-literal / `nodeTypes` / lib-phantom paths); (d) the binder DOES merge class+interface now — a stale KDoc saying
-it did not was what justified the refusal. **Mechanism**: `classNamesWithSiblingInterfaces()` built a program-wide set
-of names used by both a class and an interface, and `lookupInstanceMemberInResolvableChain` answered "unsafe" for any
-class in it — every class-instance TS2339/TS2551 emitter goes through it (`tryEmitClassInstanceMissingTs2339`, the
-`new C().x` and chained `o.d.x` branches, both `this.x` branches); independently, `tryEmitClassInstanceMissingTs2339`
-counted a merged interface as a shape declaration, so `shapeDecls != 1` bailed on every genuine merge. **Change**
-(`Checker.kt` +22 net): the name set and its cache are deleted; `mergedInterfaceHasMember(classSym, propName)` reads
-the interfaces on the class's OWN symbol and answers true / false / null (null — refuse — for a lib interface, an
-`extends` list, or any member that is not a plain named property / method / accessor); the chain walker takes the
-symbol and finds a base's class declaration by kind; `shapeDecls` no longer counts interfaces; the `new` and chained
-branches no longer refuse a merged interface; the TS2551 suggestion pool includes merged-interface members. **Pins**:
-`ClassInterfaceNameCollisionTest`, 15 tests; ablation a1 11 / a2 4 / a3 5 / a4 1 / a5 1 / a6 1 / a7 1 / a8 1 / a9 1 /
-a10 **0** (the lib-interface refusal is unpinned, not proven necessary — a lib interface's members are readable
-anyway; its only added case is lib + `extends`, which the `extends` refusal already covers). **Gates**: full suite
-22,029 / 0 / 44 (+15); corpus screen 8725 / 0; `cost_gate.py` 0 (counters identical to (P18.240)'s — this round moves
-none); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1
-(none of these corpora holds such a collision — the grid is a CONTROL; the matrix and pins are the gate); warning gate
-with probe: probe only. The final `Checker.class` (`b69eb37e`) differs from the gridded builder binary only by a KDoc
-(`javap -c -p` minus line numbers identical). Residues -> (CHK.186), (CHK.187).
 
 ## QUEUE
 
@@ -892,7 +892,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [ ] **(CHK.190) STAGE 1 LANDED 2026-10-01 ((P18.249) note: renames, default and local clauses, `.js` specifiers, barrel chains, augmentation-contributed names). OPEN: c13 named cycle (tsgo TS2303 at both clauses; ours terminates and reads `any`); c14 TS1362 for an `export type` name used as a value; c08 `export * as M` read in value positions; c26 TS2305 where tsgo says TS2614; namespace-level `export { … }` clauses missing from a namespace's export table (the corpus shape `namespacesWithTypeAliasOnlyExportsMerge`); stage 2 (`resolveAlias`'s import arms without the `.js` / crawl / star legs — no measured row it would close); the a9 `.js` leg is unpinned. EARLIER: SAME-NAME `export { X } from` LANDED 2026-10-01 at (P18.248) (with the collision fix); RE-MEASURE the census matrix before stage 1 — c01 c09 c12 c15 c16 c20 c24 now pass, still failing: c03 c04 c06 c08 c10 c13 c19 c21 (renaming / default clauses, local `{B0 as B}`, import-then-export rename, `.js` specifiers, the 3-barrel star chain, the named-cycle TS2303, `export type`), and importers no longer need shifting. CENSUSED 2026-10-01 (read-only, `build/scratch-p18247-census/README.txt`). Stage 1: one helper `importedExport(target, exportedName)` over `exportedSymbolsThroughStars` (importer-visible names, null = unknowable -> today's lookup), plus `followExportSpecifier` (from-clause resolved relative to the declaring file, `.js` leg included; local clause in the declaring scope), wired into a new `resolveAlias` arm for MODULE-level `ExportSpecifier`s, the three `resolveAlias` lookup sites, `computeImportedSymbolGeneral` and the namespace / function-like / enum flow resolvers — predicted +45 tsgo rows over 12 cells, +5 on a real rxjs consumer (1 -> 6 of 11), 0 on the profiles / libraries / corpus; EVERY fixture must shift the importer by a line or it measures (CHK.192). Refused: keying by the declared name, `locals` first, a namespace-clause arm (it exposes a namespace export-table gap: `namespacesWithTypeAliasOnlyExportsMerge` +4 ours-only TS2694), replacing `createModuleSymbol`'s table. Stage 2 and the census's separate items (TS2303 on a named cycle, TS1362 for an `export type` name used as a value, value positions through `export * as M`, clause-exported names in a namespace table, TS2305 vs TS2614) follow. ORIGINAL: A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
 
-- [ ] **(CHK.194) RESIDUES OF (CHK.193) — a SILENT WRONG TYPE first.** (a) **the class member table is LAST-WINS across static and instance**: `class A { s = 1; static s = true }` makes `new A().s` read `boolean` where tsgo says `number` (and s4's TS2416 detail line reads `'true'` for tsgo's `'number'`); letting the instance member win in `MemberResolver` fixes that read and breaks `A.s` (static reads also go through `members`) — the proper fix routes constructor-side reads through `staticMembers`; measure every static-read path against tsgo first; (b) `this.nope` / `this.valu` inside a class merged with `interface C extends B` (cells c5 / c8 line 4) stay silent — the `this` path does not use (P18.250)'s legs; the alias base (c6) and lib base (c7) stay refused; (c) `const N = { C: class { … } }; new N.C().q` is silent before and after where tsgo reports TS2322 (typing a class expression inside an object literal); (d) still refused: a class-expression base (c1), a mixin base (c2), a `.d.ts` `declare class` base (c11). Cells in `build/bench/p18247-agent/cells` and `build/bench/p18250-agent/cells`.
+- [ ] **(CHK.194) (a) LANDED 2026-10-01 as a STAGE ((P18.251) note: instance wins the shared table, class-value reads route to `staticMembers`, a SUPPRESS-ONLY static retry in `Relater`). OPEN: the class value needs a real CONSTRUCTOR-SIDE type ((CHK.73)) — it would replace the `Relater` static retry, fix m13's detail line, and give `typeof A` its statics (m7 / q2: `getTypeOfSymbolForTypeQuery` builds from `exports`, which holds no statics — filling it gives non-clash statics real types for the first time, so it MOVES ROWS and needs its own sizing); `this` in a static method as a class-value receiver (m16 / m22); namespace exports merged into a class answered on the class-value side (m12, `A.s` reads `number` for tsgo's `true`); a member read through the wrong side typed `any` like tsgo (m15, collides with today's `this` typing); un-annotated getters typing `any` (m5); `A.prototype.s` (m8); a `const` class expression (m11); a block-local class (m19, B83.5); and (b)-(d) below, untouched. Cells `build/bench/p18251-agent/cells`. EARLIER: RESIDUES OF (CHK.193) — a SILENT WRONG TYPE first.** (a) **the class member table is LAST-WINS across static and instance**: `class A { s = 1; static s = true }` makes `new A().s` read `boolean` where tsgo says `number` (and s4's TS2416 detail line reads `'true'` for tsgo's `'number'`); letting the instance member win in `MemberResolver` fixes that read and breaks `A.s` (static reads also go through `members`) — the proper fix routes constructor-side reads through `staticMembers`; measure every static-read path against tsgo first; (b) `this.nope` / `this.valu` inside a class merged with `interface C extends B` (cells c5 / c8 line 4) stay silent — the `this` path does not use (P18.250)'s legs; the alias base (c6) and lib base (c7) stay refused; (c) `const N = { C: class { … } }; new N.C().q` is silent before and after where tsgo reports TS2322 (typing a class expression inside an object literal); (d) still refused: a class-expression base (c1), a mixin base (c2), a `.d.ts` `declare class` base (c11). Cells in `build/bench/p18247-agent/cells` and `build/bench/p18250-agent/cells`.
 
 - [x] **(CHK.193) DONE 2026-10-01 ((P18.250) note). RESIDUES OF (CHK.191) (cells `build/bench/p18247-agent/cells`) — two FALSE POSITIVES first.** (a) ours-only TS2416: an instance member is compared against a BASE STATIC (`class A { static s = 1 } class B extends A { s = "x" }`, cell a4 — tsgo is silent); (b) ours-only TS2339 on an UNRESOLVED import: `l.nope` where `import { L } from "lib"` does not resolve (tsgo types it `any`, cell c10); (c) a WRONG TYPE under a shadowing parameter: `new N.C()` inside `function f(N: {...})` types as the outer namespace's class (`'C'` where tsgo prints `'{ z: number; }'`, cell b6); (d) the TS2551 suggestion pool does not follow interface `extends` (cell c8), which blocks following a merged interface's class / alias / lib `extends` (c5-c7); (e) still refused, all reported by tsgo: a class-expression base (c1), a mixin base (c2), a `.d.ts` `declare class` base (c11); `new ns.default().nope` waits on (CHK.190).
 

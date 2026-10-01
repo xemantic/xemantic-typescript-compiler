@@ -1,5 +1,10 @@
 
 
+**(P18.246) — (CHK.187): A MISSING PROPERTY ON A CLASS WHOSE BASE IS DECLARED IN A MODULE, IMPORTED OR BLOCK-SCOPED — AND ON `new D().x` INSIDE A MODULE — NOW REPORTS AS IN tsgo; 57 MORE tsgo ROWS ON A 37-CELL MATRIX, NONE OF OURS ALONE; +12 PINS, 22,109 / 0 / 44 (2026-10-01).**
+Screen 0; grid 8x0; libraries unchanged. Found and verified along the way: a NAMED re-export (`export { B } from "./m"`)
+leaves the importer's binding typed `any` — every type through a barrel file — queued at the top as (CHK.190).
+
+
 **(P18.245) — (INV.0) EXTRACTION: THE CLASS MISSING-MEMBER CHECKS MOVE OUT OF `Checker.kt` (−377 LINES) INTO `ClassInstanceMembers.kt`, VERBATIM; 22,097 / 0 / 44 (2026-10-01).**
 All pass rows, counters and diagnostics identical to the pre-move build; screen 0; grid 8x0; libraries unchanged. The
 warm A/B was inconclusive — an A/A control of two identical binaries read +2.4% on the same box — so the deterministic

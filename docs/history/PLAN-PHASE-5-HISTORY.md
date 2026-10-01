@@ -1,3 +1,31 @@
+### Round (P18.241) — (CHK.182): a class whose NAME matches an interface anywhere in the program no longer silences its TS2339 / TS2551 — a program-wide name refusal is replaced by reading the interfaces actually merged into the class's own symbol; 23 silenced rows restored across a 30-cell matrix, all tsgo rows; +0 on corpus, grid and libraries (2026-09-30)
+
+**Out-of-order pick, stated**: taken ahead of (CHK.185) / (CHK.183) (both small residues) because it silenced whole
+families of rows. One implementation subagent. **Where the queue item was wrong**: (a) not "two module files" — the
+silence hit ANY class whose name matched an interface in ANY file: two modules in either order, a module with a
+script either way round, two scripts, and a genuine same-scope merge (`interface D` + `class D` in one file);
+(b) "interface+interface and class+class are fine" said nothing about the cause — neither shape enters the
+class-instance path; (c) `moduleInterfaceNames` / `multiFileModuleTypeNames` are innocent (read only by the
+object-literal / `nodeTypes` / lib-phantom paths); (d) the binder DOES merge class+interface now — a stale KDoc saying
+it did not was what justified the refusal. **Mechanism**: `classNamesWithSiblingInterfaces()` built a program-wide set
+of names used by both a class and an interface, and `lookupInstanceMemberInResolvableChain` answered "unsafe" for any
+class in it — every class-instance TS2339/TS2551 emitter goes through it (`tryEmitClassInstanceMissingTs2339`, the
+`new C().x` and chained `o.d.x` branches, both `this.x` branches); independently, `tryEmitClassInstanceMissingTs2339`
+counted a merged interface as a shape declaration, so `shapeDecls != 1` bailed on every genuine merge. **Change**
+(`Checker.kt` +22 net): the name set and its cache are deleted; `mergedInterfaceHasMember(classSym, propName)` reads
+the interfaces on the class's OWN symbol and answers true / false / null (null — refuse — for a lib interface, an
+`extends` list, or any member that is not a plain named property / method / accessor); the chain walker takes the
+symbol and finds a base's class declaration by kind; `shapeDecls` no longer counts interfaces; the `new` and chained
+branches no longer refuse a merged interface; the TS2551 suggestion pool includes merged-interface members. **Pins**:
+`ClassInterfaceNameCollisionTest`, 15 tests; ablation a1 11 / a2 4 / a3 5 / a4 1 / a5 1 / a6 1 / a7 1 / a8 1 / a9 1 /
+a10 **0** (the lib-interface refusal is unpinned, not proven necessary — a lib interface's members are readable
+anyway; its only added case is lib + `extends`, which the `extends` refusal already covers). **Gates**: full suite
+22,029 / 0 / 44 (+15); corpus screen 8725 / 0; `cost_gate.py` 0 (counters identical to (P18.240)'s — this round moves
+none); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1
+(none of these corpora holds such a collision — the grid is a CONTROL; the matrix and pins are the gate); warning gate
+with probe: probe only. The final `Checker.class` (`b69eb37e`) differs from the gridded builder binary only by a KDoc
+(`javap -c -p` minus line numbers identical). Residues -> (CHK.186), (CHK.187).
+
 ### Round (P18.240) — (CHK.184): a guard on an OPTIONAL property narrows the union by tsgo's `narrowTypeByDiscriminant` — the shipped false TS18048 (and a false TS2339 on `never` from `!in`) is gone, 109 -> 3 mismatched cells of a 480-cell matrix, 83 false rows removed, (CHK.180)'s union refusal LIFTED; +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent. **Where the queue item was wrong**: (a) not only truthy / `!` / `&&` — `=== undefined`,
