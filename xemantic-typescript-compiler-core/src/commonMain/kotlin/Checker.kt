@@ -448,6 +448,14 @@ class Checker(
             moduleImportAliasNames, state.symbolTargets,
         )
 
+    /** (CHK.190) TS2303 on a named re-export cycle and TS1361 / TS1362 on a value use of a
+     *  type-only alias chain; see `ImportExportAliasDiagnostics.kt`. */
+    private val importExportAliasDiagnostics = ImportExportAliasDiagnostics(
+        this,
+        ImportExportAliasChain(fileResults) { spec, decl, file -> nameResolver.clauseModuleTarget(spec, decl, file) },
+        lexicalResolver,
+    ) { resolveAliasTarget(it) }
+
     /** (INV.0) step 5 — the RELATION collaborator; see `Relater.kt`. */
     private val relater =
         Relater(
@@ -10151,6 +10159,10 @@ class Checker(
         pass("checkCircularExportEqualsImportAlias") { checkCircularExportEqualsImportAlias() }
         // 56c. Check `export = X` + `export as namespace X` self-cycle (TS2303)
         pass("checkExportAsNamespaceSelfCycle") { checkExportAsNamespaceSelfCycle() }
+        // 56d. (CHK.190) named re-export cycles (TS2303) and value uses of a type-only
+        //      import / export chain (TS1361 / TS1362)
+        pass("checkReExportCycles") { importExportAliasDiagnostics.checkReExportCycles(checkedResults) }
+        pass("checkTypeOnlyValueUses") { importExportAliasDiagnostics.checkTypeOnlyValueUses(checkedResults) }
         // 57. Check return statement outside function body (TS1108)
         pass("checkReturnOutsideFunction") { checkReturnOutsideFunction() }
         // 57b. TS1101/TS1300/TS2410 (with statements) migrated to the check
@@ -53229,6 +53241,13 @@ class Checker(
                             if (importedName !in moduleNamedExports) {
                                 // Squiggle on the propertyName if present, else on the name
                                 val nameNode = importSpecifier.propertyName ?: importSpecifier.name
+                                // (CHK.190) a spelling suggestion among the exports wins over the
+                                // default-import hint (tsgo's `errorNoModuleMemberSymbol` order).
+                                val suggestion = getSpellingSuggestionFromNames(importedName, moduleNamedExports + "default")
+                                if (suggestion != null) {
+                                    emitMissingMemberSuggestion(source, fileName, moduleName, importedName, nameNode, suggestion, targetFile, resolvedFile)
+                                    continue
+                                }
                                 val nameStart = nameNode.pos
                                 val nameLength = nameNode.text.length
                                 val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
@@ -53752,128 +53771,12 @@ class Checker(
                             // of a non-default name can't be proven (M1.1 FN-safe).
                             val knownExports = allExports ?: continue
                             if (importedName !in knownExports) {
-                                val nameNode = specEl.propertyName ?: specEl.name
-                                // Check if name is declared locally but not exported → TS2459
-                                // or declared locally but exported under a different name → TS2460
-                                val localNames = getModuleLocalNames(targetFile)
-                                val exportAlias = getModuleExportAlias(targetFile, importedName)
-                                when {
-                                    exportAlias != null -> {
-                                        // TS2460: name declared locally, exported as 'exportAlias'
-                                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                                        // Add TS2728 related info pointing to the declaration in the target file
-                                        val declPos2460 = getLocalDeclarationPos(targetFile, importedName)
-                                        val targetSource2460 = targetResult.sourceFile.text
-                                        val relatedInfo2460 = if (declPos2460 != null) {
-                                            val (declLine, declChar) = getLineAndCharacterOfPosition(targetSource2460, declPos2460.first)
-                                            listOf(Diagnostic(
-                                                message = "'$importedName' is declared here.",
-                                                category = DiagnosticCategory.Message,
-                                                code = 2728,
-                                                fileName = resolvedFile,
-                                                line = declLine,
-                                                character = declChar,
-                                                start = declPos2460.first,
-                                                length = declPos2460.second,
-                                            ))
-                                        } else emptyList()
-                                        diagnostics.add(Diagnostic(
-                                            message = "Module '\"$moduleName\"' declares '$importedName' locally, but it is exported as '$exportAlias'.",
-                                            category = DiagnosticCategory.Error,
-                                            code = 2460,
-                                            fileName = fileName,
-                                            line = line,
-                                            character = character,
-                                            start = nameNode.pos,
-                                            length = nameNode.text.length,
-                                            relatedInformation = relatedInfo2460,
-                                        ))
-                                    }
-                                    importedName in localNames -> {
-                                        // TS2459: name declared locally but not exported
-                                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                                        // Add TS2728 related info for first declaration + TS6204 "and here" for additional
-                                        val allDeclPositions = getAllLocalDeclarationPositions(targetFile, importedName)
-                                        val targetSource = targetResult.sourceFile.text
-                                        val relatedInfo = buildList {
-                                            allDeclPositions.forEachIndexed { idx, declPos ->
-                                                val (declLine, declChar) = getLineAndCharacterOfPosition(targetSource, declPos.first)
-                                                if (idx == 0) {
-                                                    add(Diagnostic(
-                                                        message = "'$importedName' is declared here.",
-                                                        category = DiagnosticCategory.Message,
-                                                        code = 2728,
-                                                        fileName = resolvedFile,
-                                                        line = declLine,
-                                                        character = declChar,
-                                                        start = declPos.first,
-                                                        length = declPos.second,
-                                                    ))
-                                                } else {
-                                                    add(Diagnostic(
-                                                        message = "and here.",
-                                                        category = DiagnosticCategory.Message,
-                                                        code = 6204,
-                                                        fileName = resolvedFile,
-                                                        line = declLine,
-                                                        character = declChar,
-                                                        start = declPos.first,
-                                                        length = declPos.second,
-                                                    ))
-                                                }
-                                            }
-                                        }
-                                        diagnostics.add(Diagnostic(
-                                            message = "Module '\"$moduleName\"' declares '$importedName' locally, but it is not exported.",
-                                            category = DiagnosticCategory.Error,
-                                            code = 2459,
-                                            fileName = fileName,
-                                            line = line,
-                                            character = character,
-                                            start = nameNode.pos,
-                                            length = nameNode.text.length,
-                                            relatedInformation = relatedInfo,
-                                        ))
-                                    }
-                                    else -> {
-                                        // TS2724 (spelling) when a close exported-member name exists,
-                                        // else plain TS2305.
-                                        val suggestion = getSpellingSuggestionFromNames(importedName, knownExports)
-                                        if (suggestion != null) {
-                                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                                            // Related TS2728 "'suggestion' is declared here." at the
-                                            // suggested member's declaration in the target module.
-                                            val declPos = getLocalDeclarationPos(targetFile, suggestion)
-                                            val relatedInfo = if (declPos != null) {
-                                                val targetSrc = targetResult.sourceFile.text
-                                                val (dLine, dChar) = getLineAndCharacterOfPosition(targetSrc, declPos.first)
-                                                listOf(Diagnostic(
-                                                    message = "'$suggestion' is declared here.",
-                                                    category = DiagnosticCategory.Message,
-                                                    code = 2728,
-                                                    fileName = resolvedFile,
-                                                    line = dLine,
-                                                    character = dChar,
-                                                    start = declPos.first,
-                                                    length = declPos.second,
-                                                ))
-                                            } else emptyList()
-                                            diagnostics.add(Diagnostic(
-                                                message = "'\"$moduleName\"' has no exported member named '$importedName'. Did you mean '$suggestion'?",
-                                                category = DiagnosticCategory.Error,
-                                                code = 2724,
-                                                fileName = fileName,
-                                                line = line,
-                                                character = character,
-                                                start = nameNode.pos,
-                                                length = nameNode.text.length,
-                                                relatedInformation = relatedInfo,
-                                            ))
-                                        } else {
-                                            emitTs2305(source, fileName, moduleName, importedName, nameNode)
-                                        }
-                                    }
-                                }
+                                emitAbsentNamedMember(
+                                    source = source, fileName = fileName, moduleName = moduleName,
+                                    importedName = importedName, nameNode = specEl.propertyName ?: specEl.name,
+                                    targetResult = targetResult, resolvedFile = resolvedFile,
+                                    knownExports = knownExports, hasDefaultExport = false,
+                                )
                             }
                         }
                     }
@@ -53932,11 +53835,16 @@ class Checker(
                             if (hasExportEqualsInTarget) continue
                             val knownExports = allExports ?: continue
                             if (sourceName !in knownExports) {
-                                // Only emit if TS2614 wouldn't cover this case
-                                // (TS2614 fires for named imports where module has default)
-                                // For re-exports, TS2305 always fires for missing names
-                                val nameNode = specEl.propertyName ?: specEl.name
-                                emitTs2305(source, fileName, moduleName, sourceName, nameNode)
+                                // (CHK.190) the same order as an import (TS2724 / TS2614 /
+                                // TS2460 / TS2459 / TS2305) — tsgo resolves both through
+                                // `errorNoModuleMemberSymbol`; a re-export has no separate
+                                // TS2614 owner, so it is decided here.
+                                emitAbsentNamedMember(
+                                    source = source, fileName = fileName, moduleName = moduleName,
+                                    importedName = sourceName, nameNode = specEl.propertyName ?: specEl.name,
+                                    targetResult = targetResult, resolvedFile = resolvedFile,
+                                    knownExports = knownExports, hasDefaultExport = hasDefaultExport,
+                                )
                             }
                         }
                     }
@@ -53944,6 +53852,160 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * The row for a named import / `export { … } from` specifier naming [importedName],
+     * which [knownExports] (the target's export set, stars followed) does not hold —
+     * tsgo's `errorNoModuleMemberSymbol` order (checker.go:14810): a spelling suggestion
+     * among the exports -> TS2724; else, when the target has a default export
+     * ([hasDefaultExport]), TS2614 "Did you mean to use 'import x from …'"; else
+     * `reportNonExportedMember` — declared locally and exported under another name ->
+     * TS2460, declared locally and not exported -> TS2459, otherwise TS2305. The import
+     * branch passes `hasDefaultExport = false`: its TS2614 is [checkDefaultImports]'s.
+     */
+    private fun emitAbsentNamedMember(
+        source: String, fileName: String, moduleName: String, importedName: String, nameNode: Identifier,
+        targetResult: BinderResult, resolvedFile: String, knownExports: Set<String>, hasDefaultExport: Boolean,
+    ) {
+        val targetFile = targetResult.sourceFile
+        val suggestion = getSpellingSuggestionFromNames(importedName, knownExports)
+        if (suggestion != null) {
+            emitMissingMemberSuggestion(source, fileName, moduleName, importedName, nameNode, suggestion, targetFile, resolvedFile)
+            return
+        }
+        if (hasDefaultExport) {
+            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            diagnostics.add(Diagnostic(
+                message = "Module '\"$moduleName\"' has no exported member '$importedName'. Did you mean to use 'import $importedName from \"$moduleName\"' instead?",
+                category = DiagnosticCategory.Error,
+                code = 2614,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = nameNode.pos,
+                length = nameNode.text.length,
+            ))
+            return
+        }
+        // Check if name is declared locally but not exported → TS2459
+        // or declared locally but exported under a different name → TS2460
+        val localNames = getModuleLocalNames(targetFile)
+        val exportAlias = getModuleExportAlias(targetFile, importedName)
+        when {
+            exportAlias != null -> {
+                // TS2460: name declared locally, exported as 'exportAlias'
+                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                // Add TS2728 related info pointing to the declaration in the target file
+                val declPos2460 = getLocalDeclarationPos(targetFile, importedName)
+                val targetSource2460 = targetResult.sourceFile.text
+                val relatedInfo2460 = if (declPos2460 != null) {
+                    val (declLine, declChar) = getLineAndCharacterOfPosition(targetSource2460, declPos2460.first)
+                    listOf(Diagnostic(
+                        message = "'$importedName' is declared here.",
+                        category = DiagnosticCategory.Message,
+                        code = 2728,
+                        fileName = resolvedFile,
+                        line = declLine,
+                        character = declChar,
+                        start = declPos2460.first,
+                        length = declPos2460.second,
+                    ))
+                } else emptyList()
+                diagnostics.add(Diagnostic(
+                    message = "Module '\"$moduleName\"' declares '$importedName' locally, but it is exported as '$exportAlias'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2460,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = nameNode.pos,
+                    length = nameNode.text.length,
+                    relatedInformation = relatedInfo2460,
+                ))
+            }
+            importedName in localNames -> {
+                // TS2459: name declared locally but not exported
+                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                // Add TS2728 related info for first declaration + TS6204 "and here" for additional
+                val allDeclPositions = getAllLocalDeclarationPositions(targetFile, importedName)
+                val targetSource = targetResult.sourceFile.text
+                val relatedInfo = buildList {
+                    allDeclPositions.forEachIndexed { idx, declPos ->
+                        val (declLine, declChar) = getLineAndCharacterOfPosition(targetSource, declPos.first)
+                        if (idx == 0) {
+                            add(Diagnostic(
+                                message = "'$importedName' is declared here.",
+                                category = DiagnosticCategory.Message,
+                                code = 2728,
+                                fileName = resolvedFile,
+                                line = declLine,
+                                character = declChar,
+                                start = declPos.first,
+                                length = declPos.second,
+                            ))
+                        } else {
+                            add(Diagnostic(
+                                message = "and here.",
+                                category = DiagnosticCategory.Message,
+                                code = 6204,
+                                fileName = resolvedFile,
+                                line = declLine,
+                                character = declChar,
+                                start = declPos.first,
+                                length = declPos.second,
+                            ))
+                        }
+                    }
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Module '\"$moduleName\"' declares '$importedName' locally, but it is not exported.",
+                    category = DiagnosticCategory.Error,
+                    code = 2459,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = nameNode.pos,
+                    length = nameNode.text.length,
+                    relatedInformation = relatedInfo,
+                ))
+            }
+            else -> emitTs2305(source, fileName, moduleName, importedName, nameNode)
+        }
+    }
+
+    /** TS2724 `'"m"' has no exported member named 'x'. Did you mean 'y'?` with the related
+     *  TS2728 at the suggested member's declaration in [targetFile]. */
+    private fun emitMissingMemberSuggestion(
+        source: String, fileName: String, moduleName: String, importedName: String, nameNode: Identifier,
+        suggestion: String, targetFile: SourceFile, resolvedFile: String,
+    ) {
+        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+        val declPos = getLocalDeclarationPos(targetFile, suggestion)
+        val relatedInfo = if (declPos != null) {
+            val (dLine, dChar) = getLineAndCharacterOfPosition(targetFile.text, declPos.first)
+            listOf(Diagnostic(
+                message = "'$suggestion' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = resolvedFile,
+                line = dLine,
+                character = dChar,
+                start = declPos.first,
+                length = declPos.second,
+            ))
+        } else emptyList()
+        diagnostics.add(Diagnostic(
+            message = "'\"$moduleName\"' has no exported member named '$importedName'. Did you mean '$suggestion'?",
+            category = DiagnosticCategory.Error,
+            code = 2724,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = nameNode.pos,
+            length = nameNode.text.length,
+            relatedInformation = relatedInfo,
+        ))
     }
 
     /** tsxResolveExternalModuleExportsTypes: `import { NAME } from '<bare>'` where '<bare>' resolves

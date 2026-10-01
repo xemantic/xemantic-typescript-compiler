@@ -624,6 +624,25 @@ internal class NameResolver(
                         setSymbolTarget(symbol, target)
                         return resolveAlias(target, visited)
                     }
+                    // (CHK.190) `export * as M from "./m"` — the binder declares `M` as an
+                    // Alias whose declaration is the ExportDeclaration itself, and no arm
+                    // followed it, so `import { M } from "./r"` read `any` in VALUE positions
+                    // (`new M.B()`, `M.n`) while type positions resolved through the
+                    // qualified-name path. It names the module object, exactly as a
+                    // namespace import of the same specifier does.
+                    is ExportDeclaration -> {
+                        if (decl.exportClause !is NamespaceExport) continue
+                        val file = (decl as NodeBase).parent as? SourceFile ?: continue
+                        val spec = (decl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                        val targetResult = clauseModuleTarget(spec, decl, file.fileName)?.let { fileResults[it] } ?: continue
+                        checker.resolveModuleExportAssignment(targetResult, visited)?.let { t ->
+                            setSymbolTarget(symbol, t)
+                            return resolveAlias(t, visited)
+                        }
+                        val moduleSymbol = checker.createModuleSymbol(symbol.name, targetResult)
+                        setSymbolTarget(symbol, moduleSymbol)
+                        return moduleSymbol
+                    }
                     else -> {}
                 }
             }
@@ -845,14 +864,18 @@ internal class NameResolver(
             val local = fileResults[file.fileName]?.locals?.get(declared) ?: return null
             return local.takeIf { s -> s.declarations.none { it === spec } }
         }
-        val targetFile = resolveModuleSpecifier(specifier, exportDecl)
-            ?: resolveModuleSpecifierRelative(specifier, file.fileName)
-            ?: resolveAliasJsModuleSpecifier(specifier, file.fileName)
-            ?: resolveImportTargetFallback(specifier, file.fileName)
-            ?: return null
+        val targetFile = clauseModuleTarget(specifier, exportDecl, file.fileName) ?: return null
         val tr = fileResults[targetFile] ?: return null
         return importedExport(tr, declared, visited)
     }
+
+    /** (CHK.190) The file a module-level import / export-from clause's [specifier] names,
+     *  resolved from its [declaringFile] — plain, relative, `.js`, then the crawl's answer. */
+    fun clauseModuleTarget(specifier: String, decl: Node, declaringFile: String): String? =
+        resolveModuleSpecifier(specifier, decl)
+            ?: resolveModuleSpecifierRelative(specifier, declaringFile)
+            ?: resolveAliasJsModuleSpecifier(specifier, declaringFile)
+            ?: resolveImportTargetFallback(specifier, declaringFile)
 
     /** Resolve an import alias to its target symbol, with cycle detection. */
     fun resolveAliasTarget(symbol: Symbol): Symbol? {
