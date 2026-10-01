@@ -79,8 +79,8 @@ class ModuleLocalBaseClassMembersTest {
 
     @Test
     fun `this in a subclass of a module-local base`() {
-        // `this.s` (a static on the base) is left out: tsgo reports TS2576 there and this
-        // path is silent, in a script file as well — a recorded residue, not pinned.
+        // `this.s` (a static on the base) is TS2576 since (CHK.191) — pinned in
+        // ThisInheritedStaticAndQualifiedNewTest.
         val r = rows("// @Filename: /proj/src/a.ts\nexport {};\nclass B { p = 0; value = 2; static s = 1 }\nclass C extends B {\n  m() { return [this.nope, this.p, this.valu]; }\n}\n")
         assert(
             r == listOf(

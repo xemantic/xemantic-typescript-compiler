@@ -158,11 +158,32 @@ internal class ClassInstanceMembers(
      * Callers still demand a [ClassDeclaration] among the answer's declarations, so a base
      * that is a variable, a call or a class expression stays refused.
      */
-    private fun resolveBaseClassSymbol(baseExpr: Identifier, enclosingNs: Symbol? = null): Symbol? {
-        val raw = enclosingNs?.exports?.get(baseExpr.text)
-            ?: checker.resolveHeritageBaseSymbol(baseExpr) ?: return null
+    private fun resolveBaseClassSymbol(baseExpr: Expression, enclosingNs: Symbol? = null): Symbol? {
+        val raw = when (baseExpr) {
+            is Identifier -> enclosingNs?.exports?.get(baseExpr.text)
+                ?: checker.resolveHeritageBaseSymbol(baseExpr)
+            // (CHK.191) a DOTTED base (`extends N.B`, `extends ns.B` through a namespace
+            // import): the heritage resolver's qualified leg, which follows only EXPORTED
+            // members and answers null for anything else.
+            else -> if (isDottedEntityName(baseExpr)) checker.resolveHeritageBaseSymbol(baseExpr) else null
+        } ?: return null
         return if (raw.flags.hasAny(SymbolFlags.Alias)) checker.resolveAlias(raw) else raw
     }
+
+    /** (CHK.191) `a.b.c` — a property-access chain of identifiers, nothing else. */
+    private fun isDottedEntityName(e: Expression): Boolean = when (e) {
+        is Identifier -> true
+        is PropertyAccessExpression -> isDottedEntityName(e.expression)
+        else -> false
+    }
+
+    /** (CHK.191) The first `extends` expression of [classDecl] when it is an entity name
+     *  (an Identifier or a dotted chain of them) — the shapes [resolveBaseClassSymbol]
+     *  resolves; null for no `extends` AND for any other base (a call, a class expression). */
+    private fun entityNameBaseOf(classDecl: ClassDeclaration): Expression? =
+        classDecl.heritageClauses
+            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            ?.types?.firstOrNull()?.expression?.takeIf { isDottedEntityName(it) }
 
     /**
      * (CHK.187) The class a `new <ctor>()` receiver constructs, for the `new` branch of the
@@ -173,9 +194,23 @@ internal class ClassInstanceMembers(
      * a local variable shadowing the class name (which neither consult sees) types the
      * receiver differently, and a guessed class there is a false TS2339 on legal code.
      */
-    fun newExpressionClassSymbol(newExpr: NewExpression, ctor: Identifier): Symbol? {
-        val raw = checker.lexicalValueSymbolForNode(ctor, ctor.text)
-            ?: checker.lookupPerFileForNode(ctor, ctor.text) ?: return null
+    fun newExpressionClassSymbol(newExpr: NewExpression, ctor: Expression): Symbol? {
+        val raw = when (ctor) {
+            is Identifier -> checker.lexicalValueSymbolForNode(ctor, ctor.text)
+                ?: checker.lookupPerFileForNode(ctor, ctor.text)
+            // (CHK.191) `new N.C()` / `new ns.C()`: the qualified name resolved as a heritage
+            // base is (exported members only); the type-agreement test below still decides.
+            // The receiver's own type is NOT a sufficient check here: with the head shadowed
+            // by a parameter / local (`function f(N: {…}) { new N.C() }`) this checker still
+            // types the `new` as the outer class's instance, so the shadow is refused by syntax.
+            is PropertyAccessExpression -> {
+                var head: Expression = ctor
+                while (head is PropertyAccessExpression) head = head.expression
+                if (head is Identifier && !LocalShadowGuard.innermostBindingIsVariable(head, head.text))
+                    checker.resolveHeritageBaseSymbol(ctor) else null
+            }
+            else -> null
+        } ?: return null
         val sym = if (raw.flags.hasAny(SymbolFlags.Alias)) checker.resolveAlias(raw) else raw
         if (!sym.flags.hasAny(SymbolFlags.Class)) return null
         val instanceSym = when (val t = checker.getTypeOfExpression(newExpr)) {
@@ -187,12 +222,16 @@ internal class ClassInstanceMembers(
     }
 
     fun lookupInstanceMemberInResolvableChain(
-        classDecl: ClassDeclaration, classSym: Symbol?, propName: String, visited: MutableSet<String>? = null,
+        classDecl: ClassDeclaration, classSym: Symbol?, propName: String, visited: MutableList<ClassDeclaration>? = null,
         enclosingNs: Symbol? = null,
     ): Boolean? {
-        val v = visited ?: mutableSetOf()
-        val className = classDecl.name?.text ?: return null
-        if (!v.add(className)) return false
+        // (CHK.191) the cycle guard is keyed by DECLARATION IDENTITY, not by name: a dotted
+        // base may share its subclass's name (`class Server extends net.Server`), and a
+        // name key answered "already walked" there — a false "missing" for an inherited member.
+        val v = visited ?: ArrayList(4)
+        if (classDecl.name?.text == null) return null
+        if (v.any { it === classDecl }) return false
+        v.add(classDecl)
         // (CHK.182) the class's OWN merged interfaces, read off its symbol. A caller
         // without one cannot rule a merge out, so it gets the old refusal.
         if (classSym == null) return null
@@ -202,7 +241,7 @@ internal class ClassInstanceMembers(
             false -> {}
         }
         if (classDecl.members.any { it is IndexSignature && !numberIndexCannotName(it, propName) }) return null
-        if (ModifierFlag.Declare in classDecl.modifiers) return null
+        if (ModifierFlag.Declare in classDecl.modifiers && !isProgramSourceDeclaration(classDecl)) return null
         for (m in classDecl.members) {
             when (m) {
                 is PropertyDeclaration -> {
@@ -229,7 +268,7 @@ internal class ClassInstanceMembers(
         val baseExpr = classDecl.heritageClauses
             ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
             ?.types?.firstOrNull()?.expression ?: return false
-        if (baseExpr !is Identifier) return null
+        if (!isDottedEntityName(baseExpr)) return null
         // Resolve the base via the enclosing namespace's exports first (a namespace-local
         // base is not in `globals`), falling back to `globals`. Without this a namespace-local
         // base returns `null` (uncertain → the caller bails), which — now that
@@ -247,10 +286,14 @@ internal class ClassInstanceMembers(
         return lookupInstanceMemberInResolvableChain(baseDecl, baseSym, propName, v, baseNs)
     }
 
-    fun hasInstanceMemberNamed(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
-        val v = visited ?: mutableSetOf()
-        val className = classDecl.name?.text ?: return false
-        if (!v.add(className)) return false
+    fun hasInstanceMemberNamed(classDecl: ClassDeclaration, name: String, visited: MutableList<ClassDeclaration>? = null): Boolean {
+        // (CHK.191) the cycle guard is keyed by DECLARATION IDENTITY, not by name: a dotted
+        // base may share its subclass's name (`class Server extends net.Server`), and a
+        // name key answered "already walked" there — a false "missing" for an inherited member.
+        val v = visited ?: ArrayList(4)
+        if (classDecl.name?.text == null) return false
+        if (v.any { it === classDecl }) return false
+        v.add(classDecl)
         for (m in classDecl.members) {
             when (m) {
                 is PropertyDeclaration -> {
@@ -274,10 +317,8 @@ internal class ClassInstanceMembers(
                 else -> {}
             }
         }
-        val baseExpr = classDecl.heritageClauses
-            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-            ?.types?.firstOrNull()?.expression
-        if (baseExpr is Identifier) {
+        val baseExpr = entityNameBaseOf(classDecl)
+        if (baseExpr != null) {
             val baseSym = resolveBaseClassSymbol(baseExpr)
             if (baseSym != null) {
                 val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration
@@ -393,10 +434,7 @@ internal class ClassInstanceMembers(
                     if (nameId != null && nameId.text.isNotEmpty() && nameId.text !in pool) pool[nameId.text] = nameId
                 }
             }
-            val baseId = cur.heritageClauses
-                ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                ?.types?.firstOrNull()?.expression as? Identifier
-            curSym = baseId?.let { resolveBaseClassSymbol(it) }
+            curSym = entityNameBaseOf(cur)?.let { resolveBaseClassSymbol(it) }
             cur = curSym?.declarations?.firstOrNull { d -> d is ClassDeclaration } as? ClassDeclaration
         }
         val suggestion = checker.getSpellingSuggestionFromNames(propName, pool.keys) ?: return false
@@ -447,6 +485,56 @@ internal class ClassInstanceMembers(
         return true
     }
 
+    /**
+     * (CHK.191) TS2576 for `this.X` / `this["X"]` in an instance member where X is a STATIC of
+     * the enclosing class OR OF A BASE — tsgo names the RECEIVER class (`C.s`, `C<U>.s`,
+     * [className] already carries the type parameters) and, for an element access, squiggles
+     * the whole access and spells the key as written ([suggestionKey]). Returns true when
+     * emitted. A name that is ALSO an instance member somewhere on the chain is legal.
+     */
+    fun tryEmitThisStaticTs2576(
+        classDecl: ClassDeclaration, propName: String, className: String,
+        ts2576Start: Int, ts2576Length: Int, suggestionKey: String, source: String, fileName: String,
+    ): Boolean {
+        if (!isStaticMemberOfClass(classDecl, propName)) return false
+        if (hasInstanceMemberNamed(classDecl, propName)) return false
+        val (line, character) = checker.getLineAndCharacterOfPosition(source, ts2576Start)
+        checker.diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$className'. Did you mean to access the static member '$className$suggestionKey' instead?",
+            category = DiagnosticCategory.Error, code = 2576,
+            fileName = fileName, line = line, character = character,
+            start = ts2576Start, length = ts2576Length,
+        ))
+        return true
+    }
+
+    /**
+     * (CHK.191) A `declare class` whose members this walk can trust: written in a program
+     * `.ts` source, not in a lib, a declaration file or an ambient module block (where
+     * module augmentations of a library's typings live). A merge into it is on its symbol and is read by
+     * [mergedInterfaceHasMember], exactly as for a class with a body.
+     */
+    private fun isProgramSourceDeclaration(decl: Node): Boolean {
+        if (decl in checker.builtinLibDecls) return false
+        var cur: Node? = (decl as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) return !checker.isDtsFile(cur.fileName)
+            // an ambient module (`declare module "m"`, `declare global`) is another file's
+            // augmentation target — refused, as in a declaration file.
+            if (cur is ModuleDeclaration && (ModifierFlag.Declare in cur.modifiers || cur.name !is Identifier)) return false
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
+    /** `C` / `C<T, U>` — a class's instance type as tsgo displays it at a `this` receiver. */
+    fun classDisplayWithTypeParams(classDecl: ClassDeclaration, fallbackName: String): String {
+        val baseName = classDecl.name?.text ?: fallbackName
+        val tps = classDecl.typeParameters
+        return if (!tps.isNullOrEmpty()) "$baseName<${tps.joinToString(", ") { it.name.text }}>" else baseName
+    }
+
     private fun classMemberNameText(nameNode: Node?): String? = when (nameNode) {
         is Identifier -> nameNode.text
         is StringLiteralNode -> nameNode.text
@@ -469,10 +557,14 @@ internal class ClassInstanceMembers(
         else -> null
     }
 
-    fun isStaticMemberOfClass(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
-        val v = visited ?: mutableSetOf()
-        val className = classDecl.name?.text ?: return false
-        if (!v.add(className)) return false
+    fun isStaticMemberOfClass(classDecl: ClassDeclaration, name: String, visited: MutableList<ClassDeclaration>? = null): Boolean {
+        // (CHK.191) the cycle guard is keyed by DECLARATION IDENTITY, not by name: a dotted
+        // base may share its subclass's name (`class Server extends net.Server`), and a
+        // name key answered "already walked" there — a false "missing" for an inherited member.
+        val v = visited ?: ArrayList(4)
+        if (classDecl.name?.text == null) return false
+        if (v.any { it === classDecl }) return false
+        v.add(classDecl)
         for (m in classDecl.members) {
             val memberName = when (m) {
                 is PropertyDeclaration -> classMemberNameText(m.name)
@@ -491,10 +583,8 @@ internal class ClassInstanceMembers(
             }
             if (isStatic) return true
         }
-        val baseExpr = classDecl.heritageClauses
-            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-            ?.types?.firstOrNull()?.expression
-        if (baseExpr is Identifier) {
+        val baseExpr = entityNameBaseOf(classDecl)
+        if (baseExpr != null) {
             val baseSym = resolveBaseClassSymbol(baseExpr)
             if (baseSym != null) {
                 val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration

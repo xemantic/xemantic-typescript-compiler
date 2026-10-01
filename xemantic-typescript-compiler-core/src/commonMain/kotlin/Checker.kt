@@ -156478,6 +156478,7 @@ interface DataView {
         cmamCheckResolvedObjectType(
             objectExpr, objectType, displayTypeOverride, propName, diagStart, diagLength,
             source, fileName, isThisAccess, emitTs2728RelatedInfo,
+            ts2576Start, ts2576Length, suggestionKey,
         )
         } finally {
             CpaSections.endR()
@@ -156583,18 +156584,22 @@ interface DataView {
         CpaSections.atR(CpaSections.R_NEW)
         if (objectExpr is NewExpression) {
             val ctor = objectExpr.expression
-            if (ctor is Identifier) {
+            // (CHK.191) a QUALIFIED callee (`new N.C()`, `new ns.C()`) resolves through
+            // [ClassInstanceMembers.newExpressionClassSymbol] alone.
+            if (ctor is Identifier || ctor is PropertyAccessExpression) {
                 // B15.2: for namespace-nested `new C(...).prop` patterns, look up the
                 // ctor symbol via the property-access namespace stack first — the
                 // binder puts namespace-internal classes in `namespaceSymbol.exports`,
                 // not directly in `globals`. Falls back to `globals` for top-level
                 // classes (the original behavior).
                 var ctorSym: Symbol? = null
-                for (ns in propertyAccessEnclosingNamespaces.asReversed()) {
-                    ctorSym = ns.exports?.get(ctor.text)
-                    if (ctorSym != null) break
+                if (ctor is Identifier) {
+                    for (ns in propertyAccessEnclosingNamespaces.asReversed()) {
+                        ctorSym = ns.exports?.get(ctor.text)
+                        if (ctorSym != null) break
+                    }
+                    if (ctorSym == null) ctorSym = globals[ctor.text]
                 }
-                if (ctorSym == null) ctorSym = globals[ctor.text]
                 // (CHK.187) a module-local / imported / block-scoped class is in no `globals`.
                 if (ctorSym == null || !ctorSym.flags.hasAny(SymbolFlags.Class)) {
                     ctorSym = classInstanceMembers.newExpressionClassSymbol(objectExpr, ctor) ?: ctorSym
@@ -156630,9 +156635,10 @@ interface DataView {
                         val canEmit = (chainResult == false || isCircular) && !isJsExpando
                         if (canEmit) {
                             val typeArgs = classDecl.typeParameters?.size ?: 0
+                            val ctorName = (ctor as? Identifier)?.text ?: classDecl.name?.text ?: ctorSym.name
                             val display = if (typeArgs > 0) {
-                                ctor.text + "<" + List(typeArgs) { "unknown" }.joinToString(", ") + ">"
-                            } else ctor.text
+                                ctorName + "<" + List(typeArgs) { "unknown" }.joinToString(", ") + ">"
+                            } else ctorName
                             // (CHK.187) a STATIC member is TS2576 and a near-miss name TS2551, as at
                             // every other class-instance receiver — this branch used to print a
                             // plain TS2339 for both (in a script file too, before the module fix).
@@ -159657,6 +159663,9 @@ interface DataView {
         fileName: String,
         isThisAccess: Boolean,
         emitTs2728RelatedInfo: Boolean,
+        ts2576Start: Int,
+        ts2576Length: Int,
+        suggestionKey: String,
     ) {
         // Check Interface and Object types (anonymous object literals, type literals, etc.)
         CpaSections.atR(CpaSections.R_TYPEGATE)
@@ -159797,9 +159806,16 @@ interface DataView {
             // swallowed — genericRecursiveImplicitConstructorErrors3's `this.isArray()` on
             // `PullTypeSymbol extends PullSymbol`, both in `namespace TypeScript`).
             val thisEnclosingNs = objectType.symbol?.parent?.takeIf { it.flags.hasAny(SymbolFlags.Module) }
-            if (classDecl != null && classInstanceMembers.lookupInstanceMemberInResolvableChain(classDecl, objectType.symbol, propName, enclosingNs = thisEnclosingNs) == false
-                && !classInstanceMembers.isStaticMemberOfClass(classDecl, propName)
-            ) {
+            val chainMissing = classDecl != null &&
+                classInstanceMembers.lookupInstanceMemberInResolvableChain(classDecl, objectType.symbol, propName, enclosingNs = thisEnclosingNs) == false
+            // (CHK.191) a static inherited from a BASE is TS2576 here too (the own-class static
+            // is found by the member table and answered further down).
+            if (chainMissing && classInstanceMembers.isStaticMemberOfClass(classDecl, propName)) {
+                val sym = objectType.symbol
+                if (sym != null && classInstanceMembers.tryEmitThisStaticTs2576(classDecl, propName,
+                        classInstanceMembers.classDisplayWithTypeParams(classDecl, sym.name), ts2576Start, ts2576Length, suggestionKey, source, fileName)) return
+            }
+            if (chainMissing && !classInstanceMembers.isStaticMemberOfClass(classDecl, propName)) {
                 val baseName = classDecl.name?.text ?: objectType.symbol?.name
                 if (baseName != null) {
                     val tps = classDecl.typeParameters
@@ -159906,6 +159922,7 @@ interface DataView {
         cmamEmitMissingProperty(
             objectExpr, objectType, displayTypeOverride, propName, diagStart, diagLength,
             source, fileName, isThisAccess, emitTs2728RelatedInfo,
+            ts2576Start, ts2576Length, suggestionKey,
         )
     }
 
@@ -159927,6 +159944,9 @@ interface DataView {
         fileName: String,
         isThisAccess: Boolean,
         emitTs2728RelatedInfo: Boolean,
+        ts2576Start: Int,
+        ts2576Length: Int,
+        suggestionKey: String,
     ) {
         // Check if property exists in type members
         CpaSections.atR(CpaSections.R_PROP)
@@ -160008,26 +160028,11 @@ interface DataView {
             // on the resolved symbol to distinguish.
             if (isThisAccess && !inStaticClassMethod) {
                 val classDecl = objectType.symbol?.declarations?.firstOrNull() as? ClassDeclaration
-                if (classDecl != null
-                    && classInstanceMembers.isStaticMemberOfClass(classDecl, propName)
-                    && !classInstanceMembers.hasInstanceMemberNamed(classDecl, propName)
-                ) {
-                    val baseName = classDecl.name?.text ?: objectType.symbol?.name
-                    if (baseName != null) {
-                        val tps = classDecl.typeParameters
-                        val className = if (!tps.isNullOrEmpty())
-                            "$baseName<${tps.joinToString(", ") { it.name.text }}>"
-                        else baseName
-                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                        diagnostics.add(Diagnostic(
-                            message = "Property '$propName' does not exist on type '$className'. Did you mean to access the static member '$className.$propName' instead?",
-                            category = DiagnosticCategory.Error, code = 2576,
-                            fileName = fileName, line = line, character = character,
-                            start = diagStart, length = diagLength,
-                        ))
-                        return
-                    }
-                }
+                // (CHK.191) through the shared emitter: an element access squiggles the whole
+                // access and spells the key as written (`C["s"]`), as tsgo does.
+                val baseName = classDecl?.name?.text ?: objectType.symbol?.name
+                if (classDecl != null && baseName != null && classInstanceMembers.tryEmitThisStaticTs2576(classDecl, propName,
+                        classInstanceMembers.classDisplayWithTypeParams(classDecl, baseName), ts2576Start, ts2576Length, suggestionKey, source, fileName)) return
             }
             return
         }
