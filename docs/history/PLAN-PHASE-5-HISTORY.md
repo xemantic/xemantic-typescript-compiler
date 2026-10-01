@@ -1,3 +1,30 @@
+### Round (P18.240) — (CHK.184): a guard on an OPTIONAL property narrows the union by tsgo's `narrowTypeByDiscriminant` — the shipped false TS18048 (and a false TS2339 on `never` from `!in`) is gone, 109 -> 3 mismatched cells of a 480-cell matrix, 83 false rows removed, (CHK.180)'s union refusal LIFTED; +0 on corpus, grid and libraries (2026-09-30)
+
+One implementation subagent. **Where the queue item was wrong**: (a) not only truthy / `!` / `&&` — `=== undefined`,
+`!== undefined` and `typeof w.a === 'undefined'` gave the same false row, and the `in` operator was WORSE: its `!in`
+side produced `never`, i.e. a false TS18048 plus a false `TS2339 Property 'b' does not exist on type 'never'`; (b) a
+PRIMITIVE `T` is not a false positive for truthiness (`""` is falsy — tsgo reports too, and we matched); (c) a THIRD
+cause: once `w` narrowed correctly, a three-member union LOST tsgo's own TS18048, because the B81.1c suppression asked
+`getPropertyOfType` of the narrowed union, which answers for ONE constituent (CLAUDE.md's
+"`getPropertyOfType`'s UNION ARM" trap); (d) the machinery was mostly present (`isDiscriminantPropertyOfUnion`) — what
+was missing is the round-425 gap: optionality was never folded into the property type. **Mechanism**: new
+`DiscriminantFactsNarrowing.kt` (131 lines) ports `narrowTypeByDiscriminant` — each member's property type with
+`| undefined` folded in when optional (`?: never` -> `undefined`), tsgo's discriminant gate (not uniform, at least one
+literal / unit type; generic / `any` / `unknown` refuses), the operator's own narrowing over those property types, and
+a member dropped only when CERTAINLY disjoint (nullish vs non-nullish, or unequal literals). Hooks: truthiness (after
+`pDiscriminant`), equality with `undefined`/`null` (in `narrowByDiscriminantProperty`, before the round-425 literal
+filter), `typeof` (new `typeofDiscriminantNarrow`); none on a `?.` access. `narrowByInOperator` keeps a member whose
+property is optional on the `!in` side (tsgo's `isTypePresencePossible`), for unions and a single object. B81.1c
+suppresses only when EVERY constituent of the narrowed union declares the property required and never `undefined`.
+`WrittenReceiverTypes`' written-union refusal is removed (-7) and the corpus screen stays 0 with it lifted.
+**Matrix** (8 union shapes x 10 guards x 3 receivers x exactOptionalPropertyTypes on/off): 109 / 109 mismatched ->
+3 / 0; the 3 are PRE-EXISTING misses (`?: never` under `in`, where we used to emit two false rows and are now silent);
+every ours-only row gone; rows that must still report still do. **Pins**: `Chk184OptionalUndefinedDiscriminantTest`,
+16 tests; ablation a1 8 / a2 1 / a3 1 / a4 1 / a5 2 / a6 1 / a7 1 / a8 1 RED; 209 related classes (2,289 tests)
+green. **Gates**: full suite 22,014 / 0 / 44 (+16); corpus screen 8725 / 0; `cost_gate.py` 0 (all within 0.15%);
+`huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning
+gate with probe: probe only. Residues -> (CHK.185).
+
 ### Round (P18.239) — (CHK.180) stage 1: `this` and written-type `const` body locals reach the member / element-access / nullish readers per access, as tsgo types them — 45 -> 27 missing of a 104-cell matrix, 0 ours-only, every new row tsgo's exact text; +0 on corpus, grid and libraries (2026-09-30)
 
 **Out-of-order pick, stated**: taken ahead of (CHK.183) / (CHK.182) because a read-only census had fully specified and

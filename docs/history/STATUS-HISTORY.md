@@ -1,5 +1,11 @@
 
 
+**(P18.245) — (INV.0) EXTRACTION: THE CLASS MISSING-MEMBER CHECKS MOVE OUT OF `Checker.kt` (−377 LINES) INTO `ClassInstanceMembers.kt`, VERBATIM; 22,097 / 0 / 44 (2026-10-01).**
+All pass rows, counters and diagnostics identical to the pre-move build; screen 0; grid 8x0; libraries unchanged. The
+warm A/B was inconclusive — an A/A control of two identical binaries read +2.4% on the same box — so the deterministic
+receipts carry the split.
+
+
 **(P18.244) — (CHK.189): AFTER "only refers to a type", NO MORE KNOCK-ON ERRORS ON THE SAME EXPRESSION (WE ADDED "not callable", "property does not exist" AND MORE WHERE tsgo STOPS), AND NAMESPACE MISUSE IN `new`, SHORTHAND AND DESTRUCTURING TARGETS NOW REPORTS TS2708; +16 PINS, 22,082 / 0 / 44 (2026-10-01).**
 Across 37 test cells: 0 tsgo rows lost, 37 gained, 32 ours-only removed. The full suite caught 8 hover regressions the
 builder's sweep missed (the value-only rule also fired for type references); fixed before commit. Screen 0; grid 8x0.
