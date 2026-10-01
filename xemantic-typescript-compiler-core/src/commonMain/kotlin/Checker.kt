@@ -15036,8 +15036,11 @@ class Checker(
     private fun resolveHeritageBaseHead(expr: Expression): Symbol? =
         nameResolver.resolveHeritageBaseHead(expr)
 
-    private fun resolveHeritageBaseSymbol(expr: Expression): Symbol? =
+    internal fun resolveHeritageBaseSymbol(expr: Expression): Symbol? =
         nameResolver.resolveHeritageBaseSymbol(expr)
+
+    internal fun lexicalValueSymbolForNode(node: Node, name: String): Symbol? =
+        nameResolver.lexicalValueSymbolForNode(node, name)
 
     internal fun ambientModuleSurfaceMember(module: Symbol, name: String, visited: MutableSet<Int>): Symbol? =
         nameResolver.ambientModuleSurfaceMember(module, name, visited)
@@ -156424,7 +156427,7 @@ interface DataView {
         // (JIT.1)(b): R_LITERAL / R_NEW -- the literal and `new` receiver shapes.
         if (cmamCheckLiteralAndNewReceiver(
                 objectExpr, propName, diagStart, diagLength, source, fileName,
-                ts2576Start, ts2576Length,
+                ts2576Start, ts2576Length, suggestionKey,
             )) return
         // (JIT.1)(b): R_CALL / R_PAEA / R_STATIC -- call, member-access and
         // static-`this` receiver shapes.
@@ -156494,6 +156497,7 @@ interface DataView {
         fileName: String,
         ts2576Start: Int,
         ts2576Length: Int,
+        suggestionKey: String,
     ): Boolean {
         // 17.161: String literal receiver — `"".bogus` / `"foo".missing`. Resolves
         // to the String apparent type and emits TS2339 with the literal value displayed
@@ -156591,6 +156595,10 @@ interface DataView {
                     if (ctorSym != null) break
                 }
                 if (ctorSym == null) ctorSym = globals[ctor.text]
+                // (CHK.187) a module-local / imported / block-scoped class is in no `globals`.
+                if (ctorSym == null || !ctorSym.flags.hasAny(SymbolFlags.Class)) {
+                    ctorSym = classInstanceMembers.newExpressionClassSymbol(objectExpr, ctor) ?: ctorSym
+                }
                 if (ctorSym != null && ctorSym.flags.hasAny(SymbolFlags.Class)) {
                     // Skip when the class symbol has multiple declarations that could
                     // contribute INSTANCE members: an interface merge (or a second class /
@@ -156625,6 +156633,13 @@ interface DataView {
                             val display = if (typeArgs > 0) {
                                 ctor.text + "<" + List(typeArgs) { "unknown" }.joinToString(", ") + ">"
                             } else ctor.text
+                            // (CHK.187) a STATIC member is TS2576 and a near-miss name TS2551, as at
+                            // every other class-instance receiver — this branch used to print a
+                            // plain TS2339 for both (in a script file too, before the module fix).
+                            if (chainResult == false) {
+                                if (classInstanceMembers.tryEmitStaticAccessTs2576(ctorSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName)) return true
+                                if (classInstanceMembers.emitClassChainTs2551Suggestion(classDecl, ctorSym, propName, display, diagStart, diagLength, source, fileName)) return true
+                            }
                             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                             diagnostics.add(Diagnostic(
                                 message = "Property '$propName' does not exist on type '$display'.",

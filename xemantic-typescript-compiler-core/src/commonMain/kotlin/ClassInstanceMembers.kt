@@ -82,24 +82,108 @@ internal class ClassInstanceMembers(
      *  them into one symbol) instead of refusing it, which is what tsgo reports. */
     private fun mergedInterfaceHasMember(classSym: Symbol, propName: String): Boolean? {
         var found = false
+        val visited = HashSet<Int>()
         for (d in classSym.declarations) {
             if (d !is InterfaceDeclaration) continue
-            if (d in checker.builtinLibDecls) return null
-            if (!d.heritageClauses.isNullOrEmpty()) return null
-            for (m in d.members) {
-                val name = when (m) {
-                    is PropertyDeclaration -> classMemberNameText(m.name)
-                    is MethodDeclaration -> classMemberNameText(m.name)
-                    is GetAccessor -> classMemberNameText(m.name)
-                    is SetAccessor -> classMemberNameText(m.name)
-                    is SemicolonClassElement -> continue
-                    else -> return null
-                } ?: return null
-                if (name.isEmpty()) return null
-                if (name == propName) found = true
+            when (interfaceChainHasMember(d, propName, visited)) {
+                null -> return null
+                true -> found = true
+                false -> {}
             }
         }
         return found
+    }
+
+    /** (CHK.187) One [InterfaceDeclaration] of [mergedInterfaceHasMember], with its
+     *  `extends` list FOLLOWED rather than refused: each base must be an Identifier naming
+     *  a symbol whose declarations are all program interfaces (resolved where the clause
+     *  is written, as a class base is), and each is read the same way. Anything else — a
+     *  lib interface, a qualified or computed base, a type alias, a class — is `null`. */
+    private fun interfaceChainHasMember(d: InterfaceDeclaration, propName: String, visited: MutableSet<Int>): Boolean? {
+        if (d in checker.builtinLibDecls) return null
+        var found = false
+        for (m in d.members) {
+            val name = when (m) {
+                is PropertyDeclaration -> classMemberNameText(m.name)
+                is MethodDeclaration -> classMemberNameText(m.name)
+                is GetAccessor -> classMemberNameText(m.name)
+                is SetAccessor -> classMemberNameText(m.name)
+                is SemicolonClassElement -> continue
+                is IndexSignature -> if (numberIndexCannotName(m, propName)) continue else return null
+                else -> return null
+            } ?: return null
+            if (name.isEmpty()) return null
+            if (name == propName) found = true
+        }
+        if (found) return true
+        for (clause in d.heritageClauses.orEmpty()) {
+            if (clause.token != SyntaxKind.ExtendsKeyword) return null
+            for (t in clause.types) {
+                val baseId = t.expression as? Identifier ?: return null
+                val baseSym = resolveBaseClassSymbol(baseId) ?: return null
+                if (!visited.add(baseSym.id)) continue
+                if (baseSym.declarations.isEmpty() || baseSym.declarations.any { it !is InterfaceDeclaration }) return null
+                for (bd in baseSym.declarations) {
+                    when (interfaceChainHasMember(bd as InterfaceDeclaration, propName, visited)) {
+                        null -> return null
+                        true -> return true
+                        false -> {}
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    /** (CHK.187) A `[k: number]: T` index signature cannot supply a property whose name is
+     *  an identifier — such a name is never a numeric literal name, bar the two spellings
+     *  `NaN` / `Infinity` (`String(Number(s)) === s`), which stay refused. Every other index
+     *  signature (string, template, symbol, a union key) is still a refusal. */
+    private fun numberIndexCannotName(m: IndexSignature, propName: String): Boolean {
+        val param = m.parameters.singleOrNull() ?: return false
+        if ((param.type as? KeywordTypeNode)?.kind != SyntaxKind.NumberKeyword) return false
+        val first = propName.firstOrNull() ?: return false
+        if (!(first.isLetter() || first == '_' || first == '$')) return false
+        return propName != "NaN" && propName != "Infinity"
+    }
+
+    /**
+     * (CHK.187) The symbol an `extends` clause's Identifier base names, resolved where the
+     * clause is WRITTEN: [enclosingNs]'s exports first (the namespace-aware walk's own
+     * leg), then [Checker.resolveHeritageBaseSymbol] — the scope-space consult (B83.5), the
+     * enclosing namespaces and the DECLARING file's per-file scope, which is where a
+     * module-local or imported base lives (INV.3(d) keeps both out of `globals`, so the
+     * old `globals[name]` consult answered null for them and every chain walk refused). An
+     * import alias the per-file probe leaves unresolved (a default import) is followed.
+     * Callers still demand a [ClassDeclaration] among the answer's declarations, so a base
+     * that is a variable, a call or a class expression stays refused.
+     */
+    private fun resolveBaseClassSymbol(baseExpr: Identifier, enclosingNs: Symbol? = null): Symbol? {
+        val raw = enclosingNs?.exports?.get(baseExpr.text)
+            ?: checker.resolveHeritageBaseSymbol(baseExpr) ?: return null
+        return if (raw.flags.hasAny(SymbolFlags.Alias)) checker.resolveAlias(raw) else raw
+    }
+
+    /**
+     * (CHK.187) The class a `new <ctor>()` receiver constructs, for the `new` branch of the
+     * missing-member check when `globals` has no class of that name — a module-local or
+     * imported class, or a block-scoped one (B83.5). The name is resolved where it is
+     * WRITTEN (the scope-space value consult, then the per-file scope), and the answer is
+     * ADOPTED ONLY WHEN THE EXPRESSION'S OWN TYPE IS THAT CLASS'S INSTANCE: a parameter or
+     * a local variable shadowing the class name (which neither consult sees) types the
+     * receiver differently, and a guessed class there is a false TS2339 on legal code.
+     */
+    fun newExpressionClassSymbol(newExpr: NewExpression, ctor: Identifier): Symbol? {
+        val raw = checker.lexicalValueSymbolForNode(ctor, ctor.text)
+            ?: checker.lookupPerFileForNode(ctor, ctor.text) ?: return null
+        val sym = if (raw.flags.hasAny(SymbolFlags.Alias)) checker.resolveAlias(raw) else raw
+        if (!sym.flags.hasAny(SymbolFlags.Class)) return null
+        val instanceSym = when (val t = checker.getTypeOfExpression(newExpr)) {
+            is Type.Reference -> t.target.symbol
+            is Type.Interface -> t.symbol
+            else -> null
+        }
+        return sym.takeIf { instanceSym === it }
     }
 
     fun lookupInstanceMemberInResolvableChain(
@@ -117,7 +201,7 @@ internal class ClassInstanceMembers(
             true -> return true
             false -> {}
         }
-        if (classDecl.members.any { it is IndexSignature }) return null
+        if (classDecl.members.any { it is IndexSignature && !numberIndexCannotName(it, propName) }) return null
         if (ModifierFlag.Declare in classDecl.modifiers) return null
         for (m in classDecl.members) {
             when (m) {
@@ -153,7 +237,7 @@ internal class ClassInstanceMembers(
         // swallow a genuinely-missing-member TS2339. `false` still propagates ONLY through a
         // fully-resolvable chain, so this stays FP-safe (uncertainty → null → bail). `enclosingNs`
         // is null for the non-`this` callers → globals-only (unchanged).
-        val baseSym = enclosingNs?.exports?.get(baseExpr.text) ?: checker.globals[baseExpr.text] ?: return null
+        val baseSym = resolveBaseClassSymbol(baseExpr, enclosingNs) ?: return null
         // (CHK.182) the CLASS among the base's declarations — a merged interface may be
         // declared first, and the recursion reads it off [baseSym] anyway.
         val baseDecl = baseSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return null
@@ -194,7 +278,7 @@ internal class ClassInstanceMembers(
             ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
             ?.types?.firstOrNull()?.expression
         if (baseExpr is Identifier) {
-            val baseSym = checker.globals[baseExpr.text]
+            val baseSym = resolveBaseClassSymbol(baseExpr)
             if (baseSym != null) {
                 val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration
                 if (baseDecl != null && hasInstanceMemberNamed(baseDecl, name, v)) return true
@@ -309,10 +393,10 @@ internal class ClassInstanceMembers(
                     if (nameId != null && nameId.text.isNotEmpty() && nameId.text !in pool) pool[nameId.text] = nameId
                 }
             }
-            val baseName = (cur.heritageClauses
+            val baseId = cur.heritageClauses
                 ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                ?.types?.firstOrNull()?.expression as? Identifier)?.text
-            curSym = baseName?.let { checker.globals[it] }
+                ?.types?.firstOrNull()?.expression as? Identifier
+            curSym = baseId?.let { resolveBaseClassSymbol(it) }
             cur = curSym?.declarations?.firstOrNull { d -> d is ClassDeclaration } as? ClassDeclaration
         }
         val suggestion = checker.getSpellingSuggestionFromNames(propName, pool.keys) ?: return false
@@ -411,7 +495,7 @@ internal class ClassInstanceMembers(
             ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
             ?.types?.firstOrNull()?.expression
         if (baseExpr is Identifier) {
-            val baseSym = checker.globals[baseExpr.text]
+            val baseSym = resolveBaseClassSymbol(baseExpr)
             if (baseSym != null) {
                 val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration
                 if (baseDecl != null && isStaticMemberOfClass(baseDecl, name, v)) return true
