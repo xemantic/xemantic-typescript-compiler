@@ -486,6 +486,7 @@ class Checker(
 
     /** (INV.0) (P18.245) — the class-instance missing-member family; see `ClassInstanceMembers.kt`. */
     private val classInstanceMembers = ClassInstanceMembers(this)
+    internal val classConstructorTypes = ClassConstructorTypes(this)
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -119155,6 +119156,7 @@ interface DataView {
      */
     internal fun getTypeOfIdentifier(id: Identifier): Type {
         val t = getTypeOfIdentifierCore(id)
+        classConstructorTypes.instanceOf(t)?.let { if (classConstructorTypes.isDirectNewCallee(id)) return it }
         if (t is Type.Union && discriminantCarryNames.isNotEmpty() && id.text in discriminantCarryNames) {
             return destructuredDiscriminantCarry(id, t) ?: t
         }
@@ -137196,6 +137198,8 @@ interface DataView {
                 }
             }
             is Type.Object -> {
+                // (CHK.196) a class's constructor side prints as tsgo does: `typeof Name`.
+                if (classConstructorTypes.isConstructorType(type)) return "typeof ${type.symbol!!.name}"
                 // Tuple type: display as [T1, T2, ...] — `readonly [T1, T2]` for a readonly one.
                 val tupleElems = type.tupleElementTypes
                 if (tupleElems != null) {
@@ -160308,7 +160312,10 @@ interface DataView {
         val suggestion = getSpellingSuggestionFromNames(propName, memberNames)
         // For static access on class/namespace identifiers, use "typeof X" format
         val rawTypeName = typeToString(displayTypeOverride ?: objectType)
-        val typeName = if (!isThisAccess && objectType.symbol?.flags?.hasAny(SymbolFlags.Class) == true) {
+        // (CHK.196) a constructor-side type already renders as `typeof Name`; only the
+        // instance hybrid a class identifier still reads as needs the prefix.
+        val typeName = if (!isThisAccess && objectType.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
+            !classConstructorTypes.isConstructorType(displayTypeOverride ?: objectType)) {
             "typeof $rawTypeName"
         } else {
             rawTypeName
@@ -173667,8 +173674,10 @@ interface DataView {
             // requirement (statics live in BOTH `members` and `staticMembers` per the
             // bifurcation model, so name-presence alone over-counts: `class C { static
             // prop() {} }` instances have NO `prop`).
+            // (CHK.196): on a class's CONSTRUCTOR side the statics are exactly the members.
             val srcSym = sourceMembers[prop.name]
             val srcStaticOnly = srcSym != null && srcSym.declarations.isNotEmpty() &&
+                !classConstructorTypes.isConstructorType(sourceType) &&
                 srcSym.declarations.all { d ->
                     when (d) {
                         is PropertyDeclaration -> ModifierFlag.Static in d.modifiers
@@ -178596,6 +178605,9 @@ interface DataView {
         val flags = symbol.flags
         return when {
             flags.hasAny(SymbolFlags.Class) -> {
+                // (CHK.196) stage 1: the class's constructor side (statics, merged-namespace
+                // values, every visible construct signature) — see [ClassConstructorTypes].
+                classConstructorTypes.constructorTypeOfClass(symbol)?.let { return it }
                 // typeof ClassName → constructor type with construct signature
                 val classType = getDeclaredTypeOfSymbol(symbol)
                 if (classType === anyType || classType === errorType) return anyType
@@ -178658,6 +178670,8 @@ interface DataView {
     private fun buildClassValueConstructorTypeForDisplay(symbol: Symbol): Type.Object? {
         val classDecl = symbol.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
             ?: return null
+        // (CHK.196) stage 1: the one constructor-side builder.
+        classConstructorTypes.constructorTypeOfClass(symbol)?.let { return it }
         val classType = getDeclaredTypeOfSymbol(symbol)
         if (classType === anyType || classType === errorType) return null
         val isAbstract = ModifierFlag.Abstract in classDecl.modifiers
