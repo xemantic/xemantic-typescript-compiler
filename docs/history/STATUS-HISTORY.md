@@ -1,5 +1,11 @@
 
 
+**(P18.250) — (CHK.193): TWO FALSE ERRORS ON LEGAL CODE ARE GONE — AN INSTANCE MEMBER IS NO LONGER CHECKED AGAINST A BASE CLASS's STATIC, AND AN IMPORT FROM A MISPLACED `declare module` IS NO LONGER TREATED AS A REAL MODULE (IT NOW REPORTS tsgo's "cannot find module"); +10 PINS, 22,167 / 0 / 44 (2026-10-01).**
+Also: `new N.C()` under a parameter named `N` types from the parameter, and members of a merged interface's base class
+are checked. Screen 0; grid 8x0; libraries unchanged. Queued first next: a silent wrong type when a class declares an
+instance member and a static of the same name ((CHK.194)).
+
+
 **(P18.249) — (CHK.190) STAGE 1: TYPES NOW FLOW THROUGH BARREL FILES — RENAMED, DEFAULT AND CHAINED RE-EXPORTS (`export { a as b } from`, `export { default as x } from`, `.js` SPECIFIERS) RESOLVE TO THE REAL DECLARATION INSTEAD OF A SILENT `any`, AND HOVER FOLLOWS THEM; +21 PINS, 22,157 / 0 / 44 (2026-10-01).**
 The full suite caught names added by a module augmentation going missing on the first build; fixed before commit.
 Screen 0; grid 8x0; libraries unchanged.

@@ -1,3 +1,28 @@
+### Round (P18.245) — (INV.0) extraction: the class-instance missing-member family (8 declarations — TS2339 / TS2551 / TS2576 on class instances, the merged-interface member read of (P18.241)) moves VERBATIM into `ClassInstanceMembers.kt`; `Checker.kt` -377; every deterministic receipt byte-identical; the warm A/B is below this box's A/A noise floor (2026-10-01)
+
+One implementation subagent. **Choice**: of the two candidates the type-only-value / TS2693 / TS2708 family was
+REFUSED for this round — it sits in three places and its helpers read the spine's own state (`spineScopeLookup`,
+`spineCaStatus`, `spineCaFrames`, `spineSource`, `spineFileName`, `spineTavGlobalValueless`), so moving it would expose
+spine internals; it stays the next candidate once that state is passed in explicitly. The class-instance family is one
+contiguous block (379 lines; the brief's list missed `hasInstanceMemberNamed`, `tryEmitStaticAccessTs2576`,
+`classMemberNameText`). `internal class ClassInstanceMembers(private val checker: Checker)`, field
+`classInstanceMembers`; 18 call sites call it directly; 9 ambient reads, writes `diagnostics` only; 5 widenings (4
+functions `internal`, the `RUNTIME_PROPERTIES` constant `internal val`); ledger row 16. **Verbatim proof** both ways.
+**Receipts** (orchestrator-retaken, `8b103e5a` vs `28b024af`): per-pass `--passTiming` table — all pass rows, counters
+and the 30 listed diagnostics identical, the one differing line being the narrowing walk's `>=1ms by kind` tally, a
+TIME-BUCKETED count; `cost_gate.py` deltas identical to (P18.244)'s (the split moves no counter); PrintInlining (builder,
+both name forms) — `checkArgumentsAgainstSignature` identical in 3 of 4 runs, the odd one the parent's own first run at
+the `$default` site (the known run-to-run instability), every moved method keeps its verdict (+16 bytes of parameter
+null checks); full suite 22,097 / 0 / 44 (+15, `ClassInstanceMembersCollaboratorTest`); corpus screen 8725 / 0;
+`huge_methods.py --fail-over 0` 0; spine closure audit clean; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked
+0/0, cronstrue 1/1; warning gate with probe: probe only; tsgo matrix 15 / 15 cells identical. **Warm A/B, recorded
+honestly**: before->after +1.5% (0/2), after->before showed the after-arm +2.9% (one arm sd 2.7%), a replicate +0.5%
+noise-dominated — and an **A/A control** (the before-arm against a byte-identical copy of itself) read **+2.4%, B wins
+0/2**, so on this box at this hour the warm A/B cannot resolve anything below ~2-3% and the deterministic receipts carry
+the split. Builder ablation over 9 pin classes (161 tests green): a1 6 / a2 5 / a3 4 / a4 1 / a5 7 / a6 1 / a7 1 RED.
+Noted, not changed (behaviour-preserving round): `emitClassChainTs2551Suggestion` and `isStaticMemberOfClass` still
+find a base class through `globals` only — that is (CHK.187)'s territory.
+
 ### Round (P18.244) — (CHK.189)(a)+(b): a value read of a type-only symbol is an ERROR type at every reader (identifier typer, callee, member-access receiver), so the ours-only follow-on rows after TS2693 / TS2708 are gone; own-file `new N()`, shorthand and destructuring targets on a namespace report TS2708; 37 cells: 0 tsgo rows lost, +37 gained, 32 ours-only removed; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent (resumed once). **Where the queue item was wrong**: (a) THREE readers, not one — the
