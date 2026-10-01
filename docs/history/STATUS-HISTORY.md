@@ -1,5 +1,10 @@
 
 
+**(P18.244) — (CHK.189): AFTER "only refers to a type", NO MORE KNOCK-ON ERRORS ON THE SAME EXPRESSION (WE ADDED "not callable", "property does not exist" AND MORE WHERE tsgo STOPS), AND NAMESPACE MISUSE IN `new`, SHORTHAND AND DESTRUCTURING TARGETS NOW REPORTS TS2708; +16 PINS, 22,082 / 0 / 44 (2026-10-01).**
+Across 37 test cells: 0 tsgo rows lost, 37 gained, 32 ours-only removed. The full suite caught 8 hover regressions the
+builder's sweep missed (the value-only rule also fired for type references); fixed before commit. Screen 0; grid 8x0.
+
+
 **(P18.243) — (CHK.188): USING A GLOBAL INTERFACE, TYPE ALIAS OR TYPE-ONLY NAMESPACE AS A VALUE FROM ANOTHER FILE NOW REPORTS tsgo's "only refers to a type" (TS2693 / TS2585 / TS2708) — PREVIOUSLY SILENT; +15 PINS, 22,066 / 0 / 44 (2026-09-30).**
 The corpus caught two false-positive traps on the way (the embedded test lib and `declare namespace` bookkeeping),
 both handled. Screen 0; grid 8x0; libraries unchanged. Queued: the ours-only follow-on errors after such a row

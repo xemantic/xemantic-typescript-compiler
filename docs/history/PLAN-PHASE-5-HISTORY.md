@@ -1,3 +1,36 @@
+### Round (P18.239) — (CHK.180) stage 1: `this` and written-type `const` body locals reach the member / element-access / nullish readers per access, as tsgo types them — 45 -> 27 missing of a 104-cell matrix, 0 ours-only, every new row tsgo's exact text; +0 on corpus, grid and libraries (2026-09-30)
+
+**Out-of-order pick, stated**: taken ahead of (CHK.183) / (CHK.182) because a read-only census had fully specified and
+priced it (`build/scratch-p18237-census/README.txt`); (CHK.182) is next. One implementation subagent. **Where the
+census / brief was wrong**: (a) predicted 29 missing, landed 27 — the two `as`-local KEY cells close too once
+`annotatedReceiver` takes an `as` initializer; (b) the constructor key cell is not a `this` problem — any class that
+declares a constructor carries a construct signature on its instance type ((CHK.73)), which `plainIndexless` refuses,
+for a plain `d: D` parameter too; (c) **the stage-1 spec as written reddened the corpus** —
+`discriminateWithOptionalProperty4(exactoptionalpropertytypes=false)` grew a false `TS18048 'zWorkAround.b'`, invisible
+to the grid and to the census's instrument — whose cause is an EXISTING narrowing gap (truthiness narrowing on a union
+whose members carry `?: undefined` properties), already a shipped false positive on parameters and file-level consts
+(queued (CHK.184)); a WRITTEN UNION of two or more non-nullish constituents is therefore refused; (d) with (c) in, the
+frame-lifetime install (arm a6) no longer reddens the corpus — the shape it does break (a false TS2341 on `({ x } =
+this)` after a `this.p` read) is pinned; (e) only one of the census's four tsgo-silent controls reproduced as written —
+static and class-expression `this` are NOT tsgo-silent, the `let` shape needed a class with `this.tokenizer.*`, the
+marked `Instance.ts:77` shape reproduces only verbatim (removing its two comment lines stops it — unexplained, recorded
+in the pin's KDoc), and the object-literal-method crossing is unreachable because the property-access walk never
+enters such a body. **Mechanism**: new `WrittenReceiverTypes.kt` (131 lines) — `this` through
+`enclosingInstanceThisTypeForFlow`; a single-declaration `const` whose type is WRITTEN (annotation, `as T`, `<T>`, a
+parenthesised cast; not `as const`); refused when the root is not `any`, already in `currentLocalTypes`, a parameter
+binding or a shadowed name, `any` / error / `unknown`, a multi-constituent union, `readCrossesUnmodeledContainer`, or a
+nullish type the `bodyLocalAssignmentsVeto` silences; installed for ONE `checkSingle*` call and removed
+(`Checker.kt` wrapper, two call sites, +25). `ElementAccessMissingMember.annotatedReceiver` accepts a cast initializer.
+Five refusal pins in `AnnotatedBodyLocalReceiverTest` now CLOSE, byte-identical to tsgo, and were converted to tsgo-row
+pins (`… - closed by CHK-180`). **Pins**: `Chk180WrittenReceiverTypeTest`, 20 tests (one `residue - …` countdown for the
+construct-signature case); ablation a1 4 / a2 1 / a3 1 / a4 3 / a4k 3 / a5 1 / a6 1 / a7 1 RED (a2, a3, a5 confirmed
+LIVE on marked, reproducing its 44 / 12 ours-only rows). **Gates**: full suite 21,998 / 0 / 44 (+20); corpus screen
+8725 / 0; `cost_gate.py` — every counter FELL (`narrow.walks` -3.30%, `mapped.hits` -2.17%, `globals.lookups` -1.83%,
+`typeOfExpr.calls` -0.33%; the before binary reproduces the recorded baseline exactly, so they are real: a receiver
+with a written type installed takes shorter resolution paths than the `any` fallback it replaces), baseline updated;
+`huge_methods.py --fail-over 0` 0 (`checkPropertyAccessInExpr` 5,123, `cpaSpineLeave` 7,308); grid 8 x added=0
+removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only.
+
 ### Round (P18.238) — (CHK.181): a rest-tuple parameter's arity is read the way tsgo reads it — optional elements give a range (`Expected 1-2`), a tuple with its own rest element gives `at least N`, and a missing rest parameter relates TS6236 — in both arity readers; every changed row a tsgo row, +0 on corpus, grid and libraries (2026-09-30)
 
 One implementation subagent, beside a read-only (CHK.180) census. **Where the queue item was wrong**: the defect was
