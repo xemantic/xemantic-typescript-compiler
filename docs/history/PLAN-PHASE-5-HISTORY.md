@@ -1,3 +1,31 @@
+### Round (P18.252) — (CHK.190) residues: re-export CYCLES report tsgo's TS2303, TS1361 / TS1362 ("cannot be used as a value because it was imported/exported using 'import type'/'export type'") are implemented for the first time, a missing re-exported / imported member picks tsgo's code (TS2724 > TS2614 > TS2460 / TS2459 / TS2305), and `export * as M` resolves in value positions; every added row a tsgo row; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent, beside a read-only census of the class constructor-side type ((CHK.73)). **Where the
+item was wrong**: (a) c14 was not a one-row gap — TS1361 / TS1362 had ZERO emitters anywhere (even a plain `import type
+{ B }; new B()`), and the corpus never caught it because the typeOnly conformance CASE files are missing from this
+clone (30 error baselines carry the codes) — built as a new family; (b) c26 hid more: an `export { x } from` naming an
+absent member always printed TS2305, and the IMPORT side was wrong twice (a spelling suggestion must beat TS2614, and
+TS2724 must beat TS2460 / TS2459); (c) the namespace-level `export { … }` residue is THREE mechanisms (a false TS2708 in
+a clause-only ambient namespace, clause entries missing from the namespace export table — false TS2694 / TS2339 — and
+one missing tsgo row) — REFUSED as not contained, queued; (d) `circular1` / `circular3` are tsgo `submoduleAccepted`
+rows whose case files are missing too, so never gated — now pinned from tsgo's baselines. **Mechanism**: new
+`ImportExportAliasChain.kt` (168 lines) walks the import / export alias declarations hop by hop, syntactically
+(`nextHop`, `isOnCycle`, `firstTypeOnly`; stars deliberately not followed); new `ImportExportAliasDiagnostics.kt` (280
+lines) — `checkReExportCycles` (TS2303 at every alias ON a cycle, spanning the specifier; lead-ins and the importer not
+reported) and `checkTypeOnlyValueUses` (TS1361 / TS1362 at value uses with the 1376 / 1377 "was imported / exported
+here" note; a whitelist of expression positions plus shorthand and class `extends`, excluding type queries /
+`implements` / interface heritage; a same-named parameter or local shadows; the final target must be a value),
+registered as passes; `Checker.emitAbsentNamedMember` holds tsgo's code order (extracted from
+`checkNamedImportExistence`), `checkDefaultImports`' TS2614 asks for a suggestion first; a `resolveAlias`
+`ExportDeclaration` arm maps `export * as M` to the module object; `NameResolver.clauseModuleTarget` is the shared
+specifier chain. `Checker.kt` +62 net, `NameResolver.kt` +23. **Matrix**: c13 + ten cycle shapes 0 -> all agree; c14
++ seven 1361 / 1362 shapes 0 -> all agree (note spans included); eleven missing-member codes wrong -> all agree; o1 4
+wrong -> 4 agree; c08 3 -> 5 of 5. **Pins**: `ImportExportAliasChainDiagnosticsTest`, 25 tests; ablation a1 10 / a1b 2
+/ a2 4 / a3 1 / a4 1 / a5 1 / a6 1 / a7 1 / a8 1 / a9 1 / a10 1 / a11 2 / a12 1 RED. **Gates**: full suite 22,207 / 0 /
+44 (+25); corpus screen 8725 / 0 (the census's 84 re-export cases did not move); `cost_gate.py` 0; `huge_methods.py
+--fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe:
+probe only. The constructor-side census reported meanwhile -> queued as (CHK.196). Residues -> (CHK.195).
+
 ### Round (P18.251) — (CHK.194)(a): an instance member and a same-named static no longer overwrite each other — `new A().s` and `A.s` each read their own side in both declaration orders; 14 cells wrong -> tsgo, one swapped cell fixed; a STAGED fix (instance wins the shared table, class-value reads route to `staticMembers`), not the full separation; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent. **Where the brief was wrong**: (a) the class-value reads (`A.s`, a call, `A["s"]`) needed
