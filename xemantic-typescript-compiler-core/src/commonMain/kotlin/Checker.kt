@@ -111723,35 +111723,25 @@ interface DataView {
         return withInstantiationContext(scopeMapper(scope)) {
             val mapper = createTypeMapper(typeParams, typeArgs)
             when (decl) {
-                is PropertyDeclaration -> {
-                    val declType = decl.type ?: return null
+                // 17.39 / (P18.260): a field, a getter and a parameter property share ONE rule —
+                // [instantiateMethodParamType], which descends into a function-shaped object
+                // (substituting the outer type arguments into its signatures, incl. their own
+                // type parameters' constraints), a union carrying one, and an anonymous property
+                // bag of them, where plain [instantiateType] deliberately no-ops a function shape.
+                // Before, only the FIELD arm took the function-object half, so `constructor(public
+                // c: abstract new () => T)` / `get c(): () => T` / `c: (() => T) | null` read
+                // through `H<Ab>` kept the raw `T` (a false TS2322 on `h.c = Ab`, a silent read).
+                // (CHK.102) every step MINTS — never mutates `rawType`, which INV.5(c)'s
+                // context-keyed `mappedNodeTypes` shares between instantiations.
+                is PropertyDeclaration, is GetAccessor, is Parameter -> {
+                    val declType = when (decl) {
+                        is PropertyDeclaration -> decl.type
+                        is GetAccessor -> decl.type
+                        else -> (decl as Parameter).type
+                    } ?: return null
                     val rawType = getTypeFromTypeNode(declType)
                     if (rawType === errorType || rawType === anyType) null
-                    else if (rawType is Type.Object && rawType !is Type.Reference && rawType !is Type.Interface
-                        && (!rawType.callSignatures.isNullOrEmpty() || !rawType.constructSignatures.isNullOrEmpty())) {
-                        // 17.39: Function-typed property — substitute outer typeArgs into the
-                        // inner sig's TypeParam constraints/defaults + params + return type.
-                        // Without this, `interface I<S> { f: <T extends S>(x: T) => void }`'s
-                        // f.signature.T retains constraint `S` (un-substituted) at the call site,
-                        // blocking 16.4ds per-property elaboration of arg-vs-constraint and 16.4i
-                        // TS2345-via-constraint emission. (CHK.102) the helper MINTS — it may
-                        // NOT mutate `rawType`, which INV.5(c)'s context-keyed
-                        // `mappedNodeTypes` shares between every instantiation resolving this
-                        // annotation node under the target's own type-param scope.
-                        substituteOuterTypeArgsInGenericFnObject(rawType, mapper)
-                    } else instantiateType(rawType, mapper)
-                }
-                is GetAccessor -> {
-                    val declType = decl.type ?: return null
-                    val rawType = getTypeFromTypeNode(declType)
-                    if (rawType === errorType || rawType === anyType) null
-                    else instantiateType(rawType, mapper)
-                }
-                is Parameter -> {
-                    val declType = decl.type ?: return null
-                    val rawType = getTypeFromTypeNode(declType)
-                    if (rawType === errorType || rawType === anyType) null
-                    else instantiateType(rawType, mapper)
+                    else instantiateMethodParamType(rawType, mapper)
                 }
                 is MethodDeclaration -> {
                     // 16.0n: Build an instantiated method type (Type.Object with call signatures)

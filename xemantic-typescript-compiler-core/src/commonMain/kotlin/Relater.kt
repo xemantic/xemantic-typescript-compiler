@@ -1315,8 +1315,9 @@ internal class Relater(
         excluded: Set<String>,
     ): Boolean {
         val targetProps = target.properties ?: return true
-        val sourceHasCallSigs = !source.callSignatures.isNullOrEmpty()
-        val sourceMembers = source.members ?: if (sourceHasCallSigs) emptyMap() else return targetProps.isEmpty()
+        val sourceHasCtorSigs = !source.constructSignatures.isNullOrEmpty()
+        val sourceMembers = source.members
+            ?: if (!source.callSignatures.isNullOrEmpty() || sourceHasCtorSigs) emptyMap() else return targetProps.isEmpty()
         // Statics filter: when target carries a static side (class declaration),
         // skip target.properties entries that live on the static side. Instance-vs-
         // instance shape comparison must not see `static bar()` on either side.
@@ -1326,6 +1327,10 @@ internal class Relater(
             val targetName = targetProp.name
             // (CHK.142)(b) tsgo's `excludeProperties(properties, excludedProperties)`.
             if (excluded.isNotEmpty() && targetName in excluded) continue
+            // (P18.260) tsgo's `propertiesRelatedTo` never compares a target property flagged
+            // `Prototype` — the binder-made `prototype` of a class's constructor side. The
+            // instance is compared through the construct signatures instead.
+            if (targetName == "prototype" && checker.classConstructorTypes.isConstructorType(target)) continue
             if (targetStatics != null && targetStatics[targetName] === targetProp) continue
             // Inherited Object prototype members (constructor, toString, valueOf, …)
             // are never "missing" — every JS object has them via the prototype chain.
@@ -1335,6 +1340,15 @@ internal class Relater(
             // source has its own `toString: 5`, fall through to the type-compatibility
             // check (number vs () => string emits TS2322 per `assignmentToObject_ts`).
             if (targetName in Checker.OBJECT_PROTOTYPE_PROPERTIES && !sourceMembers.containsKey(targetName)) continue
+            // (P18.260) tsgo's apparent type of an object with call OR construct signatures is
+            // `Function` (`resolveStructuredTypeMembers`), so a construct-signature-only source
+            // (`new () => C`, `abstract new () => C`) also reaches `prototype` (typed `any`),
+            // `call`/`apply`/`bind`, `length` and `name` — `const x: typeof C = c` with `c: new ()
+            // => C` relates there and was a false TS2322 here. Only where the source lacks the
+            // member itself: a class constructor type carries its own `prototype` (the instance),
+            // which must still be compared. The call-signature form below is unchanged.
+            val sourceHasCallSigs = !source.callSignatures.isNullOrEmpty() ||
+                (sourceHasCtorSigs && !sourceMembers.containsKey(targetName))
             // 17.27: When source is a function type (has callSignatures), Function.prototype
             // methods (call/apply/bind) are implicitly available through the apparent type.
             // Lets `() => void` satisfy `interface Callable { call(blah: any) }` etc.
