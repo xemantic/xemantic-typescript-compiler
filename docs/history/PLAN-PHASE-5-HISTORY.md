@@ -1,3 +1,31 @@
+### Round (P18.251) — (CHK.194)(a): an instance member and a same-named static no longer overwrite each other — `new A().s` and `A.s` each read their own side in both declaration orders; 14 cells wrong -> tsgo, one swapped cell fixed; a STAGED fix (instance wins the shared table, class-value reads route to `staticMembers`), not the full separation; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent. **Where the brief was wrong**: (a) the class-value reads (`A.s`, a call, `A["s"]`) needed
+no per-path fix — all go through `getTypeOfPropertyAccess`, so one classifier at the member lookup covers reads, call
+return types and argument checks; (b) the real hazard was a NAME-keyed static filter (`staticMembers.containsKey(name)`)
+at 6 relation and missing-property sites — once the instance member wins it would drop the instance member too, so all
+6 are identity tests now (`statics[name] === prop`); (c) the class value is still typed as its INSTANCE type ((CHK.73)),
+so a relation cannot tell `A` from `new A()` as a source; (d) `staticMembers` is null until the member table is first
+resolved, so `A.m("x")` as a class's first use checked against the instance method. **Mechanism**: `MemberResolver` —
+a static never replaces an instance entry (it lives in `staticMembers` only), an instance member replaces a static
+entry with a fresh symbol, each side's methods / accessors get their own symbol (`memberIsStatic`, `instanceHolds`);
+`Checker.classValueStaticMember` answers only on a name clash, for an identifier or namespace-qualified receiver that
+resolves to the class symbol, refusing a same-named parameter / block binding (`isShadowedByLocalBinding`), consulted at
+`computeRawTypeOfPropertyAccess` and `getTypeOfElementAccess`; `Relater` retries a source's failing instance member
+with its static — **SUPPRESS-ONLY, a stopgap**: it removes a false positive on `const y: { s: boolean } = A` and could
+miss a row on an INSTANCE source; the corpus and grid read 0 moved, and it is to be replaced by a real constructor-side
+type ((CHK.73)). `Checker.kt` +52, `MemberResolver.kt` +53, `Relater.kt` +10, `ClassInstanceMembers.kt` +35.
+**Matrix**: m1 m2 m3 m4 m6 m9 m10 m14 m17 m18 m20 m21 m24 q3 wrong -> tsgo (q3 also gains the missing TS2741 / TS2322);
+m23 was a SWAP (`A.m("x")` reported, `new A().m(1)` not) -> tsgo; s4's TS2416 detail now `'number'`, p4 s6 s7 match;
+m13 line 4 has tsgo's code and head with the detail still `'number'` for `'boolean'` (the class-value relation).
+**Pins**: `StaticInstanceMemberSeparationTest`, 15 tests; ablation a1 10 / a2 1 / a3 1 / a4 7 / a5 1 / a6 1 / a7 2 / a8
+1 / a9 1 / a10 2 RED. **Gates**: full suite 22,182 / 0 / 44 (+15); corpus screen 8725 / 0; `cost_gate.py` 0;
+`huge_methods.py --fail-over 0` 0 (`resolveInterfaceMembersCore` 5,589); grid (identity hash now covers
+`MemberResolver` and `Relater`) 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 (a control — the
+clash shape is not in these programs); warning gate with probe: ONE real warning in the new test file (an unnecessary
+`orEmpty()` on a non-null list) — fixed by the orchestrator, gate re-run clean, class re-run 15 / 15. Residues -> the
+(CHK.194) item.
+
 ### Round (P18.250) — (CHK.193): two shipped false positives removed — an instance member is no longer compared against a BASE STATIC (false TS2416), and an import of an untargeted `declare module` in a module file no longer types as a real module (false TS2339, and tsgo's missing TS2307 now reports); a qualified `new N.C()` under a shadowing parameter types as the parameter's member; a merged interface's class base and its names reach the member check and the TS2551 pool; every moved row a tsgo row; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent. **Where the queue item was wrong**: (b) the import was not merely "unresolved" — a
