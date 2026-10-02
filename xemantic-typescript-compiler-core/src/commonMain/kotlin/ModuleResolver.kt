@@ -291,25 +291,59 @@ class ModuleResolver(
 
     // --- bare specifiers --------------------------------------------------------
 
+    private fun isJsExtension(path: String): Boolean =
+        path.endsWith(".js") || path.endsWith(".jsx") || path.endsWith(".mjs") || path.endsWith(".cjs")
+
     private fun resolveBare(spec: String, fromDir: String): String? {
         val (pkg, sub) = splitBare(spec)
         var dir = fromDir
+        // (CHK.202) tsgo resolves a package import in TWO passes — TypeScript and
+        // declaration extensions over EVERY ancestor `node_modules` (and its `@types`)
+        // first, JavaScript only after — so a nearer package that ships only `.js` loses
+        // to a farther `@types/<pkg>`. Approximated by remembering the first JavaScript
+        // answer and continuing the walk for a typed one.
+        var jsFallback: String? = null
         while (true) {
             val nm = "$dir/node_modules"
             val pkgDir = "$nm/$pkg"
             if (isDirectory(pkgDir)) {
-                resolveInPackage(pkgDir, sub)?.let { return it }
+                resolveInPackage(pkgDir, sub)?.let {
+                    if (!isJsExtension(it)) return it
+                    if (jsFallback == null) jsFallback = it
+                }
             }
             // @types fallback: @types/<name> or @types/<scope>__<name>.
             val typesPkg = if (pkg.startsWith("@")) "@types/" + pkg.substring(1).replace("/", "__") else "@types/$pkg"
             val typesDir = "$nm/$typesPkg"
             if (isDirectory(typesDir)) {
-                resolveInPackage(typesDir, sub)?.let { return it }
+                resolveInPackage(typesDir, sub)?.let {
+                    if (!isJsExtension(it)) return it
+                    if (jsFallback == null) jsFallback = it
+                }
             }
             val parent = PathUtil.dirname(dir)
-            if (parent == dir || parent.isEmpty()) return null
+            if (parent == dir || parent.isEmpty()) return jsFallback
             dir = parent
         }
+    }
+
+    /**
+     * (CHK.202) tsgo's `PackageId.Name` for a file resolved inside `node_modules`: the
+     * `name` of the package that owns it (the segment after the LAST `node_modules/`,
+     * two segments for a scope), answered only when its `package.json` carries both a
+     * `name` and a `version` — a package id needs both. Null outside `node_modules`.
+     */
+    fun packageIdName(resolved: String): String? {
+        val at = resolved.lastIndexOf("/node_modules/")
+        if (at < 0) return null
+        val rest = resolved.substring(at + "/node_modules/".length)
+        val parts = rest.split('/')
+        val pkg = if (rest.startsWith("@") && parts.size >= 3) parts[0] + "/" + parts[1]
+            else if (!rest.startsWith("@") && parts.size >= 2) parts[0] else return null
+        val json = readPackageJson(resolved.substring(0, at) + "/node_modules/" + pkg + "/package.json") ?: return null
+        val name = json["name"]?.stringValue ?: return null
+        json["version"]?.stringValue ?: return null
+        return name
     }
 
     /** Splits a bare specifier into (packageName, subpath); handles `@scope/name`. */

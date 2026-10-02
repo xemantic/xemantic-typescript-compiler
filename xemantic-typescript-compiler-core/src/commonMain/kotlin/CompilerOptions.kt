@@ -292,6 +292,10 @@ data class CompilerOptions(
     val allowJs: Boolean = false,
     val allowJsExplicitlyFalse: Boolean = false,
     val checkJs: Boolean = false,
+    /** (CHK.202) `checkJs` WRITTEN as `false` — tsgo's tristate: an unset `checkJs` makes a
+     *  JavaScript file "plain JS" (only the binder/grammar rows of `plainJSErrors` survive),
+     *  an explicit `false` drops every semantic row of it ([UncheckedJsFiles]). */
+    val checkJsExplicitlyFalse: Boolean = false,
     val isolatedModules: Boolean = false,
     val skipLibCheck: Boolean = false,
     val forceConsistentCasingInFileNames: Boolean = false,
@@ -678,6 +682,27 @@ data class ParsedSource(
      * never a missing error at the import itself.
      */
     val moduleResolutions: Map<String, Map<String, String>> = emptyMap(),
+    /**
+     * (CHK.202) importer file name -> (module specifier as written -> the `node_modules`
+     * JavaScript file it resolved to). tsgo's `maxNodeModuleJsDepth` defaults to 0, so
+     * such a file is NOT in the program: the import is an implicit-`any` module, reported
+     * as TS7016 under `noImplicitAny` ([UntypedModuleResolution]). Empty off the project
+     * path, like [moduleResolutions].
+     */
+    val untypedModuleResolutions: Map<String, Map<String, UntypedModuleResolution>> = emptyMap(),
+)
+
+/**
+ * (CHK.202) A module specifier the project crawl resolved to a JavaScript file inside
+ * `node_modules`, which it then left out of the program (tsgo's `maxNodeModuleJsDepth: 0`).
+ *
+ * [packageName] is tsgo's `PackageId.Name` — the enclosing package's `package.json`
+ * `name`, recorded only when that manifest also carries a `version` (a package id needs
+ * both) — and decides whether TS7016 carries its "Try `npm i --save-dev @types/…`" line.
+ */
+data class UntypedModuleResolution(
+    val resolvedFileName: String,
+    val packageName: String?,
 )
 
 /**
@@ -1130,7 +1155,7 @@ private fun applyDirectiveArms3(
             allowJs = boolValue,
             allowJsExplicitlyFalse = !boolValue
         )
-        "checkjs" -> options.copy(checkJs = boolValue)
+        "checkjs" -> options.copy(checkJs = boolValue, checkJsExplicitlyFalse = !boolValue)
         "isolatedmodules" -> options.copy(isolatedModules = boolValue)
         "skiplibcheck" -> options.copy(skipLibCheck = boolValue)
         "forceconsistentcasinginfilenames" -> options.copy(forceConsistentCasingInFileNames = boolValue)

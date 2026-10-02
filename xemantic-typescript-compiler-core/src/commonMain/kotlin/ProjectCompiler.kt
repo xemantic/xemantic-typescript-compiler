@@ -339,6 +339,9 @@ class ProjectCompiler(private val vfs: Vfs) {
         // (CHK.30) importer -> specifier -> resolved file, as the crawl's own
         // [ModuleResolver] answered it; carried into the core via [ParsedSource].
         val moduleResolutions = mutableMapOf<String, MutableMap<String, String>>()
+        // (CHK.202) importer -> specifier -> the `node_modules` JavaScript file it named,
+        // which the crawl left OUT of the program (tsgo's `maxNodeModuleJsDepth: 0`).
+        val untypedModuleResolutions = mutableMapOf<String, MutableMap<String, UntypedModuleResolution>>()
         val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
         FrontEnd.close(FrontEnd.CONFIG, feConfigT0)
         val feCrawlT0 = FrontEnd.t()
@@ -346,6 +349,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             val typeRoots = effectiveTypeRoots(config)
             crawlImportGraph(
                 seeds, resolver, emitOptions, unresolved, importEdges, moduleResolutions,
+                untypedModuleResolutions = untypedModuleResolutions,
                 resolveReferenceTypes = { name ->
                     typeRoots.firstNotNullOfOrNull { resolveTypePackageInRoot(it, name, resolver) }
                 },
@@ -368,7 +372,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             if (!emitOptions.effectiveModule.isNodeNext) emitOptions
             else emitOptions.copy(packageJsonTypes = packageScopesOf(program.keys))
         val parsed = ParsedSource(coreOptions, files, hasExplicitFilenames = true, preParsed = preParsed,
-            moduleResolutions = moduleResolutions)
+            moduleResolutions = moduleResolutions, untypedModuleResolutions = untypedModuleResolutions)
         // (INC.46) The fingerprint walk is armed around THIS compile and disarmed
         // again, and its answer is snapshotted immediately. The arming is a
         // process-global rather than a threaded parameter deliberately: the walk hooks
@@ -589,6 +593,11 @@ class ProjectCompiler(private val vfs: Vfs) {
         // specifier at all; handing it the answer the real resolver already computed
         // is what stops an imported type from silently degrading to `any`.
         moduleResolutions: MutableMap<String, MutableMap<String, String>> = mutableMapOf(),
+        // (CHK.202): every specifier that resolved to a JavaScript file inside
+        // `node_modules`. tsgo's `maxNodeModuleJsDepth` defaults to 0 (this compiler
+        // does not parse the option), so such a file never enters the program and the
+        // import is an implicit-`any` module — the checker's TS7016.
+        untypedModuleResolutions: MutableMap<String, MutableMap<String, UntypedModuleResolution>> = mutableMapOf(),
         // M4.8: `/// <reference types="pkg">` needs the tsconfig's type roots, which
         // the crawl has no other access to; the caller supplies the lookup.
         resolveReferenceTypes: (String) -> String? = { null },
@@ -628,6 +637,11 @@ class ProjectCompiler(private val vfs: Vfs) {
                     val resolved = resolver.resolveFrom(spec, importerDir)
                     if (resolved == null) {
                         if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(f.path to spec)
+                        continue
+                    }
+                    if (isNodeModulesJs(resolved)) {
+                        untypedModuleResolutions.getOrPut(f.path) { mutableMapOf() }[spec] =
+                            UntypedModuleResolution(resolved, resolver.packageIdName(resolved))
                         continue
                     }
                     importEdges.add(f.path to resolved)
@@ -670,6 +684,11 @@ class ProjectCompiler(private val vfs: Vfs) {
             FrontEnd.close(FrontEnd.CRAWL_DRAIN, feDrainT0)
         }
     }
+
+    /** (CHK.202) A JavaScript file reached through `node_modules` — never a program file here. */
+    private fun isNodeModulesJs(path: String): Boolean =
+        "/node_modules/" in path &&
+            (path.endsWith(".js") || path.endsWith(".jsx") || path.endsWith(".mjs") || path.endsWith(".cjs"))
 
     /**
      * INV.1(b): reads and parses [paths] concurrently — read +

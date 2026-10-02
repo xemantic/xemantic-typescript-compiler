@@ -134,17 +134,16 @@ class TsgoStep22Test {
     }
 
     /**
-     * residue — under `allowJs` WITHOUT `checkJs` tsgo checks the file at all and is
-     * SILENT for every row above; we still report TS2855, because
-     * `Checker.checkClassFieldSuperAccessJs` is gated on the file EXTENSION and not on
-     * `checkJs` ((P18.92)'s hazard). Unchanged by this round in both arms and recorded
-     * here so the next reader meets a decision rather than a guarantee; the honest fix is
-     * a file-level "an unchecked JS file reports nothing" gate, not a patch on one walker.
+     * Under `allowJs` WITHOUT `checkJs` the file is "plain JS" and tsgo is SILENT for
+     * every row above (measured on tsgo 7.0.2). This was a countdown pin asserting our
+     * TS2855 until (CHK.202) landed the file-level gate it asked for —
+     * `UncheckedJsFiles`, applied in `Checker.getDiagnostics` — so
+     * `checkClassFieldSuperAccessJs`'s extension gate no longer reaches the output.
      */
     @Test
-    fun `residue - allowJs without checkJs still reports TS2855 where tsgo is silent`() {
+    fun `allowJs without checkJs reports no TS2855 as tsgo`() {
         val d = diagnose(shapes, "// @strict: true\n// @allowJs: true\n// @target: esnext", "index.js")
-        assert(d.count { it.code == 2855 } == 2)
+        assert(d.none { it.code == 2855 })
     }
 
     // ------------------------------------------------- 2. a dropped JSDoc @type tag

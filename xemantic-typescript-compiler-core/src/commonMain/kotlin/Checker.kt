@@ -81,6 +81,9 @@ class Checker(
      * for the string-based compile path.
      */
     private val moduleResolutions: Map<String, Map<String, String>> = emptyMap(),
+    /** (CHK.202) [ParsedSource.untypedModuleResolutions] — read by [checkUnresolvedModules]
+     *  (TS7016) and by the TS2307 / TS2882 emitters, which it silences. */
+    private val untypedModuleResolutions: Map<String, Map<String, UntypedModuleResolution>> = emptyMap(),
     /**
      * (API.3) When non-null, the check spine RECORDS the type of the expression at
      * each requested [TypeCaptureSpan] as it walks past it — see [TypeCaptureRequest]
@@ -8573,6 +8576,9 @@ class Checker(
      */
     private val tsCommentDirectiveCache: MutableMap<String, Map<Int, TsCommentDirective>> = HashMap()
 
+    /** (CHK.202) Per-file [UncheckedJsFiles.Mode], built on first ask by [uncheckedJsModeOf]. */
+    private val uncheckedJsModeCache: MutableMap<String, UncheckedJsFiles.Mode> = HashMap()
+
     init {
         try {
         // (KIR) a sink and a partition worker are mutually exclusive by
@@ -11279,8 +11285,31 @@ class Checker(
             else diagnostics.filter { it.fileName == null || it.fileName in assigned }
         // (LEGACY.0b) F6a: TypeScript 7's missing-property head suppression is decided
         // once, here, over the finished diagnostics — see [RelationHeadSuppression].
-        val answered = applyTsCommentDirectives(RelationHeadSuppression.apply(visible))
+        val answered = applyTsCommentDirectives(filterUncheckedJs(RelationHeadSuppression.apply(visible)))
         return if (options.noCheck) answered.filter { keptUnderNoCheck(it) } else answered
+    }
+
+    /** (CHK.202) The file's [UncheckedJsFiles.Mode]; a file this checker did not bind is CHECKED. */
+    private fun uncheckedJsModeOf(fileName: String): UncheckedJsFiles.Mode =
+        uncheckedJsModeCache.getOrPut(fileName) {
+            val text = fileResults[fileName]?.sourceFile?.text ?: return@getOrPut UncheckedJsFiles.Mode.CHECKED
+            UncheckedJsFiles.modeOf(fileName, text, options)
+        }
+
+    /**
+     * (CHK.202) tsgo reports no checker row for a SKIPPED file and only the
+     * `plainJSErrors` codes for a PLAIN JavaScript file ([UncheckedJsFiles]) — applied
+     * BEFORE the comment directives, because tsgo returns those files' rows without
+     * consulting them ([applyTsCommentDirectives] skips the same files).
+     */
+    private fun filterUncheckedJs(rows: List<Diagnostic>): List<Diagnostic> {
+        if (rows.none { d -> d.fileName != null && uncheckedJsModeOf(d.fileName) != UncheckedJsFiles.Mode.CHECKED }) {
+            return rows
+        }
+        return rows.filter { d ->
+            val fileName = d.fileName ?: return@filter true
+            UncheckedJsFiles.keeps(uncheckedJsModeOf(fileName), d.code, options)
+        }
     }
 
     /**
@@ -11535,6 +11564,9 @@ class Checker(
             val text = result.sourceFile.text
             val directives = tsCommentDirectivesOf(fileName, text)
             if (directives.isEmpty()) continue
+            // (CHK.202) tsgo returns a plain-JS or a skipped file's rows before it
+            // looks at a directive: none is honoured and none is reported unused.
+            if (uncheckedJsModeOf(fileName) != UncheckedJsFiles.Mode.CHECKED) continue
             if (perFile == null) { perFile = mutableMapOf(); sources = mutableMapOf() }
             perFile[fileName] = directives
             sources!![fileName] = text
@@ -51086,6 +51118,23 @@ class Checker(
                     is StringLiteralNode -> specifier.text
                     else -> continue
                 }
+                // (CHK.202) resolved, by the project crawl, to a `node_modules` JavaScript
+                // file the program does not contain: an implicit-`any` module (TS7016 under
+                // noImplicitAny, never for a side-effect import), and no other row here.
+                // An ambient `declare module` of the same name wins, as tsgo's
+                // `tryFindAmbientModule` runs first.
+                val untyped = untypedModuleResolutions[fileName]?.get(moduleName)
+                if (untyped != null) {
+                    if (!isSideEffectImport && moduleName !in ambientModuleNames &&
+                        (options.noImplicitAny || (!options.noImplicitAnyExplicitlyFalse && !options.strictExplicitlyFalse))
+                    ) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, specifier.pos)
+                        diagnostics.add(UntypedModuleImports.diagnostic(
+                            specifier, moduleName, untyped, fileName, line, character, fileResults.keys,
+                        ))
+                    }
+                    continue
+                }
                 // B472: the bare `.`/`..` package-index specifiers resolve to the importing
                 // file's directory index — never TS2307 when they resolve (corpus-FP-safe:
                 // only importWithTrailingSlash imports from exactly `.`/`..`).
@@ -52119,6 +52168,8 @@ class Checker(
     }
 
     private fun emitTS2307(specifier: Expression, moduleName: String, source: String, fileName: String) {
+        // (CHK.202) a specifier the crawl resolved to an untyped `node_modules` module.
+        if (untypedModuleResolutions[fileName]?.containsKey(moduleName) == true) return
         val start = specifier.pos
         val length = moduleName.length + 2 // +2 for quotes
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -52290,6 +52341,8 @@ class Checker(
     }
 
     private fun emitTS2882(specifier: Expression, moduleName: String, source: String, fileName: String) {
+        // (CHK.202) a side-effect import of an untyped `node_modules` module resolves.
+        if (untypedModuleResolutions[fileName]?.containsKey(moduleName) == true) return
         val start = specifier.pos
         val length = moduleName.length + 2 // +2 for quotes
         val (line, character) = getLineAndCharacterOfPosition(source, start)
