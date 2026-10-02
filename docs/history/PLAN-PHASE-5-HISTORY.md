@@ -1,3 +1,30 @@
+### Round (P18.248) — (CHK.192): an import specifier resolves through its OWN import statement (by identity, through the parent chain), no longer through another file's statement at the same offsets — a SILENT WRONG TYPE fixed; the structural `enclosingImportIndex` is no longer built at all; plus `resolveAlias` follows a same-name `export { X } from` (the slice of (CHK.190) the fix exposed); every matrix cell agrees with tsgo; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent. **Where the brief was wrong**: (a) harness's 47 different-target collisions moved 0 rows —
+they are star barrels re-exporting the same declaration, so the wrong statement still reached the right symbol;
+(b) all 9 readers of the index go through `enclosingImportsOf` / `findEnclosingImport`, so one fix covers every
+resolver (resolveAlias, computeImportedSymbolGeneral, the function-like / namespace / enum / var-annotation /
+interface-view / callee resolvers); no other import- or export-node-keyed structural table exists; (c) the collision
+was HIDING a defect: in corpus `constEnumNoEmitReexport` `Usage3.ts`'s `import { MyConstEnum } from './ReExport'`
+collided with `ImportExport.ts`'s, so the barrel was skipped and the const enum inlined BY ACCIDENT — resolving through
+its own statement exposed the (CHK.190) gap and broke that emit baseline, so the narrow same-name re-export arm landed
+here to keep it green. **Mechanism**: `enclosingImportsOf` asks `ownTopLevelImportOf(spec)` first (`ImportSpecifier ->
+NamedImports -> ImportClause -> ImportDeclaration -> SourceFile` by identity, top level only — what the index held);
+`blockLevelImportOf` still serves `declare module` blocks; the structural index survives only as a fallback for
+PARENTLESS nodes and an ordinary program never builds it (the (INC.81) hot row, ~5 ms on 2,401 files, disappears). A
+new `is ExportSpecifier` arm in `NameResolver.resolveAlias` handles a same-name from-clause only (renames stay
+(CHK.190)). `Checker.kt` +32, `NameResolver.kt` +21. `ProjectEnclosingImportIndexTest`'s promotion pin
+(`multiFileKeys > 0`) was pinning the DEFECT — it now asserts the twin fixture and the plain project resolve and
+`enclosingImportBuilds == 0`. **Matrix** (`build/bench/p18248-agent/m`): every collision cell (named / three files /
+non-zero offset / `.ts` vs `.d.ts` / function / interface / var / namespace / rename / type guard) wrong -> tsgo;
+census cells c01 c09 c12 c15 c16 c20 c24 now pass; 0 ours-only rows before and after. **Pins**:
+`ImportSpecifierOffsetCollisionTest`, 14 tests; ablation a1 (no `ownTopLevelImportOf`) 9 RED, a2 (no export-specifier
+arm) 3 RED (and the corpus emit baseline). **Gates**: full suite 22,136 / 0 / 44 (+14); corpus screen 8725 / 0
+(1 mismatch on the first screen, before the re-export arm); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid
+8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only. CLAUDE.md's
+(INC.81) entry and the archive's "do not optimise to identity keys" rule marked SUPERSEDED. Not fixed, same family, no
+observed case: `MemberResolver.jsFileClassDecls` and the lib declaration sets are structurally keyed `Set<Node>`s too.
+
 ### Round (P18.247) — (CHK.191): `this.s` on a static inherited from a base reports TS2576 (and the own-class `this["s"]` row is tsgo's), qualified `new N.C().x` receivers resolve, an `ns.B` base and a program `declare class` base are walked — and the chain walks' NAME-keyed cycle guard is replaced by declaration identity; 53-cell agreement 68 -> 130 of 166 tsgo rows, ours-only 5 -> 3 (all pre-existing); +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent (resumed once), beside the read-only (CHK.190) census. **Where the queue item was wrong**:

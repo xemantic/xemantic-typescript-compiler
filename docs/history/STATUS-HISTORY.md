@@ -1,5 +1,10 @@
 
 
+**(P18.253) — (CHK.196) STAGE 1: `typeof A` IS NOW A REAL CONSTRUCTOR TYPE — ITS STATIC MEMBERS, CONSTRUCTORS AND ABSTRACT-NESS — AND MESSAGES AND HOVER PRINT `typeof A` AS tsgo DOES; 8 MORE tsgo ROWS ON THE CENSUS MATRIX, NONE OF OURS ALONE; +20 PINS, 22,227 / 0 / 44 (2026-10-01).**
+Screen 0 (and the switched-off baselines unchanged); grid 8x0; libraries unchanged. Stage 2 (plain identifier reads of
+a class) is next in the plan.
+
+
 **(P18.252) — (CHK.190) RESIDUES: CIRCULAR RE-EXPORTS NOW REPORT tsgo's "circular definition", USING AN `import type` / `export type` NAME AS A VALUE IS REPORTED FOR THE FIRST TIME (TS1361 / TS1362 HAD NO CODE AT ALL), AND A MISSING IMPORTED MEMBER GETS tsgo's EXACT MESSAGE; +25 PINS, 22,207 / 0 / 44 (2026-10-01).**
 Screen 0; grid 8x0; libraries unchanged. Also queued: the census-specified plan for giving a class value a proper
 constructor-side type ((CHK.196)), stage 1 next.
