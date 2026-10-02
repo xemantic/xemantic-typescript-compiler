@@ -39,6 +39,10 @@ package com.xemantic.typescript.compiler
  * reads: `docs/inversion-ambient-ledger.md` row 17.
  */
 /** tsgo's `extensionsToRemove` (tspath/extension.go:43), in its order. */
+/** tsgo's `SymbolFlagsModuleMember`: the export kinds a misspelt named import is matched against. */
+private val MODULE_MEMBER = SymbolFlags.Variable or SymbolFlags.Function or SymbolFlags.Class or
+    SymbolFlags.Interface or SymbolFlags.Enum or SymbolFlags.Module or SymbolFlags.TypeAlias or SymbolFlags.Alias
+
 private val TS_MODULE_EXTENSIONS = listOf(
     ".d.ts", ".d.mts", ".d.cts", ".mjs", ".mts", ".cjs", ".cts", ".ts", ".js", ".tsx", ".jsx", ".json",
 )
@@ -69,14 +73,17 @@ internal class NamedImportExistence(
 
         for (result in checker.checkedResults) {
             val fileName = result.sourceFile.fileName
-            if (checker.isDtsFile(fileName)) continue
+            // (CHK.198) a declaration file and a type-only clause skip the default-import
+            // and TS2614 rules, never the `export =` named-import rule below (tsgo reports
+            // it in both).
+            val isDts = checker.isDtsFile(fileName)
             val source = result.sourceFile.text
 
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is ImportDeclaration) continue
                 val importClause = stmt.importClause ?: continue
                 // Type-only imports don't need a runtime default export
-                if (importClause.isTypeOnly) continue
+                val defaultRulesApply = !isDts && !importClause.isTypeOnly
 
                 // Resolve the module specifier
                 val specifier = stmt.moduleSpecifier
@@ -113,6 +120,26 @@ internal class NamedImportExistence(
                     if (nm != null && checker.nodeModulesPackageTypeIsModule(nm)) {
                         resolvedFile = nm
                         nmEsmTarget = true
+                    }
+                }
+                // (CHK.198)(d) a default import a bare specifier names, from a CommonJS
+                // importer: an ambient `declare module "<spec>"` (tsgo resolves it first) or a
+                // `node_modules` declaration file. Both have a synthetic default unless they
+                // declare the `__esModule` marker (`canHaveSyntheticDefault`'s declaration-file
+                // arm); only the default-import rule is judged for them here.
+                var nmCjsTarget = false
+                if (resolvedFile == null && bareSpec && defaultRulesApply && importClause.name != null) {
+                    val ambient = ambientModuleBlocks()
+                    if (moduleName in ambient) {
+                        ambient[moduleName]?.let { checkAmbientDefaultImport(source, fileName, moduleName, importClause.name, it) }
+                        continue
+                    }
+                    if (!isESModuleFormat(options, fileName)) {
+                        val nm = checker.resolveBareNodeModulesAnyPrefix(moduleName, fileName)
+                        if (nm != null && checker.isDtsFile(nm)) {
+                            resolvedFile = nm
+                            nmCjsTarget = true
+                        }
                     }
                 }
                 if (resolvedFile == null) continue
@@ -159,7 +186,7 @@ internal class NamedImportExistence(
                     else -> targetIsJsCjs
                 }
                 val defaultBinding = importClause.name
-                if (defaultBinding != null && !hasDefaultExport && !syntheticDefault) {
+                if (defaultRulesApply && defaultBinding != null && !hasDefaultExport && !syntheticDefault) {
                     // (CHK.197) tsgo names the module by its symbol — the RESOLVED file name
                     // with a known extension removed (`tspath.RemoveFileExtension`), quoted:
                     // an absolute path in a project build, the flat name in a corpus fixture.
@@ -207,7 +234,7 @@ internal class NamedImportExistence(
                 // TS2614: named import specifier not found in module exports, but
                 // module has a default export — suggest using default import instead.
                 // Only fires when module HAS a default export (otherwise TS1192 is enough).
-                if (hasDefaultExport) {
+                if (defaultRulesApply && !nmCjsTarget && hasDefaultExport) {
                     val namedBindings = importClause.namedBindings
                     // TS2614 is an ABSENCE diagnostic — star-following applies, and an
                     // unknowable export set (null) suppresses it entirely (M1.1 FN-safe).
@@ -248,54 +275,17 @@ internal class NamedImportExistence(
                 }
 
                 // (CHK.197) a named import of an `export =` module — tsgo's
-                // `getExternalModuleMember` (checker.go:14593) then `reportNonExportedMember`
-                // (checker.go:14823), per specifier: a PROPERTY of the export= target's type
-                // (an apparent type for a primitive, the static side for a class, the exports
-                // for a namespace — no Object/Function augmentation) is legal; otherwise the
-                // name that IS the export= target's own local reads TS2595 under `module`
-                // >= ES2015, TS2597 from a JS importer, TS2616 elsewhere — ONE of the three,
-                // never two; every other name is TS2305. A member set this pass cannot
-                // enumerate ([exportEqualsMemberNames] null) keeps only the self-name row.
+                // `getExternalModuleMember` (checker.go:14593), per specifier
+                // ([reportExportEqualsSpecifier]); (CHK.198) type-only specifiers and clauses
+                // and declaration-file importers included.
                 val namedBindingsEq = importClause.namedBindings
-                if (hasExportEquals && namedBindingsEq is NamedImports) {
-                    val exportEqExpr = (targetFile.statements.firstOrNull {
-                        it is ExportAssignment && it.isExportEquals
-                    } as? ExportAssignment)?.expression
-                    val selfName = (exportEqExpr as? Identifier)?.text
-                        ?.takeIf { targetResult.locals[it] != null }
-                    val members = exportEqualsMemberNames(targetFile, targetResult, selfName)
-                    val importerIsJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
-                        fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+                if (hasExportEquals && !nmCjsTarget && namedBindingsEq is NamedImports) {
+                    val target = exportEqualsTarget(targetResult, resolvedFile)
                     for (importSpecifier in namedBindingsEq.elements) {
-                        if (importSpecifier.isTypeOnly) continue
-                        val nameNode = importSpecifier.propertyName ?: importSpecifier.name
-                        val importedName = nameNode.text
-                        if (importedName == "default") continue
-                        if (members != null && importedName in members) continue
-                        if (importedName == selfName) {
-                            val (code, message) = when {
-                                options.effectiveModule.isEs2015OrHigher -> 2595 to
-                                    "'$importedName' can only be imported by using a default import."
-                                importerIsJs -> 2597 to
-                                    "'$importedName' can only be imported by using a 'require' call or by using a default import."
-                                else -> 2616 to
-                                    "'$importedName' can only be imported by using 'import $importedName = require(\"$moduleName\")' or a default import."
-                            }
-                            val nameStart = nameNode.pos
-                            val (line, character) = checker.getLineAndCharacterOfPosition(source, nameStart)
-                            checker.diagnostics.add(Diagnostic(
-                                message = message,
-                                category = DiagnosticCategory.Error,
-                                code = code,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = nameStart,
-                                length = importedName.length,
-                            ))
-                        } else if (members != null) {
-                            emitTs2305(source, fileName, moduleName, importedName, nameNode)
-                        }
+                        reportExportEqualsSpecifier(
+                            source, fileName, moduleName,
+                            importSpecifier.propertyName ?: importSpecifier.name, target,
+                        )
                     }
                 }
 
@@ -310,46 +300,284 @@ internal class NamedImportExistence(
     }
 
     /**
-     * (CHK.197) The names a named import may take from an `export =` module whose target
-     * is the local [selfName]: the properties of the target's type, as tsgo's
-     * `getPropertyOfTypeEx(getTypeOfSymbol(target), name, skipObjectFunctionPropertyAugment)`
-     * sees them — a class's static side (statics, `prototype`, merged namespace values), a
-     * namespace's exports, an object-typed variable's members, a primitive variable's
-     * wrapper-interface members, and nothing for a plain function. Null when the set cannot
-     * be enumerated soundly (an inherited static, a function with expando assignments, an
-     * enum, a non-identifier target, an unresolvable type) — the caller then reports only
-     * the self-name, never a TS2305 it cannot prove.
+     * (CHK.198) What [reportExportEqualsSpecifier] needs to know about an `export =` module:
+     * the target's own local name ([selfName], null for a non-identifier target), the
+     * names a specifier may legally take ([members], null when they cannot be enumerated
+     * soundly) and the module-member exports a misspelt name is matched against
+     * ([suggestions], tsgo's `getSuggestedSymbolForNonexistentModule`).
+     */
+    private class ExportEqualsTarget(
+        val targetFile: SourceFile,
+        val resolvedFile: String,
+        val selfName: String?,
+        val members: Set<String>?,
+        val suggestions: Map<String, Symbol>,
+    )
+
+    private fun exportEqualsTarget(targetResult: BinderResult, resolvedFile: String): ExportEqualsTarget {
+        val targetFile = targetResult.sourceFile
+        val expr = (targetFile.statements.firstOrNull {
+            it is ExportAssignment && it.isExportEquals
+        } as? ExportAssignment)?.expression
+        val selfName = (expr as? Identifier)?.text?.takeIf { targetResult.locals[it] != null }
+        val sym = selfName?.let { targetResult.locals[it] }
+        val members = when {
+            sym != null -> exportEqualsMemberNames(targetFile, targetResult, sym, resolvedFile)
+            selfName == null && expr != null -> objectLiteralNames(expr)
+            else -> null
+        }
+        val suggestions = HashMap<String, Symbol>()
+        sym?.exports?.forEach { (name, export) ->
+            if (export.flags.hasAny(MODULE_MEMBER) && name.isNotEmpty()) suggestions[name] = export
+        }
+        return ExportEqualsTarget(targetFile, resolvedFile, selfName, members, suggestions)
+    }
+
+    /**
+     * (CHK.197) (CHK.198) tsgo's `getExternalModuleMember` (checker.go:14593) for one
+     * specifier of a named import or re-export of an `export =` module: a property of the
+     * target's type (`getPropertyOfTypeEx(..., skipObjectFunctionPropertyAugment)` — an
+     * apparent type for a primitive, the static side for a class, no Object/Function
+     * members) or an export of the target symbol is legal; otherwise
+     * `errorNoModuleMemberSymbol` — a spelling match among the target's module-member
+     * exports reads TS2724, the target's own local name reads TS2595 under `module` >=
+     * ES2015, TS2597 from a JS importer, TS2616 elsewhere (one of the three, never two),
+     * every other name TS2305. A type-only specifier follows the same rule. When the member
+     * set is unknown ([ExportEqualsTarget.members] null) only the self-name row is reported.
+     */
+    private fun reportExportEqualsSpecifier(
+        source: String, fileName: String, moduleName: String, nameNode: Identifier, target: ExportEqualsTarget,
+    ) {
+        val importedName = nameNode.text
+        if (importedName.isEmpty() || importedName == "default") return
+        // An unchecked JavaScript importer (`allowJs` without `checkJs`) reports nothing.
+        if (checker.isJsLikeFileName(fileName) && !options.checkJs) return
+        val members = target.members
+        if (members != null && importedName in members) return
+        if (members != null) {
+            val suggestion = checker.getSpellingSuggestionFromNames(importedName, target.suggestions.keys)
+            if (suggestion != null) {
+                val decl = target.suggestions[suggestion]?.valueDeclaration?.let { declarationNameSpan(it) }
+                emitMissingMemberSuggestion(
+                    source, fileName, moduleName, importedName, nameNode, suggestion,
+                    target.targetFile, target.resolvedFile, decl,
+                )
+                return
+            }
+        }
+        if (importedName == target.selfName) {
+            val importerIsJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+            val (code, message) = when {
+                options.effectiveModule.isEs2015OrHigher -> 2595 to
+                    "'$importedName' can only be imported by using a default import."
+                importerIsJs -> 2597 to
+                    "'$importedName' can only be imported by using a 'require' call or by using a default import."
+                else -> 2616 to
+                    "'$importedName' can only be imported by using 'import $importedName = require(\"$moduleName\")' or a default import."
+            }
+            val nameStart = nameNode.pos
+            val (line, character) = checker.getLineAndCharacterOfPosition(source, nameStart)
+            checker.diagnostics.add(Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error,
+                code = code,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = nameStart,
+                length = importedName.length,
+            ))
+        } else if (members != null) {
+            emitTs2305(source, fileName, moduleName, importedName, nameNode)
+        }
+    }
+
+    /**
+     * (CHK.197) (CHK.198) The names a specifier may take from an `export =` module whose
+     * target is the local [sym]: every export of the symbol (a namespace's values AND types,
+     * an enum's members, a class's merged-namespace members — tsgo's `getExportOfModule` on
+     * the module, whose exports ARE the target's), plus the properties of its type: a
+     * class's static side including statics inherited along a chain of class declarations
+     * (plus the base classes' merged-namespace VALUES — an inherited namespace TYPE is not
+     * a property), an enum's members, a function's expando assignments in its own scope,
+     * an annotated variable's object members or a primitive's wrapper members, an
+     * object-literal initializer's own property names. A cross-file `declare module`
+     * augmentation adds to a namespace target. Null when the set cannot be enumerated
+     * soundly — a base that is not a class declaration, a computed or spread literal member,
+     * an expando through a computed key, an initializer of any other form, an unresolvable
+     * type — and the caller then reports only the self-name, never a TS2305 it cannot prove.
      */
     private fun exportEqualsMemberNames(
         targetFile: SourceFile,
         targetResult: BinderResult,
-        selfName: String?,
+        sym: Symbol,
+        resolvedFile: String,
     ): Set<String>? {
-        val sym = targetResult.locals[selfName ?: return null] ?: return null
-        if (sym.flags.hasAny(SymbolFlags.Class)) {
-            val inherits = sym.declarations.any { d ->
-                d is ClassDeclaration && d.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true
-            }
-            if (inherits) return null
-            val ctor = checker.classConstructorTypes.constructorTypeOfClass(sym) ?: return null
-            return ctor.members?.keys?.filter { it.isNotEmpty() }?.toSet()
+        val names = HashSet<String>()
+        sym.exports?.keys?.forEach { if (it.isNotEmpty()) names += it }
+        val flags = sym.flags
+        if (flags.hasAny(SymbolFlags.Class)) names += classStaticNames(sym) ?: return null
+        if (flags.hasAny(SymbolFlags.Enum)) names += enumMemberNames(sym) ?: return null
+        if (flags.hasAny(SymbolFlags.Function)) names += expandoNames(targetFile, sym.name) ?: return null
+        if (flags.hasAny(SymbolFlags.Variable)) names += variableMemberNames(sym) ?: return null
+        if (flags.hasAny(SymbolFlags.Module)) {
+            names += checker.augmentationDeclaredExportNames(resolvedFile)
+            names += checker.augmentationInterfaceMemberNames(resolvedFile)
+        } else if (!flags.hasAny(SymbolFlags.Class or SymbolFlags.Enum or SymbolFlags.Function or SymbolFlags.Variable)) {
+            return null
         }
-        checker.getExportEqualsMemberNames(targetFile, targetResult)?.let { return it }
-        if (sym.flags.hasAny(SymbolFlags.Enum or SymbolFlags.Module)) return null
-        if (sym.flags.hasAny(SymbolFlags.Function)) {
-            val hasExpando = targetFile.statements.any { st ->
-                val e = (st as? ExpressionStatement)?.expression as? BinaryExpression
-                val left = e?.left as? PropertyAccessExpression
-                (left?.expression as? Identifier)?.text == selfName
+        return names
+    }
+
+    /** A class's static side — own and inherited statics, `prototype`, merged-namespace
+     *  values — when every base along the chain is a class declaration; else null. */
+    private fun classStaticNames(sym: Symbol): Set<String>? {
+        val ctor = checker.classConstructorTypes.constructorTypeOfClass(sym) ?: return null
+        val names = HashSet<String>()
+        ctor.members?.keys?.forEach { if (it.isNotEmpty()) names += it }
+        var cur = sym
+        val seen = HashSet<Symbol>()
+        while (seen.add(cur)) {
+            if (cur.declarations.any { d -> d !is ClassDeclaration && d !is InterfaceDeclaration && d !is ModuleDeclaration }) return null
+            if (cur.declarations.any { d -> d is ClassDeclaration && d.members.any(::isComputedStatic) }) return null
+            val extends = cur.declarations.filterIsInstance<ClassDeclaration>().mapNotNull { d ->
+                d.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
             }
-            return if (hasExpando) null else emptySet()
+            if (extends.isEmpty()) return names
+            // A merged interface's heritage adds base types that are not the class's base.
+            if (cur.declarations.any { d -> d is InterfaceDeclaration && !d.heritageClauses.isNullOrEmpty() }) return null
+            val iface = checker.getDeclaredTypeOfSymbol(cur) as? Type.Interface ?: return null
+            checker.resolveStructuredTypeMembers(iface)
+            val base = iface.baseTypes?.singleOrNull() ?: return null
+            val baseSym = ((base as? Type.Interface) ?: (base as? Type.Reference)?.target)?.symbol ?: return null
+            if (baseSym.declarations.none { it is ClassDeclaration }) return null
+            baseSym.exports?.forEach { (name, export) ->
+                if (export.flags.hasAny(SymbolFlags.Value) && name.isNotEmpty()) names += name
+            }
+            cur = baseSym
         }
-        if (!sym.flags.hasAny(SymbolFlags.Variable)) return null
-        val type = checker.getTypeOfSymbol(sym)
-        if (!type.flags.hasAny(TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BooleanLike)) return null
-        val wrapper = checker.getApparentType(type) as? Type.Object ?: return null
-        checker.resolveStructuredTypeMembers(wrapper)
-        return wrapper.members?.keys?.filter { it.isNotEmpty() }?.toSet()
+        return null
+    }
+
+    private fun isComputedStatic(m: ClassElement): Boolean = when (m) {
+        is PropertyDeclaration -> ModifierFlag.Static in m.modifiers && m.name is ComputedPropertyName
+        is MethodDeclaration -> ModifierFlag.Static in m.modifiers && m.name is ComputedPropertyName
+        is GetAccessor -> ModifierFlag.Static in m.modifiers && m.name is ComputedPropertyName
+        is SetAccessor -> ModifierFlag.Static in m.modifiers && m.name is ComputedPropertyName
+        else -> false
+    }
+
+    /** Every member name of every declaration of an enum; null for a computed member name. */
+    private fun enumMemberNames(sym: Symbol): Set<String>? {
+        val names = HashSet<String>()
+        for (d in sym.declarations) {
+            if (d !is EnumDeclaration) continue
+            for (m in d.members) names += literalName(m.name) ?: return null
+        }
+        return names
+    }
+
+    /**
+     * The expando properties of the function [name]: `name.p = …` / `name["p"] = …`
+     * assignments in the target file's own scope (nested blocks included, function and
+     * class bodies not — tsgo binds an expando in the declaring container only). Null on
+     * an assignment through a non-literal key.
+     */
+    private fun expandoNames(targetFile: SourceFile, name: String): Set<String>? {
+        val names = HashSet<String>()
+        var unknown = false
+        fun visit(node: Node) {
+            if (unknown) return
+            when (node) {
+                is FunctionDeclaration, is FunctionExpression, is ArrowFunction, is MethodDeclaration,
+                is ClassDeclaration, is ClassExpression, is GetAccessor, is SetAccessor, is Constructor -> return
+                is BinaryExpression -> if (node.operator == SyntaxKind.Equals) {
+                    when (val left = node.left) {
+                        is PropertyAccessExpression ->
+                            if ((left.expression as? Identifier)?.text == name) names += left.name.text
+                        is ElementAccessExpression -> if ((left.expression as? Identifier)?.text == name) {
+                            val key = left.argumentExpression as? StringLiteralNode
+                            if (key == null) unknown = true else names += key.text
+                        }
+                        else -> {}
+                    }
+                }
+                else -> {}
+            }
+            forEachChild(node, ::visit)
+        }
+        for (st in targetFile.statements) visit(st)
+        return if (unknown) null else names
+    }
+
+    /** An annotated variable's object members or a primitive's wrapper members; an
+     *  unannotated variable's object-literal initializer's own names; else null. */
+    private fun variableMemberNames(sym: Symbol): Set<String>? {
+        val decl = sym.declarations.filterIsInstance<VariableDeclaration>().singleOrNull() ?: return null
+        val typeNode = decl.type
+        if (typeNode != null) {
+            val type = checker.getTypeFromTypeNode(typeNode)
+            if (type.flags.hasAny(TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BooleanLike)) {
+                val wrapper = checker.getApparentType(type) as? Type.Object ?: return null
+                checker.resolveStructuredTypeMembers(wrapper)
+                return wrapper.members?.keys?.filter { it.isNotEmpty() }?.toSet()
+            }
+            return checker.collectCommonObjectMemberNames(type)
+        }
+        return objectLiteralNames(decl.initializer ?: return null)
+    }
+
+    /** An object literal's own property names (through parentheses, `satisfies` and `as const`);
+     *  null for any other expression and for a spread or computed member. */
+    private fun objectLiteralNames(expr: Expression): Set<String>? {
+        var e = expr
+        while (true) {
+            e = when (e) {
+                is ParenthesizedExpression -> e.expression
+                is SatisfiesExpression -> e.expression
+                is AsExpression -> {
+                    val t = e.type
+                    if (t is TypeReference && (t.typeName as? Identifier)?.text == "const" && t.typeArguments == null) e.expression
+                    else return null
+                }
+                else -> break
+            }
+        }
+        val literal = e as? ObjectLiteralExpression ?: return null
+        val names = HashSet<String>()
+        for (p in literal.properties) {
+            names += when (p) {
+                is PropertyAssignment -> literalName(p.name)
+                is ShorthandPropertyAssignment -> p.name.text
+                is MethodDeclaration -> literalName(p.name)
+                is GetAccessor -> literalName(p.name)
+                is SetAccessor -> literalName(p.name)
+                else -> null
+            } ?: return null
+        }
+        return names
+    }
+
+    private fun literalName(name: Node): String? = when (name) {
+        is Identifier -> name.text
+        is StringLiteralNode -> name.text
+        is NumericLiteralNode -> name.text
+        else -> null
+    }
+
+    /** The (start, length) of a declaration's name, for the TS2728 related row. */
+    private fun declarationNameSpan(decl: Node): Pair<Int, Int>? {
+        val name: Node? = when (decl) {
+            is VariableDeclaration -> decl.name
+            is FunctionDeclaration -> decl.name
+            is ClassDeclaration -> decl.name
+            is EnumDeclaration -> decl.name
+            is ModuleDeclaration -> decl.name
+            else -> null
+        }
+        val id = name as? Identifier ?: return null
+        return id.pos to id.text.length
     }
 
     fun checkNamedImportExistence() {
@@ -459,7 +687,6 @@ internal class NamedImportExistence(
                         val moduleName = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
                         // Only check relative imports — non-relative imports might resolve incorrectly
                         if (!moduleName.startsWith("./") && !moduleName.startsWith("../")) continue
-                        if (stmt.isTypeOnly) continue
                         val clause = stmt.exportClause as? NamedExports ?: continue
 
                         // Same `.js`/`.jsx`→`.ts` fallback as the import branch: nodenext
@@ -470,6 +697,16 @@ internal class NamedImportExistence(
                             ?: continue
                         val targetResult = fileResults[resolvedFile] ?: continue
                         val targetFile = targetResult.sourceFile
+                        // (CHK.198) a re-export of an `export =` module follows the import's
+                        // per-specifier rule, type-only specifiers and clauses included.
+                        if (targetFile.statements.any { it is ExportAssignment && it.isExportEquals }) {
+                            val target = exportEqualsTarget(targetResult, resolvedFile)
+                            for (specEl in clause.elements) {
+                                reportExportEqualsSpecifier(source, fileName, moduleName, specEl.propertyName ?: specEl.name, target)
+                            }
+                            continue
+                        }
+                        if (stmt.isTypeOnly) continue
 
                         // Same star-following as the import branch (M1.1): the `default`
                         // re-export stays decidable from the DIRECT file; non-default specs
@@ -491,22 +728,18 @@ internal class NamedImportExistence(
                             hasDefaultExport -> starExports + "default" + augNames
                             else -> starExports + augNames
                         }
-                        val hasExportEqualsInTarget = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
-
                         for (specEl in clause.elements) {
                             if (specEl.isTypeOnly) continue
                             // For re-exports: the "source name" in the source module
                             // is either propertyName (for `export { X as Y } from ...`) or name
                             val sourceName = (specEl.propertyName ?: specEl.name).text
                             if (sourceName == "default") {
-                                if (!hasDefaultExport && !hasExportEqualsInTarget) {
+                                if (!hasDefaultExport) {
                                     val nameNode = specEl.propertyName ?: specEl.name
                                     emitTs2305(source, fileName, moduleName, "default", nameNode)
                                 }
                                 continue
                             }
-                            // Skip named member checks for export= modules (requires type resolution)
-                            if (hasExportEqualsInTarget) continue
                             val knownExports = allExports ?: continue
                             if (sourceName !in knownExports) {
                                 // (CHK.190) the same order as an import (TS2724 / TS2614 /
@@ -653,9 +886,10 @@ internal class NamedImportExistence(
     private fun emitMissingMemberSuggestion(
         source: String, fileName: String, moduleName: String, importedName: String, nameNode: Identifier,
         suggestion: String, targetFile: SourceFile, resolvedFile: String,
+        suggestionDecl: Pair<Int, Int>? = getLocalDeclarationPos(targetFile, suggestion),
     ) {
         val (line, character) = checker.getLineAndCharacterOfPosition(source, nameNode.pos)
-        val declPos = getLocalDeclarationPos(targetFile, suggestion)
+        val declPos = suggestionDecl
         val relatedInfo = if (declPos != null) {
             val (dLine, dChar) = checker.getLineAndCharacterOfPosition(targetFile.text, declPos.first)
             listOf(Diagnostic(
@@ -714,9 +948,11 @@ internal class NamedImportExistence(
      * Returns all locally-declared names in the source file (exported or not).
      * Used to distinguish TS2459 (declared but not exported) from TS2305 (not declared).
      */
-    private fun getModuleLocalNames(file: SourceFile): Set<String> {
+    private fun getModuleLocalNames(file: SourceFile): Set<String> = getModuleLocalNames(file.statements)
+
+    private fun getModuleLocalNames(statements: List<Statement>): Set<String> {
         val names = mutableSetOf<String>()
-        for (stmt in file.statements) {
+        for (stmt in statements) {
             when (stmt) {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
@@ -806,6 +1042,80 @@ internal class NamedImportExistence(
             }
         }
         return result
+    }
+
+    private var ambientBlocks: Map<String, ModuleBlock?>? = null
+
+    /** (CHK.198)(d) The ambient `declare module "<name>"` bodies of the program's script
+     *  files, by name; null for a name declared more than once or without a body (not
+     *  judged). Built on first ask. */
+    private fun ambientModuleBlocks(): Map<String, ModuleBlock?> = ambientBlocks ?: HashMap<String, ModuleBlock?>().also { map ->
+        for (r in binderResults) {
+            val stmts = r.sourceFile.statements
+            if (stmts.none { it is ModuleDeclaration } || checker.isModuleFile(stmts)) continue
+            for (st in stmts) {
+                val md = st as? ModuleDeclaration ?: continue
+                val name = (md.name as? StringLiteralNode)?.text ?: continue
+                map[name] = if (name in map) null else md.body as? ModuleBlock
+            }
+        }
+        ambientBlocks = map
+    }
+
+    /**
+     * (CHK.198)(d) TS1192 / TS2613 for a default import of an ambient module that declares
+     * the `__esModule` marker and has no default export. A body with an explicit export
+     * declaration exports only what it marks; otherwise every declaration is exported.
+     */
+    private fun checkAmbientDefaultImport(
+        source: String, fileName: String, moduleName: String, binding: Identifier, body: ModuleBlock,
+    ) {
+        val stmts = body.statements
+        if (stmts.any { it is ExportAssignment }) return
+        val explicit = stmts.any { it is ExportDeclaration }
+        val exported = HashSet<String>()
+        var hasDefault = false
+        for (st in stmts) {
+            val modifiers: Set<ModifierFlag> = when (st) {
+                is VariableStatement -> st.modifiers
+                is FunctionDeclaration -> st.modifiers
+                is ClassDeclaration -> st.modifiers
+                is EnumDeclaration -> st.modifiers
+                is InterfaceDeclaration -> st.modifiers
+                is TypeAliasDeclaration -> st.modifiers
+                is ModuleDeclaration -> st.modifiers
+                is ExportDeclaration -> {
+                    if (st.moduleSpecifier != null) return
+                    (st.exportClause as? NamedExports)?.elements?.forEach {
+                        if (it.name.text == "default") hasDefault = true else exported += it.name.text
+                    }
+                    continue
+                }
+                else -> continue
+            }
+            if (ModifierFlag.Default in modifiers) hasDefault = true
+            if (explicit && ModifierFlag.Export !in modifiers) continue
+            when (st) {
+                is VariableStatement -> st.declarationList.declarations.forEach { d -> (d.name as? Identifier)?.let { exported += it.text } }
+                else -> getModuleLocalNames(listOf(st)).let { exported += it }
+            }
+        }
+        if (hasDefault || "__esModule" !in exported) return
+        val importName = binding.text
+        val (line, character) = checker.getLineAndCharacterOfPosition(source, binding.pos)
+        val (code, message) = if (importName in exported) 2613 to
+            "Module '\"$moduleName\"' has no default export. Did you mean to use 'import { $importName } from \"$moduleName\"' instead?"
+        else 1192 to "Module '\"$moduleName\"' has no default export."
+        checker.diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = binding.pos,
+            length = importName.length,
+        ))
     }
 
     /**

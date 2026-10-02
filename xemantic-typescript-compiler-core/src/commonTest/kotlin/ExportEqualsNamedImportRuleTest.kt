@@ -37,10 +37,9 @@ import kotlin.test.Test
  * TS2616 under `module: esnext`), whatever its name.
  *
  * Every row below was measured on `tools/tsgo-7.0.2/lib/tsc` over the matching cell of
- * `build/bench/p18257-agent/matrix` / `matrix2`. A member set this pass cannot enumerate
- * soundly (an inherited static, an enum, a function with expandos, an unannotated object)
- * keeps only the self-name row: tsgo's TS2305 for the other names there is a recorded
- * RESIDUE, pinned below as silence so a guessing fix cannot add a false row.
+ * `build/bench/p18257-agent/matrix` / `matrix2`. (CHK.198) enumerated the member sets this
+ * pass left unknown (an inherited static, an enum, a function with expandos, an object
+ * literal) — `ExportEqualsNamedImportResiduesTest` pins those and the shapes still unknown.
  */
 class ExportEqualsNamedImportRuleTest {
 
@@ -190,9 +189,8 @@ class ExportEqualsNamedImportRuleTest {
     }
 
     @Test
-    fun `residue - an inherited static keeps only the self-name row`() {
-        // tsgo also reports TS2305 for `x`; the inherited static `bs` is legal there. This
-        // pass does not enumerate inherited statics, so it reports nothing it cannot prove.
+    fun `an inherited static is importable and any other name is TS2305`() {
+        // (CHK.198) was a residue (self-name row only); tsgo's rows, `bs` legal.
         val r = rows("""
             // @Filename: m.ts
             class B { static bs = 1 }
@@ -205,12 +203,13 @@ class ExportEqualsNamedImportRuleTest {
         """.trimIndent())
         assert(r == listOf(
             "main.ts:1:17 TS2616 'K' can only be imported by using 'import K = require(\"./m\")' or a default import.",
+            "main.ts:1:20 TS2305 Module '\"./m\"' has no exported member 'x'.",
         ))
     }
 
     @Test
-    fun `residue - a function with an expando keeps only the self-name row`() {
-        // tsgo: `p` legal, `f` TS2616, `x` TS2305.
+    fun `a function's expando is importable and any other name is TS2305`() {
+        // (CHK.198) was a residue; tsgo: `p` legal, `f` TS2616, `x` TS2305.
         val r = rows("""
             // @Filename: m.ts
             function f() {}
@@ -223,12 +222,13 @@ class ExportEqualsNamedImportRuleTest {
         """.trimIndent())
         assert(r == listOf(
             "main.ts:1:13 TS2616 'f' can only be imported by using 'import f = require(\"./m\")' or a default import.",
+            "main.ts:1:16 TS2305 Module '\"./m\"' has no exported member 'x'.",
         ))
     }
 
     @Test
-    fun `residue - an enum export equals target keeps only the self-name row`() {
-        // tsgo: `A` legal, `E` TS2595 (esnext), `x` TS2305.
+    fun `an enum export equals target exposes its members`() {
+        // (CHK.198) was a residue; tsgo: `A` legal, `E` TS2595 (esnext), `x` TS2305.
         val r = rows("""
             // @Filename: m.ts
             enum E { A, B }
@@ -238,7 +238,10 @@ class ExportEqualsNamedImportRuleTest {
             import { A, E, x } from "./m";
             export { A, E, x };
         """.trimIndent(), "// @strict: true\n// @module: esnext")
-        assert(r == listOf("main.ts:1:13 TS2595 'E' can only be imported by using a default import."))
+        assert(r == listOf(
+            "main.ts:1:13 TS2595 'E' can only be imported by using a default import.",
+            "main.ts:1:16 TS2305 Module '\"./m\"' has no exported member 'x'.",
+        ))
     }
 
     @Test

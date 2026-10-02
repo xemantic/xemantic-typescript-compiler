@@ -9823,8 +9823,6 @@ class Checker(
         pass("checkBareAtTypesExportEqualsMissingNamedImport") { checkBareAtTypesExportEqualsMissingNamedImport() }
         // 14c'. Check for imports from `@types/...` packages (TS6137)
         pass("checkTypesPackageImports") { checkTypesPackageImports() }
-        // 14c''. .d.ts named imports from an `export =` namespace/object (TS2305)
-        pass("checkNamedImportFromExportEqualsInDts") { checkNamedImportFromExportEqualsInDts() }
         pass("checkNamedImportFromAmbientExportEqualsValue") { checkNamedImportFromAmbientExportEqualsValue() }
         // conflictingDeclarationsImportFromNamespace1/2 — `import * as N from '<pkg>'` +
         // self-calling `export const N = () => N()` → TS7023 ((LEGACY.0b step 3) removed
@@ -52683,72 +52681,13 @@ class Checker(
      * doesn't exist in the module's exports but the module does have a default export.
      */
     /**
-     * B52.8: Returns the set of named members accessible via a `export = X` target,
-     * or null when the export = target has no discoverable named-member shape (and so
-     * the legacy TS2616 "must use require" diagnostic should fire instead).
-     *
-     * Returns non-null in these cases:
-     *  - `export = NS` where NS is a namespace symbol → NS.exports keys
-     *  - `export = x` where x is a variable whose type resolves to a Type.Object with
-     *    members, or a Type.Union of Type.Objects with at least one common property.
-     *    The returned set contains the COMMON property names (those present in ALL
-     *    union constituents, mirroring TypeScript's named-import-on-union semantics).
-     *
-     * Returns null in these cases (TS2616 fallback):
-     *  - `export = X` where X is a primitive value, class, function, etc.
-     *  - Type resolution fails or produces an opaque type (anyType, errorType, etc.).
-     */
-    internal fun getExportEqualsMemberNames(
-        targetFile: SourceFile,
-        targetResult: BinderResult,
-    ): Set<String>? {
-        val exportEqStmt = targetFile.statements.firstOrNull {
-            it is ExportAssignment && it.isExportEquals
-        } as? ExportAssignment ?: return null
-        val exportEqExpr = exportEqStmt.expression as? Identifier ?: return null
-        val exportedSym = targetResult.locals[exportEqExpr.text] ?: return null
-
-        // Case 1: namespace export. `export = NS` → NS.exports keys (only non-type members).
-        if (exportedSym.flags.hasAny(SymbolFlags.Module)) {
-            val exports = exportedSym.exports ?: return null
-            // Only include value-position members (skip pure-type aliases / interfaces).
-            // Conservative: include everything but obvious type-only entries.
-            val nonValueOnly = SymbolFlags.Interface or SymbolFlags.TypeAlias
-            return exports.entries.asSequence()
-                .filter { (_, sym) ->
-                    // Include if has value flags OR has Module/Class/Function/Variable/Enum
-                    sym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Class or
-                        SymbolFlags.Function or SymbolFlags.Variable or SymbolFlags.Enum) ||
-                    sym.flags.hasNone(nonValueOnly)
-                }
-                .map { it.key }
-                .toSet()
-        }
-
-        // Case 2: variable export. Only fire when the variable has a TYPE ANNOTATION
-        // that resolves to a Type.Object with members or a Type.Union of objects.
-        // We require an annotation (not an initializer-inferred type) to keep the
-        // analysis tractable and avoid resolving complex initializer types.
-        if (exportedSym.flags.hasAny(SymbolFlags.Variable)) {
-            val varDecl = exportedSym.declarations
-                .filterIsInstance<VariableDeclaration>()
-                .firstOrNull { it.type != null } ?: return null
-            val typeNode = varDecl.type ?: return null
-            val type = getTypeFromTypeNode(typeNode)
-            return collectCommonObjectMemberNames(type)
-        }
-
-        return null
-    }
-
-    /**
      * Helper for B52.8: returns the set of property names common to all constituents
      * of a type that is "object-like" (Type.Object or Type.Union/Intersection of objects).
      * Returns null when the type is not object-like (primitive, errorType, etc.).
      * Empty set is a valid return (object with no members → no common names → all imports
      * would fail TS2305, no fall-through to TS2616).
      */
-    private fun collectCommonObjectMemberNames(type: Type): Set<String>? {
+    internal fun collectCommonObjectMemberNames(type: Type): Set<String>? {
         return when (type) {
             is Type.Object -> {
                 resolveStructuredTypeMembers(type)
@@ -53196,59 +53135,13 @@ class Checker(
         }
     }
 
-    /**
-     * B98.r53: a `.d.ts` file doing `import { X } from './m'` where `./m`'s
-     * `export =` target is a namespace/object that has no member `X` → TS2305
-     * "Module '"./m"' has no exported member 'X'.". The general named-import
-     * existence path (checkDefaultImports) skips `.d.ts` files, and
-     * checkNamedImportExistence `continue`s on `export =` modules. This narrow
-     * walker covers the `.d.ts` + export=-namespace shape only, reusing
-     * [getExportEqualsMemberNames] (non-null only for a genuine namespace/object
-     * `export =` — null shapes fall through with no emission → FP-safe).
-     */
-    private fun checkNamedImportFromExportEqualsInDts() {
-        val isMultiFile = binderResults.size > 1 || isMultiFileSource
-        if (!isMultiFile) return
-        if (!options.moduleSuffixes.isNullOrEmpty()) return
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (!isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            for (stmt in result.sourceFile.statements) {
-                if (stmt !is ImportDeclaration) continue
-                val clause = stmt.importClause ?: continue
-                if (clause.isTypeOnly) continue
-                val named = clause.namedBindings as? NamedImports ?: continue
-                val moduleName = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                if (!moduleName.startsWith("./") && !moduleName.startsWith("../")) continue
-                val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName) ?: continue
-                val targetResult = fileResults[resolvedFile] ?: continue
-                val targetFile = targetResult.sourceFile
-                if (!targetFile.statements.any { it is ExportAssignment && it.isExportEquals }) continue
-                val exportEqMembers = getExportEqualsMemberNames(targetFile, targetResult) ?: continue
-                for (specEl in named.elements) {
-                    if (specEl.isTypeOnly) continue
-                    val nameNode = specEl.propertyName ?: specEl.name
-                    val importedName = nameNode.text
-                    if (importedName == "default") continue
-                    // conflictingDeclarationsImportFromNamespace1/2: the export= value's
-                    // member may be contributed by a cross-file `declare module` augmentation
-                    // (which getExportEqualsMemberNames doesn't merge) — suppress the FP TS2305.
-                    if (importedName !in exportEqMembers &&
-                        !augmentationAddsExportMember(resolvedFile, importedName)) {
-                        namedImportExistence.emitTs2305(source, fileName, moduleName, importedName, nameNode)
-                    }
-                }
-            }
-        }
-    }
-
-    /** True if a `declare module "<spec>"` augmentation (in any file, with <spec> resolving
-     *  to [targetFileName]) contributes an export member named [name] — as a top-level decl
-     *  or an interface member. Used to suppress a FP TS2305 when an `export =` module's named
-     *  export is added by a cross-file augmentation (conflictingDeclarationsImportFromNamespace1/2).
-     *  Suppression direction is FN-safe: a missed augmentation only under-fires TS2305. */
-    private fun augmentationAddsExportMember(targetFileName: String, name: String): Boolean {
+    /** (CHK.198) The names a `declare module "<spec>"` augmentation (in any file, with
+     *  <spec> resolving to [targetFileName]) contributes — top-level declarations and the
+     *  members of an augmented interface. Unioned into a namespace-carrying `export =`
+     *  target's member set (conflictingDeclarationsImportFromNamespace1/2: a member the
+     *  augmentation adds to the variable's interface type). Suppression-only. */
+    internal fun augmentationInterfaceMemberNames(targetFileName: String): Set<String> {
+        val out = HashSet<String>()
         for (r in binderResults) {
             val augFile = r.sourceFile.fileName
             for (stmt in r.sourceFile.statements) {
@@ -53259,16 +53152,16 @@ class Checker(
                 val body = md.body as? ModuleBlock ?: continue
                 for (b in body.statements) {
                     when (b) {
-                        is InterfaceDeclaration -> if (b.members.any { augMemberName(it) == name }) return true
-                        is VariableStatement -> if (b.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) return true
-                        is FunctionDeclaration -> if (b.name?.text == name) return true
-                        is ClassDeclaration -> if (b.name?.text == name) return true
+                        is InterfaceDeclaration -> b.members.forEach { m -> augMemberName(m)?.let { out += it } }
+                        is VariableStatement -> b.declarationList.declarations.forEach { d -> (d.name as? Identifier)?.let { out += it.text } }
+                        is FunctionDeclaration -> b.name?.let { out += it.text }
+                        is ClassDeclaration -> b.name?.let { out += it.text }
                         else -> {}
                     }
                 }
             }
         }
-        return false
+        return out
     }
 
     private fun augMemberName(m: ClassElement): String? = when (m) {
