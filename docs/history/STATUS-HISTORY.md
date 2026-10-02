@@ -1,5 +1,9 @@
 
 
+**(P18.263) — (CHK.195)(a): NAMESPACES THAT EXPORT THROUGH `export { … }` CLAUSES NO LONGER PRODUCE FALSE ERRORS ("cannot use namespace as a value", "has no exported member") — THREE SYMPTOMS, ONE BINDER CAUSE — AND THREE NEIGHBOURING FALSE ERRORS WENT WITH THEM; +16 PINS, 22,377 / 0 / 44 (2026-10-02).**
+Screen 0; grid 8x0 (one harness regression the grid caught mid-round was fixed and pinned); libraries unchanged.
+
+
 **(P18.262) — (CHK.196): PASSING AN ABSTRACT CONSTRUCTOR WHERE A CONCRETE ONE IS NEEDED IS NOW REPORTED, `new H(() => new Co())` INFERS ITS TYPE, MISSING STATICS GET tsgo's CODE AND `cond ? A : B` OF CLASSES REDUCES; 5 MORE MATRIX CELLS MATCH tsgo AND ONE FALSE POSITIVE THE WIDENING EXPOSED WAS CAUGHT; +8 PINS, 22,361 / 0 / 44 (2026-10-02).**
 Screen 0; grid 8x0; libraries unchanged.
 

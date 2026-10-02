@@ -1,3 +1,34 @@
+### Round (P18.258) — (CHK.196) residues: an inherited generic constructor is instantiated through the base's type arguments, an `any`-typed base gives the zero-argument default, TS2511 is decided from the callee TYPE (incl. unions of constructor types), TS2339 reaches any `new` receiver whose callee constructs a class (and an anonymous `export default class`), and the dead `instanceof` exclusion is deleted; new cells 27 -> 60 agreeing with tsgo, ours-only 13 -> 5 (all pre-existing); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
+
+One implementation subagent. **Where the item was wrong**: (a) n05 is not the argument check — a generic class's OWN
+constructor parameter `v: T` resolved with no class scope to `errorType`, which instantiation through `G<number>`
+preserved and the argument loop skipped; (b) "`class D extends (any)`" is really `declare const Base: any; class D
+extends Base {}` — the literal `extends (anyv) {}` is a PARSER defect (frozen subsystem, left as a residue); (c) the
+TS2511 walker CANNOT be retired: disabled, the screen loses 3 baselines (B83.5 block-scoped classes, an anonymous
+default import — fixed this round — and an array-literal `.map(cls => new cls())` whose element union collapses), so
+it is demoted to a FALLBACK; (d) the anonymous `export default class` TS2339 gap was NAME RESOLUTION — the binder never
+binds a nameless class, so the import was `any`; (e) the `instanceof` exclusion was dead and tsgo types the operand as
+`typeof A` — deleted. **Mechanism**: `ClassConstructorTypes.inheritedConstructSignatures` walks the extends chain
+building the type-argument mapping level by level and re-resolves the declaring class's constructor parameters under
+its own type parameters (`reresolveSigParamsUnderClassScope` now `internal`) — single-signature only, overloaded ones
+stay with B264, whose single-mismatch row now dedups against the ordinary check (a duplicate TS2345 HEAD printed);
+`baseConstructsWithNoArguments` extends `defaultConstructorOf` to a file-level `any`-annotated base and to a base whose
+own constructor side is the trusted default; `newExprAbstractConstructorTs2511` owns every callee through
+`constructsAbstract` (unions of constructor types included) while `spineAiEnterNode` records its rows
+(`noteWalkerAbstractRow`) so the type-based check neither redraws them nor checks the arguments (tsgo's
+`resolveErrorCall` — 3 ours-only TS2345 / TS2554 gone); `newExpressionClassSymbol` / `newReceiverClassDecl` /
+`newReceiverDisplay` reach any receiver shape and print the instantiation (`Bx<number>`, was `Bx<unknown>`);
+`NameResolver.anonymousDefaultClassSymbol` mints one `default` symbol per file for the default-import ladder and
+`importedExport("default")`. `Checker.kt` +20 net; `checkSingleNewExpressionTypesCore` 6,857 -> 6,918 bytecodes.
+**Pins**: `ConstructorSideResiduesTest` 16; three `M04AbstractClassSpineMigrationTest` countdown pins (silence where
+tsgo reports TS2511) inverted to tsgo's rows; ablation a1 2 / a2 1 / a3 1 / a4 1 / a5 2 / a6 3 / a7 1 / a8 2 / a9 2 /
+a10 2 / a11 1 / a12 2 / a13 1 / a14 1 RED, a15 (`instanceof` exclusion restored) 0 — dead, as measured. **Gates**:
+full suite 22,303 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0;
+`huge_methods.py --fail-over 0` 0; `spine_closure_audit.py` clean; grid 8 x added=0 removed=0 + chain OK, rxjs /
+marked / cronstrue unchanged; warning gate with probe: probe only. **n08 refused**: `const arr = [A, B]` types as
+`typeof A[]` — the element union of two constructor types collapses to its first member (stage 3's relation gates, also
+behind call inference and the walker's remaining `.map` shape).
+
 ### Round (P18.257) — (CHK.197): a named import from an `export =` module follows tsgo's per-specifier rule (the target's own name -> exactly one of TS2595 / TS2597 / TS2616, a member of the target -> legal, anything else -> TS2305), the doubled TS2595 + TS2616 under esnext is gone, and TS1192 / TS2613 name the resolved file as tsgo does; 45-cell matrix 0 -> 43 agreeing, (P18.255)'s 17 cells 12 -> 17, 0 ours-only; `Checker.kt` untouched (2026-10-01)
 
 One implementation subagent; the change is confined to `NamedImportExistence.kt` (+84 / -140), so `Checker.class` is

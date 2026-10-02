@@ -25,6 +25,37 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.268) — (LIBS.1) round 3, (CHK.203): an arrow assigned to `recv.member` gets its contextual parameter types when `recv` is an unannotated contextually-typed callback parameter, a `T`-annotated parameter or a receiver whose member is inherited through a generic base, and a return-context inference matches a shared type-argument prefix (`Ctor<Leaf>` vs `Ctor<T, D>`); zod 529 -> 195 ours-only (TS7006 280 -> 22, TS2339 139 -> 69), the 8-library tally 1,145 -> 811, NONE added (2026-10-02)
+
+One implementation subagent. **Where the brief was wrong**: (a) "an annotated receiver works" was half true — a
+`T`-annotated receiver failed too, and so did an annotated interface whose member is inherited through a GENERIC base;
+(b) F4 was three mechanisms, not one receiver gap — zod's main shape is `const X: core.$constructor<Z> =
+core.$constructor("X", (inst, def) => {…})`, where RETURN-TYPE inference from the annotation failed because the
+annotation omits the defaulted `D`, leaving `inst` as the constraint `ZodTrait` — the same failure behind ~70 ours-only
+TS2339 (`'options' does not exist on type 'ZodTrait'`); (c) TS7006 was the SYMPTOM — the arrow bodies were already typed
+(their TS2322 rows matched tsgo before); only the spineIany arity edge got no contextual type. **Mechanism** (all
+additive second chances, `Checker.kt` +108): a fourth parallel implicit-any stack `implicitAnyScopeCtxParams` holding an
+arrow's / function expression's unannotated parameters (pushed / popped with the other three; a same-named body local
+removes its entry in `spineIanyVarDeclEnter`) and `contextualParamTypeForImplicitAny` asking the parameter's contextual
+type through the same pull `applyPulledContextualParamTypes` uses; `implicitAnyAnnCtxType` takes a bare type-parameter
+annotation's constraint from the nearest enclosing declaration of that name; `inheritedMemberCtxType` brings the B82.1
+inherited-base substitution (which existed only in `computeRawTypeOfPropertyAccess`) to the property-access arm when
+its lookup answers `any` / an error / a bare type parameter; `ctxReturnInferInto` matches the SHARED argument prefix
+instead of refusing on a count mismatch. No spine handler touched. **Matrix** (`build/bench/p18268-agent/cells`): every
+cell = tsgo (callback parameter through inferred / explicit / non-generic callees, `T extends` receivers, element
+access, inherited generic member, omitted-default return context, the inferred type argument `'Leaf'` where we said
+`'ZodTrait'`, optional member) and every control unchanged (annotated receiver, local const, `this`, differing union
+member, missing member, longer arrow, uncontextual inner parameter, block-local shadow). **Pins**:
+`AssignmentTargetReceiverContextTest` 16; ablation a1 6 / a2 2 / a4 2 / a5 2 / a6 1 / a7 2 RED; a3 (an apparent-type wrapper)
+read 0 and was REMOVED. **Gates**: full suite 22,468 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the same
+41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
+cronstrue unchanged; library grid zod 529 -> 195 (agree 5 and missing 9 unmoved), the seven others identical row SETS;
+warning gate with probe: probe only. **Residues** (in (CHK.203)'s done note): zod's 22 TS7006 left (object-literal
+property values, an array literal assigned to `onattach`, four unreduced `schemas.ts` sites, a v3 `this[...]` value);
+an OVERLOADED member target reports TS7006 where tsgo intersects the signatures (pre-existing, `singleApplicableSigArity`);
+a generic outer type parameter through an explicit type argument; `implicitAnyScopes` is function-scoped, not
+block-scoped (a `{ const inst = 1 }` block shadows a later `inst.m = …`).
+
 ### Round (P18.267) — (LIBS.1) round 2, (CHK.202): an unchecked JavaScript file (allowJs without checkJs, `@ts-nocheck`, explicit `checkJs: false`) keeps only tsgo's plain-JS / syntactic / declaration rows, `.js` inside `node_modules` is no longer loaded (maxNodeModuleJsDepth 0) and its import gets tsgo's TS7016, and package resolution is TypeScript-first across every ancestor `node_modules` / `@types`; type-fest 820 -> 431 ours-only, the 8-library tally 1,534 -> 1,145, program file lists identical to tsgo on 7 of 8 libraries; NONE added anywhere (2026-10-02)
 
 One implementation subagent. **Where the brief was wrong**: (a) the funnel CANNOT drop everything outside tsgo's
@@ -282,37 +313,6 @@ cronstrue 1/1; warning gate with probe: probe only. **Residues**: inference thro
 common supertype (d11 / d12); tsgo also subtype-reduces `cond ? A : B` and multiple returns (we reduce array literals
 only); `h.c` on `H<Ab>` reads an un-instantiated `abstract new () => T` — a PRE-EXISTING false positive (s4); chain
 shapes b09 / r07 / e4.
-
-### Round (P18.258) — (CHK.196) residues: an inherited generic constructor is instantiated through the base's type arguments, an `any`-typed base gives the zero-argument default, TS2511 is decided from the callee TYPE (incl. unions of constructor types), TS2339 reaches any `new` receiver whose callee constructs a class (and an anonymous `export default class`), and the dead `instanceof` exclusion is deleted; new cells 27 -> 60 agreeing with tsgo, ours-only 13 -> 5 (all pre-existing); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
-
-One implementation subagent. **Where the item was wrong**: (a) n05 is not the argument check — a generic class's OWN
-constructor parameter `v: T` resolved with no class scope to `errorType`, which instantiation through `G<number>`
-preserved and the argument loop skipped; (b) "`class D extends (any)`" is really `declare const Base: any; class D
-extends Base {}` — the literal `extends (anyv) {}` is a PARSER defect (frozen subsystem, left as a residue); (c) the
-TS2511 walker CANNOT be retired: disabled, the screen loses 3 baselines (B83.5 block-scoped classes, an anonymous
-default import — fixed this round — and an array-literal `.map(cls => new cls())` whose element union collapses), so
-it is demoted to a FALLBACK; (d) the anonymous `export default class` TS2339 gap was NAME RESOLUTION — the binder never
-binds a nameless class, so the import was `any`; (e) the `instanceof` exclusion was dead and tsgo types the operand as
-`typeof A` — deleted. **Mechanism**: `ClassConstructorTypes.inheritedConstructSignatures` walks the extends chain
-building the type-argument mapping level by level and re-resolves the declaring class's constructor parameters under
-its own type parameters (`reresolveSigParamsUnderClassScope` now `internal`) — single-signature only, overloaded ones
-stay with B264, whose single-mismatch row now dedups against the ordinary check (a duplicate TS2345 HEAD printed);
-`baseConstructsWithNoArguments` extends `defaultConstructorOf` to a file-level `any`-annotated base and to a base whose
-own constructor side is the trusted default; `newExprAbstractConstructorTs2511` owns every callee through
-`constructsAbstract` (unions of constructor types included) while `spineAiEnterNode` records its rows
-(`noteWalkerAbstractRow`) so the type-based check neither redraws them nor checks the arguments (tsgo's
-`resolveErrorCall` — 3 ours-only TS2345 / TS2554 gone); `newExpressionClassSymbol` / `newReceiverClassDecl` /
-`newReceiverDisplay` reach any receiver shape and print the instantiation (`Bx<number>`, was `Bx<unknown>`);
-`NameResolver.anonymousDefaultClassSymbol` mints one `default` symbol per file for the default-import ladder and
-`importedExport("default")`. `Checker.kt` +20 net; `checkSingleNewExpressionTypesCore` 6,857 -> 6,918 bytecodes.
-**Pins**: `ConstructorSideResiduesTest` 16; three `M04AbstractClassSpineMigrationTest` countdown pins (silence where
-tsgo reports TS2511) inverted to tsgo's rows; ablation a1 2 / a2 1 / a3 1 / a4 1 / a5 2 / a6 3 / a7 1 / a8 2 / a9 2 /
-a10 2 / a11 1 / a12 2 / a13 1 / a14 1 RED, a15 (`instanceof` exclusion restored) 0 — dead, as measured. **Gates**:
-full suite 22,303 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0;
-`huge_methods.py --fail-over 0` 0; `spine_closure_audit.py` clean; grid 8 x added=0 removed=0 + chain OK, rxjs /
-marked / cronstrue unchanged; warning gate with probe: probe only. **n08 refused**: `const arr = [A, B]` types as
-`typeof A[]` — the element union of two constructor types collapses to its first member (stage 3's relation gates, also
-behind call inference and the walker's remaining `.map` shape).
 
 ## QUEUE
 
@@ -916,7 +916,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.190) DONE 2026-10-01 (stage 1 (P18.249), residues (P18.252); the namespace-clause residue and the rest -> (CHK.195)). STAGE 1 LANDED 2026-10-01 ((P18.249) note: renames, default and local clauses, `.js` specifiers, barrel chains, augmentation-contributed names). OPEN: c13 named cycle (tsgo TS2303 at both clauses; ours terminates and reads `any`); c14 TS1362 for an `export type` name used as a value; c08 `export * as M` read in value positions; c26 TS2305 where tsgo says TS2614; namespace-level `export { … }` clauses missing from a namespace's export table (the corpus shape `namespacesWithTypeAliasOnlyExportsMerge`); stage 2 (`resolveAlias`'s import arms without the `.js` / crawl / star legs — no measured row it would close); the a9 `.js` leg is unpinned. EARLIER: SAME-NAME `export { X } from` LANDED 2026-10-01 at (P18.248) (with the collision fix); RE-MEASURE the census matrix before stage 1 — c01 c09 c12 c15 c16 c20 c24 now pass, still failing: c03 c04 c06 c08 c10 c13 c19 c21 (renaming / default clauses, local `{B0 as B}`, import-then-export rename, `.js` specifiers, the 3-barrel star chain, the named-cycle TS2303, `export type`), and importers no longer need shifting. CENSUSED 2026-10-01 (read-only, `build/scratch-p18247-census/README.txt`). Stage 1: one helper `importedExport(target, exportedName)` over `exportedSymbolsThroughStars` (importer-visible names, null = unknowable -> today's lookup), plus `followExportSpecifier` (from-clause resolved relative to the declaring file, `.js` leg included; local clause in the declaring scope), wired into a new `resolveAlias` arm for MODULE-level `ExportSpecifier`s, the three `resolveAlias` lookup sites, `computeImportedSymbolGeneral` and the namespace / function-like / enum flow resolvers — predicted +45 tsgo rows over 12 cells, +5 on a real rxjs consumer (1 -> 6 of 11), 0 on the profiles / libraries / corpus; EVERY fixture must shift the importer by a line or it measures (CHK.192). Refused: keying by the declared name, `locals` first, a namespace-clause arm (it exposes a namespace export-table gap: `namespacesWithTypeAliasOnlyExportsMerge` +4 ours-only TS2694), replacing `createModuleSymbol`'s table. Stage 2 and the census's separate items (TS2303 on a named cycle, TS1362 for an `export type` name used as a value, value positions through `export * as M`, clause-exported names in a namespace table, TS2305 vs TS2614) follow. ORIGINAL: A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
 
-- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534 -> (P18.267) 1,145. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
+- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534 -> (P18.267) 1,145 -> (P18.268) 811. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
 
 - [x] **(CHK.201) DONE 2026-10-02 ((P18.266): flow-graph clause reachability + a Block arm; zod -277; residue: a never-returning call declared in a MODULE, `isNeverReturningExpression` reads `globals` only). F3 — false TS7029 "fallthrough case in switch" (zod 277, all 60 locale files).** `case X: { … return }` whose body is a BLOCK counts as falling through: `isDefinitelyTerminating` has no `Block` arm (nor labelled statements). Cheapest large win; prefer asking the FLOW GRAPH whether the clause end is reachable over extending the syntactic predicate. Repro `build/scratch-p18265-census/repro/fall1`.
 
@@ -924,7 +924,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.202) DONE 2026-10-02 ((P18.267) note: unchecked-JS modes, `node_modules` JS excluded + TS7016, TypeScript-first package resolution; type-fest -389; residues -> (CHK.211)). F2 — JavaScript files checked / loaded where tsgo does not (type-fest 389).** A `.js` file under `allowJs` without `checkJs` (and no `// @ts-check`) gets semantic rows (`repro/localjs3`); `.js` files inside `node_modules` are loaded at all (tsgo: `maxNodeModuleJsDepth` 0 — type-fest's program is 72 `node_modules` files here vs 42), and the flip side is a missing TS7016 at the import under `noImplicitAny` (`repro/nmjs`). Needs `-project` pins (`ProjectCompiler` + a `Vfs`). CLAUDE.md: "A `.js` FILE IS IN THE PROGRAM UNDER `allowJs` AND *CHECKED* ONLY UNDER `checkJs`".
 
-- [ ] **(CHK.203) F4 — `recv.member = (a) => …` loses the contextual parameter type (TS7006, zod ~262)** when `recv` is an unannotated contextually-typed callback parameter or typed by a type parameter (an annotated receiver works): the implicit-any assignment path resolves the receiver without the applied contextual parameter types. Repro `build/scratch-p18265-census/repro/ctxassign`.
+- [x] **(CHK.203) DONE 2026-10-02 ((P18.268): contextual parameter receivers, `T` receivers, inherited generic members, prefix return-context inference; zod -334. RESIDUES: zod 22 TS7006 — object-literal property values `json-schema-processors.ts:84-101`, an array literal into `onattach`, four unreduced `schemas.ts` sites, a v3 `this[...]` value; an OVERLOADED member target -> TS7006 where tsgo intersects (`singleApplicableSigArity`); a generic outer type parameter through an explicit type argument; `implicitAnyScopes` is function-scoped, so a block-local `{ const inst = 1 }` shadows a later `inst.m = …`). F4 — `recv.member = (a) => …` loses the contextual parameter type (TS7006, zod ~262)** when `recv` is an unannotated contextually-typed callback parameter or typed by a type parameter (an annotated receiver works): the implicit-any assignment path resolves the receiver without the applied contextual parameter types. Repro `build/scratch-p18265-census/repro/ctxassign`.
 
 - [ ] **(CHK.204) F1 — unused-declaration check (TS6133 / TS6196) misses whole syntax kinds (hono 33, type-fest ~55, zod 7, ky 1).** A name counts as used only if a hand-written collector walks its kind: references inside a template-literal type, an index-signature value type, a type predicate, a type-parameter constraint / default, an `infer` constraint, an `as U` cast in a default value are missed. Replace the per-kind collectors (`collectRefsFromType`, `collectTypeReferenceNames`, the class / interface / alias type-parameter collectors) with ONE `forEachChild` walk per scope. Repro `build/scratch-p18265-census/repro/unused`; the corpus TS6133 / TS6196 / TS6205 baselines are the gate.
 
