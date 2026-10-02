@@ -1,3 +1,33 @@
+### Round (P18.254) — (CHK.196) stage 2: a class identifier READ AS A VALUE answers the constructor-side type (`const c = A`, `A` as an argument, `N.C`, renamed / default imports, `return A`, class expressions, `A.prototype`); the census matrix 44 -> 59 rows agreeing with tsgo and ours-only 12 -> 0; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
+
+One implementation subagent. **Where the item was wrong**: (a) `newCalleeVarHoldsClassValue`'s class half is NOT
+deletable in this stage — a direct `new` callee still reads the instance (stage 1's mapping), so its arm still
+suppresses the false TS2351 on a constructor-less class; it and B60.15 become deletable only when `new`-expression
+typing is PORTED to read construct signatures off the constructor type (not done — the main residue); (b) the generic-
+class-vs-primitive cell was blocked by `typeContainsForeignTypeParam` (the construct signature's raw return `G` read as
+a leaked type parameter), not by `canUseTypeEngine`; (c) the census's last ours-only row (`N.C`) was handled too, so
+12 -> 0 rather than 12 -> 1; (d) class EXPRESSIONS typed `any` outright and had no symbol, and `MemberResolver` gave
+statics only to `ClassDeclaration`; (e) the real shadow hazard is a same-named parameter / local of the INSTANCE type
+(`function f(A: A)`), not a missing name check — guarded. **Mechanism**: `ClassConstructorTypes.valueReadType` (an
+identifier that typed as exactly the declared instance type of the class it names becomes the constructor type, in a
+value-read position per `isValueReadPosition` — never a direct `new` callee, a heritage expression or an `instanceof`
+right operand, never under a same-named walk-scoped binding); `qualifiedValueReadType` for `N.C` (the class must be
+its parent namespace's export and the receiver's last name must spell it — a namespace receiver types `any`);
+`prototype` on the constructor type (the instance, `any` type arguments for a generic class); a `ClassDeclaration` arm
+in `returnIdentifierType`; `classExpressionType` (one symbol per expression node, a mixin `extends` keeps `any` — two
+corpus false TS2322 otherwise) with class-expression statics in `MemberResolver`; `canUseTypeEngine` admits a
+constructor source against a call-only target; `typeContainsForeignTypeParam` treats a constructor type as never
+foreign; `Checker.currentFileLocal` resolves renamed / default imports; the externals renderer REFUSES a constructor
+type (it rendered bare `Box`, which does not compile). `Checker.kt` +24, `ClassConstructorTypes.kt` +112. **Matrix**:
+gained c01 c02 c18 (display) c03 c10 x2 c14 h02 h11 h17 x2 h10 c15 x2; ours-only removed c17 c22 c24 c29 c32 x2 c35 h03
+h12 h15 x2 h18; stage-1 cells +2. **Pins**: `ClassValueReadConstructorTypeTest` 15, one more tsgo-LSP hover pin; two
+stale `residue -` pins repointed to tsgo's rows (`FunctionBindTest`, `NewExpressionContextualArgumentTest`), the
+externals generator expectation moved to `unmapped typeof Box`; ablation b1 10 / b2 1 / b3 1 / b4 1 / b5 1 / b6 1 / b7
+1 / b8 1 / b9 1 / b10 1 / b11 2 / b12 1 / b13 1 / externals 1 RED, b14 (`instanceof` exclusion) 0 — kept to match the
+census, measurable later. **Gates**: full suite 22,243 / 0 / 44 (+16); corpus screen 8725 / 0 and with `--include ''`
+the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0,
+marked 0/0, cronstrue 1/1; warning gate with probe: probe only. Residues stay in (CHK.196).
+
 ### Round (P18.253) — (CHK.196) stage 1: `typeof A` answers a real CONSTRUCTOR-SIDE type (statics incl. inherited, merged-namespace exports, construct signatures, abstract-ness) and displays as `typeof A` in messages and hover; the census matrix 36 -> 44 rows agreeing with tsgo, 0 new ours-only; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
 
 One implementation subagent, from the read-only census (`build/scratch-p18252-census/README.txt`). **Where the census was
