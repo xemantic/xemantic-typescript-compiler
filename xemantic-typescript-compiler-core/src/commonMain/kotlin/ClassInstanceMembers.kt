@@ -228,6 +228,12 @@ internal class ClassInstanceMembers(
         val resolved = raw?.let { if (it.flags.hasAny(SymbolFlags.Alias)) checker.resolveAlias(it) else it }
         val sym = if (resolved != null && resolved.flags.hasAny(SymbolFlags.Class)) {
             resolved
+        } else if (ctor !is Identifier && resolved == null) {
+            // (P18.258) any other callee — `new o.A()`, `new arr[0]()`, `new (class {})()` —
+            // through the class its constructor-side type constructs; the instance agreement
+            // below still decides.
+            checker.classConstructorTypes.constructedClass(checker.getTypeOfExpression(ctor))?.symbol
+                ?: return null
         } else if (ctor is Identifier && (resolved == null || resolved.flags.hasAny(SymbolFlags.Variable))) {
             // (P18.256) a VARIABLE or PARAMETER holding a class (`const c = A`, `t: typeof A`; a
             // parameter is in no binder table, so [raw] is null for it): its type is the class's
@@ -244,6 +250,50 @@ internal class ClassInstanceMembers(
         return sym.takeIf { instanceSym === it }
     }
 
+    private val classExpressionDecls = HashMap<Symbol, ClassDeclaration>()
+
+    /**
+     * The class declaration the `new`-receiver member check walks for [sym]: its
+     * [ClassDeclaration], or — (P18.258) — for the symbol [ClassConstructorTypes.classExpressionType]
+     * mints for a class EXPRESSION, a declaration view of that expression (same members,
+     * heritage and type parameters; named as the symbol is, `e` / `Named` /
+     * `(Anonymous class)`, which is tsgo's display) — not for a generic one. Built once per
+     * symbol, so the chain walk's identity-keyed cycle guard sees one node.
+     */
+    fun newReceiverClassDecl(sym: Symbol): ClassDeclaration? {
+        (sym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration)?.let { return it }
+        val expr = sym.declarations.singleOrNull() as? ClassExpression ?: return null
+        // A GENERIC class expression's `new` is not instantiated here (`new g(1)` would print
+        // `g<unknown>` where tsgo prints `g<number>`): refused.
+        if (!expr.typeParameters.isNullOrEmpty()) return null
+        return classExpressionDecls.getOrPut(sym) {
+            ClassDeclaration(
+                name = expr.name ?: Identifier(sym.name),
+                typeParameters = expr.typeParameters,
+                heritageClauses = expr.heritageClauses,
+                members = expr.members,
+                modifiers = expr.modifiers,
+                pos = expr.pos,
+                end = expr.end,
+            )
+        }
+    }
+
+    /**
+     * (P18.258) The TS2339 display of a `new <generic class>()` receiver: the class name
+     * over the type arguments the `new` expression's own type carries — tsgo's
+     * `Bx<number>` for `new Bx(1)` — with an argument nothing inferred (a type parameter,
+     * `any` from a gap) printed `unknown`, which is the whole display when the expression's
+     * type is not an instantiation of [ctorSym].
+     */
+    fun newReceiverDisplay(newExpr: NewExpression, ctorSym: Symbol, ctorName: String, typeArgs: Int): String {
+        val t = checker.getTypeOfExpression(newExpr) as? Type.Reference
+        val args = t?.takeIf { it.target.symbol === ctorSym }?.resolvedTypeArguments
+        val shown = if (args == null || args.size != typeArgs) List(typeArgs) { "unknown" }
+        else args.map { a -> if (a is Type.TypeParam || a === anyType || a === errorType) "unknown" else checker.typeToString(a) }
+        return ctorName + "<" + shown.joinToString(", ") + ">"
+    }
+
     fun lookupInstanceMemberInResolvableChain(
         classDecl: ClassDeclaration, classSym: Symbol?, propName: String, visited: MutableList<ClassDeclaration>? = null,
         enclosingNs: Symbol? = null,
@@ -252,7 +302,7 @@ internal class ClassInstanceMembers(
         // base may share its subclass's name (`class Server extends net.Server`), and a
         // name key answered "already walked" there — a false "missing" for an inherited member.
         val v = visited ?: ArrayList(4)
-        if (classDecl.name?.text == null) return null
+        if (classDecl.name?.text == null && ModifierFlag.Default !in classDecl.modifiers) return null
         if (v.any { it === classDecl }) return false
         v.add(classDecl)
         // (CHK.182) the class's OWN merged interfaces, read off its symbol. A caller
@@ -528,7 +578,8 @@ internal class ClassInstanceMembers(
         // members as actual properties and should fall through to normal TS2339 checking.
         // NOTE: Type.Interface extends Type.Object so `is Type.Object` alone matches both.
         if (receiverType != null && receiverType !is Type.Interface && receiverType is Type.Object) return false
-        val classDecl = typeSym.declarations.firstOrNull() as? ClassDeclaration ?: return false
+        val classDecl = typeSym.declarations.firstOrNull() as? ClassDeclaration
+            ?: newReceiverClassDecl(typeSym) ?: return false
         if (!isStaticMemberOfClass(classDecl, propName)) return false
         if (hasInstanceMemberNamed(classDecl, propName)) return false
         val baseName = classDecl.name?.text ?: typeSym.name

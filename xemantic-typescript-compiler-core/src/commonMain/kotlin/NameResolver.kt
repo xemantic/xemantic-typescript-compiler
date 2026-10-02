@@ -489,6 +489,13 @@ internal class NameResolver(
                                 setSymbolTarget(symbol, exported)
                                 return resolveAlias(exported, visited)
                             }
+                            // (P18.258) an ANONYMOUS `export default class { … }` is bound under no
+                            // name at all, so the import typed `any`; tsgo binds it as the
+                            // export `default` (displayed `default` / `typeof default`).
+                            anonymousDefaultClassSymbol(targetResult.sourceFile)?.let { cls ->
+                                setSymbolTarget(symbol, cls)
+                                return cls
+                            }
                             // Scan for `export default X` (ExportAssignment without isExportEquals)
                             for (stmt in targetResult.sourceFile.statements) {
                                 if (stmt is ExportAssignment && !stmt.isExportEquals) {
@@ -811,6 +818,26 @@ internal class NameResolver(
      * An ExportSpecifier-declared alias reached through the ladder is followed one hop
      * ([exportSpecifierTarget]); [visited] (alias ids) guards a named re-export cycle.
      */
+    private val anonymousDefaultClasses = HashMap<String, Symbol?>()
+
+    /**
+     * (P18.258) The class symbol of [file]'s ANONYMOUS `export default class` — minted once
+     * per file and named `default`, as tsgo's binder names the export — or null when the
+     * file has none. The binder binds a class under its own name only, so a nameless one
+     * is in no table and a default import of it resolved to nothing (`any`).
+     */
+    fun anonymousDefaultClassSymbol(file: SourceFile): Symbol? =
+        anonymousDefaultClasses.getOrPut(file.fileName) {
+            val decl = file.statements.firstOrNull {
+                it is ClassDeclaration && it.name == null &&
+                    ModifierFlag.Export in it.modifiers && ModifierFlag.Default in it.modifiers
+            } ?: return@getOrPut null
+            Symbol(SymbolFlags.Class or SymbolFlags.ExportValue, "default").also {
+                it.declarations.add(decl)
+                it.valueDeclaration = decl
+            }
+        }
+
     fun importedExport(tr: BinderResult, exportedName: String, visited: MutableSet<Int>): Symbol? {
         val sf = tr.sourceFile
         val tableAnswers = exportTableAnswers.getOrPut(sf.fileName) {
@@ -840,6 +867,7 @@ internal class NameResolver(
             (sym.declarations.singleOrNull() as? ExportSpecifier)?.let { it.name.text != exportedName } == true
         }
             ?: checker.resolveExportedSymbolThroughStars(sf, exportedName)
+            ?: (if (exportedName == "default") anonymousDefaultClassSymbol(sf) else null)
             ?: return null
         val spec = raw.declarations.singleOrNull() as? ExportSpecifier ?: return raw
         if (!visited.add(raw.id)) return raw

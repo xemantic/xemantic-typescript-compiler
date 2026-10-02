@@ -71927,7 +71927,13 @@ interface DataView {
 
     /** ENTER dispatch: the legacy NewExpression arm's TS2511 emission,
      *  verbatim (Identifier callee in the effective abstractClasses or
-     *  typeofAbstractVars set). */
+     *  typeofAbstractVars set). (P18.258) The type-based check
+     *  ([newExprAbstractConstructorTs2511], at the node's LEAVE) owns every callee
+     *  now; this walker is the FALLBACK for the callees no type reaches — measured
+     *  by disabling it: a block-scoped class (B83.5, `abstractClassInLocalScopeIsAbstract`)
+     *  and a callback over an array literal of classes (`[ConcreteA, AbstractA].map(cls =>
+     *  new cls())`, whose element union collapses to its first member here) — and a row it
+     *  draws is noted so the type-based check neither redraws it nor checks the arguments. */
     private fun spineAiEnterNode(node: Node) {
         if ((node as NodeBase).kindId != NodeKind.NEW_EXPRESSION) return
         node as NewExpression
@@ -71942,6 +71948,7 @@ interface DataView {
         val start = node.pos
         val length = expressionTrueEnd(node) - start
         val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        classConstructorTypes.noteWalkerAbstractRow(spineFileName, start)
         diagnostics.add(Diagnostic(
             message = "Cannot create an instance of an abstract class.",
             category = DiagnosticCategory.Error,
@@ -155966,7 +155973,7 @@ interface DataView {
             val ctor = objectExpr.expression
             // (CHK.191) a QUALIFIED callee (`new N.C()`, `new ns.C()`) resolves through
             // [ClassInstanceMembers.newExpressionClassSymbol] alone.
-            if (ctor is Identifier || ctor is PropertyAccessExpression) {
+            run {
                 // B15.2: for namespace-nested `new C(...).prop` patterns, look up the
                 // ctor symbol via the property-access namespace stack first — the
                 // binder puts namespace-internal classes in `namespaceSymbol.exports`,
@@ -155995,8 +156002,11 @@ interface DataView {
                     if (ctorSym.declarations.count { it is ClassDeclaration } > 1) return true
                     // (CHK.182) a merged INTERFACE is read by the chain walk below
                     // ([mergedInterfaceHasMember]), which refuses what it cannot read.
-                    if (ctorSym.declarations.any { it !is ClassDeclaration && it !is ModuleDeclaration && it !is InterfaceDeclaration }) return true
-                    val classDecl = ctorSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+                    // (P18.258) a class EXPRESSION's minted symbol carries its one ClassExpression.
+                    if (ctorSym.declarations.any { it !is ClassDeclaration && it !is ModuleDeclaration && it !is InterfaceDeclaration } &&
+                        !(ctorSym.declarations.size == 1 && ctorSym.declarations[0] is ClassExpression)
+                    ) return true
+                    val classDecl = classInstanceMembers.newReceiverClassDecl(ctorSym)
                     if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
                         // Walk own members + extends chain. `false` means the chain
                         // resolves cleanly (no IndexSignature, no ambient base, no
@@ -156019,7 +156029,9 @@ interface DataView {
                             // with `const c = A`, and `import { A as B }; new B()`, both say 'A'.
                             val ctorName = classDecl.name?.text ?: ctorSym.name
                             val display = if (typeArgs > 0) {
-                                ctorName + "<" + List(typeArgs) { "unknown" }.joinToString(", ") + ">"
+                                // (P18.258) tsgo prints the INSTANTIATED instance (`Bx<number>` for
+                                // `new Bx(1)`); `unknown` only for what nothing inferred.
+                                classInstanceMembers.newReceiverDisplay(objectExpr, ctorSym, ctorName, typeArgs)
                             } else ctorName
                             // (CHK.187) a STATIC member is TS2576 and a near-miss name TS2551, as at
                             // every other class-instance receiver — this branch used to print a
@@ -164759,16 +164771,17 @@ interface DataView {
 
     /**
      * (P18.256) TS2511 off the constructor type — tsgo `resolveNewExpression`'s
-     * `someSignature(constructSignatures, isAbstract)` — for the callees the name-based TS2511
-     * walker ([spineAiEnterNode], a bare identifier through `!`) cannot see: `new N.Ab()`,
-     * `new o.Ab()`, `new arr[0]()`, `new (Ab)()`. True when reported; tsgo stops there
-     * (`resolveErrorCall`), so the caller does not check the arguments.
+     * `someSignature(constructSignatures, isAbstract)`. True when reported (or already
+     * reported); tsgo stops there (`resolveErrorCall`), so the caller does not check the
+     * arguments. (P18.258) Every callee, a bare identifier included, and a union of
+     * constructor types; the name-based walker ([spineAiEnterNode], at the node's ENTER) is
+     * kept only as the fallback for callees no type reaches — a block-scoped class (B83.5)
+     * and an anonymous `export default abstract class` import — and a row it drew is not
+     * redrawn here.
      */
     private fun newExprAbstractConstructorTs2511(expr: NewExpression, calleeType: Type, source: String, fileName: String): Boolean {
-        var c = expr.expression
-        while (c is NonNullExpression) c = c.expression
-        if (c is Identifier) return false
-        if (getConstructSignaturesOfType(calleeType).none { it.isAbstract }) return false
+        if (classConstructorTypes.walkerAbstractRowDrawn(fileName, expr.pos)) return true
+        if (!classConstructorTypes.constructsAbstract(calleeType)) return false
         val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
         diagnostics.add(Diagnostic(
             message = "Cannot create an instance of an abstract class.",
@@ -165375,7 +165388,11 @@ interface DataView {
             }
         } else null
         val explicitArgsAllResolve = resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }
-        val effectiveSigs: List<Signature> = if (!classTypeParams.isNullOrEmpty() && explicitArgsAllResolve) {
+        // (P18.258) a constructor-less class's inherited signatures, instantiated through the
+        // heritage type arguments (a non-generic class always; a generic one under explicit ones).
+        val inherited = classConstructorTypes.inheritedNewSignatures(calleeType, resolvedTypeArgs?.takeIf { explicitArgsAllResolve })
+        val effectiveSigs: List<Signature> = if (inherited != null) inherited
+        else if (!classTypeParams.isNullOrEmpty() && explicitArgsAllResolve) {
             val reresolved = signatures.map { sig -> reresolveSigParamsUnderClassScope(sig, classTypeParams) }
             // B74.5: After re-resolving params under class scope, substitute the class
             // TypeParams with the explicit type arguments. Without this, a static method
@@ -165465,7 +165482,7 @@ interface DataView {
      * type without re-running the AST resolution path. Preserves the original
      * symbols' cache entries (used by `instantiateSignature` in [handleSuperMethodCall]).
      */
-    private fun reresolveSigParamsUnderClassScope(
+    internal fun reresolveSigParamsUnderClassScope(
         sig: Signature,
         classTypeParams: List<Type.TypeParam>,
     ): Signature {
@@ -183627,6 +183644,9 @@ interface DataView {
                         is Identifier -> argNode.text.length
                         else -> 1
                     }
+                    // (P18.258) the ordinary argument check already drew this row when the
+                    // mismatching parameter needs no heritage substitution (`b: number`).
+                    if (diagnostics.any { it.code == 2345 && it.start == argNode.pos && it.fileName == fileName }) continue
                     val (line, ch) = getLineAndCharacterOfPosition(source, argNode.pos)
                     diagnostics.add(Diagnostic(
                         message = "Argument of type '$argT' is not assignable to parameter of type '$paramT'.",

@@ -40,6 +40,9 @@ import kotlin.test.Test
  * expression's CALLEE subtree, case-clause EXPRESSIONS, bare for-initializer
  * EXPRESSIONS, and object-literal METHOD bodies all stay unwalked). All
  * expectations verified green against the pre-migration legacy walker first.
+ * (P18.258) the type-based TS2511 (`Checker.newExprAbstractConstructorTs2511`) now
+ * owns every callee and reports three of those unwalked positions as tsgo does; the
+ * walker is the fallback for what no type reaches.
  */
 class M04AbstractClassSpineMigrationTest {
 
@@ -219,7 +222,9 @@ class M04AbstractClassSpineMigrationTest {
     }
 
     @Test
-    fun `reach - a new-expression CALLEE subtree is not walked`() {
+    fun `reach - a new-expression CALLEE subtree is reported through the type-based check`() {
+        // (P18.258) the walker does not reach a callee subtree; the type-based TS2511 at the
+        // inner `new A()` does — tsgo 7.0.2: t.ts(3,11) TS2511.
         diagnose(
             """
             abstract class A {}
@@ -227,19 +232,20 @@ class M04AbstractClassSpineMigrationTest {
             new (wrap(new A()))()
             """
         ) should {
-            have(none { it.code == 2511 })
+            have(count { it.code == 2511 && it.line == 3 && it.character == 11 } == 1)
         }
     }
 
     @Test
-    fun `reach - an object-literal method body is not walked`() {
+    fun `reach - an object-literal method body is reported through the type-based check`() {
+        // (P18.258) tsgo 7.0.2: t.ts(2,26) TS2511.
         diagnose(
             """
             abstract class A {}
             const o = { m() { return new A() } }
             """
         ) should {
-            have(none { it.code == 2511 })
+            have(count { it.code == 2511 && it.line == 2 && it.character == 26 } == 1)
         }
     }
 
@@ -284,7 +290,9 @@ class M04AbstractClassSpineMigrationTest {
     }
 
     @Test
-    fun `reach - a bare for-initializer EXPRESSION is not walked but a declaration list is`() {
+    fun `reach - a bare for-initializer EXPRESSION and a declaration list are both reported`() {
+        // (P18.258) the walker skips the bare expression; the type-based check reports it —
+        // tsgo 7.0.2: t.ts(3,10) TS2511.
         diagnose(
             """
             abstract class A {}
@@ -292,7 +300,7 @@ class M04AbstractClassSpineMigrationTest {
             for (y = new A() as unknown; false;) {}
             """
         ) should {
-            have(none { it.code == 2511 })
+            have(count { it.code == 2511 && it.line == 3 && it.character == 10 } == 1)
         }
         diagnose(
             """

@@ -46,8 +46,8 @@ package com.xemantic.typescript.compiler
  * class-value source); since stage 2 every VALUE read of a class — an identifier
  * ([valueReadType]), `N.C` ([qualifiedValueReadType]), `return A`, a class expression
  * ([classExpressionType]) and, since (P18.256), a direct `new` callee, whose readers take the
- * constructed class back through [constructedClass]. A heritage expression and an
- * `instanceof` right operand keep the instance. `typeToString` renders a type minted here as
+ * constructed class back through [constructedClass]. A heritage expression keeps the
+ * instance. `typeToString` renders a type minted here as
  * `typeof Name` ([isConstructorType]).
  */
 internal class ClassConstructorTypes(
@@ -87,6 +87,144 @@ internal class ClassConstructorTypes(
         return constructorTypeOfClass(sym)
     }
 
+    /**
+     * (P18.258) The construct signatures a constructor-less class INHERITS, with the
+     * parameter types instantiated through the heritage type arguments — tsgo's
+     * `getDefaultConstructSignatures` (the base constructor type's signatures, instantiated
+     * with the base type arguments). [MemberResolver] copies the base REFERENCE's signatures,
+     * but a generic class's own constructor parameter `v: T` was resolved with no class scope
+     * (`errorType`), so `class H extends G<number> {}` checked no argument of `new H("s")`.
+     * Here the declaring class's constructor parameters are re-resolved under its own type
+     * parameters (`Checker.reresolveSigParamsUnderClassScope`) and instantiated with the
+     * mapper composed down the extends chain. Expressed in [cls]'s own type parameters.
+     * Null when [cls] declares a constructor, the chain carries no type argument, the
+     * declaring base is not a resolvable class, or its constructor is overloaded.
+     */
+    fun inheritedConstructSignatures(cls: Type.Interface): List<Signature>? {
+        if (ownConstructorClassDecl(cls) != null) return null
+        var current = cls
+        var mapper: TypeMapper? = null
+        repeat(32) {
+            val base = current.baseTypes?.firstOrNull() ?: return null
+            val target: Type.Interface
+            if (base is Type.Reference) {
+                target = base.target
+                val tps = target.typeParameters ?: return null
+                val args = base.resolvedTypeArguments ?: return null
+                if (tps.size != args.size) return null
+                val m = mapper
+                mapper = createTypeMapper(tps, if (m == null) args else args.map { checker.instantiateType(it, m) })
+            } else {
+                target = base as? Type.Interface ?: return null
+            }
+            if (target.symbol?.flags?.hasAny(SymbolFlags.Class) != true) return null
+            if (ownConstructorClassDecl(target) != null) {
+                val m = mapper ?: return null
+                checker.resolveStructuredTypeMembers(target)
+                val tps = target.typeParameters
+                val sigs = target.constructSignatures?.filter { it.declaration is Constructor } ?: return null
+                // An OVERLOADED inherited constructor stays with B264
+                // (`checkInheritedOverloadedCtorArgs`), whose TS2769 the overload path does
+                // not reproduce (`inheritedConstructorWithRestParams2`; both together double-emit).
+                if (sigs.size != 1) return null
+                return sigs.map { s ->
+                    val r = if (tps.isNullOrEmpty()) s else checker.reresolveSigParamsUnderClassScope(s, tps)
+                    checker.instantiateSignature(r, m)
+                }
+            }
+            current = target
+        }
+        return null
+    }
+
+    /**
+     * (P18.258) The signatures a `new` of [calleeType] checks its arguments against when the
+     * constructed class declares no constructor: [inheritedConstructSignatures], further
+     * instantiated with the call's explicit type arguments [typeArgs] for a generic class
+     * (which without them is not inferred here, so null). Null keeps the caller's list.
+     */
+    fun inheritedNewSignatures(calleeType: Type, typeArgs: List<Type>?): List<Signature>? {
+        val cls = constructedClass(calleeType) ?: return null
+        val tps = cls.typeParameters
+        if (!tps.isNullOrEmpty() && tps.size != typeArgs?.size) return null
+        val inherited = inheritedConstructSignatures(cls) ?: return null
+        if (tps.isNullOrEmpty() || typeArgs == null) return inherited
+        val m = createTypeMapper(tps, typeArgs)
+        return inherited.map { checker.instantiateSignature(it, m) }
+    }
+
+    /** The class declaration of [cls] when it declares a constructor, else null. */
+    private fun ownConstructorClassDecl(cls: Type.Interface): Node? =
+        cls.symbol?.declarations?.firstOrNull { d ->
+            (d is ClassDeclaration && d.members.any { it is Constructor }) ||
+                (d is ClassExpression && d.members.any { it is Constructor })
+        }
+
+    /**
+     * (P18.258) tsgo's `getDefaultConstructSignatures` for a constructor-less class whose
+     * base constructor type has NO construct signature gives ONE zero-parameter signature:
+     * measured for `declare const Base: any; class D extends Base {}` (`new D(1, 2)` is
+     * TS2554 "Expected 0 arguments"). Trusted here only where the base is decidable from the
+     * syntax and the checker agrees — an identifier naming a FILE-LEVEL variable annotated
+     * with the `any` keyword (an `any` from this checker's own gaps is never a reason to
+     * count arguments), or a class whose own constructor side is the trusted default
+     * (`class G extends B0 {}` over a constructor-less `B0`).
+     */
+    private fun baseConstructsWithNoArguments(decl: Node, base: Expression): Boolean {
+        val id = base as? Identifier ?: return false
+        val baseType = checker.getTypeOfExpression(id)
+        if (baseType === anyType) {
+            // The class sits at file level (a declaration, or a `const e = class …` initializer),
+            // so no inner binding can shadow the file-level variable.
+            var root: Node = (decl as NodeBase).parent ?: return false
+            while (root !is SourceFile) {
+                if (root !is VariableDeclaration && root !is VariableDeclarationList &&
+                    root !is VariableStatement && root !is ParenthesizedExpression
+                ) return false
+                root = (root as NodeBase).parent ?: return false
+            }
+            val file: SourceFile = root
+            val v = file.statements.asSequence().filterIsInstance<VariableStatement>()
+                .flatMap { it.declarationList.declarations }
+                .filter { (it.name as? Identifier)?.text == id.text }
+                .singleOrNull() ?: return false
+            return (v.type as? KeywordTypeNode)?.kind == SyntaxKind.AnyKeyword
+        }
+        val baseSym = (baseType as? Type.Interface)?.symbol ?: return false
+        if (!baseSym.flags.hasAny(SymbolFlags.Class) || checker.getDeclaredTypeOfSymbol(baseSym) !== baseType) return false
+        val sig = constructorTypeOfClass(baseSym)?.constructSignatures?.singleOrNull() ?: return false
+        return sig.defaultConstructorOf != null
+    }
+
+    /**
+     * (P18.258) Does `new` of [calleeType] construct an ABSTRACT class — tsgo's
+     * `someSignature(constructSignatures, isAbstract)`, where a union's signatures carry
+     * a constituent's abstract flag: measured TS2511 for `typeof ConcreteA | typeof AbstractA`
+     * (`abstractClassUnionInstantiation`). A union counts only when every constituent is
+     * constructable at all (otherwise the call is not constructable, a different row).
+     */
+    fun constructsAbstract(calleeType: Type): Boolean {
+        if (calleeType is Type.Union) {
+            if (calleeType.types.any { checker.getConstructSignaturesOfType(it).isEmpty() }) return false
+            return calleeType.types.any { t -> checker.getConstructSignaturesOfType(t).any { it.isAbstract } }
+        }
+        return checker.getConstructSignaturesOfType(calleeType).any { it.isAbstract }
+    }
+
+    /** (P18.258) The `new` expressions (file, start) the name-based TS2511 walker reported;
+     *  it runs at the expression's ENTER, before the type-based check at its LEAVE. */
+    private val walkerAbstractRows = HashSet<Long>()
+
+    private fun rowKey(fileName: String, start: Int): Long =
+        (fileName.hashCode().toLong() shl 32) or (start.toLong() and 0xFFFFFFFFL)
+
+    fun noteWalkerAbstractRow(fileName: String, start: Int) {
+        walkerAbstractRows.add(rowKey(fileName, start))
+    }
+
+    fun walkerAbstractRowDrawn(fileName: String, start: Int): Boolean =
+        walkerAbstractRows.isNotEmpty() && rowKey(fileName, start) in walkerAbstractRows
+
     /** True for a type minted by [constructorTypeOfClass] (identity). */
     fun isConstructorType(type: Type): Boolean = type is Type.Object && type in minted
 
@@ -125,8 +263,8 @@ internal class ClassConstructorTypes(
      * (CHK.196) stage 2 — the type of an identifier READ of a class: when [t], what the
      * identifier typer answered for [id], is exactly the declared instance type of the class
      * [id] spells, and [id] sits in a value-read position, answer the class's constructor side.
-     * Never for a heritage expression (`extends A` reads the instance) or the right operand
-     * of `instanceof` (the narrowing reads the instance). A direct `new` callee IS a value read
+     * Never for a heritage expression (`extends A` reads the instance); the right operand of
+     * `instanceof` reads the constructor side since (P18.258). A direct `new` callee IS a value read
      * since (P18.256): the `new` readers take the class back through [constructedClass].
      * Null keeps [t].
      */
@@ -184,14 +322,16 @@ internal class ClassConstructorTypes(
         return sym
     }
 
-    /** Not a heritage expression or the right operand of `instanceof`. */
+    /**
+     * Not a heritage expression. (P18.258) The right operand of `instanceof` IS a value use:
+     * tsgo types it `typeof A`, and the exclusion stage 2 kept was dead — removing it moved
+     * no corpus row and no `instanceof` narrowing cell (measured over class, abstract,
+     * generic, `unknown` and type-parameter left operands).
+     */
     private fun isValueUse(node: Node): Boolean {
-        var self: Node = node
         var p = (node as NodeBase).parent
-        while (p is ParenthesizedExpression || p is NonNullExpression) { self = p; p = (p as NodeBase).parent }
-        if (p is ExpressionWithTypeArguments || p is HeritageClause) return false
-        if (p is BinaryExpression && p.right === self && p.operator == SyntaxKind.InstanceOfKeyword) return false
-        return true
+        while (p is ParenthesizedExpression || p is NonNullExpression) p = (p as NodeBase).parent
+        return p !is ExpressionWithTypeArguments && p !is HeritageClause
     }
 
     /**
@@ -227,14 +367,17 @@ internal class ClassConstructorTypes(
                 sigs += Signature(resolvedReturnType = iface, isAbstract = isAbstract).also { sig ->
                     // A class with an `extends` clause and no constructor inherits the base's
                     // (an unresolvable base gives none here, which is not "zero parameters"),
-                    // so only a heritage-free class's default carries a trustworthy arity.
+                    // so a heritage-free class's default carries a trustworthy arity, and an
+                    // extending one's only when the base is known to construct with none
+                    // ([baseConstructsWithNoArguments]).
                     val decl = symbol.declarations.firstOrNull { it is ClassDeclaration || it is ClassExpression }
                     val heritage = when (decl) {
                         is ClassDeclaration -> decl.heritageClauses
                         is ClassExpression -> decl.heritageClauses
                         else -> null
                     }
-                    if (decl != null && heritage?.none { it.token == SyntaxKind.ExtendsKeyword } != false) {
+                    val ext = heritage?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }?.types?.firstOrNull()
+                    if (decl != null && (ext == null || baseConstructsWithNoArguments(decl, ext.expression))) {
                         sig.defaultConstructorOf = decl
                     }
                 }
