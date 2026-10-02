@@ -29523,7 +29523,7 @@ class Checker(
                     val hasValues = subBody is ModuleBlock && subBody.statements.any { ss ->
                         ss is FunctionDeclaration || ss is ClassDeclaration ||
                             ss is VariableStatement || ss is EnumDeclaration ||
-                            ss is ModuleDeclaration
+                            ss is ModuleDeclaration || namespaceExportClauseCarriesValue(ss)
                     }
                     if (!hasValues) nsOnly.add(n)
                 }
@@ -29578,7 +29578,7 @@ class Checker(
                     val hasValues = subBody is ModuleBlock && subBody.statements.any { ss ->
                         ss is FunctionDeclaration || ss is ClassDeclaration ||
                             ss is VariableStatement || ss is EnumDeclaration ||
-                            ss is ModuleDeclaration
+                            ss is ModuleDeclaration || namespaceExportClauseCarriesValue(ss)
                     }
                     if (!hasValues) nsOnly.add(n)
                 }
@@ -30147,7 +30147,7 @@ class Checker(
                             is ModuleBlock -> body.statements.any { s ->
                                 s is FunctionDeclaration || s is ClassDeclaration ||
                                     s is VariableStatement || s is EnumDeclaration ||
-                                    s is ModuleDeclaration // nested namespace may have value exports
+                                    s is ModuleDeclaration || namespaceExportClauseCarriesValue(s) // nested namespace may have value exports
                             }
                             else -> false
                         }
@@ -39625,7 +39625,9 @@ class Checker(
                     // export check for them.
                     val isSubNamespace = memberSym.flags.hasAny(SymbolFlags.Module)
                     // Check if member is actually exported via AST scan.
-                    val isExported = isSubNamespace || memberSym.declarations.any { d ->
+                    // (CHK.195) …or exported by the namespace's own `export { … }` clause.
+                    val isExported = isSubNamespace || memberSym.flags.hasAny(SymbolFlags.ExportValue) ||
+                        memberSym.declarations.any { d ->
                         when (d) {
                             is FunctionDeclaration -> ModifierFlag.Export in d.modifiers
                             is ClassDeclaration -> ModifierFlag.Export in d.modifiers
@@ -41194,6 +41196,10 @@ class Checker(
 
         // Resolve through the namespace chain
         var symbol = globals[segments.firstOrNull() ?: return]
+        // (CHK.195) a MODULE file's own `declare namespace` first — the loop below takes
+        // whichever checked file declares the name first, i.e. another module's same-named
+        // namespace, which (CHK.195)'s clause entries made answer (and miss) members.
+            ?: fileResults[fileName]?.locals?.get(segments.first())
         if (symbol == null) {
             // Also check file-level locals
             for (result in checkedResults) {
@@ -158920,7 +158926,9 @@ interface DataView {
                 // (namespaceMergedWithImportAliasNoCrash: `Library.foo`). Excludes lib
                 // namespaces (Intl etc.), whose TS2550 lib-target hint above already returned.
                 val nsDecls = identSymbol.declarations.filterIsInstance<ModuleDeclaration>()
-                if (nsDecls.isNotEmpty() && nsDecls.none { isNamespaceInstantiated(it) } &&
+                // (CHK.195) …a `declare namespace` with values is not that: its members are
+                // reachable, so an absent one is TS2339 in tsgo.
+                if (nsDecls.isNotEmpty() && nsDecls.none { isNamespaceInstantiated(it) || ambientNamespaceHasValue(it) } &&
                     identSymbol.declarations.none { it in builtinLibDecls }) return true
                 diagnostics.add(Diagnostic(
                     message = "Property '$propName' does not exist on type '$typeName'.",
@@ -199390,6 +199398,9 @@ interface DataView {
                     }
                 }
             }
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is Identifier) checkNamespaceClauseLocality(stmt, source, fileName)
+            }
             // B98.r56: `export { X }` INSIDE an ambient `declare module "m" { ... }`
             // block where X is NOT declared in the block but IS a real outer/global
             // declaration → TS2661. (X declared inside the block, e.g.
@@ -199426,6 +199437,40 @@ interface DataView {
                         ))
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * (CHK.195) TS2661 for a NAMESPACE body's `export { x }` whose `x` resolves to a
+     * declaration of a SCRIPT file's top level (tsgo `checkExportSpecifier`:
+     * `IsGlobalSourceFile(GetDeclarationContainer(decl))`) — a lib global included. A name
+     * declared in a module file, in an enclosing namespace or nowhere is not reported here.
+     * Type-only specifiers are skipped, as the module-level arm above skips them.
+     */
+    private fun checkNamespaceClauseLocality(ns: ModuleDeclaration, source: String, fileName: String) {
+        val body = when (val b = ns.body) {
+            is ModuleBlock -> b
+            is ModuleDeclaration -> { checkNamespaceClauseLocality(b, source, fileName); return }
+            else -> return
+        }
+        for (s in body.statements) {
+            if (s is ModuleDeclaration && s.name is Identifier) { checkNamespaceClauseLocality(s, source, fileName); continue }
+            if (s !is ExportDeclaration || s.moduleSpecifier != null || s.isTypeOnly) continue
+            val named = s.exportClause as? NamedExports ?: continue
+            for (spec in named.elements) {
+                if (spec.isTypeOnly) continue
+                val decl = nameResolver.namespaceClauseTarget(spec, s)?.declarations?.firstOrNull() ?: continue
+                val stmtNode: Node? = if (decl is VariableDeclaration) (decl as NodeBase).parent?.let { (it as NodeBase).parent } else decl
+                val container = (stmtNode as? NodeBase)?.parent as? SourceFile ?: continue
+                if (container.fileName in moduleFiles) continue
+                val nameNode = spec.propertyName ?: spec.name
+                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot export '${nameNode.text}'. Only local declarations can be exported from a module.",
+                    category = DiagnosticCategory.Error, code = 2661, fileName = fileName,
+                    line = line, character = character, start = nameNode.pos, length = nameNode.text.length,
+                ))
             }
         }
     }

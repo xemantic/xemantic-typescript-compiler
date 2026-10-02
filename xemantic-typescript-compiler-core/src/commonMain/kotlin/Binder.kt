@@ -640,7 +640,15 @@ class Binder(private val options: CompilerOptions) {
         val body = decl.body
         if (body != null && sym != null) {
             when (body) {
-                is ModuleBlock -> bindStatements(body.statements)
+                is ModuleBlock -> {
+                    // (CHK.195) a namespace's own `export { … }` clauses bind AFTER the
+                    // block's declarations, so a clause written above the member it
+                    // exports still finds it ([bindNamespaceExportClause]).
+                    for (stmt in body.statements) if (!isNamespaceLocalExportClause(stmt)) bindStatement(stmt)
+                    for (stmt in body.statements) if (isNamespaceLocalExportClause(stmt)) {
+                        bindNamespaceExportClause(stmt as ExportDeclaration, body)
+                    }
+                }
                 is ModuleDeclaration -> bindModuleDeclaration(body)
                 else -> { /* empty body */ }
             }
@@ -728,6 +736,44 @@ class Binder(private val options: CompilerOptions) {
             }
             else -> { /* export * from "mod" — no named symbol */ }
         }
+    }
+
+    private fun isNamespaceLocalExportClause(stmt: Statement): Boolean =
+        stmt is ExportDeclaration && stmt.moduleSpecifier == null && stmt.exportClause is NamedExports
+
+    /**
+     * (CHK.195) A namespace body's `export { a as b }` puts `b` in the namespace's export
+     * table — keyed by the EXPORTED name, as tsgo's binder keys `container.Symbol().Exports`.
+     * This binder binds every member of a namespace body into that same table, exported or
+     * not, so a clause naming a SIBLING member under its own name marks that member exported
+     * (`ExportValue`, the bit [Checker] already reads for an `export`-modified member); any
+     * other entry — a rename, or a name the block does not declare (an outer binding, an
+     * import) — is an [SymbolFlags.Alias] declared by the specifier, which
+     * [NameResolver.resolveAlias] follows through the clause's scope. A name the table
+     * already holds as a non-alias member of ANOTHER block keeps it (the pre-(CHK.195)
+     * behaviour; tsgo would resolve outward there).
+     */
+    private fun bindNamespaceExportClause(decl: ExportDeclaration, block: ModuleBlock) {
+        val clause = decl.exportClause as NamedExports
+        for (spec in clause.elements) {
+            val exported = spec.name.text
+            val declared = spec.propertyName?.text ?: exported
+            val existing = currentScope[exported]
+            if (existing != null && !existing.flags.hasAny(SymbolFlags.Alias)) {
+                if (exported == declared && existing.declarations.any { declaresDirectlyIn(it, block) }) {
+                    existing.flags = existing.flags or SymbolFlags.ExportValue
+                }
+                recordNodeSymbol(spec, existing)
+                continue
+            }
+            declareSymbol(currentScope, exported, SymbolFlags.Alias or SymbolFlags.ExportValue, spec)
+        }
+    }
+
+    /** Is [decl] (a declaration, or a `VariableDeclaration`) a direct statement of [block]? */
+    private fun declaresDirectlyIn(decl: Node, block: ModuleBlock): Boolean {
+        val stmt = if (decl is VariableDeclaration) (decl as NodeBase).parent?.let { (it as NodeBase).parent } else decl
+        return (stmt as? NodeBase)?.parent === block
     }
 
     // -----------------------------------------------------------------------

@@ -342,14 +342,18 @@ class NamedReExportResolutionTest {
         assert(actual.none { it.startsWith("a.ts") })
     }
 
+    /**
+     * (CHK.195) A namespace-local export clause IS followed, in its own file's scope — the
+     * corpus `namespacesWithTypeAliasOnlyExportsMerge`, whose two module files declare the
+     * same-named namespaces, plus a value read of each end of the chain (tsgo 7.0.2,
+     * `build/bench/p18263-agent/cells/c10`; lines are the cell's — no directive here).
+     * Before (CHK.195) this was a negative control (`not followed`); following the clauses
+     * exposed four ours-only TS2694 on the chained reads, because `checkQualifiedNameExports`
+     * took the root namespace from whichever checked file declared it FIRST — the OTHER
+     * module's `NS1`. The direct reads `NS1.A` / `NS2.B` were the same false row.
+     */
     @Test
-    fun `negative control - a namespace-local export clause is not followed`() {
-        // MODULE-level clauses only: a namespace's clause exports are a separate gap
-        // (corpus `namespacesWithTypeAliasOnlyExportsMerge`, whose two files are copied
-        // here — the rows need the second file declaring the same namespaces). Following
-        // those clauses exposed four ours-only TS2694 rows on the chained `NS1.NS2.B`
-        // reads (lines 12-15); tsgo reports none, and the two direct reads on lines
-        // 10-11 are the pre-existing gap of the same family.
+    fun `a namespace-local export clause is followed in its own module`() {
         val circular = "declare namespace NS1 {\n    export { NS2 };\n}\ndeclare namespace NS2 {\n    export { NS1 };\n}\nexport {};\n"
         val uses = """
             type A = string;
@@ -367,9 +371,13 @@ class NamedReExportResolutionTest {
             declare const try4: NS2.NS1.A;
             declare const try5: NS1.NS2.NS1.A;
             declare const try6: NS2.NS1.NS2.B;
+            const p1: number = try1;
+            const p6: string = try6;
         """.trimIndent() + "\n"
         val actual = rows(mapOf("circular.ts" to circular, "circularWithUses.ts" to uses))
-        val chained = actual.filter { row -> (12..15).any { row.startsWith("circularWithUses.ts:$it:") } }
-        assert(chained.isEmpty())
+        assert(actual == listOf(
+            "circularWithUses.ts:16:7 TS2322 Type 'string' is not assignable to type 'number'.",
+            "circularWithUses.ts:17:7 TS2322 Type 'number' is not assignable to type 'string'.",
+        ))
     }
 }

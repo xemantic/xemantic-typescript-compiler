@@ -878,14 +878,14 @@ internal class NameResolver(
      * (CHK.190) One hop of an `export { … }` clause specifier: a FROM clause resolves its
      * module relative to the DECLARING file (`.js` leg and the crawl's answer included)
      * and asks [importedExport] for `propertyName ?: name` there; a LOCAL clause answers
-     * the declaring file's own binding of the declared name. MODULE-level clauses only —
-     * a namespace's `export { … }` names the namespace's members, whose exports table this
-     * checker does not build from clauses (refused this round). Null when unresolvable.
+     * the declaring file's own binding of the declared name; a NAMESPACE body's clause
+     * resolves in its own scope ((CHK.195), [namespaceClauseTarget]). Null when unresolvable.
      */
     fun exportSpecifierTarget(spec: ExportSpecifier, visited: MutableSet<Int>): Symbol? {
         val named = (spec as NodeBase).parent as? NamedExports ?: return null
         val exportDecl = (named as NodeBase).parent as? ExportDeclaration ?: return null
-        val file = (exportDecl as NodeBase).parent as? SourceFile ?: return null
+        val file = (exportDecl as NodeBase).parent as? SourceFile
+            ?: return namespaceClauseTarget(spec, exportDecl)
         val declared = spec.propertyName?.text ?: spec.name.text
         val specifier = (exportDecl.moduleSpecifier as? StringLiteralNode)?.text
         if (specifier == null) {
@@ -895,6 +895,39 @@ internal class NameResolver(
         val targetFile = clauseModuleTarget(specifier, exportDecl, file.fileName) ?: return null
         val tr = fileResults[targetFile] ?: return null
         return importedExport(tr, declared, visited)
+    }
+
+    /**
+     * (CHK.195) A NAMESPACE body's `export { a as b }` names `a` in the clause's own scope:
+     * each enclosing namespace's table innermost-first (every member of a body, exported or
+     * not, is bound there), then the file, then the globals this file sees — as tsgo's
+     * `getTargetOfExportSpecifier` resolves the property name from the specifier. The
+     * clause's OWN alias (`export { x }` with no sibling `x` keys an alias `x`) is never its
+     * answer. Null for a from-clause (TS1194 territory) or a name nothing declares.
+     */
+    internal fun namespaceClauseTarget(spec: ExportSpecifier, exportDecl: ExportDeclaration): Symbol? {
+        if (exportDecl.moduleSpecifier != null) return null
+        val declared = spec.propertyName?.text ?: spec.name.text
+        fun usable(s: Symbol?): Symbol? = s?.takeIf { c -> c.declarations.none { it === spec } }
+        var cur: Node? = (exportDecl as NodeBase).parent
+        var hops = 0
+        while (cur != null && cur !is SourceFile && hops++ < 4096) {
+            if (cur is ModuleDeclaration) {
+                var segments = 0
+                var nameExpr: Expression = cur.name
+                while (nameExpr is PropertyAccessExpression) { segments++; nameExpr = nameExpr.expression }
+                var sym = nodeSymbolOf(cur)
+                var seg = 0
+                while (sym != null && seg++ <= segments && sym.flags.hasAny(SymbolFlags.Module)) {
+                    usable(sym.exports?.get(declared))?.let { return it }
+                    sym = sym.parent
+                }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        val file = cur as? SourceFile ?: return null
+        return usable(fileResults[file.fileName]?.locals?.get(declared))
+            ?: usable(checker.lookupPerFileForNode(spec, declared))
     }
 
     /** (CHK.190) The file a module-level import / export-from clause's [specifier] names,
