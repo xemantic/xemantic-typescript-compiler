@@ -25,6 +25,34 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.266) — (LIBS.1) round 1: (CHK.201) TS7029 asks the flow graph whether a case clause's end is reachable (+ a syntactic Block arm), and (CHK.205) a `//` directive inside an open `/** … */` doc comment is no longer live; the census libraries' ours-only rows 1,896 -> 1,534 (zod -277, type-fest -85), NONE added anywhere, every removed row attributed by script; +0 on corpus (incl. the 41 ignored rows), grid and the gated libraries (2026-10-02)
+
+One implementation subagent, gated for the first time on the LIBRARY GRID (`build/scratch-p18265-census/libgrid.sh
+<abs classdir> <tag> [lib…]` — ours over the 8 census libraries against the stored tsgo output; baseline tag
+`base265`, this round `r266`). **Where the brief was wrong**: (a) a `break` inside a block leaves the SWITCH, not into
+the next case, so tsgo does NOT report `case 8: { break; }` — nor `continue`, `break outer`, `continue outer` from a
+block — while it DOES report a labelled block left by `break lbl` and `try { return } catch {}`; (b) the flow graph
+alone does not cover the census's shapes — it models no never-returning call, so `case 16: { fail(); }` also needs a
+syntactic Block arm; (c) F6 had a SECOND hole beside `commentOpenOnLineBefore` ignoring an enclosing `/*`: a failed
+block-comment prefix fell through to the `//` path, so ` * // @ts-expect-error` inside a doc comment stayed live; and a
+`//` directive on a block comment's LAST line is live in tsgo and must stay so. **Mechanism**: `bindSwitchStatement`
+records every clause whose end is `FlowUnreachable` (tsgo's `FallthroughFlowNode`), exposed as
+`FlowGraph.clauseEndUnreachable`; `checkSwitchForFallthrough` drops a report the flow graph proves unreachable (it can
+only REMOVE rows) and `clauseStmtsTerminate` looks into nested Blocks (labelled statements deliberately not followed);
+a `//` opener inside an open block comment counts only on the block's last line, the backward-found opener confirmed by
+`insideOpenBlockComment` (so a glob in a string literal is not an open comment), and a failed block prefix returns null.
+`Checker.kt` +32, `Flow.kt` +18 (the new field declared before `init`, not between `currentFlowGraph` and its setter).
+**Matrices**: F3 26 clauses — 7 tsgo rows, ours 7 + 12 ours-only -> 7 + 0 (script form; module form keeps case 16);
+F6 14 shapes — exact match (3 ours-only TS2578 gone). **Pins**: `FallthroughClauseReachabilityTest` 4,
+`DocCommentDirectiveTest` 3; ablation a1 1 / a2 1 / a3 2 / a4 1 RED. **Gates**: full suite 22,433 / 0 / 44 (+7); corpus
+screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0
+removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid mitt 10 / superstruct 7 / immer 43 / ky 11 /
+hono 97 / date-fns 17 / zod 806 -> 529 / type-fest 905 -> 820, agree and missing unmoved; warning gate with probe: probe
+only. **Residues**: `case X: { fail(); }` with `fail` declared in a MODULE still reports TS7029
+(`isNeverReturningExpression` reads `globals` only — fixing it also moves TS7027, own item); a doc comment whose middle
+line holds a glob (`src/**/*.ts`) can still make a later `// @ts-expect-error` line read live; a tsgo TS2678 in the
+fallthrough matrix is unrelated and unreported.
+
 ### Round (P18.265) — (CHK.198): the `export =` named-import rule completed — and NINE FALSE TS2305 that (P18.257) shipped on legal code removed (namespace types, nested / element-access expandos, `declare module` augmentations, the lodash variable-merged-with-namespace shape); re-exports and type-only specifiers now judged, `.d.ts` importers folded into the same rule; 83-cell matrix 22 -> 102 of 124 tsgo rows, ours-only 11 -> 0; `Checker.kt` -107; plus the read-only REAL-LIBRARY census queued as (LIBS.1) (2026-10-02)
 
 Two agents in parallel: one builder, one read-only census on frozen classes. **Builder — where the item was wrong**: (a)
@@ -276,36 +304,6 @@ green. **Gates**: full suite 22,287 / 0 / 44 (+16); corpus screen 8725 / 0 (the 
 baselines are the real gate); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain
 OK, rxjs / marked / cronstrue unchanged (a CONTROL — no profile has an `export =` named import); warning gate with
 probe: probe only. Residues -> (CHK.198).
-
-### Round (P18.256) — (CHK.196): a `new` callee is an ordinary value read — a class identifier answers its constructor-side type and the `new`-expression readers take the construct signatures and the class off it; stage 1's direct-`new` mappings, `newCalleeVarHoldsClassValue`'s class half and B60.15's class refusal are deleted; TS2673 is reported for the first time; round matrix 39 -> 57 agreeing with tsgo, census 59 -> 67, ours-only 0; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
-
-One implementation subagent. **Where the item was wrong**: (a) the mapping was TWO pieces (`getTypeOfIdentifier`'s
-map-back and `ClassConstructorTypes.isValueUse`'s `new` exclusion) and a hidden FOURTH reader (`inferSimpleReturnTypeFromBody`
-types the callee directly — `genericCloneReturnTypes2` failed the screen without it); (b) reading the construct
-signatures off the constructor type is not enough: explicit type arguments, constructor-argument inference and the
-uninferred default (B56.1) are keyed on the class's type parameters, so the readers take the class back through the
-constructor type (`constructedClass`, the instance its signatures return); (c) `newCalleeVarHoldsClassValue`'s class
-half had been DEAD since stage 2 — replaced by a throw-to-TS2589 probe it read 0 on the corpus, both matrices and the
-(CHK.137) pins (129 tests) — and is deleted (what remains is `newCalleeVarHoldsInstance`); (d) B60.15's class refusal
-was not dead but WRONG — with class values constructor-typed it fired only on a genuine union of instances, suppressing
-tsgo's TS2351 for `declare const u: A | B; new u()` — deleted. **Mechanism**: `ClassConstructorTypes.constructedClass`
-/ `newCalleeConstructorSide`; `getReturnTypeOfNewExpression`, `inferSimpleReturnTypeFromBody` and
-`checkSingleNewExpressionTypesCore` read the class off the constructor type; `constructSignaturesForNewCtx` gains a
-constructor-type arm; TS2673 (`emitPrivateConstructorTs2673`) and a type-based TS2511 for non-identifier callees
-(`newExprAbstractConstructorTs2511`); TS2673 / TS2674 now cover module files and variable callees;
-`Signature.defaultConstructorOf` marks the implicit zero-argument constructor of an `extends`-less class and
-`SignatureArity` trusts it (plus `const c = C` owning C's constructor); `ClassInstanceMembers` takes a `new
-<variable or parameter>()` receiver's class from the callee's constructor type and the TS2339 message names the class.
-`checkSingleNewExpressionTypesCore` 6,817 -> 6,857 bytecodes (two emitters extracted). `Checker.kt` +22 net.
-**Matrix** (`build/bench/p18256-agent/cells`): n04 n06 n07 n14 n17 n18 n19 n20 n22 gained (TS2554 on constructor-less
-classes through variables / parameters, TS2673, TS2339 on `new c()` receivers, TS2511 through `N.` / `o.` / `arr[0]` /
-parentheses, TS2673 / TS2674 in modules, a renaming import, contextual callbacks through `const B = Box`, B60.15's
-TS2351); census c01 c02 c03 c06 c25 c31 c35. **Pins**: `NewExpressionConstructorSideTest` 14; ablation m1 3 / m2 1 /
-m3 1 / m4 2 / m5 1 / m6 1 / m7 2 / m8 1 / m9 2 / m10 2 / m12 3 / m13 2 / a4 1 / a4b 1 / a5 5 / v2 1 RED — the stage-1
-isAbstract / default-signature arms are now discriminable. **Gates**: full suite 22,271 / 0 / 44 (+14); corpus screen
-8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0 (`globals.lookups` +0.42%); `huge_methods.py --fail-over 0`
-0; grid 8 x added=0 removed=0 + chain OK (chained from (P18.254)'s capture — (P18.255) was a proven pure move), rxjs
-0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only. Residues stay in (CHK.196).
 
 ## QUEUE
 
@@ -909,9 +907,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.190) DONE 2026-10-01 (stage 1 (P18.249), residues (P18.252); the namespace-clause residue and the rest -> (CHK.195)). STAGE 1 LANDED 2026-10-01 ((P18.249) note: renames, default and local clauses, `.js` specifiers, barrel chains, augmentation-contributed names). OPEN: c13 named cycle (tsgo TS2303 at both clauses; ours terminates and reads `any`); c14 TS1362 for an `export type` name used as a value; c08 `export * as M` read in value positions; c26 TS2305 where tsgo says TS2614; namespace-level `export { … }` clauses missing from a namespace's export table (the corpus shape `namespacesWithTypeAliasOnlyExportsMerge`); stage 2 (`resolveAlias`'s import arms without the `.js` / crawl / star legs — no measured row it would close); the a9 `.js` leg is unpinned. EARLIER: SAME-NAME `export { X } from` LANDED 2026-10-01 at (P18.248) (with the collision fix); RE-MEASURE the census matrix before stage 1 — c01 c09 c12 c15 c16 c20 c24 now pass, still failing: c03 c04 c06 c08 c10 c13 c19 c21 (renaming / default clauses, local `{B0 as B}`, import-then-export rename, `.js` specifiers, the 3-barrel star chain, the named-cycle TS2303, `export type`), and importers no longer need shifting. CENSUSED 2026-10-01 (read-only, `build/scratch-p18247-census/README.txt`). Stage 1: one helper `importedExport(target, exportedName)` over `exportedSymbolsThroughStars` (importer-visible names, null = unknowable -> today's lookup), plus `followExportSpecifier` (from-clause resolved relative to the declaring file, `.js` leg included; local clause in the declaring scope), wired into a new `resolveAlias` arm for MODULE-level `ExportSpecifier`s, the three `resolveAlias` lookup sites, `computeImportedSymbolGeneral` and the namespace / function-like / enum flow resolvers — predicted +45 tsgo rows over 12 cells, +5 on a real rxjs consumer (1 -> 6 of 11), 0 on the profiles / libraries / corpus; EVERY fixture must shift the importer by a line or it measures (CHK.192). Refused: keying by the declared name, `locals` first, a namespace-clause arm (it exposes a namespace export-table gap: `namespacesWithTypeAliasOnlyExportsMerge` +4 ours-only TS2694), replacing `createModuleSymbol`'s table. Stage 2 and the census's separate items (TS2303 on a named cycle, TS1362 for an `export type` name used as a value, value positions through `export * as M`, clause-exported names in a namespace table, TS2305 vs TS2614) follow. ORIGINAL: A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
 
-- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
+- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
 
-- [ ] **(CHK.201) F3 — false TS7029 "fallthrough case in switch" (zod 277, all 60 locale files).** `case X: { … return }` whose body is a BLOCK counts as falling through: `isDefinitelyTerminating` has no `Block` arm (nor labelled statements). Cheapest large win; prefer asking the FLOW GRAPH whether the clause end is reachable over extending the syntactic predicate. Repro `build/scratch-p18265-census/repro/fall1`.
+- [x] **(CHK.201) DONE 2026-10-02 ((P18.266): flow-graph clause reachability + a Block arm; zod -277; residue: a never-returning call declared in a MODULE, `isNeverReturningExpression` reads `globals` only). F3 — false TS7029 "fallthrough case in switch" (zod 277, all 60 locale files).** `case X: { … return }` whose body is a BLOCK counts as falling through: `isDefinitelyTerminating` has no `Block` arm (nor labelled statements). Cheapest large win; prefer asking the FLOW GRAPH whether the clause end is reachable over extending the syntactic predicate. Repro `build/scratch-p18265-census/repro/fall1`.
 
 - [ ] **(CHK.202) F2 — JavaScript files checked / loaded where tsgo does not (type-fest 389).** A `.js` file under `allowJs` without `checkJs` (and no `// @ts-check`) gets semantic rows (`repro/localjs3`); `.js` files inside `node_modules` are loaded at all (tsgo: `maxNodeModuleJsDepth` 0 — type-fest's program is 72 `node_modules` files here vs 42), and the flip side is a missing TS7016 at the import under `noImplicitAny` (`repro/nmjs`). Needs `-project` pins (`ProjectCompiler` + a `Vfs`). CLAUDE.md: "A `.js` FILE IS IN THE PROGRAM UNDER `allowJs` AND *CHECKED* ONLY UNDER `checkJs`".
 
@@ -919,7 +917,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [ ] **(CHK.204) F1 — unused-declaration check (TS6133 / TS6196) misses whole syntax kinds (hono 33, type-fest ~55, zod 7, ky 1).** A name counts as used only if a hand-written collector walks its kind: references inside a template-literal type, an index-signature value type, a type predicate, a type-parameter constraint / default, an `infer` constraint, an `as U` cast in a default value are missed. Replace the per-kind collectors (`collectRefsFromType`, `collectTypeReferenceNames`, the class / interface / alias type-parameter collectors) with ONE `forEachChild` walk per scope. Repro `build/scratch-p18265-census/repro/unused`; the corpus TS6133 / TS6196 / TS6205 baselines are the gate.
 
-- [ ] **(CHK.205) F6 — `// @ts-expect-error` inside a `/** … */` doc-comment EXAMPLE treated as a live directive (type-fest 85)** — `classifyTsCommentDirectiveAt`. Repro `build/scratch-p18265-census/repro/tsexpectdoc`.
+- [x] **(CHK.205) DONE 2026-10-02 ((P18.266): a `//` directive inside an open doc comment is live only on its last line; type-fest -85; residue: a glob on a middle doc-comment line can still fool the backward opener search). F6 — `// @ts-expect-error` inside a `/** … */` doc-comment EXAMPLE treated as a live directive (type-fest 85)** — `classifyTsCommentDirectiveAt`. Repro `build/scratch-p18265-census/repro/tsexpectdoc`.
 
 - [ ] **(CHK.206) F7 — no discriminant narrowing when the compared value is not literal SYNTAX (zod 61):** `case Code.a:` where `Code` is a mapped type of literals — `narrowByDiscriminantProperty`'s comparand lookup reads literal syntax only. Repro `build/scratch-p18265-census/repro/enumlike2`.
 

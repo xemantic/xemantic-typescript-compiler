@@ -1,3 +1,33 @@
+### Round (P18.256) — (CHK.196): a `new` callee is an ordinary value read — a class identifier answers its constructor-side type and the `new`-expression readers take the construct signatures and the class off it; stage 1's direct-`new` mappings, `newCalleeVarHoldsClassValue`'s class half and B60.15's class refusal are deleted; TS2673 is reported for the first time; round matrix 39 -> 57 agreeing with tsgo, census 59 -> 67, ours-only 0; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
+
+One implementation subagent. **Where the item was wrong**: (a) the mapping was TWO pieces (`getTypeOfIdentifier`'s
+map-back and `ClassConstructorTypes.isValueUse`'s `new` exclusion) and a hidden FOURTH reader (`inferSimpleReturnTypeFromBody`
+types the callee directly — `genericCloneReturnTypes2` failed the screen without it); (b) reading the construct
+signatures off the constructor type is not enough: explicit type arguments, constructor-argument inference and the
+uninferred default (B56.1) are keyed on the class's type parameters, so the readers take the class back through the
+constructor type (`constructedClass`, the instance its signatures return); (c) `newCalleeVarHoldsClassValue`'s class
+half had been DEAD since stage 2 — replaced by a throw-to-TS2589 probe it read 0 on the corpus, both matrices and the
+(CHK.137) pins (129 tests) — and is deleted (what remains is `newCalleeVarHoldsInstance`); (d) B60.15's class refusal
+was not dead but WRONG — with class values constructor-typed it fired only on a genuine union of instances, suppressing
+tsgo's TS2351 for `declare const u: A | B; new u()` — deleted. **Mechanism**: `ClassConstructorTypes.constructedClass`
+/ `newCalleeConstructorSide`; `getReturnTypeOfNewExpression`, `inferSimpleReturnTypeFromBody` and
+`checkSingleNewExpressionTypesCore` read the class off the constructor type; `constructSignaturesForNewCtx` gains a
+constructor-type arm; TS2673 (`emitPrivateConstructorTs2673`) and a type-based TS2511 for non-identifier callees
+(`newExprAbstractConstructorTs2511`); TS2673 / TS2674 now cover module files and variable callees;
+`Signature.defaultConstructorOf` marks the implicit zero-argument constructor of an `extends`-less class and
+`SignatureArity` trusts it (plus `const c = C` owning C's constructor); `ClassInstanceMembers` takes a `new
+<variable or parameter>()` receiver's class from the callee's constructor type and the TS2339 message names the class.
+`checkSingleNewExpressionTypesCore` 6,817 -> 6,857 bytecodes (two emitters extracted). `Checker.kt` +22 net.
+**Matrix** (`build/bench/p18256-agent/cells`): n04 n06 n07 n14 n17 n18 n19 n20 n22 gained (TS2554 on constructor-less
+classes through variables / parameters, TS2673, TS2339 on `new c()` receivers, TS2511 through `N.` / `o.` / `arr[0]` /
+parentheses, TS2673 / TS2674 in modules, a renaming import, contextual callbacks through `const B = Box`, B60.15's
+TS2351); census c01 c02 c03 c06 c25 c31 c35. **Pins**: `NewExpressionConstructorSideTest` 14; ablation m1 3 / m2 1 /
+m3 1 / m4 2 / m5 1 / m6 1 / m7 2 / m8 1 / m9 2 / m10 2 / m12 3 / m13 2 / a4 1 / a4b 1 / a5 5 / v2 1 RED — the stage-1
+isAbstract / default-signature arms are now discriminable. **Gates**: full suite 22,271 / 0 / 44 (+14); corpus screen
+8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0 (`globals.lookups` +0.42%); `huge_methods.py --fail-over 0`
+0; grid 8 x added=0 removed=0 + chain OK (chained from (P18.254)'s capture — (P18.255) was a proven pure move), rxjs
+0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only. Residues stay in (CHK.196).
+
 ### Round (P18.255) — (INV.0) extraction: the named / default import existence family moves verbatim into a new `NamedImportExistence` collaborator; `Checker.kt` 202,337 -> 201,509 (-828); every receipt byte-identical (2026-10-01)
 
 One implementation subagent. **Where the brief was wrong**: candidate 1 (the type-only-value / TS2693 / TS2708 family)
