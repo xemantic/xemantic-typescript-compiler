@@ -1,3 +1,33 @@
+### Round (P18.249) — (CHK.190) stage 1: a named re-export resolves by the name the IMPORTER sees — renames, `default` clauses, local clauses, import-then-export renames, `.js` specifiers and barrel chains — through one `importedExport` lookup every import->export resolver now asks; +26 tsgo rows / -2 ours-only on the matrix, the hover follows; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent (resumed once). **Where the brief was wrong**: (a) the baseline had moved further — c14
+already agreed on 2 of 3 and the rxjs consumer already stood at 6 / 11, i.e. the census's "+5 on rxjs" was delivered
+by (CHK.192); (b) c10 (a 3-barrel mixed chain) closes in stage 1, not stage 2; (c) the spec's "fall back only when the
+table is null" would have answered ABSENT for `export default <expr>`, a bare-package from-clause and JS / `export =`
+/ `export import` files — the fallback rule is wider (below). **The full suite caught 2 failures the at-risk sweep
+missed** (`ModuleAugmentationResidueTest`): a `declare module "./x"` AUGMENTATION merges its declarations into the
+target's `locals`, which neither `exportedSymbolsThroughStars` nor the exported-name set sees, so `Brand` / `Implicit`
+/ `Exported2` were answered absent and typed `any` — fixed by requiring, for an "absent" answer, that every declaration
+of `locals[name]` live in the target file itself (arm a10: 4 RED). **Mechanism**: `NameResolver.importedExport(tr,
+name, visited)` answers from `exportedSymbolsThroughStars` (importer-visible names); it falls back to today's lookup
+(`locals`, then the star walk) when the table is null, the file is JS or has `export =` / `export import`, the name is
+`default`, or the table cannot name the symbol; it answers absent only when provably not exported (and not
+augmentation-contributed); in the fallback an `ExportSpecifier` alias whose exported name differs is skipped (so
+`export { default as D }` no longer answers a default import) and one is followed a hop, cycle-guarded.
+`exportSpecifierTarget` follows one module-level specifier (from-clause relative to the declaring file — plain,
+relative, `.js`, the crawl's answer — then `importedExport(target, propertyName ?: name)`; local clause -> the declaring
+file's local). Wired into the generalised `resolveAlias` `ExportSpecifier` arm (replacing (CHK.192)'s same-name arm),
+the default-import, `export { X as default } from` and named-import lookups in `resolveAlias`,
+`computeImportedSymbolGeneral` and the namespace / function-like / enum flow resolvers; one accessor
+`Checker.moduleExportsFollowingStarsOf`. `NameResolver.kt` +81, `Checker.kt` +0. **Matrix**: c03 c04 c06 c10 c19 c21
+0 -> all agree (24 rows), w3 loses its ours-only row, the guard / assertion / `NS.v` cell 3 -> 5 of 6 (1 display-only
+pair). **Pins**: `NamedReExportResolutionTest` 19 tests, `ProjectNamedReExportHoverTest` 2 (hover through a barrel);
+ablation a1 1 / a2 7 / a3 4 / a4 1 / a5 1 / a6 1 / a7 1 / a8 1 / a10 4 RED; a9 (the clause's own `.js` leg) 0 —
+recorded as unpinned. **Gates**: full suite 22,157 / 0 / 44 (+21, after the augmentation fix; 2 red before it); corpus
+screen 8725 / 0, and the census's 84 materialised re-export cases 0 differ; `cost_gate.py` 0 (counters identical to
+(P18.248)); `huge_methods.py --fail-over 0` 0; grid (identity hash now covers `NameResolver` too) 8 x added=0 removed=0
++ chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only. Residues -> the (CHK.190) item.
+
 ### Round (P18.248) — (CHK.192): an import specifier resolves through its OWN import statement (by identity, through the parent chain), no longer through another file's statement at the same offsets — a SILENT WRONG TYPE fixed; the structural `enclosingImportIndex` is no longer built at all; plus `resolveAlias` follows a same-name `export { X } from` (the slice of (CHK.190) the fix exposed); every matrix cell agrees with tsgo; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent. **Where the brief was wrong**: (a) harness's 47 different-target collisions moved 0 rows —

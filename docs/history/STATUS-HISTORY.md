@@ -1,5 +1,10 @@
 
 
+**(P18.254) — (CHK.196) STAGE 2: A CLASS NAME USED AS A VALUE (`const c = A`, PASSED AS AN ARGUMENT, `N.C`, AN IMPORT, `return A`, A CLASS EXPRESSION) NOW HAS ITS CONSTRUCTOR TYPE; 15 MORE tsgo ROWS ON THE CENSUS MATRIX AND ALL 12 FALSE ROWS OF OURS GONE; +16 PINS, 22,243 / 0 / 44 (2026-10-01).**
+Screen 0 (switched-off baselines unchanged); grid 8x0; libraries unchanged. Next in the plan: typing `new A()` through
+the constructor type, which retires three workarounds.
+
+
 **(P18.253) — (CHK.196) STAGE 1: `typeof A` IS NOW A REAL CONSTRUCTOR TYPE — ITS STATIC MEMBERS, CONSTRUCTORS AND ABSTRACT-NESS — AND MESSAGES AND HOVER PRINT `typeof A` AS tsgo DOES; 8 MORE tsgo ROWS ON THE CENSUS MATRIX, NONE OF OURS ALONE; +20 PINS, 22,227 / 0 / 44 (2026-10-01).**
 Screen 0 (and the switched-off baselines unchanged); grid 8x0; libraries unchanged. Stage 2 (plain identifier reads of
 a class) is next in the plan.
