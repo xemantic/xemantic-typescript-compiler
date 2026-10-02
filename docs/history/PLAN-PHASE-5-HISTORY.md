@@ -1,3 +1,26 @@
+### Round (P18.257) — (CHK.197): a named import from an `export =` module follows tsgo's per-specifier rule (the target's own name -> exactly one of TS2595 / TS2597 / TS2616, a member of the target -> legal, anything else -> TS2305), the doubled TS2595 + TS2616 under esnext is gone, and TS1192 / TS2613 name the resolved file as tsgo does; 45-cell matrix 0 -> 43 agreeing, (P18.255)'s 17 cells 12 -> 17, 0 ours-only; `Checker.kt` untouched (2026-10-01)
+
+One implementation subagent; the change is confined to `NamedImportExistence.kt` (+84 / -140), so `Checker.class` is
+byte-identical (ee09ad1f). **Where the item was wrong**: "export = value or class -> TS2305 in tsgo" holds only for
+names that are neither a member nor the target's own name — tsgo decides PER SPECIFIER (`getExternalModuleMember`,
+checker.go:14593, looks the name up as a property of the target's type with no Object / Function augmentation; on a
+miss `reportNonExportedMember` sends a target-file local that IS the `export =` target to
+`reportInvalidImportEqualsExportMember`, which picks ONE code — TS2595 for an ES2015+ `module`, TS2597 for a JS
+importer, TS2616 otherwise — and every other name to TS2305); TS1203 at the `export =` already existed, so under
+esnext the only defect was the doubled row; and the TS1192 / TS2613 module name is a CORRECTNESS fix, not form —
+tsgo prints the resolved file minus its extension, which agrees with the corpus (22 TS1192 + 2 TS2613 baselines,
+flat names). **Mechanism**: the three branches (plain-value TS2616, TS2595, class / function TS2616 / TS2597) that
+each fired for every specifier are one per-specifier loop; `exportEqualsMemberNames` decides what is importable (the
+class static side via `constructorTypeOfClass`, the existing `getExportEqualsMemberNames` for namespaces and annotated
+objects, the wrapper interface for a primitive, empty for a plain function) and answers UNKNOWN — reporting only the
+self-name row — for a class with `extends`, a function with expandos, an enum, an unannotated object or a
+non-identifier target; TS1192 / TS2613 strip tsgo's `extensionsToRemove`. **Pins**: `ExportEqualsNamedImportRuleTest`
+16; ablation a1 9 / a2 4 / a3 2 / a4 1 / a5 2 / a6 5 / a7 1 / a8 1 / a9 1 RED; at-risk sweep 30 classes / 504 tests
+green. **Gates**: full suite 22,287 / 0 / 44 (+16); corpus screen 8725 / 0 (the TS2616 / TS2595 / TS2597 / TS1192
+baselines are the real gate); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain
+OK, rxjs / marked / cronstrue unchanged (a CONTROL — no profile has an `export =` named import); warning gate with
+probe: probe only. Residues -> (CHK.198).
+
 ### Round (P18.256) — (CHK.196): a `new` callee is an ordinary value read — a class identifier answers its constructor-side type and the `new`-expression readers take the construct signatures and the class off it; stage 1's direct-`new` mappings, `newCalleeVarHoldsClassValue`'s class half and B60.15's class refusal are deleted; TS2673 is reported for the first time; round matrix 39 -> 57 agreeing with tsgo, census 59 -> 67, ours-only 0; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
 
 One implementation subagent. **Where the item was wrong**: (a) the mapping was TWO pieces (`getTypeOfIdentifier`'s

@@ -25,6 +25,38 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.267) — (LIBS.1) round 2, (CHK.202): an unchecked JavaScript file (allowJs without checkJs, `@ts-nocheck`, explicit `checkJs: false`) keeps only tsgo's plain-JS / syntactic / declaration rows, `.js` inside `node_modules` is no longer loaded (maxNodeModuleJsDepth 0) and its import gets tsgo's TS7016, and package resolution is TypeScript-first across every ancestor `node_modules` / `@types`; type-fest 820 -> 431 ours-only, the 8-library tally 1,534 -> 1,145, program file lists identical to tsgo on 7 of 8 libraries; NONE added anywhere (2026-10-02)
+
+One implementation subagent. **Where the brief was wrong**: (a) the funnel CANNOT drop everything outside tsgo's
+`plainJSErrors` — our CHECKER emits rows tsgo reports as SYNTACTIC JS diagnostics (the parser's `jsErrorAtRange` set,
+TS8002-8017 / 8037 / 8038 / 1206 / 1486, and TS1003 for JSDoc `@typedef` parse errors); the first cut dropped them and
+the corpus screen read 27 mismatches (`jsFileCompilation*Syntax`, `decoratorInJsFile*`, `jsdocTypedefNoCrash*`) —
+those codes are kept in every mode; (b) excluding `node_modules` JS is half of tsgo's file set — it resolves packages
+TypeScript-FIRST across every ancestor `node_modules` and its `@types` and only then falls back to JS (without that a
+nearer JS-only package won over `@types/normalize-package-data`); (c) `// @ts-check` / `// @ts-nocheck` were not
+modelled at all, and tsgo's `@ts-nocheck` applies to `.ts` files too; (d) `checkJs` is THREE-state in tsgo — an
+explicit `false` drops even the plain-JS binder rows (`checkJsExplicitlyFalse` added); (e) mitt was affected as well
+(50 program files vs tsgo's 9, chai / sinon JS pulled in) — the census's stored file lists were stale. **Mechanism**:
+`UncheckedJsFiles.modeOf` ports tsgo's `canIncludeBindAndCheckDiagnostics` / `IsPlainJSFile` — SKIPPED (leading
+`@ts-nocheck`, or JS under explicit `checkJs: false`: syntactic + TS4xxx / 9xxx only), PLAIN (JS, `checkJs` unset, no
+pragma: + the 91 `plainJSErrors`), CHECKED — with tsgo's `extractPragmas` (leading `//` comments, last wins, shebang
+skipped), applied in `getDiagnostics` (`filterUncheckedJs`) BEFORE comment directives, and PLAIN / SKIPPED files exempt
+from directives and TS2578 as in tsgo; the crawl leaves a resolution to a `node_modules` JS file out of the program and
+records it in `ParsedSource.untypedModuleResolutions` (through `TypeScriptCompiler` to a new `Checker` parameter),
+`checkUnresolvedModules` emits TS7016 under `noImplicitAny` (skipping side-effect imports, deferring to an ambient
+`declare module`) with tsgo's "Try `npm i --save-dev @types/…`" chain, TS2307 / TS2882 silenced for those specifiers;
+`ModuleResolver.resolveBare` keeps a JS answer only as a fallback. New `UncheckedJsFiles.kt` (161), `UntypedModuleImports.kt`
+(80); `Checker.kt` +54. **Matrices**: half 1 — 18 cells, 16 exact (plain / checkJs:false / nocheck JS / nocheck TS / mjs
+/ cjs / jsx / strict-reserved / TS2855 shapes / directives…), 2 pre-existing misses; half 2 — 12 cells, all exact incl.
+every chain line. **Pins**: `UncheckedJsAndUntypedModuleTest` 19; `TsgoStep22Test`'s TS2855 `residue -` countdown inverted
+(tsgo re-measured: silent); ablation A1 6 / A2 2 / A3 1 / A4 1 / A5 2 / A6 4 / A7 1 / A8 3 / A9 1 / A10 1 / A12 1 / A13 1 / A14
+1 RED, A11 (TS2882 silencing) 0 — a redundant guard kept as a safety net. **Gates**: full suite 22,452 / 0 / 44 (+19);
+corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid type-fest 820 -> 431 (all 389 removed
+rows in `node_modules` JS), others unchanged; program files vs tsgo: mitt 50 -> 9 (= tsgo), type-fest 512 -> 482 (=
+tsgo, identical sets), ky 159 vs tsgo 32 (that is M3, the `types` default — (CHK.209)); warning gate with probe: probe
+only. Residues -> (CHK.211).
+
 ### Round (P18.266) — (LIBS.1) round 1: (CHK.201) TS7029 asks the flow graph whether a case clause's end is reachable (+ a syntactic Block arm), and (CHK.205) a `//` directive inside an open `/** … */` doc comment is no longer live; the census libraries' ours-only rows 1,896 -> 1,534 (zod -277, type-fest -85), NONE added anywhere, every removed row attributed by script; +0 on corpus (incl. the 41 ignored rows), grid and the gated libraries (2026-10-02)
 
 One implementation subagent, gated for the first time on the LIBRARY GRID (`build/scratch-p18265-census/libgrid.sh
@@ -281,29 +313,6 @@ full suite 22,303 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the 
 marked / cronstrue unchanged; warning gate with probe: probe only. **n08 refused**: `const arr = [A, B]` types as
 `typeof A[]` — the element union of two constructor types collapses to its first member (stage 3's relation gates, also
 behind call inference and the walker's remaining `.map` shape).
-
-### Round (P18.257) — (CHK.197): a named import from an `export =` module follows tsgo's per-specifier rule (the target's own name -> exactly one of TS2595 / TS2597 / TS2616, a member of the target -> legal, anything else -> TS2305), the doubled TS2595 + TS2616 under esnext is gone, and TS1192 / TS2613 name the resolved file as tsgo does; 45-cell matrix 0 -> 43 agreeing, (P18.255)'s 17 cells 12 -> 17, 0 ours-only; `Checker.kt` untouched (2026-10-01)
-
-One implementation subagent; the change is confined to `NamedImportExistence.kt` (+84 / -140), so `Checker.class` is
-byte-identical (ee09ad1f). **Where the item was wrong**: "export = value or class -> TS2305 in tsgo" holds only for
-names that are neither a member nor the target's own name — tsgo decides PER SPECIFIER (`getExternalModuleMember`,
-checker.go:14593, looks the name up as a property of the target's type with no Object / Function augmentation; on a
-miss `reportNonExportedMember` sends a target-file local that IS the `export =` target to
-`reportInvalidImportEqualsExportMember`, which picks ONE code — TS2595 for an ES2015+ `module`, TS2597 for a JS
-importer, TS2616 otherwise — and every other name to TS2305); TS1203 at the `export =` already existed, so under
-esnext the only defect was the doubled row; and the TS1192 / TS2613 module name is a CORRECTNESS fix, not form —
-tsgo prints the resolved file minus its extension, which agrees with the corpus (22 TS1192 + 2 TS2613 baselines,
-flat names). **Mechanism**: the three branches (plain-value TS2616, TS2595, class / function TS2616 / TS2597) that
-each fired for every specifier are one per-specifier loop; `exportEqualsMemberNames` decides what is importable (the
-class static side via `constructorTypeOfClass`, the existing `getExportEqualsMemberNames` for namespaces and annotated
-objects, the wrapper interface for a primitive, empty for a plain function) and answers UNKNOWN — reporting only the
-self-name row — for a class with `extends`, a function with expandos, an enum, an unannotated object or a
-non-identifier target; TS1192 / TS2613 strip tsgo's `extensionsToRemove`. **Pins**: `ExportEqualsNamedImportRuleTest`
-16; ablation a1 9 / a2 4 / a3 2 / a4 1 / a5 2 / a6 5 / a7 1 / a8 1 / a9 1 RED; at-risk sweep 30 classes / 504 tests
-green. **Gates**: full suite 22,287 / 0 / 44 (+16); corpus screen 8725 / 0 (the TS2616 / TS2595 / TS2597 / TS1192
-baselines are the real gate); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain
-OK, rxjs / marked / cronstrue unchanged (a CONTROL — no profile has an `export =` named import); warning gate with
-probe: probe only. Residues -> (CHK.198).
 
 ## QUEUE
 
@@ -907,11 +916,13 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.190) DONE 2026-10-01 (stage 1 (P18.249), residues (P18.252); the namespace-clause residue and the rest -> (CHK.195)). STAGE 1 LANDED 2026-10-01 ((P18.249) note: renames, default and local clauses, `.js` specifiers, barrel chains, augmentation-contributed names). OPEN: c13 named cycle (tsgo TS2303 at both clauses; ours terminates and reads `any`); c14 TS1362 for an `export type` name used as a value; c08 `export * as M` read in value positions; c26 TS2305 where tsgo says TS2614; namespace-level `export { … }` clauses missing from a namespace's export table (the corpus shape `namespacesWithTypeAliasOnlyExportsMerge`); stage 2 (`resolveAlias`'s import arms without the `.js` / crawl / star legs — no measured row it would close); the a9 `.js` leg is unpinned. EARLIER: SAME-NAME `export { X } from` LANDED 2026-10-01 at (P18.248) (with the collision fix); RE-MEASURE the census matrix before stage 1 — c01 c09 c12 c15 c16 c20 c24 now pass, still failing: c03 c04 c06 c08 c10 c13 c19 c21 (renaming / default clauses, local `{B0 as B}`, import-then-export rename, `.js` specifiers, the 3-barrel star chain, the named-cycle TS2303, `export type`), and importers no longer need shifting. CENSUSED 2026-10-01 (read-only, `build/scratch-p18247-census/README.txt`). Stage 1: one helper `importedExport(target, exportedName)` over `exportedSymbolsThroughStars` (importer-visible names, null = unknowable -> today's lookup), plus `followExportSpecifier` (from-clause resolved relative to the declaring file, `.js` leg included; local clause in the declaring scope), wired into a new `resolveAlias` arm for MODULE-level `ExportSpecifier`s, the three `resolveAlias` lookup sites, `computeImportedSymbolGeneral` and the namespace / function-like / enum flow resolvers — predicted +45 tsgo rows over 12 cells, +5 on a real rxjs consumer (1 -> 6 of 11), 0 on the profiles / libraries / corpus; EVERY fixture must shift the importer by a line or it measures (CHK.192). Refused: keying by the declared name, `locals` first, a namespace-clause arm (it exposes a namespace export-table gap: `namespacesWithTypeAliasOnlyExportsMerge` +4 ours-only TS2694), replacing `createModuleSymbol`'s table. Stage 2 and the census's separate items (TS2303 on a named cycle, TS1362 for an `export type` name used as a value, value positions through `export * as M`, clause-exported names in a namespace table, TS2305 vs TS2614) follow. ORIGINAL: A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
 
-- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
+- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534 -> (P18.267) 1,145. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
 
 - [x] **(CHK.201) DONE 2026-10-02 ((P18.266): flow-graph clause reachability + a Block arm; zod -277; residue: a never-returning call declared in a MODULE, `isNeverReturningExpression` reads `globals` only). F3 — false TS7029 "fallthrough case in switch" (zod 277, all 60 locale files).** `case X: { … return }` whose body is a BLOCK counts as falling through: `isDefinitelyTerminating` has no `Block` arm (nor labelled statements). Cheapest large win; prefer asking the FLOW GRAPH whether the clause end is reachable over extending the syntactic predicate. Repro `build/scratch-p18265-census/repro/fall1`.
 
-- [ ] **(CHK.202) F2 — JavaScript files checked / loaded where tsgo does not (type-fest 389).** A `.js` file under `allowJs` without `checkJs` (and no `// @ts-check`) gets semantic rows (`repro/localjs3`); `.js` files inside `node_modules` are loaded at all (tsgo: `maxNodeModuleJsDepth` 0 — type-fest's program is 72 `node_modules` files here vs 42), and the flip side is a missing TS7016 at the import under `noImplicitAny` (`repro/nmjs`). Needs `-project` pins (`ProjectCompiler` + a `Vfs`). CLAUDE.md: "A `.js` FILE IS IN THE PROGRAM UNDER `allowJs` AND *CHECKED* ONLY UNDER `checkJs`".
+- [ ] **(CHK.211) RESIDUES OF (CHK.202) / (P18.267).** TS7016 fires only for import / export / import-equals STATEMENTS — missing at a checkJs `require`, a dynamic `import()`, an `import("x")` type, and inside `.d.ts` files (`checkUnresolvedModules` skips declaration files); `// @ts-check` without `checkJs` does not switch ON our `checkJs`-gated walkers (264 sites), so rows tsgo reports there are still missing (e.g. TS2339 in `build/bench/p18267-agent/m1` c04 — (P18.267) only REMOVED rows); `maxNodeModuleJsDepth` is not parsed (always 0); the TS7016 chain's packages-map test is approximated from program files and the package id takes the last `node_modules` segment.
+
+- [x] **(CHK.202) DONE 2026-10-02 ((P18.267) note: unchecked-JS modes, `node_modules` JS excluded + TS7016, TypeScript-first package resolution; type-fest -389; residues -> (CHK.211)). F2 — JavaScript files checked / loaded where tsgo does not (type-fest 389).** A `.js` file under `allowJs` without `checkJs` (and no `// @ts-check`) gets semantic rows (`repro/localjs3`); `.js` files inside `node_modules` are loaded at all (tsgo: `maxNodeModuleJsDepth` 0 — type-fest's program is 72 `node_modules` files here vs 42), and the flip side is a missing TS7016 at the import under `noImplicitAny` (`repro/nmjs`). Needs `-project` pins (`ProjectCompiler` + a `Vfs`). CLAUDE.md: "A `.js` FILE IS IN THE PROGRAM UNDER `allowJs` AND *CHECKED* ONLY UNDER `checkJs`".
 
 - [ ] **(CHK.203) F4 — `recv.member = (a) => …` loses the contextual parameter type (TS7006, zod ~262)** when `recv` is an unannotated contextually-typed callback parameter or typed by a type parameter (an annotated receiver works): the implicit-any assignment path resolves the receiver without the applied contextual parameter types. Repro `build/scratch-p18265-census/repro/ctxassign`.
 
