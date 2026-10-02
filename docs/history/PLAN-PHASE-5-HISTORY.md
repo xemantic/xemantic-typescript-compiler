@@ -1,3 +1,26 @@
+### Round (P18.261) — (INV.0) extraction: the `new`-expression check family (incl. the B264 inherited-overload pass) moves verbatim into a new `NewExpressionChecks` collaborator; `Checker.kt` 201,635 -> 200,637 (-998); every receipt byte-identical (2026-10-02)
+
+One implementation subagent. **Where the brief was wrong**: (a) the moved core is 7,191 bytecodes after the move, not
+6,918 — every member read now costs a `checker.` field load (+273); still 809 under 8,000, but the NEXT round growing
+it must SPLIT it; (b) widening a hot `private fun` to `internal` adds Kotlin's parameter null checks —
+`checkArgumentsAgainstSignature` 810 -> 839 bytes from that alone; (c) the family carries four reads of walk-scoped
+state (`currentFileLocals`, `callWalkerClassStack`, `spineNaRunActive`) and one scoped save-and-restore write
+(`arityCall`) — taken on ledger row 13's precedent (reads of fields other walks own, not spine internals); (d) the B264
+pass `checkInheritedOverloadedCtorArgs` separated cleanly and moved too. **Moved**: five spans (7224-7231,
+164745-165501, 166602-166627, 166837-166855, 183589-183774), 11 declarations — the hop-budget field, the core family
+run, `typeofClassValueDisplay` and `classExtendsOrIs` (single callers, moved to save a widening each) and the B264 pass;
+`newCalleeTypeSymbolDeclaresClass` stayed (moving it trades one widening for two). Call sites re-pointed with no stubs:
+the spine's `NEW_EXPRESSION` arm (the HANDLER did not move), `checkCallTypesInExpr` and the B264 `pass(...)` line. New
+field `newExpressionChecks` after `classConstructorTypes`. Widenings: 5 fields + 10 functions. **Receipts**: verbatim
+proof both ways (`build/bench/p18261-agent/proof.py`); the per-pass table (419 pass rows, 46 diagnostics, the counter
+block — 501 normalized lines) byte-identical; `PrintInlining` on `checkArgumentsAgainstSignature` all-refused in both
+arms (two `$default` rows flip on process noise — a second run of the before binary reads like the after arm);
+`cost_gate.py` counters identical to (P18.260); 42 `new` / constructor pin classes (781 tests) green;
+`NewExpressionChecksCollaboratorTest` 16, ablation a1 3 / a2 2 / a3 1 / a4 2 / a5 7 RED; a 23-cell tsgo matrix identical
+before and after; `spine_closure_audit.py` clean. **Gates**: full suite 22,353 / 0 / 44 (+16); corpus screen 8725 / 0;
+`huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; warning
+gate with probe: probe only. Ledger row 18. Gaps the matrix exposed -> (CHK.199).
+
 ### Round (P18.260) — (CHK.196) false positive first: a generic class's GETTER or PARAMETER-PROPERTY member whose type mentions `T` through a function shape (and any member whose union / object type carries one) is now instantiated through the reference's type arguments — the `h.c = Ab` false TS2322 and its silent-read twin are gone; a construct-signature-only source now sees `Function`'s apparent members and a constructor's own `prototype` is not compared; 62-cell matrix 27 -> 49 full-row agreeing, 0 ours-only; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
 
 One implementation subagent. **Where the item was wrong**: (a) it is neither construct signatures nor the member
