@@ -17036,7 +17036,7 @@ class Checker(
     }
 
     private fun walkUnusedInferInStmts(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) when (stmt) {
+        for (stmt in stmts) if (!isAmbientUnusedRoot(stmt)) when (stmt) {
             is TypeAliasDeclaration -> walkUnusedInferInTypeNode(stmt.type, source, fileName)
             is InterfaceDeclaration -> {
                 for (m in stmt.members) when (m) {
@@ -17131,6 +17131,9 @@ class Checker(
                     collectTypeReferenceNames(type.trueType, refs)
                     for ((name, inferNode) in inferNames) {
                         if (name in refs) continue
+                        // (P18.271) a `_`-prefixed type parameter is never unused (tsgo
+                        // `isUnreferencedTypeParameter`) — `infer _` included.
+                        if (name.startsWith("_")) continue
                         // (LEGACY.0b) TypeScript 7 reports an unused `infer U` on the
                         // type parameter's NAME (tsgo `checkUnusedInferTypeParameter`:
                         // `NewDiagnosticForNode(typeParameter.Name(), …)`), where tsc 6
@@ -17307,6 +17310,9 @@ class Checker(
             }
             is RestType -> collectTypeReferenceNames(type.type, out)
             is OptionalType -> collectTypeReferenceNames(type.type, out)
+            // (P18.271) a template span and a type predicate reference names too.
+            is TemplateLiteralType -> templateTypeReferenceNames(type.head.rawText ?: "").forEach { out.add(it.name) }
+            is TypePredicate -> type.type?.let { collectTypeReferenceNames(it, out) }
             else -> {}
         }
     }
@@ -18090,6 +18096,27 @@ class Checker(
         }
     }
 
+    /** (P18.271) A generic function EXPRESSION's own type parameters shadow outer names: its
+     *  references are collected into a fresh scope (with the parameters' constraints and
+     *  defaults, which tsgo counts as uses — `<M, U extends Tgt<M>>`) and handed to [outer]
+     *  minus the type-parameter names by [unusedTypeParamScopeClose]. No type parameters: the
+     *  outer scope itself, exactly as before. */
+    private fun unusedTypeParamInnerScope(tps: List<TypeParameter>?, outer: UnusedScope): UnusedScope {
+        if (tps.isNullOrEmpty()) return outer
+        val inner = UnusedScope()
+        for (tp in tps) {
+            tp.constraint?.let { collectRefsFromType(it, inner) }
+            tp.default?.let { collectRefsFromType(it, inner) }
+        }
+        return inner
+    }
+
+    private fun unusedTypeParamScopeClose(tps: List<TypeParameter>?, inner: UnusedScope, outer: UnusedScope) {
+        if (inner === outer || tps.isNullOrEmpty()) return
+        val names = tps.mapTo(HashSet()) { it.name.text }
+        for (n in inner.referencedNames) if (n !in names) outer.referencedNames.add(n)
+    }
+
     private fun collectRefsFromExpr(expr: Expression, scope: UnusedScope) {
         when (expr) {
             is Identifier -> scope.referencedNames.add(expr.text)
@@ -18151,15 +18178,18 @@ class Checker(
                         }
                         is SpreadAssignment -> collectRefsFromExpr(prop.expression, scope)
                         is MethodDeclaration -> {
+                            (prop.name as? ComputedPropertyName)?.let { collectRefsFromExpr(it.expression, scope) }
                             prop.body?.statements?.forEach { collectUnusedReferences(it, scope) }
                             prop.parameters.forEach { param ->
                                 param.initializer?.let { collectRefsFromExpr(it, scope) }
                             }
                         }
                         is GetAccessor -> {
+                            (prop.name as? ComputedPropertyName)?.let { collectRefsFromExpr(it.expression, scope) }
                             prop.body?.statements?.forEach { collectUnusedReferences(it, scope) }
                         }
                         is SetAccessor -> {
+                            (prop.name as? ComputedPropertyName)?.let { collectRefsFromExpr(it.expression, scope) }
                             prop.body?.statements?.forEach { collectUnusedReferences(it, scope) }
                         }
                         else -> {}
@@ -18167,24 +18197,28 @@ class Checker(
                 }
             }
             is ArrowFunction -> {
+                val inner = unusedTypeParamInnerScope(expr.typeParameters, scope)
                 when (val body = expr.body) {
-                    is Block -> body.statements.forEach { collectUnusedReferences(it, scope) }
-                    is Expression -> collectRefsFromExpr(body, scope)
+                    is Block -> body.statements.forEach { collectUnusedReferences(it, inner) }
+                    is Expression -> collectRefsFromExpr(body, inner)
                     else -> {}
                 }
                 expr.parameters.forEach { param ->
-                    param.initializer?.let { collectRefsFromExpr(it, scope) }
-                    param.type?.let { collectRefsFromType(it, scope) }
+                    param.initializer?.let { collectRefsFromExpr(it, inner) }
+                    param.type?.let { collectRefsFromType(it, inner) }
                 }
-                expr.type?.let { collectRefsFromType(it, scope) }
+                expr.type?.let { collectRefsFromType(it, inner) }
+                unusedTypeParamScopeClose(expr.typeParameters, inner, scope)
             }
             is FunctionExpression -> {
-                expr.body.statements.forEach { collectUnusedReferences(it, scope) }
+                val inner = unusedTypeParamInnerScope(expr.typeParameters, scope)
+                expr.body.statements.forEach { collectUnusedReferences(it, inner) }
                 expr.parameters.forEach { param ->
-                    param.initializer?.let { collectRefsFromExpr(it, scope) }
-                    param.type?.let { collectRefsFromType(it, scope) }
+                    param.initializer?.let { collectRefsFromExpr(it, inner) }
+                    param.type?.let { collectRefsFromType(it, inner) }
                 }
-                expr.type?.let { collectRefsFromType(it, scope) }
+                expr.type?.let { collectRefsFromType(it, inner) }
+                unusedTypeParamScopeClose(expr.typeParameters, inner, scope)
             }
             is ClassExpression -> {
                 expr.heritageClauses?.forEach { clause ->
@@ -18334,7 +18368,21 @@ class Checker(
     }
 
     private fun collectRefsFromClassElement(element: ClassElement, scope: UnusedScope) {
+        // (P18.271) a computed member name is a value read (`get [KEY]()`, `[KEY]: number`).
+        val computedName = when (element) {
+            is PropertyDeclaration -> element.name
+            is MethodDeclaration -> element.name
+            is GetAccessor -> element.name
+            is SetAccessor -> element.name
+            else -> null
+        }
+        (computedName as? ComputedPropertyName)?.let { collectRefsFromExpr(it.expression, scope) }
         when (element) {
+            // (P18.271) an index signature's parameter and value types reference names.
+            is IndexSignature -> {
+                element.parameters.forEach { param -> param.type?.let { collectRefsFromType(it, scope) } }
+                element.type?.let { collectRefsFromType(it, scope) }
+            }
             is PropertyDeclaration -> {
                 element.initializer?.let { collectRefsFromExpr(it, scope) }
                 element.type?.let { collectRefsFromType(it, scope) }
@@ -18351,6 +18399,7 @@ class Checker(
                 element.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
                 element.typeParameters?.forEach { tp ->
                     tp.constraint?.let { collectRefsFromType(it, scope) }
+                    tp.default?.let { collectRefsFromType(it, scope) }
                 }
             }
             is Constructor -> {
@@ -18435,6 +18484,7 @@ class Checker(
                 for (member in type.members) {
                     when (member) {
                         is PropertyDeclaration -> {
+                            (member.name as? ComputedPropertyName)?.let { collectRefsFromExpr(it.expression, scope) }
                             member.type?.let { collectRefsFromType(it, scope) }
                         }
                         is MethodDeclaration -> {
@@ -18474,7 +18524,10 @@ class Checker(
                 type.templateSpans.forEach { span ->
                     collectRefsFromType(span.type, scope)
                 }
+                // (P18.271) the spans are never parsed — read the raw slice.
+                templateTypeReferenceNames(type.head.rawText ?: "").forEach { scope.referencedNames.add(it.name) }
             }
+            is TypePredicate -> type.type?.let { collectRefsFromType(it, scope) }
             is RestType -> collectRefsFromType(type.type, scope)
             is NamedTupleMember -> collectRefsFromType(type.type, scope)
             is OptionalType -> collectRefsFromType(type.type, scope)
@@ -18489,6 +18542,10 @@ class Checker(
      * Recurse into nested scopes to check for unused declarations within them.
      */
     private fun checkUnusedInNestedScopes(stmt: Statement, source: String, fileName: String, siblingStatements: List<Statement>? = null) {
+        // (P18.271) tsgo's `reportUnused` drops every row on a node in an AMBIENT context
+        // (`NodeFlagsAmbient`): nothing inside `declare module "x" { … }` (a module augmentation
+        // included), `declare namespace`, `declare class C<T>`, `declare interface`, `declare type`.
+        if (isAmbientUnusedRoot(stmt)) return
         when (stmt) {
             is FunctionDeclaration -> {
                 stmt.body?.let { body ->
@@ -19255,6 +19312,9 @@ class Checker(
             }
         }
 
+        // (P18.271) a reference in any type parameter's constraint or default (its own
+        // included) is a use — tsgo resolves it like any other.
+        collectTypeParamListRefs(typeParams, tpScope)
         // Collect type refs from: heritage clauses, member types, constructor params
         cls.heritageClauses?.forEach { clause ->
             for (type in clause.types) {
@@ -19270,6 +19330,7 @@ class Checker(
             when (member) {
                 is PropertyDeclaration -> member.type?.let { collectTypeRefs(it, tpScope) }
                 is MethodDeclaration -> {
+                    collectTypeParamListRefs(member.typeParameters, tpScope)
                     member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
                     member.type?.let { collectTypeRefs(it, tpScope) }
                     member.body?.let { body ->
@@ -19371,6 +19432,7 @@ class Checker(
             }
         }
 
+        collectTypeParamListRefs(typeParams, tpScope)
         // Collect refs from heritage clauses and members
         iface.heritageClauses?.forEach { clause ->
             for (type in clause.types) {
@@ -19381,6 +19443,7 @@ class Checker(
             when (member) {
                 is PropertyDeclaration -> member.type?.let { collectTypeRefs(it, tpScope) }
                 is MethodDeclaration -> {
+                    collectTypeParamListRefs(member.typeParameters, tpScope)
                     member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
                     member.type?.let { collectTypeRefs(it, tpScope) }
                 }
@@ -19410,6 +19473,7 @@ class Checker(
             }
         }
 
+        collectTypeParamListRefs(typeParams, tpScope)
         collectTypeRefs(alias.type, tpScope)
         reportUnusedTypeParams(tpScope, typeParams, source, fileName)
     }
@@ -19599,8 +19663,9 @@ class Checker(
                 if (param.isCommentPlaceholder) continue
                 val name = param.name
                 if (name is Identifier) {
-                    // Skip if underscore-prefixed or if it has access modifiers (constructor params)
-                    if (!name.text.startsWith("_") &&
+                    // Skip if underscore-prefixed or if it has access modifiers (constructor params).
+                    // (P18.271) a `this` parameter is never reported (tsgo `IsThisParameter`).
+                    if (!name.text.startsWith("_") && name.text != "this" &&
                         ModifierFlag.Public !in param.modifiers &&
                         ModifierFlag.Protected !in param.modifiers &&
                         ModifierFlag.Private !in param.modifiers) {
@@ -19683,6 +19748,8 @@ class Checker(
             }
             for (param in parameters) {
                 param.type?.let { collectTypeRefs(it, tpScope) }
+                // (P18.271) a type written in a parameter DEFAULT (`m = (i) => i as U`).
+                param.initializer?.let { collectTypeRefsInExpr(it, tpScope) }
             }
             returnType?.let { collectTypeRefs(it, tpScope) }
             for (stmt in bodyStatements) {
@@ -19761,6 +19828,16 @@ class Checker(
         reportUnusedTypeParams(scope, typeParameters, source, fileName)
     }
 
+    /** (P18.271) Every constraint and default of a type-parameter list, as type-parameter-scope
+     *  references (tsgo counts `_V extends [T, U]`, `<E2 = E>` and a parameter's own
+     *  `T extends Array<T>` as uses). */
+    private fun collectTypeParamListRefs(tps: List<TypeParameter>?, scope: UnusedScope) {
+        tps?.forEach { tp ->
+            tp.constraint?.let { collectTypeRefs(it, scope) }
+            tp.default?.let { collectTypeRefs(it, scope) }
+        }
+    }
+
     /** Collect type identifier references from a type node. */
     private fun collectTypeRefs(type: TypeNode, scope: UnusedScope) {
         when (type) {
@@ -19778,13 +19855,12 @@ class Checker(
             is IntersectionType -> type.types.forEach { collectTypeRefs(it, scope) }
             is ParenthesizedType -> collectTypeRefs(type.type, scope)
             is FunctionType -> {
-                type.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { collectTypeRefs(it, scope) }
-                }
+                collectTypeParamListRefs(type.typeParameters, scope)
                 type.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
                 type.type.let { collectTypeRefs(it, scope) }
             }
             is ConstructorType -> {
+                collectTypeParamListRefs(type.typeParameters, scope)
                 type.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
                 type.type.let { collectTypeRefs(it, scope) }
             }
@@ -19793,6 +19869,7 @@ class Checker(
                     when (member) {
                         is PropertyDeclaration -> member.type?.let { collectTypeRefs(it, scope) }
                         is MethodDeclaration -> {
+                            collectTypeParamListRefs(member.typeParameters, scope)
                             member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
                             member.type?.let { collectTypeRefs(it, scope) }
                         }
@@ -19829,7 +19906,10 @@ class Checker(
                 type.templateSpans.forEach { span ->
                     collectTypeRefs(span.type, scope)
                 }
+                // (P18.271) the spans are never parsed — read the raw slice.
+                templateTypeReferenceNames(type.head.rawText ?: "").forEach { scope.referencedNames.add(it.name) }
             }
+            is TypePredicate -> type.type?.let { collectTypeRefs(it, scope) }
             else -> {}
         }
     }
@@ -19905,9 +19985,14 @@ class Checker(
                 // But type arguments can still contain nested TypeQuery.
                 type.typeArguments?.forEach { collectTypeQueryValueRefs(it, scope) }
             }
-            is TemplateLiteralType -> type.templateSpans.forEach { span ->
-                collectTypeQueryValueRefs(span.type, scope)
+            is TemplateLiteralType -> {
+                type.templateSpans.forEach { span -> collectTypeQueryValueRefs(span.type, scope) }
+                templateTypeReferenceNames(type.head.rawText ?: "").forEach {
+                    if (it.afterTypeof) scope.referencedNames.add(it.name)
+                }
             }
+            // A predicate's parameter NAME is not a read of that parameter (tsgo reports it).
+            is TypePredicate -> type.type?.let { collectTypeQueryValueRefs(it, scope) }
             else -> {}
         }
     }
@@ -20012,18 +20097,21 @@ class Checker(
                 collectTypeRefsInExpr(expr.whenFalse, scope)
             }
             is ArrowFunction -> {
-                expr.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { collectTypeRefs(it, scope) }
-                }
+                collectTypeParamListRefs(expr.typeParameters, scope)
                 expr.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
                 expr.type?.let { collectTypeRefs(it, scope) }
+                // (P18.271) the body: an expression body's `as U`, a block body's statements.
+                when (val body = expr.body) {
+                    is Block -> body.statements.forEach { collectTypeRefsInStatement(it, scope) }
+                    is Expression -> collectTypeRefsInExpr(body, scope)
+                    else -> {}
+                }
             }
             is FunctionExpression -> {
-                expr.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { collectTypeRefs(it, scope) }
-                }
+                collectTypeParamListRefs(expr.typeParameters, scope)
                 expr.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
                 expr.type?.let { collectTypeRefs(it, scope) }
+                expr.body.statements.forEach { collectTypeRefsInStatement(it, scope) }
             }
             else -> {}
         }
