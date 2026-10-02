@@ -1,3 +1,29 @@
+### Round (P18.250) — (CHK.193): two shipped false positives removed — an instance member is no longer compared against a BASE STATIC (false TS2416), and an import of an untargeted `declare module` in a module file no longer types as a real module (false TS2339, and tsgo's missing TS2307 now reports); a qualified `new N.C()` under a shadowing parameter types as the parameter's member; a merged interface's class base and its names reach the member check and the TS2551 pool; every moved row a tsgo row; +0 on corpus, grid and libraries (2026-10-01)
+
+One implementation subagent. **Where the queue item was wrong**: (b) the import was not merely "unresolved" — a
+`declare module "lib"` written in a MODULE file is an augmentation with no target (tsgo TS2664), and we still treated
+it as a real ambient module in three places (the import fallbacks, the TS2307 gate, the augmentation merge, which put
+its exports into `globals`), so tsgo's TS2307 was MISSING on every such import as well as a false TS2339 added; (d) it
+was more than the suggestion pool — a merged `interface C extends <class>` made the check refuse outright (silent: no
+TS2339 in c5, no TS2551 in c8), and our spelling suggester lacked tsgo's rule that a candidate under 3 characters is
+offered only when it differs by case (`core.go:574`), without which following interface bases would have produced a
+false TS2551; (a) the root is in `MemberResolver` — the instance member table also holds a class's statics, last
+declaration wins on a name clash. **Mechanism / change** (`Checker.kt` +45, `NameResolver.kt` +39,
+`ClassInstanceMembers.kt` +58): (a) the TS2416 override check skips a base member whose declarations are all `static`,
+unless the base also declares an instance member of that name (that case keeps its TS2416); (b)
+`NameResolver.isUntargetedAugmentation(spec)` (every top-level `declare module` of that name in a non-`.d.ts` module
+file with nothing to target, computed once) gates the three ambient fallbacks, and untargeted augmentations are skipped
+by the merge and left out of `ambientModuleNames`; (c) a `new N.C()` whose head is bound by a variable / parameter
+(`LocalShadowGuard.innermostBindingIsVariable`) is typed as a member read of that value; (d) an interface's class base
+is followed through `lookupInstanceMemberInResolvableChain`, `addShapeNames` / `addInterfaceBaseNames` feed the TS2551
+pool, and the under-3-characters rule lands in `getSpellingSuggestionFromNames`. **Matrix**: a4 / s1 / s5 false TS2416
+-> silent (static vs static keeps TS2417); c10 / u2 false TS2339 -> TS2307 as tsgo; b6 `'C'` -> `'{ z: number; }'`; c5
+/ c8 / p2 silent or TS2339 -> tsgo's TS2339 / TS2551; every moved row a tsgo row, none lost. **Pins**:
+`StaticSideAugmentationAndShadowedNewTest`, 10 tests; ablation A1 2 / A9 1 / A2 1 / A3 1 / A4 1 / A5 1 / A6 2 / A7 1 / A8
+1 RED. **Gates**: full suite 22,167 / 0 / 44 (+10); corpus screen 8725 / 0; `cost_gate.py` 0; `huge_methods.py
+--fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1 (none holds these shapes
+— a control); warning gate with probe: probe only. Residues -> (CHK.194).
+
 ### Round (P18.249) — (CHK.190) stage 1: a named re-export resolves by the name the IMPORTER sees — renames, `default` clauses, local clauses, import-then-export renames, `.js` specifiers and barrel chains — through one `importedExport` lookup every import->export resolver now asks; +26 tsgo rows / -2 ours-only on the matrix, the hover follows; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent (resumed once). **Where the brief was wrong**: (a) the baseline had moved further — c14

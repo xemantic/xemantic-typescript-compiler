@@ -1,5 +1,9 @@
 
 
+**(P18.255) — (INV.0) EXTRACTION: THE NAMED / DEFAULT IMPORT CHECKS MOVE OUT OF `Checker.kt` INTO THEIR OWN FILE, 828 LINES, BEHAVIOUR BYTE-IDENTICAL BY EVERY RECEIPT; +14 PINS, 22,257 / 0 / 44 (2026-10-01).**
+Screen 0; grid 8x0; libraries unchanged. Three import-message gaps the move's own matrix exposed are queued as (CHK.197).
+
+
 **(P18.254) — (CHK.196) STAGE 2: A CLASS NAME USED AS A VALUE (`const c = A`, PASSED AS AN ARGUMENT, `N.C`, AN IMPORT, `return A`, A CLASS EXPRESSION) NOW HAS ITS CONSTRUCTOR TYPE; 15 MORE tsgo ROWS ON THE CENSUS MATRIX AND ALL 12 FALSE ROWS OF OURS GONE; +16 PINS, 22,243 / 0 / 44 (2026-10-01).**
 Screen 0 (switched-off baselines unchanged); grid 8x0; libraries unchanged. Next in the plan: typing `new A()` through
 the constructor type, which retires three workarounds.
