@@ -1,3 +1,37 @@
+### Round (P18.259) — (CHK.196) stage 3 part 1: a union of class CONSTRUCTOR types no longer collapses (tsgo's subtype reduction instead of a false identity merge), and the relation honours the constructor side — abstract-ness, statics inherited through a generic base, bivariant constructor parameters; the dead (P18.251) static retry is deleted; 76-cell matrix 40 -> 71 cells agreeing with tsgo, ours-only rows 23 -> 3; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
+
+One implementation subagent. **Where the item was wrong**: (a) "`[A, B]` collapses to its first member" was NEITHER
+subtype reduction NOR a relation verdict — the array-literal dedupe calls `ts2403Identical`, which ignores construct
+signatures and keys its cycle stack by the class symbol a constructor type SHARES with its own `prototype`, so any two
+classes without distinguishing statics compared IDENTICAL; (b) tsgo DOES collapse some — an array literal is
+subtype-reduced, so `[Co, Ab]` over two empty classes is `(typeof Ab)[]` and `[C, A]` with `C extends A` is `(typeof
+A)[]` — so the fix is tsgo's reduction, not "never collapse"; (c) "the same collapse through call inference" is a
+different mechanism (inference picking a common supertype, d11 / d12) — unchanged, residue; (d) the TS2511 walker still
+cannot be retired, but disabled it now loses 1 baseline instead of 3 (only the B83.5 block-scoped class); (e) B175 and
+its var-decl twin are still load-bearing (2 baselines each ablated) — kept; (f) the (P18.251) SUPPRESS-ONLY static retry
+in `Relater` read 0 on the screen and on `StaticInstanceMemberSeparationTest` — deleted; (g) opening the argument gate
+exposed 6 false positives on rxjs (tsgo 0) from two pre-existing defects, both fixed below. **Mechanism**:
+`getTypeOfArrayLiteral` never merges two distinct constructor types through `ts2403Identical`, and the union goes
+through `ClassConstructorTypes.reduceConstructorSubtypes` (tsgo's `removeSubtypes` limited to constructor types, with
+tsgo's strict-arity rule); `Relater.signaturesRelatedTo` refuses an abstract source construct signature against a
+non-abstract target, `abstract new () => T` now BUILDS an abstract signature (no type node ever did), `TypeInstantiator`
+keeps `isAbstract` through all four instantiation paths, and the chain line "Cannot assign an abstract constructor type
+to a non-abstract constructor type." is added; `caasNonSimpleParamChecks` admits a constructor argument against a
+constructor-typed parameter, TS6213 is offered only when a construct signature's return relates (tsgo's
+`elaborateDidYouMeanToCallOrConstruct`), and a missing required static is the TS2741 head (`missingRequiredStatic`);
+`MemberResolver` inherits statics through a GENERIC base (`Type.Reference` -> target — the rxjs `Action<T> extends
+Subscription` case); `Relater` compares parameters bivariantly when the target signature is a `Constructor` (tsgo's
+`compareSignaturesRelated` — the rxjs `TestScheduler` row); an array of a constructor type prints `(typeof A)[]`.
+`Checker.kt` +94 net. **Pins**: `ConstructorUnionReductionTest` 13; ablation a1 5 / a2 3 / a3 1 / a4 3 / a5 1 / a6 1 /
+a7 2 / a8 1 / a9 1 / a10 2 / a11 1 / a12 2 / a13 3 / a14 1 / a15 1 / a16 1 RED (a3 / a6 needed added fixtures — their
+first try read 0); screen arms w1 1 / b1 2 / b2 2 / r1 0. **Gates**: full suite 22,316 / 0 / 44 (+13); corpus screen
+8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; `spine_closure_audit.py`
+clean; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0 (an intermediate build read 0 -> 6, fixed), marked 0/0,
+cronstrue 1/1; warning gate with probe: probe only. **Residues**: inference through `new () => T` (c01 / c02) and the
+common supertype (d11 / d12); tsgo also subtype-reduces `cond ? A : B` and multiple returns (we reduce array literals
+only); `h.c` on `H<Ab>` reads an un-instantiated `abstract new () => T` — a PRE-EXISTING false positive (s4); chain
+shapes b09 / r07 / e4.
+
 ### Round (P18.258) — (CHK.196) residues: an inherited generic constructor is instantiated through the base's type arguments, an `any`-typed base gives the zero-argument default, TS2511 is decided from the callee TYPE (incl. unions of constructor types), TS2339 reaches any `new` receiver whose callee constructs a class (and an anonymous `export default class`), and the dead `instanceof` exclusion is deleted; new cells 27 -> 60 agreeing with tsgo, ours-only 13 -> 5 (all pre-existing); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
 
 One implementation subagent. **Where the item was wrong**: (a) n05 is not the argument check — a generic class's OWN

@@ -1,5 +1,9 @@
 
 
+**(P18.264) — (CHK.199): `new` ON A CLASS INSTANCE NOW REPORTS "NOT CONSTRUCTABLE" IN EVERY FILE AND POSITION, INHERITED-CONSTRUCTOR OVERLOADS ARE CHECKED WHEREVER `new` APPEARS, AND A VIOLATED TYPE-ARGUMENT CONSTRAINT ON `new C<…>()` IS REPORTED AS tsgo DOES; THE HOT METHOD WAS SPLIT FIRST (7,191 -> 5,181 BYTECODES); +19 PINS, 22,396 / 0 / 44 (2026-10-02).**
+Screen 0; grid 8x0; libraries unchanged. Residues queued as (CHK.200).
+
+
 **(P18.263) — (CHK.195)(a): NAMESPACES THAT EXPORT THROUGH `export { … }` CLAUSES NO LONGER PRODUCE FALSE ERRORS ("cannot use namespace as a value", "has no exported member") — THREE SYMPTOMS, ONE BINDER CAUSE — AND THREE NEIGHBOURING FALSE ERRORS WENT WITH THEM; +16 PINS, 22,377 / 0 / 44 (2026-10-02).**
 Screen 0; grid 8x0 (one harness regression the grid caught mid-round was fixed and pinned); libraries unchanged.
 
