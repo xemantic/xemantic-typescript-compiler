@@ -7856,6 +7856,14 @@ class Checker(
      *  [popImplicitAnyScope]. Declared before `init` (init-order trap). */
     private val implicitAnyScopeDestructures = ArrayDeque<HashMap<String, Pair<Expression, String>>>()
 
+    /** (CHK.203) Fourth parallel stack — an ARROW / FUNCTION EXPRESSION's un-annotated
+     *  identifier parameters (null when it has none), so an assignment target rooted at
+     *  one (`(inst) => { inst._zod.check = (payload) => … }`) types from the parameter's
+     *  CONTEXTUAL type ([contextualParamTypeForImplicitAny]). A body local of the same
+     *  name removes its entry ([spineIanyVarDeclEnter]). Pushed/popped ONLY via
+     *  [pushImplicitAnyScope]/[popImplicitAnyScope]. Declared before `init`. */
+    private val implicitAnyScopeCtxParams = ArrayDeque<HashMap<String, Parameter>?>()
+
     /** Round 470: the ENCLOSING CLASS's members for the implicit-any walker — set
      *  around each class element ([spineIanyClassElementEnter]'s frame) so a `this.prop =
      *  <arrow>` assignment target resolves its contextual type from the class
@@ -37512,6 +37520,15 @@ class Checker(
         implicitAnyScopes.addLast(m)
         implicitAnyScopeInits.addLast(HashMap())
         implicitAnyScopeDestructures.addLast(HashMap())
+        var ctxParams: HashMap<String, Parameter>? = null
+        for (p in params) {
+            val n = p.name as? Identifier ?: continue
+            if (p.type != null || p.isCommentPlaceholder || n.text.isEmpty()) continue
+            val fn = (p as NodeBase).parent
+            if (fn !is ArrowFunction && fn !is FunctionExpression) break
+            (ctxParams ?: HashMap<String, Parameter>().also { ctxParams = it })[n.text] = p
+        }
+        implicitAnyScopeCtxParams.addLast(ctxParams)
     }
 
     /** Round 435c: pops the parallel scope stacks — the only legal pop. */
@@ -37519,6 +37536,7 @@ class Checker(
         implicitAnyScopes.removeLast()
         implicitAnyScopeInits.removeLast()
         implicitAnyScopeDestructures.removeLast()
+        implicitAnyScopeCtxParams.removeLast()
     }
 
     /** Round 435c: [getTypeFromTypeNodeSafe] with the implicit-any walker's enclosing
@@ -37687,7 +37705,7 @@ class Checker(
                 }
             }
             if (found) {
-                ann?.let { getTypeFromTypeNodeSafeNsAware(it) }
+                ann?.let { implicitAnyAnnCtxType(it) }
                     // Round 435c: an annotation-less local with a recorded INITIALIZER
                     // types from it (arrow/fn-expr initializers + the Map.get idiom);
                     // declared-untyped-without-initializer stays null (TS7006 stands).
@@ -37702,6 +37720,8 @@ class Checker(
                                 ?: getTypeOfExpression(src).takeIf { it !== anyType && it !== errorType }
                             recvT?.let { lookupPropertyTypeForCtx(it, prop) }
                         }
+                    ?: implicitAnyScopeCtxParams.getOrNull(foundIdx)?.get(left.text)
+                        ?.let { contextualParamTypeForImplicitAny(it) }
             } else {
                 val sym = currentFileLocals?.get(left.text) ?: globals[left.text]
                 val vd = sym?.declarations?.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
@@ -37723,7 +37743,14 @@ class Checker(
                 val recvT = resolveAssignTargetCtxTypeForImplicitAny(left.expression)
                     ?: getTypeOfExpression(left.expression).takeIf { it !== anyType && it !== errorType }
                 val direct = recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
+                    ?.takeIf { it !== anyType && it !== errorType && it !is Type.TypeParam }
                     ?: namespaceMemberVarAnnotationCtx(left)
+                    // (CHK.203) a member INHERITED through a generic base reference
+                    // (`ZodBoolean extends _ZodBoolean<…>`, whose `_zod: Internals` lives
+                    // three bases up) reads back from [lookupPropertyTypeForCtx] as the
+                    // DECLARING interface's unsubstituted type parameter — the
+                    // property-access path's own resolver substitutes along the chain.
+                    ?: recvT?.let { inheritedMemberCtxType(it, left.name.text) }
                 if (direct == null) {
                     // Round 481: an AS-CAST receiver whose TYPE declares the member
                     // as a method/fn-typed property AST-side — harnessIO's `(result
@@ -37781,6 +37808,82 @@ class Checker(
         }
         is ParenthesizedExpression -> resolveAssignTargetCtxTypeForImplicitAny(left.expression)
         else -> null
+    }
+
+    /**
+     * (CHK.203) A receiver's annotation for [resolveAssignTargetCtxTypeForImplicitAny].
+     * A bare reference to a TYPE PARAMETER (`inst: T` with `T extends Inst`) does not
+     * resolve on the spineIany edge (no type-parameter scope is installed there), so
+     * its members come from the CONSTRAINT of the innermost lexically enclosing
+     * declaration of that name — tsgo's apparent type of the receiver. Anything else
+     * is the plain ns-aware resolution, unchanged.
+     */
+    private fun implicitAnyAnnCtxType(ann: TypeNode): Type? {
+        val t = getTypeFromTypeNodeSafeNsAware(ann)
+        if (t != null && t !== anyType && t !== errorType && t !is Type.TypeParam) return t
+        val ref = ann as? TypeReference ?: return t
+        val name = (ref.typeName as? Identifier)?.text ?: return t
+        if (ref.typeArguments != null) return t
+        var cur: Node? = (ann as NodeBase).parent
+        while (cur != null) {
+            val decls: List<TypeParameter>? = when (val c = cur) {
+                is FunctionDeclaration -> c.typeParameters
+                is FunctionExpression -> c.typeParameters
+                is ArrowFunction -> c.typeParameters
+                is MethodDeclaration -> c.typeParameters
+                is ClassDeclaration -> c.typeParameters
+                is ClassExpression -> c.typeParameters
+                else -> null
+            }
+            val d = decls?.firstOrNull { it.name.text == name }
+            if (d != null) {
+                return d.constraint?.let { getTypeFromTypeNodeSafeNsAware(it) }
+                    ?.takeIf { it !== anyType && it !== errorType && it !is Type.TypeParam } ?: t
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return t
+    }
+
+    /**
+     * (CHK.203) [name]'s type on [recvT] the way [computeRawTypeOfPropertyAccess]
+     * reads it — including B82.1's arm, which substitutes the GENERIC BASE's arguments
+     * into an inherited member (`Leaf extends Sub<Plain>`, `Sub<I> extends Core<I>`,
+     * `Core<I> { _zod: I }`: the member table answers `any` for `_zod`, which
+     * [lookupPropertyTypeForCtx] and [resolveMemberPropertyType] both inherit). Null
+     * for a missing member or an `any`/error answer.
+     */
+    private fun inheritedMemberCtxType(recvT: Type, name: String): Type? {
+        val apparent = getApparentType(recvT)
+        val prop = getPropertyOfType(apparent, name) ?: return null
+        val t = when {
+            apparent is Type.Reference -> resolveGenericPropertyType(apparent, prop)
+            apparent is Type.Interface && prop.parent != null && prop.parent !== apparent.symbol ->
+                findInheritedBaseRef(apparent, prop.parent!!)?.let { resolveGenericPropertyType(it, prop) }
+            else -> null
+        } ?: getTypeOfSymbol(prop)
+        return t.takeIf { it !== anyType && it !== errorType }
+    }
+
+    /**
+     * (CHK.203) The CONTEXTUAL type of an un-annotated parameter of an arrow / function
+     * expression — the same pull [applyPulledContextualParamTypes] types the body with,
+     * asked here because this predicate runs on the spineIany edge, where that body's
+     * `currentLocalTypes` is not populated yet. Same guards: a single applicable
+     * signature, a non-`any` parameter type, no out-of-scope type parameter. Null = no
+     * contextual type (TS7006 stands).
+     */
+    private fun contextualParamTypeForImplicitAny(param: Parameter): Type? {
+        val fn = (param as NodeBase).parent ?: return null
+        val params = (fn as? ArrowFunction)?.parameters ?: (fn as? FunctionExpression)?.parameters ?: return null
+        val i = params.indexOfFirst { it === param }.takeIf { it >= 0 } ?: return null
+        val ctx = pullContextualTypeAt(fn) ?: return null
+        val sig = callableSignaturesForCtx(ctx, requiredParamPrefixCount(params))?.singleOrNull() ?: return null
+        val sp = sig.parameters.getOrNull(i) ?: return null
+        if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) return null
+        val t = getTypeOfSymbol(sp)
+        if (t === anyType || t === errorType || typeContainsOutOfScopeTypeParam(t, fn)) return null
+        return t
     }
 
     /**
@@ -60628,6 +60731,7 @@ interface DataView {
         implicitAnyScopes.clear()
         implicitAnyScopeInits.clear()
         implicitAnyScopeDestructures.clear()
+        implicitAnyScopeCtxParams.clear()
         implicitAnyNsStack.clear()
         spineIanyCtx = null
         spineIanyFrames.clear()
@@ -61927,6 +62031,7 @@ interface DataView {
         implicitAnyScopes.lastOrNull()?.let { scope ->
             val dn = decl.name
             if (dn is Identifier && dn.text.isNotEmpty()) {
+                implicitAnyScopeCtxParams.lastOrNull()?.remove(dn.text)
                 scope[dn.text] = decl.type
                     ?: (decl.initializer as? AsExpression)?.type
                     ?: calleeReturnAnnotationForImplicitAny(decl.initializer)
@@ -151480,8 +151585,11 @@ interface DataView {
         if (target is Type.Reference && source is Type.Reference && target.target === source.target) {
             val ta = target.resolvedTypeArguments ?: return
             val sa = source.resolvedTypeArguments ?: return
-            if (ta.size != sa.size) return
-            for (i in ta.indices) ctxReturnInferInto(sa[i], ta[i], tps, out, depth + 1)
+            // (CHK.203) one side may carry fewer arguments — an annotation that OMITS a
+            // defaulted type parameter (`$constructor<ZS>` for `$constructor<T, D = …>`)
+            // records only the written ones — so the positional match runs over the
+            // shared prefix rather than refusing the whole reference.
+            for (i in 0 until minOf(ta.size, sa.size)) ctxReturnInferInto(sa[i], ta[i], tps, out, depth + 1)
             return
         }
         // (CHK.159) tsgo `inferFromTypes`: two ARRAY types (`isArrayType` — `Array` and
