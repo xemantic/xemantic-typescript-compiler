@@ -1,3 +1,29 @@
+### Round (P18.260) — (CHK.196) false positive first: a generic class's GETTER or PARAMETER-PROPERTY member whose type mentions `T` through a function shape (and any member whose union / object type carries one) is now instantiated through the reference's type arguments — the `h.c = Ab` false TS2322 and its silent-read twin are gone; a construct-signature-only source now sees `Function`'s apparent members and a constructor's own `prototype` is not compared; 62-cell matrix 27 -> 49 full-row agreeing, 0 ours-only; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
+
+One implementation subagent. **Where the item was wrong**: (a) it is neither construct signatures nor the member
+TABLE — a declared FIELD `c!: abstract new () => T` already worked; the PARAMETER-PROPERTY spelling (cell s4) failed;
+(b) it is WIDER: getters and parameter properties failed for ANY function shape mentioning `T` (`new () => T`, `() =>
+T`, `(a: T) => void`, optional, inherited through a specialized base), and all three member forms failed for a union
+or object type carrying one — false TS2322s on the write side, silent acceptance (`const n: number = h.c`) on the read
+side; (c) the `const x: typeof Ab = h.c` false positive is a separate, non-generic mechanism — a construct-signature-
+only source never reached `Function`'s members (`prototype`) — with a third pre-existing false positive beside it (the
+constructor type's own binder-made `prototype` compared where tsgo skips it). **Mechanism**:
+`resolveGenericPropertyTypeWorker`'s three arms (field / getter / parameter) merge into one routed through the existing
+`instantiateMethodParamType` (function shape, union carrying one, object type of them; builds new types, never mutates
+the shared annotation); `Relater.propertiesRelatedTo`'s `Function` apparent-member skips apply to a construct-signature
+source too — only where the source lacks the member itself — and a target property flagged `Prototype` is never
+compared (tsgo). `Checker.kt` -8 net, `Relater.kt` +14. **Matrix**: writes a01 (= s4) b01 b02 c10 silent as tsgo; reads
+b07 b08 c02 c03 c04 c06 c07 c12 report tsgo's full rows; construct types into `typeof C` a06 b11 b12 d01 e03 e01
+silent as tsgo; true positives t01-t12 b10 d03 d06 e04 e05 all still reported. **Pins**: `GenericMemberInstantiationTest`
+21; ablation a1 8 / a2 1 / a3 2 / a4 2 / a5 2 / a6 1 RED. **Gates**: full suite 22,337 / 0 / 44 (+21); corpus screen
+8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0
+removed=0 + chain OK, rxjs / marked / cronstrue unchanged; warning gate with probe: probe only. **Residues**:
+message-form only (b09 / t04 a TS2741 head at the arrow body; c08 / c09 target naming; d03 / d06 a construct type
+missing a static heads TS2322 not TS2741 — `missingRequiredStatic` is wired to class-identifier sources only; t01 / t02
+/ t03 / t09 a missing chain line; t06 an extra `prototype` chain line); two real gaps — c13 `new H(() => new Co())`
+inference types the member `() => any`, and t05 `take(h.c)` with an abstract member against a `new () => Co` parameter
+is a missed TS2345.
+
 ### Round (P18.259) — (CHK.196) stage 3 part 1: a union of class CONSTRUCTOR types no longer collapses (tsgo's subtype reduction instead of a false identity merge), and the relation honours the constructor side — abstract-ness, statics inherited through a generic base, bivariant constructor parameters; the dead (P18.251) static retry is deleted; 76-cell matrix 40 -> 71 cells agreeing with tsgo, ours-only rows 23 -> 3; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
 
 One implementation subagent. **Where the item was wrong**: (a) "`[A, B]` collapses to its first member" was NEITHER
