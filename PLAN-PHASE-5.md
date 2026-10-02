@@ -25,6 +25,39 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.265) — (CHK.198): the `export =` named-import rule completed — and NINE FALSE TS2305 that (P18.257) shipped on legal code removed (namespace types, nested / element-access expandos, `declare module` augmentations, the lodash variable-merged-with-namespace shape); re-exports and type-only specifiers now judged, `.d.ts` importers folded into the same rule; 83-cell matrix 22 -> 102 of 124 tsgo rows, ours-only 11 -> 0; `Checker.kt` -107; plus the read-only REAL-LIBRARY census queued as (LIBS.1) (2026-10-02)
+
+Two agents in parallel: one builder, one read-only census on frozen classes. **Builder — where the item was wrong**: (a)
+the queue did not record that (P18.257)'s rule itself produced FALSE POSITIVES — nine TS2305 on code tsgo accepts: a
+namespace's interface / type alias imported by a value import, an expando assigned in a nested block or through
+`f["r"] =`, a name a `declare module "./m"` augmentation adds, and the lodash shape (a variable merged with a namespace)
+— i.e. (P18.257)'s member set ignored TYPES and augmentations; (b) "the clause gate" was bigger — `.d.ts` importers went
+through a separate walker (`checkNamedImportFromExportEqualsInDts`) that was silent on the target's own name and said
+TS2305 where tsgo says TS2616 — DELETED, `.d.ts` importers now take the same rule; (c) inherited statics through
+`constructorTypeOfClass` are sound only when every base is a class DECLARATION (an `Error` / `Map` base gets statics
+from a lib interface, which `@types/node` augments), and tsgo counts a base's merged-namespace VALUES, not types; (d)
+"an unannotated object" is decided from the literal's SYNTAX (`as any`, a call, a spread, a computed key stay unknown);
+(e) tsgo suggests a spelling (TS2724) only among a NAMESPACE target's module exports; (f) the ambient / package default
+import fires only with an `__esModule` marker. **Mechanism** (`NamedImportExistence.kt`): `reportExportEqualsSpecifier`
+— tsgo's order: member set -> legal, namespace spelling -> TS2724 + TS2728, the target's own name -> TS2595 / TS2597 /
+TS2616, else TS2305 only when the member set is KNOWN; unchecked JS reports nothing; `exportEqualsMemberNames` = every
+export (types included) + class statics through declaration chains + base namespace values, enum members, function
+expandos (own scope, nested blocks, not nested functions), annotated / literal object members, augmentation names,
+`export = {…}` literal names; the re-export branch of `checkNamedImportExistence` and type-only specifiers run the rule;
+ambient modules and a CommonJS importer's `node_modules` `.d.ts` get the default-import rule. Checker: the `.d.ts`
+walker, its `pass(...)` and `getExportEqualsMemberNames` (with its stale KDoc) removed. **Pins**:
+`ExportEqualsNamedImportResiduesTest` 29; three `residue -` countdowns in `ExportEqualsNamedImportRuleTest` now assert
+tsgo's rows; ablation a1 7 / a2 6 / a3 1 / a4 3 / a5 2 / a6 1 / a7 1 / a8 2 / a9 5 / a10 2 / a11 1 / a12 1 / a13 1 / a14 1 /
+a15 1 / a16 1 / a17 1 / a18 1 RED (two guards — interface-heritage and computed-static refusals — have no discriminating
+pin). **Gates**: full suite 22,426 / 0 / 44 (+30); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue
+unchanged (a CONTROL — no profile has these shapes); warning gate with probe: probe only. Residues -> (CHK.210).
+**Census** (`build/scratch-p18265-census/README.txt`): on 8 fresh libraries (mitt, superstruct, immer, ky, hono,
+date-fns, zod, type-fest) ours reports 1,896 rows tsgo does not (6 agree, 28 missing) while the three gated libraries
+read 0 — queued as (LIBS.1) + (CHK.201)-(CHK.209), false positives first. **Lesson**: a rule verified on a matrix of the
+shapes its item NAMES can ship false positives on the shapes it does not — (P18.257)'s 45 cells held no namespace types,
+nested expandos or augmentations.
+
 ### Round (P18.264) — (CHK.199): `checkSingleNewExpressionTypesCore` split verbatim (7,191 -> 5,181 bytecodes) and then — TS2351 on an INSTANCE used as a `new` callee in any file / position, B264's inherited-overload check at every `new` (not only top-level expression statements), and TS2344 on `new C<…>()` with tsgo's "no argument check after a constraint failure"; every targeted cell matches tsgo, four dead guards deleted (one was suppressing a tsgo row); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
 
 One implementation subagent. **Where the item was wrong**: (a) (b) was not "a plain two-level generic chain" — B264
@@ -273,29 +306,6 @@ isAbstract / default-signature arms are now discriminable. **Gates**: full suite
 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0 (`globals.lookups` +0.42%); `huge_methods.py --fail-over 0`
 0; grid 8 x added=0 removed=0 + chain OK (chained from (P18.254)'s capture — (P18.255) was a proven pure move), rxjs
 0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only. Residues stay in (CHK.196).
-
-### Round (P18.255) — (INV.0) extraction: the named / default import existence family moves verbatim into a new `NamedImportExistence` collaborator; `Checker.kt` 202,337 -> 201,509 (-828); every receipt byte-identical (2026-10-01)
-
-One implementation subagent. **Where the brief was wrong**: candidate 1 (the type-only-value / TS2693 / TS2708 family)
-was refused a second time for ledger row 16's reason (it reads spine tav / const-assignment state), so candidate 2 was
-taken — and it is FOUR spans, not one: `checkDefaultImports` (53063-53423), `checkNamedImportExistence` +
-`emitAbsentNamedMember` + `emitMissingMemberSuggestion` (53684-54012), the TS2459 / TS2460 local-declaration readers +
-`emitTs2305` (54344-54468) and `declaresEsModuleMarker` (54977-54988). Moving the helpers WITH the family cut the
-widenings by six (12 total: `checkedResults` + 11 `private` -> `internal`); `checkedResults` is read through `checker.`
-rather than passed, because its getter is a `PassTiming` partition probe. Constructor `NamedImportExistence(this,
-options, binderResults, isMultiFileSource, fileResults)` (the `NameResolver` pattern); 5 call sites re-pointed (the two
-`pass(...)` lambdas, names unchanged, and 3 `emitTs2305` callers), no stubs; the collaborator reads 16 checker members
-over 55 sites. **Receipts**: verbatim proof both ways (`build/bench/p18255-agent/proof.py`); the per-pass
-`--passTiming` table (419 pass rows, 491 normalized lines, 46 diagnostics) byte-identical; `PrintInlining` on
-`checkArgumentsAgainstSignature` identical (mangled + unmangled); `cost_gate.py` counters identical to (P18.254); 48
-import / export pin classes (466 tests) green; `NamedImportExistenceCollaboratorTest` 14 tests, ablation a1 2 / a2 5 /
-a3 2 / a4 16 / a5 1 / a6 3 RED; a 17-cell tsgo matrix identical before and after. **Gates**: full suite 22,257 / 0 / 44
-(+14); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; `spine_closure_audit.py` clean; grid 8 x added=0
-removed=0 + chain OK, rxjs / marked / cronstrue unchanged (on Checker.class 1efcf4b5, the gated binary); warning gate
-with probe: probe only. Ledger row 17. **Gaps the matrix exposed (unchanged by the move, queued as (CHK.197))**: a
-named import from an `export = <value>` module reads TS2616 where tsgo reads TS2305, and under `module: esnext` it emits
-TS2595 AND TS2616 where tsgo reads TS2305 + TS1203; TS1192 / TS2613 print the specifier where tsgo prints the resolved
-path.
 
 ## QUEUE
 
@@ -925,7 +935,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.199) DONE 2026-10-02 ((P18.264) note; residues -> (CHK.200)). `new`-EXPRESSION GAPS FOUND BY (P18.261)'s MATRIX (`build/bench/p18261-agent/matrix`; the family now lives in `NewExpressionChecks.kt`).** (a) TS2351 missing on an INSTANCE used as a `new` callee in a MODULE file (c05) — `newCalleeVarHoldsInstance` reads `globals`, which never holds a module file's locals; (b) the B264 inherited-overload check misses a plain two-level GENERIC chain (c11 / c20 / c22); (c) TS2344 (violated type-argument constraint) missing on `new` (c15 / c21). `checkSingleNewExpressionTypesCore` is at 7,191 of 8,000 bytecodes — SPLIT it before growing it.
 
-- [ ] **(CHK.198) RESIDUES OF (CHK.197) / (P18.257) (`build/bench/p18257-agent/{matrix,matrix2}`).** (a) 15 tsgo rows still missing, all FN-safe: when the `export =` target's member set is UNKNOWN (inherited statics, an enum, a function with expandos, an unannotated object, an `export = {…}` literal) only the self-name row is reported and tsgo's TS2305 for other names is dropped; (b) `import type { … }` / `{ type x }` skip the whole check (the clause gate at the top of `checkDefaultImports`); (c) `export { x } from "./m"` against an `export =` module is silent where tsgo reports TS2305 / TS2616 (`checkNamedImportExistence` skips such targets); (d) a default import from an ambient module or a commonjs-importer `node_modules` package gets no TS1192 / TS2613 at all (pre-existing); (e) `Checker.getExportEqualsMemberNames`' KDoc still calls null "the TS2616 fallback".
+- [ ] **(CHK.210) RESIDUES OF (CHK.198) / (P18.265) (`build/bench/p18265-agent/matrix`; all MISSING rows, no false positives).** Member sets still UNKNOWN: non-declaration bases (mixin, `extends Map` / `Error`, a const alias of a class), spread / call / `as any` / arrow-with-expando initializers, a computed `export = {…}` key, `declare const v: any` (tsgo: TS2305 for everything); a BARE-specifier `export =` package (lodash via `"lodash"` — our resolver does not reach `@types` there); `export { … } from "./dir"` does not resolve a directory index in the re-export branch; type-only imports / re-exports of ORDINARY modules unchecked (`e-typeonly-esm`, 3 TS2305 — wider, unpriced); TS1363 (`import type d, { x }`) not emitted; ambient modules with an `export =` not judged.
+
+- [x] **(CHK.198) DONE 2026-10-02 ((P18.265) note: nine (P18.257) false positives removed, 22 -> 102 of 124 rows; residues -> (CHK.210)). RESIDUES OF (CHK.197) / (P18.257) (`build/bench/p18257-agent/{matrix,matrix2}`).** (a) 15 tsgo rows still missing, all FN-safe: when the `export =` target's member set is UNKNOWN (inherited statics, an enum, a function with expandos, an unannotated object, an `export = {…}` literal) only the self-name row is reported and tsgo's TS2305 for other names is dropped; (b) `import type { … }` / `{ type x }` skip the whole check (the clause gate at the top of `checkDefaultImports`); (c) `export { x } from "./m"` against an `export =` module is silent where tsgo reports TS2305 / TS2616 (`checkNamedImportExistence` skips such targets); (d) a default import from an ambient module or a commonjs-importer `node_modules` package gets no TS1192 / TS2613 at all (pre-existing); (e) `Checker.getExportEqualsMemberNames`' KDoc still calls null "the TS2616 fallback".
 
 - [x] **(CHK.197) DONE 2026-10-01 ((P18.257) note: tsgo's per-specifier rule, 0 -> 43 of 45 cells; residues -> (CHK.198)). DEFAULT / NAMED IMPORT FROM AN `export =` MODULE (found by (P18.255)'s matrix, `build/bench/p18255-agent/matrix/`).** A named import from a `.ts` module whose surface is `export = <variable or class>` reads TS2616 where tsgo reads TS2305; under `module: esnext` the same import emits BOTH TS2595 and TS2616 (the "mutually exclusive" comment in `checkDefaultImports` is wrong for the plain-value TS2616 branch) where tsgo reads TS2305 + TS1203 at the `export =`; TS1192 / TS2613 name the module by its specifier (no `./`) where tsgo prints the resolved file path. The family now lives in `NamedImportExistence.kt`.
 

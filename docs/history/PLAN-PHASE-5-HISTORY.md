@@ -1,3 +1,26 @@
+### Round (P18.255) — (INV.0) extraction: the named / default import existence family moves verbatim into a new `NamedImportExistence` collaborator; `Checker.kt` 202,337 -> 201,509 (-828); every receipt byte-identical (2026-10-01)
+
+One implementation subagent. **Where the brief was wrong**: candidate 1 (the type-only-value / TS2693 / TS2708 family)
+was refused a second time for ledger row 16's reason (it reads spine tav / const-assignment state), so candidate 2 was
+taken — and it is FOUR spans, not one: `checkDefaultImports` (53063-53423), `checkNamedImportExistence` +
+`emitAbsentNamedMember` + `emitMissingMemberSuggestion` (53684-54012), the TS2459 / TS2460 local-declaration readers +
+`emitTs2305` (54344-54468) and `declaresEsModuleMarker` (54977-54988). Moving the helpers WITH the family cut the
+widenings by six (12 total: `checkedResults` + 11 `private` -> `internal`); `checkedResults` is read through `checker.`
+rather than passed, because its getter is a `PassTiming` partition probe. Constructor `NamedImportExistence(this,
+options, binderResults, isMultiFileSource, fileResults)` (the `NameResolver` pattern); 5 call sites re-pointed (the two
+`pass(...)` lambdas, names unchanged, and 3 `emitTs2305` callers), no stubs; the collaborator reads 16 checker members
+over 55 sites. **Receipts**: verbatim proof both ways (`build/bench/p18255-agent/proof.py`); the per-pass
+`--passTiming` table (419 pass rows, 491 normalized lines, 46 diagnostics) byte-identical; `PrintInlining` on
+`checkArgumentsAgainstSignature` identical (mangled + unmangled); `cost_gate.py` counters identical to (P18.254); 48
+import / export pin classes (466 tests) green; `NamedImportExistenceCollaboratorTest` 14 tests, ablation a1 2 / a2 5 /
+a3 2 / a4 16 / a5 1 / a6 3 RED; a 17-cell tsgo matrix identical before and after. **Gates**: full suite 22,257 / 0 / 44
+(+14); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; `spine_closure_audit.py` clean; grid 8 x added=0
+removed=0 + chain OK, rxjs / marked / cronstrue unchanged (on Checker.class 1efcf4b5, the gated binary); warning gate
+with probe: probe only. Ledger row 17. **Gaps the matrix exposed (unchanged by the move, queued as (CHK.197))**: a
+named import from an `export = <value>` module reads TS2616 where tsgo reads TS2305, and under `module: esnext` it emits
+TS2595 AND TS2616 where tsgo reads TS2305 + TS1203; TS1192 / TS2613 print the specifier where tsgo prints the resolved
+path.
+
 ### Round (P18.254) — (CHK.196) stage 2: a class identifier READ AS A VALUE answers the constructor-side type (`const c = A`, `A` as an argument, `N.C`, renamed / default imports, `return A`, class expressions, `A.prototype`); the census matrix 44 -> 59 rows agreeing with tsgo and ours-only 12 -> 0; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
 
 One implementation subagent. **Where the item was wrong**: (a) `newCalleeVarHoldsClassValue`'s class half is NOT
