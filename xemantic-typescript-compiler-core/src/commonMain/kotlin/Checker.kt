@@ -106432,6 +106432,16 @@ interface DataView {
         val nonPrimApparent = nonPrimitiveMissingPropSource(sourceType)
         val allMissing = collectMissingProperties(nonPrimApparent ?: sourceType, targetType)
         val missingDisplaySource = if (nonPrimApparent != null) "{}" else displaySource
+        // (P18.262) a construct-only pair missing one required static is tsgo's TS2741 head.
+        if (allMissing.isEmpty()) classConstructorTypes.missingRequiredStatic(sourceType, targetType)?.let { st ->
+            diagnostics.add(Diagnostic(
+                message = "Property '${st.name}' is missing in type '$displaySource' but required in type '$displayTarget'.",
+                category = DiagnosticCategory.Error, code = 2741, fileName = fileName, line = line,
+                character = character, start = name.pos, length = name.text.length,
+                relatedInformation = listOfNotNull(createPropertyDeclaredHereRelatedInfo(st)),
+            ))
+            return
+        }
         val missingPropSym = if (allMissing.isNotEmpty() && targetType is Type.Object) {
             lastMissingPropertySymbol ?: targetType.properties?.find { it.name == allMissing[0] }
         } else null
@@ -118299,7 +118309,8 @@ interface DataView {
                 // branch to non-undefined (round 458). FP-safe via applyConditionNarrowing.
                 val trueT = ternaryBranchType(expr.whenTrue, expr.condition, conditionIsTrue = true)
                 val falseT = ternaryBranchType(expr.whenFalse, expr.condition, conditionIsTrue = false)
-                if (trueT === falseT) trueT else getUnionType(listOf(trueT, falseT))
+                // (P18.262) tsgo subtype-reduces the result: `cond ? C : A` is `typeof A`.
+                if (trueT === falseT) trueT else classConstructorTypes.reduceConstructorSubtypesOf(getUnionType(listOf(trueT, falseT)))
             }
 
             // Comma list expression — type of last element
@@ -129534,12 +129545,7 @@ interface DataView {
         val elementType = when (elementTypes.size) {
             0 -> anyType
             1 -> elementTypes[0]
-            else -> getUnionType(elementTypes).let { u ->
-                if (u !is Type.Union) u else {
-                    val reduced = classConstructorTypes.reduceConstructorSubtypes(u.types)
-                    if (reduced === u.types) u else if (reduced.size == 1) reduced[0] else getUnionType(reduced)
-                }
-            }
+            else -> classConstructorTypes.reduceConstructorSubtypesOf(getUnionType(elementTypes))
         }
         return getArrayType(elementType)
     }
@@ -131444,10 +131450,52 @@ interface DataView {
         for (tp in typeParams) {
             val tpName = tp.symbol?.name ?: return null
             val inferredType = inferClassTypeParamFromBareCtorParam(ctorParams, tpName, args)
+                ?: inferClassTypeParamFromCallbackReturn(ctorParams, tpName, args)
             if (inferredType == null || inferredType === errorType) return null
             result.add(inferredType)
         }
         return result
+    }
+
+    /**
+     * (P18.262) The fallback for ONE class type parameter no bare-`T` constructor parameter
+     * binds: the first constructor parameter annotated `(...) => T` — a function type whose
+     * RETURN is the bare `T` and whose parameters do not mention it — infers `T` from the
+     * widened return type of the argument's single call signature (tsgo's return-position
+     * inference: `new H(() => new Co())` against `constructor(public c: () => T)` is `H<Co>`,
+     * cell c13). Kept out of [inferClassTypeParamFromBareCtorParam], which also feeds the
+     * argument's own CONTEXTUAL type ([classTypeArgumentMapper]) — typing the arrow to find
+     * its context would recurse. Null when no such parameter exists, the argument has not
+     * exactly one call signature, or its return is `any` / an error.
+     */
+    private fun inferClassTypeParamFromCallbackReturn(
+        ctorParams: List<Parameter>,
+        tpName: String,
+        args: List<Expression>,
+    ): Type? {
+        fun isBareTp(n: TypeNode?) = n is TypeReference && n.typeArguments.isNullOrEmpty() &&
+            (n.typeName as? Identifier)?.text == tpName
+        for (i in ctorParams.indices) {
+            if (i >= args.size) break
+            if (ctorParams[i].dotDotDotToken) break
+            val fn = ctorParams[i].type as? FunctionType ?: continue
+            if (!fn.typeParameters.isNullOrEmpty() || !isBareTp(fn.type)) continue
+            if (fn.parameters.any { p -> p.type?.let { nodeMentionsIdentifier(it, tpName) } != false }) continue
+            val argType = getTypeOfExpression(args[i]) as? Type.Object ?: return null
+            val sig = argType.callSignatures?.singleOrNull() ?: return null
+            if (!sig.typeParameters.isNullOrEmpty()) return null
+            val ret = sig.resolvedReturnType ?: return null
+            if (ret.flags.hasAny(TypeFlags.Any) || ret === errorType || typeMentionsAnyTypeParam(ret)) return null
+            return widenType(ret)
+        }
+        return null
+    }
+
+    private fun nodeMentionsIdentifier(node: Node, text: String): Boolean {
+        if (node is Identifier && node.text == text) return true
+        var found = false
+        forEachChild(node) { if (!found && nodeMentionsIdentifier(it, text)) found = true }
+        return found
     }
 
     /** 17.14b's rule for ONE class type parameter: the widened type of the argument at
@@ -170356,7 +170404,7 @@ interface DataView {
             // and free-type-parameter guards are the neighbours'.
             val allowCtorVsCtor = arityOk &&
                 (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
-                classConstructorTypes.isConstructorType(argType) &&
+                classConstructorTypes.isConstructSource(argType) &&
                 paramType is Type.Object && paramType !is Type.Interface && paramType !is Type.Reference &&
                 !paramType.constructSignatures.isNullOrEmpty() &&
                 !typeContainsForeignTypeParam(paramType, emptySet()) &&
@@ -170762,7 +170810,7 @@ interface DataView {
         }
         // (CHK.196) stage 3: a class constructor type against a constructor-typed parameter
         // elaborates through its construct signatures, as the declaration reader does.
-        if (chain.isEmpty() && classConstructorTypes.isConstructorType(argType) &&
+        if (chain.isEmpty() && classConstructorTypes.isConstructSource(argType) &&
             paramType is Type.Object && !paramType.constructSignatures.isNullOrEmpty()
         ) {
             chain.addAll(getConstructMismatchElaboration(argType as Type.Object, paramType))
@@ -176033,6 +176081,17 @@ interface DataView {
                     incompatible.add(IncompatibleProp(targetName, effectiveSource, targetPropType, sourceWidened))
                 }
             }
+            // (P18.262) tsgo never compares a class constructor type's binder-made `prototype`
+            // (`Relater.propertiesRelatedTo`); the instance is compared through the construct
+            // signatures AFTER every static, so a `prototype` mismatch alone elaborates as the
+            // construct-signature comparison (`Property 'x' is missing in type 'Ot' but required
+            // in type 'Co'.` directly under the head, cell t06).
+            if (classConstructorTypes.isConstructorType(target) && incompatible.any { it.name == "prototype" }) {
+                incompatible.removeAll { it.name == "prototype" }
+                if (incompatible.isEmpty() && getMissingRequiredPropertySymbol(source, target) == null) {
+                    return getConstructMismatchElaboration(source, target).takeIf { it.isNotEmpty() }
+                }
+            }
             if (incompatible.isEmpty()) {
                 // No property-type mismatch — try the missing-required-property path.
                 // Matches `propertiesRelatedTo`'s missing-prop logic so structural
@@ -177400,10 +177459,20 @@ interface DataView {
             // 'C'.`), with no `Type 'A' is not assignable to type 'C'.` above it — measured only
             // for a source instance with NO base class: a derived source (`typeof D` with
             // `D extends A`) keeps that line and names the base in the next, which is not modelled.
+            // (P18.262) the same holds for SEVERAL missing members (the `is missing the
+            // following properties` line), and any other instance chain (a property-type
+            // mismatch) prints under the `Type 'S' is not assignable to type 'T'.` line —
+            // measured against tsgo for baseless instances only, as above.
             val baseless = (sourceRet as? Type.Interface)?.let { resolveBaseTypesLazy(it); it.baseTypes.isNullOrEmpty() } == true
-            val missing = if (!baseless) null else getPropertyElaborationChain(sourceRet, targetRet)?.singleOrNull()
-                ?.takeIf { it.startsWith("  Property '") && it.contains("' is missing in type '") }
+            val inner = if (!baseless) null else getPropertyElaborationChain(sourceRet, targetRet)
+            val missing = inner?.singleOrNull()?.takeIf {
+                it.startsWith("  Property '") && it.contains("' is missing in type '") ||
+                    it.startsWith("  Type '") && it.contains("' is missing the following properties from type '")
+            }
             chain.add(missing ?: "  Type '${typeToString(sourceRet)}' is not assignable to type '${typeToString(targetRet)}'.")
+            if (missing == null && inner != null && targetRet is Type.Interface && sourceRet is Type.Interface) {
+                chain.addAll(inner.map { "  $it" })
+            }
         }
         return chain
     }

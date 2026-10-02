@@ -249,6 +249,18 @@ internal class ClassConstructorTypes(
     }
 
     /**
+     * (P18.262) [reduceConstructorSubtypes] applied to a whole union [t] — the shape the
+     * array-literal element type and the conditional expression share (tsgo builds both
+     * with `UnionReductionSubtype`: `cond ? C : A` with `C extends A` is `typeof A`). Any
+     * other type, or a union with nothing dropped, is answered unchanged.
+     */
+    fun reduceConstructorSubtypesOf(t: Type): Type {
+        if (t !is Type.Union) return t
+        val reduced = reduceConstructorSubtypes(t.types)
+        return if (reduced === t.types) t else if (reduced.size == 1) reduced[0] else checker.getUnionType(reduced)
+    }
+
+    /**
      * tsgo's `strictSubtypeRelation` between two constructor types, approximated as
      * assignability plus its STRICT ARITY rule (`compareSignaturesRelated`: a source
      * signature with more parameters than the target's is not a strict subtype), which is
@@ -271,16 +283,54 @@ internal class ClassConstructorTypes(
      * (CHK.196) stage 3: the first REQUIRED static of constructor type [target] that
      * constructor type [source] lacks — tsgo's `propertiesRelatedTo` reports a missing member
      * before it compares any construct signature, as a TS2741 head (`Property 'sa' is missing
-     * in type 'typeof B' but required in type 'typeof A'.`). Null unless both are constructor
-     * types and a static is missing.
+     * in type 'typeof B' but required in type 'typeof A'.`). Null unless both are construct
+     * sources ([isConstructSource]) and a static is missing. (P18.262) widened from class
+     * constructor types to any construct-only pair (`new () => St` against `typeof St`, cells
+     * d03 / d06; `{ new (): C; s: number }` targets) — for such a pair only ONE missing member
+     * is answered (two or more is tsgo's TS2739, which this does not model).
      */
     fun missingRequiredStatic(source: Type, target: Type): Symbol? {
-        if (!isConstructorType(source) || !isConstructorType(target)) return null
-        val members = (source as Type.Object).members
-        return (target as Type.Object).properties.orEmpty().firstOrNull { p ->
+        if (!isConstructSource(source) || !isConstructSource(target)) return null
+        source as Type.Object; target as Type.Object
+        if (isConstructorType(source) && isConstructorType(target)) {
+            val members = source.members
+            return target.properties.orEmpty().firstOrNull { p ->
+                p.name != "prototype" && !checker.isOptionalProperty(p) && members?.get(p.name) == null
+            }
+        }
+        checker.resolveStructuredTypeMembers(source)
+        checker.resolveStructuredTypeMembers(target)
+        val members = source.members
+        val required = target.properties.orEmpty().filter { p ->
             p.name != "prototype" && !checker.isOptionalProperty(p) && members?.get(p.name) == null
         }
+        // (P18.262) A construct-only source that is NOT a class constructor type (`new () =>
+        // St`) has `Function`'s apparent members (`Relater.propertiesRelatedTo`); a required
+        // target member spelled like one is a type question, never a missing member — refuse
+        // rather than guess which row tsgo reports first.
+        if (!isConstructorType(source) && required.any { functionApparentName(it.name) }) return null
+        return required.singleOrNull()
     }
+
+    private fun functionApparentName(name: String): Boolean =
+        name in Checker.FUNCTION_PROTOTYPE_METHODS || name in Checker.FUNCTION_RUNTIME_PROPERTIES ||
+            name in Checker.OBJECT_PROTOTYPE_PROPERTIES || name == "length" || name == "name" ||
+            name.contains("hasInstance")
+
+    /**
+     * (P18.262) A CONSTRUCT-ONLY source — a class constructor type ([isConstructorType]) or an
+     * anonymous constructor type spelled by a type node (`abstract new () => T`, `{ new (): A }`,
+     * also after instantiation): an anonymous `Type.Object` carrying construct signatures and no
+     * call signature. tsgo relates both through the same constructor side, so the argument gate
+     * admits either against a constructor-typed parameter (`take(h.c)`, cell t05). A GENERIC
+     * construct signature (`new <T>() => T`) is refused: tsgo instantiates it against the
+     * target's signature first, which this relation does not, so admitting it is a false
+     * TS2345 on legal code.
+     */
+    fun isConstructSource(type: Type): Boolean = isConstructorType(type) ||
+        type is Type.Object && type !is Type.Interface && type !is Type.Reference &&
+        !type.constructSignatures.isNullOrEmpty() && type.callSignatures.isNullOrEmpty() &&
+        type.constructSignatures!!.all { it.typeParameters.isNullOrEmpty() }
 
     /** True for a type minted by [constructorTypeOfClass] (identity). */
     fun isConstructorType(type: Type): Boolean = type is Type.Object && type in minted
