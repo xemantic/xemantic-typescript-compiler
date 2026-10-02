@@ -204,7 +204,19 @@ class FlowGraph internal constructor(
      * speed.
      */
     recordedNodes: List<Node>? = null,
+    /**
+     * (CHK.201) The `pos` of every switch clause whose END is unreachable — tsgo's
+     * `clause.FallthroughFlowNode` read by `checkSwitchStatement` under
+     * `noFallthroughCasesInSwitch`. A clause absent from the set either falls
+     * through or was not bound; the TS7029 check consults the set only to REFUSE a
+     * report its syntactic predicate would make, so an absent clause keeps the old
+     * answer.
+     */
+    private val unreachableClauseEnds: Set<Int> = emptySet(),
 ) {
+    /** (CHK.201) True when control cannot reach the end of [clause]'s statements. */
+    fun clauseEndUnreachable(clause: Node): Boolean = clause.pos in unreachableClauseEnds
+
     // INV.2(b): nodeId-indexed fast path for [flowAt] — the pilot array-indexed side
     // table. Pre-computed here from the FINISHED map by walking the tree, so an
     // in-tree node's array answer is BY CONSTRUCTION exactly what the map returns
@@ -783,6 +795,7 @@ class FlowGraphBuilder {
             nodeToFlow, closureStarts.toList(), sourceFile, containerStarts.toList(),
             if (PassTiming.detailed) narrowingNodes.toList() else null,
             recordedNodes,
+            unreachableClauseEnds,
         )
         FrontEnd.close(FrontEnd.FLOW_INDEX, tIndex)
         // (WARM.23) round 894 candidate (3): price the CONTAINER, not the owner.
@@ -814,6 +827,9 @@ class FlowGraphBuilder {
      * cost a hash per record to save nothing.
      */
     private val recordedNodes: ArrayList<Node> = ArrayList()
+
+    /** (CHK.201) see [FlowGraph.clauseEndUnreachable]. */
+    private val unreachableClauseEnds: HashSet<Int> = HashSet()
 
     /** (NARROW.2)(f) round 855: the name-consuming flow nodes minted for this file,
      *  accumulated at MINT time so the inventory is exhaustive by construction (a
@@ -1248,6 +1264,7 @@ class FlowGraphBuilder {
                     } else clauseEntry
                     currentFlow = mergedEntry
                     bindEachStatement(clause.statements)
+                    if (currentFlow is FlowUnreachable) unreachableClauseEnds.add(clause.pos)
                     fallthroughFlow = currentFlow
                 }
                 is DefaultClause -> {
@@ -1261,6 +1278,7 @@ class FlowGraphBuilder {
                     } else clauseEntry
                     currentFlow = mergedEntry
                     bindEachStatement(clause.statements)
+                    if (currentFlow is FlowUnreachable) unreachableClauseEnds.add(clause.pos)
                     fallthroughFlow = currentFlow
                 }
                 else -> { /* unexpected clause kind — skip */ }

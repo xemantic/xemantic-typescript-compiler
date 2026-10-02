@@ -1166,6 +1166,8 @@ class Checker(
     /** The file name currently being checked — used to look up file-level type maps. */
     internal var currentCheckFileName: String? = null
 
+    /** (CHK.201) The flow graph of the file [checkFallthroughCases] is walking. */
+    private var fallthroughFlowGraph: FlowGraph? = null
     /** Control-flow graph for the file currently being checked. Looked up via
      *  [getFlowAt] during narrowing in [checkVarDeclAssignability]. Null in passes
      *  that don't initialize it (narrowing is opt-in per emission site). */
@@ -11383,9 +11385,14 @@ class Checker(
         val blockStart = when {
             opener >= 0 && source[opener + 1] == '*' -> opener
             opener < 0 && source.lastIndexOf("/*", at) > source.lastIndexOf("*/", at) -> lineStart
+            // (CHK.205) A `//` on a line INSIDE a block comment (a JSDoc code-fence
+            // example) opens nothing — it is block-comment text, so the directive
+            // counts only on the block's last line, like any other block line.
+            opener >= 0 && insideOpenBlockComment(source, lineStart, opener) -> lineStart
             else -> -1
         }
-        if (blockStart >= 0 && isTsDirectiveCommentPrefix(source, blockStart, at)) {
+        if (blockStart >= 0) {
+            if (!isTsDirectiveCommentPrefix(source, blockStart, at)) return null
             val close = source.indexOf("*/", at)
             if (close >= 0) {
                 var j = at
@@ -11405,6 +11412,23 @@ class Checker(
         var end = at
         while (end < source.length && source[end] != '\n' && source[end] != '\r') end++
         return TsCommentDirective(expectError, opener, end)
+    }
+
+    /**
+     * (CHK.205) Whether [lineStart]'s line begins inside a block comment that is
+     * still open at [opener] on that line. The block opener found by a backward
+     * search is confirmed to be a real comment opener by [commentOpenOnLineBefore]
+     * on ITS own line, so a glob inside a string literal does not read as an open
+     * comment.
+     */
+    private fun insideOpenBlockComment(source: String, lineStart: Int, opener: Int): Boolean {
+        if (lineStart == 0) return false
+        val open = source.lastIndexOf("/*", lineStart - 1)
+        if (open < 0) return false
+        val closeBefore = source.indexOf("*/", open + 2)
+        if (closeBefore in 0 until opener) return false
+        val openLineStart = if (open == 0) 0 else source.lastIndexOf('\n', open - 1) + 1
+        return commentOpenOnLineBefore(source, openLineStart, open + 2) == open
     }
 
     /** (CHK.31) `^\s*(?:\/|\*)*\s*$` — the text a block comment's last line may
@@ -95713,8 +95737,10 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            fallthroughFlowGraph = result.flowGraph
             walkForFallthroughCases(result.sourceFile.statements, source, fileName)
         }
+        fallthroughFlowGraph = null
     }
 
     private fun walkForFallthroughCases(stmts: List<Statement>, source: String, fileName: String) {
@@ -95872,8 +95898,11 @@ interface DataView {
             if (i == clauses.size - 1) continue
             // Empty clauses (no statements) are allowed to fall through
             if (clauseStmts.isEmpty()) continue
-            // Check if the clause definitely terminates
-            if (!clauseStmtsTerminate(clauseStmts)) {
+            // Check if the clause definitely terminates. (CHK.201) The syntactic predicate
+            // has no Block / labelled arm, so `case X: { return }` read as falling through;
+            // the flow graph's clause-end reachability (tsgo's FallthroughFlowNode) refuses
+            // every report whose end it proves unreachable.
+            if (!clauseStmtsTerminate(clauseStmts) && fallthroughFlowGraph?.clauseEndUnreachable(clause) != true) {
                 // Report on the CURRENT clause's case/default keyword
                 val clauseStart = when (clause) {
                     is CaseClause -> clause.pos
@@ -95902,8 +95931,11 @@ interface DataView {
      * Returns true if a list of statements definitely terminates on ALL code paths.
      */
     private fun clauseStmtsTerminate(stmts: List<Statement>): Boolean {
-        // A clause terminates if any statement in it definitely terminates on all paths
-        return stmts.any { isDefinitelyTerminating(it) }
+        // A clause terminates if any statement in it definitely terminates on all paths.
+        // (CHK.201) A nested BLOCK is looked into, so a never-returning call the flow graph
+        // does not model (`case 1: { fail(); }`) still terminates; a labelled statement is
+        // NOT, since `lbl: { break lbl }` falls into the next clause.
+        return stmts.any { if (it is Block) clauseStmtsTerminate(it.statements) else isDefinitelyTerminating(it) }
     }
 
     // -----------------------------------------------------------------------
