@@ -1,3 +1,30 @@
+### Round (P18.253) — (CHK.196) stage 1: `typeof A` answers a real CONSTRUCTOR-SIDE type (statics incl. inherited, merged-namespace exports, construct signatures, abstract-ness) and displays as `typeof A` in messages and hover; the census matrix 36 -> 44 rows agreeing with tsgo, 0 new ours-only; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
+
+One implementation subagent, from the read-only census (`build/scratch-p18252-census/README.txt`). **Where the census was
+wrong**: (a) its stage-1 arm silently included the instrument's `mapBack` (a constructor-typed variable read as the
+instance when it is the callee of `new`) — without an equivalent `new t(1).v` through `typeof Box` loses its tsgo row,
+so a direct `new` callee reads the instance interface (`Checker.kt` ~119159); (b) "delete the `typeof $rawTypeName`
+prefix" would have been WRONG — it still produces today's correct `typeof A` for a receiver that is the instance type;
+it is GUARDED, skipped only for a constructor-side type; (c) a compensation site the census missed: B175's "a static
+source member does not count" in `collectMissingProperties` fired on the constructor side too (a false TS2741 where tsgo
+reports TS2322) — fixed and pinned; (d) two predicted arms do not redden: isAbstract (TS2511 already comes through the
+`new`-callee mapping — redundant today) and the 0-argument default (it surfaces as a dropped relation row, not TS2351).
+**Mechanism**: new `ClassConstructorTypes.kt` (126 lines) — `constructorTypeOfClass(sym)`, memoized per symbol, the
+class symbol as the type's symbol: an anonymous `Type.Object` with the instance interface's `staticMembers` (inherited
+included) plus the merged namespace's value exports, construct signatures from the class's visible constructors (the
+base's when it declares none) re-returned to the class and abstract when the class is, else one 0-argument default; NO
+`prototype` (measured: a false TS2741 in `classSideInheritance3` while identifiers stay instance-typed). Routed into
+`getTypeOfSymbolForTypeQuery`'s class arm (covering `typeof A`, the `m.Cls` module-object carriers and the object-
+literal class-value source) and `buildClassValueConstructorTypeForDisplay`; `typeToString` prints `typeof Name` for a
+builder-minted type. `Checker.kt` +15. **Matrix**: c06 x3 (incl. the "typeof typeof" display), c12, c16 x2, c21 x2, c31,
+h03 gained; extra cells k2 k4 k5 k7 k10 +9 tsgo rows, k6 / k9 display fixed (`new () => A` -> `typeof A`); no cell lost a
+row. **Pins**: `ClassConstructorSideTypeQueryTest` 18, `ProjectTypeofClassHoverTest` 2 (hover against tsgo's LSP);
+ablation a1 8 / a2 1 / a3 1 / a4 0 (redundant) / a5 1 / a6 8 / a7 1 / a8 1 / a9 2 / a11 2 RED; an a10 guard read 0 and was
+removed. **Gates**: full suite 22,227 / 0 / 44 (+20, no other expectation moved); corpus screen 8725 / 0 and with
+`--include ''` the same 41 ignored mismatches as before; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only; the builder's
+module sweep (project 953, lsp 58, kir 313, externals 290 tests) green. Stages 2-4 stay in (CHK.196).
+
 ### Round (P18.252) — (CHK.190) residues: re-export CYCLES report tsgo's TS2303, TS1361 / TS1362 ("cannot be used as a value because it was imported/exported using 'import type'/'export type'") are implemented for the first time, a missing re-exported / imported member picks tsgo's code (TS2724 > TS2614 > TS2460 / TS2459 / TS2305), and `export * as M` resolves in value positions; every added row a tsgo row; +0 on corpus, grid and libraries (2026-10-01)
 
 One implementation subagent, beside a read-only census of the class constructor-side type ((CHK.73)). **Where the

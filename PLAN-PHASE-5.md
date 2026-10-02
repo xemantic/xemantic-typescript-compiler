@@ -25,6 +25,36 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.263) — (CHK.195)(a): a namespace's `export { … }` clause now binds under the EXPORTED name — the false TS2708 in clause-only ambient namespaces, the false TS2694 / TS2339 on clause entries and the missing tsgo row are all one binder fact; three neighbouring false positives fixed with it; every cell's ours-only rows to 0 bar one pre-existing display defect; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
+
+One implementation subagent. **Where the item was wrong**: (a) "three mechanisms, not contained" — all three come from
+ONE fact: the binder put every namespace member, exported or not, into the namespace's export table keyed by its
+DECLARED name, so an `export { … }` clause never produced an entry under the name it exports (CLAUDE.md's two-spellings
+trap, inside a namespace); (b) the census's 4 ours-only TS2694 were neither scope nor meaning — `checkQualifiedNameExports`
+looked the root namespace up as `globals[name]` and took whichever checked file declared it FIRST, i.e. the OTHER
+module's `NS1` (two direct-read false TS2694 already existed on the parent for the same reason); (c) the ns2 "missing
+row" is general — `N.nope` on ANY value-bearing `declare namespace` was silent, because the TS2339 suppression assumed
+every `declare namespace` non-instantiated. **Mechanism**: the binder binds a namespace's clauses AFTER the rest of the
+block (a clause above its member still finds it), marks a sibling exported under its own name `ExportValue`, and makes
+every other entry (rename, outer name, import) an ALIAS keyed by the exported name; `NameResolver.namespaceClauseTarget`
+resolves the declared name in the clause's own scope (enclosing namespace tables innermost-first, the file, visible
+globals), never answering with the clause's own alias; the three syntactic TS2708 checks consult
+`namespaceExportClauseCarriesValue` — a port of tsgo's syntactic module-instance-state (new `NamespaceExportClauses.kt`,
+140 lines), which also counts an exported `import X = …` (a second false TS2708); the TS2339 suppression uses
+`ambientNamespaceHasValue` excluding `declare global` (the grid's first pass caught +2 ours-only TS2339 on `global.gc` in
+harness's `sys.ts` without that exclusion); the `import k = N.b` reader reads `ExportValue` (removing a false TS2694 the
+new alias would have created, and `acceptableAlias1`'s); `checkQualifiedNameExports` takes the root from the current
+file's own locals first; new TS2661 for a namespace clause naming a script-level or lib global. `Checker.kt` +45,
+`Binder.kt` +46, `NameResolver.kt` +33. **Matrix** (`build/bench/p18263-agent/cells`): m01 (= ns1) 7/5/1 -> 8/0/0, m02
+(= ns2) 0/5/6 -> 6/0/0, m08 m09 m10 m11 m12 c08 c10 to full agreement, m03 m04 m05 m06 m07 improved, c07
+(`acceptableAlias1`) false TS2694 gone; every moved row a tsgo row; the one remaining ours-only row (m04 / m05) is the
+pre-existing `typeof N.b` display, reproduced on the parent with a plain `export const`. **Pins**: `NamespaceExportClauseTest`
+16 (full tsgo row lists); `NamedReExportResolutionTest`'s "namespace-local export clause is not followed" countdown
+re-pointed to tsgo's row; ablation a1 8 / a2 5 / a3 3 / a4 10 / a5 2 / a6 2 / a7 4 / a8 1 / a9 1 / a10 1 RED. **Gates**:
+full suite 22,377 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the same 41 (`acceptableAlias1`'s content
+improved, still a TS-1 harness row); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 +
+chain OK, rxjs / marked / cronstrue unchanged; warning gate with probe: probe only.
+
 ### Round (P18.262) — (CHK.196) stage-3 residues: an ANONYMOUS construct type (`abstract new () => Co`) is now a constructor source to the argument relation and the missing-static TS2741, generic-class constructor arguments infer `T` from a callback's return, `cond ? A : B` of classes is subtype-reduced, and a constructor's own `prototype` no longer appears in an elaboration chain; 138-cell matrix 73 -> 78 of 94 agreeing with tsgo, 0 ours-only (one new false positive caught and refused); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
 
 One implementation subagent. **Where the item was wrong**: (a) t05 was not "which class sources reach
@@ -271,33 +301,6 @@ externals generator expectation moved to `unmapped typeof Box`; ablation b1 10 /
 census, measurable later. **Gates**: full suite 22,243 / 0 / 44 (+16); corpus screen 8725 / 0 and with `--include ''`
 the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs 0/0,
 marked 0/0, cronstrue 1/1; warning gate with probe: probe only. Residues stay in (CHK.196).
-
-### Round (P18.253) — (CHK.196) stage 1: `typeof A` answers a real CONSTRUCTOR-SIDE type (statics incl. inherited, merged-namespace exports, construct signatures, abstract-ness) and displays as `typeof A` in messages and hover; the census matrix 36 -> 44 rows agreeing with tsgo, 0 new ours-only; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-01)
-
-One implementation subagent, from the read-only census (`build/scratch-p18252-census/README.txt`). **Where the census was
-wrong**: (a) its stage-1 arm silently included the instrument's `mapBack` (a constructor-typed variable read as the
-instance when it is the callee of `new`) — without an equivalent `new t(1).v` through `typeof Box` loses its tsgo row,
-so a direct `new` callee reads the instance interface (`Checker.kt` ~119159); (b) "delete the `typeof $rawTypeName`
-prefix" would have been WRONG — it still produces today's correct `typeof A` for a receiver that is the instance type;
-it is GUARDED, skipped only for a constructor-side type; (c) a compensation site the census missed: B175's "a static
-source member does not count" in `collectMissingProperties` fired on the constructor side too (a false TS2741 where tsgo
-reports TS2322) — fixed and pinned; (d) two predicted arms do not redden: isAbstract (TS2511 already comes through the
-`new`-callee mapping — redundant today) and the 0-argument default (it surfaces as a dropped relation row, not TS2351).
-**Mechanism**: new `ClassConstructorTypes.kt` (126 lines) — `constructorTypeOfClass(sym)`, memoized per symbol, the
-class symbol as the type's symbol: an anonymous `Type.Object` with the instance interface's `staticMembers` (inherited
-included) plus the merged namespace's value exports, construct signatures from the class's visible constructors (the
-base's when it declares none) re-returned to the class and abstract when the class is, else one 0-argument default; NO
-`prototype` (measured: a false TS2741 in `classSideInheritance3` while identifiers stay instance-typed). Routed into
-`getTypeOfSymbolForTypeQuery`'s class arm (covering `typeof A`, the `m.Cls` module-object carriers and the object-
-literal class-value source) and `buildClassValueConstructorTypeForDisplay`; `typeToString` prints `typeof Name` for a
-builder-minted type. `Checker.kt` +15. **Matrix**: c06 x3 (incl. the "typeof typeof" display), c12, c16 x2, c21 x2, c31,
-h03 gained; extra cells k2 k4 k5 k7 k10 +9 tsgo rows, k6 / k9 display fixed (`new () => A` -> `typeof A`); no cell lost a
-row. **Pins**: `ClassConstructorSideTypeQueryTest` 18, `ProjectTypeofClassHoverTest` 2 (hover against tsgo's LSP);
-ablation a1 8 / a2 1 / a3 1 / a4 0 (redundant) / a5 1 / a6 8 / a7 1 / a8 1 / a9 2 / a11 2 RED; an a10 guard read 0 and was
-removed. **Gates**: full suite 22,227 / 0 / 44 (+20, no other expectation moved); corpus screen 8725 / 0 and with
-`--include ''` the same 41 ignored mismatches as before; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x
-added=0 removed=0 + chain OK, rxjs 0/0, marked 0/0, cronstrue 1/1; warning gate with probe: probe only; the builder's
-module sweep (project 953, lsp 58, kir 313, externals 290 tests) green. Stages 2-4 stay in (CHK.196).
 
 ## QUEUE
 
@@ -909,7 +912,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.197) DONE 2026-10-01 ((P18.257) note: tsgo's per-specifier rule, 0 -> 43 of 45 cells; residues -> (CHK.198)). DEFAULT / NAMED IMPORT FROM AN `export =` MODULE (found by (P18.255)'s matrix, `build/bench/p18255-agent/matrix/`).** A named import from a `.ts` module whose surface is `export = <variable or class>` reads TS2616 where tsgo reads TS2305; under `module: esnext` the same import emits BOTH TS2595 and TS2616 (the "mutually exclusive" comment in `checkDefaultImports` is wrong for the plain-value TS2616 branch) where tsgo reads TS2305 + TS1203 at the `export =`; TS1192 / TS2613 name the module by its specifier (no `./`) where tsgo prints the resolved file path. The family now lives in `NamedImportExistence.kt`.
 
-- [ ] **(CHK.195) RESIDUES OF (CHK.190) / (P18.252) (cells `build/bench/p18252-agent/cells`).** (a) NAMESPACE-level `export { … }` — three mechanisms: a false TS2708 "Cannot use namespace 'N' as a value" in a clause-only ambient namespace, clause entries missing from the namespace export table (false TS2694 / TS2339; corpus shape `namespacesWithTypeAliasOnlyExportsMerge`), one missing tsgo row (`ns1` / `ns2`); (b) TS1362 through a type-only star (`export type * from`); (c) TS2693 for an imported type alias used as a value (t1) — never reported; (d) TS1361 / TS1362 deliberately silent inside a namespace and in JSX tags; (e) TS2303 cycles not followed through `export default <ident>` or stars; (f) a module namespace object displays `typeof import("m")` instead of the path, and a write to one of its members misses TS2540.
+- [ ] **(CHK.195) (a) LANDED 2026-10-02 ((P18.263): namespace `export { }` clauses bind under the exported name; the TS2708 / TS2694 / TS2339 false positives and the missing row fixed). NEW from (a)'s matrix (`build/bench/p18263-agent/cells`, all reproduced on the parent with non-clause controls): namespace-valued member reads type `any` (`N.Inner.z` through a clause, `P.O2.z` through `export import` — the module-symbol-has-no-type gap, (CHK.73)/(CHK.196)); `typeof N.b` displays `typeof N.b` where tsgo prints the member type; `O.I.nope` on a nested namespace and a merged namespace member read from another file are silent; `typeof N` on a type-only namespace misses TS2708; a clause naming an unexported member of a DIFFERENT block of the same namespace keeps the old behaviour. OPEN as before: (b)-(f). WAS: RESIDUES OF (CHK.190) / (P18.252) (cells `build/bench/p18252-agent/cells`).** (a) NAMESPACE-level `export { … }` — three mechanisms: a false TS2708 "Cannot use namespace 'N' as a value" in a clause-only ambient namespace, clause entries missing from the namespace export table (false TS2694 / TS2339; corpus shape `namespacesWithTypeAliasOnlyExportsMerge`), one missing tsgo row (`ns1` / `ns2`); (b) TS1362 through a type-only star (`export type * from`); (c) TS2693 for an imported type alias used as a value (t1) — never reported; (d) TS1361 / TS1362 deliberately silent inside a namespace and in JSX tags; (e) TS2303 cycles not followed through `export default <ident>` or stars; (f) a module namespace object displays `typeof import("m")` instead of the path, and a write to one of its members misses TS2540.
 
 - [ ] **(CHK.194) (a) LANDED 2026-10-01 as a STAGE ((P18.251) note: instance wins the shared table, class-value reads route to `staticMembers`, a SUPPRESS-ONLY static retry in `Relater`). OPEN: the class value needs a real CONSTRUCTOR-SIDE type ((CHK.73)) — it would replace the `Relater` static retry, fix m13's detail line, and give `typeof A` its statics (m7 / q2: `getTypeOfSymbolForTypeQuery` builds from `exports`, which holds no statics — filling it gives non-clash statics real types for the first time, so it MOVES ROWS and needs its own sizing); `this` in a static method as a class-value receiver (m16 / m22); namespace exports merged into a class answered on the class-value side (m12, `A.s` reads `number` for tsgo's `true`); a member read through the wrong side typed `any` like tsgo (m15, collides with today's `this` typing); un-annotated getters typing `any` (m5); `A.prototype.s` (m8); a `const` class expression (m11); a block-local class (m19, B83.5); and (b)-(d) below, untouched. Cells `build/bench/p18251-agent/cells`. EARLIER: RESIDUES OF (CHK.193) — a SILENT WRONG TYPE first.** (a) **the class member table is LAST-WINS across static and instance**: `class A { s = 1; static s = true }` makes `new A().s` read `boolean` where tsgo says `number` (and s4's TS2416 detail line reads `'true'` for tsgo's `'number'`); letting the instance member win in `MemberResolver` fixes that read and breaks `A.s` (static reads also go through `members`) — the proper fix routes constructor-side reads through `staticMembers`; measure every static-read path against tsgo first; (b) `this.nope` / `this.valu` inside a class merged with `interface C extends B` (cells c5 / c8 line 4) stay silent — the `this` path does not use (P18.250)'s legs; the alias base (c6) and lib base (c7) stay refused; (c) `const N = { C: class { … } }; new N.C().q` is silent before and after where tsgo reports TS2322 (typing a class expression inside an object literal); (d) still refused: a class-expression base (c1), a mixin base (c2), a `.d.ts` `declare class` base (c11). Cells in `build/bench/p18247-agent/cells` and `build/bench/p18250-agent/cells`.
 
