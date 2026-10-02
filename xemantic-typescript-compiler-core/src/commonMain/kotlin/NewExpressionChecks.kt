@@ -31,8 +31,8 @@ package com.xemantic.typescript.compiler
  * and the argument checks against the construct signature(s) the callee resolves to) with its
  * helpers (`newCalleeVarHoldsInstance`, `emitPrivateConstructorTs2673`,
  * `newExprAbstractConstructorTs2511`, `newCalleeNonNullType`, `typeofClassValueDisplay`,
- * `classExtendsOrIs`), and B264's inherited-overloaded-constructor pass
- * [checkInheritedOverloadedCtorArgs]. Extracted VERBATIM from `Checker.kt` (five spans:
+ * `classExtendsOrIs`), and B264's inherited-overloaded-constructor check
+ * [checkInheritedOverloadedCtorNew] (a pass until (CHK.199)). Extracted VERBATIM from `Checker.kt` (five spans:
  * 7224-7231, 164745-165501, 166602-166627, 166837-166855, 183589-183774); the options come in
  * through the constructor and every other Checker member it reads is reached through [checker].
  * Ambient reads: `docs/inversion-ambient-ledger.md` row 18.
@@ -130,6 +130,7 @@ internal class NewExpressionChecks(
         val prevArityCall = checker.arityCall
         checker.arityCall = expr
         checkSingleNewExpressionTypesCore(expr, source, fileName)
+        checkInheritedOverloadedCtorNew(expr, source, fileName)
         checker.arityCall = prevArityCall
     }
 
@@ -484,92 +485,7 @@ internal class NewExpressionChecks(
                 }
             }
         }
-        // B60.15: union callee for `new` — mirror of B60.14 for TS2349 with three cases:
-        //   (a) all constituents non-constructable → "No constituent ... is constructable."
-        //   (b) some non-constructable → "Not all constituents ... are constructable." + first missing display
-        //   (c) all constructable but sigs differ structurally → "Each member ... has construct signatures, but none ... compatible..."
-        // (CHK.98)(a)'s class-instance refusal is retired (P18.256): it existed because a
-        // class VALUE typed as its INSTANCE, so `[ConcreteA, AbstractA].map(cls => new cls())`
-        // read a union of instances. A class value is now its constructor side ((CHK.196)), so
-        // a union of class INSTANCES at a `new` really is unconstructable — `declare const
-        // u: A | B; new u()` is TS2351 in tsgo, and the refusal was suppressing it.
-        if (calleeType is Type.Union) {
-            val constituents = calleeType.types
-            val nonCtor = constituents.filter { checker.getConstructSignaturesOfType(it).isEmpty() }
-            val unionDisplay = checker.typeToString(calleeType)
-            val ce = expr.expression
-            val (start, length) = run {
-                val s = ce.pos
-                Pair(s, checker.expressionTrueEnd(ce) - s)
-            }
-            if (length > 0) {
-                val (line, character) = checker.getLineAndCharacterOfPosition(source, start)
-                if (nonCtor.isNotEmpty() && nonCtor.size == constituents.size) {
-                    checker.diagnostics.add(Diagnostic(
-                        message = "This expression is not constructable.",
-                        category = DiagnosticCategory.Error, code = 2351,
-                        fileName = fileName, line = line, character = character,
-                        start = start, length = length,
-                        messageChain = listOf("  No constituent of type '$unionDisplay' is constructable."),
-                    ))
-                    return
-                }
-                if (nonCtor.isNotEmpty() && nonCtor.size != constituents.size) {
-                    val missingDisplay = checker.typeToString(nonCtor[0])
-                    checker.diagnostics.add(Diagnostic(
-                        message = "This expression is not constructable.",
-                        category = DiagnosticCategory.Error, code = 2351,
-                        fileName = fileName, line = line, character = character,
-                        start = start, length = length,
-                        messageChain = listOf(
-                            "  Not all constituents of type '$unionDisplay' are constructable.",
-                            "    Type '$missingDisplay' has no construct signatures.",
-                        ),
-                    ))
-                    return
-                }
-                if (nonCtor.isEmpty() && constituents.size >= 2) {
-                    // All constructable; check pairwise sig compat heuristic
-                    val sigsList = constituents.map { checker.getConstructSignaturesOfType(it).firstOrNull() }
-                    val hasNullSig = sigsList.any { it == null }
-                    if (!hasNullSig) {
-                        val sigs = sigsList.map { it!! }
-                        // (CHK.97) tsc runs `getUnionSignatures` over the CONSTRUCT lists
-                        // too, so a union whose members' construct signatures COMBINE is
-                        // constructable — this branch's only verdict was `differ → TS2351`,
-                        // i.e. every `new (typeof A | typeof B)(…)` with differing ctor
-                        // parameters was a false positive. Fall through to the ordinary
-                        // construct resolution below, which now reads the combined list.
-                        val ctorCombined = checker.combineUnionSignatures(calleeType, construct = true)
-                        val differ = if (ctorCombined != null) false else run {
-                            for (i in sigs.indices) for (j in i + 1 until sigs.size) {
-                                val s1 = sigs[i]; val s2 = sigs[j]
-                                if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
-                                if (s1.parameters.size != s2.parameters.size) return@run true
-                                for (k in s1.parameters.indices) {
-                                    val t1 = checker.getTypeOfSymbol(s1.parameters[k])
-                                    val t2 = checker.getTypeOfSymbol(s2.parameters[k])
-                                    if (t1 !== t2) return@run true
-                                }
-                            }
-                            false
-                        }
-                        if (differ) {
-                            checker.diagnostics.add(Diagnostic(
-                                message = "This expression is not constructable.",
-                                category = DiagnosticCategory.Error, code = 2351,
-                                fileName = fileName, line = line, character = character,
-                                start = start, length = length,
-                                messageChain = listOf(
-                                    "  Each member of the union type '$unionDisplay' has construct signatures, but none of those signatures are compatible with each other.",
-                                ),
-                            ))
-                            return
-                        }
-                    }
-                }
-            }
-        }
+        if (newUnionCalleeNotConstructable(expr, calleeType, source, fileName)) return
         // (CHK.137) round (P18.128) — a variable that HOLDS A CLASS is constructable, and a
         // variable that holds an INSTANCE is not, and this checker's type cannot tell them
         // apart. Both directions are decided HERE, above the construct-signature read, and
@@ -631,6 +547,7 @@ internal class NewExpressionChecks(
                 return
             }
         }
+        if (newInstanceCalleeNotConstructable(expr, calleeType, source, fileName)) return
         // B497: the args-required early return was moved BELOW the union-callee branch
         // (above) so a NO-ARGS union callee (`new union;`) is still constructability-checked.
         val args = expr.arguments ?: return
@@ -694,6 +611,152 @@ internal class NewExpressionChecks(
             }
             return
         }
+        checkNewArgsAgainstConstructSignatures(expr, args, calleeType, signatures, source, fileName)
+    }
+
+    /**
+     * (CHK.199)(a) TS2351 for `new i()` where `i` holds a class INSTANCE — tsgo's
+     * `resolveNewExpression` finds no construct signature on an instance type and reports
+     * "Type 'C' has no construct signatures." at the callee. The two older emitters (the
+     * (CHK.137) block and 17.170) gate on `globals`, which never holds a MODULE file's locals
+     * (INV.3(d)), and read the construct-signature list, which a class DECLARING a
+     * constructor registers on its instance type here — so a module file, an annotated
+     * declaration and a parameter were silent. Since (CHK.196) a class VALUE types as its
+     * constructor side, so an identifier callee whose type is still the class's DECLARED
+     * INSTANCE type really is an instance; decided from that type, not from a symbol table.
+     *
+     * Refused (falls through to the older paths): a class merged with an interface or
+     * anything else (an interface may declare a construct signature) and every generic
+     * instance (tsgo reports `new g()` on a `G<number>` too — a missing row, never a false one).
+     * A class identifier never reaches here — it reads as its constructor side, which
+     * [ClassConstructorTypes.constructedClass] recognises — and three further refusals (the
+     * callee spelling the class's name, a block-scoped class binding, the declared-type
+     * identity) were built, ablated to 0 RED on the pins and 0 on the corpus screen, and
+     * deleted: the first one was suppressing tsgo's row for `function g(D: D) { new D() }`.
+     */
+    private fun newInstanceCalleeNotConstructable(expr: NewExpression, calleeType: Type, source: String, fileName: String): Boolean {
+        val ce = expr.expression as? Identifier ?: return false
+        val ti = calleeType as? Type.Interface ?: return false
+        if (checker.classConstructorTypes.constructedClass(calleeType) != null) return false
+        val cls = ti.symbol ?: return false
+        if (!cls.flags.hasAny(SymbolFlags.Class)) return false
+        if (cls.declarations.isEmpty() || cls.declarations.any { it !is ClassDeclaration && it !is ClassExpression }) return false
+        if (!ti.typeParameters.isNullOrEmpty()) return false
+        val (line, character) = checker.getLineAndCharacterOfPosition(source, ce.pos)
+        checker.diagnostics.add(Diagnostic(
+            message = "This expression is not constructable.",
+            category = DiagnosticCategory.Error, code = 2351,
+            fileName = fileName, line = line, character = character,
+            start = ce.pos, length = ce.text.length,
+            messageChain = listOf("  Type '${cls.name}' has no construct signatures."),
+        ))
+        return true
+    }
+
+    /**
+     * (CHK.199) split out of [checkSingleNewExpressionTypesCore] VERBATIM: the B60.15
+     * union-callee constructability report. Answers true when a row was reported (the
+     * caller then returns, as the inline region's three bare `return`s did).
+     */
+    private fun newUnionCalleeNotConstructable(expr: NewExpression, calleeType: Type, source: String, fileName: String): Boolean {
+        // B60.15: union callee for `new` — mirror of B60.14 for TS2349 with three cases:
+        //   (a) all constituents non-constructable → "No constituent ... is constructable."
+        //   (b) some non-constructable → "Not all constituents ... are constructable." + first missing display
+        //   (c) all constructable but sigs differ structurally → "Each member ... has construct signatures, but none ... compatible..."
+        // (CHK.98)(a)'s class-instance refusal is retired (P18.256): it existed because a
+        // class VALUE typed as its INSTANCE, so `[ConcreteA, AbstractA].map(cls => new cls())`
+        // read a union of instances. A class value is now its constructor side ((CHK.196)), so
+        // a union of class INSTANCES at a `new` really is unconstructable — `declare const
+        // u: A | B; new u()` is TS2351 in tsgo, and the refusal was suppressing it.
+        if (calleeType is Type.Union) {
+            val constituents = calleeType.types
+            val nonCtor = constituents.filter { checker.getConstructSignaturesOfType(it).isEmpty() }
+            val unionDisplay = checker.typeToString(calleeType)
+            val ce = expr.expression
+            val (start, length) = run {
+                val s = ce.pos
+                Pair(s, checker.expressionTrueEnd(ce) - s)
+            }
+            if (length > 0) {
+                val (line, character) = checker.getLineAndCharacterOfPosition(source, start)
+                if (nonCtor.isNotEmpty() && nonCtor.size == constituents.size) {
+                    checker.diagnostics.add(Diagnostic(
+                        message = "This expression is not constructable.",
+                        category = DiagnosticCategory.Error, code = 2351,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf("  No constituent of type '$unionDisplay' is constructable."),
+                    ))
+                    return true
+                }
+                if (nonCtor.isNotEmpty() && nonCtor.size != constituents.size) {
+                    val missingDisplay = checker.typeToString(nonCtor[0])
+                    checker.diagnostics.add(Diagnostic(
+                        message = "This expression is not constructable.",
+                        category = DiagnosticCategory.Error, code = 2351,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf(
+                            "  Not all constituents of type '$unionDisplay' are constructable.",
+                            "    Type '$missingDisplay' has no construct signatures.",
+                        ),
+                    ))
+                    return true
+                }
+                if (nonCtor.isEmpty() && constituents.size >= 2) {
+                    // All constructable; check pairwise sig compat heuristic
+                    val sigsList = constituents.map { checker.getConstructSignaturesOfType(it).firstOrNull() }
+                    val hasNullSig = sigsList.any { it == null }
+                    if (!hasNullSig) {
+                        val sigs = sigsList.map { it!! }
+                        // (CHK.97) tsc runs `getUnionSignatures` over the CONSTRUCT lists
+                        // too, so a union whose members' construct signatures COMBINE is
+                        // constructable — this branch's only verdict was `differ → TS2351`,
+                        // i.e. every `new (typeof A | typeof B)(…)` with differing ctor
+                        // parameters was a false positive. Fall through to the ordinary
+                        // construct resolution below, which now reads the combined list.
+                        val ctorCombined = checker.combineUnionSignatures(calleeType, construct = true)
+                        val differ = if (ctorCombined != null) false else run {
+                            for (i in sigs.indices) for (j in i + 1 until sigs.size) {
+                                val s1 = sigs[i]; val s2 = sigs[j]
+                                if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
+                                if (s1.parameters.size != s2.parameters.size) return@run true
+                                for (k in s1.parameters.indices) {
+                                    val t1 = checker.getTypeOfSymbol(s1.parameters[k])
+                                    val t2 = checker.getTypeOfSymbol(s2.parameters[k])
+                                    if (t1 !== t2) return@run true
+                                }
+                            }
+                            false
+                        }
+                        if (differ) {
+                            checker.diagnostics.add(Diagnostic(
+                                message = "This expression is not constructable.",
+                                category = DiagnosticCategory.Error, code = 2351,
+                                fileName = fileName, line = line, character = character,
+                                start = start, length = length,
+                                messageChain = listOf(
+                                    "  Each member of the union type '$unionDisplay' has construct signatures, but none of those signatures are compatible with each other.",
+                                ),
+                            ))
+                            return true
+                        }
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * (CHK.199) split out of [checkSingleNewExpressionTypesCore] VERBATIM (it was at 7,191 of
+     * the 8,000-bytecode JIT limit): the argument check against the construct signature(s)
+     * the callee resolves to, after the 17.21 class-scope re-resolution.
+     */
+    private fun checkNewArgsAgainstConstructSignatures(
+        expr: NewExpression, args: List<Expression>, calleeType: Type, signatures: List<Signature>,
+        source: String, fileName: String,
+    ) {
         // 17.21: When the class has its own TypeParameters (e.g. `class List<T>`)
         // AND the call site has explicit type arguments (e.g. `new List<T>(...)`),
         // build a fresh signature with each param's type re-resolved under the
@@ -722,6 +785,24 @@ internal class NewExpressionChecks(
             }
         } else null
         val explicitArgsAllResolve = resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }
+        // (CHK.199)(c) TS2344 / TS2559 — tsgo's `checkTypeArguments` runs for a `new` as for a
+        // call: an explicit type argument violating the class type parameter's (instantiated)
+        // constraint is reported at the type argument, and the candidate is then rejected, so
+        // the arguments are NOT checked (measured: `new G<number>("x")` is TS2344 alone).
+        // Shares the call site's emitter; the arity gate is the call site's (defaults may be
+        // omitted), and a TS2558 arity error elsewhere keeps this silent.
+        if (explicitArgsAllResolve && !classTypeParams.isNullOrEmpty() &&
+            resolvedTypeArgs.size in classTypeParams.count { it.default == null }..classTypeParams.size
+        ) {
+            val padded = if (resolvedTypeArgs.size < classTypeParams.size)
+                resolvedTypeArgs + (resolvedTypeArgs.size until classTypeParams.size).map { classTypeParams[it].default ?: errorType }
+            else resolvedTypeArgs
+            val before = checker.diagnostics.size
+            checker.checkCallTypeArgConstraints(
+                classTypeParams, resolvedTypeArgs, expr.typeArguments.orEmpty(), createTypeMapper(classTypeParams, padded), source, fileName,
+            )
+            if (checker.diagnostics.size > before) return
+        }
         // (P18.258) a constructor-less class's inherited signatures, instantiated through the
         // heritage type arguments (a non-generic class always; a generic one under explicit ones).
         val inherited = checker.classConstructorTypes.inheritedNewSignatures(calleeType, resolvedTypeArgs?.takeIf { explicitArgsAllResolve })
@@ -745,6 +826,7 @@ internal class NewExpressionChecks(
             checker.checkArgumentsAgainstOverloads(args, effectiveSigs, source, fileName, expr.expression)
         }
     }
+
 
     /**
      * (CHK.173) B5f (N1) — tsgo's `resolveNewExpression` reads its callee through
@@ -869,177 +951,196 @@ internal class NewExpressionChecks(
      * '(<params>): <Class>', gave the following error." chain (overload indices are
      * 1-based over ALL overloads; only arity-applicable ones are listed). Any
      * unrecognized shape bails (FN, never FP).
+     *
+     * (CHK.199) Asked per `new` from [checkSingleNewExpressionTypes] (it was a program-wide
+     * pass over top-level EXPRESSION STATEMENTS only, so `const d = new Derived(1)`, an
+     * assignment, a return and every nested position were silent where tsgo reports). The
+     * callee class and its whole extends chain must still be top-level classes of the
+     * same file — the AST-only model's `classes` table.
      */
-    fun checkInheritedOverloadedCtorArgs() {
-        val primKw = mapOf(
-            SyntaxKind.StringKeyword to "string", SyntaxKind.NumberKeyword to "number",
-            SyntaxKind.BooleanKeyword to "boolean", SyntaxKind.BigIntKeyword to "bigint",
-        )
-        for (result in checker.checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (checker.isDtsFile(fileName) || checker.isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            val classes = result.sourceFile.statements
+    private fun checkInheritedOverloadedCtorNew(ne: NewExpression, source: String, fileName: String) {
+        if (checker.isDtsFile(fileName) || checker.isJsLikeFileName(fileName)) return
+        val calleeId = ne.expression as? Identifier ?: return
+        val callArgs0 = ne.arguments ?: return
+        if (callArgs0.any { argPrim(it) == null }) return
+        var root: Node = ne
+        while (root !is SourceFile) root = (root as NodeBase).parent ?: return
+        val classes = topLevelClassesOf(root)
+        if (!ne.typeArguments.isNullOrEmpty() || !ne.leadingTypeArguments.isNullOrEmpty()) return
+        val cls = classes[calleeId.text] ?: return
+        // (CHK.199) the callee must RESOLVE to that top-level class here, not to a shadowing
+        // binding (a parameter, a local `const`, a block-scoped class — all measured; a
+        // separate B83.5 lexical-table refusal ablated to 0 RED and was not kept).
+        if ((checker.getCalleeType(calleeId) as? Type.Interface)?.symbol?.declarations?.contains(cls) != true) return
+        if (cls.members.any { it is Constructor }) return  // own ctor → main path owns it
+        if (!cls.typeParameters.isNullOrEmpty()) return
+        val info = resolveCtor(cls, classes) ?: return
+        val callArgs = callArgs0
+        val argTypesOrNull = callArgs.map { argPrim(it) }
+        if (argTypesOrNull.any { it == null }) return
+        val argTypes = argTypesOrNull.filterNotNull()
+        val applicable = info.overloads.withIndex().filter { arityFits(it.value, argTypes.size) }
+        if (applicable.isEmpty()) return
+        val mismatches = applicable.map { it to firstMismatch(it.value, argTypes) }
+        if (mismatches.any { it.second == null }) return  // some overload matches
+        if (applicable.size == 1) {
+            val (idx, argT, paramT) = mismatches[0].second!!
+            val argNode = callArgs[idx]
+            val len = when (argNode) {
+                is StringLiteralNode -> (argNode.rawText?.length ?: argNode.text.length) + 2
+                is NumericLiteralNode -> argNode.text.length
+                is Identifier -> argNode.text.length
+                else -> 1
+            }
+            // (P18.258) the ordinary argument check already drew this row when the
+            // mismatching parameter needs no heritage substitution (`b: number`).
+            if (checker.diagnostics.any { it.code == 2345 && it.start == argNode.pos && it.fileName == fileName }) return
+            val (line, ch) = checker.getLineAndCharacterOfPosition(source, argNode.pos)
+            checker.diagnostics.add(Diagnostic(
+                message = "Argument of type '$argT' is not assignable to parameter of type '$paramT'.",
+                category = DiagnosticCategory.Error, code = 2345,
+                fileName = fileName, line = line, character = ch,
+                start = argNode.pos, length = len,
+            ))
+        } else {
+            // (LEGACY.0b) F3: TypeScript 7 reports the LAST arity-applicable failing
+            // candidate only, anchored at ITS own mismatching argument (tsc 6 listed
+            // every candidate and anchored at the callee), with `The last overload is
+            // declared here.` (TS2771) at that candidate's declaration.
+            val (lastIv, lastMm) = mismatches.last()
+            val (argIdx, argT, paramT) = lastMm!!
+            val chain = listOf(
+                "  The last overload gave the following error.",
+                "    Argument of type '$argT' is not assignable to parameter of type '$paramT'.",
+            )
+            val argNode = callArgs[argIdx]
+            val len = when (argNode) {
+                is StringLiteralNode -> (argNode.rawText?.length ?: argNode.text.length) + 2
+                is NumericLiteralNode -> argNode.text.length
+                is Identifier -> argNode.text.length
+                else -> 1
+            }
+            val related = listOfNotNull(
+                info.decls.getOrNull(lastIv.index)
+                    ?.let { checker.lastOverloadDeclaredHereAt(it, source, fileName) }
+            )
+            val (line, ch) = checker.getLineAndCharacterOfPosition(source, argNode.pos)
+            checker.diagnostics.add(Diagnostic(
+                message = "No overload matches this call.",
+                category = DiagnosticCategory.Error, code = 2769,
+                fileName = fileName, line = line, character = ch,
+                start = argNode.pos, length = len,
+                messageChain = chain, relatedInformation = related,
+            ))
+        }
+    }
+
+    private var topLevelClassesFile: SourceFile? = null
+    private var topLevelClasses: Map<String, ClassDeclaration> = emptyMap()
+
+    /** The named top-level classes of [file], memoized for the last file asked. */
+    private fun topLevelClassesOf(file: SourceFile): Map<String, ClassDeclaration> {
+        if (topLevelClassesFile !== file) {
+            topLevelClasses = file.statements
                 .filterIsInstance<ClassDeclaration>()
                 .filter { it.name != null }
                 .associateBy { it.name!!.text }
+            topLevelClassesFile = file
+        }
+        return topLevelClasses
+    }
 
-            class ParamSpec(val name: String, val type: String, val isRest: Boolean, val isOptional: Boolean)
-            class CtorInfo(val overloads: List<List<ParamSpec>>, val total: Int, val decls: List<Constructor>)
+    private val primKw = mapOf(
+        SyntaxKind.StringKeyword to "string", SyntaxKind.NumberKeyword to "number",
+        SyntaxKind.BooleanKeyword to "boolean", SyntaxKind.BigIntKeyword to "bigint",
+    )
 
-            // resolve the ctor-owning class through the extends chain, substituting TPs
-            fun resolveCtor(cls0: ClassDeclaration): CtorInfo? {
-                var cls = cls0
-                var hops = 0
-                var subst = emptyMap<String, String>()
-                while (cls.members.none { it is Constructor } && hops < 6) {
-                    val ext = cls.heritageClauses
-                        ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                        ?.types?.singleOrNull() ?: return null
-                    val baseName = (ext.expression as? Identifier)?.text ?: return null
-                    val base = classes[baseName] ?: return null
-                    val args = ext.typeArguments
-                    subst = if (args != null) {
-                        val tps = base.typeParameters ?: return null
-                        if (tps.size != args.size) return null
-                        tps.indices.associate { i ->
-                            tps[i].name.text to (primKw[(args[i] as? KeywordTypeNode)?.kind] ?: return null)
-                        }
-                    } else {
-                        if (!base.typeParameters.isNullOrEmpty()) return null
-                        emptyMap()
-                    }
-                    cls = base
-                    hops++
+    private class ParamSpec(val name: String, val type: String, val isRest: Boolean, val isOptional: Boolean)
+    private class CtorInfo(val overloads: List<List<ParamSpec>>, val total: Int, val decls: List<Constructor>)
+
+    // resolve the ctor-owning class through the extends chain, substituting TPs
+    private fun resolveCtor(cls0: ClassDeclaration, classes: Map<String, ClassDeclaration>): CtorInfo? {
+        var cls = cls0
+        var hops = 0
+        var subst = emptyMap<String, String>()
+        while (cls.members.none { it is Constructor } && hops < 6) {
+            val ext = cls.heritageClauses
+                ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                ?.types?.singleOrNull() ?: return null
+            val baseName = (ext.expression as? Identifier)?.text ?: return null
+            val base = classes[baseName] ?: return null
+            val args = ext.typeArguments
+            subst = if (args != null) {
+                val tps = base.typeParameters ?: return null
+                if (tps.size != args.size) return null
+                tps.indices.associate { i ->
+                    tps[i].name.text to (primKw[(args[i] as? KeywordTypeNode)?.kind] ?: return null)
                 }
-                val ctors = cls.members.filterIsInstance<Constructor>()
-                if (ctors.isEmpty()) return null
-                // OVERLOADED signatures only — the single-signature inherited-ctor case is
-                // already handled by the existing rest-arg path (double-emit otherwise:
-                // inheritedConstructorWithRestParams regressed on the first cut)
-                val sigs = ctors.filter { it.body == null }
-                if (sigs.size < 2) return null
-                val overloads = sigs.map { c ->
-                    c.parameters.map { p ->
-                        val pn = (p.name as? Identifier)?.text ?: return null
-                        val t = p.type ?: return null
-                        val typeName: String
-                        val rest = p.dotDotDotToken
-                        if (rest) {
-                            val at = t as? ArrayType ?: return null
-                            typeName = when (val et = at.elementType) {
-                                is KeywordTypeNode -> primKw[et.kind] ?: return null
-                                is TypeReference -> subst[(et.typeName as? Identifier)?.text] ?: return null
-                                else -> return null
-                            }
-                        } else {
-                            typeName = when (t) {
-                                is KeywordTypeNode -> primKw[t.kind] ?: return null
-                                is TypeReference -> subst[(t.typeName as? Identifier)?.text] ?: return null
-                                else -> return null
-                            }
-                        }
-                        ParamSpec(pn, typeName, rest, p.questionToken)
+            } else {
+                if (!base.typeParameters.isNullOrEmpty()) return null
+                emptyMap()
+            }
+            cls = base
+            hops++
+        }
+        val ctors = cls.members.filterIsInstance<Constructor>()
+        if (ctors.isEmpty()) return null
+        // OVERLOADED signatures only — the single-signature inherited-ctor case is
+        // already handled by the existing rest-arg path (double-emit otherwise:
+        // inheritedConstructorWithRestParams regressed on the first cut)
+        val sigs = ctors.filter { it.body == null }
+        if (sigs.size < 2) return null
+        val overloads = sigs.map { c ->
+            c.parameters.map { p ->
+                val pn = (p.name as? Identifier)?.text ?: return null
+                val t = p.type ?: return null
+                val typeName: String
+                val rest = p.dotDotDotToken
+                if (rest) {
+                    val at = t as? ArrayType ?: return null
+                    typeName = when (val et = at.elementType) {
+                        is KeywordTypeNode -> primKw[et.kind] ?: return null
+                        is TypeReference -> subst[(et.typeName as? Identifier)?.text] ?: return null
+                        else -> return null
                     }
-                }
-                return CtorInfo(overloads, overloads.size, sigs)
-            }
-
-            fun argPrim(e: Expression): String? = when (e) {
-                is StringLiteralNode -> "string"
-                is NumericLiteralNode -> "number"
-                is Identifier -> when (e.text) { "true", "false" -> "boolean"; else -> null }
-                else -> null
-            }
-            fun arityFits(ps: List<ParamSpec>, n: Int): Boolean {
-                val restIdx = ps.indexOfFirst { it.isRest }
-                val minCount = ps.count { !it.isRest && !it.isOptional }
-                return if (restIdx >= 0) n >= minCount else n in minCount..ps.size
-            }
-            // first (argIndex, argType, paramType) mismatch or null
-            fun firstMismatch(ps: List<ParamSpec>, args: List<String>): Triple<Int, String, String>? {
-                val restIdx = ps.indexOfFirst { it.isRest }
-                for ((i, a) in args.withIndex()) {
-                    val pt = if (restIdx >= 0 && i >= restIdx) ps[restIdx].type
-                    else ps.getOrNull(i)?.type ?: return null
-                    if (a != pt) return Triple(i, a, pt)
-                }
-                return null
-            }
-            fun paramsDisplay(ps: List<ParamSpec>): String = ps.joinToString(", ") { p ->
-                val prefix = if (p.isRest) "..." else ""
-                val opt = if (p.isOptional) "?" else ""
-                val t = if (p.isRest) "${p.type}[]" else p.type
-                "$prefix${p.name}$opt: $t"
-            }
-
-            for (stmt in result.sourceFile.statements) {
-                val ne = (stmt as? ExpressionStatement)?.expression as? NewExpression ?: continue
-                val calleeId = ne.expression as? Identifier ?: continue
-                if (!ne.typeArguments.isNullOrEmpty() || !ne.leadingTypeArguments.isNullOrEmpty()) continue
-                val cls = classes[calleeId.text] ?: continue
-                if (cls.members.any { it is Constructor }) continue  // own ctor → main path owns it
-                if (!cls.typeParameters.isNullOrEmpty()) continue
-                val info = resolveCtor(cls) ?: continue
-                val callArgs = ne.arguments ?: continue
-                val argTypesOrNull = callArgs.map { argPrim(it) }
-                if (argTypesOrNull.any { it == null }) continue
-                val argTypes = argTypesOrNull.filterNotNull()
-                val applicable = info.overloads.withIndex().filter { arityFits(it.value, argTypes.size) }
-                if (applicable.isEmpty()) continue
-                val mismatches = applicable.map { it to firstMismatch(it.value, argTypes) }
-                if (mismatches.any { it.second == null }) continue  // some overload matches
-                if (applicable.size == 1) {
-                    val (idx, argT, paramT) = mismatches[0].second!!
-                    val argNode = callArgs[idx]
-                    val len = when (argNode) {
-                        is StringLiteralNode -> (argNode.rawText?.length ?: argNode.text.length) + 2
-                        is NumericLiteralNode -> argNode.text.length
-                        is Identifier -> argNode.text.length
-                        else -> 1
-                    }
-                    // (P18.258) the ordinary argument check already drew this row when the
-                    // mismatching parameter needs no heritage substitution (`b: number`).
-                    if (checker.diagnostics.any { it.code == 2345 && it.start == argNode.pos && it.fileName == fileName }) continue
-                    val (line, ch) = checker.getLineAndCharacterOfPosition(source, argNode.pos)
-                    checker.diagnostics.add(Diagnostic(
-                        message = "Argument of type '$argT' is not assignable to parameter of type '$paramT'.",
-                        category = DiagnosticCategory.Error, code = 2345,
-                        fileName = fileName, line = line, character = ch,
-                        start = argNode.pos, length = len,
-                    ))
                 } else {
-                    // (LEGACY.0b) F3: TypeScript 7 reports the LAST arity-applicable failing
-                    // candidate only, anchored at ITS own mismatching argument (tsc 6 listed
-                    // every candidate and anchored at the callee), with `The last overload is
-                    // declared here.` (TS2771) at that candidate's declaration.
-                    val (lastIv, lastMm) = mismatches.last()
-                    val (argIdx, argT, paramT) = lastMm!!
-                    val chain = listOf(
-                        "  The last overload gave the following error.",
-                        "    Argument of type '$argT' is not assignable to parameter of type '$paramT'.",
-                    )
-                    val argNode = callArgs[argIdx]
-                    val len = when (argNode) {
-                        is StringLiteralNode -> (argNode.rawText?.length ?: argNode.text.length) + 2
-                        is NumericLiteralNode -> argNode.text.length
-                        is Identifier -> argNode.text.length
-                        else -> 1
+                    typeName = when (t) {
+                        is KeywordTypeNode -> primKw[t.kind] ?: return null
+                        is TypeReference -> subst[(t.typeName as? Identifier)?.text] ?: return null
+                        else -> return null
                     }
-                    val related = listOfNotNull(
-                        info.decls.getOrNull(lastIv.index)
-                            ?.let { checker.lastOverloadDeclaredHereAt(it, source, fileName) }
-                    )
-                    val (line, ch) = checker.getLineAndCharacterOfPosition(source, argNode.pos)
-                    checker.diagnostics.add(Diagnostic(
-                        message = "No overload matches this call.",
-                        category = DiagnosticCategory.Error, code = 2769,
-                        fileName = fileName, line = line, character = ch,
-                        start = argNode.pos, length = len,
-                        messageChain = chain, relatedInformation = related,
-                    ))
                 }
+                ParamSpec(pn, typeName, rest, p.questionToken)
             }
         }
+        return CtorInfo(overloads, overloads.size, sigs)
+    }
+
+    private fun argPrim(e: Expression): String? = when (e) {
+        is StringLiteralNode -> "string"
+        is NumericLiteralNode -> "number"
+        is Identifier -> when (e.text) { "true", "false" -> "boolean"; else -> null }
+        else -> null
+    }
+    private fun arityFits(ps: List<ParamSpec>, n: Int): Boolean {
+        val restIdx = ps.indexOfFirst { it.isRest }
+        val minCount = ps.count { !it.isRest && !it.isOptional }
+        return if (restIdx >= 0) n >= minCount else n in minCount..ps.size
+    }
+    // first (argIndex, argType, paramType) mismatch or null
+    private fun firstMismatch(ps: List<ParamSpec>, args: List<String>): Triple<Int, String, String>? {
+        val restIdx = ps.indexOfFirst { it.isRest }
+        for ((i, a) in args.withIndex()) {
+            val pt = if (restIdx >= 0 && i >= restIdx) ps[restIdx].type
+            else ps.getOrNull(i)?.type ?: return null
+            if (a != pt) return Triple(i, a, pt)
+        }
+        return null
+    }
+    private fun paramsDisplay(ps: List<ParamSpec>): String = ps.joinToString(", ") { p ->
+        val prefix = if (p.isRest) "..." else ""
+        val opt = if (p.isOptional) "?" else ""
+        val t = if (p.isRest) "${p.type}[]" else p.type
+        "$prefix${p.name}$opt: $t"
     }
 }

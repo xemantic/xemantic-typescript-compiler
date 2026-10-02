@@ -124,7 +124,7 @@ internal class ClassConstructorTypes(
                 val tps = target.typeParameters
                 val sigs = target.constructSignatures?.filter { it.declaration is Constructor } ?: return null
                 // An OVERLOADED inherited constructor stays with B264
-                // (`checkInheritedOverloadedCtorArgs`), whose TS2769 the overload path does
+                // (`checkInheritedOverloadedCtorNew`), whose TS2769 the overload path does
                 // not reproduce (`inheritedConstructorWithRestParams2`; both together double-emit).
                 if (sigs.size != 1) return null
                 return sigs.map { s ->

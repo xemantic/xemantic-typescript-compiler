@@ -10313,7 +10313,7 @@ class Checker(
         // 72a4k (B262): TS2345 for JSDoc-optional contextually-typed fn-expr params as call args
         pass("checkJsDocOptionalContextualParamCalls") { checkJsDocOptionalContextualParamCalls() }
         // 72a4l (B264): TS2345/TS2769 for inherited overloaded generic declare-class ctors
-        pass("checkInheritedOverloadedCtorArgs") { newExpressionChecks.checkInheritedOverloadedCtorArgs() }
+        // (CHK.199) asked per `new` since then: NewExpressionChecks.checkInheritedOverloadedCtorNew
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         pass("checkIndexedAccessTpMismatchAssignment") { checkIndexedAccessTpMismatchAssignment() }
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -170948,7 +170948,7 @@ interface DataView {
      * For each type parameter with a constraint, check the supplied type arg against
      * the instantiated constraint. Emits TS2344.
      */
-    private fun checkCallTypeArgConstraints(
+    internal fun checkCallTypeArgConstraints(
         typeParams: List<Type.TypeParam>,
         resolvedTypeArgs: List<Type>,
         typeArgNodes: List<TypeNode>,
