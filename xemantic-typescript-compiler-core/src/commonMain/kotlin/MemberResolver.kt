@@ -412,8 +412,12 @@ internal class MemberResolver(
                 // Class-side inheritance for `class C extends B`: B's statics are
                 // inherited as C's statics (mirrors how members inherit). Interface
                 // base types have no statics, so `it.staticMembers` is null there.
-                if (baseType is Type.Interface) {
-                    baseType.staticMembers?.forEach { (name, sym) ->
+                // (CHK.196) stage 3: a GENERIC base (`extends Act<T>`) is a Type.Reference whose
+                // statics live on its target — statics do not depend on the type arguments.
+                val staticBase = baseType as? Type.Interface
+                    ?: (baseType as? Type.Reference)?.target?.also { resolveStructuredTypeMembers(it) }
+                if (staticBase != null) {
+                    staticBase.staticMembers?.forEach { (name, sym) ->
                         if (name !in staticMembers) staticMembers[name] = sym
                     }
                 }

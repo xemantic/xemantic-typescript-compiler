@@ -71930,10 +71930,10 @@ interface DataView {
      *  typeofAbstractVars set). (P18.258) The type-based check
      *  ([newExprAbstractConstructorTs2511], at the node's LEAVE) owns every callee
      *  now; this walker is the FALLBACK for the callees no type reaches — measured
-     *  by disabling it: a block-scoped class (B83.5, `abstractClassInLocalScopeIsAbstract`)
-     *  and a callback over an array literal of classes (`[ConcreteA, AbstractA].map(cls =>
-     *  new cls())`, whose element union collapses to its first member here) — and a row it
-     *  draws is noted so the type-based check neither redraws it nor checks the arguments. */
+     *  by disabling it: since (P18.259) only a block-scoped class (B83.5,
+     *  `abstractClassInLocalScopeIsAbstract`) — the array-literal `.map(cls => new cls())`
+     *  shape is typed now that the element union keeps distinct constructor types — and a row
+     *  it draws is noted so the type-based check neither redraws it nor checks the arguments. */
     private fun spineAiEnterNode(node: Node) {
         if ((node as NodeBase).kindId != NodeKind.NEW_EXPRESSION) return
         node as NewExpression
@@ -105713,10 +105713,25 @@ interface DataView {
                 !initSym.flags.hasAny(SymbolFlags.Variable)
             ) {
                 val srcCtorType = buildClassValueConstructorTypeForDisplay(initSym)
+                // (CHK.196) stage 3: a missing required STATIC is reported first, as TS2741.
+                val missingStatic = srcCtorType?.let { classConstructorTypes.missingRequiredStatic(it, targetType) }
+                if (missingStatic != null) {
+                    val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '${missingStatic.name}' is missing in type 'typeof ${initSym.name}' but required in type '$displayTarget'.",
+                        category = DiagnosticCategory.Error, code = 2741, fileName = fileName,
+                        line = line, character = character, start = name.pos, length = name.text.length,
+                        relatedInformation = listOfNotNull(createPropertyDeclaredHereRelatedInfo(missingStatic)),
+                    ))
+                    return null
+                }
                 if (srcCtorType != null) {
                     val sourceSig = srcCtorType.constructSignatures!!.first()
                     val targetSig = targetType.constructSignatures!!.first()
-                    val ok = signatureRelatedTo(sourceSig, targetSig, assignableRelation)
+                    val ok = signatureRelatedTo(sourceSig, targetSig, assignableRelation,
+                        bivariantParams = targetSig.declaration is Constructor) &&
+                        !(sourceSig.isAbstract && !targetSig.isAbstract) // (CHK.196) stage 3
                     if (!ok) {
                         val displaySource = "typeof ${initSym.name}"
                         val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -109725,7 +109740,9 @@ interface DataView {
                 if (srcCtorType != null) {
                     val sourceSig = srcCtorType.constructSignatures!!.first()
                     val targetSig = tt.constructSignatures!!.first()
-                    val ok = signatureRelatedTo(sourceSig, targetSig, assignableRelation)
+                    val ok = signatureRelatedTo(sourceSig, targetSig, assignableRelation,
+                        bivariantParams = targetSig.declaration is Constructor) &&
+                        !(sourceSig.isAbstract && !targetSig.isAbstract) // (CHK.196) stage 3
                     if (!ok) {
                         val displaySource = "typeof ${rhsSym.name}"
                         val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
@@ -129514,7 +129531,17 @@ interface DataView {
             // member (preserves prior behavior for genuinely heterogeneous arrays).
             // Unblocks `lambdaParamTypes` (contextually-typed lambda param resolves to a
             // single anonymous object type so `x.foo` reaches the TS2339 emission).
-            if (elementTypes.none { it === t || ts2403Identical(it, t, 0) == Ts2403Cmp.IDENTICAL }) {
+            // (CHK.196) stage 3: two DISTINCT class constructor types are never merged by the
+            // identity test, which reads no construct signature and keys its cycle stack by the
+            // class symbol the constructor type shares with its own `prototype` — so any two
+            // classes without distinguishing statics compared IDENTICAL and `[A, B]` kept `A`.
+            // tsgo's subtype reduction decides them instead ([ClassConstructorTypes.reduceConstructorSubtypes]).
+            val ctor = classConstructorTypes.isConstructorType(t)
+            if (elementTypes.none {
+                    it === t || (!(ctor && classConstructorTypes.isConstructorType(it)) &&
+                        ts2403Identical(it, t, 0) == Ts2403Cmp.IDENTICAL)
+                }
+            ) {
                 elementTypes.add(t)
             }
         }
@@ -129523,7 +129550,12 @@ interface DataView {
         val elementType = when (elementTypes.size) {
             0 -> anyType
             1 -> elementTypes[0]
-            else -> getUnionType(elementTypes)
+            else -> getUnionType(elementTypes).let { u ->
+                if (u !is Type.Union) u else {
+                    val reduced = classConstructorTypes.reduceConstructorSubtypes(u.types)
+                    if (reduced === u.types) u else if (reduced.size == 1) reduced[0] else getUnionType(reduced)
+                }
+            }
         }
         return getArrayType(elementType)
     }
@@ -136377,14 +136409,17 @@ interface DataView {
                 // Array types display as T[] (not Array<T>)
                 if (type.target === globalArrayType && args != null && args.size == 1) {
                     val elemStr = typeToString(args[0])
-                    // Parenthesize union/intersection element types: (A | B)[] not A | B[]
-                    if (args[0] is Type.Union || args[0] is Type.Intersection) "($elemStr)[]"
+                    // Parenthesize union/intersection element types: (A | B)[] not A | B[] —
+                    // and (CHK.196) a constructor type, which renders as a type query (`(typeof A)[]`).
+                    if (args[0] is Type.Union || args[0] is Type.Intersection ||
+                        classConstructorTypes.isConstructorType(args[0])) "($elemStr)[]"
                     else "$elemStr[]"
                 } else if (globalReadonlyArrayType != null &&
                     type.target === globalReadonlyArrayType && args != null && args.size == 1) {
                     // ReadonlyArray<T> displays as `readonly T[]` (shorthand) to match TypeScript.
                     val elemStr = typeToString(args[0])
-                    if (args[0] is Type.Union || args[0] is Type.Intersection) "readonly ($elemStr)[]"
+                    if (args[0] is Type.Union || args[0] is Type.Intersection ||
+                        classConstructorTypes.isConstructorType(args[0])) "readonly ($elemStr)[]"
                     else "readonly $elemStr[]"
                 } else {
                     val target = type.target.symbol?.name ?: "Object"
@@ -171136,7 +171171,18 @@ interface DataView {
                 !typeContainsForeignTypeParam(paramType, emptySet()) &&
                 !typeContainsForeignTypeParam(argType, emptySet()) &&
                 argNamedObjectVsNamedObjectCheckable(arg, argType, paramType)
-            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam && !allowArrayLikeVsArrayLike && !allowNamedObjectVsNamedObject) return CAAS_CONTINUE
+            // (CHK.196) stage 3: a class CONSTRUCTOR type against a constructor-typed parameter
+            // (`typeof A`, `new () => A`, `abstract new () => A`) — decided by the relation's
+            // constructor side (statics, construct signatures, abstract-ness); the arity, rest
+            // and free-type-parameter guards are the neighbours'.
+            val allowCtorVsCtor = arityOk &&
+                (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
+                classConstructorTypes.isConstructorType(argType) &&
+                paramType is Type.Object && paramType !is Type.Interface && paramType !is Type.Reference &&
+                !paramType.constructSignatures.isNullOrEmpty() &&
+                !typeContainsForeignTypeParam(paramType, emptySet()) &&
+                !typeContainsForeignTypeParam(argType, emptySet())
+            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam && !allowArrayLikeVsArrayLike && !allowNamedObjectVsNamedObject && !allowCtorVsCtor) return CAAS_CONTINUE
             // Round 79l (orchestrated — Agent A plan): for a contextually-typed
             // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
             // body-return type (allowFuncReturnMismatch), TypeScript reports a
@@ -171392,7 +171438,16 @@ interface DataView {
         if (argType is Type.Object) {
             val constructSigs = getConstructSignaturesOfType(argType)
             val callSigs = getCallSignaturesOfType(argType)
-            if (constructSigs.isNotEmpty() && callSigs.isEmpty()) {
+            // (CHK.196) stage 3: tsgo's `elaborateDidYouMeanToCallOrConstruct` offers `new` only
+            // when some construct signature's RETURN type relates to the parameter — never for a
+            // class value passed where a constructor is expected (`f(B)` against `typeof A`).
+            if (constructSigs.isNotEmpty() && callSigs.isEmpty() &&
+                (!classConstructorTypes.isConstructorType(argType) || constructSigs.any { cs ->
+                    val rt = cs.resolvedReturnType
+                    rt != null && rt !== anyType && rt !== errorType && rt !== neverType &&
+                        checkTypeRelatedTo(rt, paramType, assignableRelation)
+                })
+            ) {
                 relatedInfo.add(Diagnostic(
                     message = "Did you mean to use 'new' with this expression?",
                     category = DiagnosticCategory.Message,
@@ -171515,6 +171570,23 @@ interface DataView {
         }
         if (chain.isEmpty() && namedPair && paramType is Type.Union) {
             argNamedVsUnionParamChain(argType, paramType)?.let { chain.addAll(it) }
+        }
+        // (CHK.196) stage 3: a missing required STATIC is tsgo's TS2741 head at the argument.
+        classConstructorTypes.missingRequiredStatic(argType, paramType)?.let { missingStatic ->
+            diagnostics.add(Diagnostic(
+                message = "Property '${missingStatic.name}' is missing in type '$argTypeStr' but required in type '$paramTypeStr'.",
+                category = DiagnosticCategory.Error, code = 2741, fileName = fileName,
+                line = line, character = character, start = start, length = length,
+                relatedInformation = listOfNotNull(createPropertyDeclaredHereRelatedInfo(missingStatic)),
+            ))
+            return CAAS_CONTINUE
+        }
+        // (CHK.196) stage 3: a class constructor type against a constructor-typed parameter
+        // elaborates through its construct signatures, as the declaration reader does.
+        if (chain.isEmpty() && classConstructorTypes.isConstructorType(argType) &&
+            paramType is Type.Object && !paramType.constructSignatures.isNullOrEmpty()
+        ) {
+            chain.addAll(getConstructMismatchElaboration(argType as Type.Object, paramType))
         }
         diagnostics.add(Diagnostic(
             message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
@@ -178101,6 +178173,10 @@ interface DataView {
         if (sourceSigs.isNullOrEmpty() || targetSigs.isNullOrEmpty()) return emptyList()
         val sourceSig = sourceSigs.first()
         val targetSig = targetSigs.first()
+        // (CHK.196) stage 3: tsgo's `signaturesRelatedTo` reports the abstract mismatch alone.
+        if (sourceSig.isAbstract && !targetSig.isAbstract) {
+            return listOf("  Cannot assign an abstract constructor type to a non-abstract constructor type.")
+        }
         val chain = mutableListOf<String>()
         if (sourceSig.minArgumentCount > targetSig.parameters.size) {
             chain.add(
@@ -178113,6 +178189,8 @@ interface DataView {
         for (i in 0 until len) {
             val sp = getTypeOfSymbol(sourceSig.parameters[i])
             val tp = getTypeOfSymbol(targetSig.parameters[i])
+            // (CHK.196) stage 3: a CONSTRUCTOR-declared target compares parameters bivariantly.
+            if (targetSig.declaration is Constructor && checkTypeRelatedTo(sp, tp, assignableRelation)) continue
             if (!checkTypeRelatedTo(tp, sp, assignableRelation)) {
                 // B9.1: binding-pattern synthesized params have empty `Symbol.name`;
                 // render as `_` here (consistent with formatParameter).
@@ -178138,7 +178216,15 @@ interface DataView {
         val targetRet = targetSig.resolvedReturnType ?: anyType
         if (!targetRet.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceRet, targetRet, assignableRelation)) {
-            chain.add("  Type '${typeToString(sourceRet)}' is not assignable to type '${typeToString(targetRet)}'.")
+            // (CHK.196) stage 3: tsgo reports a MISSING member of the constructed instance as
+            // the chain's own line (`Property 'c' is missing in type 'A' but required in type
+            // 'C'.`), with no `Type 'A' is not assignable to type 'C'.` above it — measured only
+            // for a source instance with NO base class: a derived source (`typeof D` with
+            // `D extends A`) keeps that line and names the base in the next, which is not modelled.
+            val baseless = (sourceRet as? Type.Interface)?.let { resolveBaseTypesLazy(it); it.baseTypes.isNullOrEmpty() } == true
+            val missing = if (!baseless) null else getPropertyElaborationChain(sourceRet, targetRet)?.singleOrNull()
+                ?.takeIf { it.startsWith("  Property '") && it.contains("' is missing in type '") }
+            chain.add(missing ?: "  Type '${typeToString(sourceRet)}' is not assignable to type '${typeToString(targetRet)}'.")
         }
         return chain
     }
@@ -178194,7 +178280,15 @@ interface DataView {
             decl = node, typeParamDecls = node.typeParameters,
             params = node.parameters, returnTypeNode = node.type,
         )
-        ctorType.constructSignatures = listOf(sig)
+        // (CHK.196) stage 3: `abstract new () => T` is an ABSTRACT construct signature — the
+        // relation refuses an abstract source against a non-abstract target ([Relater]).
+        ctorType.constructSignatures = listOf(
+            if (ModifierFlag.Abstract !in node.modifiers) sig else Signature(
+                declaration = sig.declaration, typeParameters = sig.typeParameters, parameters = sig.parameters,
+                resolvedReturnType = sig.resolvedReturnType, minArgumentCount = sig.minArgumentCount,
+                isAbstract = true, thisType = sig.thisType,
+            )
+        )
         return ctorType
     }
 

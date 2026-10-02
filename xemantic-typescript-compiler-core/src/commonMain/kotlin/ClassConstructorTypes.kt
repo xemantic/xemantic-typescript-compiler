@@ -225,6 +225,63 @@ internal class ClassConstructorTypes(
     fun walkerAbstractRowDrawn(fileName: String, start: Int): Boolean =
         walkerAbstractRows.isNotEmpty() && rowKey(fileName, start) in walkerAbstractRows
 
+    /**
+     * (CHK.196) stage 3 — tsgo's `removeSubtypes` (an array literal's element union is
+     * `UnionReduction.Subtype`) restricted to the CONSTRUCTOR types among [members], which
+     * are in union order: walking from the end, a constructor type that is a strict subtype
+     * of another remaining one is dropped. `[Co, Ab]` over two empty classes is
+     * `(typeof Ab)[]` and `[C, A]` with `C extends A` is `(typeof A)[]`, measured. Every
+     * other member is untouched (this checker models no general subtype reduction).
+     * Answers [members] itself when nothing is dropped.
+     */
+    fun reduceConstructorSubtypes(members: List<Type>): List<Type> {
+        if (members.count { isConstructorType(it) } < 2) return members
+        val kept = members.toMutableList()
+        var i = kept.size - 1
+        while (i >= 0) {
+            val source = kept[i]
+            if (isConstructorType(source) && kept.any { it !== source && isConstructorType(it) && strictlySubsumedBy(source, it) }) {
+                kept.removeAt(i)
+            }
+            i--
+        }
+        return if (kept.size == members.size) members else kept
+    }
+
+    /**
+     * tsgo's `strictSubtypeRelation` between two constructor types, approximated as
+     * assignability plus its STRICT ARITY rule (`compareSignaturesRelated`: a source
+     * signature with more parameters than the target's is not a strict subtype), which is
+     * what keeps `typeof O` (`constructor(x?: number)`) over `typeof Co` (no constructor) in
+     * both orders.
+     */
+    private fun strictlySubsumedBy(source: Type, target: Type): Boolean {
+        val s = source as Type.Object
+        val t = target as Type.Object
+        val tSigs = t.constructSignatures.orEmpty()
+        val sSigs = s.constructSignatures.orEmpty()
+        val arityOk = tSigs.all { ts ->
+            val targetRest = (ts.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+            targetRest || sSigs.any { it.parameters.size <= ts.parameters.size }
+        }
+        return arityOk && checker.isTypeAssignableTo(source, target)
+    }
+
+    /**
+     * (CHK.196) stage 3: the first REQUIRED static of constructor type [target] that
+     * constructor type [source] lacks — tsgo's `propertiesRelatedTo` reports a missing member
+     * before it compares any construct signature, as a TS2741 head (`Property 'sa' is missing
+     * in type 'typeof B' but required in type 'typeof A'.`). Null unless both are constructor
+     * types and a static is missing.
+     */
+    fun missingRequiredStatic(source: Type, target: Type): Symbol? {
+        if (!isConstructorType(source) || !isConstructorType(target)) return null
+        val members = (source as Type.Object).members
+        return (target as Type.Object).properties.orEmpty().firstOrNull { p ->
+            p.name != "prototype" && !checker.isOptionalProperty(p) && members?.get(p.name) == null
+        }
+    }
+
     /** True for a type minted by [constructorTypeOfClass] (identity). */
     fun isConstructorType(type: Type): Boolean = type is Type.Object && type in minted
 

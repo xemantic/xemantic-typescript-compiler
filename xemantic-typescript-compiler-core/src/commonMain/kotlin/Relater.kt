@@ -1430,16 +1430,6 @@ internal class Relater(
                     methodSignaturesBivariantlyRelated(
                         sourcePropType, checker.getPropertyTypeForRelation(target, targetProp))
                 ) continue
-                // (CHK.194)(a): a class's STATIC member that shares the name with the instance
-                // one. The class VALUE is typed as its INSTANCE type ((CHK.73)), so a class
-                // source here may be `A` (whose `s` is the static) as well as `new A()` (whose
-                // `s` is the instance member) and the relation cannot tell which. Accepting when
-                // the static side relates is suppression-only: it refuses a false positive on a
-                // class-value source and costs at most a missed row on an instance source.
-                val srcStatic = checker.getStaticMembersOfType(source)?.get(targetName)
-                if (srcStatic != null && srcStatic !== sourceProp &&
-                    checkTypeRelatedTo(checker.getPropertyTypeForRelation(source, srcStatic), targetPropType, relation)
-                ) continue
                 // Round 435 (tsc contextual literal types): a FRESH object-literal prop
                 // keeps its literal type against a literal-containing target member —
                 // getTypeOfObjectLiteral widens (`kind: "paths"` → string), so retry with
@@ -1474,10 +1464,18 @@ internal class Relater(
         if (targetSigs.isNullOrEmpty()) return true // no signatures to match
         val sourceSigs = if (isConstruct) source.constructSignatures else source.callSignatures
         if (sourceSigs.isNullOrEmpty()) return false // target has signatures, source doesn't
+        // (CHK.196) stage 3: tsgo's `signaturesRelatedTo` refuses an ABSTRACT construct
+        // signature against a non-abstract one ("Cannot assign an abstract constructor type to
+        // a non-abstract constructor type"), reading each side's FIRST signature.
+        if (isConstruct && sourceSigs[0].isAbstract && !targetSigs[0].isAbstract) return false
         // Each target signature must be matched by some source signature
         for (targetSig in targetSigs) {
+            // (CHK.196) stage 3: tsgo's `compareSignaturesRelated` is strictly variant only when
+            // the TARGET is not a method or a CONSTRUCTOR declaration — a class's constructor
+            // parameters compare bivariantly (`typeof VirtualAction` against `typeof AsyncAction`).
+            val bivariant = isConstruct && targetSig.declaration is Constructor
             val matched = sourceSigs.any { sourceSig ->
-                signatureRelatedTo(sourceSig, targetSig, relation)
+                signatureRelatedTo(sourceSig, targetSig, relation, bivariantParams = bivariant)
             }
             if (!matched) return false
         }

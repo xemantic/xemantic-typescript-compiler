@@ -234,6 +234,7 @@ internal class TypeInstantiator(
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
+            isAbstract = sig.isAbstract,
             thisType = sig.thisType?.let { instantiateContextualParamType(it, mapper) },
         )
     }
@@ -262,6 +263,7 @@ internal class TypeInstantiator(
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
+            isAbstract = sig.isAbstract,
             // (CHK.133)(a) the `this` pseudo-parameter follows the mapper like a parameter.
             thisType = sig.thisType?.let { instantiateType(it, mapper) },
         )
@@ -390,6 +392,7 @@ internal class TypeInstantiator(
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
+            isAbstract = sig.isAbstract,
             thisType = newThisType,
         )
     }
@@ -466,6 +469,7 @@ internal class TypeInstantiator(
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
+            isAbstract = sig.isAbstract,
             thisType = newThisType,
         )
     }
