@@ -1037,13 +1037,12 @@ class ProjectCompiler(private val vfs: Vfs) {
     // --- @types acquisition (tsconfig `types` / `typeRoots`) ---------------------
 
     /**
-     * Resolves the automatic type-library inclusions, mirroring tsc: the included
-     * package set is `types` when specified (an EMPTY list disables inclusion
-     * entirely), else every package discovered in the effective type roots. Each
+     * Resolves the automatic type-library inclusions, mirroring tsgo: the included
+     * package set is `types` as written, with a `"*"` entry standing for every package
+     * in the effective type roots; an UNSET or empty `types` includes nothing. Each
      * package resolves to its declaration entry via
      * [ModuleResolver.resolveTypeRootPackage]; a name explicitly listed in `types`
-     * that resolves in no type root reports TS2688 (auto-discovery includes only
-     * what exists, so it never does).
+     * that resolves in no type root reports TS2688.
      */
     /**
      * Resolve a `/// <reference path="…" />` target against the referencing file
@@ -1074,43 +1073,59 @@ class ProjectCompiler(private val vfs: Vfs) {
         resolver: ModuleResolver,
         diagnostics: MutableList<Diagnostic>,
     ): List<String> {
-        val requested = config.options.types
-        if (requested != null && requested.isEmpty()) return emptyList()
+        // (CHK.209) M3 — TypeScript 7 (`module.GetAutomaticTypeDirectiveNames`): an UNSET
+        // `types` includes NOTHING (TypeScript 6 scanned every type root), an explicit list
+        // is taken as written, and only a `"*"` entry enumerates the type roots — spliced in
+        // at its own position, then de-duplicated. `typeRoots` alone therefore includes
+        // nothing; it only says where `"*"` looks and where a name resolves.
+        val requested = config.options.types ?: return emptyList()
+        if (requested.isEmpty()) return emptyList()
         val typeRoots = effectiveTypeRoots(config)
+        val names = LinkedHashSet<String>()
+        for (name in requested) {
+            if (name == "*") names.addAll(wildcardTypeDirectiveNames(typeRoots)) else names.add(name)
+        }
         val entries = LinkedHashSet<String>()
-        if (requested != null) {
-            for (name in requested) {
-                val entry = typeRoots.firstNotNullOfOrNull { resolveTypePackageInRoot(it, name, resolver) }
-                if (entry != null) entries.add(entry)
-                else diagnostics.add(
-                    Diagnostic(
-                        message = "Cannot find type definition file for '$name'.",
-                        category = DiagnosticCategory.Error,
-                        code = 2688,
-                    )
+        for (name in names) {
+            val entry = typeRoots.firstNotNullOfOrNull { resolveTypePackageInRoot(it, name, resolver) }
+            if (entry != null) entries.add(entry)
+            else diagnostics.add(
+                Diagnostic(
+                    message = "Cannot find type definition file for '$name'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2688,
                 )
-            }
-        } else {
-            for (root in typeRoots) {
-                // sorted: deterministic program order. (INC.60) one listing per
-                // directory rather than a listing plus a probe per entry.
-                for (child in vfs.listEntries(root).sortedBy { it.path }) {
-                    if (!child.isDirectory) continue
-                    val base = PathUtil.basename(child.path)
-                    if (base.startsWith(".")) continue
-                    if (base.startsWith("@")) {
-                        // A scope directory inside a type root contributes its subdirectories.
-                        for (scoped in vfs.listEntries(child.path).sortedBy { it.path }) {
-                            if (!scoped.isDirectory || PathUtil.basename(scoped.path).startsWith(".")) continue
-                            resolver.resolveTypeRootPackage(scoped.path)?.let { entries.add(it) }
-                        }
-                    } else {
-                        resolver.resolveTypeRootPackage(child.path)?.let { entries.add(it) }
-                    }
-                }
-            }
+            )
         }
         return entries.toList()
+    }
+
+    /**
+     * (CHK.209) The names a `"*"` entry of `types` stands for, as tsgo enumerates them:
+     * every DIRECTORY directly inside each type root (in root order, each root's listing
+     * sorted so the program order is a function of the project), skipping a name starting
+     * with `.` and a DefinitelyTyped "not needed" stub (`"typings": null` in its
+     * `package.json`). A scope directory is NOT descended into — tsgo passes its bare
+     * name on to resolution, which is how `@types` (which mangles scopes) is laid out.
+     */
+    private fun wildcardTypeDirectiveNames(typeRoots: List<String>): List<String> {
+        val names = mutableListOf<String>()
+        for (root in typeRoots) {
+            for (child in vfs.listEntries(root).sortedBy { it.path }) {
+                if (!child.isDirectory) continue
+                val base = PathUtil.basename(child.path)
+                if (base.startsWith(".")) continue
+                if (typingsIsNull(PathUtil.join(child.path, "package.json"))) continue
+                names.add(base)
+            }
+        }
+        return names
+    }
+
+    private fun typingsIsNull(packageJson: String): Boolean {
+        if (!vfs.exists(packageJson)) return false
+        val text = vfs.readText(packageJson) ?: return false
+        return Regex("\"typings\"\\s*:\\s*null").containsMatchIn(text)
     }
 
     /**

@@ -7638,6 +7638,9 @@ class Checker(
      *  pure function of the frozen ASTs — the un-memoized statement scan showed in
      *  the round-623 JFR). Declared before `init` per the init-order trap. */
     private val fileNonGenericTypeCache = HashMap<String, Boolean>()
+    /** (CHK.208) [ownScopeTypeParamInfo]'s memo: pure over (file, reference text, position kind) — file
+     *  `locals` and alias targets are frozen by the time the arity check runs. */
+    private val ownScopeTpiCache = HashMap<String, Any>()
 
     /** M3.4 (round 413): per-file memo of [getModuleNamedExports] (fileName →
      *  exported-name set) so [computeExportedSymbolThroughStars]'s leaf gate is
@@ -53959,6 +53962,11 @@ class Checker(
      */
     private fun namespaceImportTargetFile(alias: Identifier): SourceFile? {
         val symbol = spineScopeLookup(alias.text) ?: return null
+        return namespaceImportSymbolTargetFile(symbol, currentCheckFileName)
+    }
+
+    /** [namespaceImportTargetFile] for an already-resolved alias [symbol], resolving its specifier from [contextFile]. */
+    private fun namespaceImportSymbolTargetFile(symbol: Symbol, contextFile: String?): SourceFile? {
         if (!symbol.flags.hasAny(SymbolFlags.Alias)) return null
         for (decl in symbol.declarations) {
             val imported = when (decl) {
@@ -53976,15 +53984,19 @@ class Checker(
                 else -> null
             } ?: continue
             if (imported.importClause?.namedBindings !is NamespaceImport) continue
-            val spec = (imported.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            val contextFile = currentCheckFileName
-            val targetFile = resolveModuleSpecifier(spec, imported)
-                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
-                ?: resolveImportTargetFallback(spec, contextFile)
-                ?: continue
-            return fileResults[targetFile]?.sourceFile
+            return importDeclarationTargetFile(imported, contextFile) ?: continue
         }
         return null
+    }
+
+    /** The program file an import declaration's string specifier names, from [contextFile]. */
+    private fun importDeclarationTargetFile(imported: ImportDeclaration, contextFile: String?): SourceFile? {
+        val spec = (imported.moduleSpecifier as? StringLiteralNode)?.text ?: return null
+        val targetFile = resolveModuleSpecifier(spec, imported)
+            ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+            ?: resolveImportTargetFallback(spec, contextFile)
+            ?: return null
+        return fileResults[targetFile]?.sourceFile
     }
 
     /**
@@ -58746,6 +58758,7 @@ interface DataView {
         // with the lib's arity — `Generic type 'Omit' requires 2 type argument(s)` for a local
         // one-parameter `Omit`.
         val info = lexicalTypeAliasArity(typeRef, name)
+            ?: ownScopeTypeParamInfo(typeName, fileName, forTypePosition)
             ?: getTypeParamInfo(name, forTypePosition) ?: return
 
         // Non-generic local types (0 type params) used with type args → TS2315, not TS2314
@@ -58803,6 +58816,62 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    /**
+     * (CHK.208) The arity of the declaration a type reference ACTUALLY names, resolved through
+     * the referencing file's own top-level scope — `Name` through its `locals` (an import alias
+     * followed to its target), `ns.Name` through `ns`'s exports — where [getTypeParamInfo] is a
+     * whole-program NAME scan that answers with whichever same-named generic comes first in file
+     * order (zod's v4 `interface ZodArray<T = …>` was arity-checked against v3's
+     * `class ZodArray<T, Cardinality = …>`, a false TS2707). Null when the reference does not
+     * resolve to a class / interface / type alias here (a barrel's `export *` is followed), so the
+     * scan still answers what it always
+     * did (namespace-nested and global names); a resolved NON-generic type answers `maxTotal = 0`.
+     */
+    private fun ownScopeTypeParamInfo(typeName: Node, fileName: String, forTypePosition: Boolean): TypeParamInfo? {
+        val text = when (typeName) {
+            is Identifier -> typeName.text
+            is QualifiedName -> "${(typeName.left as? Identifier)?.text ?: return null}.${typeName.right.text}"
+            else -> return null
+        }
+        val key = "$fileName|$forTypePosition|$text"
+        ownScopeTpiCache[key]?.let { return it as? TypeParamInfo }
+        val computed = computeOwnScopeTypeParamInfo(typeName, fileName, forTypePosition)
+        ownScopeTpiCache[key] = computed ?: Unit
+        return computed
+    }
+
+    private fun computeOwnScopeTypeParamInfo(typeName: Node, fileName: String, forTypePosition: Boolean): TypeParamInfo? {
+        val locals = fileResults[fileName]?.locals ?: return null
+        val sym: Symbol = when (typeName) {
+            is Identifier -> locals[typeName.text] ?: return null
+            is QualifiedName -> {
+                val left = typeName.left as? Identifier ?: return null
+                val leftSym = locals[left.text] ?: return null
+                val container = if (leftSym.flags.hasAny(SymbolFlags.Alias)) resolveAlias(leftSym) else leftSym
+                val member = typeName.right.text
+                container.exports?.get(member)
+                    ?: syntheticModuleFile[container.id]?.let { exportedSymbolsThroughStars(it)?.get(member) }
+                    // `import * as ns from "./m.js"` — a specifier the alias resolver does not follow
+                    ?: namespaceImportSymbolTargetFile(leftSym, fileName)?.let { exportedSymbolsThroughStars(it)?.get(member) }
+                    ?: return null
+            }
+            else -> return null
+        }
+        fun isTypeLike(s: Symbol) =
+            s.declarations.any { it is ClassDeclaration || it is InterfaceDeclaration || it is TypeAliasDeclaration }
+        var target = if (sym.flags.hasAny(SymbolFlags.Alias)) resolveAlias(sym) else sym
+        if (!isTypeLike(target) && sym.flags.hasAny(SymbolFlags.Alias)) {
+            // `import { ZA } from "./m.js"` — a specifier the alias resolver does not follow
+            val spec = sym.declarations.firstNotNullOfOrNull { it as? ImportSpecifier }
+            val decl = spec?.let { ownTopLevelImportOf(it)?.second }
+            val viaFile = decl?.let { importDeclarationTargetFile(it, fileName) }
+                ?.let { exportedSymbolsThroughStars(it)?.get((spec.propertyName ?: spec.name).text) }
+            if (viaFile != null) target = if (viaFile.flags.hasAny(SymbolFlags.Alias)) resolveAlias(viaFile) else viaFile
+        }
+        if (!isTypeLike(target)) return null
+        return getTypeParamInfoFromSymbol(target, forTypePosition) ?: TypeParamInfo(0, 0, target.name)
     }
 
     /**
@@ -182959,7 +183028,8 @@ interface DataView {
     private fun computeTypeLibResolution() {
         if (typeLibResolutionComputed) return
         typeLibResolutionComputed = true
-        val types = options.types ?: return
+        // (CHK.209) `"*"` is tsgo's wildcard over the type roots, never a library name.
+        val types = options.types?.filter { it != "*" } ?: return
         val typeRoots = options.typeRoots ?: return
         if (types.isEmpty() || typeRoots.isEmpty()) return
         val fileNames = binderResults.map { it.sourceFile.fileName }.toSet()

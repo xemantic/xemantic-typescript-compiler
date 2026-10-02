@@ -35,7 +35,8 @@ import kotlin.test.Test
  * declares an ambient GLOBAL can enter the program only through acquisition
  * (no import references it), so inclusion is observable as the global name
  * resolving (no TS2304) and the entry file joining `programFiles` — and
- * NON-inclusion as the exact inverse.
+ * NON-inclusion as the exact inverse. (CHK.209): TypeScript 7's default — an unset `types`
+ * includes nothing; `"*"` is what scans the type roots.
  */
 class TypesAcquisitionTest {
 
@@ -60,14 +61,24 @@ class TypesAcquisitionTest {
     private fun cannotFindName(result: ProjectCompiler.Result, name: String): Boolean =
         result.diagnostics.any { it.code == 2304 && it.message.contains("'$name'") }
 
+    /** (CHK.209) TypeScript 7: an UNSET `types` includes nothing (TypeScript 6 scanned the roots). */
     @Test
-    fun `auto-includes every type package when types is unspecified`() {
+    fun `an unspecified types includes no type package`() {
         val result = ProjectCompiler(project("""{ "include": ["src/**/*.ts"] }"""))
+            .build("/proj", noEmit = true)
+        val program = result.programFiles.toSet()
+        assert(gadgetEntry !in program && widgetEntry !in program)
+        assert(cannotFindName(result, "gadget") && cannotFindName(result, "widget"))
+    }
+
+    @Test
+    fun `a star types entry auto-includes every type package`() {
+        val result = ProjectCompiler(project("""{ "compilerOptions": { "types": ["*"] }, "include": ["src/**/*.ts"] }"""))
             .build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
         assert(gadgetEntry in program)
         assert(widgetEntry in program)
-        assert(result.diagnostics.none { it.code == 2304 })
+        assert(result.diagnostics.none { it.code == 2304 || it.code == 2688 })
     }
 
     @Test
@@ -107,7 +118,7 @@ class TypesAcquisitionTest {
     fun `typeRoots replaces the default at-types scan`() {
         val result = ProjectCompiler(
             project(
-                """{ "compilerOptions": { "typeRoots": ["./typings"] }, "include": ["src/**/*.ts"] }""",
+                """{ "compilerOptions": { "typeRoots": ["./typings"], "types": ["*"] }, "include": ["src/**/*.ts"] }""",
                 mapOf("/proj/typings/env/index.d.ts" to "declare var gadget: number; declare var widget: number;"),
             ),
         ).build("/proj", noEmit = true)
@@ -123,7 +134,7 @@ class TypesAcquisitionTest {
     fun `the typeRoot walk-up finds ancestor node_modules`() {
         val vfs = InMemoryVfs(
             mapOf(
-                "/repo/packages/app/tsconfig.json" to """{ "include": ["src/**/*.ts"] }""",
+                "/repo/packages/app/tsconfig.json" to """{ "compilerOptions": { "types": ["*"] }, "include": ["src/**/*.ts"] }""",
                 "/repo/packages/app/src/index.ts" to "export const t: number = hoisted;",
                 // Hoisted monorepo layout: @types two directories above the config.
                 "/repo/node_modules/@types/hoistedlib/index.d.ts" to "declare var hoisted: number;",
@@ -134,19 +145,20 @@ class TypesAcquisitionTest {
         assert(result.diagnostics.none { it.code == 2304 })
     }
 
+    /** (CHK.209) tsgo's wildcard passes a scope directory's bare name on, which resolves nowhere. */
     @Test
-    fun `a scope dir inside a typeRoot is auto-discovered`() {
+    fun `a scope dir inside a typeRoot is not descended into by the wildcard`() {
         val result = ProjectCompiler(
             project(
-                """{ "include": ["src/**/*.ts"] }""",
+                """{ "compilerOptions": { "types": ["*"] }, "include": ["src/**/*.ts"] }""",
                 mapOf(
                     "/proj/src/index.ts" to "export const t: number = scopedThing;",
                     "/proj/node_modules/@types/@myscope/thing/index.d.ts" to "declare var scopedThing: number;",
                 ),
             ),
         ).build("/proj", noEmit = true)
-        assert("/proj/node_modules/@types/@myscope/thing/index.d.ts" in result.programFiles.toSet())
-        assert(!cannotFindName(result, "scopedThing"))
+        assert("/proj/node_modules/@types/@myscope/thing/index.d.ts" !in result.programFiles.toSet())
+        assert(result.diagnostics.any { it.code == 2688 && it.message.contains("'@myscope'") })
     }
 
     @Test
