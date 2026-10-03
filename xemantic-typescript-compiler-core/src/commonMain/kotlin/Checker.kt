@@ -132346,10 +132346,26 @@ interface DataView {
         // The `all { … is a literal }` guard states the arm's DOMAIN: `keyof` of a type with a
         // string index signature is `string | number`, which is NOT a literal union, and whose
         // answer is the plain index-signature lookup the branches above already give.
-        cheaKeyLiterals(getTypeOfExpression(indexExpr))?.let { keys ->
+        val keyType = getTypeOfExpression(indexExpr)
+        cheaKeyLiterals(keyType)?.let { keys ->
             val parts = keys.map { getIndexedAccessType(objectType, it) }
             if (parts.any { it === anyType || it === errorType }) return anyType
             return getUnionType(parts)
+        }
+        // (CHK.213) a key union with a PRIMITIVE member — `keyof { [k: string]: V }` is
+        // `string | number` now, which carries neither the String- nor the Number-LIKE flag:
+        // distribute the same way, all-or-nothing, the primitive members through the index
+        // signatures.
+        if (keyType is Type.Union && apparent is Type.Object) {
+            val parts = keyType.types.map { m ->
+                when {
+                    m is Type.StringLiteral || m is Type.NumberLiteral -> getIndexedAccessType(objectType, m)
+                    m === stringType -> apparent.stringIndexInfo?.type ?: anyType
+                    m === numberType -> (apparent.numberIndexInfo ?: apparent.stringIndexInfo)?.type ?: anyType
+                    else -> anyType
+                }
+            }
+            if (parts.none { it === anyType || it === errorType }) return getUnionType(parts)
         }
         return anyType
     }
@@ -146690,8 +146706,30 @@ interface DataView {
                     stmt.finallyBlock?.let { checkConstraintsInStatements(it.statements, source, fileName) }
                 }
                 is LabeledStatement -> checkConstraintsInStatements(listOf(stmt.statement), source, fileName)
+                // (CHK.213) a type reference written as a CALL's type argument
+                // (`expectType<IsOptionalKeyOf<A, 'd'>>(false)`) is a type reference like any
+                // other — tsgo checks every one; this walker visited declarations only.
+                is ExpressionStatement -> checkConstraintsInCallTypeArgs(stmt.expression, source, fileName)
                 else -> {}
             }
+        }
+    }
+
+    /** (CHK.213) the type arguments of the calls / `new`s in [expr] — through call
+     *  arguments and parentheses, never into a function body (its own scope). */
+    private fun checkConstraintsInCallTypeArgs(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is CallExpression -> {
+                expr.typeArguments?.forEach { checkConstraintsInTypeNode(it, source, fileName) }
+                checkConstraintsInCallTypeArgs(expr.expression, source, fileName)
+                expr.arguments.forEach { checkConstraintsInCallTypeArgs(it, source, fileName) }
+            }
+            is NewExpression -> {
+                expr.typeArguments?.forEach { checkConstraintsInTypeNode(it, source, fileName) }
+                expr.arguments?.forEach { checkConstraintsInCallTypeArgs(it, source, fileName) }
+            }
+            is ParenthesizedExpression -> checkConstraintsInCallTypeArgs(expr.expression, source, fileName)
+            else -> {}
         }
     }
 
@@ -146977,14 +147015,15 @@ interface DataView {
 
         val argTypes = typeArgs.map { getTypeFromTypeNode(it) }
         val mapper = createTypeMapper(typeParams, argTypes)
+        val instantiatedConstraints = instantiateConstraintNodes(typeParamNodes, typeParams, argTypes)
 
         val len = minOf(typeArgs.size, typeParams.size)
         for (i in 0 until len) {
             val typeParam = typeParams[i]
-            val constraint = typeParam.constraint ?: continue
+            if (typeParam.constraint == null) continue
             val argType = argTypes[i]
             if (argType === anyType || argType === errorType) continue
-            val instantiatedConstraint = instantiateType(constraint, mapper)
+            val instantiatedConstraint = instantiatedConstraints[i] ?: continue
             if (instantiatedConstraint === anyType || instantiatedConstraint === errorType) continue
 
             if (!checkTypeRelatedTo(argType, instantiatedConstraint, assignableRelation)) {
@@ -147001,14 +147040,6 @@ interface DataView {
                         continue
                     }
                 }
-                // Tuple types structurally satisfy `Array<X>` / `ReadonlyArray<X>`
-                // constraints — tuples extend the array prototype. Our structural
-                // comparison doesn't always recognize this so add a narrow bail-out.
-                if (argType is Type.Object && argType.tupleElementTypes != null &&
-                    instantiatedConstraint is Type.Reference) {
-                    val tName = instantiatedConstraint.target.symbol?.name
-                    if (tName == "Array" || tName == "ReadonlyArray") continue
-                }
                 // TypeParam source with constraint: check the constraint chain against
                 // the target constraint. `function f<T extends number>(...) { I<T> }`
                 // where I's TypeParam extends number — T's constraint IS number, which
@@ -147018,7 +147049,7 @@ interface DataView {
                 // constraint (unconstrained T → would over-skip and lose genuine
                 // TS2344 cases — those keep `constraint == null` and fall through).
                 if (argType is Type.TypeParam && argType.constraint != null) {
-                    val cnst = argType.constraint!!
+                    val cnst = siblingAwareConstraintOf(argType) ?: argType.constraint!!
                     // A constraint that resolves to `any` satisfies EVERY target
                     // constraint (`any` is assignable to anything), exactly like the
                     // direct anyType-arg skip above. This covers a literal `extends any`
@@ -147060,16 +147091,21 @@ interface DataView {
                 if (argType is Type.Union && argType.types.all { m ->
                         checkTypeRelatedTo(m, instantiatedConstraint, assignableRelation) ||
                         (m is Type.TypeParam && m.constraint != null &&
-                            m.constraint !== errorType &&
-                            (m.constraint === anyType ||
-                                checkTypeRelatedTo(m.constraint!!, instantiatedConstraint, assignableRelation)))
+                            (siblingAwareConstraintOf(m) ?: m.constraint!!).let { mc ->
+                                mc !== errorType &&
+                                    (mc === anyType || checkTypeRelatedTo(mc, instantiatedConstraint, assignableRelation))
+                            })
                     }) {
                     continue
                 }
                 val argNode = typeArgs[i]
-                val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
+                // (CHK.213) a LITERAL argument takes tsgo's `reportRelationError`
+                // generalization (`L<'x', number>` reads `Type 'string'`).
+                val argDisplay = (if (isUnitLikeType(argType) || (argType is Type.Union && argType.types.all { isUnitLikeType(it) }))
+                    relationErrorSourceDisplay(argType, instantiatedConstraint) else null)
+                    ?: formatTypeForDisplay(argNode) ?: typeToString(argType)
                 // 16.4gc: constraint display with TypeParam substitution (see 16.4gb)
-                val constraintDisplay = typeToStringWithMapper(instantiatedConstraint, mapper)
+                val constraintDisplay = constraintDisplayOf(typeParamNodes[i], instantiatedConstraint, typeParamNodes, typeArgs, argTypes)
                 // 16.4gc: source-span squiggle (see 16.4gb)
                 var trueEnd = argNode.end
                 while (trueEnd > argNode.pos && source.getOrNull(trueEnd - 1)?.let {
@@ -147105,7 +147141,10 @@ interface DataView {
 
                 // Add elaboration for missing properties (structural Object vs Object)
                 var emittedMissing = false
-                if (argType is Type.Object && instantiatedConstraint is Type.Object) {
+                // (CHK.213) a TUPLE argument has no own array members, so this elaboration
+                // would list `concat` as missing — and that chain entry then suppresses the
+                // head ([RelationHeadSuppression]) into a TS2741 tsgo never reports.
+                if (argType is Type.Object && argType.tupleElementTypes == null && instantiatedConstraint is Type.Object) {
                     resolveStructuredTypeMembers(argType)
                     resolveStructuredTypeMembers(instantiatedConstraint)
                     val constraintProps = instantiatedConstraint.properties ?: emptyList()
@@ -147178,6 +147217,146 @@ interface DataView {
                 ))
             }
         }
+    }
+
+    /**
+     * (CHK.213) Every type parameter's constraint INSTANTIATED WITH THE REFERENCE'S TYPE
+     * ARGUMENTS — tsgo's `instantiateType(getConstraintOfTypeParameter(tp), mapper)` in
+     * `checkTypeArgumentConstraints`. This model has no deferred `keyof T` / `T[K]` type:
+     * resolved against a FRESH parameter `T`, `keyof T` answers `string` and
+     * `T["_zod"]["def"]` answers from `T`'s CONSTRAINT, so `instantiateType` afterwards has
+     * nothing left to substitute — `K extends keyof O` accepted every string (type-fest's
+     * hidden TS2344s) and zod's `K extends Exclude<keyof T["_zod"]["def"], …>` was judged
+     * against `Check<any>`'s base `def` (a false TS2344). So the constraint NODE is
+     * re-resolved with every parameter name bound to its argument, the alias-body
+     * mechanism ([getTypeFromTypeNodeWithMapper] with alias args); a parameter with no
+     * argument takes its default resolved under the same bindings, else stays the fresh
+     * parameter. The declaration's own names are shadowed out of the ambient type-param
+     * scope, which is consulted BEFORE alias args (round 472's body shadow).
+     */
+    private fun instantiateConstraintNodes(
+        tpNodes: List<TypeParameter>, typeParams: List<Type.TypeParam>, argTypes: List<Type>,
+    ): List<Type?> {
+        val bindings = HashMap<String, Type>()
+        currentTypeAliasArgs?.let { bindings.putAll(it) }
+        val names = tpNodes.map { it.name.text }
+        val ambientScope = currentTypeParamScope
+        val scope = if (ambientScope != null && names.any { it in ambientScope }) ambientScope - names.toSet() else ambientScope
+        for (i in tpNodes.indices) bindings[names[i]] = argTypes.getOrNull(i) ?: typeParams[i]
+        for (i in tpNodes.indices) {
+            if (i < argTypes.size) continue
+            val d = tpNodes[i].default ?: continue
+            bindings[names[i]] = withInstantiationContext(InstantiationMapper(HashMap(bindings), scope, inferenceNamespaceStack.size)) {
+                getTypeFromTypeNode(d)
+            }
+        }
+        val mapper = InstantiationMapper(bindings, scope, inferenceNamespaceStack.size)
+        return tpNodes.map { tp -> tp.constraint?.let { getTypeFromTypeNodeWithMapper(it, mapper) } }
+    }
+
+    /**
+     * (CHK.213) A type-parameter ARGUMENT's constraint re-resolved with its SIBLINGS in
+     * scope, or null. [withDeclTypeParamScope] fills a head parameter's constraint OUTSIDE
+     * the scope install (a self-constraining alias recurses otherwise), so
+     * `A extends keyof T["_zod"]["def"]` froze as `keyof errorType` = `string | number |
+     * symbol` — harmless while the target constraint was as wrong, a false TS2344 once the
+     * target is instantiated properly. Here the walker IS inside the install, so the node
+     * resolves; refused when the constraint names its own declaration (the recursion
+     * (INC.19) measured) or the parameter is not the one the enclosing head declares.
+     */
+    private fun siblingAwareConstraintOf(tp: Type.TypeParam): Type? {
+        val decl = currentTypeParamDecls[tp.symbol?.name ?: return null] ?: return null
+        val node = decl.constraint ?: return null
+        if (typeParamInternCache[internKey(decl)] !== tp) return null
+        val owner = when (val o = decl.parent) {
+            is TypeAliasDeclaration -> o.name.text
+            is InterfaceDeclaration -> o.name.text
+            is ClassDeclaration -> o.name?.text
+            else -> return null
+        } ?: return null
+        var selfRef = false
+        fun visit(n: Node) {
+            if (selfRef) return
+            if (n is TypeReference && (n.typeName as? Identifier)?.text == owner) { selfRef = true; return }
+            forEachChild(n) { visit(it) }
+        }
+        visit(node)
+        if (selfRef) return null
+        return getTypeFromTypeNode(node)
+    }
+
+    /**
+     * (CHK.213) [decl]'s own type-parameter nodes when no ENCLOSING declaration has type
+     * parameters a constraint could name (a top-level / namespace-level function or class,
+     * or a method of a non-generic class), else null.
+     */
+    internal fun standaloneTypeParameterNodes(decl: Node?): List<TypeParameter>? {
+        val tps = when (decl) {
+            is FunctionDeclaration -> decl.typeParameters
+            is ClassDeclaration -> decl.typeParameters
+            is MethodDeclaration -> decl.typeParameters
+            else -> null
+        }
+        if (tps.isNullOrEmpty()) return null
+        var p = (decl as NodeBase).parent
+        while (p != null && p !is SourceFile) {
+            when (p) {
+                is ClassDeclaration -> if (!p.typeParameters.isNullOrEmpty()) return null
+                is ClassExpression, is FunctionDeclaration, is FunctionExpression, is ArrowFunction,
+                is MethodDeclaration, is InterfaceDeclaration, is TypeAliasDeclaration -> return null
+                else -> {}
+            }
+            p = (p as NodeBase).parent
+        }
+        return tps
+    }
+
+    /**
+     * (CHK.213) The constraint as tsgo displays it. A `keyof X` constraint shows its
+     * ORIGIN — `keyof Ex`, not the literal union it evaluates to — when X is written as a
+     * named type and the union has two or more keys (one key prints as that literal; an
+     * anonymous or union operand prints the union). A constraint that is a bare SIBLING
+     * parameter shows that argument as written (`Ex`, where its structure would expand).
+     * Everything else renders the instantiated type.
+     */
+    private fun constraintDisplayOf(
+        tp: TypeParameter, instantiated: Type, tpNodes: List<TypeParameter>,
+        argNodes: List<TypeNode>, argTypes: List<Type>,
+    ): String {
+        var c = tp.constraint ?: return typeToString(instantiated)
+        while (c is ParenthesizedType) c = c.type
+        fun siblingIndex(n: TypeNode): Int {
+            val ref = n as? TypeReference ?: return -1
+            if (!ref.typeArguments.isNullOrEmpty()) return -1
+            val name = (ref.typeName as? Identifier)?.text ?: return -1
+            return tpNodes.indexOfFirst { it.name.text == name }
+        }
+        val bare = siblingIndex(c)
+        if (bare >= 0 && bare < argNodes.size) {
+            return formatTypeForDisplay(argNodes[bare]) ?: typeToString(instantiated)
+        }
+        // A generic alias whose body is a CONDITIONAL resolves to its branch, which tsgo
+        // displays structurally — not as the alias instantiation (`KeysOfUnion<U2>`).
+        if (c is TypeReference && !c.typeArguments.isNullOrEmpty() && aliasDisplayMap[instantiated.id] != null) {
+            val sym = (c.typeName as? Identifier)?.let { lookupPerFileForNode(it, it.text) }
+            if (sym?.declarations?.any { it is TypeAliasDeclaration && it.type is ConditionalType } == true &&
+                typeToStringInProgress.add(instantiated.id)) {
+                try { return typeToString(instantiated) } finally { typeToStringInProgress.remove(instantiated.id) }
+            }
+        }
+        if (c is TypeOperator && c.operator == SyntaxKind.KeyOfKeyword && instantiated is Type.Union) {
+            val operandNode = c.type
+            val idx = siblingIndex(operandNode)
+            val written: TypeNode? = when {
+                idx >= 0 -> argNodes.getOrNull(idx)
+                operandNode is TypeReference && operandNode.typeArguments.isNullOrEmpty() -> operandNode
+                else -> null
+            }
+            if (written is TypeReference || written is ArrayType) {
+                formatTypeForDisplay(written)?.let { return "keyof $it" }
+            }
+        }
+        return typeToString(instantiated)
     }
 
     /**
@@ -161036,7 +161215,7 @@ interface DataView {
                 val mapper = createTypeMapper(tps, paddedArgs)
                 // TS2344 / TS2559: Check supplied type arguments against their constraints.
                 val diagsBeforeTypeArgs = diagnostics.size
-                checkCallTypeArgConstraints(tps, resolvedTypeArgs, typeArgs, mapper, source, fileName)
+                checkCallTypeArgConstraints(tps, resolvedTypeArgs, typeArgs, mapper, source, fileName, genericSig.declaration)
                 // (CHK.219)(d) tsgo's `chooseOverload` rejects a candidate whose explicit type
                 // arguments fail their constraints BEFORE its arguments are checked, and
                 // reports the type-argument error alone — so no argument row follows one.
@@ -167831,14 +168010,20 @@ interface DataView {
         mapper: TypeMapper,
         source: String,
         fileName: String,
+        declaration: Node? = null,
     ) {
         val len = minOf(typeParams.size, resolvedTypeArgs.size, typeArgNodes.size)
+        // (CHK.213) the constraint NODES re-resolved with the type arguments bound, as at a
+        // type reference — only for a declaration no enclosing type parameter can reach
+        // into, since the call site's scope is not the declaration's.
+        val tpNodes = standaloneTypeParameterNodes(declaration)?.takeIf { it.size == typeParams.size }
+        val nodeConstraints = tpNodes?.let { instantiateConstraintNodes(it, typeParams, resolvedTypeArgs) }
         for (i in 0 until len) {
             val constraint = typeParams[i].constraint ?: continue
             val argType = resolvedTypeArgs[i]
             if (argType === anyType || argType === errorType) continue
             // Instantiate the constraint (e.g., `U extends T` where T is mapped to number → constraint = number)
-            val instantiatedConstraint = instantiateType(constraint, mapper)
+            val instantiatedConstraint = nodeConstraints?.getOrNull(i) ?: instantiateType(constraint, mapper)
             if (instantiatedConstraint === anyType || instantiatedConstraint === errorType) continue
             // TS2559 weak-type rule: when the (instantiated) constraint is a "weak type"
             // (object with ≥1 property, ALL optional, no index/call/construct sigs) and the
@@ -167901,7 +168086,10 @@ interface DataView {
                 // 16.4gb: For anonymous Type.Object constraints where instantiateType
                 // doesn't rewrite member types, render with explicit substitution so a
                 // constraint like `{ a: T }` with T→string displays as `{ a: string; }`.
-                val constraintDisplay = typeToStringWithMapper(instantiatedConstraint, mapper)
+                // (CHK.213) a node-instantiated constraint is concrete: tsgo's display.
+                val constraintDisplay = if (tpNodes != null && nodeConstraints?.getOrNull(i) != null)
+                    constraintDisplayOf(tpNodes[i], instantiatedConstraint, tpNodes, typeArgNodes, resolvedTypeArgs)
+                else typeToStringWithMapper(instantiatedConstraint, mapper)
                 val start = argNode.pos
                 // 16.4gb: Use the source span (trim trailing whitespace/`,`/`>`/`;`) instead
                 // of display-text length. Source text `{ a: number }` is 13 chars but display
@@ -175261,9 +175449,8 @@ interface DataView {
             // during init (which can cause test ordering sensitivity).
             val props = type.properties
             if (props != null) {
-                if (props.isEmpty()) return neverType
-                val literals = props.map { Type.StringLiteral(it.name) }
-                return getUnionType(literals)
+                if (props.isEmpty() && type.stringIndexInfo == null && type.numberIndexInfo == null) return neverType
+                return getUnionType(keyofKeyTypes(type, props))
             }
             // Members not yet resolved — trigger resolution
             resolveStructuredTypeMembers(type)
@@ -175285,9 +175472,8 @@ interface DataView {
                 KeyofCycleCensus.refused++
                 return stringType
             }
-            if (resolvedProps.isEmpty()) return stringType
-            val literals = resolvedProps.map { Type.StringLiteral(it.name) }
-            return getUnionType(literals)
+            if (resolvedProps.isEmpty() && type.stringIndexInfo == null && type.numberIndexInfo == null) return stringType
+            return getUnionType(keyofKeyTypes(type, resolvedProps))
         }
         if (type is Type.Intersection && type.types.any { it is Type.TypeParam }) {
             // (INV.0) step 10a: `keyof (X & T)` where `T` is a bare type parameter has an
@@ -175315,6 +175501,56 @@ interface DataView {
             return stringType
         }
         return stringType
+    }
+
+    /**
+     * (CHK.213) The key types of an object type with a resolved member table: a string
+     * index signature contributes `string | number`, a number one `number` (tsc's
+     * `getLiteralTypeFromProperties` + index-key types), a symbol-keyed member `symbol`
+     * (this model has no unique-symbol type, so the WIDER key, never a wrong string), and
+     * every other member its name as a string literal. `keyof { [k: string]: V }` answered
+     * `never` before, a closed domain for an open one — invisible while no constraint was
+     * instantiated against it.
+     */
+    private fun keyofKeyTypes(type: Type.Object, props: List<Symbol>): List<Type> {
+        val out = ArrayList<Type>(props.size + 2)
+        if (type.stringIndexInfo != null) { out.add(stringType); out.add(numberType) }
+        else if (type.numberIndexInfo != null) out.add(numberType)
+        var symbolKey = false
+        for (p in props) {
+            if (p.name.startsWith("__@")) { symbolKey = true; continue }
+            if (type.stringIndexInfo != null) continue
+            if (type.numberIndexInfo != null && p.name.toDoubleOrNull() != null) continue
+            out.add(Type.StringLiteral(p.name))
+        }
+        if (symbolKey || hasUnnamedComputedMember(type)) out.add(esSymbolType)
+        return out
+    }
+
+    /** (CHK.213) a declared member whose computed key named NO entry of the member table
+     *  (`[sym]: V` with `sym` a unique symbol — the name abstains) — its key is a symbol. */
+    private fun hasUnnamedComputedMember(type: Type.Object): Boolean {
+        val decls = type.symbol?.declarations ?: listOfNotNull(type.declaredAt)
+        for (d in decls) {
+            val members: List<ClassElement> = when (d) {
+                is TypeLiteral -> d.members
+                is InterfaceDeclaration -> d.members
+                is ClassDeclaration -> d.members
+                else -> continue
+            }
+            for (m in members) {
+                val n = when (m) {
+                    is PropertyDeclaration -> m.name
+                    is MethodDeclaration -> m.name
+                    is GetAccessor -> m.name
+                    is SetAccessor -> m.name
+                    else -> null
+                } as? ComputedPropertyName ?: continue
+                val name = evaluateComputedPropertyName(n)
+                if (name == null || name.startsWith("__@")) return true
+            }
+        }
+        return false
     }
 
     /**

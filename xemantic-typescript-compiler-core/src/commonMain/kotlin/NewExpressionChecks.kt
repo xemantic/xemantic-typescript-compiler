@@ -777,7 +777,8 @@ internal class NewExpressionChecks(
         // means the call site can't actually access the type (e.g. inside a
         // static method, a class-level T is out of scope and TypeScript already
         // emits TS2302; emitting TS2345 too would double-fault).
-        val classTypeParams = (checker.classConstructorTypes.constructedClass(calleeType) ?: calleeType as? Type.Interface)?.typeParameters
+        val constructedClass = checker.classConstructorTypes.constructedClass(calleeType) ?: calleeType as? Type.Interface
+        val classTypeParams = constructedClass?.typeParameters
         val hasExplicitTypeArgs = !expr.typeArguments.isNullOrEmpty()
         val resolvedTypeArgs: List<Type>? = if (hasExplicitTypeArgs) {
             expr.typeArguments.map { tn ->
@@ -800,6 +801,7 @@ internal class NewExpressionChecks(
             val before = checker.diagnostics.size
             checker.checkCallTypeArgConstraints(
                 classTypeParams, resolvedTypeArgs, expr.typeArguments.orEmpty(), createTypeMapper(classTypeParams, padded), source, fileName,
+                constructedClass.symbol?.declarations?.firstOrNull { it is ClassDeclaration },
             )
             if (checker.diagnostics.size > before) return
         }
