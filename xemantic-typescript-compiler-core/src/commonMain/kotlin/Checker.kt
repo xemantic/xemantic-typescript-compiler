@@ -34016,6 +34016,7 @@ class Checker(
      *  result (see [nestedInterfaceCtxType]'s gates). */
     private fun resolveImplicitAnyCtxAnnotation(node: TypeNode): Type? {
         val direct = getTypeFromTypeNodeSafeNsAware(node)
+        if (direct === anyType) ctxMappedIndexType(node)?.let { return it } // (CHK.214)
         if (direct != null && direct !== anyType && direct !== errorType) {
             // an `X[]` that resolved to Array<any/error> still deserves the retry
             val needRetry = node is ArrayType &&
@@ -34985,6 +34986,69 @@ class Checker(
      * reference, or an `any`/`error` declared type) keeps the table's answer, which
      * is this helper's old behaviour exactly.
      */
+    /**
+     * (CHK.214) The CONTEXTUAL type of a mapped-type annotation whose key domain is
+     * `string` or `number` — `Record<string, C>`, `{ [K in string]: C }` — which
+     * [getTypeFromMappedType] resolves to `any` (an index signature there was built
+     * and refused at three corpus baselines, (P18.117)). tsgo's
+     * `getTypeOfPropertyOfContextualType` answers such a member through the mapped
+     * type's TEMPLATE; this mints that answer as an index-signature object for the
+     * contextual readers ONLY, so no relation and no declared type ever sees it.
+     * Null for every other shape — the caller keeps its own answer. A template that
+     * is a bare alias parameter recurses on the ARGUMENT node, which is what types
+     * `Record<string, Record<string, C>>` (the argument's own type is `any`).
+     */
+    private fun ctxMappedIndexType(node0: TypeNode, depth: Int = 0): Type? {
+        if (depth > 4) return null
+        var node = node0
+        while (node is ParenthesizedType) node = node.type
+        if (node is UnionType) {
+            var minted = false
+            val parts = node.types.map { m ->
+                ctxMappedIndexType(m, depth + 1)?.also { minted = true } ?: getTypeFromTypeNodeSafeNsAware(m)
+                    ?.takeIf { it !== anyType && it !== errorType } ?: return null
+            }
+            return if (minted) getUnionType(parts) else null
+        }
+        val args = HashMap<String, TypeNode>()
+        val mapped: MappedType = when (node) {
+            is MappedType -> node
+            is TypeReference -> {
+                val sym0 = resolveTypeNameToSymbol(node.typeName) ?: return null
+                val sym = if (sym0.flags.hasAny(SymbolFlags.Alias)) resolveAlias(sym0) else sym0
+                val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                    ?: return null
+                var body = decl.type
+                while (body is ParenthesizedType) body = body.type
+                val m = body as? MappedType ?: return null
+                val tps = decl.typeParameters.orEmpty()
+                val targs = node.typeArguments.orEmpty()
+                if (targs.size != tps.size) return null
+                for ((i, tp) in tps.withIndex()) args[tp.name.text] = targs[i]
+                m
+            }
+            else -> return null
+        }
+        if (mapped.nameType != null) return null
+        val argTypes = args.mapValues { getTypeFromTypeNodeSafeNsAware(it.value) ?: return null }
+        val cNode = mapped.typeParameter.constraint ?: return null
+        val keyType = getTypeFromTypeNodeWithMapper(cNode, layeredAliasMapper(argTypes))
+        if (keyType !== stringType && keyType !== numberType) return null
+        val tmpl = mapped.type ?: return null
+        val tmplArg = ((tmpl as? TypeReference)?.takeIf { it.typeArguments.isNullOrEmpty() }
+            ?.typeName as? Identifier)?.text?.let { args[it] }
+        val value = (if (tmplArg != null) ctxMappedIndexType(tmplArg, depth + 1)
+                ?: getTypeFromTypeNodeSafeNsAware(tmplArg)
+            else getTypeFromTypeNodeWithMapper(tmpl,
+                layeredAliasMapper(argTypes + (mapped.typeParameter.name.text to keyType))))
+            ?.takeIf { it !== anyType && it !== errorType } ?: return null
+        val info = IndexInfo(keyType, value, mapped.readonlyToken, declaration = node0)
+        return Type.Object().apply {
+            members = symbolTable(); properties = emptyList()
+            if (keyType === stringType) stringIndexInfo = info else numberIndexInfo = info
+        }
+    }
+
     private fun ctxMemberTypeOf(owner: Type.Object, sym: Symbol): Type =
         (owner as? Type.Reference)?.let { resolveGenericPropertyType(it, sym) } ?: getTypeOfSymbol(sym)
 
@@ -57872,7 +57936,8 @@ interface DataView {
                     node is FunctionExpression || node is ParenthesizedExpression ||
                     node is ConditionalExpression || node is ArrayLiteralExpression
                 val fromAnn = if (retAnn != null && ctxShape)
-                    getTypeFromTypeNodeSafeNsAware(retAnn) else null
+                    getTypeFromTypeNodeSafeNsAware(retAnn)
+                        ?.let { if (it === anyType) ctxMappedIndexType(retAnn) ?: it else it } else null
                 // (CHK.40) STRICTLY ADDITIVE, and the `when` is written so that it
                 // reads that way: an annotation that resolved keeps its own answer
                 // (bar the async unwrap, which is the identity for everything
@@ -150622,6 +150687,10 @@ interface DataView {
     private fun pullCtxMemberName(name: Node?): String? = when (name) {
         is Identifier -> name.text
         is StringLiteralNode -> name.text
+        // (CHK.214) a plain decimal NUMERIC key names the member whose name is its
+        // canonical string (tsgo's numeric-literal property name); any other spelling
+        // (`0x1`, `1.0`, `1e3`) is refused rather than guessed.
+        is NumericLiteralNode -> name.text.takeIf { it.toIntOrNull()?.toString() == it }
         else -> null
     }
 
@@ -150629,7 +150698,11 @@ interface DataView {
      *  unresolvable annotation answers null instead of `errorType` (which
      *  `lookupPropertyTypeForCtx` would happily read members off). */
     private fun pullCtxResolveAnnotation(node: TypeNode): Type? =
-        getTypeFromTypeNodeSafeNsAware(node)?.takeIf { it !== anyType && it !== errorType }
+        when (val t = getTypeFromTypeNodeSafeNsAware(node)) {
+            anyType -> ctxMappedIndexType(node) // (CHK.214)
+            errorType -> null
+            else -> t
+        }
 
     /**
      * (CHK.39) Write the CONTEXTUAL parameter types of a function-like node into
@@ -174924,7 +174997,11 @@ interface DataView {
         if (t.indexOf("\${", close) >= 0) return null  // more than one placeholder
         val content = t.substring(open + 2, close).trim()
         val extractRe = Regex("Extract\\s*<\\s*${Regex.escape(tpName)}\\s*,\\s*string\\s*>")
-        if (content != tpName && !extractRe.matches(content)) return null
+        // (CHK.214) `string & K` / `K & string` is the same filter as `Extract<K, string>`
+        // over a string-literal key (tsgo reduces `string & "x"` to `"x"`).
+        val amp = content.split('&').map { it.trim() }
+        val ampFilter = amp.size == 2 && amp.contains(tpName) && amp.contains("string")
+        if (content != tpName && !extractRe.matches(content) && !ampFilter) return null
         return t.substring(0, open) + key + t.substring(close + 1)
     }
 
@@ -174996,6 +175073,9 @@ interface DataView {
         // literal remap shape (`${K}suffix` / `${Extract<K, string>}suffix`) and bail to
         // anyType (the prior effective behavior for unmodeled shapes) on anything else.
         val nameType = node.nameType
+        // (CHK.214) the template is instantiated with the PRE-remap key (`T[K]` reads the
+        // source property), the member is named by the remapped one.
+        val sourceKeys = keys
         if (nameType != null) {
             if (nameType !is TemplateLiteralType) return anyType
             val raw = nameType.head.rawText ?: return anyType
@@ -175024,7 +175104,7 @@ interface DataView {
                     ?.let { getTypeFromTypeNode(it.type) }
                     ?.takeIf { it !== anyType && it !== errorType }
             }
-            for (key in keys) {
+            for ((keyIdx, key) in keys.withIndex()) {
                 val propType = if (node.type != null) {
                     // Bind the mapped key parameter K to the current key (a string literal) so
                     // the value type `T[K]` (and conditionals over it) resolve PER KEY instead
@@ -175032,7 +175112,7 @@ interface DataView {
                     // object ? boolean | View<T[K]> : boolean }
                     // (excessPropertyChecksWithNestedIntersections). An alias-args
                     // mapper bypasses the plain nodeTypes cache so each key resolves freshly.
-                    getTypeFromTypeNodeWithMapper(node.type, layeredAliasMapper(mapOf(typeParamName to Type.StringLiteral(key))))
+                    getTypeFromTypeNodeWithMapper(node.type, layeredAliasMapper(mapOf(typeParamName to Type.StringLiteral(sourceKeys[keyIdx]))))
                 } else anyType
                 val sym = Symbol(SymbolFlags.Property, key)
                 homomorphicSourceType?.let { srcT ->
