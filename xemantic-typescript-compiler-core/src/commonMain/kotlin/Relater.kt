@@ -201,6 +201,46 @@ internal class Relater(
         out
     }
 
+    /**
+     * (CHK.225) Whether a failed COVARIANT argument check on an UNANNOTATED parameter of
+     * [target] may fall through to the structural comparison of the two instantiations
+     * instead of answering false. tsgo relates such a pair by its MEASURED variance, so
+     * `interface Fn<T> { f: (x: T) => void }` is contravariant and `M<T> { m(x: T): void }`
+     * bivariant there, and the covariant shortcut was a false positive on both. The
+     * structural path (method bivariance, parameter contravariance) answers those, and can
+     * only ACCEPT here — a structural failure is still false.
+     *
+     * Refused for the lib's array family (`Array`, `ReadonlyArray`, `ConcatArray`), which tsgo
+     * measures COVARIANT and whose structural comparison is both wrong here (round 446:
+     * `concat`) and the bulk of the fallback population (2,523 of 2,661 on the compiler profile).
+     */
+    private fun unannotatedFallbackAllowed(target: Type.Interface): Boolean =
+        target !== checker.globalArrayType && target !== checker.globalReadonlyArrayType &&
+            fallbackDeclarationCache.getOrPut(target.id) { fallbackDeclarationAllowed(target) }
+
+    /** Per generic target id — see [fallbackDeclarationAllowed]. */
+    private val fallbackDeclarationCache = HashMap<Int, Boolean>()
+
+    /**
+     * Refuses the lib's `ConcatArray` (with `Array`/`ReadonlyArray`, covariant in tsgo and the
+     * bulk of the fallback population) and any generic whose declaration spells an INDEXED
+     * ACCESS type: this engine has no generic indexed-access type, so `E[K]` over a method's
+     * own `K` relates leniently and a structural fallback would accept `Emitter<{ a: Animal }>`
+     * as `Emitter<{ a: Dog }>` (tsgo: covariant). Such a generic keeps the covariant answer.
+     */
+    private fun fallbackDeclarationAllowed(target: Type.Interface): Boolean {
+        val decls = target.symbol?.declarations ?: return true
+        if (target.symbol?.name == "ConcatArray" && decls.all { it in checker.builtinLibDecls }) return false
+        val work = ArrayDeque<Node>()
+        for (d in decls) if (d is InterfaceDeclaration || d is ClassDeclaration) work.addLast(d)
+        while (work.isNotEmpty()) {
+            val n = work.removeLast()
+            if (n is IndexedAccessType) return false
+            forEachChild(n) { work.addLast(it) }
+        }
+        return true
+    }
+
     /** (CHK.223) One type-argument pair under its declared variance: `in` relates target to
      *  source, `in out` both ways, anything else (unannotated keeps the historical covariant
      *  shortcut) source to target. */
@@ -931,10 +971,15 @@ internal class Relater(
                     targetArgs.none { checker.typeContainsUnresolvedTypeParam(it) }
                 if (!isReentry || isArrayLike) {
                     val variances = declaredVariances(source.target)
+                    var structuralFallback = false
                     for (i in sourceArgs.indices) {
-                        if (!typeArgumentRelated(sourceArgs[i], targetArgs[i], variances?.getOrNull(i) ?: 0, relation)) return false
+                        val v = variances?.getOrNull(i) ?: 0
+                        if (typeArgumentRelated(sourceArgs[i], targetArgs[i], v, relation)) continue
+                        if (v != 0 || isArrayLike || !unannotatedFallbackAllowed(source.target)) return false
+                        structuralFallback = true
+                        break
                     }
-                    return true
+                    if (!structuralFallback) return true
                 }
             }
         }
@@ -1714,8 +1759,10 @@ internal class Relater(
                     sourceParamType !== anyType && sourceParamType !== errorType &&
                     !checker.typeIncludesUndefined(sourceParamType)
                 ) checker.getUnionType(listOf(sourceParamType, undefinedType)) else sourceParamType
+            val callbackPair = bivariantParams && isCallbackParameterPair(sourceParamType, targetParamType)
             if (!checkTypeRelatedTo(targetParamType, sourceParamCmp, relation) &&
-                !(bivariantParams && checkTypeRelatedTo(sourceParamType, targetParamType, relation)) &&
+                !(bivariantParams && !callbackPair && checkTypeRelatedTo(sourceParamType, targetParamType, relation)) &&
+                !(callbackPair && erasedCallbacksRelated(source, target, sourceParamType, targetParamType, relation)) &&
                 !(!callbackThis && callbackParamsRelated(sourceParamType, targetParamType, relation))) return false
         }
         // B63.29 continuation: Source has MORE params than target.size — target's rest
@@ -1826,6 +1873,65 @@ internal class Relater(
         if (sourceNullish != targetNullish) return false
         if (sourceSig.thisType == null && targetSig.thisType == null) return false
         return signatureRelatedTo(targetSig, sourceSig, relation, callbackThis = true)
+    }
+
+    /**
+     * (CHK.225) tsgo's `callbacks` test in `compareSignaturesRelated`: both parameter types are
+     * single-call-signature function types with no type predicate and the same nullishness.
+     * Such a pair is related ONLY through the callbacks' own signatures — never by the
+     * method-parameter bivariance — which is what makes `Promise<T>` / `Set<T>` (whose `T`
+     * sits in callback parameters of methods) covariant rather than bivariant in `T`.
+     */
+    private fun isCallbackParameterPair(sourceParam: Type, targetParam: Type): Boolean {
+        val (sourceSig, sourceNullish) = singleCallSignatureOf(sourceParam) ?: return false
+        val (targetSig, targetNullish) = singleCallSignatureOf(targetParam) ?: return false
+        return sourceNullish == targetNullish && !hasTypePredicate(sourceSig) && !hasTypePredicate(targetSig)
+    }
+
+    /**
+     * (CHK.225) The callback pair of a GENERIC source method, compared after a cheap form of
+     * tsgo's `instantiateSignatureInContextOf`: a source type parameter that IS some
+     * parameter's whole type is inferred as the target's type at that position (`on<K>(k: K,
+     * f: (e: E[K]) => void)` pins `K` to the target's `K`), and every other source type
+     * parameter is erased to `any` (`forEachChild<T>(cb: (node: Node) => T)` against `… => T |
+     * undefined`). The callback's other positions stay strict, so `Promise<T>.then` and an
+     * emitter's `E[K]` keep the parameter covariant.
+     */
+    private fun erasedCallbacksRelated(
+        source: Signature,
+        target: Signature,
+        sourceParam: Type,
+        targetParam: Type,
+        relation: Relation,
+    ): Boolean {
+        val sourceTps = source.typeParameters
+        if (sourceTps.isNullOrEmpty()) return false
+        val names = HashSet<String>()
+        sourceTps.forEach { tp -> tp.symbol?.name?.let { names.add(it) } }
+        if (names.isEmpty()) return false
+        val inferred = HashMap<String, Type>()
+        val n = minOf(source.parameters.size, target.parameters.size)
+        for (i in 0 until n) {
+            val sp = checker.getTypeOfSymbol(source.parameters[i]) as? Type.TypeParam ?: continue
+            val name = sp.symbol?.name ?: continue
+            if (name in names && name !in inferred) inferred[name] = checker.getTypeOfSymbol(target.parameters[i])
+        }
+        val erase = TypeMapper { tp ->
+            val name = tp.symbol?.name
+            if (name != null && name in names) inferred[name] ?: anyType else null
+        }
+        val sourceSig = singleCallSignatureOf(sourceParam)?.first ?: return false
+        val targetSig = singleCallSignatureOf(targetParam)?.first ?: return false
+        return signatureRelatedTo(targetSig, checker.instantiateSignature(sourceSig, erase), relation, callbackThis = true)
+    }
+
+    private fun hasTypePredicate(sig: Signature): Boolean = when (val d = sig.declaration) {
+        is FunctionType -> d.type is TypePredicate
+        is MethodDeclaration -> d.type is TypePredicate
+        is FunctionDeclaration -> d.type is TypePredicate
+        is FunctionExpression -> d.type is TypePredicate
+        is ArrowFunction -> d.type is TypePredicate
+        else -> false
     }
 
     /**
