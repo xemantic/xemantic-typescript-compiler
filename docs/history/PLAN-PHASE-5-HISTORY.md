@@ -1,3 +1,30 @@
+### Round (P18.262) — (CHK.196) stage-3 residues: an ANONYMOUS construct type (`abstract new () => Co`) is now a constructor source to the argument relation and the missing-static TS2741, generic-class constructor arguments infer `T` from a callback's return, `cond ? A : B` of classes is subtype-reduced, and a constructor's own `prototype` no longer appears in an elaboration chain; 138-cell matrix 73 -> 78 of 94 agreeing with tsgo, 0 ours-only (one new false positive caught and refused); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
+
+One implementation subagent. **Where the item was wrong**: (a) t05 was not "which class sources reach
+`allowCtorVsCtor`" — the gate admitted only constructor types MINTED by `ClassConstructorTypes`, so no ANONYMOUS
+construct type (one built from a type node) ever reached the argument relation; the same gap silenced a04 / a05 / a06 /
+a21 / a22; (b) widening the gate EXPOSED a false positive — a generic source signature (`new <T>() => T`) gave an
+ours-only TS2345 (a10, tsgo silent) — refused by the new predicate; (c) "subtype reduction of multiple `return`s" is
+not a reduction problem — `inferReturnTypeFromBody` returns the FIRST top-level `return` and never builds a union (r13
+reads `typeof Y` where tsgo reads `typeof X | typeof Y`), a broader return-inference change, REFUSED; the conditional
+half landed; (d) t06's extra `prototype` chain line was the same defect as p06 / p07 / p09 — the chain compared the
+binder-made `prototype` tsgo never compares. **Mechanism**: `ClassConstructorTypes.isConstructSource` (a minted class
+constructor type, or an anonymous object — not an interface or reference — with construct signatures, no call
+signature and no GENERIC construct signature) feeds `allowCtorVsCtor` and the argument-site construct elaboration;
+`missingRequiredStatic` widens to any pair of construct sources — exactly ONE missing member (two is tsgo's TS2739,
+not modelled), refusing a `Function`-apparent spelling like `length` — and is also called on the general var-decl path
+(d03 / d06); `inferClassTypeParamFromCallbackReturn` (a fallback after the bare-`T` rule, in
+`inferTypeArgsFromConstructorCall` only — kept out of the contextual-type helper, where typing the arrow recurses)
+infers `T` from a `() => T` parameter's argument return (c13); `reduceConstructorSubtypesOf` reduces a whole union for
+array literals and now conditionals; `getPropertyElaborationChain` drops a `prototype` mismatch against a class
+constructor target and `getConstructMismatchElaboration` prints tsgo's instance chains. `Checker.kt` +75 net;
+`checkSingleNewExpressionTypesCore` untouched. **Matrix**: t05 c13 d03 d06 t06 fixed with full rows; argument
+variants 11 -> 4 disagreeing, a10's false positive fixed; inference 7 -> 2; conditionals 8 -> 3; prototype 7 -> 0.
+**Pins**: `ConstructSourceResiduesTest` 8 (7 full-text tsgo rows + 1 control); ablation a1 2 / a2 1 / a3 1 / a4 1 / a5 1 /
+a6 1 / a7 1 / a8 1 / a9 1 / a10 1 / a11 1 RED. **Gates**: full suite 22,361 / 0 / 44 (+8); corpus screen 8725 / 0 and
+`--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK,
+rxjs / marked / cronstrue unchanged; warning gate with probe: probe only.
+
 ### Round (P18.261) — (INV.0) extraction: the `new`-expression check family (incl. the B264 inherited-overload pass) moves verbatim into a new `NewExpressionChecks` collaborator; `Checker.kt` 201,635 -> 200,637 (-998); every receipt byte-identical (2026-10-02)
 
 One implementation subagent. **Where the brief was wrong**: (a) the moved core is 7,191 bytecodes after the move, not
