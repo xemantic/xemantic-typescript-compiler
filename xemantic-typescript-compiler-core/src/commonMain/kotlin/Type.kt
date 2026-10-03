@@ -239,6 +239,13 @@ sealed class Type {
     ) : Object(flags) {
         var typeParameters: List<TypeParam>? = null
         var baseTypes: List<Type>? = null
+        /** (CHK.219)(e) A heritage base answered `errorType`/`any` when [baseTypes] was
+         *  last resolved — typically a base alias IN FLIGHT on a resolution cycle — so a
+         *  member table built over it is provisional ([membersProvisional]). */
+        var heritageIncomplete: Boolean = false
+        /** (CHK.219)(e) The planted member table was built over an incomplete heritage
+         *  and is rebuilt once, on the first request made outside any member resolution. */
+        var membersProvisional: Boolean = false
         var declaredCallSignatures: List<Signature>? = null
         var declaredConstructSignatures: List<Signature>? = null
         var declaredStringIndexInfo: IndexInfo? = null

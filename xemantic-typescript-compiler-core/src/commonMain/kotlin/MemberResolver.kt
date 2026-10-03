@@ -178,6 +178,8 @@ internal class MemberResolver(
      * After this call, type.members/properties/callSignatures are populated.
      */
     fun resolveStructuredTypeMembers(type: Type.Object) {
+        if (type.properties != null && type is Type.Interface && type.membersProvisional &&
+            memberResolutionInProgress.isEmpty() && checker.typeResolutionIdle()) rebuildProvisionalMembers(type)
         if (type.properties != null) {
             // (WARM.3) the CONSUMED side for MEMBER TABLES, and it must live HERE
             // rather than in `…Core` below: the two guards are identical, so the
@@ -199,6 +201,22 @@ internal class MemberResolver(
             try { return resolveStructuredTypeMembersCore(type) } finally { mrProbeDepth-- }
         }
         return resolveStructuredTypeMembersCore(type)
+    }
+
+    /**
+     * (CHK.219)(e) A member table planted while a heritage base was still in flight
+     * (ky's `interface Options extends KyOptions` reached through `hooks.ts` while the
+     * `KyOptions` alias resolves) lacks that base's members for good; tsgo's members
+     * are lazy and never freeze that way. Rebuilt ONCE, on the first request made with
+     * no member, symbol or type-node resolution in flight, and only when the heritage
+     * then resolves completely.
+     */
+    private fun rebuildProvisionalMembers(type: Type.Interface) {
+        type.membersProvisional = false
+        checker.resolveBaseTypesLazy(type)
+        if (type.heritageIncomplete) return
+        type.properties = null
+        resolveStructuredTypeMembersCore(type)
     }
 
     private fun resolveStructuredTypeMembersCore(type: Type.Object) {
@@ -385,7 +403,8 @@ internal class MemberResolver(
         // 16.0n: Re-resolve baseTypes if empty — declarations may have been merged
         // after the first eager resolution (e.g. user's `interface Array<T> extends IFoo<T>`
         // merging with the built-in Array which was cached at init with no heritage).
-        if (type.baseTypes == null) checker.resolveBaseTypesLazy(type)
+        if (type.baseTypes == null || type.heritageIncomplete) checker.resolveBaseTypesLazy(type)
+        if (type.heritageIncomplete) type.membersProvisional = true
         val members = symbolTable()
         // Static-side mirror of [members]. Step 1 (dual-population): every member
         // we add to [members] that carries ModifierFlag.Static is ALSO added here.

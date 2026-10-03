@@ -567,6 +567,9 @@ class Checker(
     private val nodeTypes get() = state.nodeTypes
     internal val symbolTypes get() = state.symbolTypes
     private val symbolTypeResolutionInProgress get() = state.symbolTypeResolutionInProgress
+    /** (CHK.219)(e) No symbol-type or type-node resolution is in flight. */
+    internal fun typeResolutionIdle(): Boolean =
+        state.symbolTypeResolutionInProgress.isEmpty() && state.nodeTypeResolutionInProgress.isEmpty()
     private val nodeTypeResolutionInProgress get() = state.nodeTypeResolutionInProgress
     private val memberResolutionInProgress get() = state.memberResolutionInProgress
     private val declaredTypes get() = state.declaredTypes
@@ -42221,6 +42224,10 @@ class Checker(
                 // B435: a frozen-object result (Readonly<T> shape) never widens — keep the
                 // marked, literal-preserving instance intact.
                 if (type.id in frozenObjectTypeIds) return type
+                // (CHK.219)(a) a MAPPED type's members are declared, never fresh — tsgo's
+                // widening touches only an object LITERAL (`{ a: "a" }` from `mr("a")`
+                // stays `{ a: "a"; }` through `const v = mr("a")`).
+                if (type.declaredAt is MappedType) return type
                 // Round 455: a TUPLE widens its ELEMENT types but stays a proper tuple —
                 // tsc widens `[true, "x"]` to `[boolean, string]`, NOT to a
                 // `{0,1,length:number}` object. The generic member-widening below rebuilds
@@ -111588,6 +111595,7 @@ interface DataView {
         } else currentTypeParamScope
         withInstantiationContext(scopeMapper(baseScope)) {
             val baseTypes = mutableListOf<Type>()
+            var incomplete = false
             for (d in symbol.declarations) {
                 val heritageClauses = when (d) {
                     is ClassDeclaration -> d.heritageClauses
@@ -111604,6 +111612,7 @@ interface DataView {
                     if (clause.token == SyntaxKind.ImplementsKeyword) continue
                     for (exprWithArgs in clause.types) {
                         val baseType = getTypeFromBaseTypeExpression(exprWithArgs)
+                        if (baseType === errorType || baseType === anyType) incomplete = true
                         if (baseType !== errorType) {
                             baseTypes.add(baseType)
                         }
@@ -111611,6 +111620,7 @@ interface DataView {
                 }
             }
             if (baseTypes.isNotEmpty()) type.baseTypes = baseTypes
+            type.heritageIncomplete = incomplete
         }
     }
 
@@ -126723,6 +126733,11 @@ interface DataView {
             if (ip.default == null) tp.default?.let { ip.default = getTypeFromTypeNode(it) }
         }
         val params = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
+        // (CHK.219)(c) a GENERIC arrow's annotated parameter types resolve HERE, under its
+        // own scope, as [getTypeOfFunctionExpression] does — read lazily later (outside the
+        // scope, and never persisted inside it: round 778's write gate) `x: T` answered
+        // `errorType` and every call of `const f = <T>(x: T) => …` inferred nothing.
+        if (!ownTypeParams.isNullOrEmpty()) resolveParameterTypesInScope(params, expr.parameters)
         // Apply contextual typing: infer parameter types from contextual call signature.
         // B83.4f-c: do this BEFORE return-type inference so the body's identifier
         // resolution (`getTypeOfIdentifier` reads `currentLocalTypes`) sees concrete
@@ -127362,6 +127377,7 @@ interface DataView {
                 }
                 if (matchingSig?.typeParameters != null) {
                     val mapper = createTypeMapper(matchingSig.typeParameters, resolvedTypeArgs)
+                    if (matchingSig.resolvedReturnType === anyType) mappedReturnUnderMapper(matchingSig, mapper)?.let { return it }
                     val instantiated = instantiateSignature(matchingSig, mapper)
                     return instantiated.resolvedReturnType ?: anyType
                 }
@@ -127377,6 +127393,7 @@ interface DataView {
                 val mapper = tryInferSingleTypeParamFromArgs(sig, expr.arguments, forReturnType = true)
                 if (mapper != null) {
                     val rt = sig.resolvedReturnType ?: return anyType
+                    if (rt === anyType) mappedReturnUnderMapper(sig, mapper)?.let { return it }
                     return instantiateType(rt, mapper)
                 }
                 argInferResultType(sig, expr)?.let { return it }
@@ -127445,7 +127462,10 @@ interface DataView {
                     if (s.typeParameters.isNullOrEmpty()) continue
                     val rt = s.resolvedReturnType ?: continue
                     val mapper = tryInferSingleTypeParamFromArgs(s, expr.arguments, forReturnType = true)
-                    if (mapper != null) return instantiateType(rt, mapper)
+                    if (mapper != null) {
+                        if (rt === anyType) mappedReturnUnderMapper(s, mapper)?.let { return it }
+                        return instantiateType(rt, mapper)
+                    }
                 }
                 argInferOverloadResultType(inferCandidates, expr)?.let { return it }
             }
@@ -128107,6 +128127,37 @@ interface DataView {
         return if (u is Type.Object && u !is Type.Interface && u !is Type.Reference) u else null
     }
 
+    /**
+     * (CHK.219)(a) tsgo `instantiateMappedType` for a call's RESULT: a signature whose
+     * declared return is a MAPPED type over its own type parameter resolved to `any` at
+     * the declaration (the key domain is unknowable there — [getTypeFromMappedType]),
+     * so instantiating that resolved `any` loses the call's binding. The return-type
+     * NODE is re-resolved instead with each type parameter [mapper] binds installed as
+     * an alias argument (and removed from the type-parameter scope) — the shape the
+     * annotation-retry in the return check already uses. Null when the return is not a
+     * mapped type or the re-resolution still answers `any`.
+     */
+    private fun mappedReturnUnderMapper(sig: Signature, mapper: TypeMapper): Type? {
+        var node = sg4bDeclReturnTypeNode(sig.declaration) ?: return null
+        while (node is ParenthesizedType) node = node.type
+        if (node !is MappedType) return null
+        val bindings = HashMap<String, Type>()
+        for (tp in sig.typeParameters ?: return null) {
+            val name = tp.symbol?.name ?: continue
+            val t = mapper.map(tp) ?: continue
+            if (t === anyType || t === errorType) return null
+            bindings[name] = t
+        }
+        if (bindings.isEmpty()) return null
+        val scope = currentTypeParamScope
+        val r = getTypeFromTypeNodeWithMapper(node, InstantiationMapper(
+            (currentTypeAliasArgs ?: emptyMap()) + bindings,
+            if (scope != null) scope - bindings.keys else null,
+            inferenceNamespaceStack.size,
+        ))
+        return r.takeIf { it !== anyType && it !== errorType }
+    }
+
     private fun sg4bDeclReturnTypeNode(node: Node?): TypeNode? = when (node) {
         is FunctionType -> node.type
         is FunctionDeclaration -> node.type
@@ -128364,7 +128415,20 @@ interface DataView {
             }
             if (hasAnchor) 0 else 1
         }
+        // (CHK.219)(b) a type parameter that occurs in NO parameter, only in a sibling's
+        // constraint (`<T extends string, U extends [T, ...T[]]>(items: U)`), has no
+        // argument candidate: the sibling is checked against its constraint instantiated
+        // with that parameter's own constraint, and the parameter itself is left UNBOUND
+        // (tsgo binds it from the call's contextual return type, which this does not model
+        // — binding it to `string` printed `'string'` where tsgo prints `'"a"'`), so a
+        // return type that mentions it keeps the old answer. Return-type sites only.
+        val constraintOnly = if (forReturnType) tispConstraintOnlyTypeParams(tps, params)
+            .takeIf { co -> sig.resolvedReturnType.let { r -> r != null && co.none { typeMayMentionTypeParam(r, it, 0) } } }
+            .orEmpty() else emptyList()
+        val constraintOnlyMapper = if (constraintOnly.isEmpty()) null
+            else createTypeMapper(constraintOnly, constraintOnly.map { it.constraint!! })
         for (tp in orderedTps) {
+            if (tp in constraintOnly) continue
             val candidates = mutableListOf<Candidate>()
             val tpSawAnyArg = tispGatherAnchorCandidates(
                 tp = tp,
@@ -128412,12 +128476,16 @@ interface DataView {
             val effectiveCandidates = nonNeverCands.sortedBy { if (it.fromObjLit) 1 else 0 }
 
             val first = effectiveCandidates[0]
-            val firstWidened = first.widenedType
+            // (CHK.219)(b) tsgo `getCovariantInference`: a type parameter with a PRIMITIVE
+            // constraint keeps its literal candidates (`id<T extends string>("a")` is `"a"`),
+            // and the constraint is checked against that kept form (`K extends "a" | "b"`).
+            val kept = if (forReturnType) tispKeptLiterals(tp, effectiveCandidates) else null
+            val firstWidened = kept ?: first.widenedType
 
             // Constraint check: inferred type (widened first candidate) must satisfy
             // tp's constraint. Protects 16.4i (constrained TypeParam emits TS2345 with
             // constraint as effective param type) from being bypassed.
-            val constraint = tp.constraint
+            val constraint = tp.constraint?.let { c -> constraintOnlyMapper?.let { instantiateType(c, it) } ?: c }
             if (constraint != null) {
                 tispCheckConstraint(
                     tp = tp,
@@ -128488,6 +128556,87 @@ interface DataView {
 
         if (mapperPairs.isEmpty()) return null
         return createTypeMapper(mapperPairs.map { it.first }, mapperPairs.map { it.second })
+    }
+
+    /**
+     * (CHK.219)(b) tsgo `getCovariantInference`'s `primitiveConstraint` rule for
+     * [tryInferSingleTypeParamFromArgs]: a type parameter whose constraint includes a
+     * primitive or literal type ([argInferHasPrimitiveConstraint]) is NOT widened —
+     * every candidate's literal form is kept and their union is the inference. Null
+     * (widen as before) unless EVERY candidate carries a string / number / bigint /
+     * boolean literal.
+     */
+    private fun tispKeptLiterals(tp: Type.TypeParam, cands: List<Candidate>): Type? {
+        if (!argInferHasPrimitiveConstraint(tp)) return null
+        val lits = ArrayList<Type>(cands.size)
+        for (c in cands) {
+            val l = c.literalType ?: return null
+            for (m in (l as? Type.Union)?.types ?: listOf(l)) {
+                if (!tispIsUnitLiteral(m)) return null
+                lits.add(m)
+            }
+        }
+        return if (lits.size == 1) lits[0] else getUnionType(lits)
+    }
+
+    /** (CHK.219)(b) The type parameters of [tps] that no parameter mentions, that a
+     *  sibling's constraint does, and whose own constraint is concrete (mentions none
+     *  of [tps]). */
+    private fun tispConstraintOnlyTypeParams(tps: List<Type.TypeParam>, params: List<Symbol>): List<Type.TypeParam> {
+        if (tps.size < 2) return emptyList()
+        return tps.filter { tp ->
+            val c = tp.constraint
+            c != null && c !== anyType && c !== errorType && c !== unknownType &&
+                tps.none { typeMayMentionTypeParam(c, it, 0) } &&
+                tps.any { o -> o !== tp && o.constraint?.let { typeMayMentionTypeParam(it, tp, 0) } == true } &&
+                params.none { typeMayMentionTypeParam(getTypeOfSymbol(it), tp, 0) }
+        }
+    }
+
+    private fun tispIsUnitLiteral(t: Type): Boolean =
+        t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral || t === trueType || t === falseType
+
+    /** (CHK.219)(b) The literal types of an array literal's elements as a union, or null
+     *  unless every element is a unit literal (no spread, no hole). */
+    private fun tispArrayElementLiterals(arg: Expression): Type? {
+        var a = arg
+        while (a is ParenthesizedExpression) a = a.expression
+        if (a !is ArrayLiteralExpression || a.elements.isEmpty()) return null
+        val lits = a.elements.map { e -> literalTypeOfExpression(e)?.takeIf { tispIsUnitLiteral(it) } ?: return null }
+        return if (lits.size == 1) lits[0] else getUnionType(lits)
+    }
+
+    /**
+     * (CHK.219)(b) tsgo types an array literal contextually typed by a TUPLE-like
+     * constraint as a tuple, keeping an element's literal where its element context is a
+     * primitive-constrained type parameter and widening it under a plain primitive
+     * (`U extends [T, ...T[]]`, `T extends string`: `["a", "b"]`; `U extends [string,
+     * ...string[]]`: `[string, string]`). Null unless [tp]'s constraint is a tuple and
+     * [arg] an array literal of unit literals of an accepted length whose every element
+     * context is one of those two.
+     */
+    private fun tispTupleLiteralCandidate(tp: Type.TypeParam, arg: Expression): Type? {
+        val c = tp.constraint as? Type.Object ?: return null
+        val elems = c.tupleElementTypes ?: return null
+        var a = arg
+        while (a is ParenthesizedExpression) a = a.expression
+        if (a !is ArrayLiteralExpression || a.elements.isEmpty()) return null
+        val rest = c.tupleRestIndex
+        if (rest < 0 && a.elements.size != elems.size) return null
+        if (rest >= 0 && a.elements.size < rest) return null
+        val out = ArrayList<Type>(a.elements.size)
+        for ((i, e) in a.elements.withIndex()) {
+            val ctx = if (rest in 0..i) arrayRefElement(elems[rest]) ?: return null else elems.getOrNull(i) ?: return null
+            val lit = literalTypeOfExpression(e)?.takeIf { tispIsUnitLiteral(it) } ?: return null
+            out.add(when {
+                ctx is Type.TypeParam && argInferHasPrimitiveConstraint(ctx) -> lit
+                // tsgo `isLiteralOfContextualType`: a plain primitive context widens.
+                ctx.flags.hasAny(TypeFlags.String or TypeFlags.Number or TypeFlags.BigInt or TypeFlags.Boolean) ->
+                    getWidenedLiteralType(lit)
+                else -> return null
+            })
+        }
+        return buildTupleFromTypes(out)
     }
 
     /**
@@ -128838,7 +128987,14 @@ interface DataView {
                 if (!isNamedLike && !forReturnType) return null
                 // 17.31e: for Array<tp> path the literal type is null (we don't have
                 // a single literal to attach to the array's element type).
-                val literal = if (isArrayT || unionMode == 2) null else literalTypeOfExpression(arg)
+                // (CHK.219)(b) a TUPLE-constrained bare type parameter infers a tuple of the
+                // array literal's literals; an `Array<tp>` one records the elements' literals.
+                if (forReturnType && isBareT) tispTupleLiteralCandidate(tp, arg)?.let {
+                    candidates.add(Candidate(ai, it, it)); continue
+                }
+                val literal = if (isArrayT || unionMode == 2) {
+                    if (forReturnType && isArrayT) tispArrayElementLiterals(arg) else null
+                } else literalTypeOfExpression(arg)
                 candidates.add(Candidate(ai, argType, literal))
             }
         }
@@ -160879,7 +161035,12 @@ interface DataView {
                 } else resolvedTypeArgs
                 val mapper = createTypeMapper(tps, paddedArgs)
                 // TS2344 / TS2559: Check supplied type arguments against their constraints.
+                val diagsBeforeTypeArgs = diagnostics.size
                 checkCallTypeArgConstraints(tps, resolvedTypeArgs, typeArgs, mapper, source, fileName)
+                // (CHK.219)(d) tsgo's `chooseOverload` rejects a candidate whose explicit type
+                // arguments fail their constraints BEFORE its arguments are checked, and
+                // reports the type-argument error alone — so no argument row follows one.
+                val typeArgsFailed = genericCandidates.size == 1 && diagnostics.size > diagsBeforeTypeArgs
                 // B83.4f-a: use instantiateContextualSignature (not the plain
                 // instantiateSignature) so a nested FUNCTION-typed param like
                 // `f: (x: T) => Date` substitutes its inner `(x: T)` to `(x: <number>)`.
@@ -160907,7 +161068,7 @@ interface DataView {
                 }
                 checkTs2554ForPropertyAccessCall(expr, instantiated, source, fileName)
                 val taArgsT = CallSections.t()
-                checkArgumentsAgainstSignature(
+                if (!typeArgsFailed) checkArgumentsAgainstSignature(
                     expr.arguments, instantiated, source, fileName, implRelated, calleeGenericInstantiation = true,
                     // (CHK.176)(a) one generic candidate is the call's whole set; of several, it is not.
                     reportArity = genericCandidates.size == 1,
