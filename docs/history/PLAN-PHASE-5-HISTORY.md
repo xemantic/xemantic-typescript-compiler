@@ -1,3 +1,35 @@
+### Round (P18.272) — (LIBS.1) round 6, (CHK.207): four parser gaps fixed in `Parser.kt` alone — a `<` after a LINE BREAK is no longer type arguments in a type position, `get!` / `get?` are properties not accessors, a named import / export called `type` parses, and a member after an index signature no longer needs a second separator; immer 43 -> 5, the 8-library tally 689 -> 633, NONE added; `Checker.class` unchanged; cost baseline refreshed (2026-10-03)
+
+One implementation subagent; the parser is a frozen subsystem, so the corpus screen (every recovery baseline) was the
+gate. **Where the brief was wrong**: (a) the line-break rule that applies is the TYPE-position one,
+`parseTypeArgumentsOfTypeReference` (parser.go:3012, also `parseTypeQuery`), not the expression-position one — heritage
+clauses do not take it in tsgo, and keep the old behaviour; (b) the named-import `type` gap was not a missing contextual
+rule but a STALE-TOKEN lookahead (`isIdentifier()` inside `scanner.lookAhead` read the cached `type` itself), which also
+broke `export { type }`; (c) the index-signature gap is not numeric-specific — an index signature consumes its own `;`
+and the member loop asked again, and a numeric literal is one of `parseSemicolon`'s TS1005 triggers (`0()`, `1n` too);
+(d) the accessor lookahead's deny list lacked `!` AND `?` (`get?: T`, `get?()` were broken too). **Mechanism**:
+`parseTypeArgumentsOfTypeReference()` (null when `<` is on a new line) for a type reference, a typeof query and an
+import type; `!` / `?` in `parseClassMember`'s get / set lookahead; `leadingTypeIsSpecifierModifier()` (tsgo's `type` /
+`type as` / `type as as` table, reading `scanner.getToken()`) for import and export specifiers; a
+`typeMemberConsumedSemicolon` flag set by the three index-signature paths and read by the member loop for an
+`IndexSignature` only, reset after reading — the builder's FIRST cut leaked it through a nested type literal and the
+LIBRARY GRID caught it as a new TS7008 in immer's `@types/node/zlib.d.ts:63`; fixed and pinned. `Parser.kt` +55.
+**Matrices** (48 cells): every fixed shape to tsgo's rows (immer's interface 6 false -> 0, `get!` / `set!` / `get?` 3-6 false
+each -> tsgo, the `type` specifier family 1-6 false each -> 0, index-signature separators 1 false each -> 0); neighbours
+unchanged; correct parses now EXPOSE missing rows the old cascades hid (residues below). **Pins**:
+`ParserLibraryShapesTest` 18; ablation a1 3 / a2 3 / a3 4 / a4 1 / a7 (the leaky cut) 1 RED; a5 / a6 (the `IndexSignature`
+restriction and the reset) are a REDUNDANT pair — either alone stops the leak. **Gates**: full suite 22,527 / 0 / 44
+(+18); corpus screen 8725 / 0 and `--include ''` the same 41, byte-identical; `huge_methods.py --fail-over 0` 0;
+`cost_gate.py` 0 with `spine.nodes` +0.00% (the AST is unchanged on the profile) — the baseline is REFRESHED here
+(`--update`): its `globals.lookups` +0.64% / `globals.misses` +0.59% were (P18.269)'s own-scope arity probes (~+0.30%)
+plus older recorded-baseline staleness, not this round; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
+cronstrue unchanged; library grid superstruct 7 -> 6, immer 43 -> 5, hono 63 -> 61, type-fest 373 -> 358, others and
+agree / missing unmoved; warning gate with probe: probe only. **Residues** (exposed by the correct parse): an
+interface with two GENERIC call signatures misses the call's result type (immer's `IProduce`, a missing TS2322 — the
+only missing row this round surfaced, also present on the old binary in one-line form); TS2411 against an index
+signature is reported for an interface but never a TYPE LITERAL; TS1539 (bigint name), TS1255 (`static x!`), TS2749
+(a type-only-imported value used as a type), TS1441 for `x!()` in a class.
+
 ### Round (P18.271) — (LIBS.1) round 5, (CHK.204): the unused-declaration check (TS6133 / TS6196 / TS6205) now sees references in template-literal types (a raw-text scan — the parser never builds the spans), type predicates, index signatures, type-parameter constraints / defaults, parameter initializers and computed member names, and follows tsgo's reporting skips (ambient context, `this` parameters, `infer _`); all 97 library rows of that family gone, the 8-library tally 786 -> 689, NONE added (2026-10-02)
 
 One implementation subagent. **Where the brief was wrong**: (a) the census blamed the per-kind collectors; the real
