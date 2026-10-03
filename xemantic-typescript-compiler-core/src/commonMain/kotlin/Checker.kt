@@ -510,6 +510,8 @@ class Checker(
     private val genericIndexAccess = GenericIndexAccess(this)
     internal val intersectionOps = IntersectionTypeOperators(this)
     internal val indexedAccessParams = IndexedAccessParams(this)
+    /** (LIBS.2) GSIG — the `IsEqual` generic-signature trick; see `GenericSignatureConditionals.kt`. */
+    private val genericSigConditionals = GenericSignatureConditionals(this)
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -75854,7 +75856,7 @@ interface DataView {
             (p.id in mappedReadonlyMemberIds || isReadonlyAccessOrModifier(p))
 
     /** Check if a symbol is declared readonly. */
-    private fun isReadonlySymbol(symbol: Symbol): Boolean {
+    internal fun isReadonlySymbol(symbol: Symbol): Boolean {
         // M1.10: a `-readonly` mapped member is writable regardless of the carried
         // source declaration's modifier (the mapped type STRIPS readonly).
         if (symbol.id in mappedMutableMemberIds) return false
@@ -109846,6 +109848,11 @@ interface DataView {
     private fun getTypeFromTypeNodeWithMapper(node: TypeNode, mapper: InstantiationMapper): Type =
         withInstantiationContext(mapper) { getTypeFromTypeNode(node) }
 
+    /** [node] resolved with [bindings] layered onto the alias args, shadowing same-named scope type parameters. */
+    internal fun typeOfNodeBinding(node: TypeNode, bindings: Map<String, Type>): Type = getTypeFromTypeNodeWithMapper(node,
+        InstantiationMapper((currentTypeAliasArgs ?: emptyMap()) + bindings,
+            currentTypeParamScope?.let { sc -> sc.filterKeys { it !in bindings } }, inferenceNamespaceStack.size))
+
     internal fun getTypeFromTypeNode(node: TypeNode): Type {
         if (PassTiming.detailed) {
             if (tnProbeDepth++ == 0) {
@@ -113791,7 +113798,7 @@ interface DataView {
     /**
      * Get the properties of a type, triggering lazy resolution if needed.
      */
-    private fun getPropertiesOfType(type: Type): List<Symbol> {
+    internal fun getPropertiesOfType(type: Type): List<Symbol> {
         if (type is Type.Object) {
             resolveStructuredTypeMembers(type)
             return type.properties ?: emptyList()
@@ -175134,9 +175141,9 @@ interface DataView {
             // synthesized member can carry its SOURCE property's declaration (for "declared
             // here" TS6500/TS2728 related info — excessPropertyChecksWithNestedIntersections).
             val homomorphicSourceType: Type? = run { // (CHK.215) an `as` clause keeps the modifiers type
-                (constraint as? TypeOperator)
-                    ?.takeIf { it.operator == SyntaxKind.KeyOfKeyword }
-                    ?.let { getTypeFromTypeNode(it.type) }
+                ((constraint as? TypeOperator)?.takeIf { it.operator == SyntaxKind.KeyOfKeyword }?.type
+                    ?: declaredKeyofOperandOfMappedConstraint(node)) // (LIBS.2) `[P in K]`, `K extends keyof T`
+                    ?.let { getTypeFromTypeNode(it) }
                     ?.takeIf { it !== anyType && it !== errorType }
             }
             for ((keyIdx, key) in keys.withIndex()) {
@@ -175358,6 +175365,7 @@ interface DataView {
     }
 
     private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {
+        genericSigConditionals.decide(node)?.let { return getTypeFromTypeNode(if (it) node.trueType else node.falseType) }
         // Check if checkType extends extendsType
         // Round 729 bolted the round-472 `.kind` DOMAIN veto onto this conjunction,
         // because enum-member types did not discriminate in our relation
