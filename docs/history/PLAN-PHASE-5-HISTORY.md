@@ -1,3 +1,32 @@
+### Round (P18.271) — (LIBS.1) round 5, (CHK.204): the unused-declaration check (TS6133 / TS6196 / TS6205) now sees references in template-literal types (a raw-text scan — the parser never builds the spans), type predicates, index signatures, type-parameter constraints / defaults, parameter initializers and computed member names, and follows tsgo's reporting skips (ambient context, `this` parameters, `infer _`); all 97 library rows of that family gone, the 8-library tally 786 -> 689, NONE added (2026-10-02)
+
+One implementation subagent. **Where the brief was wrong**: (a) the census blamed the per-kind collectors; the real
+cause for templates is the PARSER — `skipTemplateType` parses each `${…}` and throws it away, so `templateSpans` is
+always empty and the collectors' existing `TemplateLiteralType` arms could never fire (a known archive gotcha, now a
+resident CLAUDE.md entry); (b) a unified `forEachChild` walk was therefore not the fix (it would walk nothing inside
+templates either) — targeted additions + a lexical scan of the template's raw text; (c) the 97 rows came from four more
+mechanisms the census did not name: module augmentations / `declare` blocks (hono's 5 `ContextVariableMap`), `infer _`
+(6), `this` parameters, computed member names (hono's `GET_MATCH_RESULT`). **Mechanism**: the name-only collectors
+(`collectRefsFromType`, `collectTypeRefs`, `collectTypeReferenceNames`, `collectTypeQueryValueRefs`,
+`collectRefsFromClassElement`, `collectTypeRefsInExpr`, the three type-parameter checkers) gain arms for template text,
+`TypePredicate`, `IndexSignature` elements, computed names, type-parameter constraints / defaults (sibling's, own,
+call-signature's, method's, generic arrow's) and parameter initializers; `unusedTypeParamInnerScope` /
+`unusedTypeParamScopeClose` make a generic arrow's own type parameters SHADOW outer names; tsgo's `reportUnused` skips
+(ambient context, never a `this` parameter, `_`-prefixed incl. `infer _`). New `UnusedDeclarationSyntax.kt` (142 —
+`templateTypeReferenceNames(raw)` reads identifiers inside `${…}` only, skipping literal text, quoted strings, the name
+an `infer` declares, post-`.` parts, property names and keywords, marking `typeof` operands; `isAmbientUnusedRoot`).
+`Checker.kt` +88. **Matrices**: pins 36 rows (28 ours-only, 2 missing) -> 9 (0 ours-only, 1 missing) vs tsgo 10; position
+cells 35 -> 2 = tsgo; census `repro/unused` 7 -> 0 = tsgo; over-counting controls 2 ours-only -> 0 (shadowed `Q` / `Fn`
+now REPORTED as tsgo, `tv` / `InFn` no longer false); two new silences, BOTH only on code already carrying an error
+(`const V; type T = \`${V}\`` beside TS2749, `${Dotted.x}` beside TS2702) — the existing meaning-blindness reaching
+templates. **Pins**: `UnusedDeclarationSyntaxKindsTest` 8 (silences paired with tsgo control rows); ablation a1-a9 + a4b
+each exactly 1 RED. **Gates**: full suite 22,509 / 0 / 44 (+8); corpus screen 8725 / 0 and `--include ''` byte-identical
+(a CONTROL — no corpus baseline moved); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 +
+chain OK, rxjs / marked / cronstrue unchanged; library grid ky 11 -> 10, hono 97 -> 63, zod 173 -> 166, type-fest 428 ->
+373 — every removed row TS6133 / TS6196 / TS6205, nothing added; warning gate with probe: probe only. **Residues**:
+template-literal types still unparsed (building the spans is the real, WIDE fix); the collectors stay name- and
+meaning-blind (shadowing by an inner same-named type parameter or `infer R` inside a template, value-vs-type).
+
 ### Round (P18.270) — (INV.0) extraction: the `@ts-ignore` / `@ts-expect-error` comment-directive family moves verbatim into a new `CommentDirectives` collaborator; `Checker.kt` 200,907 -> 200,628 (-279); every receipt byte-identical, including the library grid's row SETS (2026-10-02)
 
 One implementation subagent. **Where the brief was wrong**: only candidate 2 was clean. The ARITY family is split in
