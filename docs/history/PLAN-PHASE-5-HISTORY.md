@@ -1,3 +1,33 @@
+### Round (P18.263) — (CHK.195)(a): a namespace's `export { … }` clause now binds under the EXPORTED name — the false TS2708 in clause-only ambient namespaces, the false TS2694 / TS2339 on clause entries and the missing tsgo row are all one binder fact; three neighbouring false positives fixed with it; every cell's ours-only rows to 0 bar one pre-existing display defect; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
+
+One implementation subagent. **Where the item was wrong**: (a) "three mechanisms, not contained" — all three come from
+ONE fact: the binder put every namespace member, exported or not, into the namespace's export table keyed by its
+DECLARED name, so an `export { … }` clause never produced an entry under the name it exports (CLAUDE.md's two-spellings
+trap, inside a namespace); (b) the census's 4 ours-only TS2694 were neither scope nor meaning — `checkQualifiedNameExports`
+looked the root namespace up as `globals[name]` and took whichever checked file declared it FIRST, i.e. the OTHER
+module's `NS1` (two direct-read false TS2694 already existed on the parent for the same reason); (c) the ns2 "missing
+row" is general — `N.nope` on ANY value-bearing `declare namespace` was silent, because the TS2339 suppression assumed
+every `declare namespace` non-instantiated. **Mechanism**: the binder binds a namespace's clauses AFTER the rest of the
+block (a clause above its member still finds it), marks a sibling exported under its own name `ExportValue`, and makes
+every other entry (rename, outer name, import) an ALIAS keyed by the exported name; `NameResolver.namespaceClauseTarget`
+resolves the declared name in the clause's own scope (enclosing namespace tables innermost-first, the file, visible
+globals), never answering with the clause's own alias; the three syntactic TS2708 checks consult
+`namespaceExportClauseCarriesValue` — a port of tsgo's syntactic module-instance-state (new `NamespaceExportClauses.kt`,
+140 lines), which also counts an exported `import X = …` (a second false TS2708); the TS2339 suppression uses
+`ambientNamespaceHasValue` excluding `declare global` (the grid's first pass caught +2 ours-only TS2339 on `global.gc` in
+harness's `sys.ts` without that exclusion); the `import k = N.b` reader reads `ExportValue` (removing a false TS2694 the
+new alias would have created, and `acceptableAlias1`'s); `checkQualifiedNameExports` takes the root from the current
+file's own locals first; new TS2661 for a namespace clause naming a script-level or lib global. `Checker.kt` +45,
+`Binder.kt` +46, `NameResolver.kt` +33. **Matrix** (`build/bench/p18263-agent/cells`): m01 (= ns1) 7/5/1 -> 8/0/0, m02
+(= ns2) 0/5/6 -> 6/0/0, m08 m09 m10 m11 m12 c08 c10 to full agreement, m03 m04 m05 m06 m07 improved, c07
+(`acceptableAlias1`) false TS2694 gone; every moved row a tsgo row; the one remaining ours-only row (m04 / m05) is the
+pre-existing `typeof N.b` display, reproduced on the parent with a plain `export const`. **Pins**: `NamespaceExportClauseTest`
+16 (full tsgo row lists); `NamedReExportResolutionTest`'s "namespace-local export clause is not followed" countdown
+re-pointed to tsgo's row; ablation a1 8 / a2 5 / a3 3 / a4 10 / a5 2 / a6 2 / a7 4 / a8 1 / a9 1 / a10 1 RED. **Gates**:
+full suite 22,377 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the same 41 (`acceptableAlias1`'s content
+improved, still a TS-1 harness row); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 +
+chain OK, rxjs / marked / cronstrue unchanged; warning gate with probe: probe only.
+
 ### Round (P18.262) — (CHK.196) stage-3 residues: an ANONYMOUS construct type (`abstract new () => Co`) is now a constructor source to the argument relation and the missing-static TS2741, generic-class constructor arguments infer `T` from a callback's return, `cond ? A : B` of classes is subtype-reduced, and a constructor's own `prototype` no longer appears in an elaboration chain; 138-cell matrix 73 -> 78 of 94 agreeing with tsgo, 0 ours-only (one new false positive caught and refused); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
 
 One implementation subagent. **Where the item was wrong**: (a) t05 was not "which class sources reach

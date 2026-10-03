@@ -25,6 +25,36 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.273) — (LIBS.1) round 7, (CHK.206): discriminant / equality / switch narrowing by the comparand's TYPE (a unit type or a union of them — an `as const` member, a mapped type of literals, a const, an imported member, `typeof C.a`), matching tsgo cell for cell — but zod's 61 rows did NOT move (166 -> 165): the census's attribution was wrong, they are blocked UPSTREAM by two inference gaps, queued as (CHK.219); plus the read-only RESIDUAL census queued as (LIBS.2) (2026-10-03)
+
+Two agents in parallel (builder + read-only census). **Builder — where the item was wrong**: (a) zod's 61 rows are
+not F7 alone — `ZodIssueCode = util.arrayToEnum([...])` types as `any` here (tsgo: `{ a: "a"; b: "b"; }`), because a
+generic call returning a mapped type over a TYPE PARAMETER answers `any` (`getTypeFromMappedType` returns `anyType`
+for a type-parameter constraint — even an explicit `mr<"a">("a")`) and a literal argument against `T extends string`
+widens to `string`; with those open any comparand fix is INERT on zod (measured: 61 before and after); (b) the
+comparand was read syntactically at THREE sites — `narrowByDiscriminantProperty`, `narrowBySwitchClauseCore` (two
+places) and `narrowByEquality` for a plain subject (`k === C.a` with `k: "a" | "b" | "c"` did not narrow); (c) the
+census's mapped-type cell was the easy case and the enum control already worked. **Mechanism**:
+`comparandLiteralType(expr, typed)` tries the literal-syntax readers first, then `comparandUnitType` (`getTypeOfExpression`
+for an Identifier / property access / element access, accepting only a definite-value unit type or a union of them —
+enum member types are member-less `Type.Object`s and never qualify); `narrowByDiscriminantProperty` uses it (an enum
+comparand skips the type query — a cost guard) with a union comparand keeping a member if any literal keeps it; a union
+`case` never proves `default` unreachable (tsgo) and adds all its literals to the case range; `narrowByEquality` narrows
+a literal-carrying union subject (a unit comparand both branches, a union comparand the true branch only). `Checker.kt`
++43; `narrowBySwitchClauseCore` 5,108 bytecodes. **Matrix**: 27 cells = tsgo except three upstream ones (`toEnum([...])`
+generic call, a template literal comparand `\`${"a"}\``, `switch` over `C3.x` members — all the (CHK.219) gaps);
+fixed the wrong `never` rows on `default:`. **Pins**: `ComparandTypeNarrowingTest` 17 (tsgo rows incl. 3 negative
+controls, an enum control, a cross-module case); ablation a1 9 / a4 1 / a5 2 RED; a2 / a6 read 0 and were DELETED as no-op
+guards, a3 (default-switch union refusal) kept explicit and documented, a7 is a cost guard by design. **Gates**: full
+suite 22,544 / 0 / 44 (+17); corpus screen 8725 / 0 and `--include ''` the same 41, byte-identical; `cost_gate.py` 0 —
+`typeOfExpr.calls` +1.32% (the comparand type queries for non-literal, non-enum comparands — the accounting for this
+round), `narrow.memoServed` +1.05%; baseline `--update`d in this commit; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid zod 166 -> 165 (one ours-only TS2339
+gone), others unchanged, missing unchanged; warning gate with probe: probe only. **Census** (`build/scratch-p18273-census/`):
+all 661 residual rows assigned to mechanisms with 33 tsgo-checked repros — queued as (LIBS.2) + (CHK.212)-(CHK.218).
+**Lesson**: a census's MECHANISM attribution for a row population is a hypothesis until one cell of the REAL library
+moves — the F7 rows' comparand was `any` upstream, so a correct narrowing fix moved 1 of 61.
+
 ### Round (P18.272) — (LIBS.1) round 6, (CHK.207): four parser gaps fixed in `Parser.kt` alone — a `<` after a LINE BREAK is no longer type arguments in a type position, `get!` / `get?` are properties not accessors, a named import / export called `type` parses, and a member after an index signature no longer needs a second separator; immer 43 -> 5, the 8-library tally 689 -> 633, NONE added; `Checker.class` unchanged; cost baseline refreshed (2026-10-03)
 
 One implementation subagent; the parser is a frozen subsystem, so the corpus screen (every recovery baseline) was the
@@ -289,36 +319,6 @@ extra refusals) read 0 and were DELETED — A4 was suppressing tsgo's p6 row. **
 (+19); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0 (core
 5,194); grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; warning gate with probe: probe only.
 Residues -> (CHK.200).
-
-### Round (P18.263) — (CHK.195)(a): a namespace's `export { … }` clause now binds under the EXPORTED name — the false TS2708 in clause-only ambient namespaces, the false TS2694 / TS2339 on clause entries and the missing tsgo row are all one binder fact; three neighbouring false positives fixed with it; every cell's ours-only rows to 0 bar one pre-existing display defect; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
-
-One implementation subagent. **Where the item was wrong**: (a) "three mechanisms, not contained" — all three come from
-ONE fact: the binder put every namespace member, exported or not, into the namespace's export table keyed by its
-DECLARED name, so an `export { … }` clause never produced an entry under the name it exports (CLAUDE.md's two-spellings
-trap, inside a namespace); (b) the census's 4 ours-only TS2694 were neither scope nor meaning — `checkQualifiedNameExports`
-looked the root namespace up as `globals[name]` and took whichever checked file declared it FIRST, i.e. the OTHER
-module's `NS1` (two direct-read false TS2694 already existed on the parent for the same reason); (c) the ns2 "missing
-row" is general — `N.nope` on ANY value-bearing `declare namespace` was silent, because the TS2339 suppression assumed
-every `declare namespace` non-instantiated. **Mechanism**: the binder binds a namespace's clauses AFTER the rest of the
-block (a clause above its member still finds it), marks a sibling exported under its own name `ExportValue`, and makes
-every other entry (rename, outer name, import) an ALIAS keyed by the exported name; `NameResolver.namespaceClauseTarget`
-resolves the declared name in the clause's own scope (enclosing namespace tables innermost-first, the file, visible
-globals), never answering with the clause's own alias; the three syntactic TS2708 checks consult
-`namespaceExportClauseCarriesValue` — a port of tsgo's syntactic module-instance-state (new `NamespaceExportClauses.kt`,
-140 lines), which also counts an exported `import X = …` (a second false TS2708); the TS2339 suppression uses
-`ambientNamespaceHasValue` excluding `declare global` (the grid's first pass caught +2 ours-only TS2339 on `global.gc` in
-harness's `sys.ts` without that exclusion); the `import k = N.b` reader reads `ExportValue` (removing a false TS2694 the
-new alias would have created, and `acceptableAlias1`'s); `checkQualifiedNameExports` takes the root from the current
-file's own locals first; new TS2661 for a namespace clause naming a script-level or lib global. `Checker.kt` +45,
-`Binder.kt` +46, `NameResolver.kt` +33. **Matrix** (`build/bench/p18263-agent/cells`): m01 (= ns1) 7/5/1 -> 8/0/0, m02
-(= ns2) 0/5/6 -> 6/0/0, m08 m09 m10 m11 m12 c08 c10 to full agreement, m03 m04 m05 m06 m07 improved, c07
-(`acceptableAlias1`) false TS2694 gone; every moved row a tsgo row; the one remaining ours-only row (m04 / m05) is the
-pre-existing `typeof N.b` display, reproduced on the parent with a plain `export const`. **Pins**: `NamespaceExportClauseTest`
-16 (full tsgo row lists); `NamedReExportResolutionTest`'s "namespace-local export clause is not followed" countdown
-re-pointed to tsgo's row; ablation a1 8 / a2 5 / a3 3 / a4 10 / a5 2 / a6 2 / a7 4 / a8 1 / a9 1 / a10 1 RED. **Gates**:
-full suite 22,377 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the same 41 (`acceptableAlias1`'s content
-improved, still a TS-1 harness row); `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 +
-chain OK, rxjs / marked / cronstrue unchanged; warning gate with probe: probe only.
 
 ## QUEUE
 
@@ -922,7 +922,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.190) DONE 2026-10-01 (stage 1 (P18.249), residues (P18.252); the namespace-clause residue and the rest -> (CHK.195)). STAGE 1 LANDED 2026-10-01 ((P18.249) note: renames, default and local clauses, `.js` specifiers, barrel chains, augmentation-contributed names). OPEN: c13 named cycle (tsgo TS2303 at both clauses; ours terminates and reads `any`); c14 TS1362 for an `export type` name used as a value; c08 `export * as M` read in value positions; c26 TS2305 where tsgo says TS2614; namespace-level `export { … }` clauses missing from a namespace's export table (the corpus shape `namespacesWithTypeAliasOnlyExportsMerge`); stage 2 (`resolveAlias`'s import arms without the `.js` / crawl / star legs — no measured row it would close); the a9 `.js` leg is unpinned. EARLIER: SAME-NAME `export { X } from` LANDED 2026-10-01 at (P18.248) (with the collision fix); RE-MEASURE the census matrix before stage 1 — c01 c09 c12 c15 c16 c20 c24 now pass, still failing: c03 c04 c06 c08 c10 c13 c19 c21 (renaming / default clauses, local `{B0 as B}`, import-then-export rename, `.js` specifiers, the 3-barrel star chain, the named-cycle TS2303, `export type`), and importers no longer need shifting. CENSUSED 2026-10-01 (read-only, `build/scratch-p18247-census/README.txt`). Stage 1: one helper `importedExport(target, exportedName)` over `exportedSymbolsThroughStars` (importer-visible names, null = unknowable -> today's lookup), plus `followExportSpecifier` (from-clause resolved relative to the declaring file, `.js` leg included; local clause in the declaring scope), wired into a new `resolveAlias` arm for MODULE-level `ExportSpecifier`s, the three `resolveAlias` lookup sites, `computeImportedSymbolGeneral` and the namespace / function-like / enum flow resolvers — predicted +45 tsgo rows over 12 cells, +5 on a real rxjs consumer (1 -> 6 of 11), 0 on the profiles / libraries / corpus; EVERY fixture must shift the importer by a line or it measures (CHK.192). Refused: keying by the declared name, `locals` first, a namespace-clause arm (it exposes a namespace export-table gap: `namespacesWithTypeAliasOnlyExportsMerge` +4 ours-only TS2694), replacing `createModuleSymbol`'s table. Stage 2 and the census's separate items (TS2303 on a named cycle, TS1362 for an `export type` name used as a value, value positions through `export * as M`, clause-exported names in a namespace table, TS2305 vs TS2614) follow. ORIGINAL: A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
 
-- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534 -> (P18.267) 1,145 -> (P18.268) 811 -> (P18.269) 786 -> (P18.271) 689 -> (P18.272) 633. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
+- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534 -> (P18.267) 1,145 -> (P18.268) 811 -> (P18.269) 786 -> (P18.271) 689 -> (P18.272) 633 -> (P18.273) 632. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
 
 
 - [ ] **(LIBS.2) RESIDUAL REAL-LIBRARY CENSUS (read-only, at (P18.272); `build/scratch-p18273-census/README.txt`, 33 repros in `build/scratch-p18273-census/repro/` each checked against tsgo, `classify.py` assigns every row).** All 661 residual rows (633 ours-only + 28 missing) are assigned. Still present from the first census: F7 63 (zod — (CHK.206), in flight), F10 25, F11 12, F8 9, F12 7, F16 6, F18 5, F13 4 (+9 tsgo rows it hides), F14 / F15 4 each, F17 1, M1 10 (mitt, all TS2578), M2 10 missing, M4 / M5 7 / 2 missing, F4 6 left. NEW mechanisms below as (CHK.212)-(CHK.218). **Zero-row candidates (would become standing grid gates):** mitt (M1 alone), date-fns (F11 + the optional-discriminant fix + an `export *` same-binding TS2308 + one missing TS2536 + M2 for `vitest` — 1,231 files of ordinary code, the best gate), immer (F13 + producing its 9 hidden tsgo rows + the never-returning-method fix). Note: type-fest checks in 7.2 s here vs tsgo 17.7 s — we SKIP type evaluation tsgo does (TLT / DEFK / CDEF below), not a speed win.
@@ -953,7 +953,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.205) DONE 2026-10-02 ((P18.266): a `//` directive inside an open doc comment is live only on its last line; type-fest -85; residue: a glob on a middle doc-comment line can still fool the backward opener search). F6 — `// @ts-expect-error` inside a `/** … */` doc-comment EXAMPLE treated as a live directive (type-fest 85)** — `classifyTsCommentDirectiveAt`. Repro `build/scratch-p18265-census/repro/tsexpectdoc`.
 
-- [ ] **(CHK.206) F7 — no discriminant narrowing when the compared value is not literal SYNTAX (zod 61):** `case Code.a:` where `Code` is a mapped type of literals — `narrowByDiscriminantProperty`'s comparand lookup reads literal syntax only. Repro `build/scratch-p18265-census/repro/enumlike2`.
+- [ ] **(CHK.219) TWO INFERENCE GAPS THAT BLOCK zod's 61 F7 ROWS (and likely much more) — found by (P18.273), repros `build/bench/p18273-agent/m2`.** (a) A generic call returning a MAPPED type over a type parameter answers `any`: `getTypeFromMappedType` returns `anyType` when the constraint is a type parameter and call sites instantiate that already-resolved `any` — fails even for an explicit `mr<"a">("a")` where tsgo gives `{ a: "a" }`; needs a DEFERRED mapped type or re-resolving the declared return-type node with the call's type arguments. (b) Inference drops literal types against a `T extends string` parameter — `id("a")` is `string` here, `"a"` in tsgo; a tuple constraint `U extends [T, ...T[]]` gives `string[]` where tsgo gives `["a", "b"]` (zod also needs `U[number]`). (c) A template literal type `\`${"a"}\`` is not normalized to `"a"` (small, separate — see (CHK.216)). (d) A plain `s: string` subject compared to a unit comparand is not narrowed to it (tsgo does). Price (a) and (b) on the corpus, the 8 profiles and the library grid FIRST — they change inferred types everywhere.
+
+- [x] **(CHK.206) DONE 2026-10-03 ((P18.273): comparand narrowing by TYPE at all three sites, = tsgo on its matrix; zod's 61 rows are blocked upstream -> (CHK.219)). F7 — no discriminant narrowing when the compared value is not literal SYNTAX (zod 61):** `case Code.a:` where `Code` is a mapped type of literals — `narrowByDiscriminantProperty`'s comparand lookup reads literal syntax only. Repro `build/scratch-p18265-census/repro/enumlike2`.
 
 - [x] **(CHK.207) DONE 2026-10-03 ((P18.272): type-position line-break rule, `get!` / `get?`, `type` specifiers, index-signature separators; immer -38. RESIDUES: an interface with two generic call signatures misses the call result (immer `IProduce`, a missing TS2322); TS2411 never on a TYPE LITERAL; TS1539 / TS1255 / TS2749 / TS1441 missing). F5 — parser gaps (~55 rows with knock-ons, 4 libraries; frozen subsystem — grep the archive first):** `<` after a LINE BREAK parsed as type arguments (immer 37, `repro/parse1`); a class property `get!: H` parsed as an accessor (hono, `repro/parse2`); a named import called `type` (`import { object, type }`, superstruct, `repro/parse3`); a numeric member after an index signature (`{[x: string]: T; 0: U}`, type-fest 15, `repro/parse4`).
 
