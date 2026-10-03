@@ -44544,6 +44544,15 @@ class Checker(
                 if (name in localExports) continue
                 // Need ≥2 DISTINCT target files for a genuine conflict.
                 if (occ.map { it.first }.distinct().size < 2) continue
+                // (P18.274) STARSAME: tsc's TS2308 compares the resolved SYMBOLS, not the
+                // files — two stars reaching ONE binding (`import { x } from "./x";
+                // export { x }` in both targets) are not ambiguous. Suppress only when every
+                // occurrence resolves, so an unresolvable one keeps today's row.
+                val origins = occ.map { (target, _, _) ->
+                    fileResults[target]?.sourceFile?.let { resolveExportedSymbolThroughStars(it, name) }
+                        ?.let { resolveAlias(it) }
+                }
+                if (origins.all { it != null } && origins.distinctBy { it!!.id }.size == 1) continue
                 val firstSpec = occ[0].second
                 for (i in 1 until occ.size) {
                     val node = occ[i].third
@@ -51449,11 +51458,18 @@ class Checker(
                     // node_modules typings suppressed. The module-kind gate is r107's verbatim; the
                     // two CommonJS suppressions now also cover an explicit `bundler` + `commonjs`
                     // program, where r168 had none — conservative, and what tsgo resolves anyway.
-                    else if (!isRelative && effectiveModuleRes == ModuleResolutionKind.Bundler
+                    else if (!isRelative && (effectiveModuleRes == ModuleResolutionKind.Bundler ||
+                            // (P18.274) M2: Node16/NodeNext resolve a bare specifier through
+                            // node_modules alone as well (date-fns' `vitest`), with the
+                            // CommonJS arm's two untyped-package suppressions.
+                            (effectiveModuleRes.isNode16OrNodeNext &&
+                                !bareModulePackageInAnyInput(moduleName) &&
+                                !bareModuleSymlinkTargetDir(moduleName)))
                         && !moduleName.startsWith("/")
                         && !moduleName.contains("/")
                         && !moduleName.contains(":")
-                        && (options.module == null || options.module in ES_MODULE_KINDS
+                        && (options.module == null || options.module in ES_MODULE_KINDS ||
+                            effectiveModuleRes.isNode16OrNodeNext
                             // B524: also EXPLICIT commonjs. The extra suppressions below cover
                             // the B98.r2 FP cases that previously made this case intractable:
                             // untyped node_modules `.js` (bareModulePackageInAnyInput) + symlinked
@@ -97812,7 +97828,7 @@ interface DataView {
 
         // Collect all literal values from the parameter type annotation
         val requiredValues = collectLiteralTypeValues(typeNode)
-        if (requiredValues.isEmpty()) return false
+        if (requiredValues.isEmpty()) return isExhaustiveUnitTypeSwitch(stmt, getTypeFromTypeNode(typeNode))
 
         // Collect all case clause literal values using same representation as collectLiteralTypeValues
         val caseClauses = stmt.caseBlock.filterIsInstance<CaseClause>()
@@ -97840,6 +97856,39 @@ interface DataView {
         // The switch is exhaustive if all required values are covered AND all clauses return
         if (!coveredValues.containsAll(requiredValues)) return false
         return switchAlwaysReturns(stmt.caseBlock)
+    }
+
+    /**
+     * (P18.274) F11: [isExhaustiveLiteralSwitch] read the annotation's SYNTAX, so a literal
+     * union spelled through an ALIAS (`type Day = 0 | 1 | … | 6; switch (day)`, date-fns'
+     * every `formatRelative`) was never exhaustive and the function reported TS2366. This
+     * asks the RESOLVED declared type instead: every constituent must be a unit type (a
+     * string/number/bigint/boolean literal, `null`, `undefined`; `boolean` is `true | false`)
+     * and every one must be selected by a case whose literal is read off the case syntax.
+     * Any non-unit constituent answers false, so it can only REMOVE a TS2366.
+     */
+    private fun isExhaustiveUnitTypeSwitch(stmt: SwitchStatement, declared: Type): Boolean {
+        fun key(t: Type): String? = when {
+            t is Type.StringLiteral -> "s:" + t.value
+            t is Type.NumberLiteral -> "n:" + t.value
+            t is Type.BigIntLiteral -> "b:" + t.value
+            t === trueType -> "true"
+            t === falseType -> "false"
+            t === nullType -> "null"
+            t === undefinedType -> "undefined"
+            else -> null
+        }
+        val required = mutableSetOf<String>()
+        for (m in (declared as? Type.Union)?.types ?: listOf(declared)) {
+            if (m === booleanType) { required += "true"; required += "false"; continue }
+            required += key(m) ?: return false
+        }
+        val covered = mutableSetOf<String>()
+        for (clause in stmt.caseBlock) {
+            if (clause !is CaseClause) continue
+            covered += literalTypeOfExpression(clause.expression)?.let { key(it) } ?: continue
+        }
+        return covered.containsAll(required) && switchAlwaysReturns(stmt.caseBlock)
     }
 
     /**
@@ -105090,9 +105139,9 @@ interface DataView {
         // (inferSimpleExprType: `0`→"number") when the type engine already CONFIRMED a
         // literal initializer is assignable to a literal-union annotation
         // (`let x: 0 | 1 | 2 | 3 = 0` — `0` ∈ union). Mirrors the assignment-path guard.
-        if (canUse && isAssignable && (init is NumericLiteralNode ||
-                init is StringLiteralNode || init is BigIntLiteralNode ||
-                init is NoSubstitutionTemplateLiteralNode)) return
+        // (CHK.212): `-1` and `true`/`false` are literals too (a PrefixUnary and an Identifier),
+        // and the legacy path below widens them — `let n: -1 | 1 = -1` was a false TS2322.
+        if (canUse && isAssignable && isResolutionFreeScalarLiteral(init)) return
 
         // Fallback to old string-based system for remaining cases
         if (declaredTypeStr != null) {
@@ -107220,7 +107269,23 @@ interface DataView {
         if (init is ArrayLiteralExpression && contextualTupleConstituent(targetType) != null) {
             contextualType = targetType
         }
-        val sourceType = try { getTypeOfExpression(init) } finally { contextualType = savedContextual }
+        // (CHK.212): tsgo's `checkPropertyDeclaration` -> `checkVariableLikeDeclaration` checks
+        // the initializer against the declared type WITH it as the contextual type, so a
+        // literal stays a literal (`b: "a" | "b" = "a"`) and an object literal's members are
+        // typed by the annotation. This position read the bare `getTypeOfExpression`, which
+        // answers the base primitive for a literal node — a false TS2322 on the most ordinary
+        // class shape. Same rules, in the same order, as the var-decl reader.
+        if (targetType is Type.Object &&
+            ((init is ObjectLiteralExpression && objLitTargetNeedsContext(targetType)) ||
+                constAssertedObjectLiteralOf(init) != null)
+        ) contextualType = targetType
+        val sourceType = try {
+            applyContextualLiteralPreservation(
+                (if (propTypeContainsLiteral(targetType)) literalTypeOfExpression(init, isArrayLikeReference(targetType))
+                else enumTargetLiteralSource(init, targetType)) ?: getTypeOfExpression(init),
+                targetType, init,
+            )
+        } finally { contextualType = savedContextual }
         lastMissingPropertyName = null
         val canUse = canUseTypeEngine(sourceType, targetType)
         // (CHK.93) stage 2: TS4104 at the property name, in place of the chain.
@@ -109403,13 +109468,8 @@ interface DataView {
                     // and `isAssignableTo("boolean", "true | undefined")` fails. The engine
                     // already validated it (sourceType kept as `true` via propTypeContainsLiteral).
                     CtaSections.atE(CtaSections.E_LITTAIL)
-                    val rhsIsBooleanLiteral = (expr.right as? Identifier)?.text.let { it == "true" || it == "false" }
-                    if (canUse && isAssignable && (expr.right is NumericLiteralNode ||
-                            expr.right is StringLiteralNode || expr.right is BigIntLiteralNode ||
-                            expr.right is NoSubstitutionTemplateLiteralNode ||
-                            rhsIsBooleanLiteral)) {
-                        return
-                    }
+                    // (CHK.212): [isResolutionFreeScalarLiteral] also covers `-1` (`w = -1`).
+                    if (canUse && isAssignable && isResolutionFreeScalarLiteral(expr.right)) return
                 }
 
                 // Fallback to old string-based system
@@ -126406,12 +126466,21 @@ interface DataView {
             // constituent equals the tested literal, and survives a single negative
             // comparison when ANY constituent differs (mirrors the enum path's
             // multi-valued-discriminant rule).
+            // (P18.274) OPTDISC: a `null`/`undefined` constituent (`type?: undefined`, the
+            // "no discriminant" arm of date-fns' locale unions) can never strictly-equal a
+            // definite VALUE literal either, so it takes part as a never-matching value —
+            // tsgo drops `{ type?: undefined }` on `v.type === "other"`'s true branch.
+            fun nullishUnit(x: Type) = x === undefinedType || x === nullType
+            if (literalIsDefiniteValue && nullishUnit(propType)) {
+                singleHadDiscriminant = true
+                return !equal
+            }
             if (literalIsDefiniteValue && propType is Type.Union &&
-                propType.types.all { isLiteralKindForDiscriminant(it) }
+                propType.types.all { isLiteralKindForDiscriminant(it) || nullishUnit(it) }
             ) {
                 singleHadDiscriminant = true
-                return if (equal) propType.types.any { literalsEqualForDiscriminant(it, lit) }
-                else propType.types.any { !literalsEqualForDiscriminant(it, lit) }
+                return if (equal) propType.types.any { !nullishUnit(it) && literalsEqualForDiscriminant(it, lit) }
+                else propType.types.any { nullishUnit(it) || !literalsEqualForDiscriminant(it, lit) }
             }
             // Round 459: an ENUM-typed discriminant vs a NUMERIC literal narrows by the
             // enum's TYPE-LEVEL domain (the union of member literal values) — tsc's
@@ -136620,7 +136689,10 @@ interface DataView {
                                     val typeStr = if (propType != null) typeToString(propType) else "any"
                                     // 16.0: Optional properties render as `name?: type | undefined`
                                     // matching TypeScript's display convention.
-                                    if (isOptionalProperty(p)) {
+                                    // (P18.274): `type?: undefined` printed `undefined | undefined`.
+                                    if (isOptionalProperty(p) && propType != null && propType !== anyType && propType !== unknownType && typeIncludesUndefined(propType)) {
+                                        parts.add("$roPrefix$displayName?: $typeStr")
+                                    } else if (isOptionalProperty(p)) {
                                         parts.add("$roPrefix$displayName?: $typeStr | undefined")
                                     } else {
                                         parts.add("$roPrefix$displayName: $typeStr")
