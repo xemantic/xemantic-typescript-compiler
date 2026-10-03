@@ -1,5 +1,9 @@
 
 
+**(P18.274) — (LIBS.2): `class C { b: "a" | "b" = "a" }` AND `let n: -1 | 1 = -1` NO LONGER GET FALSE ERRORS, AND date-fns IS DOWN TO ONE FALSE ROW (FROM 17) WITH NO MISSING ROWS; zod's MISSING ROWS 9 -> 0; TALLY 632 -> 614; +11 PINS, 22,555 / 0 / 44 (2026-10-03).**
+Screen 0; grid 8x0; gated libraries unchanged. date-fns becomes a standing gate once (CHK.220) closes its last row.
+
+
 **(P18.273) — (LIBS.1) ROUND 7: NARROWING NOW UNDERSTANDS COMPARISONS AGAINST CONSTANTS (`case Code.a:`, `x.kind === OC.a`), MATCHING tsgo ON ITS MATRIX — BUT zod's 61 TARGET ROWS DID NOT MOVE: THE REAL BLOCKER IS TWO INFERENCE GAPS UPSTREAM, NOW QUEUED; ALSO A FULL RE-CENSUS OF THE 633 REMAINING LIBRARY ROWS; +17 PINS, 22,544 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; gated libraries unchanged; tally 633 -> 632.
 

@@ -25,6 +25,30 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.279) — (INV.0) extraction: the MODULE-SYNTAX family (TS2440 / TS1147 / TS1205 / TS1269 / TS1280 / TS1292 / TS1484 / TS2866 / TS2661 checks) moves verbatim into `ModuleSyntaxChecks` and the TS8xxx TypeScript-syntax-in-JS check into `TsSyntaxInJsFiles`; `Checker.kt` 197,864 -> 195,775 (-2,089); every receipt identical; the builder STALLED and the orchestrator finished the round (2026-10-03)
+
+One implementation subagent, stopped after 28 minutes silent with no process — the move, the verbatim proof scripts,
+the per-pass receipts, the PrintInlining runs and an 11-cell matrix were all on disk; the pins, the ablation and every
+gate were taken by the orchestrator. **Choice**: the type-argument-constraint family the brief named first was not
+taken (it reads the walk-scoped type-parameter scope and its helpers have many outside callers); the builder's census
+chose two clean pure-AST families instead. **Moved**: `ModuleSyntaxChecks.kt` (1,544) — the TS2440 barrel memo and
+the ten passes `checkIsolatedModulesGlobalValueShadow` / `…ScriptNamespaces` / `…ReExportType` /
+`…ExportImportIsType` / `…ExportDefaultIsType`, `checkImportNotAtTopLevel`, `checkNamespaceImportVarConflict`,
+`checkImportConflictsWithLocal`, `checkVerbatimModuleSyntax`, `checkExportSpecifierLocality` with their helpers;
+`TsSyntaxInJsFiles.kt` (637) — `checkTsSyntaxInJsFiles`. Two collaborator fields before `init`; eleven `pass(…)`
+lambdas re-pointed, names unchanged; 21 checker members read; 5 widenings (`fileResults`, `srcLastIndexOf`,
+`moduleInstanceStateOf`, `isNamespaceInstantiated`, `resolveBarrelStarTarget`). **Receipts**: verbatim proof both
+ways (`build/bench/p18279-agent/proof.py`: both moved blocks and the Checker residue byte-identical); per-pass tables
+identical on the compiler profile (514 normalized lines) AND on an `isolatedModules` profile copy where the moved passes
+are registered (`iso-prof`, 11,520 lines); PrintInlining `checkArgumentsAgainstSignature` run 2 identical (1 + 2), run 1
+off by one "too big" row (the known cross-process instability); an 11-cell matrix identical before / after; the library
+grid's row SETS identical to `p18278d` on all 8 libraries; `cost_gate.py` 0; `spine_closure_audit.py` clean. **Pins**:
+`ModuleSyntaxChecksCollaboratorTest` 5 (TS2440, TS1147, TS1280, the TS8xxx family, a clean control; every row tsgo's);
+ablation of both collaborators (one arm each, each pin exercising one) 2 RED, sources restored and `cmp`-verified.
+**Gates**: full suite 22,598 / 0 / 44 (+5); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged (identity hash extended to both collaborators);
+warning gate with probe: probe only. Ledger row 21. **Found** (pre-existing, both arms) -> (CHK.224).
+
 ### Round (P18.278) — (LIBS.2) round 4, (CHK.213): a type-argument constraint is re-resolved with EVERY argument bound (so `K extends keyof O` checks `keyof <the actual O>`), the tuple bail-out is gone, call / `new` type arguments and expression-statement type references are checked, and `keyof` of an index signature / a symbol key is right — zod 102 -> 78 (all 25 CDEF rows), type-fest 358 -> 317, the 8-library tally 552 -> 487; ONE new false row accepted on measurement (2026-10-03)
 
 One implementation subagent. **Where the item was wrong**: (a) this checker has NO deferred `keyof T` / `T[K]` —
@@ -287,38 +311,6 @@ before / after (= tsgo); the LIBRARY GRID's sorted row sets md5-identical on all
 clean. **Gates**: full suite 22,501 / 0 / 44 (+9); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x
 added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; warning gate with probe: probe only. Ledger row 19.
 Next extraction candidate: the arity family, once the `libProvides*` block or the arity code is moved so it is one run.
-
-### Round (P18.269) — (LIBS.1) round 4: an unset `types` now includes NO `@types` package (TypeScript 7's default; `"*"` splices every type-root directory), and a generic's arity is checked against the declaration the reference actually NAMES (its own file's scope, namespace exports, `export *` stars, a `.js` specifier) instead of a whole-program name scan; zod 195 -> 173, type-fest 431 -> 428, the 8-library tally 811 -> 786, ky's program 159 -> 32 files (= tsgo); NONE added — and two missing tsgo rows found (2026-10-02)
-
-One implementation subagent. **Where the brief was wrong**: (a) M3 cannot move the profiles or the gated libraries
-— all 8 profile tsconfigs set `"types": []` and rxjs / marked / cronstrue have no `@types` up their tree; only ky moves
-(159 -> 32 files = tsgo, its 11 rows unchanged — the 127 extra `@types` files produced no rows); (b) the F9 leak was
-wider than one direction — it also HID real rows (a decoy with a default made us miss tsgo's TS2314 on a local generic
-that REQUIRES arguments, c5 / c12) and reached `ns.X` references and imports through a barrel or a `.js` specifier
-(zod's `deep-partial.ts:69` needed `import * as schemas from "./schemas.js"` resolved through the import's own
-specifier — the alias resolver does not follow `.js`); (c) F18 (the `$ZodType` shown as `$ZodFunctionOut` display) is
-the first-wins alias display table, not the name scan — left. **Mechanism**: `ProjectCompiler.collectTypeRootEntries`
-follows tsgo's `GetAutomaticTypeDirectiveNames` — unset -> nothing, an explicit list as written, a `"*"` entry -> the
-directories directly inside each type root spliced at its position (dot-prefixed and `"typings": null` stubs skipped,
-scope directories not descended — `@scope` gets TS2688), `typeRoots` alone includes nothing; `computeTypeLibResolution`
-drops `"*"`; `checkTypeArgCount` asks the memoised `ownScopeTypeParamInfo` first — `Name` through the file's own
-`locals` following import aliases, `ns.Name` through namespace exports then `export *` stars, the import declaration's
-own specifier where the alias resolver cannot follow it — a resolved non-generic type answers `maxTotal = 0`, and only
-an unresolved reference falls back to the old scan; `namespaceImportTargetFile` split in two (behaviour unchanged).
-`Checker.kt` +82, `ProjectCompiler.kt` +13. **Matrices**: M3 12 cells — unset / `typeRoots`-only / `@types`-only import /
-`"*"` / `"*"`+name / hidden / roots+`"*"` now = tsgo (rootslist keeps a pre-existing relative-`typeRoots` defect); F9 12
-cells — six false TS2707 / TS2314 removed (c1 c2 c3 c9 c10 c11), wrong arity fixed (c4, c8), two MISSING tsgo rows added
-(c5, c12). **Pins**: `TypesOptionDefaultTest` 12, `OwnScopeTypeArgArityTest` 11 (both through `ProjectCompiler` + a
-`Vfs`); four `TypesAcquisitionTest` pins asserted TypeScript-6 behaviour and now assert tsgo's (unset includes nothing,
-`"*"`, the `typeRoots` / walk-up pins via `"*"`, the scope directory -> TS2688); ablation a1 5 / a2 10 / a3 7 / a4 1 / a5 1 /
-a6 1 / a7 1 / a8 2 RED. **Gates**: full suite 22,492 / 0 / 44 (+24); corpus screen 8725 / 0 and `--include ''` the same
-41; `cost_gate.py` 0 (`globals.lookups` +0.64% vs the stored baseline, +0.34% of it the baseline's own staleness; the
-first cut read +3.21%, the memo brought it down); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain
-OK, rxjs / marked / cronstrue unchanged; library grid zod 195 -> 173 (all 22 the F9 rows), type-fest 431 -> 428 (3 TS2314),
-program file lists = tsgo on all 8 libraries; warning gate with probe: probe only. **Residues**: with `types: ["*"]`
-tsgo prints the short TS2580 / 2581 / 2582 hints where we print the "add to types" variants; the relative-`typeRoots`
-TS2688 defect; F18; the alias resolver does not follow `.js` specifiers in general (fixed only inside the arity check —
-likely costs zod rows elsewhere).
 
 ## QUEUE
 
@@ -932,6 +924,8 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 - [ ] **(CHK.220) RE-SCOPED 2026-10-03 ((P18.276)): date-fns's LAST ours-only row needs DEFERRED CONDITIONAL TYPES — `valuesArray[index]` over `LocalizeValues<Value>` indexed by `LocalizeUnitIndex<Value>`, both deferred conditionals this checker types as `any` (repro `build/bench/p18276-agent/m220d`: tsgo TS2322 on two mis-assignment probes + TS2536, ours silent) — a much larger item than first thought (deferred indexed access, generic `keyof`; overlaps (CHK.215) DEFK and (CHK.219)(a)). The narrow TS2536 half LANDED at (P18.276) (`GenericIndexAccess.kt`, type-parameter index only, 12 / 15 of tsgo's matrix rows; open: symbol keys / `PropertyKey`, a constrained receiver type parameter, alias constraints, the type-node `T[K]` form). WAS: TS2536 on an ELEMENT-ACCESS expression with a GENERIC index is never reported — date-fns's LAST ours-only row (a TS2578 over it, `buildLocalizeFn/index.ts:131`) — found by (P18.274).** `function g<T, K>(t: T, k: K) { return t[k] }` is silent here; tsgo reports TS2536 on 4 of 5 generic cells (`checkIndexedAccessIndexType`). A NEW check with false-positive risk across zod / type-fest — build the matrix (constrained `K extends keyof T`, `K extends string`, a mapped / record `T`, a union index, a numeric index, a type-parameter receiver with an index signature) against tsgo and price it on the library grid FIRST. Closing it makes date-fns ZERO ours-only and zero missing -> add it to the standing grid as a gate.
 
 - [x] **(CHK.212) DONE 2026-10-03 ((P18.274): class-property literal initializers typed without widening; the var-decl / assignment `-1` / `true` sibling fixed; 13 + 5 false positives -> 0). A class property with a literal-UNION annotation and a literal initializer reports a false TS2322 — `class C { b: "a" | "b" = "a" }` — under every config, readonly and generic classes included (`checkPropertyInitAssignability`).** Only 3 library rows but the most ORDINARY shape in the census, so FIRST. The one corpus case with this shape is green: check whether it reproduces only through the CLI with the REAL libs (`@useRealLibs` / a `-project` fixture) before pinning with `diagnose()`.
+
+- [ ] **(CHK.224) Module-syntax residues found by (P18.279)'s matrix (`build/bench/p18279-agent/matrix`, pre-existing on both arms; the family now lives in `ModuleSyntaxChecks.kt`).** FALSE POSITIVES (first): `declare global { var gv: number } export { gv }` reports TS2661 where tsgo is silent (c2); `namespace Q { var X = 1 } namespace Q { import X = Q }` reports TS2440 where tsgo is silent (c11). MISSING in plain shapes: TS1205 re-exporting a type under `isolatedModules` (c4, 2 rows), TS1484 under `verbatimModuleSyntax` (c5), TS1292 (c6), TS1269 (c8), TS2866 (c10).
 
 - [ ] **(CHK.223) zod: `ZodMiniString` (and `ZodMiniBoolean`) is judged NOT to satisfy `SomeType` — a wrong relation verdict that is now THREE false rows in `src/v4/mini/schemas.ts` (TS2344 at 1948 x2, and at 1963 since (P18.278) removed the tuple bail-out that was hiding it).** tsgo is silent on all three. Reduce the relation (`build/bench/p18278-agent` has the zod fixture); the fix removes all three rows. Also open from (P18.278): `keyof` of a type parameter is `string` (`P2<T,'z'>` in a generic body, the `*KeysOf<T>` family), `keyof (A | B)` is `string`, generic-class method calls keep the old path, optional tuple elements (`[true, false?]`), and head-parameter sibling constraints still frozen as `keyof errorType` for other readers.
 

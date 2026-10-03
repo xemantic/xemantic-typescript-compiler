@@ -1,3 +1,35 @@
+### Round (P18.269) — (LIBS.1) round 4: an unset `types` now includes NO `@types` package (TypeScript 7's default; `"*"` splices every type-root directory), and a generic's arity is checked against the declaration the reference actually NAMES (its own file's scope, namespace exports, `export *` stars, a `.js` specifier) instead of a whole-program name scan; zod 195 -> 173, type-fest 431 -> 428, the 8-library tally 811 -> 786, ky's program 159 -> 32 files (= tsgo); NONE added — and two missing tsgo rows found (2026-10-02)
+
+One implementation subagent. **Where the brief was wrong**: (a) M3 cannot move the profiles or the gated libraries
+— all 8 profile tsconfigs set `"types": []` and rxjs / marked / cronstrue have no `@types` up their tree; only ky moves
+(159 -> 32 files = tsgo, its 11 rows unchanged — the 127 extra `@types` files produced no rows); (b) the F9 leak was
+wider than one direction — it also HID real rows (a decoy with a default made us miss tsgo's TS2314 on a local generic
+that REQUIRES arguments, c5 / c12) and reached `ns.X` references and imports through a barrel or a `.js` specifier
+(zod's `deep-partial.ts:69` needed `import * as schemas from "./schemas.js"` resolved through the import's own
+specifier — the alias resolver does not follow `.js`); (c) F18 (the `$ZodType` shown as `$ZodFunctionOut` display) is
+the first-wins alias display table, not the name scan — left. **Mechanism**: `ProjectCompiler.collectTypeRootEntries`
+follows tsgo's `GetAutomaticTypeDirectiveNames` — unset -> nothing, an explicit list as written, a `"*"` entry -> the
+directories directly inside each type root spliced at its position (dot-prefixed and `"typings": null` stubs skipped,
+scope directories not descended — `@scope` gets TS2688), `typeRoots` alone includes nothing; `computeTypeLibResolution`
+drops `"*"`; `checkTypeArgCount` asks the memoised `ownScopeTypeParamInfo` first — `Name` through the file's own
+`locals` following import aliases, `ns.Name` through namespace exports then `export *` stars, the import declaration's
+own specifier where the alias resolver cannot follow it — a resolved non-generic type answers `maxTotal = 0`, and only
+an unresolved reference falls back to the old scan; `namespaceImportTargetFile` split in two (behaviour unchanged).
+`Checker.kt` +82, `ProjectCompiler.kt` +13. **Matrices**: M3 12 cells — unset / `typeRoots`-only / `@types`-only import /
+`"*"` / `"*"`+name / hidden / roots+`"*"` now = tsgo (rootslist keeps a pre-existing relative-`typeRoots` defect); F9 12
+cells — six false TS2707 / TS2314 removed (c1 c2 c3 c9 c10 c11), wrong arity fixed (c4, c8), two MISSING tsgo rows added
+(c5, c12). **Pins**: `TypesOptionDefaultTest` 12, `OwnScopeTypeArgArityTest` 11 (both through `ProjectCompiler` + a
+`Vfs`); four `TypesAcquisitionTest` pins asserted TypeScript-6 behaviour and now assert tsgo's (unset includes nothing,
+`"*"`, the `typeRoots` / walk-up pins via `"*"`, the scope directory -> TS2688); ablation a1 5 / a2 10 / a3 7 / a4 1 / a5 1 /
+a6 1 / a7 1 / a8 2 RED. **Gates**: full suite 22,492 / 0 / 44 (+24); corpus screen 8725 / 0 and `--include ''` the same
+41; `cost_gate.py` 0 (`globals.lookups` +0.64% vs the stored baseline, +0.34% of it the baseline's own staleness; the
+first cut read +3.21%, the memo brought it down); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain
+OK, rxjs / marked / cronstrue unchanged; library grid zod 195 -> 173 (all 22 the F9 rows), type-fest 431 -> 428 (3 TS2314),
+program file lists = tsgo on all 8 libraries; warning gate with probe: probe only. **Residues**: with `types: ["*"]`
+tsgo prints the short TS2580 / 2581 / 2582 hints where we print the "add to types" variants; the relative-`typeRoots`
+TS2688 defect; F18; the alias resolver does not follow `.js` specifiers in general (fixed only inside the arity check —
+likely costs zod rows elsewhere).
+
 ### Round (P18.268) — (LIBS.1) round 3, (CHK.203): an arrow assigned to `recv.member` gets its contextual parameter types when `recv` is an unannotated contextually-typed callback parameter, a `T`-annotated parameter or a receiver whose member is inherited through a generic base, and a return-context inference matches a shared type-argument prefix (`Ctor<Leaf>` vs `Ctor<T, D>`); zod 529 -> 195 ours-only (TS7006 280 -> 22, TS2339 139 -> 69), the 8-library tally 1,145 -> 811, NONE added (2026-10-02)
 
 One implementation subagent. **Where the brief was wrong**: (a) "an annotated receiver works" was half true — a
