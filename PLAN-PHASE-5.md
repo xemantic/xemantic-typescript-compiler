@@ -25,6 +25,40 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.278) — (LIBS.2) round 4, (CHK.213): a type-argument constraint is re-resolved with EVERY argument bound (so `K extends keyof O` checks `keyof <the actual O>`), the tuple bail-out is gone, call / `new` type arguments and expression-statement type references are checked, and `keyof` of an index signature / a symbol key is right — zod 102 -> 78 (all 25 CDEF rows), type-fest 358 -> 317, the 8-library tally 552 -> 487; ONE new false row accepted on measurement (2026-10-03)
+
+One implementation subagent. **Where the item was wrong**: (a) this checker has NO deferred `keyof T` / `T[K]` —
+`getKeyofType` on a type parameter answers `string`, so `K extends keyof O` accepted any string; the fix is to
+RE-RESOLVE the constraint node with the arguments bound (as alias bodies are instantiated), not to "keep it
+deferred"; (b) removing the tuple bail-out alone made the missing-property elaboration list `concat` and
+`RelationHeadSuppression` turn the TS2344 into a TS2741 tsgo never reports; (c) proper instantiation exposed two older
+defects fixed in-round: `keyof {[k: string]: V}` answered `never` and symbol-keyed members were dropped (a standing
+false TS2322 on `const b: keyof B = 1`), and a head parameter's sibling-naming constraint was frozen as `keyof
+errorType` (new zod false rows); (d) "~60 of type-fest's 77 TS2344 are this" is high — 32 recovered, the other 45 are
+template-literal types, generic `keyof T` in a body, the `*KeysOf<T>` family, optional tuple elements and
+`apply-default-options`. **Mechanism**: `checkConstraintsForTypeArgs` calls `instantiateConstraintNodes`
+(every parameter name bound to its argument or default, the declaration's own names removed from the ambient scope)
+in place of `instantiateType(constraint, mapper)`; the tuple -> `Array` / `ReadonlyArray` bail-out is deleted and the
+missing-property elaboration skips tuples; `siblingAwareConstraintOf` re-resolves a type-parameter argument's own
+constraint in the head's scope (refusing a self-naming one, (INC.19)'s recursion); `checkCallTypeArgConstraints`
+takes the declaration (only when no enclosing type parameter is reachable); `constraintDisplayOf` (keyof origin,
+literal generalization, conditional-alias structure); `keyofKeyTypes` (`string | number` for a string index,
+`number` for a number index) and `hasUnnamedComputedMember` (`symbol`); `elementAccessResultType` distributes a
+primitive key union through index signatures all-or-nothing; `checkConstraintsInCallTypeArgs`, a new
+expression-statement walk (12 of the 32). `Checker.kt` +236, `NewExpressionChecks.kt` +2. **Matrix**: 30 cells vs
+tsgo — every row moved is a tsgo row except the one below; display-only residues: union origin order, homomorphic
+`keyof Partial<Ex>`, `KeysOfUnion<Ex>`, `keyof H`. **The accepted new false row**: zod `mini/schemas.ts:1963` (a tuple
+of zod schemas against `readonly SomeType[]`) — its elements fail through the EXISTING wrong verdict "`ZodMiniString`
+does not satisfy `SomeType`" (already two false rows at 1948), which the bail-out was hiding. Restoring the bail-out
+removes it but brings back type-fest `and-all.ts:60` / `or-all.ts:59`, which are TS2578 false rows too — so the trade
+is one false row against two, and the root verdict is queued as (CHK.223). **Pins**:
+`DeferredTypeArgConstraintTest` 10; ablation a1 6 / a2 1 / a3 1 / a4 1 / a5 1 / a6 1 / a7 3 / a8 1 / a9 1 / a10 1 / a11 1 /
+a12 1 RED. **Gates**: full suite 22,593 / 0 / 44 (+10); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` `typeNode.bypassed` 153,264 -> 147,775 (-3.58%, a real REDUCTION, pristine-confirmed) — rebaselined,
+others within +1.7%; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
+cronstrue unchanged; library grid zod 102 -> 78, type-fest 358 -> 317, others unchanged (tally 552 -> 487); warning
+gate with probe: probe only.
+
 ### Round (P18.277) — (LIBS.2) round 3, (CHK.219): a generic call returning a MAPPED type is instantiated (re-resolving the declared return node under the call's bindings), literal candidates survive against a primitive / tuple constraint, a generic ARROW's annotated parameters are finally typed in its own type-parameter scope — plus two older bugs those exposed (arguments checked after an explicit type argument failed its constraint; an interface's inherited members lost when a heritage base resolves mid-cycle) — all 62 of zod's F7 rows gone (164 -> 102), the 8-library tally 614 -> 552, NONE added (2026-10-03)
 
 One implementation subagent, each part PRICED separately. **Where the item was wrong**: (a) and (b) alone move NOTHING
@@ -285,37 +319,6 @@ program file lists = tsgo on all 8 libraries; warning gate with probe: probe onl
 tsgo prints the short TS2580 / 2581 / 2582 hints where we print the "add to types" variants; the relative-`typeRoots`
 TS2688 defect; F18; the alias resolver does not follow `.js` specifiers in general (fixed only inside the arity check —
 likely costs zod rows elsewhere).
-
-### Round (P18.268) — (LIBS.1) round 3, (CHK.203): an arrow assigned to `recv.member` gets its contextual parameter types when `recv` is an unannotated contextually-typed callback parameter, a `T`-annotated parameter or a receiver whose member is inherited through a generic base, and a return-context inference matches a shared type-argument prefix (`Ctor<Leaf>` vs `Ctor<T, D>`); zod 529 -> 195 ours-only (TS7006 280 -> 22, TS2339 139 -> 69), the 8-library tally 1,145 -> 811, NONE added (2026-10-02)
-
-One implementation subagent. **Where the brief was wrong**: (a) "an annotated receiver works" was half true — a
-`T`-annotated receiver failed too, and so did an annotated interface whose member is inherited through a GENERIC base;
-(b) F4 was three mechanisms, not one receiver gap — zod's main shape is `const X: core.$constructor<Z> =
-core.$constructor("X", (inst, def) => {…})`, where RETURN-TYPE inference from the annotation failed because the
-annotation omits the defaulted `D`, leaving `inst` as the constraint `ZodTrait` — the same failure behind ~70 ours-only
-TS2339 (`'options' does not exist on type 'ZodTrait'`); (c) TS7006 was the SYMPTOM — the arrow bodies were already typed
-(their TS2322 rows matched tsgo before); only the spineIany arity edge got no contextual type. **Mechanism** (all
-additive second chances, `Checker.kt` +108): a fourth parallel implicit-any stack `implicitAnyScopeCtxParams` holding an
-arrow's / function expression's unannotated parameters (pushed / popped with the other three; a same-named body local
-removes its entry in `spineIanyVarDeclEnter`) and `contextualParamTypeForImplicitAny` asking the parameter's contextual
-type through the same pull `applyPulledContextualParamTypes` uses; `implicitAnyAnnCtxType` takes a bare type-parameter
-annotation's constraint from the nearest enclosing declaration of that name; `inheritedMemberCtxType` brings the B82.1
-inherited-base substitution (which existed only in `computeRawTypeOfPropertyAccess`) to the property-access arm when
-its lookup answers `any` / an error / a bare type parameter; `ctxReturnInferInto` matches the SHARED argument prefix
-instead of refusing on a count mismatch. No spine handler touched. **Matrix** (`build/bench/p18268-agent/cells`): every
-cell = tsgo (callback parameter through inferred / explicit / non-generic callees, `T extends` receivers, element
-access, inherited generic member, omitted-default return context, the inferred type argument `'Leaf'` where we said
-`'ZodTrait'`, optional member) and every control unchanged (annotated receiver, local const, `this`, differing union
-member, missing member, longer arrow, uncontextual inner parameter, block-local shadow). **Pins**:
-`AssignmentTargetReceiverContextTest` 16; ablation a1 6 / a2 2 / a4 2 / a5 2 / a6 1 / a7 2 RED; a3 (an apparent-type wrapper)
-read 0 and was REMOVED. **Gates**: full suite 22,468 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the same
-41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
-cronstrue unchanged; library grid zod 529 -> 195 (agree 5 and missing 9 unmoved), the seven others identical row SETS;
-warning gate with probe: probe only. **Residues** (in (CHK.203)'s done note): zod's 22 TS7006 left (object-literal
-property values, an array literal assigned to `onattach`, four unreduced `schemas.ts` sites, a v3 `this[...]` value);
-an OVERLOADED member target reports TS7006 where tsgo intersects the signatures (pre-existing, `singleApplicableSigArity`);
-a generic outer type parameter through an explicit type argument; `implicitAnyScopes` is function-scoped, not
-block-scoped (a `{ const inst = 1 }` block shadows a later `inst.m = …`).
 
 ## QUEUE
 
@@ -919,7 +922,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.190) DONE 2026-10-01 (stage 1 (P18.249), residues (P18.252); the namespace-clause residue and the rest -> (CHK.195)). STAGE 1 LANDED 2026-10-01 ((P18.249) note: renames, default and local clauses, `.js` specifiers, barrel chains, augmentation-contributed names). OPEN: c13 named cycle (tsgo TS2303 at both clauses; ours terminates and reads `any`); c14 TS1362 for an `export type` name used as a value; c08 `export * as M` read in value positions; c26 TS2305 where tsgo says TS2614; namespace-level `export { … }` clauses missing from a namespace's export table (the corpus shape `namespacesWithTypeAliasOnlyExportsMerge`); stage 2 (`resolveAlias`'s import arms without the `.js` / crawl / star legs — no measured row it would close); the a9 `.js` leg is unpinned. EARLIER: SAME-NAME `export { X } from` LANDED 2026-10-01 at (P18.248) (with the collision fix); RE-MEASURE the census matrix before stage 1 — c01 c09 c12 c15 c16 c20 c24 now pass, still failing: c03 c04 c06 c08 c10 c13 c19 c21 (renaming / default clauses, local `{B0 as B}`, import-then-export rename, `.js` specifiers, the 3-barrel star chain, the named-cycle TS2303, `export type`), and importers no longer need shifting. CENSUSED 2026-10-01 (read-only, `build/scratch-p18247-census/README.txt`). Stage 1: one helper `importedExport(target, exportedName)` over `exportedSymbolsThroughStars` (importer-visible names, null = unknowable -> today's lookup), plus `followExportSpecifier` (from-clause resolved relative to the declaring file, `.js` leg included; local clause in the declaring scope), wired into a new `resolveAlias` arm for MODULE-level `ExportSpecifier`s, the three `resolveAlias` lookup sites, `computeImportedSymbolGeneral` and the namespace / function-like / enum flow resolvers — predicted +45 tsgo rows over 12 cells, +5 on a real rxjs consumer (1 -> 6 of 11), 0 on the profiles / libraries / corpus; EVERY fixture must shift the importer by a line or it measures (CHK.192). Refused: keying by the declared name, `locals` first, a namespace-clause arm (it exposes a namespace export-table gap: `namespacesWithTypeAliasOnlyExportsMerge` +4 ours-only TS2694), replacing `createModuleSymbol`'s table. Stage 2 and the census's separate items (TS2303 on a named cycle, TS1362 for an `export type` name used as a value, value positions through `export * as M`, clause-exported names in a namespace table, TS2305 vs TS2614) follow. ORIGINAL: A NAMED RE-EXPORT LEAVES THE IMPORTER'S BINDING TYPED `any` — `export { B } from "./m"` (and `import { B } from "./m"; export { B }`) then `import { B } from "./r"`: `const x: string = new B().p` and `const y: string = n` are SILENT where tsgo reports TS2322 (found by (P18.246); verified on `build/scratch-reexport/y1` / `y2`: ours 0 rows, tsgo 3).** Every type that flows through a barrel file is silently `any` — a hole for the checker AND for every Phase-18 product reading its types (the `Project` API / hover, the externals generator, KIR). `computeImportedSymbolGeneral` finds only the target's locals or STAR re-exports. Read CLAUDE.md "A MODULE SYMBOL'S `exports` TABLE *IS* THE TARGET FILE'S `locals`" (the export table is keyed by the DECLARED name; `exportedSymbolsThroughStars` already answers the enumeration keyed by the importer-visible name, for KIR) and the (CHK.30) entry (`resolveImportTargetFallback`); make import resolution follow named re-exports (with renames `export { a as b } from`, chains, cycles, `export *` + named shadowing, `export type`), measured against tsgo. A SILENT-ANY defect: fixing it ADDS rows wherever the newly typed values were wrong all along — price it on the corpus, the 8 profiles and the libraries (rxjs re-exports its whole API through barrels), every added row a tsgo row; expect to stage it.
 
-- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534 -> (P18.267) 1,145 -> (P18.268) 811 -> (P18.269) 786 -> (P18.271) 689 -> (P18.272) 633 -> (P18.273) 632 -> (P18.274) 614 (date-fns 1 / 0 — its last row needs deferred conditional types, (CHK.220)) -> (P18.277) 552. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
+- [ ] **(LIBS.1) REAL-LIBRARY FALSE-POSITIVE ARC — TALLY (library grid `build/scratch-p18265-census/libgrid.sh`, ours-only rows vs tsgo): base265 1,896 -> (P18.266) 1,534 -> (P18.267) 1,145 -> (P18.268) 811 -> (P18.269) 786 -> (P18.271) 689 -> (P18.272) 633 -> (P18.273) 632 -> (P18.274) 614 (date-fns 1 / 0 — its last row needs deferred conditional types, (CHK.220)) -> (P18.277) 552 -> (P18.278) 487. — the (P18.265) census (`build/scratch-p18265-census/README.txt`, repros `build/scratch-p18265-census/repro/<name>/`, runner `build/scratch-p18265-census/repro.sh`, install recipes in the README).** On 8 fresh libraries (mitt, superstruct, immer, ky, hono, date-fns, zod, type-fest) WE REPORT 1,896 ROWS tsgo DOES NOT (agree 6, missing 28), while the three gated libraries read 0 — the mission's stop-condition probe (owner directive 2026-09-21) says this arc outranks synthetic-matrix residues. Work the (CHK.201)-(CHK.209) items below FALSE POSITIVES FIRST, each round pinned against tsgo AND re-measured on the affected libraries; add hono, ky and zod (clean or near-clean under tsgo) to the grid as soon as they read 0 ours-only, so they become gates.
 
 
 - [ ] **(LIBS.2) RESIDUAL REAL-LIBRARY CENSUS (read-only, at (P18.272); `build/scratch-p18273-census/README.txt`, 33 repros in `build/scratch-p18273-census/repro/` each checked against tsgo, `classify.py` assigns every row).** All 661 residual rows (633 ours-only + 28 missing) are assigned. Still present from the first census: F7 63 (zod — (CHK.206), in flight), F10 25, F11 12, F8 9, F12 7, F16 6, F18 5, F13 4 (+9 tsgo rows it hides), F14 / F15 4 each, F17 1, M1 10 (mitt, all TS2578), M2 10 missing, M4 / M5 7 / 2 missing, F4 6 left. NEW mechanisms below as (CHK.212)-(CHK.218). **Zero-row candidates (would become standing grid gates):** mitt (M1 alone), date-fns (F11 + the optional-discriminant fix + an `export *` same-binding TS2308 + one missing TS2536 + M2 for `vitest` — 1,231 files of ordinary code, the best gate), immer (F13 + producing its 9 hidden tsgo rows + the never-returning-method fix). Note: type-fest checks in 7.2 s here vs tsgo 17.7 s — we SKIP type evaluation tsgo does (TLT / DEFK / CDEF below), not a speed win.
@@ -930,7 +933,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [x] **(CHK.212) DONE 2026-10-03 ((P18.274): class-property literal initializers typed without widening; the var-decl / assignment `-1` / `true` sibling fixed; 13 + 5 false positives -> 0). A class property with a literal-UNION annotation and a literal initializer reports a false TS2322 — `class C { b: "a" | "b" = "a" }` — under every config, readonly and generic classes included (`checkPropertyInitAssignability`).** Only 3 library rows but the most ORDINARY shape in the census, so FIRST. The one corpus case with this shape is green: check whether it reproduces only through the CLI with the REAL libs (`@useRealLibs` / a `-project` fixture) before pinning with `diagnose()`.
 
-- [ ] **(CHK.213) CDEF — a type-argument constraint that indexes another type parameter is checked against that parameter's CONSTRAINT too early (25 zod false positives) and the same defect HIDES ~60 of tsgo's 77 TS2344 rows in type-fest, plus a tuple bail-out hiding 4 more.** In `checkConstraintsForTypeArgs`, keep an indexed access / `keyof` over a type parameter DEFERRED so instantiation can substitute it, and delete the tuple bail-out. Repros in `build/scratch-p18273-census/repro/`.
+- [ ] **(CHK.223) zod: `ZodMiniString` (and `ZodMiniBoolean`) is judged NOT to satisfy `SomeType` — a wrong relation verdict that is now THREE false rows in `src/v4/mini/schemas.ts` (TS2344 at 1948 x2, and at 1963 since (P18.278) removed the tuple bail-out that was hiding it).** tsgo is silent on all three. Reduce the relation (`build/bench/p18278-agent` has the zod fixture); the fix removes all three rows. Also open from (P18.278): `keyof` of a type parameter is `string` (`P2<T,'z'>` in a generic body, the `*KeysOf<T>` family), `keyof (A | B)` is `string`, generic-class method calls keep the old path, optional tuple elements (`[true, false?]`), and head-parameter sibling constraints still frozen as `keyof errorType` for other readers.
+
+- [x] **(CHK.213) DONE 2026-10-03 ((P18.278): constraint re-resolved with every argument bound, tuple bail-out removed, call / new / expression-statement type arguments checked, keyof of index signatures and symbol keys; zod -24, type-fest -41; one accepted new false row -> (CHK.223)). CDEF — a type-argument constraint that indexes another type parameter is checked against that parameter's CONSTRAINT too early (25 zod false positives) and the same defect HIDES ~60 of tsgo's 77 TS2344 rows in type-fest, plus a tuple bail-out hiding 4 more.** In `checkConstraintsForTypeArgs`, keep an indexed access / `keyof` over a type parameter DEFERRED so instantiation can substitute it, and delete the tuple bail-out. Repros in `build/scratch-p18273-census/repro/`.
 
 - [ ] **(CHK.214) CTXM — contextual typing through a MAPPED type: arrows inside `Record<string, C>` get TS7006 where `{[k: string]: C}` works (15, zod + ky).** `spineIanyPropAssignEdge` / `lookupPropertyTypeForCtx` must resolve mapped / `Record` types to their members or index signature, and `pullContextualTypeAt` must hand over the TYPE, not just the arity.
 

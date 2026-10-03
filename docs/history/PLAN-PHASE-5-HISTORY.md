@@ -1,3 +1,34 @@
+### Round (P18.268) — (LIBS.1) round 3, (CHK.203): an arrow assigned to `recv.member` gets its contextual parameter types when `recv` is an unannotated contextually-typed callback parameter, a `T`-annotated parameter or a receiver whose member is inherited through a generic base, and a return-context inference matches a shared type-argument prefix (`Ctor<Leaf>` vs `Ctor<T, D>`); zod 529 -> 195 ours-only (TS7006 280 -> 22, TS2339 139 -> 69), the 8-library tally 1,145 -> 811, NONE added (2026-10-02)
+
+One implementation subagent. **Where the brief was wrong**: (a) "an annotated receiver works" was half true — a
+`T`-annotated receiver failed too, and so did an annotated interface whose member is inherited through a GENERIC base;
+(b) F4 was three mechanisms, not one receiver gap — zod's main shape is `const X: core.$constructor<Z> =
+core.$constructor("X", (inst, def) => {…})`, where RETURN-TYPE inference from the annotation failed because the
+annotation omits the defaulted `D`, leaving `inst` as the constraint `ZodTrait` — the same failure behind ~70 ours-only
+TS2339 (`'options' does not exist on type 'ZodTrait'`); (c) TS7006 was the SYMPTOM — the arrow bodies were already typed
+(their TS2322 rows matched tsgo before); only the spineIany arity edge got no contextual type. **Mechanism** (all
+additive second chances, `Checker.kt` +108): a fourth parallel implicit-any stack `implicitAnyScopeCtxParams` holding an
+arrow's / function expression's unannotated parameters (pushed / popped with the other three; a same-named body local
+removes its entry in `spineIanyVarDeclEnter`) and `contextualParamTypeForImplicitAny` asking the parameter's contextual
+type through the same pull `applyPulledContextualParamTypes` uses; `implicitAnyAnnCtxType` takes a bare type-parameter
+annotation's constraint from the nearest enclosing declaration of that name; `inheritedMemberCtxType` brings the B82.1
+inherited-base substitution (which existed only in `computeRawTypeOfPropertyAccess`) to the property-access arm when
+its lookup answers `any` / an error / a bare type parameter; `ctxReturnInferInto` matches the SHARED argument prefix
+instead of refusing on a count mismatch. No spine handler touched. **Matrix** (`build/bench/p18268-agent/cells`): every
+cell = tsgo (callback parameter through inferred / explicit / non-generic callees, `T extends` receivers, element
+access, inherited generic member, omitted-default return context, the inferred type argument `'Leaf'` where we said
+`'ZodTrait'`, optional member) and every control unchanged (annotated receiver, local const, `this`, differing union
+member, missing member, longer arrow, uncontextual inner parameter, block-local shadow). **Pins**:
+`AssignmentTargetReceiverContextTest` 16; ablation a1 6 / a2 2 / a4 2 / a5 2 / a6 1 / a7 2 RED; a3 (an apparent-type wrapper)
+read 0 and was REMOVED. **Gates**: full suite 22,468 / 0 / 44 (+16); corpus screen 8725 / 0 and `--include ''` the same
+41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
+cronstrue unchanged; library grid zod 529 -> 195 (agree 5 and missing 9 unmoved), the seven others identical row SETS;
+warning gate with probe: probe only. **Residues** (in (CHK.203)'s done note): zod's 22 TS7006 left (object-literal
+property values, an array literal assigned to `onattach`, four unreduced `schemas.ts` sites, a v3 `this[...]` value);
+an OVERLOADED member target reports TS7006 where tsgo intersects the signatures (pre-existing, `singleApplicableSigArity`);
+a generic outer type parameter through an explicit type argument; `implicitAnyScopes` is function-scoped, not
+block-scoped (a `{ const inst = 1 }` block shadows a later `inst.m = …`).
+
 ### Round (P18.267) — (LIBS.1) round 2, (CHK.202): an unchecked JavaScript file (allowJs without checkJs, `@ts-nocheck`, explicit `checkJs: false`) keeps only tsgo's plain-JS / syntactic / declaration rows, `.js` inside `node_modules` is no longer loaded (maxNodeModuleJsDepth 0) and its import gets tsgo's TS7016, and package resolution is TypeScript-first across every ancestor `node_modules` / `@types`; type-fest 820 -> 431 ours-only, the 8-library tally 1,534 -> 1,145, program file lists identical to tsgo on 7 of 8 libraries; NONE added anywhere (2026-10-02)
 
 One implementation subagent. **Where the brief was wrong**: (a) the funnel CANNOT drop everything outside tsgo's
