@@ -1,3 +1,28 @@
+### Round (P18.275) — (INV.0) extraction: the UNUSED-DECLARATION family moves verbatim into a new `UnusedDeclarations` collaborator; `Checker.kt` 200,831 -> 197,463 (-3,368, the largest extraction of the arc); every receipt byte-identical, including a second per-pass receipt on a `noUnused*` profile copy and the library grid's row SETS (2026-10-03)
+
+One implementation subagent. **Where the brief was wrong**: (a) the range had two HOLES that stay in `Checker` —
+`isModuleFile` / `hasCommonJsExportAssignment` / `isEsModuleFile` (`isModuleFile` alone has 62 outside callers) and the
+shared line / pin helpers `lineStartsFor`..`pinRel` — so the move is four spans (803-807 the `unusedComputedKeys` field,
+16801-17339, 17438-20118, 20180-20321); (b) the family reads NO walk or spine state (pure AST), which is why it moved
+whole; (c) the compiler profile sets no `noUnusedLocals` / `noUnusedParameters`, so its three passes are never
+REGISTERED there and the brief's per-pass receipt would have been nearly vacuous — a second receipt ran on a profile
+copy with both flags on (`build/bench/p18275-agent/unused-prof`: `checkUnusedDeclarations` 829 ms / 11 rows,
+`checkUnusedParameterProperties` 6 rows, all 63 diagnostics identical); (d) the switch family is two scattered runs (one
+helper reads the walk-scoped `currentCheckFileName`) and the module-diagnostics family is ~6,500 lines apart — refused.
+**Moved**: 58 declarations + the `unusedComputedKeys` field (moved with its only writer / readers); one new field
+`unusedDeclarations` (beside `newExpressionChecks`, before `init`); five call sites re-pointed (three `pass(…)` lambdas,
+names unchanged, `computeBindingPatternSpan` — the TS1182 underline — and `collectTypeReferenceNames`); two widenings
+(`isParameterPropertyModifier`, `hasCommonJsExportAssignment`, +7 bytes each); the collaborator reads 9 checker members
+over 36 sites and writes only `diagnostics.add` (12). **Receipts**: verbatim proof both ways; per-pass tables
+identical (compiler profile 499 lines / 417 pass rows; the `noUnused*` copy 536 lines); `PrintInlining` equal across
+arms; `cost_gate.py` counters identical; 13 unused-family classes (200 tests) green; `UnusedDeclarationsCollaboratorTest`
+9 (two unnecessary `!!` the warning gate caught in it, fixed — the class re-run 9 / 9 green), ablation a1 3 / a2 3 / a3 16 /
+a4 1 RED; a 9-cell tsgo matrix identical before / after (8 = tsgo); the LIBRARY GRID's sorted row sets identical to
+`r274` on all 8 libraries; `spine_closure_audit.py` clean. **Gates**: full suite 22,564 / 0 / 44 (+9); corpus screen
+8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue
+unchanged; warning gate with probe: probe only after the fix. Ledger row 20. **Found**: a pre-existing ours-only TS6138
+on a PUBLIC parameter property (`constructor(public q: number)`, tsgo silent) -> (CHK.221).
+
 ### Round (P18.274) — (LIBS.2) round 1: (CHK.212) a class property's literal initializer is checked against its literal-union annotation without widening (and the var-decl / assignment readers stop re-reporting `-1` / `true` after the engine accepted them), plus five date-fns mechanisms — an aliased exhaustive switch, an optional-`undefined` discriminant, `export *` of one binding, TS2307 under node16 / nodenext, `?: undefined` display; date-fns 17 + 1 missing -> 1 + 0, zod 9 missing -> 0, the 8-library tally 632 -> 614, NONE added (2026-10-03)
 
 One implementation subagent. **Where the item was wrong**: (a) (CHK.212) reproduces EVERYWHERE — `diagnose()` with the
