@@ -500,6 +500,9 @@ class Checker(
     /** (INV.0) (P18.275) — the unused-declaration family (TS6133 / TS6138 / TS6192 / TS6196 / TS6198 / TS6205); see `UnusedDeclarations.kt`. */
     private val unusedDeclarations = UnusedDeclarations(this, options)
 
+    /** (CHK.220) TS2536 on an element access whose index is a type parameter; see `GenericIndexAccess.kt`. */
+    private val genericIndexAccess = GenericIndexAccess(this)
+
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
     // while mutable state is clearly grouped in CheckerState.
@@ -156771,6 +156774,7 @@ interface DataView {
         nullishReceivers.emitTs1804xForNullishElementAccessReceiver(expr, source, fileName)
         // (CHK.173) Round B3: a member / parenthesized receiver (`o.p['x']`, `(y)['length']`).
         if (!expr.questionDotToken) nullishReceivers.emitTs1804xForNullableCompoundReceiver(expr.expression, source, fileName)
+        genericIndexAccess.check(expr, source, fileName)
         val arg = expr.argumentExpression
         // 17.93: TS2538 "Type 'null'/'undefined' cannot be used as an index type." for
         // element-access indices that resolve to null/undefined. Mirrors TypeScript's

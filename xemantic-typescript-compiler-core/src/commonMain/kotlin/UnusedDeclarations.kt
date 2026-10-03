@@ -79,53 +79,45 @@ internal class UnusedDeclarations(
     )
 
     /**
-     * Check for parameter properties declared in constructors but never accessed as `this.prop`.
-     * Emits TS6138: "Property 'X' is declared but its value is never read."
+     * TS6138 "Property 'X' is declared but its value is never read." — tsgo `checkUnusedClassMembers`'s
+     * `KindConstructor` arm: a constructor parameter carrying the `private` SYNTACTIC modifier whose
+     * symbol is never referenced, reported as `UnusedKindLocal` (so under `noUnusedLocals` ONLY).
+     * (CHK.221) `public` / `protected` / bare `readonly` / `override` parameter properties are part of
+     * the class's API and are never reported; every class in the file is checked (nested ones and
+     * class expressions included), and a reference is any non-write-only access of the name inside
+     * the class — through `this`, another instance (`other.p`), a string-literal element access or a
+     * destructuring pattern. A plain `x.p = v` is write-only (tsgo `isWriteOnlyAccess`) and does not count.
      */
     fun checkUnusedParameterProperties() {
+        if (!options.noUnusedLocals) return
         for (result in checker.checkedResults) {
             if (checker.isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
-            for (stmt in result.sourceFile.statements) {
-                if (stmt is ClassDeclaration) checkUnusedParamPropsInClass(stmt, source, fileName)
+            val stack = ArrayDeque<Node>()
+            stack.addLast(result.sourceFile)
+            while (stack.isNotEmpty()) {
+                val node = stack.removeLast()
+                val members = when (node) {
+                    is ClassDeclaration -> node.members
+                    is ClassExpression -> node.members
+                    else -> null
+                }
+                if (members != null) checkUnusedParamPropsInClass(node, members, source, fileName)
+                forEachChild(node) { stack.addLast(it) }
             }
         }
     }
 
-    private fun checkUnusedParamPropsInClass(classDecl: ClassDeclaration, source: String, fileName: String) {
-        // Find the constructor
-        val ctor = classDecl.members.filterIsInstance<Constructor>().firstOrNull() ?: return
-        // Collect parameter properties (constructor params with access modifiers)
-        val paramProps = ctor.parameters.filter { param ->
-            param.modifiers.any { checker.isParameterPropertyModifier(it) }
-        }
+    private fun checkUnusedParamPropsInClass(classNode: Node, members: List<ClassElement>, source: String, fileName: String) {
+        val ctor = members.firstOrNull { it is Constructor && it.body != null } as Constructor? ?: return
+        val paramProps = ctor.parameters.filter { ModifierFlag.Private in it.modifiers && it.name is Identifier }
         if (paramProps.isEmpty()) return
-
-        // Collect names of parameter properties
-        val paramPropNames = paramProps.mapNotNull { (it.name as? Identifier)?.text }.toSet()
-        if (paramPropNames.isEmpty()) return
-
-        // Find all `this.propName` accesses in ALL class members (including constructor body)
-        val accessedViaThis = mutableSetOf<String>()
-        for (member in classDecl.members) {
-            when (member) {
-                is MethodDeclaration -> member.body?.let { collectThisPropertyAccesses(it.statements, accessedViaThis) }
-                is Constructor -> member.body?.let { collectThisPropertyAccesses(it.statements, accessedViaThis) }
-                is GetAccessor -> member.body?.let { collectThisPropertyAccesses(it.statements, accessedViaThis) }
-                is SetAccessor -> member.body?.let { collectThisPropertyAccesses(it.statements, accessedViaThis) }
-                is PropertyDeclaration -> member.initializer?.let { collectThisAccessInExpr(it, accessedViaThis) }
-                else -> {}
-            }
-        }
-
-        // Emit TS6138 for parameter properties never accessed as this.prop
+        val referenced = collectClassMemberReferences(classNode)
         for (param in paramProps) {
-            val name = param.name as? Identifier ?: continue
+            val name = param.name as Identifier
             val propName = name.text
-            if (propName.isEmpty()) continue
-            if (propName in accessedViaThis) continue
-            // Never accessed as this.propName → TS6138
+            if (propName.isEmpty() || propName in referenced) continue
             val start = name.pos
             val (line, character) = checker.getLineAndCharacterOfPosition(source, start)
             checker.diagnostics.add(Diagnostic(
@@ -141,134 +133,45 @@ internal class UnusedDeclarations(
         }
     }
 
-    private fun collectThisPropertyAccesses(statements: List<Statement>, result: MutableSet<String>) {
-        for (stmt in statements) {
-            when (stmt) {
-                is ExpressionStatement -> collectThisAccessInExpr(stmt.expression, result)
-                is VariableStatement -> for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { collectThisAccessInExpr(it, result) }
-                }
-                is ReturnStatement -> stmt.expression?.let { collectThisAccessInExpr(it, result) }
-                is IfStatement -> {
-                    collectThisAccessInExpr(stmt.expression, result)
-                    collectThisPropertyAccesses(listOf(stmt.thenStatement), result)
-                    stmt.elseStatement?.let { collectThisPropertyAccesses(listOf(it), result) }
-                }
-                is Block -> collectThisPropertyAccesses(stmt.statements, result)
-                is ForStatement -> {
-                    (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
-                        it.initializer?.let { init -> collectThisAccessInExpr(init, result) }
+    /**
+     * Every member name a class body READS: `x.p` / `x?.p` (except the write-only target of a plain
+     * `=`), `x["p"]`, and every binding-pattern / assignment-pattern property name (a destructuring
+     * of `this` or of another instance). Syntactic and deliberately over-approximate — a spurious
+     * reference costs a MISSING row, never a false positive.
+     */
+    private fun collectClassMemberReferences(classNode: Node): Set<String> {
+        val names = HashSet<String>()
+        val stack = ArrayDeque<Node>()
+        stack.addLast(classNode)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            when (node) {
+                is BinaryExpression -> if (node.operator == SyntaxKind.Equals) {
+                    val left = node.left
+                    if (left is PropertyAccessExpression) {
+                        stack.addLast(left.expression)
+                        stack.addLast(node.right)
+                        continue
                     }
-                    stmt.condition?.let { collectThisAccessInExpr(it, result) }
-                    stmt.incrementor?.let { collectThisAccessInExpr(it, result) }
-                    collectThisPropertyAccesses(listOf(stmt.statement), result)
+                    // `({ a, b: c } = this)` — an assignment pattern reads `a` and `b` off the right side.
+                    if (left is ObjectLiteralExpression) for (prop in left.properties) when (prop) {
+                        is ShorthandPropertyAssignment -> names.add(prop.name.text)
+                        is PropertyAssignment -> (prop.name as? Identifier)?.let { names.add(it.text) }
+                        else -> {}
+                    }
                 }
-                is WhileStatement -> {
-                    collectThisAccessInExpr(stmt.expression, result)
-                    collectThisPropertyAccesses(listOf(stmt.statement), result)
+                is PropertyAccessExpression -> names.add(node.name.text)
+                is ElementAccessExpression -> (node.argumentExpression as? StringLiteralNode)?.let { names.add(it.text) }
+                is BindingElement -> when (val pn = node.propertyName ?: node.name) {
+                    is Identifier -> names.add(pn.text)
+                    is StringLiteralNode -> names.add(pn.text)
+                    else -> {}
                 }
                 else -> {}
             }
+            forEachChild(node) { stack.addLast(it) }
         }
-    }
-
-    private fun collectThisAccessInExpr(expr: Expression, result: MutableSet<String>) {
-        when (expr) {
-            is PropertyAccessExpression -> {
-                val obj = expr.expression
-                if (obj is Identifier && obj.text == "this") {
-                    // this.propName — collect the property name
-                    result.add(expr.name.text)
-                } else {
-                    collectThisAccessInExpr(obj, result)
-                }
-            }
-            is CallExpression -> {
-                collectThisAccessInExpr(expr.expression, result)
-                expr.arguments.forEach { collectThisAccessInExpr(it, result) }
-            }
-            is BinaryExpression -> {
-                // B64.3-style iterative left-spine flatten to avoid StackOverflow.
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    rightStack.addLast(cur.right)
-                    cur = cur.left
-                }
-                collectThisAccessInExpr(cur, result)
-                while (rightStack.isNotEmpty()) collectThisAccessInExpr(rightStack.removeLast(), result)
-            }
-            is NewExpression -> {
-                collectThisAccessInExpr(expr.expression, result)
-                expr.arguments?.forEach { collectThisAccessInExpr(it, result) }
-            }
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> collectThisPropertyAccesses(body.statements, result)
-                is Expression -> collectThisAccessInExpr(body, result)
-                else -> {}
-            }
-            is FunctionExpression -> collectThisPropertyAccesses(expr.body.statements, result)
-            is ParenthesizedExpression -> collectThisAccessInExpr(expr.expression, result)
-            is AsExpression -> collectThisAccessInExpr(expr.expression, result)
-            is SatisfiesExpression -> collectThisAccessInExpr(expr.expression, result)
-            is NonNullExpression -> collectThisAccessInExpr(expr.expression, result)
-            is TypeAssertionExpression -> collectThisAccessInExpr(expr.expression, result)
-            is PrefixUnaryExpression -> collectThisAccessInExpr(expr.operand, result)
-            is PostfixUnaryExpression -> collectThisAccessInExpr(expr.operand, result)
-            is ConditionalExpression -> {
-                collectThisAccessInExpr(expr.condition, result)
-                collectThisAccessInExpr(expr.whenTrue, result)
-                collectThisAccessInExpr(expr.whenFalse, result)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { collectThisAccessInExpr(it, result) }
-            is TemplateExpression -> expr.templateSpans.forEach { collectThisAccessInExpr(it.expression, result) }
-            is ElementAccessExpression -> {
-                val obj = expr.expression
-                if (obj is Identifier && obj.text == "this") {
-                    // this["propName"] — collect the string-literal key only
-                    val arg = expr.argumentExpression
-                    if (arg is StringLiteralNode) result.add(arg.text)
-                } else {
-                    collectThisAccessInExpr(obj, result)
-                }
-                collectThisAccessInExpr(expr.argumentExpression, result)
-            }
-            is TaggedTemplateExpression -> {
-                collectThisAccessInExpr(expr.tag, result)
-                val t = expr.template
-                if (t is TemplateExpression) {
-                    for (span in t.templateSpans) collectThisAccessInExpr(span.expression, result)
-                }
-            }
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> collectThisAccessInExpr(prop.initializer, result)
-                    is SpreadAssignment -> collectThisAccessInExpr(prop.expression, result)
-                    is MethodDeclaration -> prop.body?.let { collectThisPropertyAccesses(it.statements, result) }
-                    is GetAccessor -> prop.body?.let { collectThisPropertyAccesses(it.statements, result) }
-                    is SetAccessor -> prop.body?.let { collectThisPropertyAccesses(it.statements, result) }
-                    else -> {}
-                }
-            }
-            is SpreadElement -> collectThisAccessInExpr(expr.expression, result)
-            is AwaitExpression -> collectThisAccessInExpr(expr.expression, result)
-            is YieldExpression -> expr.expression?.let { collectThisAccessInExpr(it, result) }
-            is VoidExpression -> collectThisAccessInExpr(expr.expression, result)
-            is DeleteExpression -> collectThisAccessInExpr(expr.expression, result)
-            is TypeOfExpression -> collectThisAccessInExpr(expr.expression, result)
-            is CommaListExpression -> for (e in expr.elements) collectThisAccessInExpr(e, result)
-            is ClassExpression -> for (m in expr.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { collectThisPropertyAccesses(it.statements, result) }
-                    is Constructor -> m.body?.let { collectThisPropertyAccesses(it.statements, result) }
-                    is GetAccessor -> m.body?.let { collectThisPropertyAccesses(it.statements, result) }
-                    is SetAccessor -> m.body?.let { collectThisPropertyAccesses(it.statements, result) }
-                    is PropertyDeclaration -> m.initializer?.let { collectThisAccessInExpr(it, result) }
-                    else -> {}
-                }
-            }
-            else -> {}
-        }
+        return names
     }
 
     /**
@@ -2819,10 +2722,10 @@ internal class UnusedDeclarations(
                 if (name is Identifier) {
                     // Skip if underscore-prefixed or if it has access modifiers (constructor params).
                     // (P18.271) a `this` parameter is never reported (tsgo `IsThisParameter`).
+                    // (CHK.221) nor is any parameter PROPERTY — tsgo `isParameterPropertyDeclaration`
+                    // covers `readonly` and `override` as well as the three accessibility modifiers.
                     if (!name.text.startsWith("_") && name.text != "this" &&
-                        ModifierFlag.Public !in param.modifiers &&
-                        ModifierFlag.Protected !in param.modifiers &&
-                        ModifierFlag.Private !in param.modifiers) {
+                        param.modifiers.none { checker.isParameterPropertyModifier(it) }) {
                         scope.declarations.add(UnusedDecl(
                             name = name.text,
                             nameNode = name,

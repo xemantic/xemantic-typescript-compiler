@@ -37,9 +37,9 @@ import kotlin.test.Test
  *
  * Every row is tsgo 7.0.2's, length included where its `--pretty` squiggle shows one (cells under
  * `build/bench/p18275-agent/matrix/`, 1-based column); all nine cells agree on both arms of the
- * move. One cell carries a pre-existing ours-only row that is NOT pinned here: a PUBLIC
- * parameter property (`constructor(public q: number)`) reads TS6138 on both arms where tsgo is
- * silent — the fixture below keeps only the private one.
+ * move. One cell carried a pre-existing ours-only row (a PUBLIC parameter property read TS6138
+ * where tsgo is silent), closed by (CHK.221) and pinned in `ParameterPropertyUnusedTest`; the
+ * fixture below keeps only the private one.
  */
 class UnusedDeclarationsCollaboratorTest {
 
