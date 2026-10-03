@@ -1,3 +1,28 @@
+### Round (P18.264) — (CHK.199): `checkSingleNewExpressionTypesCore` split verbatim (7,191 -> 5,181 bytecodes) and then — TS2351 on an INSTANCE used as a `new` callee in any file / position, B264's inherited-overload check at every `new` (not only top-level expression statements), and TS2344 on `new C<…>()` with tsgo's "no argument check after a constraint failure"; every targeted cell matches tsgo, four dead guards deleted (one was suppressing a tsgo row); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
+
+One implementation subagent. **Where the item was wrong**: (a) (b) was not "a plain two-level generic chain" — B264
+already handled it; its pass scanned only TOP-LEVEL EXPRESSION STATEMENTS, so `const d = new Derived(1)`, `export
+const`, `return`, assignments, array elements and every nested position were silent (c11 / c20 / c22 differ from the
+passing shape only in POSITION); (b) (a) was wider than c05 — 10 of 12 module cells were silent, plus annotated
+declarations and parameters in script files, and a class declaring a constructor never reached the old emitter at all.
+**Mechanism** (all in `NewExpressionChecks.kt`): the SPLIT first — `newUnionCalleeNotConstructable` (the B60.15 union
+block; its three bare `return`s became `return true`, line-multiset-diffed) and `checkNewArgsAgainstConstructSignatures`
+(the 17.21 tail, no early exits), per-pass table byte-identical; (a) `newInstanceCalleeNotConstructable` reports TS2351
+when an identifier callee's type is a non-generic class INSTANCE type that is not a constructor side — no symbol table
+consulted, so INV.3(d) and the declared-constructor axis no longer matter (sound only because a class VALUE is
+constructor-typed since (P18.254)); (b) B264 is a per-`new` check `checkInheritedOverloadedCtorNew` called after the core
+(the `pass(...)` registration removed), with a callee-resolution guard (the callee must resolve to that top-level
+class) and a memoized per-file class table; (c) TS2344 reuses the call site's `checkCallTypeArgConstraints` (now
+`internal`) with its arity gate and defaults padding, and skips the argument check after a constraint row (tsgo:
+`new G<number>("x")` is TS2344 alone). **Matrix**: c05 c11 c15 c20 c21 c22 to tsgo's row; (P18.261)'s 23 cells 23 / 23;
+24 script / module x ctor / none x instance / value / declaration / parameter / alias / let cells 24 / 24 (were 14 DIFF);
+p6 `function g(D: D) { new D() }` now TS2351 as tsgo; 15 controls silent as tsgo; B264 positions 15 / 15; TS2344 12 /
+12. **Pins**: `Chk199NewExpressionGapsTest` 19; ablation A1 5 / A2 5 / A3 4 / A3b 1 / B2 1 RED; arms B1 / A4 / A5 / A6 (four
+extra refusals) read 0 and were DELETED — A4 was suppressing tsgo's p6 row. **Gates**: full suite 22,396 / 0 / 44
+(+19); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0 (core
+5,194); grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; warning gate with probe: probe only.
+Residues -> (CHK.200).
+
 ### Round (P18.263) — (CHK.195)(a): a namespace's `export { … }` clause now binds under the EXPORTED name — the false TS2708 in clause-only ambient namespaces, the false TS2694 / TS2339 on clause entries and the missing tsgo row are all one binder fact; three neighbouring false positives fixed with it; every cell's ours-only rows to 0 bar one pre-existing display defect; +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
 
 One implementation subagent. **Where the item was wrong**: (a) "three mechanisms, not contained" — all three come from
