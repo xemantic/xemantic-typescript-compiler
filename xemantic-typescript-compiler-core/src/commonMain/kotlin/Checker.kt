@@ -509,6 +509,7 @@ class Checker(
     /** (CHK.220) TS2536 on an element access whose index is a type parameter; see `GenericIndexAccess.kt`. */
     private val genericIndexAccess = GenericIndexAccess(this)
     internal val intersectionOps = IntersectionTypeOperators(this)
+    internal val indexedAccessParams = IndexedAccessParams(this)
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -108562,7 +108563,7 @@ interface DataView {
                                 resolvedReturnType = returnType,
                                 minArgumentCount = requiredParameterCount(md.parameters),
                                 thisType = thisType,
-                            )
+                            ).also { sig -> sig.outerBindings = outerBindingsOf(typeParams, typeArgs) } // (CHK.218)
                         }
                     }
                     val fnType = Type.Object()
@@ -159509,15 +159510,19 @@ interface DataView {
             CallSections.close(CallSections.N_SINGLE_ARGS, singleArgsT)
         } else {
             CallSections.at(CallSections.OVERLOADS)
+            // (CHK.218) a generic candidate whose parameters index by its own type parameters is
+            // judged as its per-call instantiation (see [IndexedAccessParams]), so a set whose
+            // every generic member instantiates is resolved like a non-generic one.
+            val ovlSigs = indexedAccessParams.instantiateOverloads(signatures, expr.arguments)
             // Skip overload resolution when any signature has type parameters —
             // without generic type argument inference, parameter types may resolve
             // incorrectly and produce false positive TS2769 errors.
-            val hasTypeParams = signatures.any { !it.typeParameters.isNullOrEmpty() }
+            val hasTypeParams = ovlSigs.any { !it.typeParameters.isNullOrEmpty() }
             if (hasTypeParams) {
                 // (CHK.176)(a) arity needs no inference: an overload set no member of which
                 // takes this many arguments is tsgo's arity error, generic or not.
-                if (signatures.all { signatureArity.callArityFails(expr.arguments, it) }) {
-                    signatureArity.reportSignatureArity(expr.arguments, signatures, source, fileName)
+                if (ovlSigs.all { signatureArity.callArityFails(expr.arguments, it) }) {
+                    signatureArity.reportSignatureArity(expr.arguments, ovlSigs, source, fileName)
                 }
                 return
             }
@@ -159528,19 +159533,19 @@ interface DataView {
             // Embedded-lib overloads excluded (simplified arities — B279 lesson).
             run {
                 val callee = expr.expression as? PropertyAccessExpression ?: return@run
-                if (signatures.any { it.declaration != null && it.declaration in builtinLibMemberDecls }) return@run
-                val anyRest = signatures.any { sig ->
+                if (ovlSigs.any { it.declaration != null && it.declaration in builtinLibMemberDecls }) return@run
+                val anyRest = ovlSigs.any { sig ->
                     (sig.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
                 }
                 if (anyRest) return@run
                 val argCount = expr.arguments.size
                 // (CHK.176)(b) a trailing void-accepting parameter may be omitted.
-                if (signatures.any {
+                if (ovlSigs.any {
                         (argCount >= it.minArgumentCount || argCount >= relationMinArgumentCount(it)) &&
                             argCount <= it.parameters.size
                     }) return@run
-                val minA = signatures.minOf { relationMinArgumentCount(it) }
-                val maxA = signatures.maxOf { it.parameters.size }
+                val minA = ovlSigs.minOf { relationMinArgumentCount(it) }
+                val maxA = ovlSigs.maxOf { it.parameters.size }
                 if (argCount > maxA) {
                     signatureArity.emitTS2554TooMany(minA, maxA, argCount, expr.arguments, maxA, source, fileName)
                     return
@@ -159548,7 +159553,7 @@ interface DataView {
                 if (argCount < minA) {
                     val nameNode = callee.name
                     if (nameNode.text.isEmpty()) return@run
-                    val bestSig = signatures.firstOrNull { relationMinArgumentCount(it) == minA } ?: return@run
+                    val bestSig = ovlSigs.firstOrNull { relationMinArgumentCount(it) == minA } ?: return@run
                     val relatedInfo = mutableListOf<Diagnostic>()
                     val missingParam = bestSig.parameters.getOrNull(argCount)?.valueDeclaration as? Parameter
                     val pname = missingParam?.name as? Identifier
@@ -159574,7 +159579,7 @@ interface DataView {
             }
             // Overload resolution: try each signature in order
             val ovlT = CallSections.t()
-            checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName, expr.expression)
+            checkArgumentsAgainstOverloads(expr.arguments, ovlSigs, source, fileName, expr.expression)
             CallSections.close(CallSections.N_OVERLOAD_ARGS, ovlT)
         }
     }
@@ -162035,7 +162040,9 @@ interface DataView {
         // arity, which keeps this path's population exactly what it was (tsgo would report the
         // arity error there instead; that is a different family and not this round's).
         val pool = arityMatches.ifEmpty { signatures }
-        val failingCandidates = pool.filter { getFirstArgumentError(args, it) != null }
+        // (CHK.218) tsgo's candidate order is `reorderCandidates`' — specialized (literal-typed)
+        // signatures first — so "the last overload" is the last NON-specialized one.
+        val failingCandidates = specializedFirst(pool).filter { getFirstArgumentError(args, it) != null }
         if (failingCandidates.isNotEmpty()) {
             val last = failingCandidates.last()
             val errorMsg = getFirstArgumentError(args, last)!!
@@ -162140,7 +162147,7 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = getTypeOfSymbol(params[i])
             if (paramType === anyType || paramType === errorType) continue
-            val argType = getTypeOfExpression(arg)
+            val argType = if (propTypeContainsLiteral(paramType)) overloadCandidateArgType(arg, paramType) else getTypeOfExpression(arg) // (CHK.218)
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Both anonymous Type.Object with non-empty callSignatures = fn-type vs fn-type.
@@ -162411,7 +162418,7 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
-            val argType = overloadNarrowedArgType(arg, getTypeOfExpression(arg))
+            val argType = overloadCandidateArgType(arg, paramType) // (CHK.218)
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 if (argType is Type.Union && paramType is Type.Intrinsic) {
@@ -162551,7 +162558,7 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
-            val argType = overloadNarrowedArgType(arg, getTypeOfExpression(arg))
+            val argType = overloadCandidateArgType(arg, paramType) // (CHK.218)
             if (argType === anyType || argType === errorType) continue
             if (argFnLacksParamTypePredicate(argType, paramType)) {
                 val start = arg.pos
@@ -162735,6 +162742,18 @@ interface DataView {
      * getFirstFailingArgPosition / getUnionMemberFailureSubline) must route through this —
      * a helper left on the raw type disagrees with the match verdict.
      */
+    /**
+     * (CHK.218) The argument type [getFirstArgumentError] and [allArgumentsMatch] judge a
+     * candidate with — the LITERAL type against a literal parameter (`on('foo', h)` against
+     * `type: "foo"`) — so the anchor and the chain name the same failing argument the message
+     * does. The two used to type the argument WIDENED and anchored at a literal argument that
+     * the message had accepted.
+     */
+    private fun overloadCandidateArgType(arg: Expression, paramType: Type): Type =
+        overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
+            (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg))
+            else enumTargetLiteralSource(arg, paramType) ?: getTypeOfExpression(arg))
+
     private fun overloadNarrowedArgType(arg: Expression, raw: Type): Type {
         if (arg !is Identifier && arg !is PropertyAccessExpression) return raw
         if (raw is Type.Union) {
@@ -165735,7 +165754,8 @@ interface DataView {
                 args, sigIn, source, fileName, calleeGenericInstantiation,
         )) return
         ArgSections.at(ArgSections.INFER)
-        val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
+        val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn
+        else indexedAccessParams.instantiate(sigIn, args) ?: run { // (CHK.218)
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
         }

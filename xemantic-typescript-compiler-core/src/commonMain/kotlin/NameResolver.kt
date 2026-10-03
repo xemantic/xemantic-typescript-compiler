@@ -321,6 +321,10 @@ internal class NameResolver(
      * un-bound `.js` files, which have no binder result for a caller to read an
      * export out of.
      */
+    /** tsgo `pathIsRelative`: `.` / `..` alone or followed by a separator. */
+    private fun isRelativeModuleSpecifier(spec: String): Boolean =
+        spec == "." || spec == ".." || spec.startsWith("./") || spec.startsWith("../")
+
     fun resolveImportTargetFallback(spec: String, contextFile: String?): String? {
         if (contextFile == null || spec.isEmpty() || moduleResolutions.isEmpty()) return null
         val target = moduleResolutions[contextFile]?.get(spec) ?: return null
@@ -402,10 +406,23 @@ internal class NameResolver(
                         // layout (`/proj/src/a.ts` importing `./b`) needs the
                         // directory-relative leg or the alias never resolves on
                         // real on-disk projects.
+                        val ctxFileName = owningSourceFile(decl)?.fileName
                         val targetFile = resolveModuleSpecifier(specifier, decl)
-                            ?: owningSourceFile(decl)?.fileName?.let {
+                            ?: ctxFileName?.let {
                                 resolveModuleSpecifierRelative(specifier, it)
                             }
+                            // (CHK.218) a DIRECTORY specifier (`'..'`, `'./sub'`, `'./'`) names
+                            // the directory's `index` / `package.json` entry, which no string
+                            // transformation of the specifier above can reach — so a default
+                            // import of one typed `any` while the named-import resolver, which
+                            // takes this leg, did not. The crawl's own answer, gated to a RELATIVE
+                            // specifier (a bare package's default import is a wider family) and to
+                            // a non-NAMESPACE import: a namespace object over a star barrel reads
+                            // the target's `locals`, which a star re-export does not populate, so
+                            // resolving one invents TS2694 rows (zod: 1,251 of them).
+                            ?: specifier.takeIf {
+                                isRelativeModuleSpecifier(it) && decl.importClause?.namedBindings !is NamespaceImport
+                            }?.let { resolveImportTargetFallback(it, ctxFileName) }
                         if (targetFile == null) {
                             // (CHK.73) AMBIENT module — B113's second chance, which the
                             // `ImportEqualsDeclaration` arm above has had for a long time

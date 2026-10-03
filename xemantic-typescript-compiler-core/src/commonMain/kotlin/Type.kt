@@ -398,6 +398,14 @@ class Signature(
      * signature.
      */
     var defaultConstructorOf: Node? = null
+
+    /**
+     * (CHK.218) The ENCLOSING declaration's type arguments, by type-parameter name, for a method
+     * signature read through an instantiated generic type (`Emitter<Ev>`'s `on` carries
+     * `Events -> Ev`) — what `IndexedAccessParams` needs to re-resolve a parameter typed by an
+     * indexed access over an outer type parameter. Null on every other signature.
+     */
+    var outerBindings: Map<String, Type>? = null
 }
 
 // ---------------------------------------------------------------------------
