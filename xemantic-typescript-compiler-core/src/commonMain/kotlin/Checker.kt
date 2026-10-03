@@ -436,7 +436,7 @@ class Checker(
 
     /** (INV.0) step 7 — the ENUM collaborator; see `EnumSemantics.kt`. Constructed
      *  BEFORE [relater] and [memberNamer], which are wired to it directly. */
-    private val enumSemantics = EnumSemantics(this)
+    internal val enumSemantics = EnumSemantics(this)
     /** (LEGACY.0a) — tsc's `stableTypeOrdering` comparator; see `StableTypeOrdering.kt`.
      *  Read by [getUnionType] at every union mint, so it must precede `init`. */
     private val stableOrdering = StableTypeOrdering(this, binderResults)
@@ -508,6 +508,7 @@ class Checker(
 
     /** (CHK.220) TS2536 on an element access whose index is a type parameter; see `GenericIndexAccess.kt`. */
     private val genericIndexAccess = GenericIndexAccess(this)
+    internal val intersectionOps = IntersectionTypeOperators(this)
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -4971,7 +4972,7 @@ class Checker(
      *  optional — which made every `Required<Pick<X, "m">>().m()` a false TS2722 (eleven of
      *  them on tsc's own source, via `context.tracker.reportInferenceFallback`). Declared
      *  before `init` per the init-order rule. */
-    private val mappedRequiredMemberIds = mutableSetOf<Int>()
+    internal val mappedRequiredMemberIds = mutableSetOf<Int>()
 
     /** B435: ids of `Object.freeze(objLit)` result Type.Objects. `widenType` returns these
      *  AS-IS (no member-widening rebuild) so the readonly marking + literal member types
@@ -10266,10 +10267,6 @@ class Checker(
         // (the string&{} introduces a string index sig → string|undefined under
         // noUncheckedIndexedAccess; no Record materializer → engine silent → additive)
         pass("checkRecordStringAmpEmptyIndexAccess") { checkRecordStringAmpEmptyIndexAccess() }
-        // B574: TS2741 for `a = b` between vars typed by a non-homomorphic mapped
-        // `Gen2<T> = { [P in keyof Gen<T>]: ... }` over a discriminated-union Gen
-        // (keyof Gen2<E.X> reconstructed from the AST; engine → anyType → additive)
-        pass("checkNonHomomorphicMappedKeyofAssign") { checkNonHomomorphicMappedKeyofAssign() }
         // B571: TS2345 for `fn(foo, key, value)` where fn's object param is an optional
         // homomorphic mapped `{[x in K]?: Lower<T>[]}` and foo[key]'s element type ≠
         // the widened value type (engine bails on this param shape → additive)
@@ -101216,7 +101213,7 @@ interface DataView {
     }
 
     /** (CHK.96) tsc's `getNonUndefinedType`: [t] with its `undefined` constituent removed. */
-    private fun nonUndefinedType(t: Type): Type {
+    internal fun nonUndefinedType(t: Type): Type {
         if (t !is Type.Union) return if (t.flags.hasAny(TypeFlags.Undefined)) neverType else t
         val kept = t.types.filter { !it.flags.hasAny(TypeFlags.Undefined) }
         return when (kept.size) {
@@ -110494,12 +110491,13 @@ interface DataView {
         if (args.size != 2) return null
         val src = getTypeFromTypeNode(args[0])
         if (src === anyType || src === errorType) return null
+        val srcProps = if (src is Type.Intersection) intersectionOps.properties(src) ?: return null else { // (CHK.226)
         val srcObj = src as? Type.Object ?: return null
         if (srcObj is Type.Reference) return null // generic instantiations: defer (members may be lazy/substituted)
         resolveStructuredTypeMembers(srcObj)
         // index signatures complicate key-set semantics → don't materialize
         if (srcObj.stringIndexInfo != null || srcObj.numberIndexInfo != null) return null
-        val srcProps = srcObj.properties ?: return null
+        srcObj.properties ?: return null }
         val k = getTypeFromTypeNode(args[1])
         // K must be a string-literal key set (single or union of string literals).
         val keyLits: List<String> = when (k) {
@@ -111025,7 +111023,8 @@ interface DataView {
                                             else "${symbol.name}<${resolvedArgs.size}>",
                                         )
                                     }
-                                    aliasDisplayMap[result.id] = symbol.name to resolvedArgs
+                                    if (!intersectionOps.aliasBodyAnswersExistingType(decl.type, result)) // (CHK.215)
+                                        aliasDisplayMap[result.id] = symbol.name to resolvedArgs
                                     // B58.3: cache for future calls with same (symbol, args).
                                     // (INC.42) NOT for a result the display-only relaxation
                                     // produced: `substitutionResultCache` is keyed by
@@ -113819,6 +113818,7 @@ interface DataView {
             // TODO: return merged property symbol
             return type.types.firstNotNullOfOrNull { getPropertyOfType(it, name) }
         }
+        if (type is Type.Intersection) return intersectionOps.propertyOfIntersection(type, name) // (CHK.226)
         return null
     }
 
@@ -121957,7 +121957,7 @@ interface DataView {
      * Same idiom as [resolvePrefixTailSegment]; the null fallback keeps a non-generic or
      * unresolvable carrier on its existing answer, so this only ever ADDS substitution.
      */
-    private fun propertyTypeOnCarrier(carrier: Type.Object, prop: Symbol): Type =
+    internal fun propertyTypeOnCarrier(carrier: Type.Object, prop: Symbol): Type =
         if (carrier is Type.Reference) resolveGenericPropertyType(carrier, prop) ?: getTypeOfSymbol(prop)
         else getTypeOfSymbol(prop)
 
@@ -133637,7 +133637,10 @@ interface DataView {
             // family and not this round's to decide.
             is Type.Intersection -> type.types.joinToString(" & ") { m ->
                 val rendered = typeToString(m)
-                if (unionMemberRendersAsFunctionType(m)) "($rendered)" else rendered
+                // (CHK.215) …which IS the rendered-form rule: a union member that prints
+                // with a top-level `|` (an anonymous union) is parenthesized.
+                if (unionMemberRendersAsFunctionType(m) ||
+                    (m is Type.Union && intersectionOps.hasTopLevelBar(rendered))) "($rendered)" else rendered
             }
             is Type.TypeParam -> type.symbol?.name ?: "T"
         }
@@ -175075,13 +175078,25 @@ interface DataView {
         val nameType = node.nameType
         // (CHK.214) the template is instantiated with the PRE-remap key (`T[K]` reads the
         // source property), the member is named by the remapped one.
-        val sourceKeys = keys
-        if (nameType != null) {
-            if (nameType !is TemplateLiteralType) return anyType
+        var sourceKeys = keys
+        if (nameType is TemplateLiteralType) {
             val raw = nameType.head.rawText ?: return anyType
             keys = keys.map {
                 evalMappedKeyRemapTemplate(raw, node.typeParameter.name.text, it) ?: return anyType
             }
+        } else if (nameType != null) { // (CHK.215) any other `as` clause, evaluated per key
+            val pairs = keys.flatMap { k ->
+                val t = getTypeFromTypeNodeWithMapper(nameType, layeredAliasMapper(mapOf(node.typeParameter.name.text to Type.StringLiteral(k))))
+                when {
+                    t === neverType -> emptyList()
+                    t is Type.StringLiteral -> listOf(t.value to k)
+                    t is Type.Union && t.types.all { it is Type.StringLiteral } -> t.types.map { (it as Type.StringLiteral).value to k }
+                    else -> return anyType
+                }
+            }
+            if (pairs.map { it.first }.toSet().size != pairs.size) return anyType
+            keys = pairs.map { it.first }; sourceKeys = pairs.map { it.second }
+            if (keys.isEmpty()) return Type.Object().apply { declaredAt = node; members = symbolTable(); properties = emptyList() }
         }
         val isOutermost = mappedTypeResolutionDepth == 0
         // B57.3c: capture bail-flag transition at the outermost mapped-type call so
@@ -175098,8 +175113,8 @@ interface DataView {
             // Homomorphic mapped type `[K in keyof T]`: resolve the modifiers type T so each
             // synthesized member can carry its SOURCE property's declaration (for "declared
             // here" TS6500/TS2728 related info — excessPropertyChecksWithNestedIntersections).
-            val homomorphicSourceType: Type? = (node.nameType == null).let { noRemap ->
-                if (!noRemap) null else (constraint as? TypeOperator)
+            val homomorphicSourceType: Type? = run { // (CHK.215) an `as` clause keeps the modifiers type
+                (constraint as? TypeOperator)
                     ?.takeIf { it.operator == SyntaxKind.KeyOfKeyword }
                     ?.let { getTypeFromTypeNode(it.type) }
                     ?.takeIf { it !== anyType && it !== errorType }
@@ -175116,7 +175131,7 @@ interface DataView {
                 } else anyType
                 val sym = Symbol(SymbolFlags.Property, key)
                 homomorphicSourceType?.let { srcT ->
-                    getPropertyOfType(srcT, key)?.declarations?.firstOrNull()?.let { sym.declarations.add(it) }
+                    getPropertyOfType(srcT, sourceKeys[keyIdx])?.declarations?.firstOrNull()?.let { sym.declarations.add(it) }
                 }
                 // M1.10: `-readonly` STRIPS readonly — the carried source declaration
                 // may have the modifier, so mark the member writable via the side-channel.
@@ -175139,7 +175154,7 @@ interface DataView {
                     // reportInferenceFallback(node)` was a false TS2349 at eleven sites of
                     // tsc's own expressionToTypeNode.ts.
                     if (strictNullChecks && homomorphicSourceType != null) {
-                        val srcProp = getPropertyOfType(homomorphicSourceType, key)
+                        val srcProp = getPropertyOfType(homomorphicSourceType, sourceKeys[keyIdx])
                         if (srcProp != null && isOptionalProperty(srcProp)) memberType = nonUndefinedType(propType)
                     }
                 }
@@ -175280,10 +175295,24 @@ interface DataView {
      * the FP surface.
      */
     private fun tryEvaluateConditionalWithInfer(checkType: Type, node: ConditionalType): Type? {
+        intersectionOps.unparenthesized(node.extendsType).let { it as? FunctionType }?.let { ext -> // (CHK.215) `S extends (p: infer I) => void`
+            val naked = nakedCheckTypeParamName(node.checkType)
+            if (naked == null || checkType !is Type.Union) {
+                val (n, t) = intersectionOps.inferFromFunctionExtends(checkType, ext) ?: return null
+                return getTypeFromTypeNodeWithMapper(node.trueType, layeredAliasMapper(mapOf(n to t)))
+            }
+            return getUnionType(checkType.types.map { c ->
+                val (n, t) = intersectionOps.inferFromFunctionExtends(c, ext) ?: return null
+                withInstantiationContext(distributionMapper(naked, c)) {
+                    getTypeFromTypeNodeWithMapper(node.trueType, layeredAliasMapper(mapOf(n to t)))
+                }
+            })
+        }
         val extAst = node.extendsType as? TypeReference ?: return null
         val extArgs = extAst.typeArguments ?: return null
         if (extArgs.none { it is InferType }) return null
-        val checkRef = checkType as? Type.Reference ?: return null
+        // (CHK.215) a TUPLE matches through its `Array<union>` / `ReadonlyArray<…>` base.
+        val checkRef = checkType as? Type.Reference ?: tupleArrayBase(checkType) ?: return null
         val checkArgs = checkRef.resolvedTypeArguments ?: return null
         if (checkArgs.size != extArgs.size) return null
         // Same target interface (compare by name — robust to symbol-instance identity
@@ -175365,6 +175394,8 @@ interface DataView {
             if (parts.any { it === anyType || it === errorType }) return anyType
             return getUnionType(parts)
         }
+        if (objectType is Type.Intersection && indexType is Type.StringLiteral) // (CHK.226)
+            intersectionOps.indexedAccess(objectType, indexType, ::getIndexedAccessType)?.let { return it }
         // String literal key: T["prop"] → type of property "prop"
         if (indexType is Type.StringLiteral) {
             val prop = getPropertyOfType(objectType, indexType.value)
@@ -175572,6 +175603,10 @@ interface DataView {
             // is a separate question with its own population.
             return getUnionType(listOf(stringType, numberType, esSymbolType))
         }
+        // (CHK.215) keyof (A & B) = keyof A | keyof B. (`keyof (A | B)` stays `string` below:
+        // closing it needs a homomorphic mapped type to DISTRIBUTE over a union and assignment
+        // narrowing over the result — `Mutable<A | B>` at tsc's binder.ts:962 — measured.)
+        if (type is Type.Intersection) intersectionOps.keyofIntersection(type, ::getKeyofType)?.let { return it }
         if (type is Type.Union) {
             // keyof (A | B) = keyof A & keyof B (intersection of keys)
             // Simplified: return string for now
@@ -182644,108 +182679,6 @@ interface DataView {
                 }
             }
             walkStmts(stmts)
-        }
-    }
-
-    // B574: `a = b` where a/b are vars typed `Gen2<E.X>`/`Gen2<E.Y>` and
-    // `type Gen2<T> = { [P in keyof Gen<T>]: ... }`, `type Gen<T extends E> =
-    // { disc: T } & ( {disc: E.A, ...extrasA} | {disc: E.B, ...extrasB} )` (a
-    // discriminated union). `keyof Gen2<E.X>` = `{disc} ∪ extras-of-branch-X` (the
-    // `{disc:T}` intersection collapses the non-matching branch to never). Our engine
-    // resolves `keyof <generic mapped over keyof intersection>` to anyType (no
-    // Type.Intersection keyof branch + mapped-type bail) → both sides anyType →
-    // SILENT → purely ADDITIVE. We reconstruct the key sets from the AST and emit
-    // TS2741 + related TS2728 for a prop required in the target but missing from the
-    // source. Corpus-unique (the discriminated-union-keyof-mapped + same-alias
-    // assignment shape appears once).
-    private fun checkNonHomomorphicMappedKeyofAssign() {
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            val stmts = result.sourceFile.statements
-            val aliases = stmts.filterIsInstance<TypeAliasDeclaration>().associateBy { it.name.text }
-            for (gen2Alias in stmts.filterIsInstance<TypeAliasDeclaration>()) {
-                val mapped = gen2Alias.type as? MappedType ?: continue
-                val mc = mapped.typeParameter.constraint as? TypeOperator ?: continue
-                if (mc.operator != SyntaxKind.KeyOfKeyword) continue
-                val genName = ((mc.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
-                val genAlias = aliases[genName] ?: continue
-                val genBody = genAlias.type as? IntersectionType ?: continue
-                val genTp = genAlias.typeParameters?.firstOrNull()?.name?.text ?: continue
-                // disc name = the prop in the `{ disc: T }` intersection member; union = the discriminated union
-                var discName: String? = null
-                var union: UnionType? = null
-                for (m in genBody.types) {
-                    (m as? TypeLiteral)?.let { tl ->
-                        tl.members.firstNotNullOfOrNull { mm ->
-                            (mm as? PropertyDeclaration)?.takeIf { ((it.type as? TypeReference)?.typeName as? Identifier)?.text == genTp }
-                        }?.let { discName = (it.name as? Identifier)?.text }
-                    }
-                    ((m as? ParenthesizedType)?.type as? UnionType ?: m as? UnionType)?.let { union = it }
-                }
-                val disc = discName ?: continue
-                val u = union ?: continue
-                // member -> list of (extraPropName, extraPropNamePos)
-                val memberExtras = HashMap<String, List<Pair<String, Int>>>()
-                for (branch in u.types) {
-                    val tl = branch as? TypeLiteral ?: continue
-                    val discProp = tl.members.firstNotNullOfOrNull { mm ->
-                        (mm as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == disc }
-                    } ?: continue
-                    val member = (((discProp.type as? TypeReference)?.typeName as? QualifiedName)?.right)?.text ?: continue
-                    val extras = tl.members.mapNotNull { mm ->
-                        val pd = mm as? PropertyDeclaration ?: return@mapNotNull null
-                        val pn = (pd.name as? Identifier) ?: return@mapNotNull null
-                        if (pn.text == disc) null else pn.text to pn.pos
-                    }
-                    memberExtras[member] = extras
-                }
-                if (memberExtras.isEmpty()) continue
-                val gen2Name = gen2Alias.name.text
-                // var name -> (enum member, display arg "ABC.A")
-                val varInfo = HashMap<String, Pair<String, String>>()
-                for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
-                    val vn = (d.name as? Identifier)?.text ?: continue
-                    val ann = d.type as? TypeReference ?: continue
-                    if ((ann.typeName as? Identifier)?.text != gen2Name) continue
-                    val arg = ann.typeArguments?.singleOrNull() as? TypeReference ?: continue
-                    val member = ((arg.typeName as? QualifiedName)?.right)?.text ?: continue
-                    val display = formatTypeReferenceName(arg.typeName) ?: continue
-                    varInfo[vn] = member to display
-                }
-                if (varInfo.isEmpty()) continue
-                fun keyset(member: String): Set<String>? =
-                    memberExtras[member]?.let { (listOf(disc) + it.map { e -> e.first }).toSet() }
-                for (s in stmts) {
-                    val bin = (s as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
-                    if (bin.operator != SyntaxKind.Equals) continue
-                    val lhs = bin.left as? Identifier ?: continue
-                    val rhs = bin.right as? Identifier ?: continue
-                    val (lMember, lDisplay) = varInfo[lhs.text] ?: continue
-                    val (rMember, rDisplay) = varInfo[rhs.text] ?: continue
-                    val tgtKeys = keyset(lMember) ?: continue
-                    val srcKeys = keyset(rMember) ?: continue
-                    val tgtDisplay = "$gen2Name<$lDisplay>"
-                    val srcDisplay = "$gen2Name<$rDisplay>"
-                    for (prop in tgtKeys) {
-                        if (prop in srcKeys) continue
-                        val pos = memberExtras[lMember]?.firstOrNull { it.first == prop }?.second ?: continue
-                        val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
-                        val (rl, rc) = getLineAndCharacterOfPosition(source, pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Property '$prop' is missing in type '$srcDisplay' but required in type '$tgtDisplay'.",
-                            category = DiagnosticCategory.Error, code = 2741, fileName = fileName,
-                            line = line, character = ch, start = lhs.pos, length = lhs.text.length,
-                            relatedInformation = listOf(Diagnostic(
-                                message = "'$prop' is declared here.",
-                                category = DiagnosticCategory.Message, code = 2728, fileName = fileName,
-                                line = rl, character = rc, start = pos, length = prop.length,
-                            )),
-                        ))
-                    }
-                }
-            }
         }
     }
 

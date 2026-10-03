@@ -122,11 +122,12 @@ class IntersectionOverUnionRelationTest {
             // type (`Expression & (NS | SL)`), and the two displays do not match. Ours
             // names the undistributed type in both, they match, and the head is dropped.
             // The gap is the chain's source display (a separate family), not the
-            // suppression; measured against tools/tsgo-7.0.2 2026-09-13.
+            // suppression; measured against tools/tsgo-7.0.2 2026-09-13. (CHK.215): the
+            // anonymous union member is now parenthesized, as tsgo prints it.
         ) should {
             have(any {
                 it.code == 2741 && it.message ==
-                    "Property 'other' is missing in type 'Expression & NS | SL' but required in type 'Other'."
+                    "Property 'other' is missing in type 'Expression & (NS | SL)' but required in type 'Other'."
             })
         }
     }
