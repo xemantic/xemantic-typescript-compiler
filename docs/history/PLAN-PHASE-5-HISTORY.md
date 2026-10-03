@@ -1,3 +1,36 @@
+### Round (P18.265) — (CHK.198): the `export =` named-import rule completed — and NINE FALSE TS2305 that (P18.257) shipped on legal code removed (namespace types, nested / element-access expandos, `declare module` augmentations, the lodash variable-merged-with-namespace shape); re-exports and type-only specifiers now judged, `.d.ts` importers folded into the same rule; 83-cell matrix 22 -> 102 of 124 tsgo rows, ours-only 11 -> 0; `Checker.kt` -107; plus the read-only REAL-LIBRARY census queued as (LIBS.1) (2026-10-02)
+
+Two agents in parallel: one builder, one read-only census on frozen classes. **Builder — where the item was wrong**: (a)
+the queue did not record that (P18.257)'s rule itself produced FALSE POSITIVES — nine TS2305 on code tsgo accepts: a
+namespace's interface / type alias imported by a value import, an expando assigned in a nested block or through
+`f["r"] =`, a name a `declare module "./m"` augmentation adds, and the lodash shape (a variable merged with a namespace)
+— i.e. (P18.257)'s member set ignored TYPES and augmentations; (b) "the clause gate" was bigger — `.d.ts` importers went
+through a separate walker (`checkNamedImportFromExportEqualsInDts`) that was silent on the target's own name and said
+TS2305 where tsgo says TS2616 — DELETED, `.d.ts` importers now take the same rule; (c) inherited statics through
+`constructorTypeOfClass` are sound only when every base is a class DECLARATION (an `Error` / `Map` base gets statics
+from a lib interface, which `@types/node` augments), and tsgo counts a base's merged-namespace VALUES, not types; (d)
+"an unannotated object" is decided from the literal's SYNTAX (`as any`, a call, a spread, a computed key stay unknown);
+(e) tsgo suggests a spelling (TS2724) only among a NAMESPACE target's module exports; (f) the ambient / package default
+import fires only with an `__esModule` marker. **Mechanism** (`NamedImportExistence.kt`): `reportExportEqualsSpecifier`
+— tsgo's order: member set -> legal, namespace spelling -> TS2724 + TS2728, the target's own name -> TS2595 / TS2597 /
+TS2616, else TS2305 only when the member set is KNOWN; unchecked JS reports nothing; `exportEqualsMemberNames` = every
+export (types included) + class statics through declaration chains + base namespace values, enum members, function
+expandos (own scope, nested blocks, not nested functions), annotated / literal object members, augmentation names,
+`export = {…}` literal names; the re-export branch of `checkNamedImportExistence` and type-only specifiers run the rule;
+ambient modules and a CommonJS importer's `node_modules` `.d.ts` get the default-import rule. Checker: the `.d.ts`
+walker, its `pass(...)` and `getExportEqualsMemberNames` (with its stale KDoc) removed. **Pins**:
+`ExportEqualsNamedImportResiduesTest` 29; three `residue -` countdowns in `ExportEqualsNamedImportRuleTest` now assert
+tsgo's rows; ablation a1 7 / a2 6 / a3 1 / a4 3 / a5 2 / a6 1 / a7 1 / a8 2 / a9 5 / a10 2 / a11 1 / a12 1 / a13 1 / a14 1 /
+a15 1 / a16 1 / a17 1 / a18 1 RED (two guards — interface-heritage and computed-static refusals — have no discriminating
+pin). **Gates**: full suite 22,426 / 0 / 44 (+30); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue
+unchanged (a CONTROL — no profile has these shapes); warning gate with probe: probe only. Residues -> (CHK.210).
+**Census** (`build/scratch-p18265-census/README.txt`): on 8 fresh libraries (mitt, superstruct, immer, ky, hono,
+date-fns, zod, type-fest) ours reports 1,896 rows tsgo does not (6 agree, 28 missing) while the three gated libraries
+read 0 — queued as (LIBS.1) + (CHK.201)-(CHK.209), false positives first. **Lesson**: a rule verified on a matrix of the
+shapes its item NAMES can ship false positives on the shapes it does not — (P18.257)'s 45 cells held no namespace types,
+nested expandos or augmentations.
+
 ### Round (P18.264) — (CHK.199): `checkSingleNewExpressionTypesCore` split verbatim (7,191 -> 5,181 bytecodes) and then — TS2351 on an INSTANCE used as a `new` callee in any file / position, B264's inherited-overload check at every `new` (not only top-level expression statements), and TS2344 on `new C<…>()` with tsgo's "no argument check after a constraint failure"; every targeted cell matches tsgo, four dead guards deleted (one was suppressing a tsgo row); +0 on corpus (incl. the 41 ignored rows), grid and libraries (2026-10-02)
 
 One implementation subagent. **Where the item was wrong**: (a) (b) was not "a plain two-level generic chain" — B264

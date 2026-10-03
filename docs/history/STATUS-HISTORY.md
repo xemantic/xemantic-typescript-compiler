@@ -1,5 +1,9 @@
 
 
+**(P18.270) — (INV.0) EXTRACTION: THE `@ts-ignore` / `@ts-expect-error` HANDLING MOVES OUT OF `Checker.kt` INTO ITS OWN FILE, 279 LINES, BEHAVIOUR BYTE-IDENTICAL BY EVERY RECEIPT (THE REAL-LIBRARY ROW SETS INCLUDED); +9 PINS, 22,501 / 0 / 44 (2026-10-02).**
+Screen 0; grid 8x0; libraries unchanged.
+
+
 **(P18.269) — (LIBS.1) ROUND 4: A PROJECT THAT SETS NO `types` OPTION NO LONGER PULLS IN EVERY `@types` PACKAGE (TypeScript 7's DEFAULT — ky's PROGRAM 159 -> 32 FILES, = tsgo), AND A GENERIC'S TYPE-ARGUMENT COUNT IS CHECKED AGAINST ITS OWN DECLARATION, NOT A SAME-NAMED ONE ELSEWHERE; 25 FALSE ROWS GONE, 2 MISSED tsgo ROWS FOUND; TALLY 811 -> 786; +24 PINS, 22,492 / 0 / 44 (2026-10-02).**
 Screen 0; grid 8x0; gated libraries unchanged; program file lists now match tsgo on all 8 census libraries.
 

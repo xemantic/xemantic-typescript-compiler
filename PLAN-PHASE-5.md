@@ -25,6 +25,31 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.275) — (INV.0) extraction: the UNUSED-DECLARATION family moves verbatim into a new `UnusedDeclarations` collaborator; `Checker.kt` 200,831 -> 197,463 (-3,368, the largest extraction of the arc); every receipt byte-identical, including a second per-pass receipt on a `noUnused*` profile copy and the library grid's row SETS (2026-10-03)
+
+One implementation subagent. **Where the brief was wrong**: (a) the range had two HOLES that stay in `Checker` —
+`isModuleFile` / `hasCommonJsExportAssignment` / `isEsModuleFile` (`isModuleFile` alone has 62 outside callers) and the
+shared line / pin helpers `lineStartsFor`..`pinRel` — so the move is four spans (803-807 the `unusedComputedKeys` field,
+16801-17339, 17438-20118, 20180-20321); (b) the family reads NO walk or spine state (pure AST), which is why it moved
+whole; (c) the compiler profile sets no `noUnusedLocals` / `noUnusedParameters`, so its three passes are never
+REGISTERED there and the brief's per-pass receipt would have been nearly vacuous — a second receipt ran on a profile
+copy with both flags on (`build/bench/p18275-agent/unused-prof`: `checkUnusedDeclarations` 829 ms / 11 rows,
+`checkUnusedParameterProperties` 6 rows, all 63 diagnostics identical); (d) the switch family is two scattered runs (one
+helper reads the walk-scoped `currentCheckFileName`) and the module-diagnostics family is ~6,500 lines apart — refused.
+**Moved**: 58 declarations + the `unusedComputedKeys` field (moved with its only writer / readers); one new field
+`unusedDeclarations` (beside `newExpressionChecks`, before `init`); five call sites re-pointed (three `pass(…)` lambdas,
+names unchanged, `computeBindingPatternSpan` — the TS1182 underline — and `collectTypeReferenceNames`); two widenings
+(`isParameterPropertyModifier`, `hasCommonJsExportAssignment`, +7 bytes each); the collaborator reads 9 checker members
+over 36 sites and writes only `diagnostics.add` (12). **Receipts**: verbatim proof both ways; per-pass tables
+identical (compiler profile 499 lines / 417 pass rows; the `noUnused*` copy 536 lines); `PrintInlining` equal across
+arms; `cost_gate.py` counters identical; 13 unused-family classes (200 tests) green; `UnusedDeclarationsCollaboratorTest`
+9 (two unnecessary `!!` the warning gate caught in it, fixed — the class re-run 9 / 9 green), ablation a1 3 / a2 3 / a3 16 /
+a4 1 RED; a 9-cell tsgo matrix identical before / after (8 = tsgo); the LIBRARY GRID's sorted row sets identical to
+`r274` on all 8 libraries; `spine_closure_audit.py` clean. **Gates**: full suite 22,564 / 0 / 44 (+9); corpus screen
+8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue
+unchanged; warning gate with probe: probe only after the fix. Ledger row 20. **Found**: a pre-existing ours-only TS6138
+on a PUBLIC parameter property (`constructor(public q: number)`, tsgo silent) -> (CHK.221).
+
 ### Round (P18.274) — (LIBS.2) round 1: (CHK.212) a class property's literal initializer is checked against its literal-union annotation without widening (and the var-decl / assignment readers stop re-reporting `-1` / `true` after the engine accepted them), plus five date-fns mechanisms — an aliased exhaustive switch, an optional-`undefined` discriminant, `export *` of one binding, TS2307 under node16 / nodenext, `?: undefined` display; date-fns 17 + 1 missing -> 1 + 0, zod 9 missing -> 0, the 8-library tally 632 -> 614, NONE added (2026-10-03)
 
 One implementation subagent. **Where the item was wrong**: (a) (CHK.212) reproduces EVERYWHERE — `diagnose()` with the
@@ -291,39 +316,6 @@ only. **Residues**: `case X: { fail(); }` with `fail` declared in a MODULE still
 (`isNeverReturningExpression` reads `globals` only — fixing it also moves TS7027, own item); a doc comment whose middle
 line holds a glob (`src/**/*.ts`) can still make a later `// @ts-expect-error` line read live; a tsgo TS2678 in the
 fallthrough matrix is unrelated and unreported.
-
-### Round (P18.265) — (CHK.198): the `export =` named-import rule completed — and NINE FALSE TS2305 that (P18.257) shipped on legal code removed (namespace types, nested / element-access expandos, `declare module` augmentations, the lodash variable-merged-with-namespace shape); re-exports and type-only specifiers now judged, `.d.ts` importers folded into the same rule; 83-cell matrix 22 -> 102 of 124 tsgo rows, ours-only 11 -> 0; `Checker.kt` -107; plus the read-only REAL-LIBRARY census queued as (LIBS.1) (2026-10-02)
-
-Two agents in parallel: one builder, one read-only census on frozen classes. **Builder — where the item was wrong**: (a)
-the queue did not record that (P18.257)'s rule itself produced FALSE POSITIVES — nine TS2305 on code tsgo accepts: a
-namespace's interface / type alias imported by a value import, an expando assigned in a nested block or through
-`f["r"] =`, a name a `declare module "./m"` augmentation adds, and the lodash shape (a variable merged with a namespace)
-— i.e. (P18.257)'s member set ignored TYPES and augmentations; (b) "the clause gate" was bigger — `.d.ts` importers went
-through a separate walker (`checkNamedImportFromExportEqualsInDts`) that was silent on the target's own name and said
-TS2305 where tsgo says TS2616 — DELETED, `.d.ts` importers now take the same rule; (c) inherited statics through
-`constructorTypeOfClass` are sound only when every base is a class DECLARATION (an `Error` / `Map` base gets statics
-from a lib interface, which `@types/node` augments), and tsgo counts a base's merged-namespace VALUES, not types; (d)
-"an unannotated object" is decided from the literal's SYNTAX (`as any`, a call, a spread, a computed key stay unknown);
-(e) tsgo suggests a spelling (TS2724) only among a NAMESPACE target's module exports; (f) the ambient / package default
-import fires only with an `__esModule` marker. **Mechanism** (`NamedImportExistence.kt`): `reportExportEqualsSpecifier`
-— tsgo's order: member set -> legal, namespace spelling -> TS2724 + TS2728, the target's own name -> TS2595 / TS2597 /
-TS2616, else TS2305 only when the member set is KNOWN; unchecked JS reports nothing; `exportEqualsMemberNames` = every
-export (types included) + class statics through declaration chains + base namespace values, enum members, function
-expandos (own scope, nested blocks, not nested functions), annotated / literal object members, augmentation names,
-`export = {…}` literal names; the re-export branch of `checkNamedImportExistence` and type-only specifiers run the rule;
-ambient modules and a CommonJS importer's `node_modules` `.d.ts` get the default-import rule. Checker: the `.d.ts`
-walker, its `pass(...)` and `getExportEqualsMemberNames` (with its stale KDoc) removed. **Pins**:
-`ExportEqualsNamedImportResiduesTest` 29; three `residue -` countdowns in `ExportEqualsNamedImportRuleTest` now assert
-tsgo's rows; ablation a1 7 / a2 6 / a3 1 / a4 3 / a5 2 / a6 1 / a7 1 / a8 2 / a9 5 / a10 2 / a11 1 / a12 1 / a13 1 / a14 1 /
-a15 1 / a16 1 / a17 1 / a18 1 RED (two guards — interface-heritage and computed-static refusals — have no discriminating
-pin). **Gates**: full suite 22,426 / 0 / 44 (+30); corpus screen 8725 / 0 and `--include ''` the same 41;
-`cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue
-unchanged (a CONTROL — no profile has these shapes); warning gate with probe: probe only. Residues -> (CHK.210).
-**Census** (`build/scratch-p18265-census/README.txt`): on 8 fresh libraries (mitt, superstruct, immer, ky, hono,
-date-fns, zod, type-fest) ours reports 1,896 rows tsgo does not (6 agree, 28 missing) while the three gated libraries
-read 0 — queued as (LIBS.1) + (CHK.201)-(CHK.209), false positives first. **Lesson**: a rule verified on a matrix of the
-shapes its item NAMES can ship false positives on the shapes it does not — (P18.257)'s 45 cells held no namespace types,
-nested expandos or augmentations.
 
 ## QUEUE
 
@@ -931,6 +923,8 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 
 - [ ] **(LIBS.2) RESIDUAL REAL-LIBRARY CENSUS (read-only, at (P18.272); `build/scratch-p18273-census/README.txt`, 33 repros in `build/scratch-p18273-census/repro/` each checked against tsgo, `classify.py` assigns every row).** All 661 residual rows (633 ours-only + 28 missing) are assigned. Still present from the first census: F7 63 (zod — (CHK.206), in flight), F10 25, F11 12, F8 9, F12 7, F16 6, F18 5, F13 4 (+9 tsgo rows it hides), F14 / F15 4 each, F17 1, M1 10 (mitt, all TS2578), M2 10 missing, M4 / M5 7 / 2 missing, F4 6 left. NEW mechanisms below as (CHK.212)-(CHK.218). **Zero-row candidates (would become standing grid gates):** mitt (M1 alone), date-fns (F11 + the optional-discriminant fix + an `export *` same-binding TS2308 + one missing TS2536 + M2 for `vitest` — 1,231 files of ordinary code, the best gate), immer (F13 + producing its 9 hidden tsgo rows + the never-returning-method fix). Note: type-fest checks in 7.2 s here vs tsgo 17.7 s — we SKIP type evaluation tsgo does (TLT / DEFK / CDEF below), not a speed win.
+
+- [ ] **(CHK.221) A false TS6138 "Property is declared but its value is never read" on a PUBLIC constructor parameter property (`constructor(public q: number)`) under `noUnusedLocals` / `noUnusedParameters` — tsgo is silent (a public member is part of the class's API) — found by (P18.275)'s matrix (`build/bench/p18275-agent/matrix` c4), pre-existing on both arms.** A false positive on legal code; the family now lives in `UnusedDeclarations.kt`. Check `private` / `protected` / `readonly` / `public readonly` parameter properties and an overridden one against tsgo.
 
 - [ ] **(CHK.220) TS2536 on an ELEMENT-ACCESS expression with a GENERIC index is never reported — date-fns's LAST ours-only row (a TS2578 over it, `buildLocalizeFn/index.ts:131`) — found by (P18.274).** `function g<T, K>(t: T, k: K) { return t[k] }` is silent here; tsgo reports TS2536 on 4 of 5 generic cells (`checkIndexedAccessIndexType`). A NEW check with false-positive risk across zod / type-fest — build the matrix (constrained `K extends keyof T`, `K extends string`, a mapped / record `T`, a union index, a numeric index, a type-parameter receiver with an index signature) against tsgo and price it on the library grid FIRST. Closing it makes date-fns ZERO ours-only and zero missing -> add it to the standing grid as a gate.
 
