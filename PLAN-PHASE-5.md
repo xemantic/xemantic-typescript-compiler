@@ -25,6 +25,36 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.276) — (LIBS.2) round 2: (CHK.221) only a `private` parameter property is reported unused, only under `noUnusedLocals`, any reference keeps it, nested classes and class expressions are checked (15 false TS6138 + 3 false TS6133 -> 0, 2 missing rows found); and a narrow first cut of TS2536 on a type-parameter element-access index (12 of tsgo's 15 matrix rows, 0 false positives) — but date-fns's last row is a DEFERRED CONDITIONAL type, not this; (CHK.220) re-scoped (2026-10-03)
+
+One implementation subagent. **Where the item was wrong**: (a) (CHK.221) was wider than "public" — EVERY non-private
+parameter property was reported, TS6138 fired under `noUnusedParameters` alone (tsgo: `noUnusedLocals` only), a bare
+`readonly` parameter property also got TS6133, `other.p` and `const { c } = this` were not counted as reads while a
+write-only `this.p = v` was, and nested classes / class expressions were never checked; (b) (CHK.220)'s date-fns row
+(`buildLocalizeFn/index.ts:131`) is `valuesArray[index]` over `LocalizeValues<Value>` indexed by
+`LocalizeUnitIndex<Value>` — both DEFERRED CONDITIONAL types, which this checker types as `any` (silent even in a plain
+mis-assignment; repro `build/bench/p18276-agent/m220d`) — so closing it needs deferred conditional types (+ deferred
+indexed access and generic `keyof`), not the generic-index check. **Mechanism**: (CHK.221) follows tsgo's
+`checkUnusedClassMembers` constructor arm — `checkUnusedParameterProperties` returns unless `noUnusedLocals` and walks
+every class declaration and expression; private-only filter; `collectClassMemberReferences` (a generic walk counting
+`x.p` except a plain `=` target, `x["p"]`, binding-pattern and destructuring-assignment names — deliberately
+over-counting, so a mistake costs a missed row, never a false positive); the parameter half of TS6133 skips any
+parameter property (`readonly` / `override` included). (CHK.220)-narrow: new `GenericIndexAccess.kt` (179) ports
+`checkIndexedAccessIndexType` for a TYPE-PARAMETER index only, three-valued (undecidable is SILENT): an unconstrained `K`
+is rejected for any receiver but `any` / `unknown`; a `K` whose WRITTEN constraint is plainly `string` / `number` /
+literals is rejected when not covered by an unconstrained type-parameter receiver (`keyof unknown` = `never`) or a
+type-literal receiver (members + string / number index signatures), read from declaration SYNTAX because this checker
+turns `Extract<keyof T, string>` into `string`. `Checker.kt` +4; `UnusedDeclarations.kt` +59 / -162 (two old `this.`
+collectors removed). **Matrices**: (CHK.221) 15 false TS6138 + 3 false TS6133 -> 0, 2 missing rows found, = tsgo in
+every config but one pre-existing missing TS4113 (`private override` with no base member); (CHK.220) 51 cells, tsgo 15
+TS2536, ours 0 -> 12 with full text / spans, no false positive (left silent: `K extends PropertyKey` on a string index
+signature, a receiver type parameter with a constraint, an alias constraint). **Pins**: `ParameterPropertyUnusedTest` 3,
+`GenericIndexAccessTest` 3; ablation a1 1 / a2 1 / a3 1 / a4 2 / a5 1 / b1 1 / b2 1 / b3 1 / b4 1 RED. **Gates**: full suite
+22,570 / 0 / 44 (+6); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0 (`typeOfExpr.calls`
++0.24%, one `getTypeOfExpression` per non-literal element access — the new check); `huge_methods.py --fail-over 0` 0;
+grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid row sets byte-identical (the
+new TS2536 fires 0 times there; tally stays 614, date-fns 1 / 0); warning gate with probe: probe only.
+
 ### Round (P18.275) — (INV.0) extraction: the UNUSED-DECLARATION family moves verbatim into a new `UnusedDeclarations` collaborator; `Checker.kt` 200,831 -> 197,463 (-3,368, the largest extraction of the arc); every receipt byte-identical, including a second per-pass receipt on a `noUnused*` profile copy and the library grid's row SETS (2026-10-03)
 
 One implementation subagent. **Where the brief was wrong**: (a) the range had two HOLES that stay in `Checker` —
@@ -288,34 +318,6 @@ added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid 
 rows in `node_modules` JS), others unchanged; program files vs tsgo: mitt 50 -> 9 (= tsgo), type-fest 512 -> 482 (=
 tsgo, identical sets), ky 159 vs tsgo 32 (that is M3, the `types` default — (CHK.209)); warning gate with probe: probe
 only. Residues -> (CHK.211).
-
-### Round (P18.266) — (LIBS.1) round 1: (CHK.201) TS7029 asks the flow graph whether a case clause's end is reachable (+ a syntactic Block arm), and (CHK.205) a `//` directive inside an open `/** … */` doc comment is no longer live; the census libraries' ours-only rows 1,896 -> 1,534 (zod -277, type-fest -85), NONE added anywhere, every removed row attributed by script; +0 on corpus (incl. the 41 ignored rows), grid and the gated libraries (2026-10-02)
-
-One implementation subagent, gated for the first time on the LIBRARY GRID (`build/scratch-p18265-census/libgrid.sh
-<abs classdir> <tag> [lib…]` — ours over the 8 census libraries against the stored tsgo output; baseline tag
-`base265`, this round `r266`). **Where the brief was wrong**: (a) a `break` inside a block leaves the SWITCH, not into
-the next case, so tsgo does NOT report `case 8: { break; }` — nor `continue`, `break outer`, `continue outer` from a
-block — while it DOES report a labelled block left by `break lbl` and `try { return } catch {}`; (b) the flow graph
-alone does not cover the census's shapes — it models no never-returning call, so `case 16: { fail(); }` also needs a
-syntactic Block arm; (c) F6 had a SECOND hole beside `commentOpenOnLineBefore` ignoring an enclosing `/*`: a failed
-block-comment prefix fell through to the `//` path, so ` * // @ts-expect-error` inside a doc comment stayed live; and a
-`//` directive on a block comment's LAST line is live in tsgo and must stay so. **Mechanism**: `bindSwitchStatement`
-records every clause whose end is `FlowUnreachable` (tsgo's `FallthroughFlowNode`), exposed as
-`FlowGraph.clauseEndUnreachable`; `checkSwitchForFallthrough` drops a report the flow graph proves unreachable (it can
-only REMOVE rows) and `clauseStmtsTerminate` looks into nested Blocks (labelled statements deliberately not followed);
-a `//` opener inside an open block comment counts only on the block's last line, the backward-found opener confirmed by
-`insideOpenBlockComment` (so a glob in a string literal is not an open comment), and a failed block prefix returns null.
-`Checker.kt` +32, `Flow.kt` +18 (the new field declared before `init`, not between `currentFlowGraph` and its setter).
-**Matrices**: F3 26 clauses — 7 tsgo rows, ours 7 + 12 ours-only -> 7 + 0 (script form; module form keeps case 16);
-F6 14 shapes — exact match (3 ours-only TS2578 gone). **Pins**: `FallthroughClauseReachabilityTest` 4,
-`DocCommentDirectiveTest` 3; ablation a1 1 / a2 1 / a3 2 / a4 1 RED. **Gates**: full suite 22,433 / 0 / 44 (+7); corpus
-screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0
-removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid mitt 10 / superstruct 7 / immer 43 / ky 11 /
-hono 97 / date-fns 17 / zod 806 -> 529 / type-fest 905 -> 820, agree and missing unmoved; warning gate with probe: probe
-only. **Residues**: `case X: { fail(); }` with `fail` declared in a MODULE still reports TS7029
-(`isNeverReturningExpression` reads `globals` only — fixing it also moves TS7027, own item); a doc comment whose middle
-line holds a glob (`src/**/*.ts`) can still make a later `// @ts-expect-error` line read live; a tsgo TS2678 in the
-fallthrough matrix is unrelated and unreported.
 
 ## QUEUE
 
@@ -924,9 +926,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 
 - [ ] **(LIBS.2) RESIDUAL REAL-LIBRARY CENSUS (read-only, at (P18.272); `build/scratch-p18273-census/README.txt`, 33 repros in `build/scratch-p18273-census/repro/` each checked against tsgo, `classify.py` assigns every row).** All 661 residual rows (633 ours-only + 28 missing) are assigned. Still present from the first census: F7 63 (zod — (CHK.206), in flight), F10 25, F11 12, F8 9, F12 7, F16 6, F18 5, F13 4 (+9 tsgo rows it hides), F14 / F15 4 each, F17 1, M1 10 (mitt, all TS2578), M2 10 missing, M4 / M5 7 / 2 missing, F4 6 left. NEW mechanisms below as (CHK.212)-(CHK.218). **Zero-row candidates (would become standing grid gates):** mitt (M1 alone), date-fns (F11 + the optional-discriminant fix + an `export *` same-binding TS2308 + one missing TS2536 + M2 for `vitest` — 1,231 files of ordinary code, the best gate), immer (F13 + producing its 9 hidden tsgo rows + the never-returning-method fix). Note: type-fest checks in 7.2 s here vs tsgo 17.7 s — we SKIP type evaluation tsgo does (TLT / DEFK / CDEF below), not a speed win.
 
-- [ ] **(CHK.221) A false TS6138 "Property is declared but its value is never read" on a PUBLIC constructor parameter property (`constructor(public q: number)`) under `noUnusedLocals` / `noUnusedParameters` — tsgo is silent (a public member is part of the class's API) — found by (P18.275)'s matrix (`build/bench/p18275-agent/matrix` c4), pre-existing on both arms.** A false positive on legal code; the family now lives in `UnusedDeclarations.kt`. Check `private` / `protected` / `readonly` / `public readonly` parameter properties and an overridden one against tsgo.
+- [x] **(CHK.221) DONE 2026-10-03 ((P18.276): tsgo's private-only / noUnusedLocals-only rule, reference-keeps, nested classes; 15 + 3 false positives -> 0; residue: a missing TS4113 for `private override` with no base member; private FIELD reads still use an older statement-list collector that misses destructuring-from-`this` and for-of reads). A false TS6138 "Property is declared but its value is never read" on a PUBLIC constructor parameter property (`constructor(public q: number)`) under `noUnusedLocals` / `noUnusedParameters` — tsgo is silent (a public member is part of the class's API) — found by (P18.275)'s matrix (`build/bench/p18275-agent/matrix` c4), pre-existing on both arms.** A false positive on legal code; the family now lives in `UnusedDeclarations.kt`. Check `private` / `protected` / `readonly` / `public readonly` parameter properties and an overridden one against tsgo.
 
-- [ ] **(CHK.220) TS2536 on an ELEMENT-ACCESS expression with a GENERIC index is never reported — date-fns's LAST ours-only row (a TS2578 over it, `buildLocalizeFn/index.ts:131`) — found by (P18.274).** `function g<T, K>(t: T, k: K) { return t[k] }` is silent here; tsgo reports TS2536 on 4 of 5 generic cells (`checkIndexedAccessIndexType`). A NEW check with false-positive risk across zod / type-fest — build the matrix (constrained `K extends keyof T`, `K extends string`, a mapped / record `T`, a union index, a numeric index, a type-parameter receiver with an index signature) against tsgo and price it on the library grid FIRST. Closing it makes date-fns ZERO ours-only and zero missing -> add it to the standing grid as a gate.
+- [ ] **(CHK.220) RE-SCOPED 2026-10-03 ((P18.276)): date-fns's LAST ours-only row needs DEFERRED CONDITIONAL TYPES — `valuesArray[index]` over `LocalizeValues<Value>` indexed by `LocalizeUnitIndex<Value>`, both deferred conditionals this checker types as `any` (repro `build/bench/p18276-agent/m220d`: tsgo TS2322 on two mis-assignment probes + TS2536, ours silent) — a much larger item than first thought (deferred indexed access, generic `keyof`; overlaps (CHK.215) DEFK and (CHK.219)(a)). The narrow TS2536 half LANDED at (P18.276) (`GenericIndexAccess.kt`, type-parameter index only, 12 / 15 of tsgo's matrix rows; open: symbol keys / `PropertyKey`, a constrained receiver type parameter, alias constraints, the type-node `T[K]` form). WAS: TS2536 on an ELEMENT-ACCESS expression with a GENERIC index is never reported — date-fns's LAST ours-only row (a TS2578 over it, `buildLocalizeFn/index.ts:131`) — found by (P18.274).** `function g<T, K>(t: T, k: K) { return t[k] }` is silent here; tsgo reports TS2536 on 4 of 5 generic cells (`checkIndexedAccessIndexType`). A NEW check with false-positive risk across zod / type-fest — build the matrix (constrained `K extends keyof T`, `K extends string`, a mapped / record `T`, a union index, a numeric index, a type-parameter receiver with an index signature) against tsgo and price it on the library grid FIRST. Closing it makes date-fns ZERO ours-only and zero missing -> add it to the standing grid as a gate.
 
 - [x] **(CHK.212) DONE 2026-10-03 ((P18.274): class-property literal initializers typed without widening; the var-decl / assignment `-1` / `true` sibling fixed; 13 + 5 false positives -> 0). A class property with a literal-UNION annotation and a literal initializer reports a false TS2322 — `class C { b: "a" | "b" = "a" }` — under every config, readonly and generic classes included (`checkPropertyInitAssignability`).** Only 3 library rows but the most ORDINARY shape in the census, so FIRST. The one corpus case with this shape is green: check whether it reproduces only through the CLI with the REAL libs (`@useRealLibs` / a `-project` fixture) before pinning with `diagnose()`.
 

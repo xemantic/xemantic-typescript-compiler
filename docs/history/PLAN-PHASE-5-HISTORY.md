@@ -1,3 +1,31 @@
+### Round (P18.266) — (LIBS.1) round 1: (CHK.201) TS7029 asks the flow graph whether a case clause's end is reachable (+ a syntactic Block arm), and (CHK.205) a `//` directive inside an open `/** … */` doc comment is no longer live; the census libraries' ours-only rows 1,896 -> 1,534 (zod -277, type-fest -85), NONE added anywhere, every removed row attributed by script; +0 on corpus (incl. the 41 ignored rows), grid and the gated libraries (2026-10-02)
+
+One implementation subagent, gated for the first time on the LIBRARY GRID (`build/scratch-p18265-census/libgrid.sh
+<abs classdir> <tag> [lib…]` — ours over the 8 census libraries against the stored tsgo output; baseline tag
+`base265`, this round `r266`). **Where the brief was wrong**: (a) a `break` inside a block leaves the SWITCH, not into
+the next case, so tsgo does NOT report `case 8: { break; }` — nor `continue`, `break outer`, `continue outer` from a
+block — while it DOES report a labelled block left by `break lbl` and `try { return } catch {}`; (b) the flow graph
+alone does not cover the census's shapes — it models no never-returning call, so `case 16: { fail(); }` also needs a
+syntactic Block arm; (c) F6 had a SECOND hole beside `commentOpenOnLineBefore` ignoring an enclosing `/*`: a failed
+block-comment prefix fell through to the `//` path, so ` * // @ts-expect-error` inside a doc comment stayed live; and a
+`//` directive on a block comment's LAST line is live in tsgo and must stay so. **Mechanism**: `bindSwitchStatement`
+records every clause whose end is `FlowUnreachable` (tsgo's `FallthroughFlowNode`), exposed as
+`FlowGraph.clauseEndUnreachable`; `checkSwitchForFallthrough` drops a report the flow graph proves unreachable (it can
+only REMOVE rows) and `clauseStmtsTerminate` looks into nested Blocks (labelled statements deliberately not followed);
+a `//` opener inside an open block comment counts only on the block's last line, the backward-found opener confirmed by
+`insideOpenBlockComment` (so a glob in a string literal is not an open comment), and a failed block prefix returns null.
+`Checker.kt` +32, `Flow.kt` +18 (the new field declared before `init`, not between `currentFlowGraph` and its setter).
+**Matrices**: F3 26 clauses — 7 tsgo rows, ours 7 + 12 ours-only -> 7 + 0 (script form; module form keeps case 16);
+F6 14 shapes — exact match (3 ours-only TS2578 gone). **Pins**: `FallthroughClauseReachabilityTest` 4,
+`DocCommentDirectiveTest` 3; ablation a1 1 / a2 1 / a3 2 / a4 1 RED. **Gates**: full suite 22,433 / 0 / 44 (+7); corpus
+screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0
+removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid mitt 10 / superstruct 7 / immer 43 / ky 11 /
+hono 97 / date-fns 17 / zod 806 -> 529 / type-fest 905 -> 820, agree and missing unmoved; warning gate with probe: probe
+only. **Residues**: `case X: { fail(); }` with `fail` declared in a MODULE still reports TS7029
+(`isNeverReturningExpression` reads `globals` only — fixing it also moves TS7027, own item); a doc comment whose middle
+line holds a glob (`src/**/*.ts`) can still make a later `// @ts-expect-error` line read live; a tsgo TS2678 in the
+fallthrough matrix is unrelated and unreported.
+
 ### Round (P18.265) — (CHK.198): the `export =` named-import rule completed — and NINE FALSE TS2305 that (P18.257) shipped on legal code removed (namespace types, nested / element-access expandos, `declare module` augmentations, the lodash variable-merged-with-namespace shape); re-exports and type-only specifiers now judged, `.d.ts` importers folded into the same rule; 83-cell matrix 22 -> 102 of 124 tsgo rows, ours-only 11 -> 0; `Checker.kt` -107; plus the read-only REAL-LIBRARY census queued as (LIBS.1) (2026-10-02)
 
 Two agents in parallel: one builder, one read-only census on frozen classes. **Builder — where the item was wrong**: (a)
