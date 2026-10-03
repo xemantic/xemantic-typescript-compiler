@@ -1,3 +1,33 @@
+### Round (P18.274) — (LIBS.2) round 1: (CHK.212) a class property's literal initializer is checked against its literal-union annotation without widening (and the var-decl / assignment readers stop re-reporting `-1` / `true` after the engine accepted them), plus five date-fns mechanisms — an aliased exhaustive switch, an optional-`undefined` discriminant, `export *` of one binding, TS2307 under node16 / nodenext, `?: undefined` display; date-fns 17 + 1 missing -> 1 + 0, zod 9 missing -> 0, the 8-library tally 632 -> 614, NONE added (2026-10-03)
+
+One implementation subagent. **Where the item was wrong**: (a) (CHK.212) reproduces EVERYWHERE — `diagnose()` with the
+embedded lib, the CLI — and the corpus case the census cited is not in this clone at all; (b) the census's
+"literal-type path" diagnosis is half: the var-decl and assignment readers had a SIBLING defect — after the type engine
+ACCEPTED `let n: -1 | 1 = -1` / `let d: true | "x" = true` / `w = -1`, the old string-based check still ran and reported
+a false TS2322, because its literal guard listed only the literal node CLASSES while `-1` is a prefix-minus expression
+and `true` parses as an identifier (tsgo accepts all); (c) the missing TS2536 behind date-fns's last row is general — we
+never report TS2536 on an ELEMENT-ACCESS expression whose index is generic (`function g<T, K>(t: T, k: K) { return t[k]
+}` is silent here; tsgo reports 4 of 5 generic cells) — a new feature with false-positive risk, REFUSED, queued as
+(CHK.220). **Mechanism** (`Checker.kt` +72): `checkPropertyInitAssignability` types the initializer as the var-decl path
+does (keep literals when the target contains literals, enum-target literals, contextual-literal preservation, an
+object-literal context); the var-decl / assignment guards use `isResolutionFreeScalarLiteral`; new
+`isExhaustiveUnitTypeSwitch` reads the RESOLVED declared type (every constituent a unit type, `boolean` = `true | false`,
+every case a literal — it can only REMOVE a TS2366); `narrowByDiscriminantProperty` drops a constituent whose
+discriminant is nullish on the definite-value branch; `checkExportStarAmbiguity` suppresses TS2308 only when every
+occurrence resolves to the SAME symbol (tsgo compares symbols, not files); `checkUnresolvedModules`' bare-package arm
+widened to node16 / nodenext; an optional property typed `undefined` no longer prints `undefined | undefined`.
+**Matrix** (CLI, strict): 13 class-property false positives -> 0, true positives now print tsgo's literal (`'nope'`
+not `'string'`); 5 var-decl / assignment false positives -> 0; 4 aliased-switch TS2366 -> 0 with the 4 genuinely
+non-exhaustive kept; 3 OPTDISC TS2339 -> 0; one STARSAME TS2308 -> 0 with different-binding rows kept; nodenext
+`vitest` TS2307 now reported. **Pins**: `ClassPropertyLiteralInitializerTest` 4, `DateFnsResidueTest` 7; ablation a1 2 /
+a1b 1 / a2 1 / a3 1 / a4 1 / a5 2 / a6 1 / a7 1 / a8 1 RED; at-risk sweep 215 classes / 2,620 tests green. **Gates**: full
+suite 22,555 / 0 / 44 (+11); corpus screen 8725 / 0 and `--include ''` the same 41, byte-identical; `cost_gate.py` 0;
+`huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library
+grid hono 61 -> 60, date-fns 17 / 1 -> 1 / 0, zod 165 / 9 -> 164 / 0 (zod's 9 `benchmark` TS2307 now REPORTED), others
+unchanged; warning gate with probe: probe only. **Residues**: (CHK.220); class-property object / array-literal true
+positives not drilled to the element (pre-existing); hex literal types (`0x1` -> `0`); TS2308 missed for the
+`export { x } from` form; `d?: any` displays `any | undefined`.
+
 ### Round (P18.273) — (LIBS.1) round 7, (CHK.206): discriminant / equality / switch narrowing by the comparand's TYPE (a unit type or a union of them — an `as const` member, a mapped type of literals, a const, an imported member, `typeof C.a`), matching tsgo cell for cell — but zod's 61 rows did NOT move (166 -> 165): the census's attribution was wrong, they are blocked UPSTREAM by two inference gaps, queued as (CHK.219); plus the read-only RESIDUAL census queued as (LIBS.2) (2026-10-03)
 
 Two agents in parallel (builder + read-only census). **Builder — where the item was wrong**: (a) zod's 61 rows are

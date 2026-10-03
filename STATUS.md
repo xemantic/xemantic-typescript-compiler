@@ -96,6 +96,9 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.284) — (LIBS.2): GENERICS WITHOUT `in` / `out` NO LONGER REJECT LEGAL ASSIGNMENTS BY ASSUMING COVARIANCE — A STRUCTURAL FALLBACK WITH tsgo's CALLBACK RULE; zod −6, hono −1, TALLY 445 -> 438, NONE ADDED, THE ROUND-336 REGRESSIONS DID NOT RECUR; +11 PINS, 22,652 / 0 / 44 (2026-10-03).**
+Screen 0; grid 8x0; mitt still 0; `Checker.kt` untouched.
+
 **(P18.283) — (LIBS.2): mitt AGREES WITH tsgo EXACTLY — 10 -> 0 false rows, 0 missing — AND IS NOW A STANDING GRID GATE (the first library this arc brought to zero); hono −1; TALLY 456 -> 445, NONE ADDED; +11 PINS, 22,641 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; gated libraries unchanged.
 
@@ -107,6 +110,3 @@ Screen 0; grid 8x0; gated libraries unchanged.
 
 **(P18.280) — (LIBS.2): DECLARED `in` / `out` VARIANCE IS NOW HONOURED WHEN TWO INSTANTIATIONS OF ONE GENERIC ARE COMPARED — zod 78 -> 68 (TEN rows, seven never named in the queue) — AND TWO MODULE-SYNTAX FALSE POSITIVES ARE GONE; TALLY 487 -> 477, NONE ADDED; +11 PINS, 22,609 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; gated libraries unchanged; `Checker.kt` untouched.
-
-**(P18.279) — (INV.0) EXTRACTION: THE MODULE-SYNTAX CHECKS AND THE "TYPESCRIPT SYNTAX IN A JS FILE" CHECK MOVE OUT OF `Checker.kt` (2,089 LINES), BEHAVIOUR BYTE-IDENTICAL BY EVERY RECEIPT; `Checker.kt` IS NOW 195,775; +5 PINS, 22,598 / 0 / 44 (2026-10-03).**
-Screen 0; grid 8x0; libraries unchanged.
