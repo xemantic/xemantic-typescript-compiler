@@ -1,3 +1,35 @@
+### Round (P18.267) — (LIBS.1) round 2, (CHK.202): an unchecked JavaScript file (allowJs without checkJs, `@ts-nocheck`, explicit `checkJs: false`) keeps only tsgo's plain-JS / syntactic / declaration rows, `.js` inside `node_modules` is no longer loaded (maxNodeModuleJsDepth 0) and its import gets tsgo's TS7016, and package resolution is TypeScript-first across every ancestor `node_modules` / `@types`; type-fest 820 -> 431 ours-only, the 8-library tally 1,534 -> 1,145, program file lists identical to tsgo on 7 of 8 libraries; NONE added anywhere (2026-10-02)
+
+One implementation subagent. **Where the brief was wrong**: (a) the funnel CANNOT drop everything outside tsgo's
+`plainJSErrors` — our CHECKER emits rows tsgo reports as SYNTACTIC JS diagnostics (the parser's `jsErrorAtRange` set,
+TS8002-8017 / 8037 / 8038 / 1206 / 1486, and TS1003 for JSDoc `@typedef` parse errors); the first cut dropped them and
+the corpus screen read 27 mismatches (`jsFileCompilation*Syntax`, `decoratorInJsFile*`, `jsdocTypedefNoCrash*`) —
+those codes are kept in every mode; (b) excluding `node_modules` JS is half of tsgo's file set — it resolves packages
+TypeScript-FIRST across every ancestor `node_modules` and its `@types` and only then falls back to JS (without that a
+nearer JS-only package won over `@types/normalize-package-data`); (c) `// @ts-check` / `// @ts-nocheck` were not
+modelled at all, and tsgo's `@ts-nocheck` applies to `.ts` files too; (d) `checkJs` is THREE-state in tsgo — an
+explicit `false` drops even the plain-JS binder rows (`checkJsExplicitlyFalse` added); (e) mitt was affected as well
+(50 program files vs tsgo's 9, chai / sinon JS pulled in) — the census's stored file lists were stale. **Mechanism**:
+`UncheckedJsFiles.modeOf` ports tsgo's `canIncludeBindAndCheckDiagnostics` / `IsPlainJSFile` — SKIPPED (leading
+`@ts-nocheck`, or JS under explicit `checkJs: false`: syntactic + TS4xxx / 9xxx only), PLAIN (JS, `checkJs` unset, no
+pragma: + the 91 `plainJSErrors`), CHECKED — with tsgo's `extractPragmas` (leading `//` comments, last wins, shebang
+skipped), applied in `getDiagnostics` (`filterUncheckedJs`) BEFORE comment directives, and PLAIN / SKIPPED files exempt
+from directives and TS2578 as in tsgo; the crawl leaves a resolution to a `node_modules` JS file out of the program and
+records it in `ParsedSource.untypedModuleResolutions` (through `TypeScriptCompiler` to a new `Checker` parameter),
+`checkUnresolvedModules` emits TS7016 under `noImplicitAny` (skipping side-effect imports, deferring to an ambient
+`declare module`) with tsgo's "Try `npm i --save-dev @types/…`" chain, TS2307 / TS2882 silenced for those specifiers;
+`ModuleResolver.resolveBare` keeps a JS answer only as a fallback. New `UncheckedJsFiles.kt` (161), `UntypedModuleImports.kt`
+(80); `Checker.kt` +54. **Matrices**: half 1 — 18 cells, 16 exact (plain / checkJs:false / nocheck JS / nocheck TS / mjs
+/ cjs / jsx / strict-reserved / TS2855 shapes / directives…), 2 pre-existing misses; half 2 — 12 cells, all exact incl.
+every chain line. **Pins**: `UncheckedJsAndUntypedModuleTest` 19; `TsgoStep22Test`'s TS2855 `residue -` countdown inverted
+(tsgo re-measured: silent); ablation A1 6 / A2 2 / A3 1 / A4 1 / A5 2 / A6 4 / A7 1 / A8 3 / A9 1 / A10 1 / A12 1 / A13 1 / A14
+1 RED, A11 (TS2882 silencing) 0 — a redundant guard kept as a safety net. **Gates**: full suite 22,452 / 0 / 44 (+19);
+corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid type-fest 820 -> 431 (all 389 removed
+rows in `node_modules` JS), others unchanged; program files vs tsgo: mitt 50 -> 9 (= tsgo), type-fest 512 -> 482 (=
+tsgo, identical sets), ky 159 vs tsgo 32 (that is M3, the `types` default — (CHK.209)); warning gate with probe: probe
+only. Residues -> (CHK.211).
+
 ### Round (P18.266) — (LIBS.1) round 1: (CHK.201) TS7029 asks the flow graph whether a case clause's end is reachable (+ a syntactic Block arm), and (CHK.205) a `//` directive inside an open `/** … */` doc comment is no longer live; the census libraries' ours-only rows 1,896 -> 1,534 (zod -277, type-fest -85), NONE added anywhere, every removed row attributed by script; +0 on corpus (incl. the 41 ignored rows), grid and the gated libraries (2026-10-02)
 
 One implementation subagent, gated for the first time on the LIBRARY GRID (`build/scratch-p18265-census/libgrid.sh
