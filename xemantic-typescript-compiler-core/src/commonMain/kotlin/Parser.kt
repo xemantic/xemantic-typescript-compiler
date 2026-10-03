@@ -2863,7 +2863,10 @@ class Parser(
                 scanner.getToken() != SyntaxKind.OpenParen && scanner.getToken() != SyntaxKind.Colon &&
                         scanner.getToken() != SyntaxKind.Semicolon && scanner.getToken() != SyntaxKind.Equals &&
                         scanner.getToken() != SyntaxKind.Comma && scanner.getToken() != SyntaxKind.CloseBrace &&
-                        scanner.getToken() != SyntaxKind.LessThan // get<T>() is a generic method, not a getter
+                        scanner.getToken() != SyntaxKind.LessThan && // get<T>() is a generic method, not a getter
+                        // `get!: H` / `get?: H` is a PROPERTY named `get` (tsgo canFollowGetOrSetKeyword
+                        // admits only `[` or a literal property name after the keyword).
+                        scanner.getToken() != SyntaxKind.Exclamation && scanner.getToken() != SyntaxKind.Question
             }
             if (result) {
                 nextToken() // skip 'get'
@@ -2877,7 +2880,10 @@ class Parser(
                 scanner.getToken() != SyntaxKind.OpenParen && scanner.getToken() != SyntaxKind.Colon &&
                         scanner.getToken() != SyntaxKind.Semicolon && scanner.getToken() != SyntaxKind.Equals &&
                         scanner.getToken() != SyntaxKind.Comma && scanner.getToken() != SyntaxKind.CloseBrace &&
-                        scanner.getToken() != SyntaxKind.LessThan // set<T>() is a generic method, not a setter
+                        scanner.getToken() != SyntaxKind.LessThan && // set<T>() is a generic method, not a setter
+                        // `set!: H` / `set?: H` is a PROPERTY named `set` (tsgo canFollowGetOrSetKeyword
+                        // admits only `[` or a literal property name after the keyword).
+                        scanner.getToken() != SyntaxKind.Exclamation && scanner.getToken() != SyntaxKind.Question
             }
             if (result) {
                 nextToken() // skip 'set'
@@ -3537,6 +3543,7 @@ class Parser(
                 nextToken()
                 continue
             }
+            typeMemberConsumedSemicolon = false
             val member = parseTypeMember()
             if (member != null) members.add(member)
             // parseTypeMember can signal a member-list ABORT (malformed-type-param
@@ -3548,10 +3555,22 @@ class Parser(
             // follower — e.g. the `?` after a `()` call signature or `[idx:number]` index
             // signature — report TS1005 "';' expected." (matching tsc), which then leaves
             // the `?` for the leading-`?` abort above.
-            if (!parseOptional(SyntaxKind.Comma)) parseSemicolon()
+            // An index signature consumes its own trailing `;` (tsgo parseIndexSignatureDeclaration
+            // ends in parseTypeMemberSemicolon) — asking again would read the NEXT member's first
+            // token, and a numeric name (`[x: string]: T; 0: U`) then reports a false TS1005.
+            // The flag is read only for an IndexSignature member: a nested type literal inside any
+            // OTHER member's type (`p?: | { [k: number]: T; } | undefined;`) sets it too, and must
+            // not stop this member's own separator from being consumed.
+            val sigConsumedSemicolon = member is IndexSignature && typeMemberConsumedSemicolon
+            typeMemberConsumedSemicolon = false
+            if (!parseOptional(SyntaxKind.Comma) && !sigConsumedSemicolon) parseSemicolon()
         }
         return members
     }
+
+    /** Set by [parseIndexSignatureOrProperty] when an index signature consumed its own trailing
+     *  `;`; read and reset by the type-member loop so it does not ask for a separator twice. */
+    private var typeMemberConsumedSemicolon = false
 
     private fun parseTypeMember(): ClassElement? {
         val pos = getPos()
@@ -3847,6 +3866,7 @@ class Parser(
             parseExpected(SyntaxKind.OpenBracket)
             parseExpected(SyntaxKind.CloseBracket)
             val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            typeMemberConsumedSemicolon = token == SyntaxKind.Semicolon
             parseSemicolon() // consume trailing ; if present (extends span to include it)
             val nodeEnd = scanner.getPrevTokenEnd() // end of last-consumed token (after ; or after return type)
             reportError("An index signature must have exactly one parameter.", code = 1096,
@@ -3862,6 +3882,7 @@ class Parser(
             val paramType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             parseExpected(SyntaxKind.CloseBracket)
             val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            typeMemberConsumedSemicolon = token == SyntaxKind.Semicolon
             parseSemicolon()
             // TS1017: An index signature cannot have a rest parameter.
             reportError("An index signature cannot have a rest parameter.", code = 1017,
@@ -3926,7 +3947,7 @@ class Parser(
             // Only consume a trailing `;` (extends span to include it for TS1021); a
             // non-`;` same-line follower (e.g. the `?` of `[idx:number]?`) is reported by
             // the member loop's parseSemicolon — emitting TS1005 here too would double it.
-            parseOptional(SyntaxKind.Semicolon)
+            typeMemberConsumedSemicolon = parseOptional(SyntaxKind.Semicolon)
             // B68.4: Suppress TS1021 when the param type is an invalid keyword
             // (any/boolean/etc.) — the checker emits TS1268 instead, matching TypeScript
             // (TypeScript doesn't double-report TS1021 + TS1268 for the same sig).
@@ -4656,12 +4677,39 @@ class Parser(
         return NamedImports(elements = elements, pos = pos, end = getEnd())
     }
 
+    /**
+     * tsgo `parseImportOrExportSpecifier`'s leading-`type` disambiguation, decided by
+     * lookahead: true when the current `type` token is the type-only MODIFIER (the caller
+     * consumes it and parses the rest as an ordinary specifier), false when it is the
+     * specifier's own NAME.
+     *
+     *     { type }           name `type`           { type as }        modifier, name `as`
+     *     { type X }         modifier, name `X`    { type as X }      name `type` as `X`
+     *     { type as as }     name `type` as `as`   { type as as X }   modifier, `as` as `X`
+     *
+     * Inside `scanner.lookAhead` the parser's cached `token` is stale, so every test reads
+     * `scanner.getToken()` — the former `isIdentifier()` test here read the `type` token
+     * itself and so made EVERY leading `type` a modifier (`import { object, type }` was TS1003).
+     */
+    private fun leadingTypeIsSpecifierModifier(): Boolean {
+        if (!(isIdentifier() && scanner.getTokenValue() == "type")) return false
+        fun canStartName(t: SyntaxKind) =
+            isIdentifierToken(t) || t.name.endsWith("Keyword") || t == SyntaxKind.StringLiteral
+        return scanner.lookAhead {
+            scanner.scan()
+            val t1 = scanner.getToken()
+            if (t1 != SyntaxKind.AsKeyword) return@lookAhead canStartName(t1)
+            scanner.scan()
+            val t2 = scanner.getToken()
+            if (t2 != SyntaxKind.AsKeyword) return@lookAhead !canStartName(t2)
+            scanner.scan()
+            canStartName(scanner.getToken())
+        }
+    }
+
     private fun parseImportSpecifier(): ImportSpecifier {
         val pos = getPos()
-        val isTypeOnly = isIdentifier() && scanner.getTokenValue() == "type" && scanner.lookAhead {
-            scanner.scan()
-            isIdentifier()
-        }
+        val isTypeOnly = leadingTypeIsSpecifierModifier()
         if (isTypeOnly) nextToken()
 
         // tsc parseImportOrExportSpecifier (kind == ImportSpecifier): the BINDING name —
@@ -4988,10 +5036,7 @@ class Parser(
 
     private fun parseExportSpecifier(): ExportSpecifier {
         val pos = getPos()
-        val isTypeOnly = isIdentifier() && scanner.getTokenValue() == "type" && scanner.lookAhead {
-            scanner.scan()
-            isIdentifier()
-        }
+        val isTypeOnly = leadingTypeIsSpecifierModifier()
         if (isTypeOnly) nextToken()
         val first = parseModuleExportNameOrMissing()
         if (token == SyntaxKind.AsKeyword) captureIeSlot() // after propertyName, before `as`
@@ -8517,6 +8562,16 @@ class Parser(
     }
 
     /**
+     * tsgo `parseTypeArgumentsOfTypeReference` (and `parseTypeQuery`'s ASI guard): a `<` that
+     * starts a NEW LINE never opens the type arguments of the reference before it. Without this
+     * rule `<C>(r: C): C` followed by a call signature `<R>(r: R): R` on the next line of an
+     * interface parses the second signature's type parameters as type arguments of `C`.
+     * Heritage clauses (`extends B\n<T>`) do not take this rule in tsgo either.
+     */
+    private fun parseTypeArgumentsOfTypeReference(): List<TypeNode>? =
+        if (scanner.hasPrecedingLineBreak()) null else tryParseTypeArguments()
+
+    /**
      * Checks if the current token can follow type arguments in an expression context,
      * indicating an instantiation expression (e.g., `foo<number>` without a call).
      * Based on TypeScript's `canFollowTypeArgumentsInExpression`.
@@ -9261,7 +9316,7 @@ class Parser(
                 return TypeQuery(exprName = importType, typeArguments = null, pos = pos, end = getEnd())
             }
             val name = parseQualifiedName()
-            val typeArgs = parseTypeArgumentsOpt()
+            val typeArgs = parseTypeArgumentsOfTypeReference()
             var type: TypeNode = TypeQuery(exprName = name, typeArguments = typeArgs, pos = pos, end = getEnd())
             // Handle array suffix `typeof X[]` and indexed-access `typeof X[K]`.
             // ASI: do not consume [ on a new line.
@@ -9521,7 +9576,7 @@ class Parser(
             else -> {
                 // Type reference
                 val name = parseQualifiedName()
-                val typeArgs = parseTypeArgumentsOpt()
+                val typeArgs = parseTypeArgumentsOfTypeReference()
                 TypeReference(typeName = name, typeArguments = typeArgs, pos = pos, end = getEnd())
             }
         }
@@ -9868,7 +9923,7 @@ class Parser(
         if (parseOptional(SyntaxKind.Dot)) {
             qualifier = parseQualifiedName()
         }
-        val typeArgs = parseTypeArgumentsOpt()
+        val typeArgs = parseTypeArgumentsOfTypeReference()
         return ImportType(
             argument = arg,
             qualifier = qualifier,
