@@ -122874,8 +122874,10 @@ interface DataView {
             val caseMemberTypes = mutableListOf<Type>()
             for (clause in all) {
                 if (clause !is CaseClause) continue
-                val lit = literalTypeOfExpression(clause.expression)
-                    ?: constStringCaseLiteralType(clause.expression)
+                // (CHK.206): a UNION comparand cannot prove the default unreachable (also
+                // refused downstream, which keys members by single literals — kept explicit).
+                val lit = comparandLiteralType(clause.expression)
+                if (lit is Type.Union) return null
                 if (lit != null) {
                     litTypes.add(lit)
                 } else {
@@ -123059,9 +123061,9 @@ interface DataView {
                 when (clause) {
                     is CaseClause -> {
                         rangeCaseCount++
-                        val lit = literalTypeOfExpression(clause.expression)
-                            ?: constStringCaseLiteralType(clause.expression)
-                        if (lit != null) literalTypes.add(lit)
+                        val lit = comparandLiteralType(clause.expression)
+                        if (lit is Type.Union) literalTypes.addAll(lit.types)
+                        else if (lit != null) literalTypes.add(lit)
                         else enumMemberKeyOfExpr(clause.expression)?.let {
                             caseEnumKeys.add(it)
                             enumMemberTypeOfExpr(clause.expression)?.let { mt -> caseEnumTypes.add(mt) }
@@ -125930,6 +125932,16 @@ interface DataView {
             ?: enumMemberTypeOfExpr(other)
         if (literalType == null) {
             enumImpossibleEqualityNarrow(t, other, equal)?.let { return it }
+            // (CHK.206): a unit-typed comparand (`k === C.a`, `C` an `as const` object or a
+            // mapped type of literals) over a literal union; a union comparand narrows only
+            // the true branch.
+            if (t is Type.Union && t.types.any { isLiteralKindForDiscriminant(it) }) {
+                when (val u = comparandUnitType(other)) {
+                    null -> {}
+                    is Type.Union -> if (equal) return getUnionType(u.types.map { narrowUnionByLiteral(t, it, keep = true) })
+                    else -> return narrowUnionByLiteral(t, u, keep = equal)
+                }
+            }
             if (!equal) return t
             // (CHK.173) S-G4: the nullish half of tsgo's comparability filter first.
             val (tv, ot) = equalityValueExcludesNullish(t, other)
@@ -126337,7 +126349,8 @@ interface DataView {
         // modeled as literals), so the plain-literal path below never fires for them. Match on
         // the enum member's canonical key read from the AST instead. Returns before the literal
         // path when a genuine enum discriminant is found.
-        enumMemberKeyOfExpr(literalSide)?.let { rhsKey ->
+        val rhsEnumKey = enumMemberKeyOfExpr(literalSide)
+        rhsEnumKey?.let { rhsKey ->
             filterUnionByEnumDiscriminant(effMembers, propName, setOf(rhsKey), keep = equal)?.let { filtered ->
                 return when (t) {
                     is Type.Union -> getUnionType(filtered)
@@ -126346,8 +126359,10 @@ interface DataView {
             }
         }
 
-        val literalType = literalTypeOfExpression(literalSide)
-            ?: constStringCaseLiteralType(literalSide)
+        // (CHK.206) typed only when the comparand is not an enum member (a cost guard: the
+        // enum path above owns those). A union comparand needs no false-branch guard — a
+        // member is kept when ANY of its literals keeps it, which `!==` always does.
+        val literalType = comparandLiteralType(literalSide, typed = rhsEnumKey == null)
         // (CHK.184): a nullish tested value over a discriminant whose value set holds
         // `undefined` — the optionality fold the round-425 rule below lacks.
         if (!propAccess.questionDotToken && (literalType === undefinedType || literalType === nullType)) {
@@ -126366,18 +126381,18 @@ interface DataView {
         // so we don't short-circuit narrowByEquality's direct-literal path or invent
         // narrowing on objects that don't model the discriminant.
         var singleHadDiscriminant = false
-        val filtered = effMembers.filter { member ->
+        fun keepFor(member: Type, lit: Type): Boolean {
             val apparent = getApparentType(member)
-            if (apparent !is Type.Object) return@filter true
+            if (apparent !is Type.Object) return true
             val propSym = getPropertyOfType(apparent, propName)
-                ?: return@filter true
+                ?: return true
             var propType = getTypeOfSymbol(propSym)
             // Round 473: recover a `typeof <constString>` discriminant annotation that
             // widened/washed — see the narrowBySwitchClause filter's twin recovery.
             if (propType === stringType || propType === anyType || propType === errorType) {
                 typeQueryConstStringLiteral(propSym)?.let { propType = it }
             }
-            if (propType === anyType || propType === errorType || propType === unknownType) return@filter true
+            if (propType === anyType || propType === errorType || propType === unknownType) return true
             // Round 425: the two rules below reason about what a RESOLVED property type
             // can equal — but property OPTIONALITY is a symbol attribute NOT folded into
             // the type (`body?: FunctionBody` resolves to bare `FunctionBody`), so a
@@ -126385,7 +126400,7 @@ interface DataView {
             // member and must fall through (the first cut dropped SourceFile on
             // `file.checkJsDirective === undefined` → never). Only definite VALUE
             // literals (string/number/bigint/true/false) discriminate.
-            val literalIsDefiniteValue = isLiteralKindForDiscriminant(literalType)
+            val literalIsDefiniteValue = isLiteralKindForDiscriminant(lit)
             // A UNION-of-literals discriminant (`type: "list" | "listOrElement"`,
             // tsc's CommandLineOptionOfListType) matches a positive comparison when ANY
             // constituent equals the tested literal, and survives a single negative
@@ -126395,8 +126410,8 @@ interface DataView {
                 propType.types.all { isLiteralKindForDiscriminant(it) }
             ) {
                 singleHadDiscriminant = true
-                return@filter if (equal) propType.types.any { literalsEqualForDiscriminant(it, literalType) }
-                else propType.types.any { !literalsEqualForDiscriminant(it, literalType) }
+                return if (equal) propType.types.any { literalsEqualForDiscriminant(it, lit) }
+                else propType.types.any { !literalsEqualForDiscriminant(it, lit) }
             }
             // Round 459: an ENUM-typed discriminant vs a NUMERIC literal narrows by the
             // enum's TYPE-LEVEL domain (the union of member literal values) — tsc's
@@ -126410,18 +126425,18 @@ interface DataView {
             // (REL.1)(b0): a MEMBER-typed discriminant (`kind: SK.A`) has the same
             // shape of answer with a domain of exactly ONE value — [enumDomainValues]
             // returns that singleton, so the narrow is strictly sharper here.
-            if (literalType is Type.NumberLiteral && propType is Type.Object &&
+            if (lit is Type.NumberLiteral && propType is Type.Object &&
                 isEnumFlavoredObjectType(propType)
             ) {
                 val values = enumDomainValues(propType)
                 if (!values.isNullOrEmpty()) {
                     singleHadDiscriminant = true
-                    val lit = literalType.value
-                    fun matches(v: ConstantValue) = v is ConstantValue.NumberValue && v.value == lit
-                    return@filter if (equal) values.any { matches(it) }
+                    val litValue = lit.value
+                    fun matches(v: ConstantValue) = v is ConstantValue.NumberValue && v.value == litValue
+                    return if (equal) values.any { matches(it) }
                     else values.any { !matches(it) }
                 }
-                return@filter true // unknown enum domain — keep (conservative)
+                return true // unknown enum domain — keep (conservative)
             }
             // An OBJECT-typed discriminant (`type: Map<string, string | number>`,
             // tsc's CommandLineOptionOfCustomType) can never strictly-equal a primitive
@@ -126433,13 +126448,17 @@ interface DataView {
                 !isEnumFlavoredObjectType(propType)
             ) {
                 singleHadDiscriminant = true
-                return@filter !equal
+                return !equal
             }
-            if (!isLiteralKindForDiscriminant(propType)) return@filter true
+            if (!isLiteralKindForDiscriminant(propType)) return true
             singleHadDiscriminant = true
-            val matches = literalsEqualForDiscriminant(propType, literalType)
-            if (equal) matches else !matches
+            val matches = literalsEqualForDiscriminant(propType, lit)
+            return if (equal) matches else !matches
         }
+        // (CHK.206): a UNION comparand (`x.kind === ab`, `ab: "a" | "b"`) keeps a member
+        // any of its literals keeps — tsgo's comparability filter on the true branch.
+        val lits = (literalType as? Type.Union)?.types ?: listOf(literalType)
+        val filtered = effMembers.filter { m -> lits.any { keepFor(m, it) } }
         return when (t) {
             is Type.Union -> getUnionType(filtered)
             else -> when {
@@ -127037,6 +127056,30 @@ interface DataView {
      *  UNAMBIGUOUS top-level const string ([topLevelConstStringValues]) reads as that
      *  string-literal type — `case EventTypesRegistry:` narrows like
      *  `case "event::typesRegistry":` (tsc typingInstallerAdapter/editorServices). */
+    /**
+     * (CHK.206) the literal a narrowing COMPARAND denotes — the literal-syntax readers, then
+     * the comparand's TYPE: a definite-value unit (`const`, an `as const` member, a mapped
+     * type of literals, `typeof X.a`) or a union of them. tsgo narrows by the value's type,
+     * whatever its syntax. A reference shape only; an enum member keeps its own key path.
+     */
+    private fun comparandLiteralType(expr: Expression, typed: Boolean = true): Type? {
+        literalTypeOfExpression(expr)?.let { return it }
+        constStringCaseLiteralType(expr)?.let { return it }
+        return if (typed) comparandUnitType(expr) else null
+    }
+
+    /** (CHK.206) the TYPE half of [comparandLiteralType]: a reference-shaped comparand whose
+     *  type is a definite-value unit or a union of them (never an enum member's type). */
+    private fun comparandUnitType(expr: Expression): Type? {
+        val e = unwrapParensExpr(expr)
+        if (e !is Identifier && e !is PropertyAccessExpression && e !is ElementAccessExpression) return null
+        // An enum member's type is a member-less `Type.Object`, never a literal kind here.
+        return getTypeOfExpression(e).takeIf {
+            isLiteralKindForDiscriminant(it) ||
+                it is Type.Union && it.types.all { m -> isLiteralKindForDiscriminant(m) }
+        }
+    }
+
     private fun constStringCaseLiteralType(expr: Expression): Type? {
         val name = (unwrapParensExpr(expr) as? Identifier)?.text ?: return null
         val value = topLevelConstStringValues[name] ?: return null
