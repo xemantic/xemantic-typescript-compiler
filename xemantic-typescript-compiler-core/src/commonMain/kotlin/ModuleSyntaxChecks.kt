@@ -629,23 +629,38 @@ internal class ModuleSyntaxChecks(
             }
         }
         for ((_, blocks) in nsGroups) {
-            // Merge var names across all blocks of this same-named namespace.
-            val varNames = mutableSetOf<String>()
-            for (block in blocks) {
+            // (CHK.224) The alias and the variable conflict only when they land in ONE symbol
+            // table, as tsgo's binder (`declareModuleMember`) puts them: an EXPORTED import goes
+            // into the namespace's exports only, so it meets an exported variable of ANY block;
+            // a LOCAL import goes into its own block's locals, where every variable of that
+            // block also lives (an exported one as its local export-value twin). A local import
+            // never meets a variable of another block, and an exported import never meets a
+            // non-exported variable — tsgo is silent on both.
+            val exportedVarNames = mutableSetOf<String>()
+            // Aligned with [blocks] (a data-class AST key would deep-hash the whole body).
+            val blockVarNames = List(blocks.size) { mutableSetOf<String>() }
+            for ((bi, block) in blocks.withIndex()) {
                 val body = block.body as? ModuleBlock ?: continue
+                val own = blockVarNames[bi]
                 for (s in body.statements) if (s is VariableStatement) {
-                    for (decl in s.declarationList.declarations) (decl.name as? Identifier)?.let { varNames.add(it.text) }
+                    val exported = ModifierFlag.Export in s.modifiers
+                    for (decl in s.declarationList.declarations) (decl.name as? Identifier)?.let {
+                        own.add(it.text)
+                        if (exported) exportedVarNames.add(it.text)
+                    }
                 }
             }
-            if (varNames.isEmpty()) continue
-            for (block in blocks) {
+            if (blockVarNames.all { it.isEmpty() }) continue
+            for ((bi, block) in blocks.withIndex()) {
                 val body = block.body as? ModuleBlock ?: continue
+                val own = blockVarNames[bi]
                 for (s in body.statements) {
                     if (s !is ImportEqualsDeclaration) continue
                     if (s.isTypeOnly) continue
                     if (s.moduleReference is ExternalModuleReference) continue   // `require(...)` is a different conflict
                     val name = s.name.text
-                    if (name !in varNames) continue
+                    val meets = if (ModifierFlag.Export in s.modifiers) exportedVarNames else own
+                    if (name !in meets) continue
                     // ImportEqualsDeclaration.pos points at `import`; back up over the
                     // `export` modifier (parser drops it from pos) so the squiggle covers
                     // the whole `export import X = …;` statement.
@@ -1355,6 +1370,24 @@ internal class ModuleSyntaxChecks(
     // TS2661: Cannot export non-local declaration
     // -----------------------------------------------------------------------
 
+    /**
+     * (CHK.224) tsgo's TS2661 test (`checkExportSpecifier`): the symbol's FIRST declaration has a
+     * global source file as its declaration container. A declaration inside `declare global { }`
+     * has the augmentation's module block as its container, so `declare global { var gv: number }
+     * export { gv }` is legal — tsgo is silent for every declaration kind there. An unparented
+     * declaration (no index stamp) keeps the historical "any real global declaration" answer.
+     */
+    private fun firstDeclarationIsGlobalFileTopLevel(sym: Symbol): Boolean {
+        val decl = sym.declarations.firstOrNull { it !is ExportSpecifier } ?: return false
+        var n: Node = decl
+        while (n is BindingElement || n is ObjectBindingPattern || n is ArrayBindingPattern ||
+            n is VariableDeclaration || n is VariableDeclarationList) {
+            n = (n as? NodeBase)?.parent ?: return true
+        }
+        val container = (n as? NodeBase)?.parent ?: return true
+        return container is SourceFile
+    }
+
     fun checkExportSpecifierLocality() {
         for (result in checker.checkedResults) {
             val fileName = result.sourceFile.fileName
@@ -1386,7 +1419,10 @@ internal class ModuleSyntaxChecks(
                     val globalSym = checker.globals[exportedName]
                     val isGlobal = exportedName == "undefined" ||
                         exportedName in Checker.KNOWN_GLOBALS ||
-                        (globalSym != null && globalSym.declarations.any { it !is ExportSpecifier })
+                        (globalSym != null && firstDeclarationIsGlobalFileTopLevel(globalSym))
+                    // (CHK.224) A real global declared inside `declare global { }` resolves and is
+                    // exportable: neither TS2661 nor "Cannot find name".
+                    if (!isGlobal && globalSym != null && globalSym.declarations.any { it !is ExportSpecifier }) continue
                     if (isGlobal) {
                         // export { Global } (value re-export of a global) → TS2661. TypeScript does
                         // NOT emit this for a type-only re-export, so skip those.

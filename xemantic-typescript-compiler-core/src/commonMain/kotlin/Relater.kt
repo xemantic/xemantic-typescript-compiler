@@ -171,6 +171,46 @@ internal class Relater(
     private var lastPrivateBrandMismatchName: String? = null
 
     /**
+     * (CHK.223) Per generic target id, the `in`/`out` variance annotations its type parameters
+     * DECLARE ([VARIANCE_OUT] / [VARIANCE_IN], both bits for `in out`; 0 = none), or null when
+     * no parameter carries one. tsgo takes an annotated variance as the variance outright
+     * (`getVariancesWorker`), so `$ZodCheck<in T>` relates `$ZodCheck<boolean>` to
+     * `$ZodCheck<never>` by `never -> boolean`; this engine has no measured variance and the
+     * same-target shortcut compared every argument covariantly.
+     */
+    private val declaredVarianceCache = HashMap<Int, IntArray?>()
+
+    private fun declaredVariances(target: Type.Interface): IntArray? = declaredVarianceCache.getOrPut(target.id) {
+        val decls = target.symbol?.declarations ?: return@getOrPut null
+        var out: IntArray? = null
+        for (d in decls) {
+            val tps = when (d) {
+                is InterfaceDeclaration -> d.typeParameters
+                is ClassDeclaration -> d.typeParameters
+                else -> null
+            } ?: continue
+            for ((i, tp) in tps.withIndex()) {
+                var v = 0
+                if (ModifierFlag.Out in tp.modifiers) v = v or VARIANCE_OUT
+                if (ModifierFlag.In in tp.modifiers) v = v or VARIANCE_IN
+                if (v == 0) continue
+                if (out == null) out = IntArray(tps.size)
+                if (i < out.size) out[i] = out[i] or v
+            }
+        }
+        out
+    }
+
+    /** (CHK.223) One type-argument pair under its declared variance: `in` relates target to
+     *  source, `in out` both ways, anything else (unannotated keeps the historical covariant
+     *  shortcut) source to target. */
+    private fun typeArgumentRelated(s: Type, t: Type, variance: Int, relation: Relation): Boolean = when (variance) {
+        VARIANCE_IN -> checkTypeRelatedTo(t, s, relation)
+        VARIANCE_IN or VARIANCE_OUT -> checkTypeRelatedTo(s, t, relation) && checkTypeRelatedTo(t, s, relation)
+        else -> checkTypeRelatedTo(s, t, relation)
+    }
+
+    /**
      * (INV.0) step 5 — the recursion RESIDUE, the one thing about this seam only a
      * test at this level can state (`RelaterTest`).
      *
@@ -890,8 +930,9 @@ internal class Relater(
                     source.target === checker.globalReadonlyArrayType) &&
                     targetArgs.none { checker.typeContainsUnresolvedTypeParam(it) }
                 if (!isReentry || isArrayLike) {
+                    val variances = declaredVariances(source.target)
                     for (i in sourceArgs.indices) {
-                        if (!checkTypeRelatedTo(sourceArgs[i], targetArgs[i], relation)) return false
+                        if (!typeArgumentRelated(sourceArgs[i], targetArgs[i], variances?.getOrNull(i) ?: 0, relation)) return false
                     }
                     return true
                 }
@@ -1827,5 +1868,9 @@ internal class Relater(
          * clean under tsgo and a fully covered 26-way one is TS2322.
          */
         const val MAX_DISCRIMINANT_COMBINATIONS = 25
+
+        /** (CHK.223) Declared-variance bits — see [declaredVariances]. */
+        const val VARIANCE_OUT = 1
+        const val VARIANCE_IN = 2
     }
 }
