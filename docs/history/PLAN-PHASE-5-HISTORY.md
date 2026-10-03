@@ -1,3 +1,33 @@
+### Round (P18.273) — (LIBS.1) round 7, (CHK.206): discriminant / equality / switch narrowing by the comparand's TYPE (a unit type or a union of them — an `as const` member, a mapped type of literals, a const, an imported member, `typeof C.a`), matching tsgo cell for cell — but zod's 61 rows did NOT move (166 -> 165): the census's attribution was wrong, they are blocked UPSTREAM by two inference gaps, queued as (CHK.219); plus the read-only RESIDUAL census queued as (LIBS.2) (2026-10-03)
+
+Two agents in parallel (builder + read-only census). **Builder — where the item was wrong**: (a) zod's 61 rows are
+not F7 alone — `ZodIssueCode = util.arrayToEnum([...])` types as `any` here (tsgo: `{ a: "a"; b: "b"; }`), because a
+generic call returning a mapped type over a TYPE PARAMETER answers `any` (`getTypeFromMappedType` returns `anyType`
+for a type-parameter constraint — even an explicit `mr<"a">("a")`) and a literal argument against `T extends string`
+widens to `string`; with those open any comparand fix is INERT on zod (measured: 61 before and after); (b) the
+comparand was read syntactically at THREE sites — `narrowByDiscriminantProperty`, `narrowBySwitchClauseCore` (two
+places) and `narrowByEquality` for a plain subject (`k === C.a` with `k: "a" | "b" | "c"` did not narrow); (c) the
+census's mapped-type cell was the easy case and the enum control already worked. **Mechanism**:
+`comparandLiteralType(expr, typed)` tries the literal-syntax readers first, then `comparandUnitType` (`getTypeOfExpression`
+for an Identifier / property access / element access, accepting only a definite-value unit type or a union of them —
+enum member types are member-less `Type.Object`s and never qualify); `narrowByDiscriminantProperty` uses it (an enum
+comparand skips the type query — a cost guard) with a union comparand keeping a member if any literal keeps it; a union
+`case` never proves `default` unreachable (tsgo) and adds all its literals to the case range; `narrowByEquality` narrows
+a literal-carrying union subject (a unit comparand both branches, a union comparand the true branch only). `Checker.kt`
++43; `narrowBySwitchClauseCore` 5,108 bytecodes. **Matrix**: 27 cells = tsgo except three upstream ones (`toEnum([...])`
+generic call, a template literal comparand `\`${"a"}\``, `switch` over `C3.x` members — all the (CHK.219) gaps);
+fixed the wrong `never` rows on `default:`. **Pins**: `ComparandTypeNarrowingTest` 17 (tsgo rows incl. 3 negative
+controls, an enum control, a cross-module case); ablation a1 9 / a4 1 / a5 2 RED; a2 / a6 read 0 and were DELETED as no-op
+guards, a3 (default-switch union refusal) kept explicit and documented, a7 is a cost guard by design. **Gates**: full
+suite 22,544 / 0 / 44 (+17); corpus screen 8725 / 0 and `--include ''` the same 41, byte-identical; `cost_gate.py` 0 —
+`typeOfExpr.calls` +1.32% (the comparand type queries for non-literal, non-enum comparands — the accounting for this
+round), `narrow.memoServed` +1.05%; baseline `--update`d in this commit; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid zod 166 -> 165 (one ours-only TS2339
+gone), others unchanged, missing unchanged; warning gate with probe: probe only. **Census** (`build/scratch-p18273-census/`):
+all 661 residual rows assigned to mechanisms with 33 tsgo-checked repros — queued as (LIBS.2) + (CHK.212)-(CHK.218).
+**Lesson**: a census's MECHANISM attribution for a row population is a hypothesis until one cell of the REAL library
+moves — the F7 rows' comparand was `any` upstream, so a correct narrowing fix moved 1 of 61.
+
 ### Round (P18.272) — (LIBS.1) round 6, (CHK.207): four parser gaps fixed in `Parser.kt` alone — a `<` after a LINE BREAK is no longer type arguments in a type position, `get!` / `get?` are properties not accessors, a named import / export called `type` parses, and a member after an index signature no longer needs a second separator; immer 43 -> 5, the 8-library tally 689 -> 633, NONE added; `Checker.class` unchanged; cost baseline refreshed (2026-10-03)
 
 One implementation subagent; the parser is a frozen subsystem, so the corpus screen (every recovery baseline) was the
