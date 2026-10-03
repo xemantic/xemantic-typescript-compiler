@@ -1,5 +1,9 @@
 
 
+**(P18.275) — (INV.0) EXTRACTION: THE UNUSED-DECLARATION CHECKS MOVE OUT OF `Checker.kt` INTO THEIR OWN FILE — 3,368 LINES, THE LARGEST EXTRACTION OF THE ARC, BEHAVIOUR BYTE-IDENTICAL BY EVERY RECEIPT; `Checker.kt` IS NOW 197,463 LINES; +9 PINS, 22,564 / 0 / 44 (2026-10-03).**
+Screen 0; grid 8x0; libraries unchanged.
+
+
 **(P18.274) — (LIBS.2): `class C { b: "a" | "b" = "a" }` AND `let n: -1 | 1 = -1` NO LONGER GET FALSE ERRORS, AND date-fns IS DOWN TO ONE FALSE ROW (FROM 17) WITH NO MISSING ROWS; zod's MISSING ROWS 9 -> 0; TALLY 632 -> 614; +11 PINS, 22,555 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; gated libraries unchanged. date-fns becomes a standing gate once (CHK.220) closes its last row.
 

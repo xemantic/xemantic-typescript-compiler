@@ -1,3 +1,26 @@
+### Round (P18.270) — (INV.0) extraction: the `@ts-ignore` / `@ts-expect-error` comment-directive family moves verbatim into a new `CommentDirectives` collaborator; `Checker.kt` 200,907 -> 200,628 (-279); every receipt byte-identical, including the library grid's row SETS (2026-10-02)
+
+One implementation subagent. **Where the brief was wrong**: only candidate 2 was clean. The ARITY family is split in
+two by the unrelated `libProvides*` block (58475-58637), keeps its caches in the pre-`init` field block, reads walk state
+(`currentFileLocals`) and ~15 tables / resolvers, and `TypeParamInfo` / `isUnresolvedGenericType` /
+`checkHeritageTypeArgCount` have 9 callers outside it — refused; the implicit-any ASSIGNMENT-TARGET family reads the
+spineIany walk stacks (`implicitAnyScopes`, `implicitAnyScopeCtxParams`, …) — spine state, refused. **Moved**: the cache
+field (8580-8588) and one contiguous run (11344-11614) — 10 declarations (`TsCommentDirective`, its cache and accessor,
+`scanTsCommentDirectives`, `classifyTsCommentDirectiveAt`, `insideOpenBlockComment`, `isTsDirectiveCommentPrefix`,
+`commentOpenOnLineBefore`, `markPrecedingTsCommentDirective`, `applyTsCommentDirectives`); one entry point with one
+caller (the `getDiagnostics` funnel line); the funnel itself (`getDiagnostics`, `filterUncheckedJs`, `keptUnderNoCheck`,
+`uncheckedJsModeOf`) stays; new field `commentDirectives` where the cache field was, before `init`. The moved code reads 6
+checker members over 10 sites, none walk state; 5 widened to `internal` (`checkedResultsAll`, `srcHas`, the 3-argument
+`srcIndexOf`, `lineStartsFor`, `uncheckedJsModeOf` — `srcHas` 16 -> 30 and `srcIndexOf` 8 -> 22 bytes of parameter null
+checks). **Receipts**: verbatim proof both ways; the per-pass table (417 pass rows, 46 diagnostics, counters)
+byte-identical; `PrintInlining` on `checkArgumentsAgainstSignature` equal across arms (the 1-vs-2 "hot method too big"
+count moves between processes on one binary); `cost_gate.py` counters identical to (P18.269); 8 related classes (144
+tests) green; `CommentDirectivesCollaboratorTest` 9, ablation a1 3 / a2 2 / a3 1 / a4 9 RED; a 9-cell tsgo matrix identical
+before / after (= tsgo); the LIBRARY GRID's sorted row sets md5-identical on all 8 libraries; `spine_closure_audit.py`
+clean. **Gates**: full suite 22,501 / 0 / 44 (+9); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; warning gate with probe: probe only. Ledger row 19.
+Next extraction candidate: the arity family, once the `libProvides*` block or the arity code is moved so it is one run.
+
 ### Round (P18.269) — (LIBS.1) round 4: an unset `types` now includes NO `@types` package (TypeScript 7's default; `"*"` splices every type-root directory), and a generic's arity is checked against the declaration the reference actually NAMES (its own file's scope, namespace exports, `export *` stars, a `.js` specifier) instead of a whole-program name scan; zod 195 -> 173, type-fest 431 -> 428, the 8-library tally 811 -> 786, ky's program 159 -> 32 files (= tsgo); NONE added — and two missing tsgo rows found (2026-10-02)
 
 One implementation subagent. **Where the brief was wrong**: (a) M3 cannot move the profiles or the gated libraries

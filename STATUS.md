@@ -96,6 +96,9 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.280) — (LIBS.2): DECLARED `in` / `out` VARIANCE IS NOW HONOURED WHEN TWO INSTANTIATIONS OF ONE GENERIC ARE COMPARED — zod 78 -> 68 (TEN rows, seven never named in the queue) — AND TWO MODULE-SYNTAX FALSE POSITIVES ARE GONE; TALLY 487 -> 477, NONE ADDED; +11 PINS, 22,609 / 0 / 44 (2026-10-03).**
+Screen 0; grid 8x0; gated libraries unchanged; `Checker.kt` untouched.
+
 **(P18.279) — (INV.0) EXTRACTION: THE MODULE-SYNTAX CHECKS AND THE "TYPESCRIPT SYNTAX IN A JS FILE" CHECK MOVE OUT OF `Checker.kt` (2,089 LINES), BEHAVIOUR BYTE-IDENTICAL BY EVERY RECEIPT; `Checker.kt` IS NOW 195,775; +5 PINS, 22,598 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; libraries unchanged.
 
@@ -107,6 +110,3 @@ Screen 0; grid 8x0; gated libraries unchanged.
 
 **(P18.276) — (LIBS.2): NON-PRIVATE CONSTRUCTOR PARAMETER PROPERTIES ARE NO LONGER FLAGGED "NEVER READ" (18 FALSE ROWS ON ITS MATRIX), AND A FIRST TS2536 CHECK FOR `t[k]` WITH A GENERIC KEY MATCHES tsgo ON 12 OF 15 CELLS WITH NO FALSE POSITIVES; date-fns's LAST ROW TURNS OUT TO NEED DEFERRED CONDITIONAL TYPES (RE-QUEUED); +6 PINS, 22,570 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; libraries unchanged (tally 614).
-
-**(P18.275) — (INV.0) EXTRACTION: THE UNUSED-DECLARATION CHECKS MOVE OUT OF `Checker.kt` INTO THEIR OWN FILE — 3,368 LINES, THE LARGEST EXTRACTION OF THE ARC, BEHAVIOUR BYTE-IDENTICAL BY EVERY RECEIPT; `Checker.kt` IS NOW 197,463 LINES; +9 PINS, 22,564 / 0 / 44 (2026-10-03).**
-Screen 0; grid 8x0; libraries unchanged.
