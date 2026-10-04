@@ -220,10 +220,9 @@ class UnionContextualSignatureIdenticalTest {
      * is `((y: number) => void) | ((y: number) => string)`, identical again, so `y` is
      * typed and the OURS-ONLY TS7006 the arm used to report on it is gone.
      *
-     * residue - both references additionally report `Type 'number' is not assignable to
-     * type 'string'` for `bad` and `Type 'string' is not assignable to type 'number'` for
-     * `bad2`; reads inside a NESTED arrow's body of a contextually typed parameter report
-     * nothing here, on a single-member contextual type as well (measured before the fix).
+     * Both references additionally report `bad` and `bad2`; since (P18.290) the NESTED
+     * arrow's block body sees both parameters (the outer concise arrow's contextual pull,
+     * and the inner arrow contextually typed by the RETURN type), so do we.
      */
     @Test
     fun `the unioned return type types a nested arrow whose members are identical again`() =
@@ -234,7 +233,7 @@ class UnionContextualSignatureIdenticalTest {
             const zv: ZzzA | ZzzB = (p) => (y) => { const bad: string = y; const bad2: number = p };
             export {}
             """
-        ).isEmpty())
+        ) == listOf(2322 to "Type 'number' is not assignable to type 'string'.", stringToNumber))
 
     /**
      * The RETURN types are UNIONED, not taken from the first member (ablation arm a3):
@@ -242,8 +241,8 @@ class UnionContextualSignatureIdenticalTest {
      * a DIFFERING pair, so `y` is implicitly `any` — both references report exactly this
      * TS7006, and a first-member-only return would type `y: number` and silence it.
      *
-     * residue - both references also report `Type 'string' is not assignable to type
-     * 'number'` for `bad2` (the nested-body read gap above).
+     * Both references also report `Type 'string' is not assignable to type 'number'` for
+     * `bad2`, and since (P18.290) so do we (the nested-body read gap above is closed).
      */
     @Test
     fun `the return type is the union of the members' returns - a differing nested pair stays implicitly any`() =
@@ -254,7 +253,7 @@ class UnionContextualSignatureIdenticalTest {
             const zv: ZzzA | ZzzB = (p) => (y) => { const bad: boolean = y; const bad2: number = p };
             export {}
             """
-        ) == listOf(7006 to "Parameter 'y' implicitly has an 'any' type."))
+        ) == listOf(stringToNumber, 7006 to "Parameter 'y' implicitly has an 'any' type."))
 
     /**
      * The DIFFERING half of D3 (ablation arm a2 — an arity-only comparison would type `p:

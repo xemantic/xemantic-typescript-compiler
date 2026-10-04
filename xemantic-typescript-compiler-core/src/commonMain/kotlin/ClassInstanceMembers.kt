@@ -712,8 +712,11 @@ internal class ClassInstanceMembers(
  */
 internal fun isShadowedByLocalBinding(ident: Identifier): Boolean {
     val name = ident.text
+    // (P18.290) a destructuring PATTERN binds its leaves (`const { Cls } = o`).
     fun binds(n: Node?): Boolean = when (n) {
         is Identifier -> n.text == name
+        is ObjectBindingPattern -> n.elements.any { binds(it.name) }
+        is ArrayBindingPattern -> n.elements.any { it is BindingElement && binds(it.name) }
         else -> false
     }
     var cur: Node? = (ident as NodeBase).parent

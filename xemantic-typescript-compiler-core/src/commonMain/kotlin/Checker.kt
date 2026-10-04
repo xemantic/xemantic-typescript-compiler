@@ -21838,6 +21838,7 @@ class Checker(
                 if (body is Block) {
                     val localVars = mutableSetOf<String>()
                     collectVarDeclaredNamesInBlock(body.statements, localVars)
+                    collectBlockScopedNamesForCtorRefs(body.statements, localVars) // (P18.290)
                     // Also collect parameter names (they shadow ctor params in nested functions)
                     for (param in expr.parameters) collectParamDeclaredNames(param.name, localVars)
                     val innerCtorNames = if (localVars.isEmpty()) ctorNames else ctorNames - localVars
@@ -21855,6 +21856,7 @@ class Checker(
                 val bodyBlock = expr.body
                 val localVars = mutableSetOf<String>()
                 collectVarDeclaredNamesInBlock(bodyBlock.statements, localVars)
+                collectBlockScopedNamesForCtorRefs(bodyBlock.statements, localVars) // (P18.290)
                 // Also collect parameter names
                 for (param in expr.parameters) collectParamDeclaredNames(param.name, localVars)
                 val innerCtorNames = if (localVars.isEmpty()) ctorNames else ctorNames - localVars
@@ -21926,7 +21928,27 @@ class Checker(
                 checkExprForCtorParamRefsInStmt(stmt.thenStatement, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
                 stmt.elseStatement?.let { checkExprForCtorParamRefsInStmt(it, memberName, ctorNames, ctorParamPropertyNames, source, fileName) }
             }
-            is Block -> stmt.statements.forEach { checkExprForCtorParamRefsInStmt(it, memberName, ctorNames, ctorParamPropertyNames, source, fileName) }
+            is Block -> {
+                // (P18.290) a nested block's own `let` / `const` / class / function shadow.
+                val own = mutableSetOf<String>().also { collectBlockScopedNamesForCtorRefs(stmt.statements, it) }
+                val names = if (own.isEmpty()) ctorNames else ctorNames - own
+                val props = if (own.isEmpty()) ctorParamPropertyNames else ctorParamPropertyNames - own
+                stmt.statements.forEach { checkExprForCtorParamRefsInStmt(it, memberName, names, props, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    /** (P18.290) The BLOCK-scoped names one statement list declares (`let`, `const`, a class,
+     *  a function) — they shadow a constructor parameter inside an initializer's function
+     *  body exactly as a `var` does: tsgo resolves `let url` to the local, so TS2301 /
+     *  TS2663 never fire for it. */
+    private fun collectBlockScopedNamesForCtorRefs(statements: List<Statement>, result: MutableSet<String>) {
+        for (st in statements) when (st) {
+            is VariableStatement -> if (st.declarationList.flags != VarKeyword)
+                for (d in st.declarationList.declarations) collectParamDeclaredNames(d.name, result)
+            is FunctionDeclaration -> st.name?.text?.let { result.add(it) }
+            is ClassDeclaration -> st.name?.text?.let { result.add(it) }
             else -> {}
         }
     }
@@ -32908,9 +32930,33 @@ class Checker(
                 is FunctionExpression -> if (cur.name?.text == name ||
                     spineExFnShadows(name, cur.parameters, cur.body)) return true
                 is ArrowFunction -> if (spineExFnShadows(name, cur.parameters, cur.body)) return true
+                // (P18.290) a NESTED block's own declarations shadow too — `while (…) { const
+                // node = …; node.x }` read the file-level `function node` (tsgo: the local).
+                is Block -> if (spineExStatementsShadow(name, cur.statements)) return true
+                is CaseClause -> if (spineExStatementsShadow(name, cur.statements)) return true
+                is DefaultClause -> if (spineExStatementsShadow(name, cur.statements)) return true
+                is ForStatement -> if ((cur.initializer as? VariableDeclarationList)?.declarations
+                        ?.any { spineExBindingNameShadows(name, it.name) } == true) return true
+                is ForOfStatement -> if ((cur.initializer as? VariableDeclarationList)?.declarations
+                        ?.any { spineExBindingNameShadows(name, it.name) } == true) return true
+                is ForInStatement -> if ((cur.initializer as? VariableDeclarationList)?.declarations
+                        ?.any { spineExBindingNameShadows(name, it.name) } == true) return true
+                is CatchClause -> if (spineExBindingNameShadows(name, cur.variableDeclaration?.name)) return true
                 else -> {}
             }
             cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
+    /** (P18.290) the declarations of one statement list that bind [name]. */
+    private fun spineExStatementsShadow(name: String, stmts: List<Statement>): Boolean {
+        for (st in stmts) when (st) {
+            is VariableStatement -> for (d in st.declarationList.declarations)
+                if (spineExBindingNameShadows(name, d.name)) return true
+            is FunctionDeclaration -> if (st.name?.text == name) return true
+            is ClassDeclaration -> if (st.name?.text == name) return true
+            else -> {}
         }
         return false
     }
@@ -34851,9 +34897,21 @@ class Checker(
      *  resolvedReturnType (via the same [callableSignaturesForCtx] resolution as the
      *  arity rule). Null when 0/≥2 sigs or an unusable return; used to thread context
      *  into an arrow's EXPRESSION body (`overloads => ({ bind: binder => … })`). */
-    private fun contextualSigReturnTypeForCtx(type: Type?): Type? {
+    private fun contextualSigReturnTypeForCtx(type: Type?, fnParams: List<Parameter>? = null): Type? {
         val sigs = callableSignaturesForCtx(type) ?: return null
-        val rt = sigs.singleOrNull()?.resolvedReturnType ?: return null
+        // (P18.290) an OVERLOADED contextual type: tsgo `getContextualCallSignature` keeps
+        // the arity-applicable signatures and folds several through `getIntersectedSignatures`
+        // (whose return is the first member's, kept verbatim). Only with the function's own
+        // parameters in hand, since the arity filter needs them.
+        val sig = sigs.singleOrNull() ?: fnParams?.let { ps ->
+            val req = requiredParamPrefixCount(ps)
+            val applicable = sigs.filter { s ->
+                s.parameters.size >= req ||
+                    (s.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+            }
+            applicable.singleOrNull() ?: getIntersectedSignatures(applicable)
+        }
+        val rt = sig?.resolvedReturnType ?: return null
         return if (rt === anyType || rt === errorType) null else rt
     }
 
@@ -57888,7 +57946,13 @@ interface DataView {
                     val ownRet = p.type?.let { getTypeFromTypeNodeSafeNsAware(it) }
                         ?.takeIf { it !== anyType && it !== errorType }
                     val cur = spineIanyCtx?.takeIf { it.kind == 0 }
-                    val retT = ownRet ?: contextualSigReturnTypeForCtx(cur?.type)
+                    // (P18.290) a CALL-ARGUMENT context carries no `type`, only the callee
+                    // parameter — read its declared type (the instantiated one, pulled, for
+                    // a generic callee), so a curried argument `(x) => (o) => …` types `o`.
+                    val ctxT = cur?.type ?: cur?.ctxParam?.let {
+                        if (cur.ctxParamGeneric) pullContextualTypeAt(p) else getTypeOfSymbol(it)
+                    }
+                    val retT = ownRet ?: contextualSigReturnTypeForCtx(ctxT, p.parameters)
                     spineIanyDefineCtx(node,
                         if (retT != null) SpineIanyCtx(kind = 0, type = retT) else null)
                 }
@@ -68610,7 +68674,12 @@ interface DataView {
         val callee = calleeExpr as? Identifier ?: return
         if (spineAiStatus(node) != AI_REACHED) return
         val name = callee.text
-        if (name !in spineAiClassesAt(node) && name !in spineAiTypeofAt(node)) return
+        val typeofVar = name in spineAiTypeofAt(node)
+        if (!typeofVar && name !in spineAiClassesAt(node)) return
+        // (P18.290) a parameter / local of the class's name shadows it: `function f(Class:
+        // Ctor) { xs.map(v => new Class(v)) }` constructs the PARAMETER (the type-based check
+        // at the leave owns it), never the file-level `abstract class Class`.
+        if (!typeofVar && isShadowedByLocalBinding(callee)) return
         val start = node.pos
         val length = expressionTrueEnd(node) - start
         val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
@@ -97003,8 +97072,15 @@ interface DataView {
             // it for a block body (there reached through `block.parent`):
             // `take((x): number => x)` types `x` from `take`'s parameter.
             // Outside the TP scope for the same reason as there.
+            // (P18.290) …and for an UN-annotated one too: its parameters are in scope for
+            // every function body nested in its expression body (`(x) => (o) => { … x … }`),
+            // exactly as a block body's are through `checkFunctionBody`.
+            // Gated on a nested BLOCK-bodied function-like: nothing else this walk reaches
+            // reads the parameters, and an unconditional pull cost `typeNode.bypassed`
+            // +29% (most concise arrows sit inside a generic body's instantiation context).
             val retAnn = expr.type
-            if (retAnn != null) applyPulledContextualParamTypes(expr, expr.parameters)
+            if (retAnn != null || conciseBodyNestsBlockFunction(bodyExpr))
+                applyPulledContextualParamTypes(expr, expr.parameters)
             CtaSections.atD(CtaSections.D_DISPATCH)
             val innerTps = typeParams + collectTypeParamNames(fnTps)
             walkFunctionBodiesInExpr(bodyExpr, source, fileName, innerTypes, innerTps)
@@ -97015,6 +97091,24 @@ interface DataView {
             currentLocalTypes = savedLocalTypes
             currentTypeParamDecls = savedTypeParamDecls
         }
+    }
+
+    /** (P18.290) Does [body] contain a function-like with a BLOCK body (the shapes the
+     *  legacy walk hands to `checkFunctionBody`)? An iterative syntactic scan. */
+    private fun conciseBodyNestsBlockFunction(body: Expression): Boolean {
+        val stack = ArrayList<Node>()
+        stack.add(body)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeAt(stack.size - 1)
+            when (n) {
+                is FunctionExpression, is ClassExpression, is MethodDeclaration,
+                is GetAccessor, is SetAccessor -> return true
+                is ArrowFunction -> if (n.body is Block) return true
+                else -> {}
+            }
+            forEachChild(n) { stack.add(it) }
+        }
+        return false
     }
 
     /**
@@ -125754,7 +125848,12 @@ interface DataView {
                     // Widen concise-body `=> undefined` literal to `any` (mirrors variable-initializer widening).
                     body is Identifier && body.text == "undefined" -> anyType
                     else -> {
-                        val bt = getTypeOfExpression(body as Expression) // concise body: () => expr
+                        // (P18.290) an EXPRESSION body is contextually typed by the contextual
+                        // signature's RETURN type (tsgo `getContextualReturnType`), never by the
+                        // arrow's own contextual type — that leaked into a curried `(x) => (o) => …`
+                        // and typed `o` with the OUTER parameter list.
+                        body as Expression
+                        val bt = withBodyContextualType(expr.parameters) { getTypeOfExpression(body) }
                         // Round 465: a concise-body arrow returning a CAPTURED nullable
                         // reference consults flow narrowing at the body's flow node — the
                         // B464 flow-into-closures continuation (FlowStart.outerFlow with
@@ -125802,6 +125901,14 @@ interface DataView {
         } finally {
             currentTypeParamScope = savedTpScope
         }
+    }
+
+    /** (P18.290) Run [block] with the ambient [contextualType] replaced by the return type of
+     *  the contextual signature it supplies (null when it supplies none). */
+    private inline fun <T> withBodyContextualType(params: List<Parameter>, block: () -> T): T {
+        val saved = contextualType
+        contextualType = saved?.let { contextualSigReturnTypeForCtx(it, params) }
+        try { return block() } finally { contextualType = saved }
     }
 
     /** Get the type of a function expression. */
@@ -125943,8 +126050,11 @@ interface DataView {
             }
             val applicable = ctxSigs.filter { it.parameters.size >= reqArity }
             if (applicable.size == 1) applicable[0]
-            else if (!options.strict) return
-            else ctxSigs[0]
+            // (P18.290) several applicable: tsgo folds them (`getIntersectedSignatures`,
+            // parameters UNIONED) under noImplicitAny.
+            else getIntersectedSignatures(applicable)
+                ?: if (!options.strict) return
+                else ctxSigs[0]
         }
         val ctxParams = ctxSig.parameters
         for ((i, param) in params.withIndex()) {
@@ -149457,6 +149567,9 @@ interface DataView {
             // the function itself.
             is ReturnStatement ->
                 if (parent.expression === node) pullCtxReturnTypeAt(parent, depth) else null
+            // (P18.290) an arrow's EXPRESSION body is a return position: contextually typed
+            // by the arrow's return annotation, else its contextual signature's return type.
+            is ArrowFunction -> if (parent.body === node) pullCtxFnReturnType(parent, depth) else null
             // (CHK.98)(c) tsc `getContextualType`'s ConditionalExpression arm
             // (checker.ts:32553): both branches of `c ? f : g` sit at the
             // conditional's own contextual position. The cpa family has always
@@ -149518,6 +149631,12 @@ interface DataView {
     private fun pullCtxReturnTypeAt(ret: ReturnStatement, depth: Int): Type? {
         if (depth > 6) return null
         val fn = pullCtxEnclosingFnLike(ret) ?: return null
+        return pullCtxFnReturnType(fn, depth)
+    }
+
+    /** (CHK.40) / (P18.290) the contextual RETURN type of the function-like [fn]. */
+    private fun pullCtxFnReturnType(fn: Node, depth: Int): Type? {
+        if (depth > 6) return null
         val ann = when (fn) {
             is FunctionDeclaration -> fn.type
             is MethodDeclaration -> fn.type
@@ -149528,7 +149647,7 @@ interface DataView {
         }
         val declared = ann?.let { pullCtxResolveAnnotation(it) }
             ?: pullContextualTypeAt(fn, depth + 1)
-                ?.let { contextualSigReturnTypeForCtx(it) }
+                ?.let { contextualSigReturnTypeForCtx(it, (fn as? ArrowFunction)?.parameters) }
             ?: return null
         return pullCtxAwaitIfAsync(fn, declared)
     }
