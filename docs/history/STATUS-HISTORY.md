@@ -1,5 +1,9 @@
 
 
+**(P18.287) — (LIBS.2): TEMPLATE-LITERAL TYPES EXIST — `` `-${string}` `` IS NO LONGER JUST `string`, SO `'5'` NO LONGER MATCHES IT; type-fest 300 -> 267 (ALL 27 string-repeat ROWS), TALLY 427 -> 394, NONE ADDED; +10 PINS, 22,676 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; mitt still 0; a corpus workaround in the unused-declaration family retired.
+
+
 **(P18.286) — (LIBS.2): `X extends any ? A : B` AND `IsAny<any>` NOW EVALUATE AS tsgo DOES, BEHIND A NEW CHECK THAT SEPARATES A WRITTEN `any` FROM AN UNRESOLVED ONE (WITHOUT IT type-fest WENT 301 -> 814); RESOLVING `NoInfer<T>` REFUSED (301 -> 387); TALLY 428 -> 427, NONE ADDED; +7 PINS, 22,666 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; mitt still 0.
 

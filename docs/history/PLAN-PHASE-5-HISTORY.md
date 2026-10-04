@@ -1,3 +1,38 @@
+### Round (P18.282) — (LIBS.2) round 7, (CHK.226) + part of (CHK.215): `keyof`, indexed access and property reads now work over INTERSECTIONS (new collaborator `IntersectionTypeOperators`), together with the three collateral defects (P18.281) measured — ky's last CTXM row gone with no false TS2322, date-fns gains no false TS18048; `infer` from a parenthesized function type evaluates (type-fest keys-of-union); alias display no longer hijacks shared types; the corpus-only walker B574 retired as engine-produced; tally 463 -> 456, NONE added; `keyof (A | B)` REFUSED on measurement (2026-10-03)
+
+One implementation subagent. **Where the item was wrong**: (a) `keyof (A | B)` ("the keys every member has") adds a
+false positive on tsc's own `binder.ts:962` (`'body' does not exist on type 'Mutable<HasContainerFlags>'`, 46 -> 47);
+tsgo first distributes a homomorphic mapped type over a union (`Mutable<A | B>` = `Mutable<A> | Mutable<B>`) — built
+too, it moved the false positive to `parser.ts:6741` because our assignment narrowing does not narrow over a union of
+mapped types — so REFUSED, `keyof (A | B)` stays `string` (2 missing rows, no false positive); `keyof (X & (A | B))`
+works with tsgo's drop-the-impossible-combination rule. (b) DEFK's 30 rows are mostly blocked on `IsEqual` (GSIG), not
+`keyof`: keys-of-union (3) was `S extends ((p: infer I) => void)` never evaluating (`infer` only supported inside a type
+reference, type-fest writes the function type in parentheses) — fixed; readonly-keys-of 9 / optional-keys-of 8 /
+readonly-keys-of-union 6 / jsonify 4 filter keys through an `as` clause built on `IsEqual` — the `as` evaluation now
+works, the 27 rows remain on GSIG. (c) The display half is NOT the round-938 / INV.5(a) blocker: tsgo attaches an alias
+name only to a type the instantiation CREATED — a `keyof` / indexed-access body or a conditional resolving to a shared
+(interned) reference / interface / union must not register (it had hijacked `number[]` program-wide as
+`LiteralToPrimitiveDeep<[1, 2, 3]>`); a conditional resolving to a fresh object / intersection still registers
+(`excessPropertyCheckIntersectionWithRecursiveType`). (d) `getIndexedAccessType`'s intersection arm is redundant once
+`getPropertyOfType` has one, except for generic members (pinned); the corpus-only walker B574
+`checkNonHomomorphicMappedKeyofAssign` is now engine-produced (it double-emitted) and was deleted. **Mechanism**
+(`IntersectionTypeOperators.kt`, 289): `keyofIntersection` (union of each part's keys; a union part expands its
+combinations and drops those with a disjoint literal / enum discriminant), `propertyOfIntersection` (a synthesized
+symbol, optional only if every part's is, typed as the intersection of part types), `indexedAccess`, `properties` for
+the Pick / Omit materializer, `inferFromFunctionExtends` (contravariant candidates intersected, a naked check type
+distributes), a tuple matching `Array<infer U>` through its array base, per-key `as` remap (a mapped type with an `as`
+clause keeps source modifiers), the alias-display skip, and `typeToString` parenthesizing an anonymous union inside an
+intersection (`X & (Y | Z)`, tsgo's). `Checker.kt` +54 / −121 (net −67). **Matrix**: `m` 18 tsgo rows, 3 agree / 4
+ours-only -> 16 / 0 / 2 missing (`IO['nope']` TS2339, a `Capitalize<>` remap — TLT); `m2` 12 rows, 3 / 2 -> 10 / 0 / 2
+(the `keyof (A | B)` cells); fixtures `pin` / `u` / `tf` / `lp` byte-identical to tsgo. **Pins**:
+`IntersectionTypeOperatorsTest` 12; `IntersectionOverUnionRelationTest` one expectation now parenthesized (= tsgo);
+ablation a1 5 / a3 1 / a4 1 / a5 1 / a6 1 / a7 1 / a8 1 / a9 2 / a10 2 / a11 1 / a12 1 RED. **Gates**: full suite 22,630 /
+0 / 44 (+12); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0 (`typeNode.bypassed` +0.33%,
+`mapped.keyed` +1.20%); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
+cronstrue unchanged (identity hash extended to `IntersectionTypeOperators`); library grid ky 10 -> 9, type-fest 317 -> 311
+(keys-of-union −3, three TS2578 in distributed-omit / distributed-pick / value-of-union now produce the expected error),
+others unchanged (tally 463 -> 456); warning gate with probe: probe only.
+
 ### Round (P18.281) — (LIBS.2) round 6, (CHK.214) CTXM: a `Record<string, C>` / string-keyed mapped type now hands its template to CONTEXTUAL readers as an index signature (the declared type stays `any`, refused at (P18.117)), and key-remapped mapped types evaluate — zod's 14 `json-schema-processors.ts` TS7006 rows gone (68 -> 54), the parameters genuinely TYPED; ky's one row refused on measurement; tally 477 -> 463, NONE added (2026-10-03)
 
 One implementation subagent. **Where the item was wrong**: the cause is not the contextual LOOKUP —
