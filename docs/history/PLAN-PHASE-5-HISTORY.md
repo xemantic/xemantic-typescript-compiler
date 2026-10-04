@@ -1,3 +1,33 @@
+### Round (P18.277) — (LIBS.2) round 3, (CHK.219): a generic call returning a MAPPED type is instantiated (re-resolving the declared return node under the call's bindings), literal candidates survive against a primitive / tuple constraint, a generic ARROW's annotated parameters are finally typed in its own type-parameter scope — plus two older bugs those exposed (arguments checked after an explicit type argument failed its constraint; an interface's inherited members lost when a heritage base resolves mid-cycle) — all 62 of zod's F7 rows gone (164 -> 102), the 8-library tally 614 -> 552, NONE added (2026-10-03)
+
+One implementation subagent, each part PRICED separately. **Where the item was wrong**: (a) and (b) alone move NOTHING
+in zod — `util.arrayToEnum` is a generic ARROW const and a generic arrow's annotated parameters were never stored
+(`getTypeOfArrowFunction` resolved them lazily OUTSIDE the arrow's type-parameter scope, so `x: T` was `errorType` and
+every call of `const f = <T>(x: T) => …` inferred nothing) — that is fix (c), and (a)+(b) without it read zod 164 -> 164;
+(c) alone priced DIRTY in two places, both OLDER bugs it uncovered: the corpus (`incorrectNumberOfTypeArgumentsDuringErrorReporting`
+— we checked arguments after an explicit type argument failed its constraint, an extra TS2353 tsgo never reports; fix
+(d)) and ky (+1 false TS2353 — `interface Options extends KyOptions` lost every `KyOptions` member on the options.ts <->
+hooks.ts import cycle because the heritage base resolved mid-alias-resolution to `errorType` and the member table built
+then was kept for good; fix (e)); (b) also needs the TUPLE rule (`U extends [T, ...T[]]` infers a tuple and `T`, in no
+parameter, must stay unbound). **Mechanism**: (a) `mappedReturnUnderMapper` re-resolves a signature's mapped return
+node under the call's bindings when it resolved to `any` (three call sites in `getReturnTypeOfCallExpressionCore`) and
+`widenType` no longer widens a mapped type's DECLARED members; (b) `tispKeptLiterals` / `tispTupleLiteralCandidate` /
+`tispArrayElementLiterals` / `tispConstraintOnlyTypeParams` inside `tryInferSingleTypeParamFromArgs` (return-type sites
+only); (c) `resolveParameterTypesInScope` for generic arrows, as function expressions already did; (d) a single generic
+candidate whose explicit type arguments fail their constraints skips the argument check (tsgo's `chooseOverload`); (e)
+`resolveBaseTypesLazy` marks `heritageIncomplete` on an `errorType` / `any` base, `MemberResolver` marks such a table
+PROVISIONAL and `rebuildProvisionalMembers` rebuilds it once at the first idle request (`typeResolutionIdle`) if the
+heritage is complete by then. `Checker.kt` +161, `MemberResolver.kt` +19, `Type.kt` +7. **Matrix**: every cell = tsgo
+(`mr<"a">("a")` -> `{ a: "a"; }`, `id<T extends string>("a")` -> `'"a"'`, a tuple constraint -> `'["a", "b"]'`, generic
+arrows infer, zod's `arrayToEnum` -> `{ a: "a"; b: "b"; }`, the constraint-failure extra TS2353 gone, ky's cycle reads
+`'unknown'` as tsgo), controls unchanged (`T extends object` keeps widening, object literals). **Pins**:
+`GenericMappedReturnInferenceTest` 13; ablation a1 3 / a2 4 / b1 5 / b2 2 / b3 1 / b4 2 / c1 2 / d1 1 / e1 1 RED (e1 needed a
+REORDERED fixture — the cycle reproduces only with `hooks.ts` first; its first try read 0). **Gates**: full suite 22,583
+/ 0 / 44 (+13); corpus screen 8725 / 0 and `--include ''` the same 41, byte-identical; `cost_gate.py` 0
+(`typeOfExpr.calls` +0.24%); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
+cronstrue unchanged; library grid zod 164 -> 102 (all 62 in `src/v3/locales/en.ts`), others and agree / missing
+unchanged; warning gate with probe: probe only. Residues -> (CHK.222).
+
 ### Round (P18.276) — (LIBS.2) round 2: (CHK.221) only a `private` parameter property is reported unused, only under `noUnusedLocals`, any reference keeps it, nested classes and class expressions are checked (15 false TS6138 + 3 false TS6133 -> 0, 2 missing rows found); and a narrow first cut of TS2536 on a type-parameter element-access index (12 of tsgo's 15 matrix rows, 0 false positives) — but date-fns's last row is a DEFERRED CONDITIONAL type, not this; (CHK.220) re-scoped (2026-10-03)
 
 One implementation subagent. **Where the item was wrong**: (a) (CHK.221) was wider than "public" — EVERY non-private

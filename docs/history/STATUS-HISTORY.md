@@ -1,5 +1,9 @@
 
 
+**(P18.282) — (LIBS.2): `keyof`, `T[K]` AND PROPERTY READS NOW WORK OVER INTERSECTION TYPES — ky 10 -> 9, type-fest 317 -> 311, TALLY 463 -> 456, NONE ADDED; `keyof (A | B)` REFUSED BECAUSE IT ADDED A FALSE POSITIVE ON tsc's OWN SOURCES; +12 PINS, 22,630 / 0 / 44 (2026-10-03).**
+Screen 0; grid 8x0; gated libraries unchanged; a corpus-only walker retired.
+
+
 **(P18.281) — (LIBS.2): CALLBACKS INSIDE A `Record<string, C>` OBJECT LITERAL NOW GET THEIR PARAMETER TYPES FROM `C` — zod 68 -> 54, TALLY 477 -> 463, NONE ADDED; ky's ONE ROW REFUSED BECAUSE ITS FIX ADDED FALSE POSITIVES (QUEUED); +9 PINS, 22,618 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; gated libraries unchanged.
 
