@@ -1,3 +1,28 @@
+### Round (P18.280) — (LIBS.2) round 5, false positives: the relation's same-target shortcut honours DECLARED `in` / `out` variance ((CHK.223) — zod 78 -> 68, ten rows, seven the queue never named), and the two module-syntax false positives of (CHK.224) are ported to tsgo's rules (TS2661 through `declare global`, TS2440 per binder table); tally 487 -> 477, NONE added (2026-10-03)
+
+One implementation subagent. **Where the item was wrong**: (CHK.223) is not a zod-specific relation leg — `Relater`'s
+same-target shortcut compared every type argument of `X<A>` vs `X<B>` COVARIANTLY with no variance information, so zod's
+`$ZodCheck<in T>` made `$ZodCheck<boolean>` fail `$ZodCheck<never>`, which travelled up `_zod.def.checks` into
+`ZodMiniString` / `ZodMiniBoolean` failing `SomeType`; the same defect also produced 4 zod TS2430 and 3 TS2344 rows in
+`core/`. It is far wider than zod — an UNANNOTATED `interface Fn<T> { f: (x: T) => void }` still false-positives
+`Fn<Animal>` -> `Fn<Dog>`; only the DECLARED half is fixed here (the measured half is the round-336 DEAD direction,
+queued with a different route as (CHK.225)). **Mechanism**: `Relater.declaredVariances(target)` reads `in` / `out`
+from the target's interface / class declarations (cached by id) and `typeArgumentRelated` applies it per argument —
+`in` checks target -> source, `in out` both directions, anything else the old covariant check (tsgo uses a declared
+variance outright). (CHK.224) TS2661: `firstDeclarationIsGlobalFileTopLevel` ports tsgo's `checkExportSpecifier` —
+report only when the symbol's FIRST declaration sits directly in a global source file, so a `declare global {}` member
+is exportable (and no longer misreported as TS2304). TS2440 models tsgo's `declareModuleMember`: an EXPORTED
+`import X =` lands in the namespace's exports and conflicts only with an exported variable in any block; a local one
+lands in its own block's locals and conflicts with any variable in that same block (per-block names kept in a list
+aligned with the blocks, not a map keyed by an AST node). `Relater.kt` +45, `ModuleSyntaxChecks.kt` +36; `Checker.kt`
+untouched (`Checker.class` 844112b5 on both arms). **Matrix** (`build/bench/p18280-agent/{r1,m,m2,m3,pins}`): every
+cell = tsgo, true positives kept (`K<"a">` -> `K<string>` under `in`, a wrong argument under `in`, a script-file
+global, `import X =` vs `var X` in the same block). **Pins**: `DeclaredVarianceAndModuleSyntaxResiduesTest` 11;
+ablation a1 4 / a2 1 / a3 1 / a4 2 / a5 1 / a6 1 RED. **Gates**: full suite 22,609 / 0 / 44 (+11); corpus screen 8725 / 0
+and `--include ''` the same 41, diff byte-identical; `cost_gate.py` all +0.00%; `huge_methods.py --fail-over 0` 0; grid
+8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid zod 78 -> 68, others unchanged (tally
+487 -> 477); warning gate with probe: probe only.
+
 ### Round (P18.279) — (INV.0) extraction: the MODULE-SYNTAX family (TS2440 / TS1147 / TS1205 / TS1269 / TS1280 / TS1292 / TS1484 / TS2866 / TS2661 checks) moves verbatim into `ModuleSyntaxChecks` and the TS8xxx TypeScript-syntax-in-JS check into `TsSyntaxInJsFiles`; `Checker.kt` 197,864 -> 195,775 (-2,089); every receipt identical; the builder STALLED and the orchestrator finished the round (2026-10-03)
 
 One implementation subagent, stopped after 28 minutes silent with no process — the move, the verbatim proof scripts,
