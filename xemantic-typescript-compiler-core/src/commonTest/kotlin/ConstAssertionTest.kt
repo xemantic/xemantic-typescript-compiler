@@ -693,9 +693,9 @@ class ConstAssertionTest {
     }
 
     @Test
-    fun `residue - a template with substitutions stays string`() {
-        // tsc: the template literal type `` `p${number}` ``.
+    fun `a template with substitutions under a const assertion is a template type`() {
+        // (P18.287) tsgo 7.0.2: the template literal type `` `p${number}` ``.
         assert(messages("declare const zi: number; const zk = `p\${zi}` as const; const zn: number = zk") ==
-            listOf("Type 'string' is not assignable to type 'number'."))
+            listOf("Type '`p\${number}`' is not assignable to type 'number'."))
     }
 }

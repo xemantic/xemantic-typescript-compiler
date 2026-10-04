@@ -97,6 +97,13 @@ internal class TypeInstantiator(
     fun instantiateType(type: Type, mapper: TypeMapper): Type {
         return when (type) {
             is Type.TypeParam -> mapper.map(type) ?: type
+            // (P18.287) a template re-normalises over its instantiated spans.
+            is Type.TemplateLiteral -> {
+                if (!type.generic) return type
+                val mapped = type.types.map { instantiateType(it, mapper) }
+                if (mapped.zip(type.types).all { (a, b) -> a === b }) type
+                else checker.templateTypes.get(type.texts, mapped)
+            }
             is Type.Union -> {
                 val mapped = type.types.map { instantiateType(it, mapper) }
                 if (mapped.zip(type.types).all { (a, b) -> a === b }) type

@@ -513,6 +513,7 @@ class Checker(
     /** (LIBS.2) GSIG — the `IsEqual` generic-signature trick; see `GenericSignatureConditionals.kt`. */
     private val genericSigConditionals = GenericSignatureConditionals(this)
     private val genuineAny = GenuineAnyProvenance(this) // (CHK.228)
+    internal val templateTypes = TemplateLiteralTypes(this) // (P18.287) (CHK.216)
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -5075,15 +5076,6 @@ class Checker(
     private val unionAliasStructural = mutableMapOf<List<Int>, String>()
     private val typeToStringInProgress = mutableSetOf<Int>()
 
-    /** B65.1: Source-text display for `TemplateLiteralType` resolutions. Each
-     *  `getTypeFromTypeNode(TemplateLiteralType)` mints a FRESH
-     *  `Type.Intrinsic("string")` (so it has a unique id) and registers the
-     *  back-tick-wrapped source rendering here. typeToString consults this
-     *  map before falling through to the default intrinsicName display so
-     *  TS2339 / TS2345 / TS2322 messages render `` `${string}:\t${number}\r\n` ``
-     *  instead of plain `string`. Assignability still flows via TypeFlags.String,
-     *  so all `=== stringType` paths remain unaffected. */
-    private val templateLiteralDisplay = mutableMapOf<Int, String>()
 
     /** 17.19: Base-class constructor signature for `super(...)` arg checking.
      *  Set by [checkCallTypesInStatement]'s ClassDeclaration branch around each
@@ -25538,9 +25530,8 @@ class Checker(
      * [child]? Mirrors checkUnresolvedInTypeCore's arms exactly, including
      * the deliberate non-descents: TypeQuery.exprName (self-emitted via
      * [checkTypeQueryName]), InferType (introduces, never references),
-     * ImportType (never walked), LiteralType/keyword/this types, and
-     * TemplateLiteralType spans (the shallow parser leaves them ALWAYS empty
-     * — see the CLAUDE.md gotcha; classified faithfully to actual behavior).
+     * ImportType (never walked), LiteralType/keyword/this types. A
+     * TemplateLiteralType's spans ARE descended since (P18.287) built them.
      * TypeParameter/Parameter/member edges are gated to the owners whose
      * signature positions the TYPE walker itself reached (function TYPES and
      * type-literal members) — declaration-owned signature positions are
@@ -25572,6 +25563,9 @@ class Checker(
         is RestType -> child === parent.type
         is OptionalType -> child === parent.type
         is NamedTupleMember -> child === parent.type
+        // (P18.287) template-literal TYPE spans are parsed now: `${T}` references T (tsgo TS2304).
+        is TemplateLiteralType -> child is TemplateLiteralTypeSpan
+        is TemplateLiteralTypeSpan -> child === parent.type
         is TypeLiteral -> child is PropertyDeclaration || child is MethodDeclaration ||
             child is IndexSignature || child is Constructor ||
             child is GetAccessor || child is SetAccessor
@@ -110178,22 +110172,9 @@ interface DataView {
             is IndexedAccessType -> getTypeFromIndexedAccess(node)
             is ConditionalType -> getTypeFromConditionalType(node)
             is MappedType -> getTypeFromMappedType(node)
-            is TemplateLiteralType -> {
-                // B65.1: preserve source-text rendering for TS2339 / TS2345 /
-                // TS2322 messages. Parser stashes the raw source slice (including
-                // backticks) in `head.rawText` (no real spans built). Each call
-                // to this branch (post-nodeTypes-cache check) mints a fresh
-                // Type.Intrinsic so distinct call sites get distinct ids, but
-                // all carry TypeFlags.String so assignability is unchanged.
-                val raw = node.head.rawText
-                if (raw.isNullOrEmpty()) {
-                    stringType
-                } else {
-                    val t = Type.Intrinsic(TypeFlags.String, "string")
-                    templateLiteralDisplay[t.id] = raw
-                    t
-                }
-            }
+            // (P18.287) a real template literal type ([TemplateLiteralTypes]); it still IS-A `string`
+            // intrinsic for every reader that does not ask for a template.
+            is TemplateLiteralType -> templateTypes.fromNode(node) { getTypeFromTypeNode(it) }
             is InferType -> anyType // only valid inside conditional types
             is RestType -> getTypeFromTypeNode(node.type) // unwrap rest
             is NamedTupleMember -> getTypeFromTypeNode(node.type) // unwrap named tuple member
@@ -124610,7 +124591,70 @@ interface DataView {
         // `expr satisfies T` is a pure-type-check: the runtime expression and its
         // type are unchanged. Preserve literal type for source literal preservation.
         is SatisfiesExpression -> literalTypeOfExpression(expr.expression)
+        // (P18.287) a template EXPRESSION in a literal context (or `as const`) has a template
+        // literal TYPE — tsgo `checkTemplateExpression`.
+        is TemplateExpression -> templateExpressionLiteralType(expr)
         else -> null
+    }
+
+    /** (P18.287) tsgo `checkTemplateExpression`'s template-context arm: the template literal type
+     *  over the spans' types, or null (the old `string`) when a span holds a type the model cannot
+     *  place precisely (an enum, a type parameter, `any`, an object, …). */
+    private fun templateExpressionLiteralType(expr: TemplateExpression): Type? {
+        if (templateExpressionHasNoContext(expr)) return null
+        val texts = ArrayList<String>(expr.templateSpans.size + 1)
+        texts.add(cookTemplateText(expr.head.text))
+        val types = ArrayList<Type>(expr.templateSpans.size)
+        for (span in expr.templateSpans) {
+            val e = span.expression
+            var t = literalTypeOfExpression(e) ?: getTypeOfExpression(e)
+            if (t is Type.Union && (e is Identifier || e is PropertyAccessExpression)) t = getNarrowedTypeForReference(t, e)
+            fun placeable(x: Type): Boolean = x === stringType || x === numberType || x === bigintType ||
+                x === booleanType || x === trueType || x === falseType || x === nullType || x === undefinedType ||
+                x === neverType || x is Type.StringLiteral || x is Type.NumberLiteral || x is Type.BigIntLiteral ||
+                x is Type.TemplateLiteral && x.precise && !x.generic
+            if (!(placeable(t) || t is Type.Union && t.types.all { placeable(it) })) return null
+            types.add(t)
+            texts.add(cookTemplateText((span.literal as? StringLiteralNode)?.text ?: return null))
+        }
+        val r = templateTypes.get(texts, types)
+        return if (r === stringType || r is Type.TemplateLiteral && !r.precise) null else r
+    }
+
+    /** (P18.287) A template expression whose position gives it no contextual type — an
+     *  un-annotated declaration's initializer, an un-annotated function's return — is `string`
+     *  in tsgo (only `as const` or a literal-ish contextual type makes it a template), and this
+     *  checker's inference also calls [literalTypeOfExpression] there. */
+    private fun templateExpressionHasNoContext(expr: Expression): Boolean {
+        var cur: Node = expr
+        while (true) {
+            val p = (cur as NodeBase).parent ?: return false
+            when (p) {
+                is ParenthesizedExpression -> cur = p
+                is ConditionalExpression -> if (p.condition === cur) return false else cur = p
+                is AsExpression -> return false
+                is VariableDeclaration -> return p.type == null
+                is PropertyDeclaration -> return p.type == null
+                is Parameter -> return p.type == null
+                is BindingElement -> return true
+                is ArrowFunction -> return p.body === cur && p.type == null
+                is ReturnStatement -> {
+                    var f: Node? = (p as NodeBase).parent
+                    while (f != null && f !is FunctionDeclaration && f !is FunctionExpression &&
+                        f !is ArrowFunction && f !is MethodDeclaration && f !is GetAccessor
+                    ) f = (f as NodeBase).parent
+                    return when (f) {
+                        is FunctionDeclaration -> f.type == null
+                        is FunctionExpression -> f.type == null
+                        is ArrowFunction -> f.type == null
+                        is MethodDeclaration -> f.type == null
+                        is GetAccessor -> f.type == null
+                        else -> true
+                    }
+                }
+                else -> return false
+            }
+        }
     }
 
     /**
@@ -131109,6 +131153,8 @@ interface DataView {
     /** 17.43 helper: true if [propType] is a literal type or contains literal members. */
     internal fun propTypeContainsLiteral(propType: Type): Boolean = when {
         propType is Type.StringLiteral -> true
+        // (P18.287) a template literal type is a literal context (tsgo `isLiteralOfContextualType`).
+        propType is Type.TemplateLiteral -> propType.precise
         propType is Type.NumberLiteral -> true
         propType is Type.BigIntLiteral -> true
         propType is Type.Intrinsic && propType.flags.hasAny(
@@ -133398,8 +133444,7 @@ interface DataView {
             // resolution fails, the slot is shown as `any`).
             is Type.Intrinsic -> when {
                 type === errorType -> "any"
-                // B65.1: template-literal-type-sourced intrinsic — render source text.
-                templateLiteralDisplay[type.id] != null -> templateLiteralDisplay[type.id]!!
+                type is Type.TemplateLiteral -> templateTypes.display(type) // (P18.287)
                 else -> type.intrinsicName
             }
             is Type.StringLiteral -> "\"${type.value}\""
@@ -175275,6 +175320,8 @@ interface DataView {
         if (checkType === errorType) return anyType
         // Unresolved type parameter — can't evaluate
         if (checkType is Type.TypeParam) return anyType
+        // (P18.287) nor a template over one (tsgo defers both).
+        if (checkType is Type.TemplateLiteral && checkType.generic) return anyType
         // (CHK.228) distributing over a genuine `never` (an empty union) yields `never`.
         if (checkType === neverType && nakedCheckTypeParamName(node.checkType) != null &&
             genuineAny.isGenuineNever(node.checkType, currentTypeAliasArgs)
@@ -175416,8 +175463,11 @@ interface DataView {
         // which is the specific evidence: the pin that motivated the patch no longer
         // needs it. See `narrowTypeByTypeGuard`'s negative branch for the profile-wide
         // ablation (11,667 suppressed verdicts, output byte-identical).
-        val related = isSimpleTypeRelatedTo(checkType, extendsType) ||
-            checkTypeRelatedTo(checkType, extendsType, assignableRelation)
+        templateTypes.conditionalDepth++ // (P18.287)
+        val related = try {
+            isSimpleTypeRelatedTo(checkType, extendsType) ||
+                checkTypeRelatedTo(checkType, extendsType, assignableRelation)
+        } finally { templateTypes.conditionalDepth-- }
         return if (related) {
             getTypeFromTypeNode(node.trueType)
         } else {
@@ -191818,6 +191868,9 @@ interface DataView {
                     val param = fd.parameters.getOrNull(i) ?: continue
                     if (param.dotDotDotToken) continue
                     val ann = resolveAliases(param.type ?: continue)
+                    // (P18.287) a template the relation now decides is reported by the general
+                    // argument check — this walker keeps only the shapes it cannot (a branded span).
+                    if (ann is TemplateLiteralType && templateTypes.isDecidableTarget(getTypeFromTypeNode(param.type))) continue@args
                     fun innerRaw(t: TemplateLiteralType): String? =
                         t.head.rawText?.removeSurrounding("`")
                     val rawTemplates: List<String> = when (ann) {

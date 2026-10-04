@@ -9566,11 +9566,16 @@ class Parser(
                 // empty) instead of building proper head + spans because the
                 // checker's display path just needs the rendered text, not the
                 // structural pieces.
-                skipTemplateType()
+                // (P18.287) the spans are BUILT now (type + cooked literal text of each span);
+                // `head.rawText` keeps the whole raw slice for the display / raw-text readers.
+                val headText = if (token == SyntaxKind.Backtick) "" else cookTemplateText(scanner.getTokenValue())
+                val headEnd = getEnd()
+                val spans = parseTemplateTypeSpans()
                 val srcEnd = scanner.getPrevTokenEnd()
                 val raw = if (pos in 0..srcEnd && srcEnd <= source.length) source.substring(pos, srcEnd) else ""
-                val head = StringLiteralNode(text = "", rawText = raw, pos = pos, end = srcEnd)
-                TemplateLiteralType(head = head, templateSpans = emptyList(), pos = pos, end = getEnd())
+                // The head node spans the head TOKEN only (a span's names must not read as inside it).
+                val head = StringLiteralNode(text = headText, rawText = raw, pos = pos, end = if (spans.isEmpty()) srcEnd else headEnd)
+                TemplateLiteralType(head = head, templateSpans = spans, pos = pos, end = getEnd())
             }
 
             else -> {
@@ -9960,20 +9965,30 @@ class Parser(
         }
     }
 
-    private fun skipTemplateType() {
-        // Skip template literal type tokens
+    /** (P18.287) Parses a template literal TYPE's spans (`${T}tail`); the caller has read the
+     *  head's text. A `NoSubstitutionTemplateLiteral` has no spans. Token consumption is exactly
+     *  the old skip's, so recovery is unchanged. */
+    private fun parseTemplateTypeSpans(): List<TemplateLiteralTypeSpan> {
         if (token == SyntaxKind.NoSubstitutionTemplateLiteral) {
-            nextToken(); return
+            nextToken(); return emptyList()
         }
+        val spans = mutableListOf<TemplateLiteralTypeSpan>()
         if (token == SyntaxKind.TemplateHead) {
             nextToken()
             while (token != SyntaxKind.EndOfFile) {
-                parseType() // skip type in span
+                val spanPos = getPos()
+                val type = parseType()
                 val kind = scanner.reScanTemplateToken()
+                val litText = cookTemplateText(scanner.getTokenValue())
+                val litPos = getPos()
+                val litEnd = getEnd()
                 nextToken()
+                val literal = StringLiteralNode(text = litText, pos = litPos, end = litEnd)
+                spans.add(TemplateLiteralTypeSpan(type = type, literal = literal, pos = spanPos, end = litEnd))
                 if (kind == SyntaxKind.TemplateTail) break
             }
         }
+        return spans
     }
 
     private fun parseQualifiedName(): Node {

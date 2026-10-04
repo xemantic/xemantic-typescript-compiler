@@ -428,7 +428,10 @@ internal class MemberNames(
     /**
      * Round 936: the ONE fixed string a template-literal TYPE denotes, or null.
      *
-     * **`TemplateLiteralType` is NOT a structured node in this parser** — B65.1 builds it
+     * (P18.287: the parser now BUILDS the spans and cooks `head.text`; this reader still uses
+     * the raw slice, which stays correct — the history below explains why it was needed.)
+     *
+     * **`TemplateLiteralType` was NOT a structured node in this parser** — B65.1 built it
      * with `templateSpans = emptyList()` and the whole raw source slice (backticks and
      * all) in `head.rawText`, because the checker's display path only ever needed the
      * rendered text. So the obvious `templateSpans.isEmpty()` test is TRUE for every

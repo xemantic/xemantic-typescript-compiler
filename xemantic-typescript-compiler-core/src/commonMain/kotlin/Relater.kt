@@ -293,6 +293,9 @@ internal class Relater(
         if (sf.hasAny(TypeFlags.Never)) return true
         // Same type by identity
         if (source === target) return true
+        // (P18.287) a precise template target is decided by template matching, never by the
+        // string-like widening below (`'5'` is not a `-${string}`).
+        if (checker.templateTypes.isDecidableTarget(target)) templateVerdict(source, target)?.let { return it }
         // Literal value comparison (different instances with same value)
         if (source is Type.StringLiteral && target is Type.StringLiteral && source.value == target.value) return true
         if (source is Type.NumberLiteral && target is Type.NumberLiteral && source.value == target.value) return true
@@ -410,6 +413,13 @@ internal class Relater(
         }
         return false
     }
+
+    /** (P18.287) [TemplateLiteralTypes.relateToTemplate] for a decidable template [target]; a
+     *  placeholder comparison is an assignability question of its own. */
+    private fun templateVerdict(source: Type, target: Type): Boolean? =
+        checker.templateTypes.relateToTemplate(source, target as Type.TemplateLiteral) { s, t ->
+            isSimpleTypeRelatedTo(s, t) || checkTypeRelatedTo(s, t, assignableRelation)
+        }
 
     /**
      * 4b. Main entry point for type relation checking with error reporting.

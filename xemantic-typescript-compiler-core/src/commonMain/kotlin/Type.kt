@@ -129,12 +129,30 @@ sealed class Type {
     val id: Int = allocTypeId()
 
     /** Intrinsic (primitive) types: any, unknown, string, number, boolean, void, undefined, null, never, etc. */
-    class Intrinsic(
+    open class Intrinsic(
         override val flags: TypeFlags,
         val intrinsicName: kotlin.String,
     ) : Type() {
         override fun toString(): kotlin.String = intrinsicName
     }
+
+    /**
+     * (P18.287) A template literal TYPE — tsgo's `TemplateLiteralType` (`texts.size ==
+     * types.size + 1`). It deliberately IS-AN [Intrinsic] `string`: every reader that treats a
+     * template as `string` (which was the WHOLE model before this round — a template resolved
+     * to a fresh `string` intrinsic) keeps seeing exactly that; only the readers that ask for
+     * a template (the relation's template-target arm, display, instantiation —
+     * [TemplateLiteralTypes]) look inside. [precise] is false for a template whose spans hold
+     * a type the model cannot place (`any`, an enum, an intersection, …): it relates as plain
+     * `string` (the pre-round behaviour) and displays [rawDisplay] when the source text is known.
+     */
+    class TemplateLiteral(
+        val texts: List<kotlin.String>,
+        val types: List<Type>,
+        val precise: kotlin.Boolean,
+        val generic: kotlin.Boolean,
+        val rawDisplay: kotlin.String? = null,
+    ) : Intrinsic(TypeFlags.String or TypeFlags.TemplateLiteral, "string")
 
     /** String literal type: "hello" */
     class StringLiteral(

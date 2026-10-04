@@ -465,7 +465,7 @@ internal class UnusedDeclarations(
             is RestType -> collectTypeReferenceNames(type.type, out)
             is OptionalType -> collectTypeReferenceNames(type.type, out)
             // (P18.271) a template span and a type predicate reference names too.
-            is TemplateLiteralType -> templateTypeReferenceNames(type.head.rawText ?: "").forEach { out.add(it.name) }
+            is TemplateLiteralType -> type.templateSpans.forEach { collectTypeReferenceNames(it.type, out) }
             is TypePredicate -> type.type?.let { collectTypeReferenceNames(it, out) }
             else -> {}
         }
@@ -1581,8 +1581,6 @@ internal class UnusedDeclarations(
                 type.templateSpans.forEach { span ->
                     collectRefsFromType(span.type, scope)
                 }
-                // (P18.271) the spans are never parsed — read the raw slice.
-                templateTypeReferenceNames(type.head.rawText ?: "").forEach { scope.referencedNames.add(it.name) }
             }
             is TypePredicate -> type.type?.let { collectRefsFromType(it, scope) }
             is RestType -> collectRefsFromType(type.type, scope)
@@ -2963,8 +2961,6 @@ internal class UnusedDeclarations(
                 type.templateSpans.forEach { span ->
                     collectTypeRefs(span.type, scope)
                 }
-                // (P18.271) the spans are never parsed — read the raw slice.
-                templateTypeReferenceNames(type.head.rawText ?: "").forEach { scope.referencedNames.add(it.name) }
             }
             is TypePredicate -> type.type?.let { collectTypeRefs(it, scope) }
             else -> {}
@@ -3044,9 +3040,6 @@ internal class UnusedDeclarations(
             }
             is TemplateLiteralType -> {
                 type.templateSpans.forEach { span -> collectTypeQueryValueRefs(span.type, scope) }
-                templateTypeReferenceNames(type.head.rawText ?: "").forEach {
-                    if (it.afterTypeof) scope.referencedNames.add(it.name)
-                }
             }
             // A predicate's parameter NAME is not a read of that parameter (tsgo reports it).
             is TypePredicate -> type.type?.let { collectTypeQueryValueRefs(it, scope) }
