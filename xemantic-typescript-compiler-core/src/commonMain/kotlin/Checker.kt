@@ -512,6 +512,7 @@ class Checker(
     internal val indexedAccessParams = IndexedAccessParams(this)
     /** (LIBS.2) GSIG — the `IsEqual` generic-signature trick; see `GenericSignatureConditionals.kt`. */
     private val genericSigConditionals = GenericSignatureConditionals(this)
+    private val genuineAny = GenuineAnyProvenance(this) // (CHK.228)
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -110131,6 +110132,8 @@ interface DataView {
         currentTypeAliasArgs?.let { m ->
             for (e in m.entries.sortedBy { it.key }) fp.append('a').append(e.key).append(':').append(e.value.id)
         }
+        // (CHK.228) a genuine-`any` argument is a context dimension: a conditional over it evaluates.
+        genuineAny.frame?.let { (m, names) -> if (m === currentTypeAliasArgs) for (n in names.sorted()) fp.append('g').append(n) }
         return NodeCtxKey(node, fp.toString())
     }
 
@@ -110825,6 +110828,14 @@ interface DataView {
                     if (decl != null && !declTPs.isNullOrEmpty() && declTPs.size == typeArgs.size
                     ) {
                         val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                        // (CHK.228) the lib's `NoInfer<T> = intrinsic` evaluates as `T` — here only
+                        // for a GENUINE `any` (type-fest `IsAny`). Every other `T` keeps today's
+                        // unresolved answer: evaluating it unmasks unrelated mis-evaluations
+                        // (measured: type-fest 301 -> 387 ours-only).
+                        if (symbol.name == "NoInfer" && resolvedArgs.size == 1 && resolvedArgs[0] === anyType &&
+                            genuineAny.isGenuineAny(typeArgs[0], currentTypeAliasArgs) &&
+                            ((decl.type as? TypeReference)?.typeName as? Identifier)?.text == "intrinsic"
+                        ) return anyType
                         if (resolvedArgs.none { it === errorType }) {
                             // B57.1b: skip substitution when any arg fails its constraint.
                             // Prevents FP TS2589 on `Foo<"false", {}>` where the constraint
@@ -110940,7 +110951,11 @@ interface DataView {
                             // B58.3: intern substitution results so identical (symbol, args)
                             // calls return the same Type instance — keeps aliasDisplayMap
                             // entries stable across re-resolution.
-                            val cacheKey = "${symbol.id}|${resolvedArgs.joinToString(",") { it.id.toString() }}"
+                            // (CHK.228) which arguments are a GENUINE `any` — part of the key, since
+                            // a conditional over one evaluates where one over a washed `any` does not.
+                            val genuineNames = genuineAny.argNames(typeArgs, declTPs, resolvedArgs, currentTypeAliasArgs)
+                            val cacheKey = "${symbol.id}|${resolvedArgs.joinToString(",") { it.id.toString() }}" +
+                                (if (genuineNames.isEmpty()) "" else "|g" + genuineNames.sorted().joinToString(","))
                             substitutionResultCache[cacheKey]?.let { return it }
                             // INV.5(b2b) round 549d: the install is an explicit mapper —
                             // bindings layered onto the ambient alias-args, plus the
@@ -110974,7 +110989,13 @@ interface DataView {
                                 aliasSubstitutionStack.addLast(symbol.id)
                                 // (a UnionType body is pushed unconditionally — the pop below
                                 // matches; the cycle-break above re-checks deferability)
-                                val result = getTypeFromTypeNodeWithMapper(decl.type, mapper)
+                                val savedGenuine = genuineAny.frame
+                                genuineAny.frame = if (genuineNames.isEmpty()) null else argMap to genuineNames
+                                val result = try {
+                                    getTypeFromTypeNodeWithMapper(decl.type, mapper)
+                                } finally {
+                                    genuineAny.frame = savedGenuine
+                                }
                                 // B50.2: register alias-display info so typeToString
                                 // renders `Foo<string>` instead of the structural form.
                                 // CRITICAL filters:
@@ -175251,9 +175272,15 @@ interface DataView {
      */
     private fun getTypeFromConditionalType(node: ConditionalType): Type {
         val checkType = getTypeFromTypeNode(node.checkType)
-        if (checkType === anyType || checkType === errorType) return anyType
+        if (checkType === errorType) return anyType
         // Unresolved type parameter — can't evaluate
         if (checkType is Type.TypeParam) return anyType
+        // (CHK.228) distributing over a genuine `never` (an empty union) yields `never`.
+        if (checkType === neverType && nakedCheckTypeParamName(node.checkType) != null &&
+            genuineAny.isGenuineNever(node.checkType, currentTypeAliasArgs)
+        ) return neverType
+        // (CHK.228) only a GENUINE `any` check type is evaluated — see [GenuineAnyProvenance].
+        if (checkType === anyType && !genuineAny.isGenuineAny(node.checkType, currentTypeAliasArgs)) return anyType
         // B119: `X extends Ref<...infer V...> ? V : ...` — when the extends-type is a
         // TypeReference carrying top-level `infer` placeholders and checkType is a
         // concrete Reference to the same target, bind the infer vars by positional
@@ -175263,7 +175290,9 @@ interface DataView {
         // Synthetic<number,number>>` should resolve to `number`, not `any`).
         tryEvaluateConditionalWithInfer(checkType, node)?.let { return it }
         val extendsType = getTypeFromTypeNode(node.extendsType)
-        if (extendsType === anyType || extendsType === errorType) return anyType
+        if (extendsType === errorType ||
+            extendsType === anyType && !genuineAny.isGenuineAny(node.extendsType, currentTypeAliasArgs)
+        ) return anyType
         // Distribution over unions
         if (checkType is Type.Union) {
             // Round 729: inside a DISTRIBUTIVE conditional the check type parameter denotes
@@ -175366,6 +175395,12 @@ interface DataView {
 
     private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {
         genericSigConditionals.decide(node)?.let { return getTypeFromTypeNode(if (it) node.trueType else node.falseType) }
+        // (CHK.228) tsgo: an `any` / `unknown` extends type is definitely true; an `any`
+        // check type against anything else yields BOTH branches.
+        if (extendsType === anyType || extendsType === unknownType)
+            return getTypeFromTypeNode(node.trueType)
+        if (checkType === anyType)
+            return getUnionType(listOf(getTypeFromTypeNode(node.trueType), getTypeFromTypeNode(node.falseType)))
         // Check if checkType extends extendsType
         // Round 729 bolted the round-472 `.kind` DOMAIN veto onto this conjunction,
         // because enum-member types did not discriminate in our relation
