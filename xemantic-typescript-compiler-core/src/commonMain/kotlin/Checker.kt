@@ -2137,7 +2137,7 @@ class Checker(
             val thisParam = params.firstOrNull()?.takeIf { (it.name as? Identifier)?.text == "this" }
             effThis = if (thisParam != null) {
                 thisParam.type?.let { tn -> getTypeFromTypeNode(tn).takeIf { it !== errorType } }
-            } else {
+            } else contextualThisTypeOfObjectLiteral(objLit) ?: run { // (P18.295) a `ThisType<T>` marker wins
                 val t = getTypeOfObjectLiteral(objLit)
                 if (t !== anyType && t !== errorType) t else null
             }
@@ -108532,7 +108532,11 @@ interface DataView {
                                 if (result !== errorType && result !is Type.Intrinsic &&
                                     result !is Type.StringLiteral && result !is Type.NumberLiteral &&
                                     result !is Type.BigIntLiteral && !isPureFunctionType &&
-                                    !returnsArgumentUnchanged
+                                    !returnsArgumentUnchanged &&
+                                    // (P18.295) a CONDITIONAL body's resolved branch carries no alias in tsgo
+                                    // (`getConditionalType` instantiates the branch bare; only a distribution's
+                                    // UNION result is aliased, `mapTypeWithAlias`).
+                                    !(intersectionOps.unparenthesized(decl.type) is ConditionalType && result !is Type.Union)
                                 ) {
                                     // (INC.11) classifier hook: this site is LAST-WINS, so a
                                     // clobber here proves the two names denote ONE `Type`.
@@ -148152,6 +148156,80 @@ interface DataView {
     }
 
     /**
+     * (P18.295) tsgo `getContextualThisParameterType`'s object-literal arm, restricted to the
+     * `ThisType<T>` marker: walk the literal's contextual type — and, while the literal is a
+     * property's value, each enclosing literal's — for `ThisType<T>` (`getThisTypeFromContextualType`:
+     * a union maps over its members, an INTERSECTION is searched constituent by constituent, so
+     * zod's `{ [K in keyof T]?: … } & ThisType<T>` is seen). Null when no marker is found, which
+     * keeps every caller's previous `this` (the literal's own type).
+     */
+    private fun contextualThisTypeOfObjectLiteral(lit: ObjectLiteralExpression): Type? {
+        var literal: ObjectLiteralExpression = lit
+        var type = pullContextualTypeAt(literal)
+        var depth = 0
+        if (type == null) type = explicitTypeArgParamTypeViaNode(literal)
+        while (type != null && depth++ < 8) {
+            thisTypeFromContextualType(type)?.let { return it }
+            val pa = (literal as NodeBase).parent as? PropertyAssignment ?: break
+            literal = (pa as NodeBase).parent as? ObjectLiteralExpression ?: break
+            type = pullContextualTypeAt(literal)
+        }
+        return null
+    }
+
+    /**
+     * (P18.295) The parameter type of a generic call's argument position, re-resolved from the
+     * parameter's TYPE NODE with the call's EXPLICIT type arguments bound — zod's
+     * `$constructor<ZodObject>(name, init, proto?: ProtoOf<T>)`. The ordinary pull answers nothing
+     * there: the declared parameter type is resolved with `T` free, a mapped type over a free
+     * `keyof T` is `any` here, and `any` absorbs the `& ThisType<T>` beside it. With `T` bound the
+     * alias evaluates (the non-generic `p: ProtoOf<Z>` always did). Only the explicit-type-argument
+     * shape, only a single non-overloaded signature; null otherwise.
+     */
+    private fun explicitTypeArgParamTypeViaNode(lit: ObjectLiteralExpression): Type? {
+        val call = (lit as NodeBase).parent as? CallExpression ?: return null
+        val typeArgs = call.typeArguments?.takeIf { it.isNotEmpty() } ?: return null
+        val idx = call.arguments.indexOfFirst { it === lit }.takeIf { it >= 0 } ?: return null
+        val callee = call.expression
+        val calleeType = when (callee) {
+            is Identifier -> getTypeOfIdentifier(callee)
+            is PropertyAccessExpression -> getTypeOfPropertyAccess(callee).let { t ->
+                if (t === anyType || t === errorType) namespaceQualifiedCalleeType(callee) ?: t else t
+            }
+            else -> return null
+        } as? Type.Object ?: return null
+        resolveStructuredTypeMembers(calleeType)
+        val sig = calleeType.callSignatures?.singleOrNull() ?: return null
+        val (declTps, declParams) = when (val d = sig.declaration) {
+            is FunctionDeclaration -> d.typeParameters to d.parameters
+            is MethodDeclaration -> d.typeParameters to d.parameters
+            else -> return null
+        }
+        val tps = declTps?.takeIf { typeArgs.size <= it.size } ?: return null
+        val paramNode = declParams.getOrNull(idx)?.takeIf { !it.dotDotDotToken }?.type ?: return null
+        val bindings = HashMap<String, Type>()
+        for (i in typeArgs.indices) bindings[tps[i].name.text] = getTypeFromTypeNode(typeArgs[i])
+        if (bindings.values.any { it === anyType || it === errorType }) return null
+        return getTypeFromTypeNodeWithMapper(paramNode, aliasMapper(bindings))
+            .takeIf { it !== anyType && it !== errorType }
+    }
+
+    private fun thisTypeFromContextualType(t: Type): Type? = when (t) {
+        is Type.Union -> t.types.mapNotNull { thisTypeFromContextualType(it) }
+            .takeIf { it.isNotEmpty() }?.let { getUnionType(it) }
+        is Type.Intersection -> t.types.firstNotNullOfOrNull { thisTypeArgument(it) }
+        else -> thisTypeArgument(t)
+    }
+
+    /** The `T` of the lib's `ThisType<T>`, else null. */
+    private fun thisTypeArgument(t: Type): Type? {
+        val ref = t as? Type.Reference ?: return null
+        val sym = ref.target.symbol ?: return null
+        if (sym.name != "ThisType" || globals["ThisType"] !== sym) return null
+        return ref.resolvedTypeArguments?.singleOrNull()?.takeIf { it !== anyType && it !== errorType }
+    }
+
+    /**
      * (CHK.39) The contextual type of an expression POSITION, pulled from the
      * parent chain — tsc's `getContextualType`, restricted to the positions a
      * function-like node can occupy and to the sources this checker can already
@@ -170968,6 +171046,11 @@ interface DataView {
                         )
                     }
                 }
+                // (P18.295) the relation now rejects an optional source property against a
+                // required target one (tsgo `propertyRelatedTo`); this is its elaboration.
+                findOptionalVsRequiredMismatch(source, target)?.let { m ->
+                    return listOf("  Property '${formatPropertyDisplayName(m)}' is optional in type '${typeToString(source)}' but required in type '${typeToString(target)}'.")
+                }
                 return null
             }
 
@@ -171289,6 +171372,13 @@ interface DataView {
         for (targetProp in targetProps) {
             if (targetProp.name.isEmpty() || targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
             val sourceProps = mergedMembers[targetProp.name] ?: continue // missing → not a contradiction here
+            // (P18.295) the intersection's property is optional only when EVERY constituent that
+            // declares it does (tsgo `createUnionOrIntersectionProperty`), and an optional source
+            // property never satisfies a required target one — see [Relater.propertiesRelatedTo].
+            if (relation === assignableRelation && source.types.all { it is Type.Object } &&
+                !isOptionalProperty(targetProp) && !isRestTupleMember(targetProp) &&
+                sourceProps.all { isOptionalProperty(it.second) }
+            ) return true
             var anyRelatesOrUncertain = false
             for ((owner, sourceProp) in sourceProps) {
                 // (CHK.162): the relation's own member types — see [intersectionMergedSatisfiesTarget].
@@ -172905,6 +172995,12 @@ interface DataView {
                 // one modifier of the four never recorded, so `Partial<T>`'s members stayed
                 // REQUIRED unless the source property happened to be optional too.
                 else if (node.questionToken) sym.flags = sym.flags or SymbolFlags.MappedOptional
+                // (P18.295) a homomorphic member keeps its SOURCE property's optionality, which the
+                // carried declaration alone does not say when the source is itself a mapped `?`
+                // member (`Simplify<{ a: boolean } & Partial<Record<'s', never>>>` keeps `s?`).
+                else if (homomorphicSourceType != null &&
+                    getPropertyOfType(homomorphicSourceType, sourceKeys[keyIdx])?.let { isOptionalProperty(it) } == true
+                ) sym.flags = sym.flags or SymbolFlags.MappedOptional
                 members[key] = sym
                 properties.add(sym)
                 symbolTypes[sym.id] = memberType
@@ -172996,6 +173092,30 @@ interface DataView {
         if (checkType is Type.Union && nakedCheckTypeParamName(node.checkType) == null &&
             node.checkType is IndexedAccessType
         ) return evaluateConditional(checkType, extendsType, node)
+        // (P18.295) `boolean` is the union `false | true` to a DISTRIBUTIVE conditional (tsc's
+        // `booleanType` IS that union): `D<T> = T extends true ? 1 : 2; D<boolean>` is `1 | 2`.
+        // Our `boolean` is an intrinsic, so a naked check type parameter bound to it (or to a
+        // union carrying it) is expanded here — type-fest's `OrAll<[boolean, false]>`.
+        val distributedBoolean = nakedCheckTypeParamName(node.checkType) != null &&
+            (checkType === booleanType || checkType is Type.Union && checkType.types.any { it === booleanType })
+        if (distributedBoolean) {
+            val parts = (if (checkType is Type.Union) checkType.types else listOf(checkType))
+                .flatMap { if (it === booleanType) listOf(falseType, trueType) else listOf(it) }
+            val name = nakedCheckTypeParamName(node.checkType)!!
+            val perConstituentExtends = typeNodeNamesTypeParam(node.extendsType, name)
+            val results = parts.map { constituent ->
+                withInstantiationContext(distributionMapper(name, constituent)) {
+                    val ext = if (perConstituentExtends) getTypeFromTypeNode(node.extendsType) else extendsType
+                    if (ext === errorType) anyType else evaluateConditional(constituent, ext, node)
+                }
+            }
+            // `false | true` answered back is `boolean` again (this model's boolean is an intrinsic).
+            val hasFalse = results.any { it === falseType || it === regularFalseType }
+            val hasTrue = results.any { it === trueType || it === regularTrueType }
+            return getUnionType(if (hasFalse && hasTrue) results.map {
+                if (it.flags == TypeFlags.BooleanLiteral && it is Type.Intrinsic) booleanType else it
+            } else results)
+        }
         if (checkType is Type.Union) {
             // Round 729: inside a DISTRIBUTIVE conditional the check type parameter denotes
             // the CONSTITUENT being tested, not the whole union — `Exclude<T, U> = T extends U
@@ -173452,7 +173572,12 @@ interface DataView {
         for (p in props) {
             if (p.name.startsWith("__@")) { symbolKey = true; continue }
             if (type.stringIndexInfo != null) continue
-            if (type.numberIndexInfo != null && p.name.toDoubleOrNull() != null) continue
+            // (P18.295) a TUPLE's element names are string keys `"0" | "1"` beside `number`
+            // (tsgo `keyof [1, 2]`), so `'0' extends keyof T` holds for a non-empty tuple.
+            // A slot at or after a REST element is not a fixed key (`keyof [...number[], 1]` has no `"0"`).
+            if (type.numberIndexInfo != null && p.name.toDoubleOrNull() != null &&
+                (type.tupleElementTypes == null || isRestTupleMember(p))
+            ) continue
             out.add(Type.StringLiteral(p.name))
         }
         if (symbolKey || hasUnnamedComputedMember(type)) out.add(esSymbolType)

@@ -861,6 +861,12 @@ internal class Relater(
         if (source is Type.Union) {
             return source.types.all { checkTypeRelatedTo(it, target, relation) }
         }
+        // (P18.295) `boolean` is the union `true | false` to tsgo: against a union target that
+        // no constituent takes whole, each half is related on its own — so `boolean` relates
+        // to `true | false` (a distributed conditional's answer, type-fest `OrAll<[boolean, …]>`).
+        if (source === booleanType && target is Type.Union && target.types.none { it === booleanType }) {
+            return checkTypeRelatedTo(trueType, target, relation) && checkTypeRelatedTo(falseType, target, relation)
+        }
         // Union target: source must be related to some constituent
         if (target is Type.Union) {
             // Round 435e: the (source, union) frame's own source-stack entry is
@@ -1515,6 +1521,14 @@ internal class Relater(
             // position N in target"). Without it `[number, ...string[]]` relates to
             // `[number, string, ...string[]]`, which both references reject.
             if (!isOptional && checker.isRestTupleMember(sourceProp)) {
+                return false
+            }
+            // (P18.295) tsgo's `propertyRelatedTo`: an OPTIONAL source property never satisfies a
+            // REQUIRED target one, whatever the property types (`{ a?: string }` vs
+            // `{ a: string | undefined }`) — skipped only under the comparable relation. The
+            // assignment readers carried this as B103's pre-check; a conditional `extends` and an
+            // argument reach only this relation.
+            if (!isOptional && relation === assignableRelation && checker.isOptionalProperty(sourceProp)) {
                 return false
             }
             // Private-brand mismatch: if both source and target declare this property as
