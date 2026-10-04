@@ -244,6 +244,94 @@ internal class TemplateLiteralTypes(private val checker: Checker) {
         return matches
     }
 
+    /**
+     * (P18.288) (CHK.216) part 2 — `S extends \`…${infer X}…\``: match [source] against the template
+     * PATTERN [node] (tsgo `inferToTemplateLiteralType` followed by the conditional's relation check).
+     * [spanType] resolves a span without an `infer`, [constraintOf] an `infer`'s constraint (null for
+     * none). Answers the new bindings, [NO_MATCH], or null for a shape not modelled.
+     */
+    fun matchInferPattern(
+        source: Type, node: TemplateLiteralType, spanType: (TypeNode) -> Type, constraintOf: (InferType) -> Type?,
+        compare: (Type, Type) -> Boolean,
+    ): Map<String, Type>? {
+        // The pattern's texts, with a literal span folded into its neighbours.
+        val texts = arrayListOf(node.head.text)
+        val spans = ArrayList<Any>() // InferType, or the placeholder Type of a checked span
+        for (span in node.templateSpans) {
+            val lit = (span.literal as? StringLiteralNode)?.text ?: ""
+            var st = span.type
+            while (st is ParenthesizedType) st = st.type
+            if (st is InferType) { spans.add(st); texts.add(lit); continue }
+            val t = spanType(st)
+            val str = templateStringFor(t)
+            when {
+                str != null -> texts[texts.size - 1] = texts.last() + str + lit
+                t === stringType || t === numberType || t === bigintType -> { spans.add(t); texts.add(lit) }
+                else -> return null
+            }
+        }
+        when {
+            source is Type.StringLiteral -> {}
+            source is Type.TemplateLiteral -> if (!source.precise || source.generic) return null
+            source === stringType -> return NO_MATCH
+            source is Type.NumberLiteral || source is Type.BigIntLiteral || source === numberType ||
+                source === bigintType || source === booleanType || source === trueType || source === falseType ||
+                source === nullType || source === undefinedType || source === unknownType -> return NO_MATCH
+            else -> return null
+        }
+        val target = Type.TemplateLiteral(texts, spans.map { (it as? Type) ?: stringType }, precise = true, generic = false)
+        val matches = inferTypesFromTemplateLiteralType(source, target) ?: return NO_MATCH
+        val out = HashMap<String, Type>()
+        for (i in spans.indices) {
+            val sp = spans[i]
+            val m = matches[i]
+            if (sp is Type) {
+                if (!isValidTypeForTemplateLiteralPlaceholder(m, sp, compare)) return NO_MATCH
+                continue
+            }
+            val infer = sp as InferType
+            val name = infer.typeParameter.name.text
+            if (name in out) return null
+            val constraint = constraintOf(infer)
+            if (constraint === errorType) return null
+            val bound = if (constraint == null || constraint === anyType || constraint === unknownType) m else {
+                val candidate = (m as? Type.StringLiteral)?.let { literalForConstraint(it, constraint) } ?: m
+                if (compare(candidate, constraint)) candidate else constraint
+            }
+            // The relation of [source] to the instantiated pattern: a literal binding re-stringifies to the text.
+            if (constraint != null && !(m is Type.StringLiteral && templateStringFor(bound) == m.value) &&
+                !isValidTypeForTemplateLiteralPlaceholder(m, bound, compare)
+            ) return NO_MATCH
+            out[name] = bound
+        }
+        return out
+    }
+
+    /** tsgo's `inferToTemplateLiteralType` reduction over a constraint: the literal the matched text
+     *  [source] denotes in the constraint's domain (a round-tripping number / bigint, a boolean, `null`,
+     *  `undefined`), or the text itself when the constraint admits strings; null when none applies. */
+    private fun literalForConstraint(source: Type.StringLiteral, constraint: Type): Type? {
+        val members = ((constraint as? Type.Union)?.types ?: listOf(constraint)).flatMap { constituents(it) }
+        if (members.any { it.flags.hasAny(TypeFlags.String) || it is Type.StringLiteral }) return source
+        val v = source.value
+        for (t in members) {
+            when {
+                t is Type.NumberLiteral -> if (isValidNumberString(v) && jsStringToNumber(v) == t.value) return t
+                t === numberType -> if (isValidNumberString(v) && jsNumberToString(jsStringToNumber(v)) == v)
+                    return Type.NumberLiteral(jsStringToNumber(v))
+                t is Type.BigIntLiteral -> if (v == t.value) return t
+                t === bigintType -> if (isValidBigIntString(v) && !v.startsWith("0x") && !v.startsWith("0o") &&
+                    !v.startsWith("0b") && v != "-0" && (v.trimStart('-').length == 1 || !v.trimStart('-').startsWith("0"))
+                ) return Type.BigIntLiteral(v)
+                t === trueType -> if (v == "true") return t
+                t === falseType -> if (v == "false") return t
+                t === nullType -> if (v == "null") return t
+                t === undefinedType -> if (v == "undefined") return t
+            }
+        }
+        return null
+    }
+
     /** tsgo `isValidTypeForTemplateLiteralPlaceholder`. */
     private fun isValidTypeForTemplateLiteralPlaceholder(
         source: Type, target: Type, compare: (Type, Type) -> Boolean,
@@ -303,6 +391,9 @@ internal class TemplateLiteralTypes(private val checker: Checker) {
     }
 
     companion object {
+        /** [matchInferPattern]'s "definitely not matched" answer (compared by identity). */
+        val NO_MATCH: Map<String, Type> = HashMap()
+
         private val DECIMAL = Regex("^[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?$")
 
         /** tsgo `isValidNumberString(s, roundTripOnly = false)`: JavaScript `+s` is finite. */
@@ -441,5 +532,41 @@ internal fun cookTemplateText(raw: String): String {
             else -> sb.append(e)
         }
     }
+    return sb.toString()
+}
+
+/**
+ * (P18.288) The value of a numeric literal's source text — separators (`1_000`) and the `0x` / `0o` /
+ * `0b` radixes included, as tsgo's scanner-computed value; null where it is not a number.
+ */
+internal fun numericLiteralTextValue(text: String): Double? {
+    val v = TemplateLiteralTypes.jsStringToNumber(text.replace("_", ""))
+    return if (v.isNaN()) null else v
+}
+
+/**
+ * (P18.288) A bigint literal's NORMALISED decimal value (tsgo's `PseudoBigInt` text): `1_000n` is `1000`,
+ * `0xFFn` is `255`. The display and the template stringification both read it.
+ */
+internal fun bigIntLiteralTextValue(text: String): String {
+    val t = text.removeSuffix("n").replace("_", "")
+    if (t.length <= 2 || t[0] != '0' || t[1].lowercaseChar() !in "xob") return t.trimStart('0').ifEmpty { "0" }
+    val radix = when (t[1].lowercaseChar()) { 'x' -> 16; 'o' -> 8; else -> 2 }
+    val digits = IntArray(1) // little-endian decimal digits
+    var len = 1
+    var acc = digits
+    for (c in t.substring(2)) {
+        var carry = c.digitToIntOrNull(radix) ?: return t
+        for (i in 0 until len) {
+            val v = acc[i] * radix + carry
+            acc[i] = v % 10; carry = v / 10
+        }
+        while (carry > 0) {
+            if (len == acc.size) acc = acc.copyOf(acc.size * 2)
+            acc[len++] = carry % 10; carry /= 10
+        }
+    }
+    val sb = StringBuilder()
+    for (i in len - 1 downTo 0) sb.append(acc[i])
     return sb.toString()
 }

@@ -206,7 +206,9 @@ internal class IntersectionTypeOperators(private val checker: Checker) {
     fun aliasBodyAnswersExistingType(body: TypeNode, result: Type): Boolean = when (unparenthesized(body)) {
         is IndexedAccessType -> true
         is TypeOperator -> (unparenthesized(body) as TypeOperator).operator == SyntaxKind.KeyOfKeyword
-        is ConditionalType -> result is Type.Reference || result is Type.Interface || result is Type.Union
+        // (P18.288) a tuple is a type REFERENCE in tsgo, which `instantiateTypeWithAlias` never names.
+        is ConditionalType -> result is Type.Reference || result is Type.Interface || result is Type.Union ||
+            result is Type.Object && result.tupleElementTypes != null
         else -> false
     }
 

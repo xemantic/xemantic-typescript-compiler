@@ -100,6 +100,8 @@ class Parser(
      *  would otherwise be silently discarded. Read+reset per element (so a nested tuple's
      *  marker does not leak to an enclosing element). */
     private var tupleElementConsumedOptionalMarker = false
+    /** (P18.288) [inTypeArgsDepth] when the innermost tuple type was entered. */
+    private var tupleTypeArgsBase = 0
     private var jsxElementDepth = 0
     /** Stack of opening token positions for related-info on missing close tokens. */
     private val openTokenStack = mutableListOf<Int>()
@@ -9386,7 +9388,7 @@ class Parser(
             // consumed here; flag it so parseTupleType can record the optionality (gated to
             // NOT-inside-type-args so a `[Map<K, V?>]` inner `?` is not mistaken for the
             // element's marker).
-            if (inTupleTypeDepth > 0 && inTypeArgsDepth == 0) tupleElementConsumedOptionalMarker = true
+            if (inTupleTypeDepth > 0 && inTypeArgsDepth == tupleTypeArgsBase) tupleElementConsumedOptionalMarker = true
             if (inTupleTypeDepth == 0) {
                 val typeText = source.substring(type.pos, typeProperEnd)
                 val suggestion = when (typeText) {
@@ -9668,6 +9670,10 @@ class Parser(
         // the tuple TYPE can display them.
         val names = mutableListOf<String?>()
         inTupleTypeDepth++
+        // (P18.288) the trailing-`?` gate asks about type arguments INSIDE this tuple: an
+        // enclosing `Last<[1, 2?]>` must not hide the element's optional marker.
+        val savedTypeArgsBase = tupleTypeArgsBase
+        tupleTypeArgsBase = inTypeArgsDepth
         try {
             while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
                 // Labeled tuple elements: `name: Type` or `name?: Type` or `...name: Type`
@@ -9704,6 +9710,7 @@ class Parser(
             }
         } finally {
             inTupleTypeDepth--
+            tupleTypeArgsBase = savedTypeArgsBase
         }
         parseExpected(SyntaxKind.CloseBracket)
         return TupleType(

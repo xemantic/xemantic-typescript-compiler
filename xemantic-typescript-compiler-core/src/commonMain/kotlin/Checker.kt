@@ -514,6 +514,7 @@ class Checker(
     private val genericSigConditionals = GenericSignatureConditionals(this)
     private val genuineAny = GenuineAnyProvenance(this) // (CHK.228)
     internal val templateTypes = TemplateLiteralTypes(this) // (P18.287) (CHK.216)
+    internal val inferPatterns = ConditionalInferPatterns(this) // (P18.288) (CHK.216) part 2
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -114956,8 +114957,8 @@ interface DataView {
                 SyntaxKind.Minus -> {
                     // -42 → NumberLiteral(-42), -1n → BigIntLiteral("-1")
                     when (val operand = expr.operand) {
-                        is NumericLiteralNode -> Type.NumberLiteral(-(operand.text.toDoubleOrNull() ?: 0.0))
-                        is BigIntLiteralNode -> Type.BigIntLiteral("-${operand.text.removeSuffix("n")}")
+                        is NumericLiteralNode -> Type.NumberLiteral(-(numericLiteralTextValue(operand.text) ?: 0.0))
+                        is BigIntLiteralNode -> Type.BigIntLiteral("-${bigIntLiteralTextValue(operand.text)}")
                         else -> if (isBigIntLikeType(getTypeOfExpression(operand))) bigintType else numberType
                     }
                 }
@@ -122412,6 +122413,8 @@ interface DataView {
      * Union ORDER: tsgo 7.0.2 prints `(1 | 2)[]` and pristine 6.0.3 `(2 | 1)[]` for the
      * same base (the two references DIVERGE here — FORM only); ours orders as tsgo.
      */
+    internal fun tupleArrayBaseOf(t: Type): Type.Reference? = tupleArrayBase(t) // (P18.288)
+
     private fun tupleArrayBase(t: Type): Type.Reference? {
         if (t !is Type.Object || t is Type.Interface) return null
         val elems = t.tupleElementTypes ?: return null
@@ -124501,11 +124504,11 @@ interface DataView {
     internal fun literalTypeOfExpression(expr: Expression, arrayCtx: Boolean = false): Type? = when (expr) {
         is StringLiteralNode -> Type.StringLiteral(expr.text)
         is NoSubstitutionTemplateLiteralNode -> Type.StringLiteral(expr.text)
-        is NumericLiteralNode -> Type.NumberLiteral(expr.text.toDoubleOrNull() ?: return null)
+        is NumericLiteralNode -> Type.NumberLiteral(numericLiteralTextValue(expr.text) ?: return null)
         is PrefixUnaryExpression -> if (expr.operator == SyntaxKind.Minus && expr.operand is NumericLiteralNode) {
-            Type.NumberLiteral(-((expr.operand).text.toDoubleOrNull() ?: return null))
+            Type.NumberLiteral(-(numericLiteralTextValue((expr.operand).text) ?: return null))
         } else null
-        is BigIntLiteralNode -> Type.BigIntLiteral(expr.text.removeSuffix("n"))
+        is BigIntLiteralNode -> Type.BigIntLiteral(bigIntLiteralTextValue(expr.text))
         is Identifier -> when (expr.text) {
             "true" -> trueType
             "false" -> falseType
@@ -147058,6 +147061,8 @@ interface DataView {
      * strict: ANY member, signature, index signature, tuple shape or backing symbol makes
      * it a real constraint that must keep being checked.
      */
+    internal fun isEmptyObjectLiteralType(t: Type): Boolean = isEmptyObjectTypeLiteral(t) // (P18.288)
+
     private fun isEmptyObjectTypeLiteral(t: Type): Boolean =
         t is Type.Object && t !is Type.Interface && t !is Type.Reference &&
             t.symbol == null &&
@@ -174222,7 +174227,12 @@ interface DataView {
             when (elem) {
                 is NamedTupleMember -> getTypeFromTypeNode(elem.type)
                 is OptionalType -> getTypeFromTypeNode(elem.type)
-                is RestType -> getTypeFromTypeNode(elem.type)
+                // (P18.288) tsgo keeps a spread's ELEMENT type: `...readonly T[]` is the rest `...T[]`.
+                is RestType -> getTypeFromTypeNode(elem.type).let { t ->
+                    if (t is Type.Reference && globalReadonlyArrayType != null && t.target === globalReadonlyArrayType)
+                        t.resolvedTypeArguments?.singleOrNull()?.let { getOrInternReference(globalArrayType, listOf(it)) } ?: t
+                    else t
+                }
                 else -> getTypeFromTypeNode(elem)
             }
         }
@@ -174234,9 +174244,46 @@ interface DataView {
         // the rest's ARRAY type, so its `length` is `number` (tsc `createTupleTargetType`) and
         // [tupleArrayBase] indexes that slot rather than unioning the array type in.
         val restIndex = node.elements.indexOfFirst { it is RestType || (it is NamedTupleMember && it.dotDotDotToken) }
+        // (P18.288) a tuple written as a TYPE is regular, never fresh: widening leaves it alone
+        // (`const d = { t: ['foo'] as ['foo'] }` keeps `['foo']`, as tsgo).
+        // tsgo: a lone array spread `[...T[]]` IS the array `T[]` (`readonly T[]` under `readonly`).
+        if (node.elements.size == 1 && node.elements[0] is RestType && isArrayLikeReference(elementTypes[0]))
+            (elementTypes[0] as Type.Reference).resolvedTypeArguments?.singleOrNull()?.let { el ->
+                return getOrInternReference(if (readonly) globalReadonlyArrayType ?: globalArrayType else globalArrayType, listOf(el))
+            }
+        val tuple = flattenTupleSpreads(node, elementTypes, readonly)
         // (CHK.134) `[x: string]` carries its label into the display — both references
         // print `[x: string]` where the bare join printed `[string]`.
-        return buildTupleFromTypes(elementTypes, node.elementOptional, readonly, restIndex, node.elementNames)
+            ?: buildTupleFromTypes(elementTypes, node.elementOptional, readonly, restIndex, node.elementNames)
+        frozenObjectTypeIds.add(tuple.id)
+        return tuple
+    }
+
+    /**
+     * (P18.288) tsgo `createNormalizedTupleType`: a spread of a TUPLE splices its elements —
+     * `[...[1, 2], 3]` is `[1, 2, 3]`, which a recursive `[...Rev<R>, F]` builds at every step. Null
+     * (the caller keeps the rest slot) when no spread is a tuple, or the result would carry two rests.
+     */
+    private fun flattenTupleSpreads(node: TupleType, elementTypes: List<Type>, readonly: Boolean): Type? {
+        val isSpread = node.elements.map { it is RestType || (it is NamedTupleMember && it.dotDotDotToken) }
+        if (isSpread.indices.none { isSpread[it] && (elementTypes[it] as? Type.Object)?.tupleElementTypes != null }) return null
+        val types = ArrayList<Type>(); val opt = ArrayList<Boolean>(); val names = ArrayList<String?>()
+        var rest = -1
+        for (i in elementTypes.indices) {
+            val t = elementTypes[i]
+            val tup = (t as? Type.Object)?.takeIf { isSpread[i] && it.tupleElementTypes != null }
+            if (tup == null) {
+                if (isSpread[i]) { if (rest >= 0) return null; rest = types.size }
+                types.add(t); opt.add(node.elementOptional?.getOrNull(i) == true); names.add(node.elementNames?.getOrNull(i))
+                continue
+            }
+            val elems = tup.tupleElementTypes!!
+            if (tup.tupleRestIndex >= 0) { if (rest >= 0) return null; rest = types.size + tup.tupleRestIndex }
+            for (j in elems.indices) {
+                types.add(elems[j]); opt.add(tupleSlotIsOptional(tup, j)); names.add(tup.tupleElementNames?.getOrNull(j))
+            }
+        }
+        return buildTupleFromTypes(types, opt.takeIf { fl -> fl.any { it } }, readonly, rest, names)
     }
 
     /**
@@ -174249,12 +174296,13 @@ interface DataView {
     internal fun instantiateTupleElements(t: Type.Object, elements: List<Type>): Type {
         val flags = elements.indices.map { tupleSlotIsOptional(t, it) }.takeIf { fl -> fl.any { it } }
         return buildTupleFromTypes(elements, flags, t.readonlyTuple, t.tupleRestIndex, t.tupleElementNames)
+            .also { if (t.id in frozenObjectTypeIds) frozenObjectTypeIds.add(it.id) } // (P18.288)
     }
 
     /** Build a tuple `Type.Object` (with `tupleElementTypes`, numbered props, length, number index sig).
      *  [optionalFlags], when non-null, marks the matching element's member symbol OPTIONAL
      *  (recorded in [optionalTupleMemberIds] so [isOptionalProperty] can see it). */
-    private fun buildTupleFromTypes(
+    internal fun buildTupleFromTypes(
         elementTypes: List<Type>, optionalFlags: List<Boolean>? = null, readonly: Boolean = false,
         restIndex: Int = -1, names: List<String?>? = null,
     ): Type {
@@ -174724,10 +174772,10 @@ interface DataView {
         return when (val literal = node.literal) {
             is StringLiteralNode -> Type.StringLiteral(literal.text)
             is NumericLiteralNode -> {
-                val value = literal.text.toDoubleOrNull() ?: 0.0
+                val value = numericLiteralTextValue(literal.text) ?: 0.0
                 Type.NumberLiteral(value)
             }
-            is BigIntLiteralNode -> Type.BigIntLiteral(literal.text.removeSuffix("n"))
+            is BigIntLiteralNode -> Type.BigIntLiteral(bigIntLiteralTextValue(literal.text))
             is Identifier -> when (literal.text) {
                 "true" -> trueType
                 "false" -> falseType
@@ -174738,10 +174786,10 @@ interface DataView {
                 if (literal.operator == SyntaxKind.Minus) {
                     when (val operand = literal.operand) {
                         is NumericLiteralNode -> {
-                            val value = -(operand.text.toDoubleOrNull() ?: 0.0)
+                            val value = -(numericLiteralTextValue(operand.text) ?: 0.0)
                             Type.NumberLiteral(value)
                         }
-                        is BigIntLiteralNode -> Type.BigIntLiteral("-${operand.text.removeSuffix("n")}")
+                        is BigIntLiteralNode -> Type.BigIntLiteral("-${bigIntLiteralTextValue(operand.text)}")
                         else -> errorType
                     }
                 } else errorType
@@ -175336,6 +175384,7 @@ interface DataView {
         // anyType, masking the inferred result (e.g. `SyntheticDestination<number,
         // Synthetic<number,number>>` should resolve to `number`, not `any`).
         tryEvaluateConditionalWithInfer(checkType, node)?.let { return it }
+        tryEvaluateInferPattern(checkType, node)?.let { return it } // (P18.288)
         val extendsType = getTypeFromTypeNode(node.extendsType)
         if (extendsType === errorType ||
             extendsType === anyType && !genuineAny.isGenuineAny(node.extendsType, currentTypeAliasArgs)
@@ -175438,6 +175487,27 @@ interface DataView {
         // the alias-arg substitution map (consulted by getTypeFromTypeReference's
         // bare-name lookup; a non-null map also bypasses the plain nodeTypes cache).
         return getTypeFromTypeNodeWithMapper(node.trueType, layeredAliasMapper(bindings))
+    }
+
+    /** (P18.288) a tuple / template `infer` pattern, decided by [ConditionalInferPatterns]; null keeps the old path. */
+    private fun tryEvaluateInferPattern(checkType: Type, node: ConditionalType): Type? {
+        if (!inferPatterns.isPattern(node.extendsType)) return null
+        fun one(c: Type): Type? = when (val m = inferPatterns.match(c, node.extendsType)) {
+            null -> null
+            ConditionalInferPatterns.NO_MATCH -> getTypeFromTypeNode(node.falseType)
+            else -> typeOfNodeBinding(node.trueType, m)
+        }
+        val naked = nakedCheckTypeParamName(node.checkType)
+        if (naked == null || checkType !is Type.Union) return one(checkType)
+        return getUnionType(checkType.types.map { c -> withInstantiationContext(distributionMapper(naked, c)) { one(c) } ?: return null })
+    }
+
+    /** (P18.288) the assignability question [ConditionalInferPatterns] asks of a non-`infer` pattern part. */
+    internal fun relateForInfer(source: Type, target: Type): Boolean {
+        templateTypes.conditionalDepth++
+        return try {
+            isSimpleTypeRelatedTo(source, target) || checkTypeRelatedTo(source, target, assignableRelation)
+        } finally { templateTypes.conditionalDepth-- }
     }
 
     private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {
@@ -176243,6 +176313,10 @@ interface DataView {
      */
     private fun reduceUnionAndEmptyObjectIntersection(types: List<Type>): Type? {
         if (types.size != 2) return null
+        // (P18.288) `NonNullable<undefined>` — a lone `null` / `undefined` with `{}` is `never` (tsgo).
+        if (strictNullChecks) types.firstOrNull { it === undefinedType || it === nullType }?.let { n ->
+            if (isEmptyObjectTypeLiteral(if (types[0] === n) types[1] else types[0])) return neverType
+        }
         val union = types.firstOrNull { it is Type.Union } as? Type.Union ?: return null
         val other = if (types[0] === union) types[1] else types[0]
         if (!isEmptyObjectTypeLiteral(other)) return null
