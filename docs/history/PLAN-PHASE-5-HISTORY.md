@@ -1,3 +1,38 @@
+### Round (P18.284) — (LIBS.2) round 9, (CHK.225)(a): when `Relater`'s same-target shortcut rejects two instantiations of an UNANNOTATED generic, it now falls through to the STRUCTURAL comparison instead of answering false — together with tsgo's callback-parameter rule and a generic-method callback instantiation it needed to stay correct; zod −6, hono −1, tally 445 -> 438, NONE added; round 336's ~263 regressions did not recur (2026-10-03)
+
+One implementation subagent, priced before landing. **Where the brief was wrong**: "fall through to structural" alone
+is not enough, because OUR structural path is not tsgo's — our method-parameter bivariance accepted a callback
+parameter in BOTH directions, while tsgo relates a parameter that is itself a single-signature callback only through
+the callbacks' signatures (that rule is what makes `Promise<T>`, `Set<T>`, `Map<K,V>` and an `Obs<T>{subscribe(cb)}`
+covariant there); the bare fallback lost 5 true positives. The callback rule then exposed a missing "instantiate the
+source signature in the target's context" step for generic methods (harness `services.ts:1119` / `:1327` through
+`forEachChild<T>(cb: (node) => T)` vs `… => T | undefined`). And the engine has no generic indexed-access type, so an
+emitter's `E[K]` relates leniently — generics whose declaration contains an `IndexedAccessType` are excluded. Round
+336's regressions did not happen: the fallback can only turn a REJECTION into an acceptance (a structural failure still
+answers false), and the corpus screen read 0. **Mechanism** (`Relater.kt`, +106): the same-target shortcut, on a
+failing covariant check of a parameter with no `in` / `out`, breaks to the structural path, gated by
+`unannotatedFallbackAllowed` / `fallbackDeclarationAllowed` (cached per target id; refuses `Array`, `ReadonlyArray`,
+`ConcatArray` and any generic whose declaration has an indexed access); under method bivariance a pair of
+single-signature callbacks with matching nullishness and no type predicate does not get the covariant-direction
+acceptance (`isCallbackParameterPair`); `erasedCallbacksRelated` compares a generic source method's callback pair on
+signatures instantiated by inferring a whole-parameter source type parameter as the target's type at that position
+and erasing the rest to `any`. `Checker.kt` untouched (`28cea031` both arms). **Matrix** (`build/bench/p18284-agent/m`-`m6`
+vs tsgo): every former false positive now clean (`Fn<Animal>` -> `Fn<Dog>`, `M<string>` -> `M<"a">`, nested
+`Outer<T>{inner: Fn<T>}`, `takeFn(fnA)` TS2345, an unused `T`, `ObsM`, mutual recursion, `WeakMap<object, any>`), every
+true positive kept (`Box`, `RO`, `Inv`, a private member, recursive nodes, `Array` / `ReadonlyArray` / `Promise` /
+`Set` / `Map`, declared `in` / `out`, `Obs`, `G`, `Tree`, emitters); residues: an emit-only emitter `E2` still a false
+positive (indexed-access exclusion), and the MISSING contravariant / invariant rejections (`Fn<Dog>` -> `Fn<Animal>`,
+`Inv<Dog>` -> `Inv<Animal>`, …) — the shortcut still ACCEPTS covariantly, untouched by an acceptance-only change. **Pins**:
+`UnannotatedVarianceFallbackTest` 11 (`DeclaredVarianceAndModuleSyntaxResiduesTest` 11 still green); ablation a1 5 / a2 2
+/ a3 1 / a5 1 RED, a4 (array-family exclusion) 0 RED — a COST guard: without it `typeNode.bypassed` rose +5,213 (2,523
+of 2,661 fallbacks were the array family), with it +169; a sixth guard read 0 RED once a5 existed and was removed.
+**Gates**: full suite 22,652 / 0 / 44 (+11); corpus screen 8725 / 0 and `--include ''` the same 41, diff byte-identical;
+`cost_gate.py` 0 (`typeNode.bypassed` +0.11% against a rebuilt before-arm); `huge_methods.py --fail-over 0` 0;
+type-fest / zod wall neutral; recursive stress ~1 s, no hang; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
+cronstrue / **mitt (standing gate) 0 -> 0** unchanged; library grid zod 54 -> 48 (`api.ts:1648`,
+`json-schema-processors.ts:370`, `memoizer.ts:271`, `schemas.ts:5063` / `:5072` TS2430, `to-json-schema.ts:54`), hono
+59 -> 58 (`jsx/context.ts:175`, WeakMap), others unchanged (tally 445 -> 438); warning gate with probe: probe only.
+
 ### Round (P18.283) — (LIBS.2) round 8, mitt to ZERO: a default / namespace import of a DIRECTORY specifier now resolves (`import mitt from '..'` typed `any`), and a generic method's parameters that index by its own type parameter (`Handler<Events[Key]>`) are re-resolved per call — mitt 10 -> 0 ours-only, 0 missing, now a STANDING grid gate; hono −1; tally 456 -> 445, NONE added (2026-10-03)
 
 One implementation subagent. **Where the brief was wrong**: M1 is TWO defects and the first is not in the argument check

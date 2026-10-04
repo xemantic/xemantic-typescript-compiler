@@ -25,6 +25,32 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.294) — (INV.0) extraction: the MODULE-RESOLUTION family (TS2307 / TS2306 / TS2435 / TS2439 / TS5097 / TS6142 checks, 6 passes + 19 helpers) moves verbatim into `ModuleResolutionChecks`; `Checker.kt` 195,063 -> 193,611 (-1,452); EVERY receipt taken, including the per-pass table — the reordered brief (pins and ablation right after the move) ended the post-move stalls of the two previous extraction rounds (2026-10-04)
+
+One implementation subagent; the brief made it write the pins and run the ablation IMMEDIATELY after the move and
+proof, logging `build/bench/p18294-agent/PROGRESS.md` after each step — it finished. **Choice**: the switch family is too
+small (~200 lines) and reads the mutable `fallthroughFlowGraph`; the type-argument-constraint family still reads the
+walk-scoped type-parameter scope; interface-extends would widen hot relation members; implements writes
+`currentFileLocals` — the census found the module-resolution run contiguous, reading no mutable field, no spine handler,
+no walk state. **Moved**: two spans (6484-6486, the memo `fileAmbientModuleInfoCache`; 47767-49218, `checkUnresolvedModules`
+.. `emitTS6142`) — 6 passes + 19 helpers; `resolvesAsJsOrJsx` STAYED (`NameResolver` calls it). 19 checker members
+read; 7 widenings, none on the relation or spine path (`resolveImportTargetFallback`,
+`resolveModuleSpecifierStrictRelative`, `resolveRelativeJsSibling`, `resolveSpecifierAnywhere`,
+`emitStatementLineDiagnostic`, and the companion sets `ES_MODULE_KINDS` / `NODE_BUILTIN_MODULES`); constructor inputs
+`options`, `binderResults`, `isMultiFileSource`, `allInputFileNames`, `jsonModuleContents`, `untypedModuleResolutions`; 16
+call sites re-pointed (6 `pass(…)` lambdas, 10 helper calls). **Receipts**: verbatim proof three ways
+(`build/bench/p18294-agent/proof.py`); per-pass `--passTiming` on the compiler profile identical after normalisation (416
+pass rows, 491 lines, md5 d949c7b7 both arms); PrintInlining `checkArgumentsAgainstSignature` identical on both arms; a
+9-cell matrix identical before / after (residues, pre-existing: c3 — a relative `import = require` inside a
+`declare module` misses tsgo's TS2307 beside our TS2439; c5 — TS2306 names its target by basename where tsgo uses the full
+path); the library grid's row sets identical to `b294` on all eight; corpus screen 8725 / 0; `cost_gate.py` 0;
+`spine_closure_audit.py` clean. **Pins**: `ModuleResolutionChecksCollaboratorTest` 9; ablation one arm per entry point,
+3 / 1 / 1 / 1 / 1 / 1 RED. **Gates**: full suite 22,760 / 0 / 44 (+9); `huge_methods.py --fail-over 0` 0; grid 8 x added=0
+removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (date-fns's row goes through the moved
+`checkUnresolvedModules`, so it is a live check of the move; identity hash extended to `ModuleResolutionChecks`); warning
+gate with probe: probe only. Ledger row 23. Next candidates found: the module-augmentation run right after the span, and two
+large mutable-free runs (181147-187158, 47050-50552) needing a closure census.
+
 ### Round (P18.293) — (LIBS.3) round 4, TFORDER: NOT an order bug — an alias reference that OMITS a defaulted type argument (`A<[]>` for `type A<T, Op = {}>`) lost its explicit arguments; filling the defaults reached five older defects, all fixed (a lib-binding cycle, `keyof unknown`, `await` of a union, two distributive-conditional rules); type-fest 230 -> 206, zod 42 -> 38, hono 48 -> 46, superstruct 6 -> 5, tally 340 -> 315, NONE added; TWO builders (the first stalled) (2026-10-04)
 
 Two implementation subagents in sequence: the first found the mechanism, wrote it to
@@ -347,41 +373,6 @@ and type-fest); grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue
 (identity hash extended to `GenericSignatureConditionals`); library grid on the final classes (orchestrator's own run
 `r285`, row sets = the builder's `a285`): type-fest 311 -> 301, others unchanged (tally 438 -> 428); warning gate with
 probe: probe only.
-
-### Round (P18.284) — (LIBS.2) round 9, (CHK.225)(a): when `Relater`'s same-target shortcut rejects two instantiations of an UNANNOTATED generic, it now falls through to the STRUCTURAL comparison instead of answering false — together with tsgo's callback-parameter rule and a generic-method callback instantiation it needed to stay correct; zod −6, hono −1, tally 445 -> 438, NONE added; round 336's ~263 regressions did not recur (2026-10-03)
-
-One implementation subagent, priced before landing. **Where the brief was wrong**: "fall through to structural" alone
-is not enough, because OUR structural path is not tsgo's — our method-parameter bivariance accepted a callback
-parameter in BOTH directions, while tsgo relates a parameter that is itself a single-signature callback only through
-the callbacks' signatures (that rule is what makes `Promise<T>`, `Set<T>`, `Map<K,V>` and an `Obs<T>{subscribe(cb)}`
-covariant there); the bare fallback lost 5 true positives. The callback rule then exposed a missing "instantiate the
-source signature in the target's context" step for generic methods (harness `services.ts:1119` / `:1327` through
-`forEachChild<T>(cb: (node) => T)` vs `… => T | undefined`). And the engine has no generic indexed-access type, so an
-emitter's `E[K]` relates leniently — generics whose declaration contains an `IndexedAccessType` are excluded. Round
-336's regressions did not happen: the fallback can only turn a REJECTION into an acceptance (a structural failure still
-answers false), and the corpus screen read 0. **Mechanism** (`Relater.kt`, +106): the same-target shortcut, on a
-failing covariant check of a parameter with no `in` / `out`, breaks to the structural path, gated by
-`unannotatedFallbackAllowed` / `fallbackDeclarationAllowed` (cached per target id; refuses `Array`, `ReadonlyArray`,
-`ConcatArray` and any generic whose declaration has an indexed access); under method bivariance a pair of
-single-signature callbacks with matching nullishness and no type predicate does not get the covariant-direction
-acceptance (`isCallbackParameterPair`); `erasedCallbacksRelated` compares a generic source method's callback pair on
-signatures instantiated by inferring a whole-parameter source type parameter as the target's type at that position
-and erasing the rest to `any`. `Checker.kt` untouched (`28cea031` both arms). **Matrix** (`build/bench/p18284-agent/m`-`m6`
-vs tsgo): every former false positive now clean (`Fn<Animal>` -> `Fn<Dog>`, `M<string>` -> `M<"a">`, nested
-`Outer<T>{inner: Fn<T>}`, `takeFn(fnA)` TS2345, an unused `T`, `ObsM`, mutual recursion, `WeakMap<object, any>`), every
-true positive kept (`Box`, `RO`, `Inv`, a private member, recursive nodes, `Array` / `ReadonlyArray` / `Promise` /
-`Set` / `Map`, declared `in` / `out`, `Obs`, `G`, `Tree`, emitters); residues: an emit-only emitter `E2` still a false
-positive (indexed-access exclusion), and the MISSING contravariant / invariant rejections (`Fn<Dog>` -> `Fn<Animal>`,
-`Inv<Dog>` -> `Inv<Animal>`, …) — the shortcut still ACCEPTS covariantly, untouched by an acceptance-only change. **Pins**:
-`UnannotatedVarianceFallbackTest` 11 (`DeclaredVarianceAndModuleSyntaxResiduesTest` 11 still green); ablation a1 5 / a2 2
-/ a3 1 / a5 1 RED, a4 (array-family exclusion) 0 RED — a COST guard: without it `typeNode.bypassed` rose +5,213 (2,523
-of 2,661 fallbacks were the array family), with it +169; a sixth guard read 0 RED once a5 existed and was removed.
-**Gates**: full suite 22,652 / 0 / 44 (+11); corpus screen 8725 / 0 and `--include ''` the same 41, diff byte-identical;
-`cost_gate.py` 0 (`typeNode.bypassed` +0.11% against a rebuilt before-arm); `huge_methods.py --fail-over 0` 0;
-type-fest / zod wall neutral; recursive stress ~1 s, no hang; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
-cronstrue / **mitt (standing gate) 0 -> 0** unchanged; library grid zod 54 -> 48 (`api.ts:1648`,
-`json-schema-processors.ts:370`, `memoizer.ts:271`, `schemas.ts:5063` / `:5072` TS2430, `to-json-schema.ts:54`), hono
-59 -> 58 (`jsx/context.ts:175`, WeakMap), others unchanged (tally 445 -> 438); warning gate with probe: probe only.
 
 ## QUEUE
 

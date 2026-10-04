@@ -1,5 +1,9 @@
 
 
+**(P18.289) — (INV.0) EXTRACTION: THE LABEL CHECKS AND THE tslib HELPER CHECKS MOVE OUT OF `Checker.kt` (1,180 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT TAKEN; `Checker.kt` IS NOW 194,798; A tslib FALSE POSITIVE QUEUED; +5 PINS, 22,688 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; libraries unchanged.
+
+
 **(P18.288) — (LIBS.2): `infer` PATTERNS IN CONDITIONAL TYPES (`[infer Head, ...infer Tail]`, arrays, collections, template literals) ARE NOW MATCHED INSTEAD OF RESOLVING TO `any`; type-fest 267 -> 255, TALLY 394 -> 382, NONE ADDED; A FRESH CENSUS RE-RANKS THE REMAINING ROWS; +7 PINS, 22,683 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; mitt still 0.
 
