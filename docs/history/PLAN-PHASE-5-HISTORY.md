@@ -1,3 +1,37 @@
+### Round (P18.278) — (LIBS.2) round 4, (CHK.213): a type-argument constraint is re-resolved with EVERY argument bound (so `K extends keyof O` checks `keyof <the actual O>`), the tuple bail-out is gone, call / `new` type arguments and expression-statement type references are checked, and `keyof` of an index signature / a symbol key is right — zod 102 -> 78 (all 25 CDEF rows), type-fest 358 -> 317, the 8-library tally 552 -> 487; ONE new false row accepted on measurement (2026-10-03)
+
+One implementation subagent. **Where the item was wrong**: (a) this checker has NO deferred `keyof T` / `T[K]` —
+`getKeyofType` on a type parameter answers `string`, so `K extends keyof O` accepted any string; the fix is to
+RE-RESOLVE the constraint node with the arguments bound (as alias bodies are instantiated), not to "keep it
+deferred"; (b) removing the tuple bail-out alone made the missing-property elaboration list `concat` and
+`RelationHeadSuppression` turn the TS2344 into a TS2741 tsgo never reports; (c) proper instantiation exposed two older
+defects fixed in-round: `keyof {[k: string]: V}` answered `never` and symbol-keyed members were dropped (a standing
+false TS2322 on `const b: keyof B = 1`), and a head parameter's sibling-naming constraint was frozen as `keyof
+errorType` (new zod false rows); (d) "~60 of type-fest's 77 TS2344 are this" is high — 32 recovered, the other 45 are
+template-literal types, generic `keyof T` in a body, the `*KeysOf<T>` family, optional tuple elements and
+`apply-default-options`. **Mechanism**: `checkConstraintsForTypeArgs` calls `instantiateConstraintNodes`
+(every parameter name bound to its argument or default, the declaration's own names removed from the ambient scope)
+in place of `instantiateType(constraint, mapper)`; the tuple -> `Array` / `ReadonlyArray` bail-out is deleted and the
+missing-property elaboration skips tuples; `siblingAwareConstraintOf` re-resolves a type-parameter argument's own
+constraint in the head's scope (refusing a self-naming one, (INC.19)'s recursion); `checkCallTypeArgConstraints`
+takes the declaration (only when no enclosing type parameter is reachable); `constraintDisplayOf` (keyof origin,
+literal generalization, conditional-alias structure); `keyofKeyTypes` (`string | number` for a string index,
+`number` for a number index) and `hasUnnamedComputedMember` (`symbol`); `elementAccessResultType` distributes a
+primitive key union through index signatures all-or-nothing; `checkConstraintsInCallTypeArgs`, a new
+expression-statement walk (12 of the 32). `Checker.kt` +236, `NewExpressionChecks.kt` +2. **Matrix**: 30 cells vs
+tsgo — every row moved is a tsgo row except the one below; display-only residues: union origin order, homomorphic
+`keyof Partial<Ex>`, `KeysOfUnion<Ex>`, `keyof H`. **The accepted new false row**: zod `mini/schemas.ts:1963` (a tuple
+of zod schemas against `readonly SomeType[]`) — its elements fail through the EXISTING wrong verdict "`ZodMiniString`
+does not satisfy `SomeType`" (already two false rows at 1948), which the bail-out was hiding. Restoring the bail-out
+removes it but brings back type-fest `and-all.ts:60` / `or-all.ts:59`, which are TS2578 false rows too — so the trade
+is one false row against two, and the root verdict is queued as (CHK.223). **Pins**:
+`DeferredTypeArgConstraintTest` 10; ablation a1 6 / a2 1 / a3 1 / a4 1 / a5 1 / a6 1 / a7 3 / a8 1 / a9 1 / a10 1 / a11 1 /
+a12 1 RED. **Gates**: full suite 22,593 / 0 / 44 (+10); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` `typeNode.bypassed` 153,264 -> 147,775 (-3.58%, a real REDUCTION, pristine-confirmed) — rebaselined,
+others within +1.7%; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked /
+cronstrue unchanged; library grid zod 102 -> 78, type-fest 358 -> 317, others unchanged (tally 552 -> 487); warning
+gate with probe: probe only.
+
 ### Round (P18.277) — (LIBS.2) round 3, (CHK.219): a generic call returning a MAPPED type is instantiated (re-resolving the declared return node under the call's bindings), literal candidates survive against a primitive / tuple constraint, a generic ARROW's annotated parameters are finally typed in its own type-parameter scope — plus two older bugs those exposed (arguments checked after an explicit type argument failed its constraint; an interface's inherited members lost when a heritage base resolves mid-cycle) — all 62 of zod's F7 rows gone (164 -> 102), the 8-library tally 614 -> 552, NONE added (2026-10-03)
 
 One implementation subagent, each part PRICED separately. **Where the item was wrong**: (a) and (b) alone move NOTHING

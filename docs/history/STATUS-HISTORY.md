@@ -1,5 +1,9 @@
 
 
+**(P18.283) — (LIBS.2): mitt AGREES WITH tsgo EXACTLY — 10 -> 0 false rows, 0 missing — AND IS NOW A STANDING GRID GATE (the first library this arc brought to zero); hono −1; TALLY 456 -> 445, NONE ADDED; +11 PINS, 22,641 / 0 / 44 (2026-10-03).**
+Screen 0; grid 8x0; gated libraries unchanged.
+
+
 **(P18.282) — (LIBS.2): `keyof`, `T[K]` AND PROPERTY READS NOW WORK OVER INTERSECTION TYPES — ky 10 -> 9, type-fest 317 -> 311, TALLY 463 -> 456, NONE ADDED; `keyof (A | B)` REFUSED BECAUSE IT ADDED A FALSE POSITIVE ON tsc's OWN SOURCES; +12 PINS, 22,630 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; gated libraries unchanged; a corpus-only walker retired.
 
