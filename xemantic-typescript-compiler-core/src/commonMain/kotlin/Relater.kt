@@ -485,6 +485,13 @@ internal class Relater(
         relation: Relation,
     ): Boolean {
         if (source === target) return true
+        // (P18.293) a template whose span is an UNRESOLVED `any` (the model's imprecise form)
+        // is a type this checker did not compute — relate it as the `any` it stands for, not
+        // as the plain `string` it displays as ([TemplateLiteralTypes.isPlaceholder] already
+        // refuses `any` as a pattern placeholder for exactly that reason).
+        if (source is Type.TemplateLiteral && !source.precise && target !== neverType &&
+            source.types.any { it === anyType || it === errorType }
+        ) return true
         // Round 754: normalise an open all-defaulted generic to its defaulted
         // instantiation before anything else looks at it — see
         // [defaultedInstantiationOfOpenGeneric]. The recursion terminates because a

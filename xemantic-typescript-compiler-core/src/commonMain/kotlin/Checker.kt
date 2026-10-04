@@ -7440,6 +7440,18 @@ class Checker(
         val merged: SymbolTable = symbolTable()
         for (result in results) {
             if (builtinLibSourceFile == null) builtinLibSourceFile = result.sourceFile
+            // (P18.293) a lib file that is a MODULE (`lib.es2025.iterator.d.ts`, `export {}`)
+            // contributes only its `declare global` block — its own top-level `Iterator`
+            // class/interface is module-local, and merging it made the global `Iterator`
+            // extend `IteratorObject` (a base CYCLE): whichever of the two resolved first
+            // lost its base, so `IteratorObject` intermittently had no `next`.
+            if (isExternalModuleByStatements(result.sourceFile.statements)) {
+                val carriers = ArrayList<Symbol>()
+                collectGlobalAugmentationCarriers(result.sourceFile.statements, result.locals,
+                    fileIsModule = true, insideAmbientModule = false, seen = HashSet(), out = carriers)
+                for (carrier in carriers) carrier.exports?.let { mergeSymbolTable(merged, it) }
+                continue
+            }
             mergeSymbolTable(merged, result.locals)
         }
         return merged
@@ -109715,8 +109727,11 @@ interface DataView {
             // profile strictly-removals; un-substituted, the alias body's inner `T`
             // stays an unbound TypeParam that fails the relation instead).
             if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) {
-                val typeArgs = node.typeArguments
-                if (!typeArgs.isNullOrEmpty()) {
+                // (P18.293) an omitted trailing argument takes its parameter's DEFAULT
+                // ([AliasDefaultTypeArgs]); a bare reference to an alias whose every
+                // parameter is defaulted is the same case with zero explicit arguments.
+                val typeArgs = node.typeArguments ?: emptyList()
+                run {
                     // Round 729: when a USER alias shadows a lib one of the same name the two
                     // declarations merge onto ONE symbol, and `firstOrNull` handed back
                     // whichever was bound first — in practice the LIB's, so a local
@@ -109732,13 +109747,19 @@ interface DataView {
                         symbol.declarations.firstOrNull { it is TypeAliasDeclaration }
                     } as? TypeAliasDeclaration
                     val declTPs = decl?.typeParameters
-                    if (decl != null && !declTPs.isNullOrEmpty() && declTPs.size == typeArgs.size
+                    val argNodes = if (decl == null || declTPs.isNullOrEmpty()) null
+                        else AliasDefaultTypeArgs.argumentNodes(typeArgs, declTPs)
+                    if (decl != null && !declTPs.isNullOrEmpty() && argNodes != null
                     ) {
-                        val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                        val resolvedArgs = AliasDefaultTypeArgs.resolve(typeArgs, declTPs,
+                            { getTypeFromTypeNode(it) }, { n, b -> typeOfNodeBinding(n, b) })
                         // (CHK.228) the lib's `NoInfer<T> = intrinsic` evaluates as `T` — here only
                         // for a GENUINE `any` (type-fest `IsAny`). Every other `T` keeps today's
                         // unresolved answer: evaluating it unmasks unrelated mis-evaluations
                         // (measured: type-fest 301 -> 387 ours-only).
+                        if (resolvedArgs.size == 1 && symbol.name in StringMappingTypes.NAMES &&
+                            ((decl.type as? TypeReference)?.typeName as? Identifier)?.text == "intrinsic"
+                        ) StringMappingTypes.apply(symbol.name, resolvedArgs[0]) { getUnionType(it) }?.let { return it }
                         if (symbol.name == "NoInfer" && resolvedArgs.size == 1 && resolvedArgs[0] === anyType &&
                             genuineAny.isGenuineAny(typeArgs[0], currentTypeAliasArgs) &&
                             ((decl.type as? TypeReference)?.typeName as? Identifier)?.text == "intrinsic"
@@ -109827,7 +109848,14 @@ interface DataView {
                                     }
                                 }
                             }
-                            if (constraintFails) return errorType
+                            // (P18.293) a reference COMPLETED by defaults keeps its old answer (the
+                            // declared type below) where the guard refuses: the guard has no
+                            // "type parameter via its constraint" rule ((INC.30)), so `MiddlewareHandler<E>`
+                            // with `E extends Env` would otherwise collapse to errorType.
+                            if (constraintFails) {
+                                if (typeArgs.size < declTPs.size) return@run
+                                return errorType
+                            }
                             // Lazy recursive-alias cycle-break (object-literal bodies only):
                             // when a plain-object-body alias references itself (`type Foo3<T> =
                             // { x: T; y: Foo3<(arg:T)=>void> }`), the inner self-reference cannot
@@ -109860,7 +109888,7 @@ interface DataView {
                             // entries stable across re-resolution.
                             // (CHK.228) which arguments are a GENUINE `any` — part of the key, since
                             // a conditional over one evaluates where one over a washed `any` does not.
-                            val genuineNames = genuineAny.argNames(typeArgs, declTPs, resolvedArgs, currentTypeAliasArgs)
+                            val genuineNames = genuineAny.argNames(argNodes, declTPs, resolvedArgs, currentTypeAliasArgs)
                             val cacheKey = "${symbol.id}|${resolvedArgs.joinToString(",") { it.id.toString() }}" +
                                 (if (genuineNames.isEmpty()) "" else "|g" + genuineNames.sorted().joinToString(","))
                             substitutionResultCache[cacheKey]?.let { return it }
@@ -109898,10 +109926,20 @@ interface DataView {
                                 // matches; the cycle-break above re-checks deferability)
                                 val savedGenuine = genuineAny.frame
                                 genuineAny.frame = if (genuineNames.isEmpty()) null else argMap to genuineNames
+                                val bailBefore = deepInstantiationBailed
                                 val result = try {
                                     getTypeFromTypeNodeWithMapper(decl.type, mapper)
                                 } finally {
                                     genuineAny.frame = savedGenuine
+                                }
+                                // (P18.293) a reference completed by defaults whose evaluation
+                                // exhausts OUR depth budget (10, against tsgo's 100 / 1,000 for a
+                                // tail-recursive conditional) keeps its old answer rather than
+                                // reporting TS2589: an omitted parameter defaulted to `[]` / `''`
+                                // is typically the ACCUMULATOR of exactly such a recursion.
+                                if (typeArgs.size < declTPs.size && deepInstantiationBailed && !bailBefore) {
+                                    deepInstantiationBailed = false
+                                    return@run
                                 }
                                 // B50.2: register alias-display info so typeToString
                                 // renders `Foo<string>` instead of the structural form.
@@ -114052,6 +114090,14 @@ interface DataView {
                     t === anyType || t === errorType -> t
                     t is Type.Reference && t.target.symbol?.name == "Promise" ->
                         t.resolvedTypeArguments?.getOrNull(0) ?: anyType
+                    // (P18.293) `await` DISTRIBUTES over a union (tsgo `getAwaitedType`):
+                    // `string | Promise<string>` awaits to `string`, not to itself.
+                    t is Type.Union && t.types.any { it is Type.Reference && it.target.symbol?.name == "Promise" } ->
+                        getUnionType(t.types.map {
+                            if (it is Type.Reference && it.target.symbol?.name == "Promise")
+                                it.resolvedTypeArguments?.getOrNull(0) ?: anyType
+                            else it
+                        })
                     else -> t
                 }
             }
@@ -174397,6 +174443,11 @@ interface DataView {
             extendsType === anyType && !genuineAny.isGenuineAny(node.extendsType, currentTypeAliasArgs)
         ) return anyType
         // Distribution over unions
+        // (P18.293) only a NAKED type parameter distributes: `R[K] extends M ? K : never` with
+        // `R[K] = Symbol | undefined` asks about the WHOLE union (tsc `isDistributive`).
+        if (checkType is Type.Union && nakedCheckTypeParamName(node.checkType) == null &&
+            node.checkType is IndexedAccessType
+        ) return evaluateConditional(checkType, extendsType, node)
         if (checkType is Type.Union) {
             // Round 729: inside a DISTRIBUTIVE conditional the check type parameter denotes
             // the CONSTITUENT being tested, not the whole union — `Exclude<T, U> = T extends U
@@ -174408,11 +174459,20 @@ interface DataView {
             // parameter distributes, so the rebinding is keyed on the check type NODE being a
             // bare reference to one — every other shape keeps the previous evaluation.
             val distributedName = nakedCheckTypeParamName(node.checkType)
+            // (P18.293) the EXTENDS type is instantiated per constituent too when it names the
+            // check type parameter — tsc's `MatchingKeys<R, M, K> = K extends (R[K] extends M ?
+            // K : never) ? K : never`, whose extends type evaluated once over the WHOLE key union
+            // kept every key.
+            val perConstituentExtends = distributedName != null &&
+                typeNodeNamesTypeParam(node.extendsType, distributedName)
             val results = checkType.types.map { constituent ->
                 if (distributedName == null) evaluateConditional(constituent, extendsType, node)
                 else withInstantiationContext(
                     distributionMapper(distributedName, constituent),
-                ) { evaluateConditional(constituent, extendsType, node) }
+                ) {
+                    val ext = if (perConstituentExtends) getTypeFromTypeNode(node.extendsType) else extendsType
+                    if (ext === errorType) anyType else evaluateConditional(constituent, ext, node)
+                }
             }
             return getUnionType(results)
         }
@@ -174431,6 +174491,21 @@ interface DataView {
         if (!ref.typeArguments.isNullOrEmpty()) return null
         val name = (ref.typeName as? Identifier)?.text ?: return null
         return if (currentTypeAliasArgs?.containsKey(name) == true) name else null
+    }
+
+    /** (P18.293) does [node] mention the type parameter [name] anywhere — [typeNodeContainsName]
+     *  plus the indexed-access, type-operator and mapped positions it does not walk. */
+    private fun typeNodeNamesTypeParam(node: TypeNode?, name: String): Boolean = when (node) {
+        null -> false
+        is IndexedAccessType -> typeNodeNamesTypeParam(node.objectType, name) || typeNodeNamesTypeParam(node.indexType, name)
+        is TypeOperator -> typeNodeNamesTypeParam(node.type, name)
+        is ParenthesizedType -> typeNodeNamesTypeParam(node.type, name)
+        is UnionType -> node.types.any { typeNodeNamesTypeParam(it, name) }
+        is IntersectionType -> node.types.any { typeNodeNamesTypeParam(it, name) }
+        is ConditionalType -> typeNodeNamesTypeParam(node.checkType, name) ||
+            typeNodeNamesTypeParam(node.extendsType, name) ||
+            typeNodeNamesTypeParam(node.trueType, name) || typeNodeNamesTypeParam(node.falseType, name)
+        else -> typeNodeContainsName(node, name)
     }
 
     /** Round 729: the ambient context with [name] rebound to one distribution [constituent].
@@ -174746,6 +174821,9 @@ interface DataView {
         if (type === anyType || type === errorType) {
             return getUnionType(listOf(stringType, numberType, esSymbolType))
         }
+        // (P18.293) `keyof unknown` is `never` (tsgo `getIndexType`): hono's
+        // `ClientRequestOptions<T = unknown>` branches on `keyof T extends never`.
+        if (type === unknownType) return neverType
         if (type is Type.Object) {
             // Only use already-resolved properties to avoid triggering member resolution
             // during init (which can cause test ordering sensitivity).
