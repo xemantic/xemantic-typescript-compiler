@@ -882,6 +882,11 @@ class Binder(private val options: CompilerOptions) {
         // over such members silently dies.
         if (existing.hasAny(SymbolFlags.Variable) && incoming.hasAny(SymbolFlags.TypeAlias)) return true
         if (existing.hasAny(SymbolFlags.TypeAlias) && incoming.hasAny(SymbolFlags.Variable)) return true
+        // TypeAlias + Module (tsgo: `TypeAliasExcludes` is `Type` and a namespace — instantiated or
+        // not — is neither, so `type X = …` + `namespace X { … }` is one symbol; the alias carries
+        // the type meaning and the namespace the value / namespace meaning).
+        if (existing.hasAny(SymbolFlags.TypeAlias) && incoming.hasAny(SymbolFlags.Module)) return true
+        if (existing.hasAny(SymbolFlags.Module) && incoming.hasAny(SymbolFlags.TypeAlias)) return true
         // Enum + Enum (merge across declarations)
         if (existing.hasAny(SymbolFlags.Enum) && incoming.hasAny(SymbolFlags.Enum)) return true
         // var + var (re-declarations allowed)

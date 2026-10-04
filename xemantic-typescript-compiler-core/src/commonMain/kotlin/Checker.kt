@@ -1888,21 +1888,19 @@ class Checker(
                     val outerScope = ccetFrames.elementAtOrNull(
                         ccetFrames.indexOfLast { it.owner === cls } - 1)
                     var scope = classFrame.tpScope
+                    var ast = classFrame.tpAst
                     if (isStatic) {
                         val baseScope = outerScope?.tpScope
                         val mtps = parent.typeParameters
-                        scope = if (mtps.isNullOrEmpty()) baseScope else {
-                            val ns = baseScope?.toMutableMap() ?: mutableMapOf()
-                            for (tpNode in mtps) {
-                                val tp = Type.TypeParam()
-                                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpNode.name.text)
-                                ns[tpNode.name.text] = tp
-                            }
-                            ns
-                        }
+                        // (P18.292) the method's own type parameters WITH their constraints —
+                        // the fresh unconstrained mint made `new B<D3>(…)` a false TS2344.
+                        if (mtps.isNullOrEmpty()) scope = baseScope
+                        else ccetFnTpScope(mtps, CcetFrame(classFrame.owner, classFrame.localTypes,
+                            classFrame.paramBindings, baseScope, classFrame.tpAst, classFrame.superBaseSig,
+                            classFrame.superBaseType)).let { scope = it.first; ast = it.second }
                     }
                     val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
-                        scope, classFrame.tpAst, top.superBaseSig, classFrame.superBaseType,
+                        scope, ast, top.superBaseSig, classFrame.superBaseType,
                         dead = top.dead)
                     ccetFrames.addLast(frame)
                     withCcetFrameAmbient(frame) {
@@ -8201,6 +8199,16 @@ class Checker(
      *  answers for every function declared in that container. Declared before `init`
      *  per the init-order trap. */
     private val expandoContainerMemo = HashMap<String, Map<String, ExpandoHostWrites>>()
+    /** (P18.292) every file-level name bound to a `type` alias merged with a `namespace` —
+     *  the only names an IMPORTED value read must resolve through its alias for (a
+     *  resolution per imported read was +17.7% `globals.lookups`). Declared before `init`. */
+    private val typeAliasNamespaceMergeNames: Set<String> by lazy {
+        val out = HashSet<String>()
+        for (r in binderResults) for ((n, sym) in r.locals) {
+            if (sym.flags.hasAny(SymbolFlags.TypeAlias) && sym.flags.hasAny(SymbolFlags.Module)) out.add(n)
+        }
+        out
+    }
 
     /** (CHK.124): the hosts whose expando members are being attached right now.
      *  A member's right-hand side may read the host itself (`g.self = g`, which the
@@ -26023,6 +26031,7 @@ class Checker(
             }
             else -> {}
         }
+        typeOnly.removeAll(nsOnly)
         return if (values.isEmpty() && typeOnly.isEmpty() && nsOnly.isEmpty()) parent
         else TavLevel(
             if (values.isEmpty()) null else values,
@@ -26079,6 +26088,7 @@ class Checker(
             else -> {}
         }
         tavCollectListValues(body.statements, values)
+        typeOnly.removeAll(nsOnly)
         return TavLevel(
             values,
             if (typeOnly.isEmpty()) null else typeOnly,
@@ -26686,6 +26696,9 @@ class Checker(
         }
         currentForwardLibTypeNames = forwardLibTypeNames
         tavCollectListValues(result.sourceFile.statements, valueNames)
+        // (P18.292) a type merged with a value-less namespace is reported as the NAMESPACE —
+        // tsgo's `onFailedToResolveSymbol` asks the namespace question before the type one.
+        typeOnlyNames.removeAll(namespaceOnlyNames)
         return TavLevel(valueNames, typeOnlyNames, namespaceOnlyNames, null)
     }
 
@@ -38116,6 +38129,14 @@ class Checker(
             if (decl is ModuleDeclaration && ModifierFlag.Declare in decl.modifiers) {
                 return true
             }
+            // (P18.292) a namespace in a DECLARATION FILE is ambient, and its body is an
+            // export context unless it carries an export declaration / assignment (tsgo's
+            // `setExportContextFlag`) — `namespace N { type X = … }` in a `.d.ts` exports X.
+            if (decl is ModuleDeclaration && (decl.body as? ModuleBlock)?.statements
+                    ?.none { it is ExportDeclaration || it is ExportAssignment } == true &&
+                generateSequence(decl as Node) { (it as NodeBase).parent }.lastOrNull()
+                    .let { it is SourceFile && isDtsFile(it.fileName) }
+            ) return true
         }
         // Check parent namespace — a namespace inside `declare module` is also ambient
         val parent = symbol.parent
@@ -38438,7 +38459,22 @@ class Checker(
                     emitTS2693(name.text, name, source, fileName)
                     return
                 }
-                if (isTypeOnlySymbolName(name.text, fileName)) {
+                // (P18.292) a value-less namespace — alone or merged with a type — is TS2708
+                // here as in every value position (tsgo asks the namespace question first).
+                // A value BELOW the file binding the name (a parameter, a block local) is
+                // what `typeof` reads — neither diagnostic applies then.
+                val valueShadowed = spineExShadowed(name, name.text)
+                val querySym = fileResults[fileName]?.locals?.get(name.text) ?: globals[name.text]
+                if (!valueShadowed && querySym != null && isValuelessNamespaceSymbol(querySym)) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot use namespace '${name.text}' as a value.",
+                        category = DiagnosticCategory.Error, code = 2708, fileName = fileName,
+                        line = line, character = character, start = name.pos, length = name.text.length,
+                    ))
+                    return
+                }
+                if (!valueShadowed && querySym != null && isTypeOnlySymbol(querySym)) {
                     emitTS2693(name.text, name, source, fileName)
                     return
                 }
@@ -38492,9 +38528,12 @@ class Checker(
      * (interface or type alias) and no Value flag — i.e. using it in a value
      * position (including inside `typeof`) is a TS2693 error.
      */
-    private fun isTypeOnlySymbolName(name: String, fileName: String): Boolean {
-        val result = fileResults[fileName]
-        val sym = result?.locals?.get(name) ?: globals[name] ?: return false
+    private fun isValuelessNamespaceSymbol(sym: Symbol): Boolean {
+        if (sym.flags.hasAny(SymbolFlags.Value) || !sym.flags.hasAny(SymbolFlags.Module)) return false
+        return sym.exports?.values?.none { it.flags.hasAny(SymbolFlags.Value) } ?: true
+    }
+
+    private fun isTypeOnlySymbol(sym: Symbol): Boolean {
         if (sym.flags.hasAny(SymbolFlags.Value)) return false
         // NamespaceModule with value exports is still usable as a value — skip.
         if (sym.flags.hasAny(SymbolFlags.Module)) {
@@ -100633,7 +100672,8 @@ interface DataView {
         // type from the original arg AST. Mirrors TypeScript's contextual-
         // type-aware widening rule. No-op for non-CallExpression inits or
         // non-matching shapes.
-        val rawSourceType = applyContextualLiteralPreservation(rawSourceTypeRaw, targetType, init)
+        val rawSourceType = annotatedExpandoSource(decl, init,
+            applyContextualLiteralPreservation(rawSourceTypeRaw, targetType, init))
         // Phase 17 / Blocker #1 step 2: narrow the source type via flow graph
         // when the target is a primitive-shaped type (never, intrinsic, or
         // a literal). Object/Interface/Reference targets still use the raw
@@ -102046,7 +102086,9 @@ interface DataView {
             return
         }
         val missingPropSym = if (allMissing.isNotEmpty() && targetType is Type.Object) {
-            lastMissingPropertySymbol ?: targetType.properties?.find { it.name == allMissing[0] }
+            // (P18.292) a symbol left by an EARLIER relation must name the member found here.
+            lastMissingPropertySymbol?.takeIf { it.name == allMissing[0] }
+                ?: targetType.properties?.find { it.name == allMissing[0] }
         } else null
         if (allMissing.isNotEmpty()) {
             // (LEGACY.0b step 13) the global `Object` source: tsgo's `reportErrorResults`
@@ -112480,6 +112522,50 @@ interface DataView {
         return sigs.singleOrNull()
     }
 
+    /**
+     * (P18.292) An ANNOTATED `const` bound to an arrow / function expression is still an
+     * expando host in tsgo's binder (`getInitializerSymbol` ignores the annotation): its
+     * `name.p = …` writes declare members on the FUNCTION's own type, which is the SOURCE
+     * related to the annotation — `const get: SG = () => …; get.raw = …` relates
+     * `{ (): R; raw: … }` to `SG`. The variable's type stays the annotation. Any statement
+     * list is a container here (a body-local `const` included); the scan is per container.
+     */
+    private fun annotatedExpandoSource(decl: VariableDeclaration, init: Expression, raw: Type): Type {
+        if (init !is ArrowFunction && init !is FunctionExpression) return raw
+        if (raw !is Type.Object || raw.callSignatures.isNullOrEmpty() || !raw.properties.isNullOrEmpty()) return raw
+        val name = (decl.name as? Identifier)?.text ?: return raw
+        val list = (decl as NodeBase).parent as? VariableDeclarationList ?: return raw
+        if (list.flags != SyntaxKind.ConstKeyword) return raw
+        val container = ((list as NodeBase).parent as? VariableStatement)?.let { (it as NodeBase).parent } ?: return raw
+        val statements = when (container) {
+            is SourceFile -> container.statements
+            is ModuleBlock -> container.statements
+            is Block -> container.statements
+            is CaseClause -> container.statements
+            is DefaultClause -> container.statements
+            else -> return raw
+        }
+        val fileName = owningSourceFileName(decl) ?: return raw
+        if (isJsLikeFileName(fileName)) return raw
+        val hosts = expandoContainerMemo.getOrPut("$fileName\u0000${container.pos}\u0000annotated") {
+            val cands = HashSet<String>()
+            for (st in statements) if (st is VariableStatement && st.declarationList.flags == SyntaxKind.ConstKeyword) {
+                for (d in st.declarationList.declarations) if (d.type != null &&
+                    (d.initializer is ArrowFunction || d.initializer is FunctionExpression)) {
+                    (d.name as? Identifier)?.text?.let { cands.add(it) }
+                }
+            }
+            if (cands.isEmpty()) return@getOrPut emptyMap()
+            val declared = HashMap<String, ExpandoHostWrites>()
+            for (c in cands) declared[c] = ExpandoHostWrites()
+            for (st in statements) collectExpandoDecls(st, cands, declared, false)
+            declared
+        }
+        val writes = hosts[name]?.takeIf { it.names.isNotEmpty() && !it.undecidable } ?: return raw
+        plantExpandoMembers(Symbol(SymbolFlags.Function, name), writes, raw, ownedByB431 = false)
+        return raw
+    }
+
     private fun expandoMemberType(rhsList: List<Expression>): Type? {
         val types = rhsList.mapNotNull {
             val t = getWidenedLiteralType(getTypeOfExpression(it))
@@ -114121,6 +114207,12 @@ interface DataView {
         // holds an `interface`'s type under its name.
         currentFileLocals?.get(id.text)?.let { local ->
             if (valuelessValueRead(id, local)) return errorType
+            if (isTypeAliasMergedNamespace(local) || (local.flags.hasAny(SymbolFlags.Alias) &&
+                    local.declarations.any { d ->
+                        ((d as? ImportSpecifier)?.let { (it.propertyName ?: it.name).text } ?: local.name) in
+                            typeAliasNamespaceMergeNames
+                    } &&
+                    resolveAliasTarget(local)?.let { isTypeAliasMergedNamespace(it) } == true)) return anyType
         }
         // Check pre-built file-level type map (covers annotated file-level declarations)
         currentCheckFileName?.let { fn ->
@@ -114163,8 +114255,14 @@ interface DataView {
         // symbol for a shadowed lib name.
         libValueBehindTypeOnlyShadow(id.text, symbol)?.let { return getTypeOfSymbol(it) }
         if (valuelessValueRead(id, symbol)) return errorType
+        if (isTypeAliasMergedNamespace(symbol)) return anyType
         return getTypeOfSymbol(symbol)
     }
+
+    /** (P18.292) `type X` merged with `namespace X`: the VALUE is the namespace, which this
+     *  checker types as `any` (a namespace has no value type here), never the alias's type. */
+    private fun isTypeAliasMergedNamespace(symbol: Symbol): Boolean =
+        symbol.flags.hasAny(SymbolFlags.TypeAlias) && symbol.flags.hasAny(SymbolFlags.Module)
 
     /**
      * (CHK.189) [sym], the symbol a value read of [id] resolved to, has NO value meaning
@@ -173395,6 +173493,7 @@ interface DataView {
                 val target = resolveAliasTarget(symbol)
                 if (target != null && target !== symbol) getTypeOfSymbolForTypeQuery(target) else anyType
             }
+            isTypeAliasMergedNamespace(symbol) -> anyType
             else -> getTypeOfSymbol(symbol)
         }
     }
