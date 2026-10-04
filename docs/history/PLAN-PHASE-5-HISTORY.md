@@ -1,3 +1,37 @@
+### Round (P18.285) — (LIBS.2) round 10, GSIG: `IsEqual`'s generic-signature identity trick now decides like tsgo (it answered TRUE for every pair), and a mapped type `{[Q in K]: …}` with `K extends keyof T` takes `T`'s modifiers — type-fest 311 -> 301 (six `is-equal` rows, four `readonly-keys-of-union`), tally 438 -> 428, NONE added (2026-10-03)
+
+One implementation subagent. **Where the brief was wrong**: the leg was not a vacuous relation —
+`getTypeFromConditionalType` returns `anyType` whenever the check type is a type parameter (this checker has NO
+deferred conditional type), so `G extends A ? 1 : 2` became `any`, both signatures read `<G>() => any` and the outer
+conditional was always TRUE. And GSIG alone does not close (CHK.215)'s 27 rows: a second mechanism, tsgo's MODIFIERS
+type for `{[Q in K]: …}` with `K extends keyof T`, clears readonly-keys-of-union (4); readonly-keys-of /
+optional-keys-of and jsonify stay blocked on `IsAny` (`X extends any` answers `any`, and `NoInfer<T>` is unresolved) plus
+intersection normalization — making `NoInfer<T>` resolve to `T` was measured (type-fest 311 -> 390, it exposes the
+`0 extends 1 & any` bug) and reverted: the `extends any` fix comes first ((CHK.228)). **Mechanism**: new
+`GenericSignatureConditionals.decide` (312), triggered by a conditional whose check and extends types are both
+parameter-less generic function types each returning a conditional over its OWN type parameter; following tsgo's
+`relater.go` it unifies the type parameters onto shared markers (identical constraints required, else null), applies the
+two-conditional rule (extends types IDENTICAL, then true->true and false->false), else relates the source default to the
+target conditional honouring skipTrue / skipFalse and the distribution-dependent rule; identity is a new `identical()`
+modelled on `isTypeIdenticalTo` (intrinsics / literals by flag and value, `boolean` = `true | false`, unions and
+intersections as disjunct-of-conjunct lists since ours are not normalized, tuples, references, plain objects with
+optional / readonly / index infos, signatures by mutual assignability). It answers UNDECIDED — old answer kept — for a
+free non-marker type parameter (a generic alias body evaluated before instantiation) and for `any` against an
+object-containing type (under the real libs `Record<string, number>` reads `any`, where tsgo says true). Hook in
+`evaluateConditional`; `declaredKeyofOperandOfMappedConstraint` walks to `K`'s declaration and uses `X` of a
+`keyof X` constraint as the modifiers type. `Checker.kt` +8 (and two widenings). **Matrix**: all 12 `IsEqual` cells
+= tsgo (number / string, any / unknown, never / any, `1` / number, readonly vs mutable, optional vs required, reordered
+and partial unions — formerly all TRUE), the type-fest-form cells, `MyPick` readonly, a constrained `<T extends string>`
+and default-constraint skip cells. **Pins**: `GenericSignatureIsEqualTest` 7; ablation a1 5 / a2 1 / a3 1 / a4 2 / a5 1 /
+a7 3 RED, a6 (the distribution-dependent guard) 0 RED — redundant (relating `1` to a bare marker already fails), kept
+because tsgo has the same rule. **Gates**: full suite 22,659 / 0 / 44 (+7) — the real check on the modifiers change,
+which reaches every `{[P in K]: …}` mapped type; corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0
+(`mapped.keyed` +1.19%, `typeNode.bypassed` +0.45%); `huge_methods.py --fail-over 0` 0; no new TS2589 (recursion probe
+and type-fest); grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt (standing gate, 0) unchanged
+(identity hash extended to `GenericSignatureConditionals`); library grid on the final classes (orchestrator's own run
+`r285`, row sets = the builder's `a285`): type-fest 311 -> 301, others unchanged (tally 438 -> 428); warning gate with
+probe: probe only.
+
 ### Round (P18.284) — (LIBS.2) round 9, (CHK.225)(a): when `Relater`'s same-target shortcut rejects two instantiations of an UNANNOTATED generic, it now falls through to the STRUCTURAL comparison instead of answering false — together with tsgo's callback-parameter rule and a generic-method callback instantiation it needed to stay correct; zod −6, hono −1, tally 445 -> 438, NONE added; round 336's ~263 regressions did not recur (2026-10-03)
 
 One implementation subagent, priced before landing. **Where the brief was wrong**: "fall through to structural" alone
