@@ -25,6 +25,31 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.289) — (INV.0) extraction: the LABEL family (TS1114 / TS7028) moves verbatim into `LabelChecks` and the TSLIB emit-helper family (TS2354 / TS2343) into `TslibHelperChecks`; `Checker.kt` 195,978 -> 194,798 (-1,180); receipts identical; the builder STALLED after the move (the second extraction in a row to do so) and the orchestrator finished the round (2026-10-04)
+
+One implementation subagent, stopped after 25 minutes silent with no process — the census, the move, the verbatim-proof
+script and an 8-cell matrix were on disk; the pins, the ablation and every gate were taken by the orchestrator.
+**Choice**: neither family the brief named (the switch family reads walk-scoped state; the type-argument-constraint
+family still reads the type-parameter scope); the census found two clean pure-AST families. **Moved**:
+`LabelChecks.kt` (313) — `checkDuplicateLabels` / `checkUnusedLabels` and their statement walkers; `TslibHelperChecks.kt`
+(955) — `checkImportHelpersWithoutTslib` / `checkMissingTslibHelpers`, the decorator-helper check, `emitTS2354` and the
+`reportedMissingTslibHelpers` set (moved with its only users). Two collaborator fields before `init`; four `pass(…)`
+lambdas re-pointed, names unchanged; the collaborators read 5 checker members (`diagnostics`,
+`getLineAndCharacterOfPosition`, `isDtsFile`, `isModuleFile`, `checkedResults`) and NO walk ambient; no new widening.
+**Receipts**: verbatim proof both ways (`build/bench/p18289-agent/proof.py`: both moved blocks and the Checker residue
+byte-identical, and the original spans concatenate to the moved originals — the 6 "checker." hits it reports in
+`TslibHelperChecks` are `checker.go:` line citations in comments); an 8-cell matrix identical before / after; the
+library grid's row SETS identical to `r288` on all eight; corpus screen 8725 / 0; `cost_gate.py` 0;
+`spine_closure_audit.py` clean. **Not taken**: the per-pass `--passTiming` table (the builder stalled before it; the
+proof, matrix, corpus, grid and library row sets carry the same claim). **Pins**: `LabelAndTslibChecksCollaboratorTest` 5
+(TS1114, TS7028 x2, TS2354, a clean control; every row tsgo's); ablation — the two label passes 3 RED, then
+`checkImportHelpersWithoutTslib` alone 1 RED (the first tslib arm aimed at `checkMissingTslibHelpers` read 0 for the
+TS2354 pin, i.e. a mis-aimed arm, not a blind pin); `checkMissingTslibHelpers` (TS2343) is unpinned — it needs a
+`node_modules/tslib`, which the `diagnose()` harness has not got — and covered by the matrix. **Gates**: full suite
+22,688 / 0 / 44 (+5); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue
+/ mitt (standing gate, 0) unchanged (identity hash extended to both collaborators); warning gate with probe: probe only.
+Ledger row 22. **Found** (pre-existing, both arms) -> (CHK.229): a tslib FALSE POSITIVE.
+
 ### Round (P18.288) — (LIBS.2) round 13, (CHK.216) TLT part 2: `infer` patterns in a conditional `extends` are MATCHED (tuple head / tail / variadic slice, arrays, collections, template literals) instead of resolving `infer` to `any`; seven pre-existing tuple / literal defects the newly-resolving conditionals exposed are fixed; type-fest 267 -> 255 (join 10, readonly-deep 2), tally 394 -> 382, NONE added; plus a read-only CENSUS refresh (LIBS.3) (2026-10-04)
 
 One implementation subagent, plus one read-only census agent on frozen classes in parallel (it never built). **Where the
@@ -333,30 +358,6 @@ ablation a1 4 / a2 1 / a3 1 / a4 2 / a5 1 / a6 1 RED. **Gates**: full suite 22,6
 and `--include ''` the same 41, diff byte-identical; `cost_gate.py` all +0.00%; `huge_methods.py --fail-over 0` 0; grid
 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid zod 78 -> 68, others unchanged (tally
 487 -> 477); warning gate with probe: probe only.
-
-### Round (P18.279) — (INV.0) extraction: the MODULE-SYNTAX family (TS2440 / TS1147 / TS1205 / TS1269 / TS1280 / TS1292 / TS1484 / TS2866 / TS2661 checks) moves verbatim into `ModuleSyntaxChecks` and the TS8xxx TypeScript-syntax-in-JS check into `TsSyntaxInJsFiles`; `Checker.kt` 197,864 -> 195,775 (-2,089); every receipt identical; the builder STALLED and the orchestrator finished the round (2026-10-03)
-
-One implementation subagent, stopped after 28 minutes silent with no process — the move, the verbatim proof scripts,
-the per-pass receipts, the PrintInlining runs and an 11-cell matrix were all on disk; the pins, the ablation and every
-gate were taken by the orchestrator. **Choice**: the type-argument-constraint family the brief named first was not
-taken (it reads the walk-scoped type-parameter scope and its helpers have many outside callers); the builder's census
-chose two clean pure-AST families instead. **Moved**: `ModuleSyntaxChecks.kt` (1,544) — the TS2440 barrel memo and
-the ten passes `checkIsolatedModulesGlobalValueShadow` / `…ScriptNamespaces` / `…ReExportType` /
-`…ExportImportIsType` / `…ExportDefaultIsType`, `checkImportNotAtTopLevel`, `checkNamespaceImportVarConflict`,
-`checkImportConflictsWithLocal`, `checkVerbatimModuleSyntax`, `checkExportSpecifierLocality` with their helpers;
-`TsSyntaxInJsFiles.kt` (637) — `checkTsSyntaxInJsFiles`. Two collaborator fields before `init`; eleven `pass(…)`
-lambdas re-pointed, names unchanged; 21 checker members read; 5 widenings (`fileResults`, `srcLastIndexOf`,
-`moduleInstanceStateOf`, `isNamespaceInstantiated`, `resolveBarrelStarTarget`). **Receipts**: verbatim proof both
-ways (`build/bench/p18279-agent/proof.py`: both moved blocks and the Checker residue byte-identical); per-pass tables
-identical on the compiler profile (514 normalized lines) AND on an `isolatedModules` profile copy where the moved passes
-are registered (`iso-prof`, 11,520 lines); PrintInlining `checkArgumentsAgainstSignature` run 2 identical (1 + 2), run 1
-off by one "too big" row (the known cross-process instability); an 11-cell matrix identical before / after; the library
-grid's row SETS identical to `p18278d` on all 8 libraries; `cost_gate.py` 0; `spine_closure_audit.py` clean. **Pins**:
-`ModuleSyntaxChecksCollaboratorTest` 5 (TS2440, TS1147, TS1280, the TS8xxx family, a clean control; every row tsgo's);
-ablation of both collaborators (one arm each, each pin exercising one) 2 RED, sources restored and `cmp`-verified.
-**Gates**: full suite 22,598 / 0 / 44 (+5); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x
-added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged (identity hash extended to both collaborators);
-warning gate with probe: probe only. Ledger row 21. **Found** (pre-existing, both arms) -> (CHK.224).
 
 ## QUEUE
 
@@ -986,6 +987,8 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
 - [ ] **(CHK.228) STEPS 1-2 LANDED 2026-10-04 ((P18.286): `extends any` / both-branches / `never` distribution / `IsAny<any>`, gated by `GenuineAnyProvenance`). OPEN: step 3 `NoInfer<T>` = `T` REFUSED at type-fest 301 -> 387 — it first needs the mis-evaluations a correct `IsAny<concrete>` exposes: `Type extends Record<Key, Type[Key]>` for optional / readonly keys (is-optional / readonly / required / writable-key-of, ~40 rows), jsonify (33), apply-default-options TS2344 (12), is-tuple (10) — patch `build/bench/p18286-agent/s3full.patch`; `[any] extends [never]` is true here (tsgo false — relation-wide, `IsNever<any>`); `NoInfer` does not block inference in generic calls (`ni("a", "b")` TS2345 missing). `X extends any` and `IsAny` — the next blocker of type-fest's DEFK rows, found by (P18.285).** A conditional `X extends any ? A : B` answers `any` instead of the TRUE branch, and a check type of `any` must yield BOTH branches (`A | B`); this blocks type-fest's `IsAny` (`0 extends 1 & T`), and through it `NoInfer<T>` (resolving it to `T` alone was measured at type-fest 311 -> 390 and reverted), readonly-keys-of (9), optional-keys-of (8) and jsonify (4). Fix `extends any` first, then `NoInfer`, then re-measure type-fest. Also from (P18.285): `is-equal:51` (`Readonly<TupleOf<50>>` — probably an `any`-washed tuple), `IsEqual` of a resolved type against an `any`-washed one and of function types differing inside a nested generic keep the old TRUE (UNDECIDED), `Includes` with `infer` over `V[0]` and `N['length'] extends 40` recursion not evaluated (silent). Root cause shared by much of this arc: the checker has NO deferred conditional type (a type-parameter check type answers `any`).
 
 - [ ] **(CHK.215) PARTLY DONE 2026-10-03 ((P18.285): GSIG — `IsEqual` — fixed and readonly-keys-of-union (4) cleared; the remaining rows are blocked on (CHK.228). (P18.282): keys-of-union (3) fixed — `infer` from a parenthesized function type; `keyof (I & U)`, `as`-clause remap and the alias-display hijack fixed. OPEN: the other 27 type-fest rows (readonly-keys-of 9, optional-keys-of 8, readonly-keys-of-union 6, jsonify 4) filter keys through `IsEqual` and are blocked on GSIG (the generic-signature trick evaluates wrong — reduce `IsEqual<A, B>` against tsgo next); `keyof (A | B)` REFUSED — needs homomorphic mapped types to distribute over unions AND assignment narrowing over a union of mapped types (tsc `binder.ts:962` / `parser.ts:6741` false positives otherwise); intersection-over-union normalization (`(string | number | symbol) & ("a" | "b")` prints unreduced); `keyof A` origin display; `IO['nope']` TS2339 on an indexed-access type node; symbol keys named `"[Symbol.iterator]"` instead of `unique symbol`). DEFK — `keyof (I & U)` and key-remapping mapped types never evaluate (30, type-fest); the displayed alias also shows the wrong type arguments.** `keyof` over an intersection containing a distributive conditional should evaluate it first; fix the alias display in the same round.
+
+- [ ] **(CHK.229) A tslib FALSE POSITIVE found by (P18.289)'s matrix (`build/bench/p18289-agent/matrix` c4-c7, pre-existing on both arms; the family now lives in `TslibHelperChecks.kt`).** With `importHelpers` and a `node_modules/tslib` PRESENT and complete, we still report TS2354 "module 'tslib' cannot be found" (c7) where tsgo is silent — a false positive on legal code; with a tslib present but MISSING a helper we report TS2354 where tsgo reports TS2343 naming the helper (`__awaiter` c4, `__decorate` c6), and a private-field read (`__classPrivateFieldGet`, c5) gets nothing. The check does not see the crawl's `node_modules` resolution — `ParsedSource.moduleResolutions` ((CHK.30)'s lesson); every gate but a `-project` fixture is blind to it.
 
 - [ ] **(LIBS.3) REFRESHED RESIDUAL CENSUS at tally 394 (read-only, (P18.288); `build/scratch-p18288-census/README.txt`, 115 repros each run against tsgo, `classify.py`; grid diffs `build/scratch-p18265-census/runs/c288/`).** Ranked by rows per round, false positives first: (1) **CURRIED** — a curried arrow `(x) => (o) => o.buffer` against `(x: number) => (o: Opts) => string` gives the inner arrow the OUTER parameter types (`repro/curried0`), as a call argument no context at all (TS7006) — 3 hono rows but a very common real-world shape, SEVERITY FIRST; (2) **SHADOW + F12** (10, zod / hono) — readers ignoring lexical shadowing: a parameter named `Class` resolves to the file-level class (TS2511), a block-scoped `const node` to a top-level function, a class-property arrow's local flagged TS2301 against a constructor parameter (`repro/ts2301c`, 7 lines); (3) **F10** (25, type-fest) — a namespace and a same-named type alias are not merged (TS2702); (4) **TFORDER** (32, type-fest; probably also TPCTX 6 and superstruct F18 2) — an alias right when imported from its own file is wrong once `index.d.ts` is loaded (`repro/tfistuple`), a first-touch / cache ORDER bug; (5) **DEFK2** (19) — a key-remapping `as` clause calling an alias guarded by `IsAny<T | K>` stays deferred (`repro/keyremap`), suspect the (P18.286) provenance gate; (6) **THISTYPE** (13, zod) — `ThisType<T>` inside an intersection contextual type ignored; (7) **GENLIT** (10) — a literal property widened when inferring against a constrained type parameter; (8) narrowing (~25 over several small families); (9) element-access / array contextual typing (10). Quick wins: STATICTP (zod 2, `new B<D3>()` in a static generic method ignores D3's constraint, 8-line repro), EXPANDO (zod 1, `const get: CallableIface = () => {}; get.raw = …`). **Within reach of ZERO**: date-fns 1 row — EMIT TS2536 for indexing a deferred conditional type with a deferred conditional key (`repro/genidx2536`, 6 lines); immer two rounds (F13 4 FPs + then produce tsgo's 8 TS2416 + 1 TS2322, NEVRET 1); ky ~4-5 rounds; superstruct not close. **Shared root causes**: A contextual typing through a compound target (~30), B no deferred conditional / generic indexed-access evaluation (DEFK2, TLT2, TAILREC, ~25 missing TS2344, date-fns), C first-touch / cache order (~40), D narrowing, E lexical shadowing ignored.
 

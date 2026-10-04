@@ -1,3 +1,27 @@
+### Round (P18.279) — (INV.0) extraction: the MODULE-SYNTAX family (TS2440 / TS1147 / TS1205 / TS1269 / TS1280 / TS1292 / TS1484 / TS2866 / TS2661 checks) moves verbatim into `ModuleSyntaxChecks` and the TS8xxx TypeScript-syntax-in-JS check into `TsSyntaxInJsFiles`; `Checker.kt` 197,864 -> 195,775 (-2,089); every receipt identical; the builder STALLED and the orchestrator finished the round (2026-10-03)
+
+One implementation subagent, stopped after 28 minutes silent with no process — the move, the verbatim proof scripts,
+the per-pass receipts, the PrintInlining runs and an 11-cell matrix were all on disk; the pins, the ablation and every
+gate were taken by the orchestrator. **Choice**: the type-argument-constraint family the brief named first was not
+taken (it reads the walk-scoped type-parameter scope and its helpers have many outside callers); the builder's census
+chose two clean pure-AST families instead. **Moved**: `ModuleSyntaxChecks.kt` (1,544) — the TS2440 barrel memo and
+the ten passes `checkIsolatedModulesGlobalValueShadow` / `…ScriptNamespaces` / `…ReExportType` /
+`…ExportImportIsType` / `…ExportDefaultIsType`, `checkImportNotAtTopLevel`, `checkNamespaceImportVarConflict`,
+`checkImportConflictsWithLocal`, `checkVerbatimModuleSyntax`, `checkExportSpecifierLocality` with their helpers;
+`TsSyntaxInJsFiles.kt` (637) — `checkTsSyntaxInJsFiles`. Two collaborator fields before `init`; eleven `pass(…)`
+lambdas re-pointed, names unchanged; 21 checker members read; 5 widenings (`fileResults`, `srcLastIndexOf`,
+`moduleInstanceStateOf`, `isNamespaceInstantiated`, `resolveBarrelStarTarget`). **Receipts**: verbatim proof both
+ways (`build/bench/p18279-agent/proof.py`: both moved blocks and the Checker residue byte-identical); per-pass tables
+identical on the compiler profile (514 normalized lines) AND on an `isolatedModules` profile copy where the moved passes
+are registered (`iso-prof`, 11,520 lines); PrintInlining `checkArgumentsAgainstSignature` run 2 identical (1 + 2), run 1
+off by one "too big" row (the known cross-process instability); an 11-cell matrix identical before / after; the library
+grid's row SETS identical to `p18278d` on all 8 libraries; `cost_gate.py` 0; `spine_closure_audit.py` clean. **Pins**:
+`ModuleSyntaxChecksCollaboratorTest` 5 (TS2440, TS1147, TS1280, the TS8xxx family, a clean control; every row tsgo's);
+ablation of both collaborators (one arm each, each pin exercising one) 2 RED, sources restored and `cmp`-verified.
+**Gates**: full suite 22,598 / 0 / 44 (+5); corpus screen 8725 / 0; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged (identity hash extended to both collaborators);
+warning gate with probe: probe only. Ledger row 21. **Found** (pre-existing, both arms) -> (CHK.224).
+
 ### Round (P18.278) — (LIBS.2) round 4, (CHK.213): a type-argument constraint is re-resolved with EVERY argument bound (so `K extends keyof O` checks `keyof <the actual O>`), the tuple bail-out is gone, call / `new` type arguments and expression-statement type references are checked, and `keyof` of an index signature / a symbol key is right — zod 102 -> 78 (all 25 CDEF rows), type-fest 358 -> 317, the 8-library tally 552 -> 487; ONE new false row accepted on measurement (2026-10-03)
 
 One implementation subagent. **Where the item was wrong**: (a) this checker has NO deferred `keyof T` / `T[K]` —
