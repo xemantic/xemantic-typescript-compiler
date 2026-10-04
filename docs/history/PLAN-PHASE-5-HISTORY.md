@@ -1,3 +1,32 @@
+### Round (P18.281) — (LIBS.2) round 6, (CHK.214) CTXM: a `Record<string, C>` / string-keyed mapped type now hands its template to CONTEXTUAL readers as an index signature (the declared type stays `any`, refused at (P18.117)), and key-remapped mapped types evaluate — zod's 14 `json-schema-processors.ts` TS7006 rows gone (68 -> 54), the parameters genuinely TYPED; ky's one row refused on measurement; tally 477 -> 463, NONE added (2026-10-03)
+
+One implementation subagent. **Where the item was wrong**: the cause is not the contextual LOOKUP —
+`getTypeFromMappedType` resolves any mapped type whose keys are `string` / `number` to `any`, so `Record<string, X>` is
+`any` everywhere (`const z: boolean = r.x` reports nothing) and `lookupPropertyTypeForCtx` was handed `any`; the
+type-level fix (an index signature) was already refused at (P18.117) on three corpus baselines, so this round fixes the
+CONTEXTUAL side only. `Record<"a" | "b", C>`, a homomorphic mapped type, `Partial` / `Readonly` were already right; key
+remap was two type-level bugs (`${string & K}` refused, and the template evaluated with the REMAPPED key); the 15 =
+zod 14 + ky 1 (zod's other 10 TS7006 are assignment-position rows of other families). **Mechanism**:
+`ctxMappedIndexType` builds an index-signature object from the template for a `Record`-style alias or a mapped type
+keyed by exactly `string` / `number`, for contextual readers ONLY (no relation, no declared type sees it; a bare alias
+parameter template recurses on the argument node — nested Records; a union annotation is rebuilt member by member),
+wired into the three readers that got `any`: `pullCtxResolveAnnotation` (types the parameters),
+`resolveImplicitAnyCtxAnnotation` (decides TS7006) and the return-annotation edge; `pullCtxMemberName` accepts a decimal
+numeric key; `evalMappedKeyRemapTemplate` accepts `string & K` / `K & string`; `getTypeFromMappedType` evaluates the
+template with the PRE-remap key. `Checker.kt` +80. **Matrix** (each callback carries a deliberately wrong-typed use,
+so a TS2322 proves the parameter is TYPED): every broken cell now = tsgo — `Record<string, C>` incl. its legal-code false
+TS7006, nested Records, method shorthand, `{[K in string]: C}`, `Record<number, C>`, return position, `| undefined`,
+`satisfies`, key remap; residues: `Record<string, C> | number` keeps a TS7006 (pre-existing `viaUnion`, also for a plain
+index signature) and an ARGUMENT position (`take({g: (agg) => …})`) is still TS7006. **ky refused**: an intersection
+arm in `getIndexedAccessType` plus `keyof (A & B) = keyof A | keyof B` removed ky's row but exposed older defects —
+ky +1 false TS2322 (`Pick` over an intersection drops `?`) and date-fns +2 false TS18048 (`Required<A & B & C>`'s `-?`
+reads through `getPropertyOfType`, which has no intersection arm) — so it was backed out
+(`build/bench/p18281-agent/work-with-intersection.patch`) and queued as (CHK.226). **Pins**: `CtxMappedTypeContextTest`
+9; ablation a1 6 / a2 6 / a3 2 / a4 2 / a5 2 / a6 1 / a7 2 / a8 1 RED. **Gates**: full suite 22,618 / 0 / 44 (+9); corpus
+screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0 (all within ±0.05%); `huge_methods.py --fail-over 0`
+0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid zod 68 -> 54, others
+row-for-row identical (tally 477 -> 463); warning gate with probe: probe only.
+
 ### Round (P18.280) — (LIBS.2) round 5, false positives: the relation's same-target shortcut honours DECLARED `in` / `out` variance ((CHK.223) — zod 78 -> 68, ten rows, seven the queue never named), and the two module-syntax false positives of (CHK.224) are ported to tsgo's rules (TS2661 through `declare global`, TS2440 per binder table); tally 487 -> 477, NONE added (2026-10-03)
 
 One implementation subagent. **Where the item was wrong**: (CHK.223) is not a zod-specific relation leg — `Relater`'s

@@ -1,5 +1,9 @@
 
 
+**(P18.286) — (LIBS.2): `X extends any ? A : B` AND `IsAny<any>` NOW EVALUATE AS tsgo DOES, BEHIND A NEW CHECK THAT SEPARATES A WRITTEN `any` FROM AN UNRESOLVED ONE (WITHOUT IT type-fest WENT 301 -> 814); RESOLVING `NoInfer<T>` REFUSED (301 -> 387); TALLY 428 -> 427, NONE ADDED; +7 PINS, 22,666 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; mitt still 0.
+
+
 **(P18.285) — (LIBS.2): THE STANDARD `IsEqual<A, B>` TYPE (EVERY TYPE-TEST LIBRARY's IDIOM) NOW ANSWERS LIKE tsgo — IT WAS `true` FOR EVERY PAIR; type-fest 311 -> 301, TALLY 438 -> 428, NONE ADDED; THE NEXT BLOCKER (`X extends any`) IS QUEUED; +7 PINS, 22,659 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; mitt still 0.
 
