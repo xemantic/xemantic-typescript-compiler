@@ -1,5 +1,9 @@
 
 
+**(P18.281) — (LIBS.2): CALLBACKS INSIDE A `Record<string, C>` OBJECT LITERAL NOW GET THEIR PARAMETER TYPES FROM `C` — zod 68 -> 54, TALLY 477 -> 463, NONE ADDED; ky's ONE ROW REFUSED BECAUSE ITS FIX ADDED FALSE POSITIVES (QUEUED); +9 PINS, 22,618 / 0 / 44 (2026-10-03).**
+Screen 0; grid 8x0; gated libraries unchanged.
+
+
 **(P18.280) — (LIBS.2): DECLARED `in` / `out` VARIANCE IS NOW HONOURED WHEN TWO INSTANTIATIONS OF ONE GENERIC ARE COMPARED — zod 78 -> 68 (TEN rows, seven never named in the queue) — AND TWO MODULE-SYNTAX FALSE POSITIVES ARE GONE; TALLY 487 -> 477, NONE ADDED; +11 PINS, 22,609 / 0 / 44 (2026-10-03).**
 Screen 0; grid 8x0; gated libraries unchanged; `Checker.kt` untouched.
 

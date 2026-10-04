@@ -1,3 +1,33 @@
+### Round (P18.276) — (LIBS.2) round 2: (CHK.221) only a `private` parameter property is reported unused, only under `noUnusedLocals`, any reference keeps it, nested classes and class expressions are checked (15 false TS6138 + 3 false TS6133 -> 0, 2 missing rows found); and a narrow first cut of TS2536 on a type-parameter element-access index (12 of tsgo's 15 matrix rows, 0 false positives) — but date-fns's last row is a DEFERRED CONDITIONAL type, not this; (CHK.220) re-scoped (2026-10-03)
+
+One implementation subagent. **Where the item was wrong**: (a) (CHK.221) was wider than "public" — EVERY non-private
+parameter property was reported, TS6138 fired under `noUnusedParameters` alone (tsgo: `noUnusedLocals` only), a bare
+`readonly` parameter property also got TS6133, `other.p` and `const { c } = this` were not counted as reads while a
+write-only `this.p = v` was, and nested classes / class expressions were never checked; (b) (CHK.220)'s date-fns row
+(`buildLocalizeFn/index.ts:131`) is `valuesArray[index]` over `LocalizeValues<Value>` indexed by
+`LocalizeUnitIndex<Value>` — both DEFERRED CONDITIONAL types, which this checker types as `any` (silent even in a plain
+mis-assignment; repro `build/bench/p18276-agent/m220d`) — so closing it needs deferred conditional types (+ deferred
+indexed access and generic `keyof`), not the generic-index check. **Mechanism**: (CHK.221) follows tsgo's
+`checkUnusedClassMembers` constructor arm — `checkUnusedParameterProperties` returns unless `noUnusedLocals` and walks
+every class declaration and expression; private-only filter; `collectClassMemberReferences` (a generic walk counting
+`x.p` except a plain `=` target, `x["p"]`, binding-pattern and destructuring-assignment names — deliberately
+over-counting, so a mistake costs a missed row, never a false positive); the parameter half of TS6133 skips any
+parameter property (`readonly` / `override` included). (CHK.220)-narrow: new `GenericIndexAccess.kt` (179) ports
+`checkIndexedAccessIndexType` for a TYPE-PARAMETER index only, three-valued (undecidable is SILENT): an unconstrained `K`
+is rejected for any receiver but `any` / `unknown`; a `K` whose WRITTEN constraint is plainly `string` / `number` /
+literals is rejected when not covered by an unconstrained type-parameter receiver (`keyof unknown` = `never`) or a
+type-literal receiver (members + string / number index signatures), read from declaration SYNTAX because this checker
+turns `Extract<keyof T, string>` into `string`. `Checker.kt` +4; `UnusedDeclarations.kt` +59 / -162 (two old `this.`
+collectors removed). **Matrices**: (CHK.221) 15 false TS6138 + 3 false TS6133 -> 0, 2 missing rows found, = tsgo in
+every config but one pre-existing missing TS4113 (`private override` with no base member); (CHK.220) 51 cells, tsgo 15
+TS2536, ours 0 -> 12 with full text / spans, no false positive (left silent: `K extends PropertyKey` on a string index
+signature, a receiver type parameter with a constraint, an alias constraint). **Pins**: `ParameterPropertyUnusedTest` 3,
+`GenericIndexAccessTest` 3; ablation a1 1 / a2 1 / a3 1 / a4 2 / a5 1 / b1 1 / b2 1 / b3 1 / b4 1 RED. **Gates**: full suite
+22,570 / 0 / 44 (+6); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0 (`typeOfExpr.calls`
++0.24%, one `getTypeOfExpression` per non-literal element access — the new check); `huge_methods.py --fail-over 0` 0;
+grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged; library grid row sets byte-identical (the
+new TS2536 fires 0 times there; tally stays 614, date-fns 1 / 0); warning gate with probe: probe only.
+
 ### Round (P18.275) — (INV.0) extraction: the UNUSED-DECLARATION family moves verbatim into a new `UnusedDeclarations` collaborator; `Checker.kt` 200,831 -> 197,463 (-3,368, the largest extraction of the arc); every receipt byte-identical, including a second per-pass receipt on a `noUnused*` profile copy and the library grid's row SETS (2026-10-03)
 
 One implementation subagent. **Where the brief was wrong**: (a) the range had two HOLES that stay in `Checker` —
