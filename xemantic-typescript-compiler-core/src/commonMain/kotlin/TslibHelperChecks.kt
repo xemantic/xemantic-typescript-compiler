@@ -26,6 +26,45 @@
 package com.xemantic.typescript.compiler
 
 /**
+ * tsc `isAnExternalModuleIndicatorNode` over a file's top-level [statements]: an import, an
+ * exporting declaration, an export assignment or declaration, or `import x = require(…)`. Shared by
+ * [Checker.isModuleFile] and the project crawl's synthetic `tslib` import (CHK.229), which must
+ * agree on which files take one.
+ */
+internal fun isExternalModuleByStatements(statements: List<Statement>): Boolean {
+    for (stmt in statements) {
+        when (stmt) {
+            is ImportDeclaration -> return true
+            // tsc isAnExternalModuleIndicatorNode: an import-equals counts ONLY with an
+            // ExternalModuleReference (`= require(...)`) or an `export` modifier — a bare
+            // entity-name alias (`import fs = module`) leaves the file a SCRIPT.
+            is ImportEqualsDeclaration ->
+                if (stmt.moduleReference is ExternalModuleReference ||
+                    ModifierFlag.Export in stmt.modifiers) return true
+            is ExportDeclaration -> return true
+            is ExportAssignment -> return true
+            // VariableStatement is not a Declaration but can have export modifier
+            is VariableStatement -> if (ModifierFlag.Export in stmt.modifiers) return true
+            else -> {
+                if (stmt is Declaration) {
+                    val modifiers = when (stmt) {
+                        is FunctionDeclaration -> stmt.modifiers
+                        is ClassDeclaration -> stmt.modifiers
+                        is EnumDeclaration -> stmt.modifiers
+                        is InterfaceDeclaration -> stmt.modifiers
+                        is TypeAliasDeclaration -> stmt.modifiers
+                        is ModuleDeclaration -> stmt.modifiers
+                        else -> emptySet()
+                    }
+                    if (ModifierFlag.Export in modifiers) return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+/**
  * (INV.0) (P18.289) — the TSLIB EMIT-HELPER family under `importHelpers`:
  * `checkImportHelpersWithoutTslib` (TS2354, no `tslib` resolvable from the file) and
  * `checkMissingTslibHelpers` (TS2343, a helper the emit would need that the resolved `tslib`

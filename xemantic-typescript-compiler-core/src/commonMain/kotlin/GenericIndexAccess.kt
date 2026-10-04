@@ -49,10 +49,34 @@ package com.xemantic.typescript.compiler
  */
 internal class GenericIndexAccess(private val checker: Checker) {
 
+    /** (LIBS.3) the second route: a deferred-conditional receiver indexed by a deferred-conditional key. */
+    private val deferredConditionals = DeferredConditionalIndexAccess(checker)
+
+    companion object {
+        /** TS2536 anchored as tsgo anchors it: from the receiver through the closing `]`. */
+        fun report(
+            checker: Checker, expr: ElementAccessExpression, arg: Expression, source: String, fileName: String,
+            indexDisplay: String, objectDisplay: String,
+        ) {
+            val argEnd = checker.expressionTrueEnd(arg)
+            var close = argEnd
+            while (close < source.length && source[close] != ']') close++
+            val accessEnd = if (close < source.length) close + 1 else argEnd
+            val start = expr.expression.pos
+            val (line, character) = checker.getLineAndCharacterOfPosition(source, start)
+            checker.diagnostics.add(Diagnostic(
+                message = "Type '$indexDisplay' cannot be used to index type '$objectDisplay'.",
+                category = DiagnosticCategory.Error, code = 2536, fileName = fileName,
+                line = line, character = character, start = start, length = (accessEnd - start).coerceAtLeast(1),
+            ))
+        }
+    }
+
     fun check(expr: ElementAccessExpression, source: String, fileName: String) {
         val arg = checker.unwrapParensExpr(expr.argumentExpression)
         if (arg is StringLiteralNode || arg is NumericLiteralNode) return
-        val indexType = checker.getTypeOfExpression(arg) as? Type.TypeParam ?: return
+        val indexType = checker.getTypeOfExpression(arg) as? Type.TypeParam
+            ?: return deferredConditionals.check(expr, arg, source, fileName)
         val indexName = indexType.symbol?.name ?: return
         val indexDecl = typeParameterDeclaration(expr, indexName) ?: return
         val objectType = checker.getTypeOfExpression(expr.expression)
@@ -62,17 +86,7 @@ internal class GenericIndexAccess(private val checker: Checker) {
             val parts = concreteKeyParts(constraint) ?: return
             if (covers(objectType, parts, expr) != false) return
         }
-        val argEnd = checker.expressionTrueEnd(arg)
-        var close = argEnd
-        while (close < source.length && source[close] != ']') close++
-        val accessEnd = if (close < source.length) close + 1 else argEnd
-        val start = expr.expression.pos
-        val (line, character) = checker.getLineAndCharacterOfPosition(source, start)
-        checker.diagnostics.add(Diagnostic(
-            message = "Type '${checker.typeToString(indexType)}' cannot be used to index type '${checker.typeToString(objectType)}'.",
-            category = DiagnosticCategory.Error, code = 2536, fileName = fileName,
-            line = line, character = character, start = start, length = (accessEnd - start).coerceAtLeast(1),
-        ))
+        report(checker, expr, arg, source, fileName, checker.typeToString(indexType), checker.typeToString(objectType))
     }
 
     /** One decidable key of a concrete constraint: a `string` / `number` keyword or a literal. */

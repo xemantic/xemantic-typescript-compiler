@@ -16793,38 +16793,7 @@ class Checker(
      * Check if a file is a module (has import/export statements).
      * Non-module files' top-level declarations are global and not checked for unused.
      */
-    internal fun isModuleFile(statements: List<Statement>): Boolean {
-        for (stmt in statements) {
-            when (stmt) {
-                is ImportDeclaration -> return true
-                // tsc isAnExternalModuleIndicatorNode: an import-equals counts ONLY with an
-                // ExternalModuleReference (`= require(...)`) or an `export` modifier — a bare
-                // entity-name alias (`import fs = module`) leaves the file a SCRIPT.
-                is ImportEqualsDeclaration ->
-                    if (stmt.moduleReference is ExternalModuleReference ||
-                        ModifierFlag.Export in stmt.modifiers) return true
-                is ExportDeclaration -> return true
-                is ExportAssignment -> return true
-                // VariableStatement is not a Declaration but can have export modifier
-                is VariableStatement -> if (ModifierFlag.Export in stmt.modifiers) return true
-                else -> {
-                    if (stmt is Declaration) {
-                        val modifiers = when (stmt) {
-                            is FunctionDeclaration -> stmt.modifiers
-                            is ClassDeclaration -> stmt.modifiers
-                            is EnumDeclaration -> stmt.modifiers
-                            is InterfaceDeclaration -> stmt.modifiers
-                            is TypeAliasDeclaration -> stmt.modifiers
-                            is ModuleDeclaration -> stmt.modifiers
-                            else -> emptySet()
-                        }
-                        if (ModifierFlag.Export in modifiers) return true
-                    }
-                }
-            }
-        }
-        return false
-    }
+    internal fun isModuleFile(statements: List<Statement>): Boolean = isExternalModuleByStatements(statements)
 
     /**
      * B98.r15: detect a CommonJS module indicator in a JS file's top-level statements:

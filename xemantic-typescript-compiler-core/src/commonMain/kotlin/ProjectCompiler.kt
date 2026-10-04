@@ -633,9 +633,18 @@ class ProjectCompiler(private val vfs: Vfs) {
                 // replaces did.
                 val importerDir = PathUtil.dirname(f.path)
                 var fileResolutions: MutableMap<String, String>? = null
-                for (spec in f.specifiers) {
+                // (CHK.229) tsgo's `resolveImportsAndModuleAugmentations` (fileloader.go:544):
+                // under `importHelpers` every JS file, and every non-declaration file that is an
+                // external module (or every one, under `isolatedModules`), takes a SYNTHETIC
+                // `import "tslib"` — so the helpers module is resolved from the file's own
+                // directory and its declaration file joins the program, which is what both
+                // TS2354 (not found) and TS2343 (a missing helper) are decided against.
+                val helpersImport = options.importHelpers && "tslib" !in f.specifiers && takesHelpersImport(f, options)
+                val specs = if (helpersImport) f.specifiers + "tslib" else f.specifiers
+                for (spec in specs) {
                     val resolved = resolver.resolveFrom(spec, importerDir)
                     if (resolved == null) {
+                        if (helpersImport && spec == "tslib") continue
                         if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(f.path to spec)
                         continue
                     }
@@ -683,6 +692,16 @@ class ProjectCompiler(private val vfs: Vfs) {
             }
             FrontEnd.close(FrontEnd.CRAWL_DRAIN, feDrainT0)
         }
+    }
+
+    /** (CHK.229) Whether [f] takes tsgo's synthetic `tslib` import (see the crawl). */
+    private fun takesHelpersImport(f: CrawledFile, options: CompilerOptions): Boolean {
+        val path = f.path
+        if (path.endsWith(".js") || path.endsWith(".jsx") || path.endsWith(".mjs") || path.endsWith(".cjs")) return true
+        if (path.endsWith(".d.ts") || path.endsWith(".d.mts") || path.endsWith(".d.cts") || path.endsWith(".json")) return false
+        if (options.isolatedModules) return true
+        val sf = f.preParsed?.sourceFile ?: return false
+        return isExternalModuleByStatements(sf.statements)
     }
 
     /** (CHK.202) A JavaScript file reached through `node_modules` — never a program file here. */
