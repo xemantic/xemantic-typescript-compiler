@@ -521,6 +521,7 @@ class Checker(
     private val genericIndexAccess = GenericIndexAccess(this)
     internal val intersectionOps = IntersectionTypeOperators(this)
     internal val indexedAccessParams = IndexedAccessParams(this)
+    internal val contextualLiteralArgs = ContextualLiteralArgs(this) // (LIBS.3) GENLIT
     /** (LIBS.2) GSIG — the `IsEqual` generic-signature trick; see `GenericSignatureConditionals.kt`. */
     private val genericSigConditionals = GenericSignatureConditionals(this)
     private val genuineAny = GenuineAnyProvenance(this) // (CHK.228)
@@ -105959,6 +105960,7 @@ interface DataView {
                         is GetAccessor -> decl.type
                         else -> (decl as Parameter).type
                     } ?: return null
+                    indexedAccessParams.reresolveMemberType(declType, decl, typeParams, typeArgs)?.let { return@withInstantiationContext it } // (CHK.231)
                     val rawType = getTypeFromTypeNode(declType)
                     if (rawType === errorType || rawType === anyType) null
                     else instantiateMethodParamType(rawType, mapper)
@@ -106021,6 +106023,9 @@ interface DataView {
                                 val sym = Symbol(SymbolFlags.FunctionScopedVariable, pName)
                                 sym.declarations.add(p)
                                 sym.valueDeclaration = p
+                                if (methodTypeParams.isNullOrEmpty()) p.type?.let { // (CHK.231)
+                                    indexedAccessParams.reresolveMemberType(it, md, typeParams, typeArgs)
+                                }?.let { symbolTypes[sym.id] = it; return@mapNotNull sym }
                                 val rawParamType = p.type?.let { getTypeFromTypeNode(it) } ?: anyType
                                 // B81.1d: a function-typed parameter (`compareFn?: (a: T, b: T)
                                 // => number`) goes through the fn-aware walker, because plain
@@ -108576,6 +108581,7 @@ interface DataView {
             if (declaredType is Type.Interface) {
                 val typeParams = declaredType.typeParameters
                 val typeArgs = node.typeArguments
+                defaultedInterfaceReference(declaredType, typeArgs.orEmpty(), node)?.let { return it } // (CHK.231)
                 if (typeParams != null && typeParams.isNotEmpty() && typeArgs != null && typeArgs.isNotEmpty()) {
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                     if (resolvedArgs.none { it === errorType }) {
@@ -108851,7 +108857,7 @@ interface DataView {
                 // Store sentinel in cache first to prevent circular type alias StackOverflow
                 declaredTypes[symbol.id] = errorType
                 val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
-                val resolved = if (decl != null) getTypeFromTypeNode(decl.type) else errorType
+                val resolved = if (decl != null) aliasOwnDefaultedReference(decl, symbol, getTypeFromTypeNode(decl.type)) else errorType
                 declaredTypes[symbol.id] = resolved
                 // B50.4: register alias-name display for non-generic type aliases
                 // whose body resolved to a NEW Type.Object (NOT Union/Intersection).
@@ -108907,10 +108913,12 @@ interface DataView {
                 // The two shapes are separated by exactly one property and nothing else:
                 // `Block` / `PropertySignature` / `InterfaceDeclaration` — the three largest
                 // families — are non-generic, `TableClass<S = any>` is not.
-                val bodyHasCompleteOwnName = resolved is Type.Object && resolved.symbol != null &&
+                // (CHK.231) a bare all-defaulted reference is that raw stand-in's successor: same rule.
+                val bareDefaulted = state.interner.isBareDefaulted(resolved)
+                val bodyHasCompleteOwnName = resolved is Type.Object && resolved.symbol != null && !bareDefaulted &&
                     (resolved !is Type.Interface || resolved.typeParameters.isNullOrEmpty())
                 val shouldRegister =
-                    resolved is Type.Object && resolved !is Type.Reference &&
+                    resolved is Type.Object && (resolved !is Type.Reference || bareDefaulted) &&
                         !bodyHasCompleteOwnName ||
                     (resolved is Type.Intersection && (
                         resolved.types.any { it is Type.Union } ||
@@ -113681,6 +113689,80 @@ interface DataView {
         return true
     }
 
+    /**
+     * (CHK.231) Is the element-access key [key] a binding tsgo treats as a constant reference — a `const`
+     * variable, or a parameter / `let` never assigned in its scope? Syntactic, innermost declaration first;
+     * anything it cannot place (a `var`, a `for` header, a catch clause, an import) answers false.
+     */
+    private fun isUnassignedKeyBinding(key: Identifier): Boolean {
+        val name = key.text
+        var n: Node? = (key as NodeBase).parent
+        var hops = 0
+        while (n != null && hops++ < 256) {
+            val stmts: List<Statement>? = when (n) {
+                is Block -> n.statements
+                is SourceFile -> n.statements
+                is ModuleBlock -> n.statements
+                is CaseClause -> n.statements
+                is DefaultClause -> n.statements
+                else -> null
+            }
+            if (stmts != null) for (st in stmts) {
+                val list = (st as? VariableStatement)?.declarationList ?: continue
+                for (d in list.declarations) if ((d.name as? Identifier)?.text == name) {
+                    return when {
+                        list.flags == SyntaxKind.ConstKeyword -> true
+                        list.flags == SyntaxKind.LetKeyword -> !patternLeafAssignedIn(n, setOf(name))
+                        else -> false
+                    }
+                }
+            }
+            val params: List<Parameter>? = when (n) {
+                is FunctionDeclaration -> n.parameters
+                is FunctionExpression -> n.parameters
+                is ArrowFunction -> n.parameters
+                is MethodDeclaration -> n.parameters
+                is Constructor -> n.parameters
+                is GetAccessor -> n.parameters
+                is SetAccessor -> n.parameters
+                else -> null
+            }
+            if (params != null) {
+                if (params.any { (it.name as? Identifier)?.text == name }) {
+                    val body: Node = when (n) {
+                        is FunctionDeclaration -> n.body
+                        is FunctionExpression -> n.body
+                        is ArrowFunction -> n.body
+                        is MethodDeclaration -> n.body
+                        is Constructor -> n.body
+                        is GetAccessor -> n.body
+                        is SetAccessor -> n.body
+                        else -> null
+                    } ?: return false
+                    return !patternLeafAssignedIn(body, setOf(name))
+                }
+            }
+            if (n is ForStatement || n is ForInStatement || n is ForOfStatement || n is CatchClause) {
+                val decl = when (n) {
+                    is ForStatement -> n.initializer
+                    is ForInStatement -> n.initializer
+                    is ForOfStatement -> n.initializer
+                    else -> (n as CatchClause).variableDeclaration
+                }
+                if (decl != null && declaresName(decl, name)) return false
+            }
+            n = (n as? NodeBase)?.parent
+        }
+        return false
+    }
+
+    private fun declaresName(n: Node, name: String): Boolean {
+        if (n is Identifier) return n.text == name
+        var found = false
+        forEachChild(n) { if (!found && it !is Expression && declaresName(it, name)) found = true }
+        return found || (n is VariableDeclaration && (n.name as? Identifier)?.text == name)
+    }
+
     internal fun getReferencePath(expr: Expression): String? = when (expr) {
         is Identifier -> expr.text
         is PropertyAccessExpression -> {
@@ -113694,12 +113776,20 @@ interface DataView {
         // path-string consumer compares consistently. Root extraction sites must use
         // [flowPathRoot] (splits on '[' too), not bare substringBefore('.').
         is ElementAccessExpression -> {
-            val idx = when (val arg = expr.argumentExpression) {
+            val arg = expr.argumentExpression
+            val idx = when (arg) {
                 is NumericLiteralNode -> arg.text
                 is StringLiteralNode -> arg.text
                 else -> null
             }
-            if (idx == null) null else {
+            // (CHK.231) tsgo `isMatchingReference`: `o[k]` and `o[k]` are one reference when `k` is the
+            // same CONST variable, or a parameter / mutable local never assigned. `@` keeps the segment
+            // distinct from any literal index.
+            if (idx == null) {
+                if (arg is Identifier && isUnassignedKeyBinding(arg)) {
+                    getReferencePath(expr.expression)?.let { "$it[@${arg.text}]" }
+                } else null
+            } else {
                 val receiverPath = getReferencePath(expr.expression) ?: return null
                 // (CHK.11) round 942: a string index that is spellable as a DOTTED property
                 // normalises to the dotted segment, because tsc's `isMatchingReference`
@@ -146632,7 +146722,9 @@ interface DataView {
             val pt = getTypeOfSymbol(p)
             if (pt === anyType || pt === errorType) continue
             if (tps.none { typeMayMentionTypeParam(pt, it, 0) }) continue
-            val at = getTypeOfExpression(args[i])
+            val at = getTypeOfExpression(args[i]).let { t ->
+                if (a is ObjectLiteralExpression || a is ArrayLiteralExpression) contextualLiteralArgs.retype(a, t, pt) else t
+            }
             if (at === anyType || at === errorType) continue
             // An argument whose own type carries an un-inferred type parameter of some
             // OTHER call (a nested call this leg could not resolve either) is a leak;
@@ -164784,6 +164876,7 @@ interface DataView {
         ArgSections.at(ArgSections.L_OBJLIT_TP)
         if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.TypeParam) {
             val constraint = paramType.constraint
+            val argType = contextualLiteralArgs.retype(arg, argType, paramType) // (LIBS.3) GENLIT
             if (constraint is Type.Object) {
                 resolveStructuredTypeMembers(constraint)
                 val hasConstraintProps = !constraint.properties.isNullOrEmpty()
@@ -164809,8 +164902,12 @@ interface DataView {
                         if (sourcePropType === anyType || sourcePropType === errorType) continue
                         if (!isSimpleCheckableType(sourcePropType)) continue
                         if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
-                        val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
-                        val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
+                        // (LIBS.3) GENLIT: a literal the contextual type kept displays as that literal, and an
+                        // optional target carries `undefined` under strictNullChecks (tsgo's `{ mode?: … }` row).
+                        val displaySource = typeToString(sourcePropType)
+                        val displayTargetProp = typeToString(getWidenedLiteralType(
+                            if (strictNullChecks && isOptionalProperty(targetProp) && !typeIncludesUndefined(targetPropType))
+                                getUnionType(listOf(targetPropType, undefinedType)) else targetPropType))
                         val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
                         val related = mutableListOf<Diagnostic>()
                         // 16.4dt: TypeScript only emits TS6500 for ANONYMOUS object constraints
@@ -171903,6 +172000,50 @@ interface DataView {
      * Pass `args = null` to denote a Reference with no resolved arguments (e.g. a raw
      * generic with no instantiation). This is rare; most call sites pass an actual list.
      */
+    /**
+     * (CHK.231) A reference to a generic interface or class that OMITS defaulted trailing type
+     * arguments (`declare const z: ZodTuple` for `ZodTuple<T = …, Rest = …>`), completed from the
+     * defaults as tsgo's `fillMissingTypeArguments` does — before this a bare reference answered
+     * the RAW interface, whose members read the unbound parameters (silently `T`), and a partial
+     * one minted a Reference with too few arguments that member instantiation refused. Null (the
+     * old answer) in a JS file, when every argument is given, or when an omitted one has no default.
+     */
+    private fun defaultedInterfaceReference(declared: Type.Interface, typeArgs: List<TypeNode>, node: Node): Type? {
+        val typeParams = declared.typeParameters
+        if (typeParams.isNullOrEmpty() || typeArgs.size >= typeParams.size) return null
+        if (isJsLikeFileName(owningSourceFileName(node) ?: return null)) return null
+        val decl = declared.symbol?.declarations?.firstOrNull { d ->
+            val tps = when (d) {
+                is InterfaceDeclaration -> d.typeParameters
+                is ClassDeclaration -> d.typeParameters
+                else -> null
+            }
+            tps != null && tps.size == typeParams.size && tps.drop(typeArgs.size).all { it.default != null }
+        } ?: return null
+        // A LIB declaration (`Iterable<T, TReturn = any, TNext = any>`, a bare `Uint8Array`) keeps its old
+        // answer: filling those exposes unrelated relation / narrowing gaps (measured: 5 non-tsgo rows over
+        // superstruct, hono and zod). Staged — see (CHK.231)'s session note.
+        if (isLibFileName(owningSourceFileName(decl) ?: return null)) return null
+        val declTPs = (decl as? InterfaceDeclaration)?.typeParameters ?: (decl as ClassDeclaration).typeParameters!!
+        if (AliasDefaultTypeArgs.argumentNodes(typeArgs, declTPs) == null) return null
+        val resolved = AliasDefaultTypeArgs.resolve(typeArgs, declTPs,
+            { getTypeFromTypeNode(it) }, { n, b -> typeOfNodeBinding(n, b) })
+        return getOrInternReference(declared, resolved.map { if (it === errorType) anyType else it })
+    }
+
+    /**
+     * (CHK.231) `type Table = TableClass` (a non-generic alias whose body is a BARE reference to an
+     * all-defaulted generic) is its own instance of `TableClass<any>`, distinct from the interned one:
+     * tsgo displays `Table` through the alias while a bare `TableClass` elsewhere stays `TableClass<any>`,
+     * and [aliasDisplayMap] is keyed by type id. Anything else answers [resolved] unchanged.
+     */
+    private fun aliasOwnDefaultedReference(decl: TypeAliasDeclaration, symbol: Symbol, resolved: Type): Type {
+        if (resolved !is Type.Reference || !decl.typeParameters.isNullOrEmpty()) return resolved
+        val ref = decl.type as? TypeReference ?: return resolved
+        if (!ref.typeArguments.isNullOrEmpty() || resolved.target.typeParameters.isNullOrEmpty()) return resolved
+        return state.interner.bareDefaultedReference(resolved.target, resolved.resolvedTypeArguments.orEmpty(), symbol.id)
+    }
+
     internal fun getOrInternReference(target: Type.Interface, args: List<Type>?): Type.Reference =
         state.interner.reference(target, args)
 
@@ -186972,6 +187113,12 @@ interface DataView {
             val leftComparable = isComparableType(leftType)
             val rightComparable = isComparableType(rightType)
             if (!leftComparable || !rightComparable) {
+                // (CHK.231) tsgo `checkBinaryLikeExpression`: two operands NEITHER of which is assignable to
+                // `number | bigint` are accepted when comparable (`Date | number` against itself).
+                if (leftType is Type.Union && rightType is Type.Union && leftType === rightType &&
+                    !typeAssignableToNumberKind(leftType) && !typeAssignableToBigIntKind(leftType) &&
+                    checkTypeRelatedTo(leftType, rightType, comparableRelation)
+                ) return
                 if (objComparison) {
                     // For an object/function operand, display the operands via
                     // typeToString (no literal-text override) — tsc widens a bare
@@ -187076,7 +187223,9 @@ interface DataView {
         // arithTruthyNarrowedNames set can't see. Consult the flow graph and use
         // the flow-narrowed type ONLY when it proves non-nullish (the arithmetic FP
         // is the nullish member — a narrowing that leaves nullish keeps firing).
-        if (inner is Identifier || inner is PropertyAccessExpression) {
+        if (inner is Identifier || inner is PropertyAccessExpression ||
+            inner is ElementAccessExpression && inner.argumentExpression is Identifier // (CHK.231)
+        ) {
             arithFlowNarrowedNonNullish(inner, t)?.let { return it }
         }
         return t
@@ -187581,9 +187730,11 @@ interface DataView {
         if (operandFlowNarrowsToNever(operand, type)) return true
         val start = operand.pos
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // (CHK.231) an identifier-keyed element access is no entity name: tsgo `checkNonNullType` says TS2532.
+        val elementKeyed = "[@" in path
         diagnostics.add(Diagnostic(
-            message = "'$path' is possibly 'undefined'.",
-            category = DiagnosticCategory.Error, code = 18048,
+            message = if (elementKeyed) "Object is possibly 'undefined'." else "'$path' is possibly 'undefined'.",
+            category = DiagnosticCategory.Error, code = if (elementKeyed) 2532 else 18048,
             fileName = fileName, line = line, character = character,
             start = start, length = expressionTrueEnd(operand) - start,
         ))

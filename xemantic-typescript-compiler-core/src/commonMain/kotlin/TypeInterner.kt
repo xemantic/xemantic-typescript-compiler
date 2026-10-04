@@ -89,6 +89,31 @@ internal class TypeInterner {
         }
     }
 
+    private val bareDefaultedCache = HashMap<String, Type.Reference>()
+    private val bareDefaultedIds = HashSet<Int>()
+
+    /**
+     * (CHK.231) The instance a non-generic type ALIAS of a bare all-defaulted generic (`type Table =
+     * TableClass` for `TableClass<S = any>`) resolves to: the defaulted instantiation, but DISTINCT from
+     * the interned `TableClass<any>` — tsgo displays `Table` through the alias while a bare `TableClass`
+     * elsewhere stays `TableClass<any>` (round 754's display invariant). One instance per alias.
+     */
+    fun bareDefaultedReference(target: Type.Interface, args: List<Type>, aliasId: Int): Type.Reference {
+        val key = buildString {
+            append(aliasId)
+            append('@')
+            append(target.id)
+            append('|')
+            args.joinTo(this, ",") { it.id.toString() }
+        }
+        return bareDefaultedCache.getOrPut(key) {
+            Type.Reference(target, resolvedTypeArguments = args).also { bareDefaultedIds.add(it.id) }
+        }
+    }
+
+    /** Is [type] a [bareDefaultedReference] instance? */
+    fun isBareDefaulted(type: Type): Boolean = type is Type.Reference && type.id in bareDefaultedIds
+
     /**
      * The instance for an already-normalized union member list — flattening,
      * `never` removal, dedup and the flags-value sort are the CALLER's

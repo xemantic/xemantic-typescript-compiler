@@ -126,15 +126,17 @@ class Rel4ElementAccessAndUnionSwitchTest {
     }
 
     /**
-     * Guard — fires on BOTH sides. A COMPUTED index is not a reference path, so
-     * the declared type still reaches the parameter: the path gate, not the node
-     * kind, is what admits an element access.
+     * Guard — fires on BOTH sides. A computed index whose key is WRITTEN in its scope is
+     * not a reference path, so the declared type still reaches the parameter: the path
+     * gate, not the node kind, is what admits an element access. ((P18.296): an UNASSIGNED
+     * key is one reference in tsgo and narrows, so this control reassigns it.)
      */
     @Test
-    fun `negative control - a computed index element access still reports the declared type`() {
+    fun `negative control - a reassigned computed index element access still reports the declared type`() {
         val diagnostics = diagnose(
             prelude + """
                 export function f(a: readonly ME[], i: number): string {
+                    i = i + 1;
                     switch (a[i]) {
                         case ME.A: return "a";
                         case ME.B: return "b";

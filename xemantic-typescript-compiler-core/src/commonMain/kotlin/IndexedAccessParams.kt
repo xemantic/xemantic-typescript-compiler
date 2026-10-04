@@ -113,6 +113,46 @@ internal class IndexedAccessParams(private val checker: Checker) {
         return rebuild(sig, decl, params, bindings)
     }
 
+    /**
+     * (CHK.231) A member type node of `target<typeArgs>` re-resolved with the target's type parameters
+     * BOUND to the arguments, when the node indexes one of them (`def: I["def"]`, `clone(def?:
+     * I["def"])`). [getTypeFromIndexedAccess] answers `I["def"]` from `I`'s CONSTRAINT at declaration
+     * time (there is no deferred indexed-access type), so instantiating the resolved member with the
+     * receiver's arguments cannot recover the argument's own property: `ZT<TupInt>.def` read
+     * `Int["def"]`. tsgo defers the access and resolves it against the argument. Null — the caller keeps
+     * its old answer — when the node has no such access, an argument still mentions a type parameter,
+     * the node names an unbound enclosing type parameter, or the result does not resolve concretely.
+     */
+    fun reresolveMemberType(node: TypeNode, decl: Node, typeParams: List<Type.TypeParam>, typeArgs: List<Type>): Type? {
+        val bindings = outerBindingsOf(typeParams, typeArgs) ?: return null
+        if (!indexesBoundName(node, bindings.keys)) return null
+        if (bindings.values.any { mentionsTypeParam(it, 0) }) return null
+        if (!enclosingTypeParamsBound(decl, bindings, emptyList(), emptyList(), listOf(node))) return null
+        val t = checker.withInstantiationContext(Checker.InstantiationMapper(bindings, null)) {
+            checker.getTypeFromTypeNode(node)
+        }
+        // `any["Bindings"]` IS `any` (hono `Context<E = any>`'s `env: E['Bindings']`); an `any` with no
+        // `any` argument behind it is an unresolved name and keeps the old answer.
+        if (t === anyType) return if (bindings.values.any { it === anyType }) anyType else null
+        if (t === errorType || t === unresolvedType || mentionsTypeParam(t, 0)) return null
+        return t
+    }
+
+    private fun indexesBoundName(node: Node, names: Set<String>): Boolean {
+        if (node is IndexedAccessType) {
+            var o: TypeNode = node.objectType
+            while (true) o = when (o) {
+                is ParenthesizedType -> o.type
+                is IndexedAccessType -> o.objectType
+                else -> break
+            }
+            if (o is TypeReference && o.typeArguments.isNullOrEmpty() && (o.typeName as? Identifier)?.text in names) return true
+        }
+        var found = false
+        forEachChild(node) { if (!found && indexesBoundName(it, names)) found = true }
+        return found
+    }
+
     private fun rebuild(sig: Signature, decl: Node, params: List<Parameter>, bindings: Map<String, Type>): Signature? {
         val newParams = ArrayList<Symbol>(params.size)
         for ((i, p) in params.withIndex()) {
@@ -187,6 +227,7 @@ internal class IndexedAccessParams(private val checker: Checker) {
     /** Every type parameter of an enclosing declaration that the signature's nodes name has a binding. */
     private fun enclosingTypeParamsBound(
         decl: Node, outer: Map<String, Type>, params: List<Parameter>, tpNodes: List<TypeParameter>,
+        nodes: List<TypeNode> = emptyList(),
     ): Boolean {
         val enclosing = HashSet<String>()
         var n = (decl as NodeBase).parent
@@ -209,6 +250,7 @@ internal class IndexedAccessParams(private val checker: Checker) {
         val unbound = enclosing.filter { it !in outer && it !in own }.toSet()
         if (unbound.isEmpty()) return true
         return params.none { p -> p.type?.let { referencesAny(it, unbound) } == true } &&
+            nodes.none { referencesAny(it, unbound) } &&
             tpNodes.none { t -> t.constraint?.let { referencesAny(it, unbound) } == true }
     }
 

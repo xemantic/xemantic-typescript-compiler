@@ -77,9 +77,12 @@ class ElementAccessReferencePathNarrowingTest {
     }
 
     @Test
-    fun `negative control - a VARIABLE index does not narrow`() {
+    fun `negative control - a REASSIGNED variable index does not narrow`() {
+        // (P18.296) an UNASSIGNED parameter index IS one reference in tsgo (`isMatchingReference`'s
+        // identifier-key arm) and narrows; only a key written in its scope keeps the two apart.
         diagnose(prelude + """
             function f(node: VarStmt, i: number) {
+                i++;
                 if (node.declarationList.declarations[i].initializer) {
                     getFlags(node.declarationList.declarations[i].initializer);
                 }
