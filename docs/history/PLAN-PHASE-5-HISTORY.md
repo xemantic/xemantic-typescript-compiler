@@ -1,3 +1,38 @@
+### Round (P18.286) — (LIBS.2) round 11, (CHK.228) steps 1-2: `X extends any` takes the true branch, a GENUINE `any` check type yields both branches, `never` distributes to `never`, and `IsAny<any>` answers true — gated by a new PROVENANCE channel (`GenuineAnyProvenance`), because this checker returns `any` for what it cannot resolve; step 3 (`NoInfer<T>` = `T`) REFUSED on measurement (type-fest 301 -> 387); tally 428 -> 427, NONE added (2026-10-04)
+
+One implementation subagent, each step priced. **Where the brief was wrong**: "`X extends any` answers `any`" is half
+the story — this checker answers `any` for MANY types it cannot resolve, so tsgo's rule cannot be keyed on the type:
+trusting every `any` check type took type-fest **301 -> 814**, trusting every `any` extends type gave 9 false `never` rows
+(tuple-max / min, `number extends A[number]` with `A[number]` unresolved), and the `T extends unknown ? … : never`
+distribution trick cannot distribute an unresolved check type (is-tuple looked right only by accident before). `never`
+needs the same care: `[T] extends [never] ? X : never` with `T` generic evaluates to `never` where tsgo defers — the
+corpus screen caught a new false positive in `conditionalTypeAssignabilityWhenDeferred` line 79 until the `never` rule
+was gated too. **Step 3 refused**: `NoInfer<T>` = `T` takes type-fest 301 -> 387 (113 added, 27 removed) even with steps
+1-2 — a correct `IsAny<concrete>` exposes mis-evaluations `any` used to mask: `Type extends Record<Key, Type[Key]>` for
+optional / readonly keys (is-*-key-of, ~40), jsonify (33), apply-default-options TS2344 (12), is-tuple (10) — so the DEFK
+rows stay blocked, now by those (patch `build/bench/p18286-agent/s3full.patch`). **Mechanism**: `GenuineAnyProvenance.kt`
+(88) — a `TypeNode` that resolved to `any` / `never` is GENUINE only if it is the keyword, a bare alias argument whose
+binding a FRAME `(argMap, names)` records as genuine (valid only while `currentTypeAliasArgs` is that exact map, so any
+other mapper install — distribution, `infer` bindings — reads as unresolved, the safe direction), or `NoInfer<…>` / an
+intersection / (for `any`) a union over a genuine node. `getTypeFromConditionalType`: a non-genuine `any` check or
+extends type still answers `any`, a genuine `never` with a bare type-parameter check type answers `never`;
+`evaluateConditional`: an `any` / `unknown` extends type takes the true branch, a genuine `any` check type takes both;
+generic alias instantiation evaluates `NoInfer<genuine any>` as `any`, adds the genuine names to the
+`substitutionResultCache` key and installs the frame around body resolution; `mappedNodeTypeKey` includes the genuine
+names (without it a genuine `DA<any>` result leaked to a later `DA<unresolved>` — pin f5). `Checker.kt` +35. **Matrix**
+(`build/bench/p18286-agent/m1`): `string extends any`, `any extends string ? 1 : 2` = `1 | 2`, `any` / `unknown`
+extends `any` / `unknown`, distributive `D<never>`, `0 extends 1 & any`, `IsAny<any>`, `DA<any>` through an alias argument
+— all now tsgo rows (17 pin rows full-text); residues: `IsAny<string>` silent (needs step 3), `IsNever<any>` silent
+(`[any] extends [never]` is true here — relation-wide), `NoInfer` does not block inference in generic calls, and display
+(a var-decl naming a conditional alias prints the alias name `'C2'`; `'number'` where tsgo prints `'0'` under a
+`never` target). **Pins**: `ConditionalAnyEvaluationTest` 7 (5 tsgo rows + controls: an unresolved `any` check / extends
+type stays silent, a should-defer `never` is not distributed, a genuine cache entry is not served to an unresolved
+one); ablation a1 2 / a2 1 / a3 1 / a11 1 / a4 1 / a5 2 / a6 1 / a7 1 / a8 2 / a9 1 / a10 1 RED (two redundant pieces
+removed after reading 0 RED). **Gates**: full suite 22,666 / 0 / 44 (+7); corpus screen 8725 / 0 and `--include ''` the
+same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; no TS2589 change; grid 8 x added=0 removed=0 + chain OK,
+rxjs / marked / cronstrue / mitt (standing gate, 0) unchanged (identity hash extended to `GenuineAnyProvenance`); library
+grid type-fest 301 -> 300 (`is-tuple.ts:37`), others unchanged (tally 428 -> 427); warning gate with probe: probe only.
+
 ### Round (P18.285) — (LIBS.2) round 10, GSIG: `IsEqual`'s generic-signature identity trick now decides like tsgo (it answered TRUE for every pair), and a mapped type `{[Q in K]: …}` with `K extends keyof T` takes `T`'s modifiers — type-fest 311 -> 301 (six `is-equal` rows, four `readonly-keys-of-union`), tally 438 -> 428, NONE added (2026-10-03)
 
 One implementation subagent. **Where the brief was wrong**: the leg was not a vacuous relation —

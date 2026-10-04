@@ -1,5 +1,9 @@
 
 
+**(P18.291) — (LIBS.3): date-fns AGREES WITH tsgo EXACTLY — 0 false rows, 0 missing — AND IS NOW THE SECOND STANDING GRID GATE (after mitt); THE tslib FALSE POSITIVE IS FIXED AT ITS ROOT (the crawl now adds tsgo's synthetic `import "tslib"`); TALLY 369 -> 368, NONE ADDED; +14 PINS, 22,714 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; mitt and date-fns hold.
+
+
 **(P18.290) — (LIBS.3): CURRIED ARROWS `(x) => (o) => …` NOW GET THEIR INNER PARAMETER TYPES FROM THE RIGHT LEVEL, OVERLOADED CONTEXTS FOLD, AND THREE WALKERS HONOUR LEXICAL SHADOWING — hono 58 -> 48, zod 48 -> 45, TALLY 382 -> 369, NONE ADDED; +12 PINS, 22,700 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; mitt still 0.
 
