@@ -1,5 +1,9 @@
 
 
+**(P18.288) — (LIBS.2): `infer` PATTERNS IN CONDITIONAL TYPES (`[infer Head, ...infer Tail]`, arrays, collections, template literals) ARE NOW MATCHED INSTEAD OF RESOLVING TO `any`; type-fest 267 -> 255, TALLY 394 -> 382, NONE ADDED; A FRESH CENSUS RE-RANKS THE REMAINING ROWS; +7 PINS, 22,683 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; mitt still 0.
+
+
 **(P18.287) — (LIBS.2): TEMPLATE-LITERAL TYPES EXIST — `` `-${string}` `` IS NO LONGER JUST `string`, SO `'5'` NO LONGER MATCHES IT; type-fest 300 -> 267 (ALL 27 string-repeat ROWS), TALLY 427 -> 394, NONE ADDED; +10 PINS, 22,676 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; mitt still 0; a corpus workaround in the unused-declaration family retired.
 

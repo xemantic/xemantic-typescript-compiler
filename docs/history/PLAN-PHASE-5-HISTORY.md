@@ -1,3 +1,39 @@
+### Round (P18.283) — (LIBS.2) round 8, mitt to ZERO: a default / namespace import of a DIRECTORY specifier now resolves (`import mitt from '..'` typed `any`), and a generic method's parameters that index by its own type parameter (`Handler<Events[Key]>`) are re-resolved per call — mitt 10 -> 0 ours-only, 0 missing, now a STANDING grid gate; hono −1; tally 456 -> 445, NONE added (2026-10-03)
+
+One implementation subagent. **Where the brief was wrong**: M1 is TWO defects and the first is not in the argument check
+— `import mitt from '..'` resolved to nothing, so `emitter` was `any` and every call was accepted (changing the import to
+`'../index'` alone cleared all ten directives). That defect is wider than mitt: a DEFAULT or NAMESPACE import of any
+directory specifier (`'./sub'`, `'./'`, `'.'`, `'..'`) typed `any` while named imports of it worked — the
+import-declaration branch of `NameResolver.resolveAlias` lacked (CHK.30)'s mandatory `resolveImportTargetFallback` leg.
+The second is the argument check the census named: there is no deferred indexed-access type, so `Events[Key]` and
+`Handler<Events[Key]>` answered `any`; mixed overload sets with a type parameter anywhere were skipped; the non-generic
+`on(type: '*', handler: WildcardHandler<Events>)` sibling was built wrong (`keyof Events` resolved from the constraint
+before substitution) — hidden while the generic sibling accepted everything; tsgo's "last overload" is the last after
+its specialized-first reordering (`reorderCandidates`); and `getFirstFailingArgPosition` typed a literal argument
+widened, anchoring on the first argument. **Mechanism**: new `IndexedAccessParams.kt` (252) — for a generic method /
+function whose parameter types index by its own type parameter, re-resolve each parameter type node for THIS call,
+binding the receiver's type arguments (new `Signature.outerBindings`, set in `resolveGenericPropertyTypeWorker`'s method
+branch) and each own type parameter from its argument (tsgo `getInferredType`: the literal when it fits the
+constraint, else the constraint); it answers null — old behaviour kept — unless the constraint is a literal union, and
+whenever a binding or result still mentions a type parameter; `instantiateOverloads` applies it to an overload set and,
+only when a generic candidate was instantiated, re-resolves the non-generic siblings under the receiver's type
+arguments; `checkArgumentsAgainstOverloads` picks the last failing candidate from `specializedFirst(pool)`;
+`overloadCandidateArgType` feeds the three failure-anchor helpers. Import fix: a `resolveImportTargetFallback` leg in
+`resolveAlias`, gated to RELATIVE specifiers and NON-namespace imports — the namespace version was priced and REFUSED:
+zod 54 -> 1,318 (1,251 TS2694 on `import * as core from "../core/index.js"`, the namespace object reads the target's
+`locals`, which star re-exports do not populate). `Checker.kt` +28, `NameResolver.kt` +17, `Type.kt` +8. **Matrix**:
+mitt's ten directives stripped — tsgo TS2769 x6 / TS2345 x4, ours before nothing, after all ten at tsgo's line, column
+and code (the TS2345 messages verbatim; the TS2769 chains differ only in pre-existing display — `| undefined` on optional
+parameters, `Handler<string>` expanded). hono's `adapter/service-worker/index.ts:36` directive now gets tsgo's exact
+TS2769 at 37:29 on the lib's generic `addEventListener<K extends keyof …EventMap>` overload — the mechanism reaches the
+DOM event-map shape. **Pins**: `IndexedAccessGenericArgumentTest` 11; ablation a1 2 / a2 7 / a3 1 (a legal
+`on('*', wildcardHandler)` becomes a false positive) / a4 2 / a5 1 / a6 1 / a7 6 / a8 1 RED. **Gates**: full suite 22,641 /
+0 / 44 (+11); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0;
+grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue unchanged (identity hash extended to
+`IndexedAccessParams`); library grid on the final classes (orchestrator's own run, `r283`, row sets = the builder's
+`a283`): mitt 10 -> 0 (tsgo 0 / ours 0 / missing 0), hono 60 -> 59, others unchanged (tally 456 -> 445); **mitt added to
+the standing grid** (`grid.sh`'s library arm: 10 rows before, 0 after); warning gate with probe: probe only.
+
 ### Round (P18.282) — (LIBS.2) round 7, (CHK.226) + part of (CHK.215): `keyof`, indexed access and property reads now work over INTERSECTIONS (new collaborator `IntersectionTypeOperators`), together with the three collateral defects (P18.281) measured — ky's last CTXM row gone with no false TS2322, date-fns gains no false TS18048; `infer` from a parenthesized function type evaluates (type-fest keys-of-union); alias display no longer hijacks shared types; the corpus-only walker B574 retired as engine-produced; tally 463 -> 456, NONE added; `keyof (A | B)` REFUSED on measurement (2026-10-03)
 
 One implementation subagent. **Where the item was wrong**: (a) `keyof (A | B)` ("the keys every member has") adds a
