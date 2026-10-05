@@ -4893,9 +4893,14 @@ class Checker(
      *  are pushed into this map, then the alias body is re-resolved fresh via
      *  [getTypeFromTypeNode] (cache-bypassed). Body-internal `TypeReference(T)` lookups
      *  consult this map BEFORE `currentTypeParamScope` so concrete types win over
-     *  TypeParams. Nested aliases nest via push/pop. Recursion guarded by [typeAliasResolutionDepth]. */
+     *  TypeParams. Nested aliases nest via push/pop. Recursion guarded by [aliasBudget]. */
     private var currentTypeAliasArgs: Map<String, Type>? = null
-    private var typeAliasResolutionDepth: Int = 0
+    /** (P18.304) bounds generic alias substitution: depth, count and tail recursion. */
+    private val aliasBudget = AliasInstantiationBudget()
+
+    /** (P18.304) the declarations whose bodies are being substituted — the innermost decides
+     *  whether a reference met there is in tail position ([AliasInstantiationBudget.isTailReference]). */
+    private val aliasBodyDeclStack: ArrayDeque<TypeAliasDeclaration> = ArrayDeque()
 
     /** Symbol ids of generic OBJECT-LITERAL-body type aliases currently being instantiated
      *  (push/pop around the substitution recursion). When a self-referential object-body
@@ -108138,7 +108143,8 @@ interface DataView {
                                 symbol.id in aliasObjLiteralInstantiationStack) {
                                 return errorType
                             }
-                            if (typeAliasResolutionDepth >= 10) {
+                            val tailRef = aliasBudget.isTailReference(node, aliasBodyDeclStack.lastOrNull())
+                            if (aliasBudget.exhausted(tailRef)) {
                                 // B57.1: signal depth-bail to outer callers so they can
                                 // emit TS2589 at the annotation position.
                                 deepInstantiationBailed = true
@@ -108179,8 +108185,9 @@ interface DataView {
                                 ambientScope - declTPs.map { it.name.text }.toSet()
                             } else ambientScope
                             val mapper = InstantiationMapper(argMap, bodyScope, inferenceNamespaceStack.size)
+                            val budgetToken = aliasBudget.enter(tailRef)
+                            aliasBodyDeclStack.addLast(decl)
                             try {
-                                typeAliasResolutionDepth++
                                 if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.addLast(symbol.id)
                                 aliasSubstitutionStack.addLast(symbol.id)
                                 // (a UnionType body is pushed unconditionally — the pop below
@@ -108194,10 +108201,14 @@ interface DataView {
                                     genuineAny.frame = savedGenuine
                                 }
                                 // (P18.293) a reference completed by defaults whose evaluation
-                                // exhausts OUR depth budget (10, against tsgo's 100 / 1,000 for a
-                                // tail-recursive conditional) keeps its old answer rather than
-                                // reporting TS2589: an omitted parameter defaulted to `[]` / `''`
-                                // is typically the ACCUMULATOR of exactly such a recursion.
+                                // exhausts the budget keeps its old answer rather than reporting
+                                // TS2589: an omitted parameter defaulted to `[]` / `''` is typically
+                                // the ACCUMULATOR of such a recursion. (P18.304) With the budget at
+                                // tsgo's limits this no longer stands in for a short budget; what it
+                                // still absorbs is EAGER evaluation — an object-literal argument's
+                                // member is resolved here where tsgo never asks for it (type-fest's
+                                // `IfNotAnyOrNever<any, {ifNot: CrashIfAny<any>}>`), and removing it
+                                // trades four true TS2589 for four false ones on that file.
                                 if (typeArgs.size < declTPs.size && deepInstantiationBailed && !bailBefore) {
                                     deepInstantiationBailed = false
                                     return@run
@@ -108275,7 +108286,8 @@ interface DataView {
                                 }
                                 return result
                             } finally {
-                                typeAliasResolutionDepth--
+                                aliasBudget.leave(tailRef, budgetToken)
+                                aliasBodyDeclStack.removeLast()
                                 if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.removeLast()
                                 aliasSubstitutionStack.removeLast()
                             }
@@ -132655,9 +132667,10 @@ interface DataView {
      * where BOTH the trueType AND falseType are self-references to the enclosing alias
      * (`Foo<T> = T extends unknown ? (… ? Foo<T> : Foo<unknown>) : unknown`). When both
      * branches recurse, the conditional has NO base case → unconditionally infinite →
-     * tsc always emits TS2589 (squiggled on the FALSE-branch self-call). FP-safe BY
-     * CONSTRUCTION (a both-branches-self-ref conditional is mathematically non-terminating,
-     * so no passing test can have one without expecting TS2589). Purely additive — our
+     * tsc always emits TS2589 (squiggled on the FALSE-branch self-call). NOT FP-safe by
+     * construction, as this comment used to claim: an OUTER conditional can be the base case
+     * and a generic check type defers the inner one — see [bothBranchConditionalIsDeferred]
+     * (P18.304, five type-fest false positives). Purely additive — our
      * conditional-type eval short-circuits infer-bearing conditionals to errorType and
      * never recurses to a depth bail, so we emit no TS2589 for these today.
      */
@@ -132669,6 +132682,7 @@ interface DataView {
                 val alias = stmt as? TypeAliasDeclaration ?: continue
                 if (alias.typeParameters.isNullOrEmpty()) continue
                 val cond = findBothBranchSelfRefConditional(alias.type, alias.name.text) ?: continue
+                if (bothBranchConditionalIsDeferred(alias, cond, result.locals)) continue
                 val falseRef = cond.falseType
                 val width = typeRefSourceWidth(falseRef, source) ?: continue
                 var start = falseRef.pos
@@ -132827,6 +132841,44 @@ interface DataView {
             message = "$what produces a tuple type that is too large to represent.",
             category = DiagnosticCategory.Error, code = code, fileName = fileName,
             line = line, character = ch, start = start, length = length))
+    }
+
+    /**
+     * (P18.304) whether [cond]'s check type is GENERIC — it names one of [alias]'s type
+     * parameters or an `infer` name declared in its body — while every name in it resolves.
+     * tsgo then DEFERS that conditional at the declaration, so its two self-references are never
+     * instantiated and nothing is reported: type-fest's `TupleMax` (`GreaterThan<F, Result>
+     * extends true ? TupleMax<R, F> : TupleMax<R, Result>`, under an outer base case). A
+     * non-generic check type (`Foo<T>`'s `unknown`) or an unresolved name (`StrIter.CutAt<…>`,
+     * which is `any`) is evaluated, and the both-branch recursion is then infinite
+     * (recursiveConditionalCrash4).
+     */
+    private fun bothBranchConditionalIsDeferred(alias: TypeAliasDeclaration, cond: ConditionalType, locals: SymbolTable): Boolean {
+        val generic = HashSet<String>()
+        alias.typeParameters?.forEach { generic.add(it.name.text) }
+        val stack = ArrayDeque<Node>()
+        stack.addLast(alias.type)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeLast()
+            if (n is InferType) generic.add(n.typeParameter.name.text)
+            forEachChild(n) { stack.addLast(it) }
+        }
+        var mentionsGeneric = false
+        stack.addLast(cond.checkType)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeLast()
+            if (n is TypeReference) {
+                var head: Node = n.typeName
+                while (head is QualifiedName) head = head.left
+                val name = (head as? Identifier)?.text
+                if (name != null) {
+                    if (name in generic) mentionsGeneric = true
+                    else if (locals[name] == null && globals[name] == null) return false
+                }
+            }
+            forEachChild(n) { stack.addLast(it) }
+        }
+        return mentionsGeneric
     }
 
     private fun condSelfRef(t: TypeNode?, name: String): Boolean =
@@ -171075,6 +171127,11 @@ interface DataView {
                 continue
             }
             val elems = tup.tupleElementTypes!!
+            // (P18.304) tsgo `createNormalizedTupleType`: a tuple of 10,000 or more elements is
+            // TS2799 (reported by [checkExcessivelyLargeTupleSpread]) and evaluates to `errorType`.
+            // Without the cap a doubling recursion (`BuildTuple<L, [...T, ...T]>`) under a deeper
+            // alias budget materializes 2^depth element symbols.
+            if (types.size + elems.size >= 10_000) return errorType
             if (tup.tupleRestIndex >= 0) { if (rest >= 0) return null; rest = types.size + tup.tupleRestIndex }
             for (j in elems.indices) {
                 types.add(elems[j]); opt.add(tupleSlotIsOptional(tup, j)); names.add(tup.tupleElementNames?.getOrNull(j))
