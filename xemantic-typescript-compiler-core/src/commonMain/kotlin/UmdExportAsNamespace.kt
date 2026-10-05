@@ -35,8 +35,8 @@ internal class UmdExportAsNamespaceOccurrence(val name: String, val pos: Int)
  * The pattern. The parser produces no AST node for `export as namespace X` (a
  * documented misparse), so the construct is found by scanning the source text.
  *
- * Two checker passes read it — [Checker.checkUmdGlobalVsDeclareGlobalConst] and
- * [Checker.checkCrossFileModuleAugmentationDuplicates] — and until (WARM.7)
+ * Two checker passes read it — [CrossFileConflictChecks.checkUmdGlobalVsDeclareGlobalConst] and
+ * [CrossFileConflictChecks.checkCrossFileModuleAugmentationDuplicates] — and until (WARM.7)
  * each compiled and ran its own copy over the FULL text of every checked file,
  * i.e. the same ~10 MB scanned twice per compile. Round 859 measured that: the
  * two are the SLOWEST-WARMING passes in the whole ~416-pass tail (0.85x and
@@ -64,9 +64,9 @@ internal val umdExportAsNamespaceRegex =
  * its offset, and nothing else.
  *
  * That pair is the NARROWEST thing both reader passes need:
- * [Checker.checkUmdGlobalVsDeclareGlobalConst] builds an occurrence record from
+ * [CrossFileConflictChecks.checkUmdGlobalVsDeclareGlobalConst] builds an occurrence record from
  * the identifier's offset and length, and
- * [Checker.checkCrossFileModuleAugmentationDuplicates] keeps a first-wins
+ * [CrossFileConflictChecks.checkCrossFileModuleAugmentationDuplicates] keeps a first-wins
  * name-to-file map. Neither reads any other part of the match, so sharing the
  * whole `MatchResult` would share more than either consumes.
  *
