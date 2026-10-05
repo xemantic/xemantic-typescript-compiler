@@ -1,3 +1,39 @@
+### Round (P18.291) — (LIBS.3) round 2: date-fns to ZERO (TS2536 for a deferred conditional receiver indexed by a deferred conditional key, replayed from tsgo's three acceptance routes) — date-fns is now a STANDING grid gate; and (CHK.229) the tslib false positive fixed at its real cause, the crawl's missing synthetic `import "tslib"`; tally 369 -> 368, NONE added (2026-10-04)
+
+One implementation subagent. **Where the items were wrong**: (a) (CHK.220)'s "needs deferred conditional types" — it
+does not: tsgo's verdict replays exactly from the declarations by evaluating both aliases at each member of `V`'s
+literal constraint; and the row is not decided by the `number` branch alone — tsgo tries THREE routes to accept
+`Idx<V>` (`relater.go` ~3489 / ~3743): the receiver's constraint (intersection of keys over its branches), the index's
+default constraint (both branches) and its distributive constraint (evaluated at each member of `V`'s constraint), and
+reports only when all three fail and the number-index escape is closed (matrix cell e1 is legal only by the third). (b)
+(CHK.229)'s cause is in the CRAWL, not the check: tsgo gives every module file, every JS file and every file under
+`isolatedModules` a synthetic `import "tslib"` (`fileloader.go:544`); ours never added it, so a `node_modules/tslib` that
+nothing imports was never in the program — `TslibHelperChecks` needed no change. **Mechanism**: new
+`DeferredConditionalIndexAccess.kt` (360), called from `GenericIndexAccess.check` when the index is not a type
+parameter — receiver and index must be identifiers whose declared type (a shadow-aware ascent: parameter / variable
+annotation or an `as` / `<T>` initializer) is a one-parameter conditional alias distributive over it, applied to the same
+enclosing `V` whose constraint is a finite literal union (<= 64); key membership is THREE-VALUED (undecided silent; a key
+is proven absent only from a fixed tuple — its slots plus `length` and the methods of its `Array` / `ReadonlyArray`
+base, with a positive control that `length` / `slice` are found — or an anonymous object type with no signatures).
+`ProjectCompiler.crawlImportGraph` adds the synthetic `tslib` import (`takesHelpersImport`), not counted as unresolved
+when it does not resolve; `Checker.isModuleFile`'s body moved unchanged to a top-level `isExternalModuleByStatements`
+in `TslibHelperChecks.kt` so the checker and the crawl share one predicate (`Checker.kt` −31). **Matrix**
+(`build/bench/p18291-agent/m`, `m2`, `tm`): 15 TS2536 cells now = tsgo, the `@ts-expect-error` form now silent, 10 true
+negatives silent, no ours-only row anywhere; residues c05 / c18 / c21 TS2536 and c06 / c07 / c15 / c19 TS7053 still missing
+(not regressed), a different-type-parameter index (`Vals<V>` by `Idx<W>`) a deliberate bail. tslib: the complete-install
+false positive (c7), the `package.json` `types` layout (d3) and import star + default (d5) now silent = tsgo; TS2343 now
+names the helper (`__awaiter`, `__classPrivateFieldGet`, `__decorate`) = tsgo; a sibling package's tslib (d2) now only on
+the file that cannot see it; residues d6 (missing `__importStar` — wrong-code TS2354 -> silent, tsgo TS2343) and d4
+(tslib shipped as JS only — tsgo TS7016, ours TS2354). **Pins**: `DeferredConditionalIndexAccessTest` 7,
+`TslibHelpersImportProjectTest` 7 (`-project` fixtures — the only instrument that sees `node_modules`); ablation a1 4 /
+a2 1 / a3 1 / a5 1 / a6 5 / a7 1 / a8 1 RED, a4 (number-index escape) 0 — redundant by construction, kept as a cheap
+guard; a9's line removed. **Gates**: full suite 22,714 / 0 / 44 (+14); corpus screen 8725 / 0 and `--include ''` the same
+41; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue /
+mitt unchanged (identity hash extended to `DeferredConditionalIndexAccess`, `TslibHelperChecksKt`); library grid
+date-fns 1 -> 0 ours-only / 0 missing, all others byte-identical (tally 369 -> 368); **date-fns added to the standing
+grid** (`grid.sh` library arm, `name=datefns`: 2 rows before, 1 after — the 1 is tsgo's own row); warning gate with probe:
+probe only.
+
 ### Round (P18.290) — (LIBS.3) round 1, false positives on common shapes: a curried arrow's expression body is typed with the contextual signature's RETURN type (it leaked the outer context), argument-position and overloaded contextual types now reach nested arrows, and three name-based walkers honour lexical shadowing — hono 58 -> 48, zod 48 -> 45, tally 382 -> 369, NONE added (2026-10-04)
 
 One implementation subagent. **Where the brief / census were wrong**: (a) CURRIED's false TS2322 came from the arrow's

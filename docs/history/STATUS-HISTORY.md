@@ -1,5 +1,9 @@
 
 
+**(P18.296) — (CHK.231) + (LIBS.3) GENLIT: INDEXED-ACCESS MEMBERS RESOLVED FROM THE TYPE ARGUMENT INSTEAD OF THE CONSTRAINT, DEFAULTS FILLED ON A BARE GENERIC REFERENCE, LITERAL ARGUMENTS KEPT AGAINST A LITERAL CONSTRAINT — THE ACCEPTED zod ROW IS GONE; TALLY 295 -> 279, NO ADDED POSITION; +7 PINS, 22,778 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; mitt and date-fns hold; two pins found asserting the opposite of tsgo and re-pointed.
+
+
 **(P18.295) — (LIBS.3): `ThisType<T>` WAS READ NOWHERE — NOW READ (zod −12); SIX RELATION FIXES (optional-vs-required, boolean distribution, `keyof` tuple, …); DEFK2's REAL BLOCKER (`NoInfer` evaluation) MEASURED AND REFUSED — TALLY 315 -> 295, ONE EXPOSED PRE-EXISTING zod ROW ACCEPTED AND QUEUED; +11 PINS, 22,771 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; mitt and date-fns hold.
 
