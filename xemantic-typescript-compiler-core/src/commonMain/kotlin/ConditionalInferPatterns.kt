@@ -210,7 +210,7 @@ internal class ConditionalInferPatterns(private val checker: Checker) {
             }
             return Verdict.MATCH
         }
-        if (slots.any { it.kind == OPTIONAL }) return Verdict.UNKNOWN
+        if (slots.any { it.kind == OPTIONAL }) return matchOptionalPrefix(src, elems, slots, restAt, bindings)
         val prefix = restAt
         val suffix = slots.size - restAt - 1
         val srcFixedPrefix = if (srcRest >= 0) srcRest else n
@@ -246,6 +246,50 @@ internal class ConditionalInferPatterns(private val checker: Checker) {
         return matchInto(slice, slots[restAt].node, bindings)
     }
 
+    /**
+     * (P18.302) A pattern of OPTIONAL slots followed by a trailing rest — type-fest's
+     * `[(infer First)?, ...infer Rest]`. Each optional slot takes the source's element at its
+     * position (an element the source's own rest provides is the rest's element type), the rest
+     * slot takes what remains, as tsgo infers it (`[]` -> `[unknown, unknown[]]`).
+     */
+    private fun matchOptionalPrefix(
+        src: Type.Object, elems: List<Type>, slots: List<Slot>, restAt: Int, bindings: HashMap<String, Type>,
+    ): Verdict {
+        if (restAt != slots.size - 1 || (0 until restAt).any { slots[it].kind != OPTIONAL }) return Verdict.UNKNOWN
+        val n = elems.size
+        val srcRest = src.tupleRestIndex
+        val fixed = if (srcRest >= 0) srcRest else n
+        if (fixed < restAt && (srcRest != n - 1 || srcRest < 0)) {
+            // tsgo infers nothing past what the source supplies: an absent slot is `unknown`, the
+            // rest `unknown[]`; a non-trailing source rest supplies nothing past the fixed prefix.
+            val supplied = fixed
+            for (i in 0 until restAt) {
+                val v = if (i < supplied) matchInto(elems[i], slots[i].node, bindings) else matchAbsent(slots[i].node, bindings)
+                if (v != Verdict.MATCH) return v
+            }
+            val r = unparen(slots[restAt].node)
+            if (r !is InferType || r.typeParameter.constraint != null || r.typeParameter.name.text in bindings) return Verdict.UNKNOWN
+            bindings[r.typeParameter.name.text] = checker.getOrInternReference(checker.globalArrayType, listOf(unknownType))
+            return Verdict.MATCH
+        }
+        val restArray = if (srcRest >= 0) elems[srcRest] as? Type.Reference ?: return Verdict.UNKNOWN else null
+        for (i in 0 until restAt) {
+            val el = if (i < fixed) elems[i] else restArray?.resolvedTypeArguments?.singleOrNull() ?: return Verdict.UNKNOWN
+            val v = matchInto(el, slots[i].node, bindings)
+            if (v != Verdict.MATCH) return v
+        }
+        val slice: Type = if (restArray != null && restAt >= srcRest && srcRest == n - 1) {
+            if (src.readonlyTuple) mutableArrayOf(restArray) ?: return Verdict.UNKNOWN else restArray
+        } else {
+            val types = elems.subList(restAt, n)
+            val opt = (restAt until n).map { checker.tupleSlotIsOptional(src, it) }.takeIf { fl -> fl.any { it } }
+            val names = src.tupleElementNames?.subList(restAt, n)
+            val rest = if (srcRest >= 0) srcRest - restAt else -1
+            checker.buildTupleFromTypes(types, opt, readonly = false, restIndex = rest, names = names)
+        }
+        return matchInto(slice, slots[restAt].node, bindings)
+    }
+
     /** An `Array<T>` / `ReadonlyArray<T>` source: only a lone rest pattern `[...X]` can match it. */
     private fun matchNonTuple(
         source: Type, slots: List<Slot>, restAt: Int, readonlyPattern: Boolean, bindings: HashMap<String, Type>,
@@ -254,10 +298,18 @@ internal class ConditionalInferPatterns(private val checker: Checker) {
             val ref = source as Type.Reference
             val readonlySource = ref.target.symbol?.name == "ReadonlyArray"
             if (slots.any { it.kind == REQUIRED }) return Verdict.NO
-            if (slots.size != 1 || restAt != 0) return Verdict.UNKNOWN
+            // (P18.302) leading OPTIONAL slots before the rest each take the element type.
+            if (restAt != slots.size - 1 || (0 until restAt).any { slots[it].kind != OPTIONAL }) return Verdict.UNKNOWN
             if (readonlySource && !readonlyPattern) return Verdict.NO
             val arr = if (readonlySource) mutableArrayOf(ref) ?: return Verdict.UNKNOWN else ref
-            return matchInto(arr, slots[0].node, bindings)
+            if (restAt > 0) {
+                val el = ref.resolvedTypeArguments?.singleOrNull() ?: return Verdict.UNKNOWN
+                for (i in 0 until restAt) {
+                    val v = matchInto(el, slots[i].node, bindings)
+                    if (v != Verdict.MATCH) return v
+                }
+            }
+            return matchInto(arr, slots[restAt].node, bindings)
         }
         // A primitive or `unknown` is never a tuple; anything else (generic, `any`, object …) is not decided.
         return if (isNeverTupleLike(source)) Verdict.NO else Verdict.UNKNOWN

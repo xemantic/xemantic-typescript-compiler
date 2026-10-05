@@ -127,7 +127,8 @@ internal class TemplateLiteralTypes(private val checker: Checker) {
     /** A pattern placeholder (tsgo `isPatternLiteralPlaceholderType` / `isGenericIndexType`),
      *  minus `any`: this checker's `any` is too often an unresolved type. */
     private fun isPlaceholder(t: Type): Boolean =
-        t === stringType || t === numberType || t === bigintType || t is Type.TypeParam
+        t === stringType || t === numberType || t === bigintType || t is Type.TypeParam ||
+            t is Type.StringMapping // (P18.302) `${Uppercase<string>}` — matched by [isValidTypeForTemplateLiteralPlaceholder]
 
     /** tsgo `getTemplateStringForType`, or null for a non-literal. */
     private fun templateStringFor(t: Type): String? = when {

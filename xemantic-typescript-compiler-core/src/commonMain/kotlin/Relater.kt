@@ -296,6 +296,7 @@ internal class Relater(
         // (P18.287) a precise template target is decided by template matching, never by the
         // string-like widening below (`'5'` is not a `-${string}`).
         if (checker.templateTypes.isDecidableTarget(target)) templateVerdict(source, target)?.let { return it }
+        if (target is Type.StringMapping) StringMappingTypes.relate(source, target, checker.templateTypes.conditionalDepth > 0)?.let { return it }
         // Literal value comparison (different instances with same value)
         if (source is Type.StringLiteral && target is Type.StringLiteral && source.value == target.value) return true
         if (source is Type.NumberLiteral && target is Type.NumberLiteral && source.value == target.value) return true
@@ -321,8 +322,11 @@ internal class Relater(
         if (sf.hasAny(TypeFlags.BigIntLike) && tf.hasAny(TypeFlags.BigInt)) return true
         // undefined → void
         if (sf.hasAny(TypeFlags.Undefined) && tf.hasAny(TypeFlags.Void)) return true
-        // void → undefined (void is treated as undefined for assignability)
-        if (sf.hasAny(TypeFlags.Void) && tf.hasAny(TypeFlags.Undefined)) return true
+        // void → undefined (void is treated as undefined for assignability) — except inside a
+        // conditional type, where tsgo's answer is the relation's own: `void extends undefined` is
+        // false (type-fest's `IsOptional<void>`, `Extract<void, undefined>`) (P18.302). Outside one
+        // this checker types too many expressions `void` that tsgo types `undefined`.
+        if (sf.hasAny(TypeFlags.Void) && tf.hasAny(TypeFlags.Undefined) && checker.templateTypes.conditionalDepth == 0) return true
         // When strict null checks are off, null/undefined assignable to everything
         if (!checker.strictNullChecks && sf.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return true
         // number → enum type (TypeScript allows number → enum)
@@ -1457,7 +1461,16 @@ internal class Relater(
             // B67.3: only skip when source doesn't EXPLICITLY define this property — if
             // source has its own `toString: 5`, fall through to the type-compatibility
             // check (number vs () => string emits TS2322 per `assignmentToObject_ts`).
-            if (targetName in Checker.OBJECT_PROTOTYPE_PROPERTIES && !sourceMembers.containsKey(targetName)) continue
+            if (targetName in Checker.OBJECT_PROTOTYPE_PROPERTIES && !sourceMembers.containsKey(targetName)) {
+                // (P18.302) tsgo reads the absent member off the source's APPARENT type, i.e. the
+                // global `Object` interface's declaration — so `{ x: 1 }` does NOT relate to
+                // `Boolean`, whose `valueOf(): boolean` is not satisfied by `Object.valueOf():
+                // Object`. Only a member whose inherited type fails the target's is refused.
+                val inherited = checker.getObjectPrototypeMemberType(targetName) ?: continue
+                val targetPropType = checker.getPropertyTypeForRelation(target, targetProp)
+                if (inherited === targetPropType || checkTypeRelatedTo(inherited, targetPropType, relation)) continue
+                return false
+            }
             // (P18.260) tsgo's apparent type of an object with call OR construct signatures is
             // `Function` (`resolveStructuredTypeMembers`), so a construct-signature-only source
             // (`new () => C`, `abstract new () => C`) also reaches `prototype` (typed `any`),

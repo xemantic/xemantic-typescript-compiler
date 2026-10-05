@@ -154,6 +154,17 @@ sealed class Type {
         val rawDisplay: kotlin.String? = null,
     ) : Intrinsic(TypeFlags.String or TypeFlags.TemplateLiteral, "string")
 
+    /**
+     * (P18.302) A string-mapping TYPE over a non-literal — tsgo's `StringMappingType`
+     * (`Lowercase<string>`, `Capitalize<string>`, …). Like [TemplateLiteral] it IS-AN
+     * [Intrinsic] `string`, so every reader that treats it as `string` keeps that answer; the
+     * relation decides a literal source against it ([StringMappingTypes.relate]).
+     */
+    class StringMapping(
+        val mapping: kotlin.String,
+        val target: Type,
+    ) : Intrinsic(TypeFlags.String or TypeFlags.StringMapping, "string")
+
     /** String literal type: "hello" */
     class StringLiteral(
         val value: kotlin.String,

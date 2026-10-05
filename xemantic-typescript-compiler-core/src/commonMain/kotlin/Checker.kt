@@ -880,6 +880,8 @@ class Checker(
      *  This makes `aliasDisplayMap[result.id]` entries stable across re-resolution,
      *  fixing the recursive-alias outer-type fresh-id issue from round 9. */
     private val substitutionResultCache: MutableMap<String, Type> = mutableMapOf()
+    /** (P18.302) the per-checker `Lowercase<string>` & co. instances ([StringMappingTypes.apply]). */
+    private val stringMappingOverString = HashMap<String, Type.StringMapping>()
 
     /** B59.1: intern Type.TypeParam instances by the TypeParameter AST node's position
      *  so the same source-level `<U>` always returns the same instance across multiple
@@ -108387,7 +108389,7 @@ interface DataView {
                         // (measured: type-fest 301 -> 387 ours-only).
                         if (resolvedArgs.size == 1 && symbol.name in StringMappingTypes.NAMES &&
                             ((decl.type as? TypeReference)?.typeName as? Identifier)?.text == "intrinsic"
-                        ) StringMappingTypes.apply(symbol.name, resolvedArgs[0]) { getUnionType(it) }?.let { return it }
+                        ) StringMappingTypes.apply(symbol.name, resolvedArgs[0], stringMappingOverString) { getUnionType(it) }?.let { return it }
                         if (symbol.name == "NoInfer" && resolvedArgs.size == 1 && resolvedArgs[0] === anyType &&
                             genuineAny.isGenuineAny(typeArgs[0], currentTypeAliasArgs) &&
                             ((decl.type as? TypeReference)?.typeName as? Identifier)?.text == "intrinsic"
@@ -131039,7 +131041,7 @@ interface DataView {
      * own prototype-named property against the inherited signature. Returns null if the
      * Object interface isn't resolvable or the member isn't found.
      */
-    private fun getObjectPrototypeMemberType(memberName: String): Type? {
+    internal fun getObjectPrototypeMemberType(memberName: String): Type? {
         val symbol = globals["Object"] ?: return null
         if (!symbol.flags.hasAny(SymbolFlags.Interface)) return null
         val type = getDeclaredTypeOfSymbol(symbol)
@@ -131323,6 +131325,7 @@ interface DataView {
             is Type.Intrinsic -> when {
                 type === errorType -> "any"
                 type is Type.TemplateLiteral -> templateTypes.display(type) // (P18.287)
+                type is Type.StringMapping -> "${type.mapping}<${typeToString(type.target)}>" // (P18.302)
                 else -> type.intrinsicName
             }
             is Type.StringLiteral -> "\"${type.value}\""
@@ -173303,6 +173306,18 @@ interface DataView {
         return null
     }
 
+    /** (P18.302) whether the property [key] of a homomorphic mapped type's source [src] is
+     *  readonly — an intersection's only when every constituent declaring it says so — or null
+     *  when no property is found. */
+    private fun homomorphicSourceReadonly(src: Type, key: String): Boolean? {
+        fun ro(p: Symbol) = isReadonlyAccessOrModifier(p) || p.id in mappedReadonlyMemberIds && p.id !in mappedMutableMemberIds
+        if (src is Type.Intersection) {
+            val props = src.types.mapNotNull { getPropertyOfType(it, key) }
+            return if (props.isEmpty()) null else props.all { ro(it) }
+        }
+        return getPropertyOfType(src, key)?.let { ro(it) }
+    }
+
     private fun getTypeFromMappedType(node: MappedType): Type {
         // B57.3b: depth-bail to signal excessive recursion. Mirror the alias-
         // substitution depth-bail pattern at getTypeFromTypeReference (~50362).
@@ -173404,6 +173419,17 @@ interface DataView {
                 // readonly-ness the same way the Readonly<T> utility materializer does.
                 if (node.readonlyMinus) mappedMutableMemberIds.add(sym.id)
                 else if (node.readonlyToken) mappedReadonlyMemberIds.add(sym.id)
+                // (P18.302) otherwise a homomorphic member is readonly exactly when its SOURCE
+                // property is (tsgo's modifiers type) — not when the one declaration it carries
+                // says so: `{readonly a} & {a}` is writable (readonly only if EVERY constituent's
+                // is) and a `Readonly<X>` member is readonly with no modifier on its declaration.
+                else if (homomorphicSourceType != null) {
+                    when (homomorphicSourceReadonly(homomorphicSourceType, sourceKeys[keyIdx])) {
+                        true -> mappedReadonlyMemberIds.add(sym.id)
+                        false -> if (isReadonlyAccessOrModifier(sym)) mappedMutableMemberIds.add(sym.id)
+                        null -> {}
+                    }
+                }
                 // Round 718: `-?` STRIPS optionality, the exact `?` analogue of the
                 // `-readonly` case above — and it needs the same side-channel for the
                 // same reason: the carried source declaration still has its `?`.
