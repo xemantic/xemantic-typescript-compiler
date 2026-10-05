@@ -222,12 +222,28 @@ sealed class Type {
          * JS probe taken without the flag set is a measured source of false conclusions.
          */
         var jsLiteral: Boolean = false
+        /**
+         * (CHK.233) A tuple's member table — its numbered element symbols plus the `length`
+         * symbol minted with the tuple ([tupleLengthSymbol]) — is built on FIRST READ of
+         * [members] or [properties] by this thunk (`Checker.buildTupleFromTypes`), never at
+         * construction. An accumulator recursion (`F<T, [...Acc, unknown]>`, run to the
+         * 1,000-level tail budget) mints a tuple per level that nothing but the next level's
+         * spread ever reads, and the eager table wrote k global `symbolTypes` / id-set entries
+         * per k-element tuple: ~n^2/2 live entries for n levels. The thunk is cleared BEFORE
+         * it runs, so it runs at most once.
+         */
+        internal var lazyMembers: (() -> Unit)? = null
         var members: SymbolTable? = null
+            get() { lazyMembers?.let { lazyMembers = null; it() }; return field }
         var properties: List<Symbol>? = null
+            get() { lazyMembers?.let { lazyMembers = null; it() }; return field }
         var callSignatures: List<Signature>? = null
         var constructSignatures: List<Signature>? = null
         var stringIndexInfo: IndexInfo? = null
+        /** (CHK.233) Builds [numberIndexInfo] on first read, apart from [lazyMembers]. */
+        internal var lazyNumberIndex: (() -> Unit)? = null
         var numberIndexInfo: IndexInfo? = null
+            get() { lazyNumberIndex?.let { lazyNumberIndex = null; it() }; return field }
         /** Non-null for tuple types — stores element types for display and length checking. */
         var tupleElementTypes: List<Type>? = null
         /**
@@ -259,6 +275,16 @@ sealed class Type {
          * the receiver's parameter list as a tuple (tsc's `getRestTypeAtPosition`).
          */
         var tupleElementNames: List<kotlin.String?>? = null
+        /**
+         * (CHK.233) The tuple's per-slot OPTIONAL flags as `Checker.buildTupleFromTypes` was
+         * handed them (an empty array for a tuple with none), so `Checker.tupleSlotIsOptional`
+         * answers without forcing the lazy member table ([lazyMembers]). Null for a type not
+         * minted there; such a reader falls back to the member table.
+         */
+        var tupleOptionalSlots: BooleanArray? = null
+        /** (CHK.233) A tuple's `length` symbol, minted with the tuple (the deferred member
+         *  table adopts it), so `length` is answered without forcing that table. */
+        var tupleLengthSymbol: Symbol? = null
         override fun toString(): kotlin.String = symbol?.name ?: "Object#$id"
     }
 

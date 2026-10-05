@@ -178,6 +178,16 @@ internal class MemberResolver(
      * After this call, type.members/properties/callSignatures are populated.
      */
     fun resolveStructuredTypeMembers(type: Type.Object) {
+        // (CHK.233) a tuple whose member table is deferred (`Type.Object.lazyMembers`) is
+        // resolved by construction: the table is built on its first read, so asking for it
+        // here would force it for every `Acc[number]` of an accumulator recursion.
+        if (type.lazyMembers != null) {
+            if (LibTypeCensus.enabled) {
+                if (checker.isLibSymbolForCensus(type.symbol)) LibTypeCensus.memHitLib++
+                else LibTypeCensus.memHitOther++
+            }
+            return
+        }
         if (type.properties != null && type is Type.Interface && type.membersProvisional &&
             memberResolutionInProgress.isEmpty() && checker.typeResolutionIdle()) rebuildProvisionalMembers(type)
         if (type.properties != null) {

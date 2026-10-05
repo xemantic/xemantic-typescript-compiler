@@ -42409,7 +42409,7 @@ class Checker(
                     val widenedElems = elems.map { e -> widenType(e).also { w -> if (w !== e) changed = true } }
                     if (!changed) return type
                     val optionalFlags = elems.indices.map { i ->
-                        type.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } ?: false
+                        tupleSlotIsOptional(type, i)
                     }.takeIf { flags -> flags.any { it } }
                     return buildTupleFromTypes(widenedElems, optionalFlags, readonly = type.readonlyTuple,
                         restIndex = type.tupleRestIndex)
@@ -98268,8 +98268,12 @@ interface DataView {
     }
 
     /** (CHK.96) is slot [i] of the tuple [t] optional (`[T?]`)? Round 452's side channel. */
-    internal fun tupleSlotIsOptional(t: Type.Object, i: Int): Boolean =
-        t.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } == true
+    internal fun tupleSlotIsOptional(t: Type.Object, i: Int): Boolean {
+        // (CHK.233) the flags the tuple was minted with; reading the member table instead
+        // would force a lazy tuple's members (`Type.Object.lazyMembers`) on every spread.
+        t.tupleOptionalSlots?.let { return i < (t.tupleElementTypes?.size ?: 0) && it.getOrNull(i) == true }
+        return t.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } == true
+    }
 
     /**
      * (CHK.111): is [sym] the member of a tuple slot at or after its REST slot? Such a member
@@ -108139,7 +108143,8 @@ interface DataView {
                             // K]: N<T,K> }[K]` — recursivelyExpandingUnionNoStackoverflow expects
                             // TS2589+TS2615), so such bodies keep the eager depth-bail; so do
                             // indexed-access bodies (`{...}[T]`, limitDeepInstantiations).
-                            if ((decl.type is TypeLiteral || unionBodyIsDeferredPositionOnly(decl.type)) &&
+                            if ((decl.type is TypeLiteral || unionBodyIsDeferredPositionOnly(decl.type) ||
+                                    intersectionBodyIsDeferredPositionOnly(decl.type, symbol.name)) &&
                                 symbol.id in aliasObjLiteralInstantiationStack) {
                                 return errorType
                             }
@@ -108188,7 +108193,7 @@ interface DataView {
                             val budgetToken = aliasBudget.enter(tailRef)
                             aliasBodyDeclStack.addLast(decl)
                             try {
-                                if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.addLast(symbol.id)
+                                if (decl.type is TypeLiteral || decl.type is UnionType || decl.type is IntersectionType) aliasObjLiteralInstantiationStack.addLast(symbol.id)
                                 aliasSubstitutionStack.addLast(symbol.id)
                                 // (a UnionType body is pushed unconditionally — the pop below
                                 // matches; the cycle-break above re-checks deferability)
@@ -108288,7 +108293,7 @@ interface DataView {
                             } finally {
                                 aliasBudget.leave(tailRef, budgetToken)
                                 aliasBodyDeclStack.removeLast()
-                                if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.removeLast()
+                                if (decl.type is TypeLiteral || decl.type is UnionType || decl.type is IntersectionType) aliasObjLiteralInstantiationStack.removeLast()
                                 aliasSubstitutionStack.removeLast()
                             }
                         }
@@ -108441,6 +108446,30 @@ interface DataView {
             forEachChild(node) { child -> stack.addLast(child) }
         }
         return false
+    }
+
+    /**
+     * (CHK.233) The lazy recursive-alias cycle-break for an INTERSECTION body: every
+     * constituent is an object type literal or a reference to ANOTHER type, and at least one
+     * is a literal — `type Wide<T> = { a(): Wide<T | 1>; … } & { tag: T }`, or tsc's corpus
+     * `TPromise<R> = Omit<Promise<R>, "then"> & { then(…): TPromise<…> }`. The self-reference
+     * then sits only inside a literal's MEMBER, which tsgo resolves lazily; eager expansion
+     * here fanned out to the alias budget and reported a false TS2589. A constituent that IS
+     * the alias (`{ a: T } & I<T>`), or an indexed-access / mapped / conditional one, forces
+     * evaluation through the recursion and keeps the eager path.
+     */
+    private fun intersectionBodyIsDeferredPositionOnly(body: TypeNode, aliasName: String): Boolean {
+        if (body !is IntersectionType) return false
+        var sawLiteral = false
+        for (m in body.types) {
+            val inner = if (m is ParenthesizedType) m.type else m
+            when (inner) {
+                is TypeLiteral -> sawLiteral = true
+                is TypeReference -> if ((inner.typeName as? Identifier)?.text == aliasName) return false
+                else -> return false
+            }
+        }
+        return sawLiteral
     }
 
     private fun unionBodyIsDeferredPositionOnly(body: TypeNode): Boolean {
@@ -111105,6 +111134,9 @@ interface DataView {
      */
     internal fun getPropertyOfType(type: Type, name: String): Symbol? {
         if (type is Type.Object) {
+            // (CHK.233) a tuple whose member table is still deferred answers `length` from the
+            // symbol it was minted with — the same symbol the table will hold once built.
+            if (name == "length" && type.lazyMembers != null) type.tupleLengthSymbol?.let { return it }
             resolveStructuredTypeMembers(type)
             return type.members?.get(name)
         }
@@ -119908,10 +119940,7 @@ interface DataView {
             types.add(if (i == t.tupleRestIndex) (restSlotElementType(e) ?: return null) else e)
         }
         if (strictNullChecks) {
-            val members = t.members
-            val anyOptional = members != null && elems.indices.any { i ->
-                members[i.toString()]?.id?.let { it in optionalTupleMemberIds } == true
-            }
+            val anyOptional = elems.indices.any { i -> tupleSlotIsOptional(t, i) }
             if (anyOptional) types.add(undefinedType)
         }
         val element = when (types.size) {
@@ -171170,33 +171199,11 @@ interface DataView {
         // `length`), so `rt[0] = 1` is TS2540 through the same side-channel `Readonly<T>`
         // uses; the bit itself is what the relation, the display and the member lookup read.
         tupleObj.readonlyTuple = readonly
-        // Create numbered property symbols: "0", "1", "2", ...
-        val props = mutableListOf<Symbol>()
-        val members = symbolTable()
-        // (CHK.111): a REST slot's MEMBER carries the rest's ELEMENT type, never its array
-        // type — tsc's `createTupleTargetType` gives slot `i` the type parameter the
-        // instantiation binds to the element, so `[number, ...string[]]`'s member `1` is
-        // `string` where `tupleElementTypes[1]` (the B526 collapse) is `string[]`.
-        val memberTypes = tupleRelationElementTypes(elementTypes, restIndex)
-        for ((i, elemType) in memberTypes.withIndex()) {
-            val propSymbol = Symbol(
-                flags = SymbolFlags.Property,
-                name = i.toString(),
-            )
-            symbolTypes[propSymbol.id] = elemType
-            if (optionalFlags?.getOrNull(i) == true) optionalTupleMemberIds.add(propSymbol.id)
-            // (CHK.111): tsc creates NO numbered property at or after the rest slot
-            // (`createTupleTargetType`'s `if (!(combinedFlags & ElementFlags.Variable))`), so
-            // such a slot is never a REQUIRED member of the target. We keep the member — it is
-            // what still reports `[number, number]` at position 1 — and record it here so the
-            // three missing-property deciders skip it. Deliberately NOT [optionalTupleMemberIds]:
-            // that channel also adds `| undefined` to an element READ and to [tupleArrayBase]'s
-            // union, and a rest slot is not optional in either sense.
-            if (restIndex in 0..i) restTupleMemberIds.add(propSymbol.id)
-            if (readonly) mappedReadonlyMemberIds.add(propSymbol.id)
-            props.add(propSymbol)
-            members[propSymbol.name] = propSymbol
-        }
+        tupleObj.tupleOptionalSlots = BooleanArray(optionalFlags?.size ?: 0) { optionalFlags!![it] }
+        // (CHK.233) `length` is minted here — one symbol per tuple, and what an accumulator
+        // recursion's `Acc['length'] extends N` reads at every level ([getPropertyOfType]
+        // answers it without forcing the table) — while the k element symbols and the number
+        // index are built on first read (`Type.Object.lazyMembers` / `lazyNumberIndex`).
         // Add readonly "length" property with literal type. For a tuple with OPTIONAL
         // elements the length is the union `minLength | … | maxLength` (tsc), so an empty
         // `[]` (length 0) relates to `[a?, b?]` (length `0 | 1 | 2`). minLength = number of
@@ -171217,19 +171224,65 @@ interface DataView {
             getUnionType((minLen..maxLen).map { Type.NumberLiteral(it.toDouble()) })
         }
         if (readonly) mappedReadonlyMemberIds.add(lengthSymbol.id)
+        tupleObj.tupleLengthSymbol = lengthSymbol
+        tupleObj.lazyMembers = { materializeTupleMembers(tupleObj, elementTypes, optionalFlags, readonly, restIndex) }
+        tupleObj.lazyNumberIndex = { materializeTupleNumberIndex(tupleObj, elementTypes, restIndex) }
+        return tupleObj
+    }
+
+    /** (CHK.233) The member table [buildTupleFromTypes] defers: numbered element symbols,
+     *  `length` and the number index, each element symbol's type in [symbolTypes]. */
+    private fun materializeTupleMembers(
+        tupleObj: Type.Object, elementTypes: List<Type>, optionalFlags: List<Boolean>?, readonly: Boolean, restIndex: Int,
+    ) {
+        TupleMemberCensus.tables++
+        // Create numbered property symbols: "0", "1", "2", ...
+        val props = mutableListOf<Symbol>()
+        val members = symbolTable()
+        // (CHK.111): a REST slot's MEMBER carries the rest's ELEMENT type, never its array
+        // type — tsc's `createTupleTargetType` gives slot `i` the type parameter the
+        // instantiation binds to the element, so `[number, ...string[]]`'s member `1` is
+        // `string` where `tupleElementTypes[1]` (the B526 collapse) is `string[]`.
+        val memberTypes = tupleRelationElementTypes(elementTypes, restIndex)
+        for ((i, elemType) in memberTypes.withIndex()) {
+            val propSymbol = Symbol(
+                flags = SymbolFlags.Property,
+                name = i.toString(),
+            )
+            symbolTypes[propSymbol.id] = elemType
+            TupleMemberCensus.elementSymbols++
+            if (optionalFlags?.getOrNull(i) == true) optionalTupleMemberIds.add(propSymbol.id)
+            // (CHK.111): tsc creates NO numbered property at or after the rest slot
+            // (`createTupleTargetType`'s `if (!(combinedFlags & ElementFlags.Variable))`), so
+            // such a slot is never a REQUIRED member of the target. We keep the member — it is
+            // what still reports `[number, number]` at position 1 — and record it here so the
+            // three missing-property deciders skip it. Deliberately NOT [optionalTupleMemberIds]:
+            // that channel also adds `| undefined` to an element READ and to [tupleArrayBase]'s
+            // union, and a rest slot is not optional in either sense.
+            if (restIndex in 0..i) restTupleMemberIds.add(propSymbol.id)
+            if (readonly) mappedReadonlyMemberIds.add(propSymbol.id)
+            props.add(propSymbol)
+            members[propSymbol.name] = propSymbol
+        }
+        val lengthSymbol = tupleObj.tupleLengthSymbol!!
         props.add(lengthSymbol)
         members["length"] = lengthSymbol
         tupleObj.properties = props
         tupleObj.members = members
+    }
+
+    /** (CHK.233) The tuple's number index, deferred apart from its members: `Acc[number]` on
+     *  an accumulator needs the element union and never the k element symbols. */
+    private fun materializeTupleNumberIndex(tupleObj: Type.Object, elementTypes: List<Type>, restIndex: Int) {
         // Tuple has a number index signature for element access. (CHK.111): over the
         // rest-EXPANDED slots, so `[number, ...string[]]` indexes `number | string` and not
         // `number | string[]` (tsc's `getIndexTypeOfType(t, numberType)`).
+        val memberTypes = tupleRelationElementTypes(elementTypes, restIndex)
         if (memberTypes.isNotEmpty()) {
             val elementUnion = if (memberTypes.size == 1) memberTypes[0]
                 else getUnionType(memberTypes)
             tupleObj.numberIndexInfo = IndexInfo(keyType = numberType, type = elementUnion)
         }
-        return tupleObj
     }
 
     /** Resolve a typeof type query: `typeof X` in type annotation position. */
