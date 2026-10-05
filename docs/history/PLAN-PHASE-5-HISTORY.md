@@ -1,3 +1,48 @@
+### Round (P18.287) — (LIBS.2) round 12, (CHK.216) TLT part 1: template-literal TYPES exist — the parser builds and cooks the spans, a `Type.TemplateLiteral` normalises like tsgo's `getTemplateLiteralType`, string literals match against it, and a template EXPRESSION in a literal context is typed as a template — type-fest 300 -> 267 (all 27 string-repeat rows, key-as-string 2, readonly-keys-of 2, join 1, extract-strict 1), tally 427 -> 394, NONE added (2026-10-04)
+
+One implementation subagent, each step priced. **Where the brief was wrong**: (a) the parser also never COOKED template
+text — the scanner keeps it raw (`\t` as two characters), so `cookTemplateText` was needed or the display printed `\\t`
+(the `templateLiteralsInTypes` baseline caught it); (b) building the spans broke a PROJECT-module gate, not the type
+walkers: `TokenIndexGateTest` failed on the real `lib.dom.generated.d.ts` because the head node spanned the whole
+template, so names inside the spans read as inside a string literal — the head and literal nodes now span only their
+own tokens; (c) step 2 alone produced a FALSE POSITIVE in rxjs (`ajax.ts:438`): the template EXPRESSION was still typed
+`string` and failed against a target that is now a literal union — tsgo's `checkTemplateExpression` (a template type in a
+literal context or under `as const`, `string` with no context, else hono's `trie.ts` display drifts) was added; (d) the
+corpus walker B297 `checkTemplateLiteralParamArgs` double-reported once the general argument check decided templates — it
+now stands aside for a single template parameter the relation decides (keeps intersection parameters and branded spans);
+(e) join's remaining 10 rows need tuple-rest `infer First / ...infer Tail`, not template `infer`. **Mechanism**:
+`Parser.parseTemplateTypeSpans` builds a head + `TemplateLiteralTypeSpan(type, literal)` per span with cooked text
+(`head.rawText` keeps the raw slice); `Type.TemplateLiteral(texts, types, precise, generic, rawDisplay)` EXTENDS
+`Intrinsic(String|TemplateLiteral, "string")` (`Intrinsic` made `open`), so every reader that treated a template as
+`string` still sees exactly that; new `TemplateLiteralTypes.kt` (445) — `get` is tsgo's normalisation (union / `boolean`
+/ `never` spans distribute with a 100k cross-product cap, literals and null / undefined stringify, nested templates
+flatten, all-literal -> a string literal, `${string}` -> `string`; a span of `any`, an enum, an object or an intersection
+makes the template IMPRECISE = the old permissive behaviour, deliberately, since this checker's `any` is usually
+unresolved), matching / inference / the placeholder check (JS-exact number and bigint validation), display with the
+printer's backtick escaping; `Relater` decides only a precise, non-generic template TARGET (a literal or precise-template
+source is matched; a plain `string` source answers false only inside a conditional's `extends` — elsewhere permissive,
+because we still type many template expressions `string` where tsgo types them as templates); Checker wiring —
+the type-node arm and `typeToString` call the collaborator (the `templateLiteralDisplay` map deleted),
+`propTypeContainsLiteral` counts a template as a literal context, `templateExpressionLiteralType` /
+`templateExpressionHasNoContext`, a generic template check type defers, `spineUResTypeDescends` descends into spans
+(TS2304 for an undeclared name in a span), `TypeInstantiator` re-normalises a generic template; the unused-declaration
+raw-text workaround is REDUNDANT and removed (`templateTypeReferenceNames` and helpers, −96 lines in
+`UnusedDeclarationSyntax.kt` — ablation a10 proves the span walk now carries it). `Checker.kt` +53 net. **Matrix**
+(`build/bench/p18287-agent/probe/m*`): isneg x3 false positives now silent; literal-vs-template mismatches x9 now tsgo
+rows (full text), matches x8 silent; template -> template, normalisation, return / assignment / argument positions (B297
+once), template expressions in context incl. the rxjs shape, `as const`, conditionals over `string` / template / literal,
+TS2304 in a span — all = tsgo; residues: object-literal property `{k: '5'}` against a template, a plain `string` ->
+template outside a conditional (deliberately permissive), `${never}x` displays `'string'` (tsgo `'"x"'`), an alias of a
+distributed union displays `'T1'`, `Capitalize` / `Uppercase` not modelled. **Pins**: `TemplateLiteralTypeTest` 10;
+`ConstAssertionTest`'s countdown `residue - a template with substitutions stays string` renamed and flipped to tsgo's
+row; ablation a1 11 / a2 3 / a3 1 / a4 3 / a5 2 / a6 1 / a7 1 / a8 1 / a9 1 / a10 1 / a11 1 RED (a2b — a second relation hook —
+read 0 and was removed as redundant). **Gates**: full suite 22,676 / 0 / 44 (+10); corpus screen 8725 / 0 and
+`--include ''` the same 41 with identical diff bodies; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt (standing gate, 0) unchanged (identity hash extended to
+`TemplateLiteralTypes`, `MemberNames`, `Type$TemplateLiteral`, `UnusedDeclarationSyntaxKt`); library grid on the final
+classes (orchestrator's run `r287` = the builder's `a287f`): type-fest 300 -> 267, others unchanged (tally 427 -> 394);
+warning gate with probe: probe only.
+
 ### Round (P18.286) — (LIBS.2) round 11, (CHK.228) steps 1-2: `X extends any` takes the true branch, a GENUINE `any` check type yields both branches, `never` distributes to `never`, and `IsAny<any>` answers true — gated by a new PROVENANCE channel (`GenuineAnyProvenance`), because this checker returns `any` for what it cannot resolve; step 3 (`NoInfer<T>` = `T`) REFUSED on measurement (type-fest 301 -> 387); tally 428 -> 427, NONE added (2026-10-04)
 
 One implementation subagent, each step priced. **Where the brief was wrong**: "`X extends any` answers `any`" is half
