@@ -69705,14 +69705,14 @@ interface DataView {
                 node as ArrowFunction
                 if (spineB94Status(node) != B94_REACHED) return
                 spineB94WithAmbient {
-                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                    emitB94ForFnLikeParams(node, node.parameters, spineSource, spineFileName)
                 }
             }
             NodeKind.FUNCTION_EXPRESSION -> {
                 node as FunctionExpression
                 if (spineB94Status(node) != B94_REACHED) return
                 spineB94WithAmbient {
-                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                    emitB94ForFnLikeParams(node, node.parameters, spineSource, spineFileName)
                 }
             }
             NodeKind.METHOD_DECLARATION -> {
@@ -69721,7 +69721,7 @@ interface DataView {
                 if (p !is ObjectLiteralExpression && p !is ClassExpression) return
                 if (spineB94Status(node) != B94_REACHED) return
                 spineB94WithAmbient {
-                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                    emitB94ForFnLikeParams(node, node.parameters, spineSource, spineFileName)
                 }
             }
             NodeKind.CONSTRUCTOR -> {
@@ -69729,7 +69729,7 @@ interface DataView {
                 if (node.parent !is ClassExpression) return
                 if (spineB94Status(node) != B94_REACHED) return
                 spineB94WithAmbient {
-                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                    emitB94ForFnLikeParams(node, node.parameters, spineSource, spineFileName)
                 }
             }
             NodeKind.SET_ACCESSOR -> {
@@ -69738,7 +69738,7 @@ interface DataView {
                 if (p !is ObjectLiteralExpression && p !is ClassExpression) return
                 if (spineB94Status(node) != B94_REACHED) return
                 spineB94WithAmbient {
-                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                    emitB94ForFnLikeParams(node, node.parameters, spineSource, spineFileName)
                 }
             }
             else -> {}
@@ -83186,8 +83186,14 @@ interface DataView {
         }
     }
 
-    private fun emitB94ForFnLikeParams(params: List<Parameter>, source: String, fileName: String) {
-        for (param in params) {
+    private fun emitB94ForFnLikeParams(fn: Node, params: List<Parameter>, source: String, fileName: String) {
+        // (P18.297) a CONTEXTUALLY typed parameter is not the B9.2 `{}`: tsgo types its pattern
+        // from the contextual signature (`cs.forEach(({ [A]: a }) => …)` is silent there).
+        val ctxSigs = if (params.any { it.type == null && it.initializer == null && it.name is ObjectBindingPattern })
+            pullContextualTypeAt(fn)?.let { callableSignaturesForCtx(it, requiredParamPrefixCount(params)) }
+        else null
+        for ((i, param) in params.withIndex()) {
+            if (ctxSigs != null && ctxSigs.isNotEmpty() && ctxSigs.all { it.parameters.size > i }) continue
             // Trigger ONLY when the parameter shape matches B9.2's `{}` default
             // (binding-pattern name + no annotation + no initializer). Annotated
             // / defaulted patterns have a real declared type; checking those
@@ -83205,6 +83211,10 @@ interface DataView {
                 if (isLiteralComputedKeyExpr(indexExpr)) continue
                 val indexType = getTypeOfExpression(indexExpr)
                 if (indexType === errorType || indexType === anyType) continue
+                // (P18.297) a `unique symbol` key is a late-bound property NAME in a parameter
+                // pattern — tsgo reports only TS7031 there.
+                if (isUniqueSymbolConstKey(indexExpr)) continue
+                if (emitB94SymbolKey(indexExpr, indexType, source, fileName)) continue
                 // Only emit when the index type is a primitive that would require
                 // an index signature to match. TypeScript displays the widened
                 // form (`'a'` → `string`).
@@ -83229,6 +83239,40 @@ interface DataView {
         }
     }
 
+    /**
+     * (P18.297) A SYMBOL-typed computed key of a `{}`-typed pattern is TS2538 "Type '<k>' cannot
+     * be used as an index type." in tsgo, never TS2537 (`lateBoundDestructuringImplicitAnyError`).
+     * Answers true when it emitted.
+     */
+    private fun emitB94SymbolKey(indexExpr: Expression, indexType: Type, source: String, fileName: String): Boolean {
+        val display = when {
+            indexType.flags.hasAny(TypeFlags.UniqueESSymbol) || isUniqueSymbolConstKey(indexExpr) -> "unique symbol"
+            indexType.flags.hasAny(TypeFlags.ESSymbol) -> "symbol"
+            else -> return false
+        }
+        val start = indexExpr.pos
+        val length = expressionTrueEnd(indexExpr) - start
+        if (length <= 0) return true
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type '$display' cannot be used as an index type.",
+            category = DiagnosticCategory.Error, code = 2538,
+            fileName = fileName, line = line, character = character, start = start, length = length,
+        ))
+        return true
+    }
+
+    /** (P18.297) [expr] names a `const` declared `unique symbol` (or `= Symbol()`), through an import.
+     *  The expression typer answers plain `symbol` for such a read, so the declaration decides. */
+    private fun isUniqueSymbolConstKey(expr: Expression): Boolean {
+        val id = expr as? Identifier ?: return false
+        var sym = lookupPerFileForNode(id, id.text) ?: return false
+        if (sym.flags.hasAny(SymbolFlags.Alias)) sym = resolveAlias(sym)
+        val decl = sym.valueDeclaration as? VariableDeclaration ?: return false
+        val list = (decl as NodeBase).parent as? VariableDeclarationList ?: return false
+        return list.flags == SyntaxKind.ConstKeyword && varDeclIsSymbol(decl)
+    }
+
     /** B98.r40: TS2537 element loop for an empty-`{}`-destructured ObjectBindingPattern. */
     private fun emitB94ForComputedKeyPattern(pattern: ObjectBindingPattern, source: String, fileName: String) {
         for (element in pattern.elements) {
@@ -83237,6 +83281,7 @@ interface DataView {
             if (isLiteralComputedKeyExpr(indexExpr)) continue
             val indexType = getTypeOfExpression(indexExpr)
             if (indexType === errorType || indexType === anyType) continue
+            if (emitB94SymbolKey(indexExpr, indexType, source, fileName)) continue
             val widened = getWidenedLiteralType(indexType)
             val typeDisplay = typeToString(widened)
             if (typeDisplay.isEmpty()) continue
@@ -96179,6 +96224,14 @@ interface DataView {
                     val varId = typeofExpr.expression as? Identifier ?: return null
                     val varName = varId.text
                     val typeGuard = litExpr.text
+                    // (P18.297) `"function"`/`"object"` FILTER the declared union exactly as the
+                    // flow walk does ([narrowByTypeOfGuard]); `typeofTypeGuardToType` answers `any`
+                    // for them, which installed a WIDENING in the then-branch.
+                    if (typeGuard == "function" || typeGuard == "object") {
+                        val varType = currentLocalTypes[varName] ?: return null
+                        val n = narrowByTypeOfGuard(varType, typeGuard, op == SyntaxKind.EqualsEqualsEquals)
+                        return if (n === varType || n.flags.hasAny(TypeFlags.Never)) null else varName to n
+                    }
                     // For === checks, narrow to the typeof type in the then-branch
                     if (op == SyntaxKind.EqualsEqualsEquals) {
                         val narrowedType = typeofTypeGuardToType(typeGuard) ?: return null
@@ -113663,6 +113716,49 @@ interface DataView {
      *  the false branch's `o.v` as Version, so the result has no `string` member.
      *  FP-safe like the base rule: only ever refines. */
     private fun ternaryBranchType(branch: Expression, condition: Expression, conditionIsTrue: Boolean): Type {
+        // (P18.297) a reference NESTED in the branch (`typeof o === "function" ? o(1) : o`'s
+        // callee) is narrowed too — tsgo's flow covers the whole branch. The tracked locals the
+        // condition mentions are narrowed by the same [applyConditionNarrowing] and installed
+        // for the branch's typing, as the legacy if-arms install theirs.
+        if (branch !is Identifier) {
+            val narrowed = ternaryConditionNarrowings(condition, conditionIsTrue)
+            if (narrowed.isNotEmpty()) {
+                var out: Type = anyType
+                withLegacyBranchNarrowings(narrowed) { out = ternaryBranchTypeCore(branch, condition, conditionIsTrue) }
+                return out
+            }
+        }
+        return ternaryBranchTypeCore(branch, condition, conditionIsTrue)
+    }
+
+    private fun ternaryConditionNarrowings(condition: Expression, isTrue: Boolean): List<Pair<String, Type>> {
+        var out: ArrayList<Pair<String, Type>>? = null
+        val work = ArrayDeque<Node>()
+        work.add(condition)
+        while (work.isNotEmpty()) {
+            val n = work.removeLast()
+            if (n is Identifier) {
+                val name = n.text
+                // FILTER-only: a union reduced to a subset of its own members. A narrowing that
+                // MINTS a type (`unknown` -> `Promise<any>` by `instanceof`) is left to the
+                // bare-reference rule — installing it exposed a `then` inference gap in hono.
+                val t = currentLocalTypes[name] as? Type.Union ?: continue
+                if (out?.any { it.first == name } == true) continue
+                val nt = applyConditionNarrowing(t, condition, isTrue, name)
+                if (nt === t || nt.flags.hasAny(TypeFlags.Never)) continue
+                val ntMembers = if (nt is Type.Union) nt.types else listOf(nt)
+                if (!ntMembers.all { m -> t.types.any { it === m } }) continue
+                (out ?: ArrayList<Pair<String, Type>>().also { out = it }).add(name to nt)
+                continue
+            }
+            if (n is ArrowFunction || n is FunctionExpression || n is ClassExpression) continue
+            if (n is PropertyAccessExpression) { work.add(n.expression); continue }
+            forEachChild(n) { work.add(it) }
+        }
+        return out ?: emptyList()
+    }
+
+    private fun ternaryBranchTypeCore(branch: Expression, condition: Expression, conditionIsTrue: Boolean): Type {
         if (branch is BinaryExpression &&
             (branch.operator == SyntaxKind.QuestionQuestion || branch.operator == SyntaxKind.BarBar) &&
             (branch.left is Identifier || branch.left is PropertyAccessExpression)
@@ -114970,6 +115066,7 @@ interface DataView {
                 (rhs as? ConditionalExpression)?.let { tern ->
                     conditionalCallBranchesReducedTypeForFlow(tern, antecedent, declaredType)?.let { return it }
                 }
+                unionSubsetAssignmentReduced(raw, declaredType)?.let { return it }
                 nonNullishUnionOverwrite(raw, declaredType)?.let { return it }
             }
             // (CHK.173) G3: `x ??= <rhs>` / `x ||= <rhs>` with an RHS only the four
@@ -115010,6 +115107,26 @@ interface DataView {
      * UNION (round 463's lenient-member-relation lesson). Shared by `=` and, since
      * (CHK.173) G3, by `??=` / `||=`.
      */
+    /**
+     * (P18.297) tsgo's `getAssignmentReducedType` for a UNION right-hand side whose every
+     * constituent IS (by identity) a member of the declared union — `o = typeof o ===
+     * "function" ? o(1) : o` over `RO | F | undefined` assigns `RO | undefined`. Round 463
+     * refuses a union RHS because a lenient member relation filtered a union to too FEW
+     * members; under the identity gate every RHS member is kept by construction, so the
+     * relation can only keep more, and the answer is a superset of the assigned type.
+     */
+    private fun unionSubsetAssignmentReduced(raw: Type?, declaredType: Type): Type? {
+        if (raw !is Type.Union || declaredType !is Type.Union) return null
+        // A nullish RHS member the declared type lacks is an optional parameter's `undefined`
+        // (its flow declared type is the bare annotation); it is carried through as assigned.
+        val (inDeclared, extra) = raw.types.partition { r -> declaredType.types.any { it === r } }
+        if (inDeclared.isEmpty() || !extra.all { isNullishConstituent(it) }) return null
+        val kept = declaredType.types.filter { m ->
+            inDeclared.any { r -> r === m || checkTypeRelatedTo(r, m, assignableRelation) }
+        }
+        return if (kept.size < declaredType.types.size) getUnionType(kept + extra) else null
+    }
+
     private fun resolvedAssignedTypeForFlow(rhs: Expression): Type? =
         resolvedAssignedRawTypeForFlow(rhs)?.takeIf { it !is Type.Union }
 
@@ -119603,6 +119720,25 @@ interface DataView {
      * a USER-declared `class Object`/`interface Function` is not the global one
      * and keeps narrowing.
      */
+    /**
+     * (P18.297) Construct signatures that make [t] a FUNCTION value. A class INSTANCE type carries
+     * its constructor's signatures here ((CHK.137)'s legacy model) although an instance is never
+     * constructable, so `typeof x === "function"` over `HF | HE` (HE a class with a declared
+     * constructor) kept HE in the true branch.
+     */
+    private fun hasRealConstructSignatures(t: Type): Boolean {
+        if (getConstructSignaturesOfType(t).isEmpty()) return false
+        val sym = when (t) {
+            is Type.Reference -> t.target.symbol
+            is Type.Interface -> t.symbol
+            else -> null
+        }
+        return sym == null || !sym.flags.hasAny(SymbolFlags.Class)
+    }
+
+    private fun isGlobalFunctionInterface(t: Type): Boolean =
+        (t as? Type.Object)?.symbol?.name == "Function" && isGlobalObjectOrFunctionType(t)
+
     private fun isGlobalObjectOrFunctionType(t: Type): Boolean {
         val sym = (t as? Type.Object)?.symbol ?: return false
         if (sym.name != "Object" && sym.name != "Function") return false
@@ -122055,10 +122191,12 @@ interface DataView {
         // nothing, `t` is returned unchanged (never narrow to `never` on this tag).
         if (guard == "function") {
             if (t !is Type.Union) return t
+            // (P18.297) the global `Function` interface carries no signature and IS a function
+            // (tsgo `isFunctionObjectType`: a `bind` member and a subtype of `Function`).
             fun couldBeFn(m: Type): Boolean =
                 m === anyType || m === unknownType || m === errorType ||
                     getCallSignaturesOfType(m).isNotEmpty() ||
-                    getConstructSignaturesOfType(m).isNotEmpty()
+                    hasRealConstructSignatures(m) || isGlobalFunctionInterface(m)
             val filtered = if (isMatch) t.types.filter { couldBeFn(it) }
                 else t.types.filter { !couldBeFn(it) || it === anyType || it === unknownType || it === errorType }
             return if (filtered.isEmpty() || filtered.size == t.types.size) t else getUnionType(filtered)
@@ -122090,7 +122228,8 @@ interface DataView {
                 // to `any` the moment `ModuleKind.ESNext` became a type of its own.
                 isEnumFlavoredObjectType(m) -> false
                 m is Type.Object ->
-                    if (getCallSignaturesOfType(m).isNotEmpty() || getConstructSignaturesOfType(m).isNotEmpty()) false
+                    if (getCallSignaturesOfType(m).isNotEmpty() || hasRealConstructSignatures(m) ||
+                        isGlobalFunctionInterface(m)) false
                     else true
                 else -> null
             }
@@ -122196,8 +122335,10 @@ interface DataView {
             val t = literalTypeOfExpression(expr.whenTrue, arrayCtx)
             val f = literalTypeOfExpression(expr.whenFalse, arrayCtx)
             if (t == null && f == null) null else {
-                val tt = t ?: getTypeOfExpression(expr.whenTrue)
-                val ff = f ?: getTypeOfExpression(expr.whenFalse)
+                // (P18.297) the non-literal branch is typed under the condition, as the
+                // ConditionalExpression arm of getTypeOfExpression does.
+                val tt = t ?: ternaryBranchType(expr.whenTrue, expr.condition, conditionIsTrue = true)
+                val ff = f ?: ternaryBranchType(expr.whenFalse, expr.condition, conditionIsTrue = false)
                 if (tt === errorType || ff === errorType) null
                 else if (tt === ff) tt
                 else getUnionType(listOf(tt, ff))
@@ -157299,6 +157440,8 @@ interface DataView {
             ?: getCallSignaturesOfType(effCalleeType)
         CallSections.at(CallSections.NO_SIGS)
         if (signatures.isEmpty()) {
+            // (P18.297) a union callee narrowed to the global `Function` is an untyped call.
+            if (effCalleeType !== calleeType && isGlobalFunctionInterface(effCalleeType)) return
             ccetNoCallSignatureDiagnostics(expr, calleeExpr, calleeType, source, fileName)
             return
         }
@@ -157818,6 +157961,8 @@ interface DataView {
         fun allCallable(t: Type): Boolean = when {
             t === anyType || t === errorType -> true
             t is Type.Union -> t.types.all { allCallable(it) }
+            // (P18.297) a narrowed-to-`Function` callee is an untyped call (tsgo), as at top level.
+            isGlobalFunctionInterface(t) -> true
             else -> getCallSignaturesOfType(t).isNotEmpty()
         }
         if (calleeType.types.any { getCallSignaturesOfType(it).isEmpty() }) {

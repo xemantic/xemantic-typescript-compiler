@@ -255,7 +255,8 @@ internal class NameResolver(
     fun augmentationTargetFile(spec: String, declaringFileName: String): String? {
         resolveModuleSpecifierRelativeJsAware(spec, declaringFileName)?.let { return it }
         resolveImportTargetFallback(spec, declaringFileName)?.let { return it }
-        if (spec.startsWith("./") || spec.startsWith("../") || moduleResolutions.isEmpty()) return null
+        if (isRelativeModuleSpecifier(spec)) return augmentationDirectoryIndex(spec, declaringFileName)
+        if (moduleResolutions.isEmpty()) return null
         var agreed: String? = null
         for ((_, perFile) in moduleResolutions) {
             val target = perFile[spec] ?: continue
@@ -263,6 +264,26 @@ internal class NameResolver(
             if (agreed == null) agreed = target else if (agreed != target) return null
         }
         return agreed
+    }
+
+    /**
+     * (P18.297) The DIRECTORY leg of a relative augmentation specifier: `declare module '../..'`
+     * names a directory, which tsgo resolves through its `index` file (hono's four
+     * `middleware/<x>/index.ts` augment `src/index.ts` this way). The crawl never answers it —
+     * an augmentation name is not an import, so [moduleResolutions] has no entry — and the
+     * string resolvers try only `<dir>.ts`. Node16/NodeNext are excluded: there an ESM importer
+     * gets no directory resolution and tsgo reports TS2664 (measured); the CJS-importer case is
+     * left unresolved rather than guessed.
+     */
+    private fun augmentationDirectoryIndex(spec: String, declaringFileName: String): String? {
+        if (options.effectiveModuleResolution.isNode16OrNodeNext) return null
+        val dir = declaringFileName.substringBeforeLast('/', "")
+        val base = checker.normalizePath(if (dir.isEmpty()) spec else "$dir/$spec").removeSuffix("/")
+        for (ext in listOf(".ts", ".tsx", ".d.ts")) {
+            val candidate = "$base/index$ext"
+            if (candidate in fileResults) return candidate
+        }
+        return null
     }
     /**
      * M3.4 (round 409): ESM `.js`-tolerant module resolution for the FLOW-ONLY

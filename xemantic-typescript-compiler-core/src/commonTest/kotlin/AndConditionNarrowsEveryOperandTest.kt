@@ -188,11 +188,9 @@ class AndConditionNarrowsEveryOperandTest {
      * positive. Measured on tsc's own sources before the refusal was added: 13 captured
      * hovers went from tsc's own `object`/`unknown` to `any`.
      *
-     * RESIDUE, deliberately NOT pinned as passing: the SINGLE-condition form of the same
-     * shape (`if (typeof zzzO === "object") { zzzQs = zzzO; }`) is SILENT here where tsc
-     * 7.0.2 reports it — that is the shipped `anyType` narrowing on the pre-existing path,
-     * which this round does not touch. And our rendering of the row below is the
-     * UN-narrowed `string | object` where tsc says `object`.
+     * (P18.297) the conjunct now FILTERS the union as the flow walk does, so the row reads
+     * tsgo 7.0.2's narrowed `object` (it used to read the un-narrowed `string | object`),
+     * and the SINGLE-condition form — silent until then — reports the same row.
      */
     @Test
     fun `a typeof-object conjunct is refused because any is a widening`() {
@@ -203,7 +201,19 @@ class AndConditionNarrowsEveryOperandTest {
                 "}",
         ).filter { it.code == 2322 }
         assert(rows.size == 1)
-        assert(rows[0].message == "Type 'string | object' is not assignable to type 'string'.")
+        assert(rows[0].message == "Type 'object' is not assignable to type 'string'.")
+    }
+
+    @Test
+    fun `a single typeof-object condition narrows the assignment source`() {
+        val rows = diagnose(
+            prelude +
+                "function zzzBc(zzzO: object | string): void {\n" +
+                "  if (typeof zzzO === \"object\") { zzzQs = zzzO; }\n" +
+                "}",
+        ).filter { it.code == 2322 }
+        assert(rows.size == 1)
+        assert(rows[0].message == "Type 'object' is not assignable to type 'string'.")
     }
 
     /**
