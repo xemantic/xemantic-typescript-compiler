@@ -173911,6 +173911,19 @@ interface DataView {
         // (P18.293) `keyof unknown` is `never` (tsgo `getIndexType`): hono's
         // `ClientRequestOptions<T = unknown>` branches on `keyof T extends never`.
         if (type === unknownType) return neverType
+        // (P18.300) a TUPLE's keys include its `Array` / `ReadonlyArray` base's (tsgo `keyof [1, 2]`
+        // has `"push"`, `"map"` …): the tuple's own table holds only its slots and `length`, so
+        // `keyof` answered a CLOSED subset and `Except<TupleOf<3, E>, 'push'>`'s `K extends keyof T`
+        // constraint failed (type-fest `FixedLengthArray`).
+        if (type is Type.Object && type !is Type.Interface && type.tupleElementTypes != null) {
+            val own = getKeyofTypeCore(type)
+            val base = getKeyofTypeCore(tupleArrayBaseTarget(type))
+            return getUnionType(listOf(own, base))
+        }
+        return getKeyofTypeCore(type)
+    }
+
+    private fun getKeyofTypeCore(type: Type): Type {
         if (type is Type.Object) {
             // Only use already-resolved properties to avoid triggering member resolution
             // during init (which can cause test ordering sensitivity).
