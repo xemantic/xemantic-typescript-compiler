@@ -1,5 +1,9 @@
 
 
+**(P18.294) — (INV.0) EXTRACTION: THE MODULE-RESOLUTION CHECKS MOVE OUT OF `Checker.kt` (1,452 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 193,611; +9 PINS, 22,760 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; libraries unchanged.
+
+
 **(P18.293) — (LIBS.3): THE "ORDER BUG" WAS AN ALIAS USED WITHOUT ITS DEFAULTED TYPE ARGUMENTS LOSING THE ONES IT HAD; FIXED, WITH THE FIVE OLDER DEFECTS IT REACHED (incl. a lib-binding cycle that made `IteratorObject` intermittently lose `next`) — TALLY 340 -> 315, NONE ADDED; +13 PINS, 22,751 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; mitt and date-fns hold; `typeNode.bypassed` +1.2% rebaselined.
 

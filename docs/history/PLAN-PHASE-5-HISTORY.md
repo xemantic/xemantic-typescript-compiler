@@ -1,3 +1,28 @@
+### Round (P18.289) — (INV.0) extraction: the LABEL family (TS1114 / TS7028) moves verbatim into `LabelChecks` and the TSLIB emit-helper family (TS2354 / TS2343) into `TslibHelperChecks`; `Checker.kt` 195,978 -> 194,798 (-1,180); receipts identical; the builder STALLED after the move (the second extraction in a row to do so) and the orchestrator finished the round (2026-10-04)
+
+One implementation subagent, stopped after 25 minutes silent with no process — the census, the move, the verbatim-proof
+script and an 8-cell matrix were on disk; the pins, the ablation and every gate were taken by the orchestrator.
+**Choice**: neither family the brief named (the switch family reads walk-scoped state; the type-argument-constraint
+family still reads the type-parameter scope); the census found two clean pure-AST families. **Moved**:
+`LabelChecks.kt` (313) — `checkDuplicateLabels` / `checkUnusedLabels` and their statement walkers; `TslibHelperChecks.kt`
+(955) — `checkImportHelpersWithoutTslib` / `checkMissingTslibHelpers`, the decorator-helper check, `emitTS2354` and the
+`reportedMissingTslibHelpers` set (moved with its only users). Two collaborator fields before `init`; four `pass(…)`
+lambdas re-pointed, names unchanged; the collaborators read 5 checker members (`diagnostics`,
+`getLineAndCharacterOfPosition`, `isDtsFile`, `isModuleFile`, `checkedResults`) and NO walk ambient; no new widening.
+**Receipts**: verbatim proof both ways (`build/bench/p18289-agent/proof.py`: both moved blocks and the Checker residue
+byte-identical, and the original spans concatenate to the moved originals — the 6 "checker." hits it reports in
+`TslibHelperChecks` are `checker.go:` line citations in comments); an 8-cell matrix identical before / after; the
+library grid's row SETS identical to `r288` on all eight; corpus screen 8725 / 0; `cost_gate.py` 0;
+`spine_closure_audit.py` clean. **Not taken**: the per-pass `--passTiming` table (the builder stalled before it; the
+proof, matrix, corpus, grid and library row sets carry the same claim). **Pins**: `LabelAndTslibChecksCollaboratorTest` 5
+(TS1114, TS7028 x2, TS2354, a clean control; every row tsgo's); ablation — the two label passes 3 RED, then
+`checkImportHelpersWithoutTslib` alone 1 RED (the first tslib arm aimed at `checkMissingTslibHelpers` read 0 for the
+TS2354 pin, i.e. a mis-aimed arm, not a blind pin); `checkMissingTslibHelpers` (TS2343) is unpinned — it needs a
+`node_modules/tslib`, which the `diagnose()` harness has not got — and covered by the matrix. **Gates**: full suite
+22,688 / 0 / 44 (+5); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue
+/ mitt (standing gate, 0) unchanged (identity hash extended to both collaborators); warning gate with probe: probe only.
+Ledger row 22. **Found** (pre-existing, both arms) -> (CHK.229): a tslib FALSE POSITIVE.
+
 ### Round (P18.288) — (LIBS.2) round 13, (CHK.216) TLT part 2: `infer` patterns in a conditional `extends` are MATCHED (tuple head / tail / variadic slice, arrays, collections, template literals) instead of resolving `infer` to `any`; seven pre-existing tuple / literal defects the newly-resolving conditionals exposed are fixed; type-fest 267 -> 255 (join 10, readonly-deep 2), tally 394 -> 382, NONE added; plus a read-only CENSUS refresh (LIBS.3) (2026-10-04)
 
 One implementation subagent, plus one read-only census agent on frozen classes in parallel (it never built). **Where the
