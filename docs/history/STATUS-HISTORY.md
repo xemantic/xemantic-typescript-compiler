@@ -1,5 +1,9 @@
 
 
+**(P18.293) — (LIBS.3): THE "ORDER BUG" WAS AN ALIAS USED WITHOUT ITS DEFAULTED TYPE ARGUMENTS LOSING THE ONES IT HAD; FIXED, WITH THE FIVE OLDER DEFECTS IT REACHED (incl. a lib-binding cycle that made `IteratorObject` intermittently lose `next`) — TALLY 340 -> 315, NONE ADDED; +13 PINS, 22,751 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; mitt and date-fns hold; `typeNode.bypassed` +1.2% rebaselined.
+
+
 **(P18.292) — (LIBS.3): A TYPE ALIAS AND A SAME-NAMED NAMESPACE NOW MERGE AS IN tsgo (25 type-fest rows), STATIC GENERIC METHODS KEEP THEIR CONSTRAINTS, ANNOTATED CALLABLE CONSTS TAKE PROPERTY ASSIGNMENTS — TALLY 368 -> 340, NONE ADDED; +24 PINS, 22,738 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; mitt and date-fns hold.
 

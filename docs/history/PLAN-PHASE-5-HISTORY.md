@@ -1,3 +1,38 @@
+### Round (P18.288) — (LIBS.2) round 13, (CHK.216) TLT part 2: `infer` patterns in a conditional `extends` are MATCHED (tuple head / tail / variadic slice, arrays, collections, template literals) instead of resolving `infer` to `any`; seven pre-existing tuple / literal defects the newly-resolving conditionals exposed are fixed; type-fest 267 -> 255 (join 10, readonly-deep 2), tally 394 -> 382, NONE added; plus a read-only CENSUS refresh (LIBS.3) (2026-10-04)
+
+One implementation subagent, plus one read-only census agent on frozen classes in parallel (it never built). **Where the
+brief and the census were wrong**: the census's join diagnosis ("template spans in the true branch not instantiated")
+was a SYMPTOM — the tuple pattern `[infer F, ...infer T]` was never matched, the extends type resolved with `infer` as
+`any`, so the true branch was taken with the infer names unbound; tuple-rest inference alone fixes the census repro
+`repro/tltinfer` (3 of the 10 join rows also needed `NonNullable<undefined>` -> `never`). Template `infer` fixes none of
+type-fest's remaining rows (camel-case 4 is a deferred conditional inside a span, remove-prefix / suffix 2 a generic
+TS2344). Newly-resolving conditionals exposed pre-existing defects, fixed where they produced type-fest false
+positives: the parser lost the `?` of an optional tuple element inside type ARGUMENTS (`X<[1, 2?]>`); `[...T[]]` was not
+normalised to `T[]` nor `...readonly T[]` to `...T[]`; tuple spreads were not flattened; a tuple written as a type was
+widened in object literals (`['foo'] as ['foo']` -> `[string]`); numeric literals with separators or radixes read as 0
+(`1_000`); bigint literals were not normalised; `Set<string> extends ReadonlySet<infer I>` / `Array` vs
+`ReadonlyArray<infer I>` did not infer. **Mechanism**: new `ConditionalInferPatterns.kt` (303) matches a tuple / array /
+collection / template pattern against a concrete check type and answers bindings, no-match (false branch) or NOT
+MODELLED (the old path keeps the case) — `matchTuple` mirrors tsgo's `sliceTupleType` (prefix / suffix / variadic slice),
+`matchCollection` unwraps `{} & Readonly<X>`; `TemplateLiteralTypes.matchInferPattern` / `literalForConstraint` port
+`inferToTemplateLiteralType` incl. number / bigint / boolean constraints and the round-trip rule (`Num<"05">` = number);
+Checker `tryEvaluateInferPattern` (distributes over a union), `flattenTupleSpreads`, the lone / readonly spread
+normalisations, declared tuples frozen against widening, nullish `& {}` -> `never`; a conditional whose result is a tuple
+no longer takes the alias name; `Parser.tupleTypeArgsBase`. `Checker.kt` +~98. **Matrix** (argument probes
+`build/bench/p18288-agent/pins/f1`-`f7` + t1a / t2a / t8): tuple head / tail / last / init / labels 7, no-match 11, slices 11,
+distribution / constrained infer / recursion 5, spreads / arrays / collections 11, template infer 22, nullish /
+separators / bigint / declared tuples / `[1, 2?]` 8 — all = tsgo; remaining probe misses are other gaps (`string` vs a
+tuple target unrelated, alias type-parameter defaults not applied). **Pins**: `ConditionalInferPatternsTest` 7;
+ablation a1 4 / a2 1 / a3 2 / a4 1 / a5 1 / a6 1 / a7 1 / a8 1 / a9 1 / a10 1 / a11 1 / a12 3 / a13 5 / a14 1 / a15 1 RED
+(`collectionView` unpinned — the `diagnose()` harness's embedded lib has no `Readonly`, so a pin would be vacuous; the
+library grid's readonly-deep rows cover it). **Gates**: full suite 22,683 / 0 / 44 (+7); corpus screen 8725 / 0 and
+`--include ''` the same 41 with identical bodies; `cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0
+removed=0 + chain OK, rxjs / marked / cronstrue / mitt (standing gate, 0) unchanged (identity hash extended to
+`ConditionalInferPatterns`); library grid on the final classes (orchestrator's run `r288` = the builder's `a288s2c`):
+type-fest 267 -> 255, others unchanged (tally 394 -> 382); warning gate with probe: probe only. **Census (LIBS.3)**:
+`build/scratch-p18288-census/README.txt` (115 repros, each run against tsgo) re-ranked the 394 rows — see the (LIBS.3)
+queue item.
+
 ### Round (P18.287) — (LIBS.2) round 12, (CHK.216) TLT part 1: template-literal TYPES exist — the parser builds and cooks the spans, a `Type.TemplateLiteral` normalises like tsgo's `getTemplateLiteralType`, string literals match against it, and a template EXPRESSION in a literal context is typed as a template — type-fest 300 -> 267 (all 27 string-repeat rows, key-as-string 2, readonly-keys-of 2, join 1, extract-strict 1), tally 427 -> 394, NONE added (2026-10-04)
 
 One implementation subagent, each step priced. **Where the brief was wrong**: (a) the parser also never COOKED template
