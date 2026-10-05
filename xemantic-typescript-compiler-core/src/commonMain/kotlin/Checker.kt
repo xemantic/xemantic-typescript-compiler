@@ -530,7 +530,17 @@ class Checker(
     internal val contextualLiteralArgs = ContextualLiteralArgs(this) // (LIBS.3) GENLIT
     /** (LIBS.2) GSIG — the `IsEqual` generic-signature trick; see `GenericSignatureConditionals.kt`. */
     private val genericSigConditionals = GenericSignatureConditionals(this)
-    private val genuineAny = GenuineAnyProvenance(this) // (CHK.228)
+    internal val genuineAny = GenuineAnyProvenance(this) // (CHK.228)
+    /**
+     * (P18.302)/(P18.306) aliases whose type-parameter constraints are being checked. A constraint
+     * is resolved with the alias's OWN parameters bound to the reference's arguments (tsgo
+     * instantiates it with the alias mapper), but one that names its own alias (`type Shared<I, D
+     * extends Shared<I, D>>`) re-enters the check for the same alias, and the nested check is a
+     * cycle: it is skipped (read as satisfied), or it recurses until the stack overflows (the
+     * corpus's `reactReduxLikeDeferredInferenceAllowsAssignment`) — under a binding mapper the
+     * node cache that broke the cycle for the bare resolution is bypassed.
+     */
+    private val ownConstraintInProgress = HashSet<Int>()
     internal val templateTypes = TemplateLiteralTypes(this) // (P18.287) (CHK.216)
     internal val inferPatterns = ConditionalInferPatterns(this) // (P18.288) (CHK.216) part 2
 
@@ -108034,6 +108044,9 @@ interface DataView {
                             genuineAny.isGenuineAny(typeArgs[0], currentTypeAliasArgs) &&
                             ((decl.type as? TypeReference)?.typeName as? Identifier)?.text == "intrinsic"
                         ) return anyType
+                        if (symbol.name == "NoInfer" && resolvedArgs.size == 1 && resolvedArgs[0] !== anyType &&
+                            ((decl.type as? TypeReference)?.typeName as? Identifier)?.text == "intrinsic"
+                        ) return resolvedArgs[0]
                         if (resolvedArgs.none { it === errorType }) {
                             // B57.1b: skip substitution when any arg fails its constraint.
                             // Prevents FP TS2589 on `Foo<"false", {}>` where the constraint
@@ -108042,10 +108055,17 @@ interface DataView {
                             // levels deep and (wrongly) emits TS2589.
                             var constraintFails = false
                             var relaxedConstraint = false
-                            for (i in declTPs.indices) {
+                            val ownTpBindings = HashMap<String, Type>().also { m ->
+                                for (i in declTPs.indices) m[declTPs[i].name.text] = resolvedArgs[i]
+                            }
+                            // (P18.306) the whole check — resolution AND relation — is one span: a
+                            // self-naming constraint re-enters through either.
+                            val ownReentrant = !ownConstraintInProgress.add(symbol.id)
+                            try { for (i in declTPs.indices) {
                                 val tpConstraintNode = declTPs[i].constraint
                                 if (tpConstraintNode != null) {
-                                    val constraintType = getTypeFromTypeNode(tpConstraintNode)
+                                    val constraintType = if (ownReentrant) anyType
+                                        else typeOfNodeBinding(tpConstraintNode, ownTpBindings)
                                     if (constraintType !== anyType && constraintType !== errorType) {
                                         // (INC.28) MEASURED AND REFUSED FOR THE *CHECKING*
                                         // PATH: judging a `Type.TypeParam` argument by its
@@ -108117,7 +108137,7 @@ interface DataView {
                                         }
                                     }
                                 }
-                            }
+                            } } finally { if (!ownReentrant) ownConstraintInProgress.remove(symbol.id) }
                             // (P18.293) a reference COMPLETED by defaults keeps its old answer (the
                             // declared type below) where the guard refuses: the guard has no
                             // "type parameter via its constraint" rule ((INC.30)), so `MiddlewareHandler<E>`
@@ -118799,7 +118819,9 @@ interface DataView {
             // type parameter operand has no member list and no discriminant to reduce by.
             val alts = if (p is Type.Union) p.types else listOf(p)
             // `Type.Interface` and `Type.Reference` both ARE `Type.Object`s.
-            if (alts.any { it !is Type.Object }) return null
+            // (P18.306) an alternative that is itself an intersection of objects flattens into
+            // its combination (tsgo's union-of-intersections normal form).
+            if (alts.any { it !is Type.Object && !(it is Type.Intersection && it.types.all { m -> m is Type.Object }) }) return null
             product *= alts.size
             if (product > DISTRIBUTE_MAX_COMBINATIONS) return null
         }
@@ -170451,7 +170473,20 @@ interface DataView {
         val targetProps = target.properties ?: return false
         if (targetProps.isEmpty()) return false
         for (targetProp in targetProps) {
-            if (targetProp.name.isEmpty() || targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            if (targetProp.name.isEmpty()) continue
+            if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) {
+                // (P18.306) a target that RE-DECLARES an `Object.prototype` member (`Boolean`'s
+                // `valueOf(): boolean`) is not satisfied by the inherited one when it does not
+                // relate — tsgo reads the apparent member (type-fest's `Jsonify<string[] & [...]>`
+                // took its `T extends Boolean` branch).
+                if (targetProp.name !in mergedMembers) {
+                    val inherited = getObjectPrototypeMemberType(targetProp.name)
+                    val tgt = getPropertyTypeForRelation(target, targetProp)
+                    if (inherited != null && tgt !== anyType && tgt !== errorType &&
+                        !checkTypeRelatedTo(inherited, tgt, relation)) return false
+                }
+                continue
+            }
             val sourceProps = mergedMembers[targetProp.name]
             if (sourceProps == null) {
                 if (isOptionalProperty(targetProp)) continue
@@ -172431,7 +172466,13 @@ interface DataView {
         val op = constraint as? TypeOperator ?: return null
         if (op.operator != SyntaxKind.KeyOfKeyword) return null
         val name = nakedCheckTypeParamName(op.type) ?: return null
-        val bound = currentTypeAliasArgs?.get(name) as? Type.Union ?: return null
+        // (P18.306) an intersection over a union is that union to tsgo, which distributes `X & (A | B)`
+        // at construction: map its distributed view (type-fest's `Simplify<RequireExactlyOne<…>>`).
+        val bound = when (val raw = currentTypeAliasArgs?.get(name)) {
+            is Type.Union -> raw
+            is Type.Intersection -> distributedNarrowingType(raw) as? Type.Union ?: return null
+            else -> return null
+        }
         if (bound.types.any { it !is Type.Object && it !is Type.Intersection }) return null
         return getUnionType(bound.types.map { c ->
             withInstantiationContext(distributionMapper(name, c)) { getTypeFromMappedType(node) }
@@ -172523,6 +172564,7 @@ interface DataView {
     }
 
     private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {
+        if (genericSigConditionals.washed(node, currentTypeAliasArgs)) return anyType // (P18.306)
         genericSigConditionals.decide(node)?.let { return getTypeFromTypeNode(if (it) node.trueType else node.falseType) }
         // (CHK.228) tsgo: an `any` / `unknown` extends type is definitely true; an `any`
         // check type against anything else yields BOTH branches.

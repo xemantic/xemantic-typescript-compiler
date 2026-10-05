@@ -113,6 +113,34 @@ internal class GenericSignatureConditionals(private val checker: Checker) {
         }
     }
 
+    /**
+     * (P18.306) whether an `IsEqual`-shaped [node] compares a WASH: an operand its extends types name
+     * that the current alias frame binds to an `any` [GenuineAnyProvenance] does not vouch for (a
+     * mapped type over a key this checker cannot enumerate reads `any`). Every wash then reads
+     * IDENTICAL, so the verdict would be a confident `true` on two types tsgo tells apart; the
+     * caller answers `any` instead — the conservative direction.
+     */
+    fun washed(node: ConditionalType, aliasArgs: Map<String, Type>?): Boolean {
+        if (aliasArgs == null) return false
+        val s = checker.intersectionOps.unparenthesized(node.checkType) as? FunctionType ?: return false
+        val t = checker.intersectionOps.unparenthesized(node.extendsType) as? FunctionType ?: return false
+        val sRet = checker.intersectionOps.unparenthesized(s.type) as? ConditionalType ?: return false
+        val tRet = checker.intersectionOps.unparenthesized(t.type) as? ConditionalType ?: return false
+        val own = (s.typeParameters.orEmpty() + t.typeParameters.orEmpty()).map { it.name.text }.toSet()
+        fun walk(n: Node): Boolean {
+            if (n is TypeReference && n.typeArguments.isNullOrEmpty()) {
+                val name = (n.typeName as? Identifier)?.text
+                if (name != null && name !in own && aliasArgs[name] === anyType &&
+                    !checker.genuineAny.isGenuineAny(n, aliasArgs)
+                ) return true
+            }
+            var found = false
+            forEachChild(n) { if (!found && walk(it)) found = true }
+            return found
+        }
+        return walk(sRet.extendsType) || walk(tRet.extendsType)
+    }
+
     private fun restrictiveAssignable(g: Type, ext: Type): Boolean = when {
         ext === g || isTop(ext) -> true
         ext is Type.Union -> ext.types.any { it === g || isTop(it) }

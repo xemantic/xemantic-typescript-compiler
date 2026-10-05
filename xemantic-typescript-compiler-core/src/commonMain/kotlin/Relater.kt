@@ -280,11 +280,18 @@ internal class Relater(
      * 4a. Fast flag-based type relatedness check (no recursion).
      * Returns true if the relation holds purely from type flags.
      */
+    private fun isArrayTarget(t: Type): Boolean = t is Type.Reference &&
+        (t.target === checker.globalArrayType || t.target === checker.globalReadonlyArrayType)
+
     fun isSimpleTypeRelatedTo(source: Type, target: Type): Boolean {
         val sf = source.flags
         val tf = target.flags
         // Any target accepts everything
         if (tf.hasAny(TypeFlags.Any)) return true
+        // (P18.306) except `never` — tsgo's `isSimpleTypeRelatedTo` refuses a `never` target before
+        // its `any`-source rule, so `IsNever<any> = [any] extends [never] ? …` is `false`. Kept to a
+        // conditional's own question: outside one this checker types too many unresolved values `any`.
+        if (sf.hasAny(TypeFlags.Any) && tf.hasAny(TypeFlags.Never) && checker.templateTypes.conditionalDepth > 0) return false
         // Any source is assignable to everything (any is both top and bottom type)
         if (sf.hasAny(TypeFlags.Any)) return true
         // Unknown target accepts everything (for assignability)
@@ -934,7 +941,10 @@ internal class Relater(
         // a genuine mismatch. Bounded to a plain (non-tuple) object target to keep the FP
         // surface minimal (tuple/array targets keep the prior behavior).
         if (source is Type.Intersection) {
-            if (target is Type.Object && target.tupleElementTypes == null &&
+            // (P18.306) an ARRAY target is the "array" half of that bound too: merging `string[] &
+            // ['x']` member-by-member contradicts `unknown[]` on the array METHODS, where tsgo relates
+            // the intersection through its `string[]` constituent (type-fest's `Jsonify<string[] & [...]>`).
+            if (target is Type.Object && target.tupleElementTypes == null && !isArrayTarget(target) &&
                 checker.intersectionMergedContradictsTarget(source, target, relation)) {
                 return false
             }
