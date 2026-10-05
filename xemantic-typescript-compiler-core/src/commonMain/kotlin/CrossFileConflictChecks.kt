@@ -912,11 +912,20 @@ internal class CrossFileConflictChecks(
                 val targetResult = binderResults.firstOrNull { it.sourceFile.fileName == targetFile } ?: continue
                 // Re-exported names in the target module (`export {N} from './x'`).
                 val reexports = mutableMapOf<String, Identifier>()
+                // (CHK.232) the meaning each re-export resolves to; a name resolving to nothing is
+                // absent (tsgo: the alias resolves to `unknown` and the merge is silent).
+                val meanings = HashMap<String, Int>()
                 for (ts in targetResult.sourceFile.statements) {
                     if (ts !is ExportDeclaration || ts.moduleSpecifier == null) continue
                     val clause = ts.exportClause as? NamedExports ?: continue
+                    val reSpec = (ts.moduleSpecifier as? StringLiteralNode)?.text
+                    val reTarget = reSpec?.let { checker.resolveModuleSpecifierRelative(it, targetFile) }
                     for (es in clause.elements) {
-                        if (es.name.text !in reexports) reexports[es.name.text] = es.name
+                        if (es.name.text !in reexports) {
+                            reexports[es.name.text] = es.name
+                            val m = reTarget?.let { exportedMeaning(it, es.propertyName?.text ?: es.name.text, HashSet()) }
+                            if (m != null) meanings[es.name.text] = m
+                        }
                     }
                 }
                 if (reexports.isEmpty()) continue
@@ -928,6 +937,8 @@ internal class CrossFileConflictChecks(
                         is TypeAliasDeclaration -> {
                             if (augHasModuleSyntax && ModifierFlag.Export !in bs.modifiers) continue
                             val re = reexports[bs.name.text] ?: continue
+                            // (CHK.232) a type alias occupies only the TYPE meaning.
+                            if ((meanings[bs.name.text] ?: 0) and mergeExcludes(M_TYPE_ALIAS) == 0) continue
                             emitAugReexportDup(bs.name.text, bs.name, augFile, augSource, re,
                                 targetFile, targetResult.sourceFile.text, 2300)
                         }
@@ -938,6 +949,7 @@ internal class CrossFileConflictChecks(
                             for (d in bs.declarationList.declarations) {
                                 val n = d.name as? Identifier ?: continue
                                 val re = reexports[n.text] ?: continue
+                                if ((meanings[n.text] ?: 0) and mergeExcludes(M_BLOCK_VAR) == 0) continue
                                 emitAugReexportDup(n.text, n, augFile, augSource, re,
                                     targetFile, targetResult.sourceFile.text, 2451)
                             }
@@ -1194,7 +1206,7 @@ internal class CrossFileConflictChecks(
         for (stmt in res.sourceFile.statements) {
             if (stmt !is ExportDeclaration) continue
             val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            val target = checker.resolveModuleSpecifier(spec, stmt) ?: continue
+            val target = checker.resolveModuleSpecifierRelative(spec, fileName) ?: continue
             val clause = stmt.exportClause
             if (clause == null) {
                 // export * from "Y" — name passes through unchanged
@@ -1229,7 +1241,9 @@ internal class CrossFileConflictChecks(
                 if (stmt !is ModuleDeclaration) continue
                 val specName = (stmt.name as? StringLiteralNode)?.text ?: continue
                 val body = stmt.body as? ModuleBlock ?: continue
-                val targetFile = checker.resolveModuleSpecifier(specName, stmt) ?: continue
+                // (CHK.232) directory-relative: a bare `resolveModuleSpecifier` keys on file NAMES and
+                // misses every nested `-project` path.
+                val targetFile = resolveAugmentationTargetFile(specName, augFile) ?: continue
                 if (targetFile == augFile) continue
                 for (inner in body.statements) {
                     val enumDecl = inner as? EnumDeclaration ?: continue
@@ -1383,55 +1397,208 @@ internal class CrossFileConflictChecks(
     }
 
     /**
-     * B449 (noSymbolForMergeCrash): a top-level `type N = …` in a SCRIPT file, where N
-     * ALSO has a top-level `namespace N`/`module N` declaration in a DIFFERENT SCRIPT
-     * file, is a cross-file global-scope merge that tsc rejects with TS2649 "Cannot
-     * augment module 'N' with value exports because it resolves to a non-module entity."
-     * at the type-alias name (the type alias is the "non-module entity" the namespace
-     * cannot merge with). The binder's symbol tables don't model this cross-file global
-     * merge, so it's AST-based — like the other dedicated cross-file walkers (B443).
+     * (CHK.232) tsgo's GLOBAL MERGE for a top-level name a SCRIPT `type` alias shares with an
+     * interface / namespace / function / `var` in another script file (B449, noSymbolForMergeCrash,
+     * rewritten). tsgo merges each file's locals into `globals` in PROGRAM ORDER through
+     * `mergeSymbol` (checker.go:14072): when the accumulated target's flags hit the source's
+     * EXCLUDED flags it reports TS2649 at the source's first declaration if the TARGET carries
+     * `NamespaceModule`, and otherwise `reportMergeSymbolError` — TS2300 at every declaration of
+     * both symbols — leaving the target unchanged either way. Meanings decide the clash, so a type
+     * alias beside a namespace (instantiated or not) is SILENT in both orders, and the
+     * noSymbolForMergeCrash shape answers TS2649 or TS2300 x3 depending on which file merges first.
      *
-     * FP firewall (corpus-EXHAUSTIVE): BOTH files must be SCRIPT files (no imports/
-     * exports) — the only other corpus file sharing the `type X`+`namespace X` shape is
-     * `reexportNameAliasedAndHoisted`, whose files are MODULE files (top-level `export`),
-     * so the type/namespace are module-scoped (no global conflict) and it is excluded.
-     * The conflict must be cross-FILE (same-file `type X`+`namespace X` is TS2300, owned
-     * by the duplicate-identifier pipeline).
+     * Scope: the names [checkCrossFileIdentifierConflicts] bails on (an interface / namespace /
+     * function / `var` declaration), carrying at least one type alias and no enum (enum merges are
+     * [checkCrossFileEnumConflicts]'s); only clashes on a TYPE-meaning bit are emitted (a pure value
+     * clash is the block-scoped / class walkers' job); `.d.ts` files are not modelled.
      */
     fun checkCrossFileTypeAliasNamespaceConflict() {
-        // name -> first script-file top-level type-alias name node (+ its file/source)
-        val typeAliases = HashMap<String, Triple<Identifier, String, String>>()
-        // name -> set of script files declaring a top-level namespace/module of that name
-        val namespaces = HashMap<String, MutableSet<String>>()
-        for (result in checker.checkedResults) {
+        class Decl(val nameNode: Identifier, val fileName: String, val source: String)
+        class FileSym(val flags: Int, val decls: List<Decl>)
+        // name -> per-file symbols in program order; a name whose own file already clashes is dropped.
+        val byName = LinkedHashMap<String, MutableList<FileSym>>()
+        val kinds = HashMap<String, Int>()
+        val internalClash = HashSet<String>()
+        for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (checker.isDtsFile(fileName)) continue
             if (checker.isModuleFile(result.sourceFile.statements)) continue
             val source = result.sourceFile.text
+            val local = LinkedHashMap<String, Pair<Int, MutableList<Decl>>>()
+            fun add(id: Identifier?, flag: Int) {
+                val name = id?.text ?: return
+                if (name.isEmpty()) return
+                val cur = local[name]
+                if (cur == null) { local[name] = flag to mutableListOf(Decl(id, fileName, source)); return }
+                if (cur.first and mergeExcludes(flag) != 0 || flag and mergeExcludes(cur.first) != 0) internalClash.add(name)
+                cur.second.add(Decl(id, fileName, source))
+                local[name] = (cur.first or flag) to cur.second
+            }
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
-                    is TypeAliasDeclaration ->
-                        typeAliases.getOrPut(stmt.name.text) { Triple(stmt.name, fileName, source) }
-                    is ModuleDeclaration -> {
-                        val nm = (stmt.name as? Identifier)?.text ?: continue
-                        namespaces.getOrPut(nm) { mutableSetOf() }.add(fileName)
+                    is TypeAliasDeclaration -> add(stmt.name, M_TYPE_ALIAS)
+                    is InterfaceDeclaration -> add(stmt.name, M_INTERFACE)
+                    is ClassDeclaration -> add(stmt.name, M_CLASS)
+                    is FunctionDeclaration -> add(stmt.name, M_FUNCTION)
+                    is EnumDeclaration -> add(stmt.name, if (ModifierFlag.Const in stmt.modifiers) M_CONST_ENUM else M_REGULAR_ENUM)
+                    is ModuleDeclaration -> add(stmt.name as? Identifier,
+                        if (checker.getModuleInstanceState(stmt) == ModuleInstanceState.NonInstantiated) M_NAMESPACE_MODULE
+                        else M_VALUE_MODULE)
+                    is VariableStatement -> {
+                        val flag = when (stmt.declarationList.flags) {
+                            SyntaxKind.ConstKeyword, SyntaxKind.LetKeyword -> M_BLOCK_VAR
+                            else -> M_FUNCTION_VAR
+                        }
+                        for (d in stmt.declarationList.declarations) add(d.name as? Identifier, flag)
+                    }
+                    else -> {}
+                }
+            }
+            for ((name, sym) in local) {
+                byName.getOrPut(name) { mutableListOf() }.add(FileSym(sym.first, sym.second))
+                kinds[name] = (kinds[name] ?: 0) or sym.first
+            }
+        }
+        // per error location: the related-node calls accumulated for it (tsgo folds them).
+        val errors = LinkedHashMap<Decl, Pair<Int, MutableList<List<Decl>>>>()
+        for ((name, syms) in byName) {
+            val k = kinds[name] ?: continue
+            if (syms.size < 2 || name in internalClash) continue
+            if (k and M_TYPE_ALIAS == 0) continue
+            if (k and (M_CONST_ENUM or M_REGULAR_ENUM) != 0) continue
+            if (k and (M_INTERFACE or M_NAMESPACE_MODULE or M_VALUE_MODULE or M_FUNCTION or M_FUNCTION_VAR) == 0) continue
+            var tFlags = syms[0].flags
+            val tDecls = syms[0].decls.toMutableList()
+            for (s in syms.drop(1)) {
+                val clash = tFlags and mergeExcludes(s.flags)
+                if (clash == 0) { tFlags = tFlags or s.flags; tDecls += s.decls; continue }
+                if (clash and M_TYPE == 0) continue
+                if (tFlags and M_NAMESPACE_MODULE != 0) {
+                    val d = s.decls.first()
+                    errors.getOrPut(d) { 2649 to mutableListOf() }
+                    continue
+                }
+                for (d in s.decls) errors.getOrPut(d) { 2300 to mutableListOf() }.second.add(tDecls.filter { it.nameNode !== d.nameNode })
+                for (d in tDecls) errors.getOrPut(d) { 2300 to mutableListOf() }.second.add(s.decls.filter { it.nameNode !== d.nameNode })
+            }
+        }
+        val fileOrder = binderResults.withIndex().associate { it.value.sourceFile.fileName to it.index }
+        for ((d, e) in errors.entries.sortedWith(compareBy({ fileOrder[it.key.fileName] }, { it.key.nameNode.pos }))) {
+            val name = d.nameNode.text
+            val (line, character) = checker.getLineAndCharacterOfPosition(d.source, d.nameNode.pos)
+            val related = duplicateCallRelatedInfos(e.second.map { call ->
+                call.map { o ->
+                    val (ol, oc) = checker.getLineAndCharacterOfPosition(o.source, o.nameNode.pos)
+                    DuplicateRelatedTarget(name, o.fileName, ol, oc, o.nameNode.pos, name.length)
+                }
+            }).distinctBy { listOf(it.code, it.fileName, it.start) }.take(5)
+            checker.diagnostics.add(Diagnostic(
+                message = if (e.first == 2649)
+                    "Cannot augment module '$name' with value exports because it resolves to a non-module entity."
+                else "Duplicate identifier '$name'.",
+                category = DiagnosticCategory.Error, code = e.first,
+                fileName = d.fileName, line = line, character = character,
+                start = d.nameNode.pos, length = name.length,
+                relatedInformation = if (e.first == 2649) emptyList() else related,
+            ))
+        }
+    }
+
+    /**
+     * (CHK.232) The MEANING an exported [name] of [fileName] occupies, as tsgo symbol-flag bits
+     * (`M_*`), following local `export { x as name }` clauses and `export … from` chains; null when
+     * the name resolves to nothing (tsgo's alias then resolves to `unknown` and merges silently).
+     */
+    private fun exportedMeaning(fileName: String, name: String, visited: MutableSet<String>): Int? {
+        if (!visited.add("$fileName\u0000$name")) return null
+        val res = checker.fileResults[fileName] ?: return null
+        var flags = 0
+        fun topLevel(local: String, exportedOnly: Boolean) {
+            for (stmt in res.sourceFile.statements) {
+                val exported = when (stmt) {
+                    is TypeAliasDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is InterfaceDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+                    else -> continue
+                }
+                if (exportedOnly && !exported) continue
+                when (stmt) {
+                    is TypeAliasDeclaration -> if (stmt.name.text == local) flags = flags or M_TYPE_ALIAS
+                    is InterfaceDeclaration -> if (stmt.name.text == local) flags = flags or M_INTERFACE
+                    is ClassDeclaration -> if (stmt.name?.text == local) flags = flags or M_CLASS
+                    is FunctionDeclaration -> if (stmt.name?.text == local) flags = flags or M_FUNCTION
+                    is EnumDeclaration -> if (stmt.name.text == local) flags = flags or
+                        (if (ModifierFlag.Const in stmt.modifiers) M_CONST_ENUM else M_REGULAR_ENUM)
+                    is ModuleDeclaration -> if ((stmt.name as? Identifier)?.text == local) flags = flags or
+                        (if (checker.getModuleInstanceState(stmt) == ModuleInstanceState.NonInstantiated) M_NAMESPACE_MODULE
+                         else M_VALUE_MODULE)
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                        if ((d.name as? Identifier)?.text != local) continue
+                        flags = flags or when (stmt.declarationList.flags) {
+                            SyntaxKind.ConstKeyword, SyntaxKind.LetKeyword -> M_BLOCK_VAR
+                            else -> M_FUNCTION_VAR
+                        }
                     }
                     else -> {}
                 }
             }
         }
-        for ((name, ta) in typeAliases) {
-            val (idNode, taFile, taSource) = ta
-            // Require a namespace of the same name in a DIFFERENT script file.
-            val nsFiles = namespaces[name] ?: continue
-            if (nsFiles.none { it != taFile }) continue
-            val (line, character) = checker.getLineAndCharacterOfPosition(taSource, idNode.pos)
-            checker.diagnostics.add(Diagnostic(
-                message = "Cannot augment module '$name' with value exports because it resolves to a non-module entity.",
-                category = DiagnosticCategory.Error, code = 2649,
-                fileName = taFile, line = line, character = character,
-                start = idNode.pos, length = idNode.text.length,
-            ))
+        topLevel(name, exportedOnly = true)
+        for (stmt in res.sourceFile.statements) {
+            if (stmt !is ExportDeclaration) continue
+            val clause = stmt.exportClause
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+            if (spec == null) {
+                if (clause is NamedExports) for (el in clause.elements)
+                    if (el.name.text == name) topLevel(el.propertyName?.text ?: name, exportedOnly = false)
+                continue
+            }
+            val target = checker.resolveModuleSpecifierRelative(spec, fileName) ?: continue
+            if (clause == null) {
+                if (flags == 0) exportedMeaning(target, name, visited)?.let { flags = flags or it }
+            } else if (clause is NamedExports) {
+                for (el in clause.elements) {
+                    if (el.name.text != name) continue
+                    exportedMeaning(target, el.propertyName?.text ?: name, visited)?.let { flags = flags or it }
+                }
+            }
+        }
+        return if (flags == 0) null else flags
+    }
+
+    private companion object {
+        // (CHK.232) tsgo `ast.SymbolFlags` meanings, restricted to top-level declaration kinds.
+        const val M_FUNCTION_VAR = 1 shl 0
+        const val M_BLOCK_VAR = 1 shl 1
+        const val M_FUNCTION = 1 shl 2
+        const val M_CLASS = 1 shl 3
+        const val M_INTERFACE = 1 shl 4
+        const val M_CONST_ENUM = 1 shl 5
+        const val M_REGULAR_ENUM = 1 shl 6
+        const val M_VALUE_MODULE = 1 shl 7
+        const val M_NAMESPACE_MODULE = 1 shl 8
+        const val M_TYPE_ALIAS = 1 shl 9
+        const val M_VALUE = M_FUNCTION_VAR or M_BLOCK_VAR or M_FUNCTION or M_CLASS or M_CONST_ENUM or
+            M_REGULAR_ENUM or M_VALUE_MODULE
+        const val M_TYPE = M_CLASS or M_INTERFACE or M_CONST_ENUM or M_REGULAR_ENUM or M_TYPE_ALIAS
+
+        /** tsgo `getExcludedSymbolFlags`: the union of each meaning's `*Excludes`. */
+        fun mergeExcludes(flags: Int): Int {
+            var r = 0
+            if (flags and M_FUNCTION_VAR != 0) r = r or (M_VALUE and M_FUNCTION_VAR.inv())
+            if (flags and M_BLOCK_VAR != 0) r = r or M_VALUE
+            if (flags and M_FUNCTION != 0) r = r or (M_VALUE and (M_FUNCTION or M_VALUE_MODULE or M_CLASS).inv())
+            if (flags and M_CLASS != 0) r = r or ((M_VALUE or M_TYPE) and (M_VALUE_MODULE or M_INTERFACE or M_FUNCTION).inv())
+            if (flags and M_INTERFACE != 0) r = r or (M_TYPE and (M_INTERFACE or M_CLASS).inv())
+            if (flags and M_REGULAR_ENUM != 0) r = r or ((M_VALUE or M_TYPE) and (M_REGULAR_ENUM or M_VALUE_MODULE).inv())
+            if (flags and M_CONST_ENUM != 0) r = r or ((M_VALUE or M_TYPE) and M_CONST_ENUM.inv())
+            if (flags and M_VALUE_MODULE != 0) r = r or (M_VALUE and (M_FUNCTION or M_CLASS or M_REGULAR_ENUM or M_VALUE_MODULE).inv())
+            if (flags and M_TYPE_ALIAS != 0) r = r or M_TYPE
+            return r
         }
     }
 }

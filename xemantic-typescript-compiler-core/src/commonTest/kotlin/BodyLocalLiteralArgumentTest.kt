@@ -427,9 +427,12 @@ class BodyLocalLiteralArgumentTest {
     }
 
     @Test
-    fun `residue - a body-local object member is not recorded`() {
-        // tsc: `string`.
-        assert(messages("function f() { const o = { v: \"a\" }; takeB(o.v) }").isEmpty())
+    fun `a body-local object member is recorded - its widened string reaches the argument gate`() {
+        // (P18.299) closed: the declaration's LEAVE now types a local object-literal
+        // initializer, so `o.v` reads `string` — tsgo 7.0.2's row exactly. This pin used to
+        // assert the silence (`residue -`).
+        assert(messages("function f() { const o = { v: \"a\" }; takeB(o.v) }") ==
+            listOf("Argument of type 'string' is not assignable to parameter of type '\"b\"'."))
     }
 
     @Test

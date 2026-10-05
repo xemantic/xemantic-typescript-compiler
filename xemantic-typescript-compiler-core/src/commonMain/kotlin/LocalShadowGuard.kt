@@ -95,8 +95,11 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
      * of a statement-position [Block]'s own statements (plus a `catch` variable's leaves when
      * the block is a catch body), of EVERY clause of a [SwitchStatement] (the case block is
      * ONE scope — clauses share it), and of a [ForStatement]'s header. Empty for anything
-     * else, including a function / accessor / static-block body (the function frame's job)
-     * and a file-level block. `var` is never included — it is function-scoped.
+     * else, including a function / accessor / static-block body (the function frame's job).
+     * A FILE-LEVEL statement block (`{ … }` directly in a source file) IS a scope: (P18.299)
+     * its declarations are B83.5-unbound like any nested block's, and excluding it left the
+     * argument walker typing every one of them `any`. `var` is never included — it is
+     * function-scoped.
      *
      * The walker opens a scope only for the names it holds or that are bound at file /
      * global level, so a block that shadows nothing pays one memo probe.
@@ -147,7 +150,7 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
             when (scope) {
                 is Block -> {
                     when (val p = (scope as NodeBase).parent) {
-                        null, is SourceFile, is FunctionDeclaration, is FunctionExpression, is ArrowFunction,
+                        null, is FunctionDeclaration, is FunctionExpression, is ArrowFunction,
                         is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor,
                         is ClassStaticBlockDeclaration -> return emptyList()
                         is CatchClause -> p.variableDeclaration?.let { leaves(it.name) }
@@ -185,7 +188,7 @@ internal class LocalShadowGuard(private val sourceFileOf: (String) -> SourceFile
             fun statements(sts: List<Statement>) { for (st in sts) if (st is VariableStatement) list(st.declarationList) }
             when (scope) {
                 is Block -> when ((scope as NodeBase).parent) {
-                    null, is SourceFile, is FunctionDeclaration, is FunctionExpression, is ArrowFunction,
+                    null, is FunctionDeclaration, is FunctionExpression, is ArrowFunction,
                     is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor,
                     is ClassStaticBlockDeclaration -> {}
                     else -> statements(scope.statements)

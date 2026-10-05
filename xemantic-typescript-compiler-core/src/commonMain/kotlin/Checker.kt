@@ -2291,6 +2291,31 @@ class Checker(
                 currentLocalTypes[nm.text] = t
             }
         }
+        if (nm != null && ann == null && currentLocalTypes[nm.text] == null) {
+            // (P18.299) an un-annotated body-local `const f = (a: A) => …` — a callee the
+            // argument walker read as `any` (B83.5), so no call to a local arrow was ever
+            // related. Typed at the LEAVE (the initializer has been walked; not the pre-scan's
+            // B420 hazard), and only when every parameter is annotated: an un-annotated one
+            // is contextually typed, which this frame cannot reproduce.
+            val fn = decl.initializer?.let { unwrapParensExpr(it) }
+            val params = when (fn) {
+                is ArrowFunction -> fn.parameters
+                is FunctionExpression -> fn.parameters
+                else -> null
+            }
+            if (params != null && varDeclIsImmutableBinding(decl) && params.all { it.type != null }) {
+                val t = getTypeOfExpression(fn!!)
+                if (t is Type.Object && !t.callSignatures.isNullOrEmpty()) currentLocalTypes[nm.text] = t
+            } else if (varDeclIsImmutableBinding(decl) &&
+                (fn is ObjectLiteralExpression || fn is ArrayLiteralExpression || fn is AsExpression)) {
+                // (P18.299) the same gap for an object / array literal or an `as` assertion
+                // (`const input = {}`, `const xs = [{ code: "" }]`, `const u = x as unknown`):
+                // the declared type the declaration reader already records, widened as a
+                // `const`'s inferred type is (an assertion is taken as written).
+                val t = getTypeOfExpression(fn)
+                if (t !== anyType && t !== errorType) currentLocalTypes[nm.text] = if (fn is AsExpression) t else widenType(t)
+            }
+        }
         if (nm != null && currentLocalTypes[nm.text] == null) {
             val shadowsCallable = listOfNotNull(
                 currentFileLocals?.get(nm.text), globals[nm.text]
@@ -126452,7 +126477,8 @@ interface DataView {
             // constraint as effective param type) from being bypassed.
             val constraint = tp.constraint?.let { c -> constraintOnlyMapper?.let { instantiateType(c, it) } ?: c }
             if (constraint != null) {
-                tispCheckConstraint(
+                val mark = diagnostics.size
+                if (tispCheckConstraint(
                     tp = tp,
                     constraint = constraint,
                     firstWidened = firstWidened,
@@ -126462,7 +126488,20 @@ interface DataView {
                     args = args,
                     source = source,
                     fileName = fileName,
-                ) ?: return null
+                ) == null) {
+                    // (P18.299) tsgo's `getInferredType`: an inference that fails its constraint
+                    // is REPLACED by the (instantiated) constraint, and the argument is then
+                    // related to it — so `g<T extends string>(x)` with `x: {}` reports `'{}'`
+                    // against `'string'`. Only where no constraint emitter above has reported
+                    // and the constraint is concrete; otherwise the open signature as before.
+                    if (source != null && fileName != null && !forReturnType && diagnostics.size == mark &&
+                        constraint !== anyType && constraint !== errorType &&
+                        !typeContainsForeignTypeParam(constraint, emptySet())) {
+                        mapperPairs.add(tp to constraint)
+                        continue
+                    }
+                    return null
+                }
             }
 
             // 17.31b multi-arg conflict detection: scan subsequent candidates, find
@@ -165113,10 +165152,14 @@ interface DataView {
                 // — the parameter is a bare `T`, so the gate above never sees `object`
                 // and only the CONSTRAINT does.
                 isArgCheckableType(constraint) &&
-                isSimpleCheckableType(argType) &&
+                // (P18.299) an OBJECT argument against a primitive constraint is decidable
+                // too (no object value is a string / number / …): tsgo replaces the failed
+                // inference by the constraint and relates the argument to it.
+                (isSimpleCheckableType(argType) || (argType is Type.Object && !isArgCheckableType(argType))) &&
                 !checkTypeRelatedTo(argType, constraint, assignableRelation)
             ) {
-                val argTypeStr = typeToString(argType)
+                val argTypeStr = if (isSimpleCheckableType(argType)) typeToString(argType)
+                    else relationErrorSourceDisplay(argType, constraint)
                 val paramTypeStr = typeToString(constraint)
                 // B273: when the ARG is an arrow/function-expression, argType here is its
                 // contextually-RE-TYPED return (a genuine fn-object would fail the
@@ -165564,7 +165607,17 @@ interface DataView {
                 !paramType.constructSignatures.isNullOrEmpty() &&
                 !typeContainsForeignTypeParam(paramType, emptySet()) &&
                 !typeContainsForeignTypeParam(argType, emptySet())
-            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam && !allowArrayLikeVsArrayLike && !allowNamedObjectVsNamedObject && !allowCtorVsCtor) return CAAS_CONTINUE
+            // (P18.299) a plain OBJECT LITERAL against a UNION / INTERSECTION of concrete object
+            // types (type-fest `RequireAtLeastOne`): the declaration reader already relates the
+            // same pair through [canUseTypeEngine]; see [argObjLitVsCompositeCheckable].
+            val allowObjLitVsComposite = arityOk &&
+                (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
+                argObjLitVsCompositeCheckable(arg, argType, paramType)
+            // tsgo's excess-property check runs FIRST for a fresh literal: a member no
+            // constituent declares is TS2353 at that member, whatever the relation says.
+            if (allowObjLitVsComposite && objLitCompositeExcess(arg as ObjectLiteralExpression, paramType, source, fileName))
+                return CAAS_CONTINUE
+            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowObjLitVsComposite && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam && !allowArrayLikeVsArrayLike && !allowNamedObjectVsNamedObject && !allowCtorVsCtor) return CAAS_CONTINUE
             // Round 79l (orchestrated — Agent A plan): for a contextually-typed
             // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
             // body-return type (allowFuncReturnMismatch), TypeScript reports a
@@ -165623,6 +165676,89 @@ interface DataView {
             }
         }
         return CAAS_NONE
+    }
+
+    /**
+     * (P18.299) Is an OBJECT-LITERAL argument decidable against a UNION / INTERSECTION
+     * parameter? Only a literal of plain `name: value` / shorthand members whose values are
+     * not functions (a method or arrow member needs contextual typing this reader does not
+     * reproduce), against a parameter whose every constituent is a concrete, non-callable
+     * object type with no free type parameter — the shape `RequireAtLeastOne` /
+     * `RequireExactlyOne` / `RequireAllOrNone` produce, which both references reject.
+     */
+    private fun argObjLitVsCompositeCheckable(arg: Expression, argType: Type, paramType: Type): Boolean {
+        if (arg !is ObjectLiteralExpression || argType !is Type.Object) return false
+        if (paramType !is Type.Union && paramType !is Type.Intersection) return false
+        for (p in arg.properties) {
+            val init = when (p) {
+                is PropertyAssignment -> if (p.name is Identifier || p.name is StringLiteralNode) unwrapParensExpr(p.initializer) else return false
+                is ShorthandPropertyAssignment -> null
+                else -> return false
+            }
+            if (init is ArrowFunction || init is FunctionExpression || init is ObjectLiteralExpression ||
+                init is ArrayLiteralExpression) return false
+        }
+        if (typeContainsForeignTypeParam(paramType, emptySet())) return false
+        fun concreteObject(t: Type): Boolean {
+            if (t === anyType || t === errorType || t is Type.TypeParam) return false
+            if (t is Type.Union) return t.types.all { concreteObject(it) }
+            if (t is Type.Intersection) return t.types.all { concreteObject(it) }
+            if (t !is Type.Object || isEnumFlavoredObjectType(t)) return false
+            resolveStructuredTypeMembers(t)
+            if (!t.callSignatures.isNullOrEmpty() || !t.constructSignatures.isNullOrEmpty()) return false
+            if (t.stringIndexInfo != null || t.numberIndexInfo != null) return false
+            return t.members.isNullOrEmpty() || t.members!!.values.all {
+                val mt = getTypeOfSymbol(it)
+                mt !== anyType && mt !== errorType && !literalSensitive(mt)
+            }
+        }
+        return concreteObject(paramType)
+    }
+
+    /** (P18.299) a member type a fresh literal's property is contextually typed AGAINST (a
+     *  literal, an enum, a union carrying one): this reader widens the argument's literal
+     *  members, so such a pair is refused rather than reported (date-fns `unit`, zod `type`). */
+    private fun literalSensitive(t: Type): Boolean = when (t) {
+        is Type.Union -> t.types.any { literalSensitive(it) }
+        is Type.StringLiteral, is Type.NumberLiteral, is Type.BigIntLiteral -> true
+        else -> t === trueType || t === falseType || t is Type.TemplateLiteral || isEnumFlavoredObjectType(t)
+    }
+
+    /** (P18.299) the TS2353 half of [argObjLitVsCompositeCheckable]: true when it reported. */
+    private fun objLitCompositeExcess(arg: ObjectLiteralExpression, paramType: Type, source: String, fileName: String): Boolean {
+        val known = HashSet<String>()
+        fun collect(t: Type) {
+            when (t) {
+                is Type.Union -> t.types.forEach { collect(it) }
+                is Type.Intersection -> t.types.forEach { collect(it) }
+                is Type.Object -> { resolveStructuredTypeMembers(t); t.members?.keys?.let { known.addAll(it) } }
+                else -> {}
+            }
+        }
+        collect(paramType)
+        for (p in arg.properties) {
+            val nameNode: Node = when (p) {
+                is PropertyAssignment -> p.name
+                is ShorthandPropertyAssignment -> p.name
+                else -> continue
+            }
+            val name = when (nameNode) {
+                is Identifier -> nameNode.text
+                is StringLiteralNode -> nameNode.text
+                else -> continue
+            }
+            if (name in known || name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            val start = nameNode.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Object literal may only specify known properties, and '$name' does not exist in type '${typeToString(paramType)}'.",
+                category = DiagnosticCategory.Error, code = 2353,
+                fileName = fileName, line = line, character = character,
+                start = start, length = if (nameNode is Identifier) name.length else name.length + 2,
+            ))
+            return true
+        }
+        return false
     }
 
     private fun caasTailGatesAndRelation(

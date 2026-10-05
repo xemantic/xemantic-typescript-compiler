@@ -867,6 +867,15 @@ internal class Relater(
         if (source === booleanType && target is Type.Union && target.types.none { it === booleanType }) {
             return checkTypeRelatedTo(trueType, target, relation) && checkTypeRelatedTo(falseType, target, relation)
         }
+        // (P18.299) an enum's own type is the union of its members to tsgo: against a union
+        // target carrying no enum-flavoured constituent each member is related on its own —
+        // so a string enum `U { A = 'a', B = 'b' }` relates to `'a' | 'b' | 'c'` (a member
+        // relates to the literal of the same value).
+        if (target is Type.Union && source is Type.Object && enumSemantics.enumOwnTypeSymbol(source) != null &&
+            target.types.none { enumSemantics.isEnumFlavoredObjectType(it) }) {
+            val members = enumSemantics.enumMemberTypesOf(source)
+            if (!members.isNullOrEmpty() && members.all { checkTypeRelatedTo(it, target, relation) }) return true
+        }
         // Union target: source must be related to some constituent
         if (target is Type.Union) {
             // Round 435e: the (source, union) frame's own source-stack entry is
@@ -1732,6 +1741,28 @@ internal class Relater(
         for (i in 0 until len) {
             val sourceParamTypeRaw = checker.getTypeOfSymbol(sourceParams[i])
             val sourceIsRest = (sourceParams[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            // (P18.299) the source's rest SHORTER than a rest-carrying target —
+            // `(...groups: string[]) => string` against `(substring: string, ...args: any[])
+            // => string` (`String.replace`'s replacer): tsgo relates the type AT EACH
+            // POSITION, so every remaining fixed target parameter and the target's rest
+            // element are related to the source's rest element. Before this the ARRAY
+            // `string[]` was compared to `substring: string` and the pair was refused.
+            if (sourceIsRest && i == sourceParams.size - 1 && targetLastIsRest && i < targetParams.size - 1) {
+                val raw = sourceParamTypeRaw
+                val elem = if (raw is Type.Reference && raw.target.symbol?.name in setOf("Array", "ReadonlyArray"))
+                    raw.resolvedTypeArguments?.firstOrNull() else null
+                if (elem != null && elem !== anyType && elem !== errorType && elem !is Type.TypeParam) {
+                    for (j in i until targetParams.size) {
+                        val t = if (j == targetParams.size - 1) targetRestElement ?: break
+                            else checker.getTypeOfSymbol(targetParams[j])
+                        if (t === anyType || t === errorType || t is Type.TypeParam) continue
+                        if (!checkTypeRelatedTo(t, elem, relation) &&
+                            !(bivariantParams && checkTypeRelatedTo(elem, t, relation))) return false
+                    }
+                    continue
+                }
+                // a non-array rest (`...args: never`) keeps the positional comparison below.
+            }
             // B196: at the source's rest position (target non-rest), compare the
             // target param against the rest ELEMENT bivariantly.
             if (sourceIsRest && i == sourceParams.size - 1 && sourceRestElement != null) {

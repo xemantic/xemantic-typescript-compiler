@@ -33,15 +33,13 @@ import kotlin.test.Test
  * the two helpers re-pointed from `Checker` — `duplicateCallRelatedInfos` (reached through
  * `checkClassShadowsLibType`) and `resolveAugmentationTargetFile` (reached for a `"."` augmentation
  * specifier). Every expected row is tsgo 7.0.2's (cells under `build/bench/p18298-agent/matrix/`,
- * 1-based column) except the one `residue -` pin; all cells read byte-identical on both arms of
+ * 1-based column); all cells read byte-identical on both arms of
  * the move.
  *
- * Pre-existing divergences shared by both arms, NOT asserted here: a type-alias augmentation
- * against a re-exported `const` is an ours-only TS2300 pair (tsgo is silent — a type and a value
- * do not collide); a script `type N` beside a script `namespace N` is an ours-only TS2649 (tsgo is
- * silent, or reports TS2300 at all three declarations when the namespace merges with an
- * interface); and an `enum` augmentation of a class reached through `export *` is TS2567 at both
- * declarations in tsgo and silent through the project path here.
+ * The three pre-existing divergences this class used to list — a type-alias augmentation against a
+ * re-exported `const`, a script `type N` beside a script `namespace N`, and an `enum` augmentation
+ * reached through a nested project path — are closed by (CHK.232); `CrossFileMeaningMergeTest`
+ * carries their tsgo rows.
  */
 class CrossFileConflictChecksCollaboratorTest {
 
@@ -322,11 +320,12 @@ class CrossFileConflictChecksCollaboratorTest {
     }
 
     /**
-     * tsgo 7.0.2 is SILENT here (a type alias and a namespace merge); the TS2649 is this checker's
-     * pre-existing answer on both arms of the move, pinned so the entry point's ablation is visible.
+     * (CHK.232) tsgo 7.0.2 is SILENT here: a type alias occupies only the type meaning, an
+     * instantiated namespace only the value / namespace one, so they merge. This pin used to assert
+     * an ours-only TS2649 (`residue -`); re-pointed to tsgo's answer.
      */
     @Test
-    fun `residue - a script type alias beside a script namespace of one name is an ours-only TS2649`() {
+    fun `a script type alias beside a script namespace of one name is silent`() {
         val r = rows(
             """
             // @Filename: /p/a.ts
@@ -337,7 +336,7 @@ class CrossFileConflictChecksCollaboratorTest {
             }
             """,
         )
-        assert(r == listOf("/p/a.ts:1:6 TS2649 Cannot augment module 'N' with value exports because it resolves to a non-module entity."))
+        assert(r.isEmpty())
     }
 
     @Test
