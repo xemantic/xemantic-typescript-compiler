@@ -25,6 +25,30 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.303) — (INV.0) extraction: the CIRCULARITY family (TS2303 import-alias cycles, TS2449 / TS2506 base-class cycles, TS2456 type-alias cycles, 9 passes) moves verbatim into `CircularityChecks`; `Checker.kt` 192,857 -> 191,529 (-1,328); every receipt identical, per-pass table included (2026-10-05)
+
+One implementation subagent in the (P18.294) order; it finished. **Choice**: the switch family is still scattered; the
+type-argument-constraint closure still reads walk-scoped type-parameter state; the constructor-return family (88222-88918)
+is clean but would widen `checkTypeRelatedTo` / `assignableRelation` on the hot relation path — refused; the circularity
+family needed 3 widenings, none on the relation or spine path. **Moved**: four spans (89245-89615 the TS2303 import-alias
+run; 134843-135471, 135496-135542, 135573-135852 the base-class / type-alias circularity run); two holes stay in `Checker`
+(`matchClosingBracket`, `typeNodeContainsName` — outside callers); three helpers re-pointed (`classHasCircularBase` x2,
+`aliasStatementSpanEnd`, `emitTS2303At`); 11 checker members read, no walk-scoped or spine state, no mutable field read;
+widenings `matchClosingBracket`, `typeNodeContainsName`, and `ambientCyclicBaseClassNamesByFile` (`internal` — the family
+writes it and TS2449's use-before-declaration check reads it, so it stays on `Checker`). **Receipts**: verbatim proof three
+ways; per-pass `--passTiming` 416 rows + 32 counter lines identical; PrintInlining `checkArgumentsAgainstSignature`
+identical on both sides (2 rows this process — the count varies between processes, as CLAUDE.md records); a 17-cell tsgo
+matrix byte-identical before / after (pre-existing divergences now inside `CircularityChecks`: `type A = B; type B = A`
+misses tsgo's TS2456 at both; `X = NumArray<X extends …>` reports TS4109 where tsgo reports TS2456; `type F = () => F[]` an
+extra TS2577; `class S extends S<number>` an extra TS2315); corpus screen 8725 / 0; `cost_gate.py` 0; spine audit clean.
+**Pins**: `CircularityChecksCollaboratorTest` 13; ablation one arm per entry point, 12 arms all RED (`aliasStatementSpanEnd`
+was blind at first — it only changes a squiggle span — and a squiggle-length pin on tsgo's underline lengths made it RED).
+**Gates**: full suite 22,879 / 0 / 44 (+13); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs /
+marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to `CircularityChecks`); library grid OURS-ONLY
+row sets identical to `r302` on all eight (orchestrator's `r303`); warning gate with probe: probe only. Ledger row 25. Next
+candidates: the constructor-return family (blocked only by the relation-path widening) and the TS2507 / TS2302 run (5 cold
+widenings).
+
 ### Round (P18.302) — (LIBS.3) round 11, the `NoInfer` gate: its 74 exposed rows are a STACK four layers deep, not five families; five root-cause fixes landed (Object-prototype members in the relation, a `Type.StringMapping` for `Lowercase<string>` & co., optional slots before a trailing rest in `infer`, `void` vs `undefined` in conditionals, homomorphic readonly) — type-fest 180 -> 175, tally 249 -> 244, NO added position; `NoInfer` NOT landed (45 added with the patch, down from 74); the deepest gate is now the alias / mapped DEPTH BUDGET of 10 (tsgo 100) (2026-10-05)
 
 One implementation subagent. **Where the brief was wrong**: jsonify (29) has nothing to do with `NoInfer` — it is a relation
@@ -333,45 +357,6 @@ removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged 
 `checkUnresolvedModules`, so it is a live check of the move; identity hash extended to `ModuleResolutionChecks`); warning
 gate with probe: probe only. Ledger row 23. Next candidates found: the module-augmentation run right after the span, and two
 large mutable-free runs (181147-187158, 47050-50552) needing a closure census.
-
-### Round (P18.293) — (LIBS.3) round 4, TFORDER: NOT an order bug — an alias reference that OMITS a defaulted type argument (`A<[]>` for `type A<T, Op = {}>`) lost its explicit arguments; filling the defaults reached five older defects, all fixed (a lib-binding cycle, `keyof unknown`, `await` of a union, two distributive-conditional rules); type-fest 230 -> 206, zod 42 -> 38, hono 48 -> 46, superstruct 6 -> 5, tally 340 -> 315, NONE added; TWO builders (the first stalled) (2026-10-04)
-
-Two implementation subagents in sequence: the first found the mechanism, wrote it to
-`build/bench/p18293-agent/FINDINGS.md`, then stalled mid-edit (27 min, no process) and was stopped; a fresh builder
-re-audited the half-applied tree and finished. **Where the census / brief were wrong**: TFORDER is not a first-touch /
-cache-order bug — `getTypeFromTypeReference`'s alias-substitution arm required `declTPs.size == typeArgs.size`, so a
-reference omitting a defaulted argument fell to `getDeclaredTypeOfSymbol` = the PARAMETRIC body (minimal repro, no
-type-fest: `type IsNever<T> = [T] extends [never] ? true : false; type A<T, Op = {}> = IsNever<T>; const c: A<[]> = "s"`
-— tsgo `'false'`, ours `'true'`); the "order" was WHICH path (var annotation vs call argument) first evaluated it. Only
-19 of the 32 TFORDER rows are this mechanism (has-*-keys, empty-object, union-member, simplify, is-array-readonly are
-not). Filling the defaults REACHED four added false positives, none an alias defect: superstruct TS2769 x2 = a
-LIB-BINDING CYCLE — `lib.es2025.iterator.d.ts` is a module (`export {}`) and `bindRealLibs` merged its module-local
-`Iterator` class + interface into the global `Iterator`, making a base cycle Iterator <-> IteratorObject so whichever
-resolved first lost its base and `IteratorObject` intermittently had no `next`, while its `declare global` block was never
-merged; hono `client.ts:103` = `keyof unknown` answered `string` (tsgo `never`); hono `cache:287` = `await` did not
-distribute over a union (the census's AW family). The 8-profile grid exposed a fifth: tsc's
-`MatchingKeys<R, M, K = keyof R>` now evaluated and reached two distributive-conditional defects. **Mechanism**:
-`AliasDefaultTypeArgs.kt` (75) fills omitted defaulted arguments, with two fallbacks keeping a default-completed
-reference on its old answer (an argument constraint-check failure; our depth budget exhausted); `bindRealLibs` merges a
-lib MODULE's `declare global` block only; `keyof unknown` = `never`; `await` distributes over a union; a distributive
-conditional re-evaluates its extends type per constituent when it names the check parameter, and a union check type
-written as an indexed access `R[K]` is not distributed; `StringMappingTypes.kt` (56) evaluates `Uppercase` /
-`Lowercase` / `Capitalize` / `Uncapitalize` (libs-neutral, tsgo-matching); `Relater` relates a template literal with an
-uncomputed `any` span as `any` (lenient by design — a false negative on a wrong literal, but it keeps 19 type-fest rows
-away). Two pieces of the first builder's work read 0 RED and libs-neutral and were removed (`{}`-index -> `unknown`, a
-TS2589 -> TS2799 retraction). `Checker.kt` +85, `Relater.kt` +7. **Matrix** (`build/bench/p18293b-agent/fx/`): the alias
-repro in var-annotation AND call-argument position, the await fixture (5 false rows -> tsgo's 2), Set / Map -> Iterable
-after an `Iterator` relation, `IteratorObject.map`, `MK<A, IT|undefined, keyof A>`, `IA<{a?: string}>`, the four string
-mappings — all = tsgo; residues (display / pre-existing): alias names printed where tsgo prints the evaluated literal
-(`'Uppercase<"ab">'` vs `'"AB"'`, `'B<[]>'` vs `'[]'`), `keyof (A | B)` still `string`, a depth-budget TS2589.
-**Pins**: `AliasDefaultTypeArgsReachTest` 13; ablation a1 4 / a2 2 / a3 1 / a4 1 / a5 1 / a6 1 / a9 2 / a10 1 / a11 1 / a12 2 RED,
-each with its library effect. **Gates**: full suite 22,751 / 0 / 44 (+13); corpus screen 8725 / 0 and `--include ''` the
-same 41; `cost_gate.py` 0 with `typeNode.bypassed` at +2.00% (+1.20% against a rebuilt parent, 148,945 -> 150,730 —
-default-completed aliases now evaluating) — REBASELINED; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 +
-chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to `AliasDefaultTypeArgs`,
-`StringMappingTypes`); library grid on the final classes (orchestrator's run `r293` vs `b293`): type-fest −24, zod −4,
-hono −2, superstruct −1, ky's TS2560 row keeps position and code with a closer message (`ResponsePromise<unknown>`),
-NOTHING added (tally 340 -> 315); warning gate with probe: probe only.
 
 ## QUEUE
 

@@ -1,5 +1,9 @@
 
 
+**(P18.298) — (INV.0) EXTRACTION: THE CROSS-FILE CONFLICT CHECKS MOVE OUT OF `Checker.kt` (1,384 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 192,648; +16 PINS, 22,812 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; libraries unchanged; three pre-existing false positives the matrix found queued as (CHK.232).
+
+
 **(P18.297) — (LIBS.3) hono: DIRECTORY-INDEX MODULE AUGMENTATION, `typeof x === 'function'` NARROWING (four mechanisms), CONTEXTUAL `unique symbol` PATTERN KEYS — hono 46 -> 29, TALLY 279 -> 262, NO ADDED POSITION; +18 PINS, 22,796 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; mitt and date-fns hold; one pin asserting the opposite of tsgo re-pointed.
 

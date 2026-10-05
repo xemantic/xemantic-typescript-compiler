@@ -1,3 +1,42 @@
+### Round (P18.293) — (LIBS.3) round 4, TFORDER: NOT an order bug — an alias reference that OMITS a defaulted type argument (`A<[]>` for `type A<T, Op = {}>`) lost its explicit arguments; filling the defaults reached five older defects, all fixed (a lib-binding cycle, `keyof unknown`, `await` of a union, two distributive-conditional rules); type-fest 230 -> 206, zod 42 -> 38, hono 48 -> 46, superstruct 6 -> 5, tally 340 -> 315, NONE added; TWO builders (the first stalled) (2026-10-04)
+
+Two implementation subagents in sequence: the first found the mechanism, wrote it to
+`build/bench/p18293-agent/FINDINGS.md`, then stalled mid-edit (27 min, no process) and was stopped; a fresh builder
+re-audited the half-applied tree and finished. **Where the census / brief were wrong**: TFORDER is not a first-touch /
+cache-order bug — `getTypeFromTypeReference`'s alias-substitution arm required `declTPs.size == typeArgs.size`, so a
+reference omitting a defaulted argument fell to `getDeclaredTypeOfSymbol` = the PARAMETRIC body (minimal repro, no
+type-fest: `type IsNever<T> = [T] extends [never] ? true : false; type A<T, Op = {}> = IsNever<T>; const c: A<[]> = "s"`
+— tsgo `'false'`, ours `'true'`); the "order" was WHICH path (var annotation vs call argument) first evaluated it. Only
+19 of the 32 TFORDER rows are this mechanism (has-*-keys, empty-object, union-member, simplify, is-array-readonly are
+not). Filling the defaults REACHED four added false positives, none an alias defect: superstruct TS2769 x2 = a
+LIB-BINDING CYCLE — `lib.es2025.iterator.d.ts` is a module (`export {}`) and `bindRealLibs` merged its module-local
+`Iterator` class + interface into the global `Iterator`, making a base cycle Iterator <-> IteratorObject so whichever
+resolved first lost its base and `IteratorObject` intermittently had no `next`, while its `declare global` block was never
+merged; hono `client.ts:103` = `keyof unknown` answered `string` (tsgo `never`); hono `cache:287` = `await` did not
+distribute over a union (the census's AW family). The 8-profile grid exposed a fifth: tsc's
+`MatchingKeys<R, M, K = keyof R>` now evaluated and reached two distributive-conditional defects. **Mechanism**:
+`AliasDefaultTypeArgs.kt` (75) fills omitted defaulted arguments, with two fallbacks keeping a default-completed
+reference on its old answer (an argument constraint-check failure; our depth budget exhausted); `bindRealLibs` merges a
+lib MODULE's `declare global` block only; `keyof unknown` = `never`; `await` distributes over a union; a distributive
+conditional re-evaluates its extends type per constituent when it names the check parameter, and a union check type
+written as an indexed access `R[K]` is not distributed; `StringMappingTypes.kt` (56) evaluates `Uppercase` /
+`Lowercase` / `Capitalize` / `Uncapitalize` (libs-neutral, tsgo-matching); `Relater` relates a template literal with an
+uncomputed `any` span as `any` (lenient by design — a false negative on a wrong literal, but it keeps 19 type-fest rows
+away). Two pieces of the first builder's work read 0 RED and libs-neutral and were removed (`{}`-index -> `unknown`, a
+TS2589 -> TS2799 retraction). `Checker.kt` +85, `Relater.kt` +7. **Matrix** (`build/bench/p18293b-agent/fx/`): the alias
+repro in var-annotation AND call-argument position, the await fixture (5 false rows -> tsgo's 2), Set / Map -> Iterable
+after an `Iterator` relation, `IteratorObject.map`, `MK<A, IT|undefined, keyof A>`, `IA<{a?: string}>`, the four string
+mappings — all = tsgo; residues (display / pre-existing): alias names printed where tsgo prints the evaluated literal
+(`'Uppercase<"ab">'` vs `'"AB"'`, `'B<[]>'` vs `'[]'`), `keyof (A | B)` still `string`, a depth-budget TS2589.
+**Pins**: `AliasDefaultTypeArgsReachTest` 13; ablation a1 4 / a2 2 / a3 1 / a4 1 / a5 1 / a6 1 / a9 2 / a10 1 / a11 1 / a12 2 RED,
+each with its library effect. **Gates**: full suite 22,751 / 0 / 44 (+13); corpus screen 8725 / 0 and `--include ''` the
+same 41; `cost_gate.py` 0 with `typeNode.bypassed` at +2.00% (+1.20% against a rebuilt parent, 148,945 -> 150,730 —
+default-completed aliases now evaluating) — REBASELINED; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 +
+chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to `AliasDefaultTypeArgs`,
+`StringMappingTypes`); library grid on the final classes (orchestrator's run `r293` vs `b293`): type-fest −24, zod −4,
+hono −2, superstruct −1, ky's TS2560 row keeps position and code with a closer message (`ResponsePromise<unknown>`),
+NOTHING added (tally 340 -> 315); warning gate with probe: probe only.
+
 ### Round (P18.292) — (LIBS.3) round 3: a type alias and a same-named namespace MERGE in the binder (F10), with the three defects that merge exposed (a `.d.ts` namespace exports every member, TS2708 not TS2693 for a value use, the merged value is not the alias type); a static generic method's own type parameters carry their constraints (STATICTP); an annotated callable `const` is an expando host (EXPANDO) — type-fest 255 -> 230, zod 45 -> 42, tally 368 -> 340, NONE added (2026-10-04)
 
 One implementation subagent. **Where the brief was wrong**: F10 is a BINDER defect, not a resolver one —
