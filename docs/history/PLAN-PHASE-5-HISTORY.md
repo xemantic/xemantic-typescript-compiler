@@ -1,3 +1,41 @@
+### Round (P18.292) — (LIBS.3) round 3: a type alias and a same-named namespace MERGE in the binder (F10), with the three defects that merge exposed (a `.d.ts` namespace exports every member, TS2708 not TS2693 for a value use, the merged value is not the alias type); a static generic method's own type parameters carry their constraints (STATICTP); an annotated callable `const` is an expando host (EXPANDO) — type-fest 255 -> 230, zod 45 -> 42, tally 368 -> 340, NONE added (2026-10-04)
+
+One implementation subagent. **Where the brief was wrong**: F10 is a BINDER defect, not a resolver one —
+`Binder.canMerge` had no type-alias + namespace rule, so the two stayed separate symbols and whichever was declared last
+owned the scope (which is why the alias-first order already worked). Merging uncovered three more: (a) a HIDDEN TS2694
+behind each TS2702 — type-fest's `package-json.d.ts` declares namespace members without `export`, and tsgo exports them
+anyway (a namespace in a `.d.ts` with no `export {}` / `export =` exports everything, `setExportContextFlag`) — without
+that the 22 rows would only have become TS2694; (b) a value use of the merged name reported TS2693 where tsgo checks for a
+namespace first and reports TS2708 (also true of interface + namespace merges before); (c) the merged name used as a
+value was typed as the ALIAS's type (false TS2339). STATICTP: a static method's own type parameters were minted fresh
+with no constraint. EXPANDO: expando support covered only un-annotated top-level consts; tsgo also treats an ANNOTATED
+`const` holding a function (in a body too) as a host whose `name.p = …` writes add members. **Mechanism**: `Binder.kt`
+merges a type alias and a namespace in either order; in the three value-position name-tracking scopes a name that is
+also a value-less namespace is no longer type-only (TS2708 wins); `checkTypeQueryName` reports TS2708 for `typeof` of a
+value-less namespace (fixing plain namespaces too, previously silent), and a same-named parameter / local
+(`spineExShadowed`) suppresses both TS2708 and TS2693 (removing an older false TS2693 for `function f(P) { typeof P }`);
+`isAmbientNamespace` — a `.d.ts` namespace exports its members unless its body has an export declaration / assignment;
+`isTypeAliasMergedNamespace` — the merged name's value is `any` (as any plain namespace here), never the alias type, in
+the identifier typer, the per-file lookup fallback, `getTypeOfSymbolForTypeQuery` and imports, the import leg gated by
+the name set `typeAliasNamespaceMergeNames` (gating on "the program has any merge" cost **+17.7% `globals.lookups`**,
+because tsc's own `BinaryExpressionState` is such a merge — with the name gate −0.09%); static methods take their type
+parameters through `ccetFnTpScope` (a method type parameter now shadows a same-named class one); `annotatedExpandoSource`
+plants `name.p = …` writes onto an annotated `const` holding an arrow / function (scanned once per container, `let`
+excluded); a stale `lastMissingPropertySymbol` is used only if it names the member actually missing (it named `raw`
+where tsgo names `other`). `Binder.kt` +5, `Checker.kt` +99. **Matrix** (`build/bench/p18292-agent/m*`, `ms`, `me`):
+F10 both orders, exported or not, generic, cross-file, `.d.ts`, script file, value use (TS2708), `typeof`, the triple —
+all = tsgo, true positives (a bare alias / interface used as a namespace) still TS2702; STATICTP 6 / 6 = tsgo; EXPANDO
+silent where legal, wrong write / return / still-missing member = tsgo (TS2741 `'other'`); residues (pre-existing): a
+namespace VALUE is `any` everywhere here, so tsgo's member-read rows on it are missing; default type arguments on a bare
+alias reference; TS2694's namespace display (`'"t".N'`); no TS2300 for a duplicate type alias; a missing member against a
+callable target is TS2322 where tsgo says TS2741. **Pins**: `NamespaceTypeAliasMergeTest` 13,
+`StaticMethodTypeParamConstraintTest` 5, `AnnotatedExpandoHostTest` 6; ablation a1 6 / a2 2 / a3 3 / a4 1 / a5 2 / a6 1 / a6b 1
+/ a7 3 / a8 4 / a8b 1 / a9 1 / a10 1 RED. **Gates**: full suite 22,738 / 0 / 44 (+24); corpus screen 8725 / 0 and
+`--include ''` the same 41, byte-identical; `cost_gate.py` 0 (`globals.lookups` −0.09%); `huge_methods.py --fail-over 0`
+0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / **mitt 0 / date-fns 1 (standing gates) unchanged**;
+library grid type-fest 255 -> 230, zod 45 -> 42 (v3 `types.ts` 3214 / 3216 TS2344, v4 `schemas.ts:2160` TS2322), others
+unchanged (tally 368 -> 340); warning gate with probe: probe only.
+
 ### Round (P18.291) — (LIBS.3) round 2: date-fns to ZERO (TS2536 for a deferred conditional receiver indexed by a deferred conditional key, replayed from tsgo's three acceptance routes) — date-fns is now a STANDING grid gate; and (CHK.229) the tslib false positive fixed at its real cause, the crawl's missing synthetic `import "tslib"`; tally 369 -> 368, NONE added (2026-10-04)
 
 One implementation subagent. **Where the items were wrong**: (a) (CHK.220)'s "needs deferred conditional types" — it

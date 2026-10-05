@@ -1,5 +1,9 @@
 
 
+**(P18.297) — (LIBS.3) hono: DIRECTORY-INDEX MODULE AUGMENTATION, `typeof x === 'function'` NARROWING (four mechanisms), CONTEXTUAL `unique symbol` PATTERN KEYS — hono 46 -> 29, TALLY 279 -> 262, NO ADDED POSITION; +18 PINS, 22,796 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; mitt and date-fns hold; one pin asserting the opposite of tsgo re-pointed.
+
+
 **(P18.296) — (CHK.231) + (LIBS.3) GENLIT: INDEXED-ACCESS MEMBERS RESOLVED FROM THE TYPE ARGUMENT INSTEAD OF THE CONSTRAINT, DEFAULTS FILLED ON A BARE GENERIC REFERENCE, LITERAL ARGUMENTS KEPT AGAINST A LITERAL CONSTRAINT — THE ACCEPTED zod ROW IS GONE; TALLY 295 -> 279, NO ADDED POSITION; +7 PINS, 22,778 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; mitt and date-fns hold; two pins found asserting the opposite of tsgo and re-pointed.
 
