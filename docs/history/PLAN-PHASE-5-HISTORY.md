@@ -1,3 +1,39 @@
+### Round (P18.290) — (LIBS.3) round 1, false positives on common shapes: a curried arrow's expression body is typed with the contextual signature's RETURN type (it leaked the outer context), argument-position and overloaded contextual types now reach nested arrows, and three name-based walkers honour lexical shadowing — hono 58 -> 48, zod 48 -> 45, tally 382 -> 369, NONE added (2026-10-04)
+
+One implementation subagent. **Where the brief / census were wrong**: (a) CURRIED's false TS2322 came from the arrow's
+TYPE path, not the pull / ccet path — in `getTypeOfArrowFunction` the ambient `contextualType` (the OUTER signature) leaked
+into the evaluation of the expression body, so the inner arrow re-read the outer parameter list (`o` became `number`);
+the argument-position TS7006 is a separate gap in `spineIanyEdgeEnter` (a call-argument context carries no `type`, only
+`ctxParam`). (b) The two hono `ssg/middleware.ts:43` TS7006 rows are an OVERLOADED contextual type, not a curried one:
+under noImplicitAny tsgo folds the applicable overloads with `getIntersectedSignatures`, we took `ctxSigs[0]` or
+nothing. (c) SHADOW is not one root but THREE name-based walkers, each with its own hand-written shadow model and none
+asking `lexicalScopeSymbol`; F12's TS2301 / TS2663 walker collected only `var` declarations. **Mechanism**:
+`withBodyContextualType` sets `contextualType` to `contextualSigReturnTypeForCtx` around a concise body's
+`getTypeOfExpression`; the spine TS7006 edge takes `cur.type ?: ctxParam`'s declared (or, for a generic callee, pulled and
+instantiated) type; a new `is ArrowFunction` arm in `pullContextualTypeAt` (`pullCtxFnReturnType`, factored out of
+`pullCtxReturnTypeAt`); an un-annotated CONCISE arrow applies its contextual parameter types when its body nests a
+block-bodied function-like (`conciseBodyNestsBlockFunction` — ungated, `typeNode.bypassed` rose +28.95%, so the gate is a
+COST guard); `contextualSigReturnTypeForCtx` / `applyContextualParameterTypes` fold an overloaded context with
+`getIntersectedSignatures`; the TS2511 walker (`spineAiEnterNode`) returns early when `isShadowedByLocalBinding` (which now
+understands destructuring patterns); `spineExShadowed` gains nested Block, case / default clause, `for` / `for…of` /
+`for…in` initializer and `catch` arms (`spineExStatementsShadow`); `collectBlockScopedNamesForCtorRefs` adds `let` /
+`const` / class / function names in initializer function bodies and a nested Block subtracts its own. `Checker.kt` +119,
+`ClassInstanceMembers.kt` +3. **Matrix** (`build/bench/p18290-agent/m/`): curried0 / curried1 / curried 3 / 4 / 1 -> 0 / 0 / 0
+(= tsgo), `cmat` 16 -> 7 rows against tsgo's 7 (5 identical, 2 same code at the whole-declaration anchor where tsgo
+anchors the inner expression — pre-existing for every arrow return), ssg / Plain 6 -> 1 against 2 (`o.nope` missing —
+the property-access reader does not fold overloads), every shadow repro 0 (= tsgo), `smat` 20 -> 8 against 8 (cells
+b / c / d TS2301 where tsgo says TS2552 "Did you mean 'URL'?", pre-existing). One cell moved from a WRONG row to a MISSING
+one: a block-local annotated `const node` shadowing a file-level `function node` used to report TS2339 with the wrong
+type and is now silent (tsgo reports it with `'{ a: 1; }'`) — in no library. `UnionContextualSignatureIdenticalTest`'s two
+tests that pinned the documented "nested-body read gap" now produce exactly tsgo's rows; expectations and KDoc updated
+(countdowns closed). **Pins**: `CurriedArrowContextualReturnTest` 6, `LexicalShadowReadersTest` 6; ablation a1 3 / a2 2 /
+a3 3 / a4 1 / a5 1 / a6 1 / a7 1 / a8 1 / a9 1 / a10 2 / a11 1 / a12 1 / a13 1 RED. **Gates**: full suite 22,700 / 0 / 44
+(+12); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0 (`typeNode.bypassed` +0.33% own); 
+`huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt (standing gate,
+0) unchanged; library grid hono 58 -> 48 (7 TS2301 `client.ts`, 2 TS7006 `ssg/middleware`, 1 TS2322 `components.ts`), zod
+48 -> 45 (`errors.ts:395` TS2339, `util.ts:880` / `:895` TS2511), others unchanged (tally 382 -> 369); warning gate with
+probe: probe only.
+
 ### Round (P18.289) — (INV.0) extraction: the LABEL family (TS1114 / TS7028) moves verbatim into `LabelChecks` and the TSLIB emit-helper family (TS2354 / TS2343) into `TslibHelperChecks`; `Checker.kt` 195,978 -> 194,798 (-1,180); receipts identical; the builder STALLED after the move (the second extraction in a row to do so) and the orchestrator finished the round (2026-10-04)
 
 One implementation subagent, stopped after 25 minutes silent with no process — the census, the move, the verbatim-proof

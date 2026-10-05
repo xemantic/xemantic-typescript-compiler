@@ -1,5 +1,9 @@
 
 
+**(P18.295) — (LIBS.3): `ThisType<T>` WAS READ NOWHERE — NOW READ (zod −12); SIX RELATION FIXES (optional-vs-required, boolean distribution, `keyof` tuple, …); DEFK2's REAL BLOCKER (`NoInfer` evaluation) MEASURED AND REFUSED — TALLY 315 -> 295, ONE EXPOSED PRE-EXISTING zod ROW ACCEPTED AND QUEUED; +11 PINS, 22,771 / 0 / 44 (2026-10-04).**
+Screen 0; grid 8x0; mitt and date-fns hold.
+
+
 **(P18.294) — (INV.0) EXTRACTION: THE MODULE-RESOLUTION CHECKS MOVE OUT OF `Checker.kt` (1,452 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 193,611; +9 PINS, 22,760 / 0 / 44 (2026-10-04).**
 Screen 0; grid 8x0; libraries unchanged.
 
