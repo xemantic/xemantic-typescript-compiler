@@ -1,5 +1,9 @@
 
 
+**(P18.299) — (CHK.232) + (LIBS.3) FBOUND: tsgo's DECLARATION-MERGE MEANING RULES FOR CROSS-FILE CONFLICTS (32 cells = tsgo); type-fest exact.ts was a REACH gap (block-local `const`s untyped), not F-bound inference — TALLY 262 -> 255, NO ADDED POSITION; +34 PINS, 22,846 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; mitt and date-fns hold; `typeNode.cacheHits` +1.9% rebaselined; two residue pins closed to tsgo.
+
+
 **(P18.298) — (INV.0) EXTRACTION: THE CROSS-FILE CONFLICT CHECKS MOVE OUT OF `Checker.kt` (1,384 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 192,648; +16 PINS, 22,812 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; libraries unchanged; three pre-existing false positives the matrix found queued as (CHK.232).
 

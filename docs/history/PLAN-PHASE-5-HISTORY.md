@@ -1,3 +1,29 @@
+### Round (P18.294) — (INV.0) extraction: the MODULE-RESOLUTION family (TS2307 / TS2306 / TS2435 / TS2439 / TS5097 / TS6142 checks, 6 passes + 19 helpers) moves verbatim into `ModuleResolutionChecks`; `Checker.kt` 195,063 -> 193,611 (-1,452); EVERY receipt taken, including the per-pass table — the reordered brief (pins and ablation right after the move) ended the post-move stalls of the two previous extraction rounds (2026-10-04)
+
+One implementation subagent; the brief made it write the pins and run the ablation IMMEDIATELY after the move and
+proof, logging `build/bench/p18294-agent/PROGRESS.md` after each step — it finished. **Choice**: the switch family is too
+small (~200 lines) and reads the mutable `fallthroughFlowGraph`; the type-argument-constraint family still reads the
+walk-scoped type-parameter scope; interface-extends would widen hot relation members; implements writes
+`currentFileLocals` — the census found the module-resolution run contiguous, reading no mutable field, no spine handler,
+no walk state. **Moved**: two spans (6484-6486, the memo `fileAmbientModuleInfoCache`; 47767-49218, `checkUnresolvedModules`
+.. `emitTS6142`) — 6 passes + 19 helpers; `resolvesAsJsOrJsx` STAYED (`NameResolver` calls it). 19 checker members
+read; 7 widenings, none on the relation or spine path (`resolveImportTargetFallback`,
+`resolveModuleSpecifierStrictRelative`, `resolveRelativeJsSibling`, `resolveSpecifierAnywhere`,
+`emitStatementLineDiagnostic`, and the companion sets `ES_MODULE_KINDS` / `NODE_BUILTIN_MODULES`); constructor inputs
+`options`, `binderResults`, `isMultiFileSource`, `allInputFileNames`, `jsonModuleContents`, `untypedModuleResolutions`; 16
+call sites re-pointed (6 `pass(…)` lambdas, 10 helper calls). **Receipts**: verbatim proof three ways
+(`build/bench/p18294-agent/proof.py`); per-pass `--passTiming` on the compiler profile identical after normalisation (416
+pass rows, 491 lines, md5 d949c7b7 both arms); PrintInlining `checkArgumentsAgainstSignature` identical on both arms; a
+9-cell matrix identical before / after (residues, pre-existing: c3 — a relative `import = require` inside a
+`declare module` misses tsgo's TS2307 beside our TS2439; c5 — TS2306 names its target by basename where tsgo uses the full
+path); the library grid's row sets identical to `b294` on all eight; corpus screen 8725 / 0; `cost_gate.py` 0;
+`spine_closure_audit.py` clean. **Pins**: `ModuleResolutionChecksCollaboratorTest` 9; ablation one arm per entry point,
+3 / 1 / 1 / 1 / 1 / 1 RED. **Gates**: full suite 22,760 / 0 / 44 (+9); `huge_methods.py --fail-over 0` 0; grid 8 x added=0
+removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (date-fns's row goes through the moved
+`checkUnresolvedModules`, so it is a live check of the move; identity hash extended to `ModuleResolutionChecks`); warning
+gate with probe: probe only. Ledger row 23. Next candidates found: the module-augmentation run right after the span, and two
+large mutable-free runs (181147-187158, 47050-50552) needing a closure census.
+
 ### Round (P18.293) — (LIBS.3) round 4, TFORDER: NOT an order bug — an alias reference that OMITS a defaulted type argument (`A<[]>` for `type A<T, Op = {}>`) lost its explicit arguments; filling the defaults reached five older defects, all fixed (a lib-binding cycle, `keyof unknown`, `await` of a union, two distributive-conditional rules); type-fest 230 -> 206, zod 42 -> 38, hono 48 -> 46, superstruct 6 -> 5, tally 340 -> 315, NONE added; TWO builders (the first stalled) (2026-10-04)
 
 Two implementation subagents in sequence: the first found the mechanism, wrote it to
