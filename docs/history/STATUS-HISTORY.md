@@ -1,5 +1,9 @@
 
 
+**(P18.301) — (LIBS.3): `keyof (A | B)`, NON-distribution of a written union check type, HOMOMORPHIC MAPPED TYPES OVER A UNION, and assignment of a call result narrowing a union — type-fest 186 -> 180, TALLY 255 -> 249, NO ADDED POSITION; the `NoInfer` gate is NOT the template residue (0 of 74 rows moved); +9 PINS, 22,859 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; mitt and date-fns hold; `typeNode.bypassed` +2.8% rebaselined (mapped types over unions now evaluated).
+
+
 **(P18.300) — (LIBS.3) EXCEPT INVESTIGATED: type-fest's `Except` is `any` from FOUR stacked causes, deepest the standing `NoInfer` refusal; the other three are correct but each adds type-fest rows while it stands, so only tuple `keyof` (Array keys) landed — TALLY 255 -> 255; `NoInfer`'s unblock is now the next arc; +4 PINS, 22,850 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; libraries unchanged.
 

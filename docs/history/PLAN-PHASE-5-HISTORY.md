@@ -1,3 +1,42 @@
+### Round (P18.296) — (CHK.231) CLOSED (it was not an inheritance bug: `I["def"]` resolved from the type parameter's CONSTRAINT even on a direct instantiation, and a bare reference to a defaulted generic interface never filled its defaults) + (LIBS.3) GENLIT closed (tsgo's `isLiteralOfContextualType` for literal arguments against a constrained type parameter); the accepted zod row is GONE; zod 26 -> 21, type-fest 203 -> 193, tally 294 -> 279, NO added position; two hand-written pins found asserting the OPPOSITE of tsgo and re-pointed (2026-10-04)
+
+One implementation subagent. **Where the brief / queue were wrong**: (CHK.231) reproduces with NO heritage — a direct
+`ZT<TupInt>.def` also read the constraint, because `getTypeFromIndexedAccess` resolves `I["def"]` from the type
+parameter's constraint when the member is declared; and the zod row needed a second fix — `declare const z: ZodTuple` is a
+BARE reference to a generic interface whose parameters all default, and the interface arm returned the raw
+`Type.Interface` whose members carry the unbound `T`. Filling those defaults exposed three older defects, all fixed so
+that no row was added: hono `Context` (`E = any`) — `env: E['Bindings']` must be `any`, not the constraint's
+`object | undefined`; zod `json-schema-processors.ts:45/48` — `agg[key]` with an unassigned key was not a narrowable
+reference, and two identical `number | bigint | Date` operands were rejected by `>`/`<`. **Two hand-written pins asserted
+the opposite of tsgo** under "negative control" names (`ElementAccessReferencePathNarrowingTest`,
+`Rel4ElementAccessAndUnionSwitchTest`: an UNASSIGNED variable index must not narrow — tsgo narrows it); both fixtures were
+re-pointed to a REASSIGNED index, verified against tsgo. **Mechanisms**: `IndexedAccessParams.reresolveMemberType`
+re-resolves a member whose type node indexes one of the target's type parameters with that parameter bound to the
+receiver's argument (an `any` argument yields `any`), from `resolveGenericPropertyTypeWorker` (fields / getters /
+parameter properties; method parameters only for a method without its own type parameters); `defaultedInterfaceReference`
+fills defaults on a bare or partial reference through `AliasDefaultTypeArgs`, skipping JS files and LIB declarations
+(without the lib exclusion superstruct / hono / zod gain 5 non-tsgo rows — measured); a per-alias instance
+(`aliasOwnDefaultedReference`, `TypeInterner.bareDefaultedReference`) keeps `type Table = TableClass` displaying `Table`;
+`getReferencePath` gives `o[k]` a `[@k]` segment when `k` is a `const` or a never-assigned parameter / `let` (tsgo's
+`isMatchingReference`), `arithOperandType` flow-narrows such operands, and an un-narrowed one reports tsgo's TS2532;
+two IDENTICAL non-numeric unions are comparable for a relational operator (deliberately narrow — tsgo's general
+`areTypesComparable`, e.g. `Date < Date`, is not modelled); GENLIT — new `ContextualLiteralArgs.kt` (167) applied in
+`argInferResultTypeArguments` and `caasObjectLiteralVsTypeParam` (which now displays the kept literal and an optional
+target as `… | undefined`). `Checker.kt` +151, `IndexedAccessParams.kt` +42, `TypeInterner.kt` +25. **Matrix**
+(`build/bench/p18296-agent/`): m1 15 cells (method / property / accessor, one- and two-level heritage, `I["def"]` vs `I`,
+interface vs class base, via `this` and from outside) 9 differing -> identical; m2 2 -> identical; m3 5 -> identical bar one
+message (a `this` return through an inherited reference displays `any` where tsgo shows `Tup<string>`); m6 hono `Context`
+2 FPs -> identical; g1 GENLIT 8 cells 6 FPs -> identical. Pre-existing residues: a `let` key assigned LATER still narrows
+here (a missing row), a reassigned key's operand reports TS2365 where tsgo reports TS2532; lib-generic default filling held
+back (`Map<any, any>` vs `Iterable<readonly [K, V], any, any>` relation and a defaulted `Uint8Array` narrowing first).
+**Pins**: `HeritageIndexedAccessAndGenlitTest` 7; ablation a1 4 / a2 2 / a3-a10 1 RED each; the lib exclusion is pinned by
+the library grid. **Gates**: full suite 22,778 / 0 / 44 (+7); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` 0 (within ±0.24%); `huge_methods.py --fail-over 0` 0; at-risk sweep 209 classes / 3,498 tests; grid 8 x
+added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to
+`ContextualLiteralArgs`); library grid on the final classes (orchestrator's `r296` vs `b296`): zod 26 -> 21 (incl. the
+(P18.295)-accepted `schemas.ts:1908` and four TS7006), type-fest 203 -> 193 (all ten merge-deep), the rest unchanged, NO
+added position (tally 294 -> 279); warning gate with probe: probe only.
+
 ### Round (P18.295) — (LIBS.3) round 5: THISTYPE closed (`ThisType<T>` was read NOWHERE in this checker, not merely inside an intersection) and six relation / evaluation defects the DEFK2 repro chain exposed; DEFK2 itself NOT closed — its real blocker is `NoInfer<T>` evaluating only for a genuine `any`, and both evaluation variants were MEASURED and REFUSED; zod 38 -> 26, type-fest 206 -> 203, tally 315 -> 295, ONE added row accepted as an exposed pre-existing defect (2026-10-04)
 
 One implementation subagent. **Where the brief / census were wrong**: the suspect — (P18.286)'s any-provenance gate — is
