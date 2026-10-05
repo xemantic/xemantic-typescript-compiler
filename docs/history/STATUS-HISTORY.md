@@ -1,5 +1,9 @@
 
 
+**(P18.300) — (LIBS.3) EXCEPT INVESTIGATED: type-fest's `Except` is `any` from FOUR stacked causes, deepest the standing `NoInfer` refusal; the other three are correct but each adds type-fest rows while it stands, so only tuple `keyof` (Array keys) landed — TALLY 255 -> 255; `NoInfer`'s unblock is now the next arc; +4 PINS, 22,850 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; libraries unchanged.
+
+
 **(P18.299) — (CHK.232) + (LIBS.3) FBOUND: tsgo's DECLARATION-MERGE MEANING RULES FOR CROSS-FILE CONFLICTS (32 cells = tsgo); type-fest exact.ts was a REACH gap (block-local `const`s untyped), not F-bound inference — TALLY 262 -> 255, NO ADDED POSITION; +34 PINS, 22,846 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; mitt and date-fns hold; `typeNode.cacheHits` +1.9% rebaselined; two residue pins closed to tsgo.
 

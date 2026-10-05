@@ -1,3 +1,40 @@
+### Round (P18.295) — (LIBS.3) round 5: THISTYPE closed (`ThisType<T>` was read NOWHERE in this checker, not merely inside an intersection) and six relation / evaluation defects the DEFK2 repro chain exposed; DEFK2 itself NOT closed — its real blocker is `NoInfer<T>` evaluating only for a genuine `any`, and both evaluation variants were MEASURED and REFUSED; zod 38 -> 26, type-fest 206 -> 203, tally 315 -> 295, ONE added row accepted as an exposed pre-existing defect (2026-10-04)
+
+One implementation subagent. **Where the brief / census were wrong**: the suspect — (P18.286)'s any-provenance gate — is
+innocent: type-fest's `IsAny<X> = 0 extends 1 & NoInfer<X>` is deferred for EVERY non-`any` X because `NoInfer<X>`
+evaluates only for a genuine `any` ((CHK.228), `Checker.kt` ~108311), so `IsAny<string>` is unresolved even at top level.
+Evaluating `NoInfer` was measured two ways and REFUSED: everywhere, type-fest 206 -> **249**; only inside a mapped `as`
+clause per concrete key, 199 but with **14 non-tsgo rows** (10 pascal-case — the TLT2 template residue showing through once
+options resolve, only in some file orders, i.e. per-key answers leaking through shared caches; adding the per-key flag to
+`substitutionResultCache` and the node-type cache key did not stop it; 4 is-tuple / except / partial-deep). The census's
+"`IsOptKey` alone agrees" tested key `'b'` only — key `'a'` answered `false` where tsgo answers `true`. THISTYPE was not
+intersection-specific: nothing ever read `ThisType`. **Mechanisms**: (1) an OPTIONAL source property satisfied a REQUIRED
+target one — `Relater.kt` (assignable relation only, as tsgo), the intersection-source merge (optional only if every
+declaring constituent says so) and its "is optional" elaboration line; (2) a homomorphic mapped type dropped a mapped-`?`
+source's optionality (`Simplify<… & Partial<…>>`); (3) `boolean` did not distribute through a naked check type parameter
+(an all-boolean answer folds back to `boolean`); (4) `boolean` did not relate to a `true | false` union; (5) `keyof [1, 2]`
+lacked the element keys (slots past a rest excluded); (6) a conditional alias's resolved branch was displayed by the alias
+name — tsgo attaches the alias only to a distribution's union result (`mapTypeWithAlias`); (7) THISTYPE —
+`contextualThisTypeOfObjectLiteral` walks the contextual type (union members, intersection constituents, outward through
+enclosing literals), wired into `ccetObjlitMemberFrame`, plus `explicitTypeArgParamTypeViaNode` re-resolving a parameter
+from its annotation with the call's explicit type arguments bound (zod's `$constructor<ZodObject>(…, proto?: ProtoOf<T>)`:
+a mapped type over a free `keyof T` became `any`, which swallowed `& ThisType<T>`). Two guards read 0 RED and were removed.
+`Checker.kt` +125, `Relater.kt` +14. **The accepted added row**: zod `classic/schemas.ts:1908` TS2353 — the corrected `this`
+REACHES an existing defect (`ZodTuple.clone`'s `def` resolves to `$ZodTypeDef` instead of `$ZodTupleDef`: generic member
+substitution through `_ZodType<Internals>` heritage); the same shape written out reads the same false row on classes-before
+(`build/bench/p18295-agent/zt`); 12 false positives of the same family leave with it; queued (CHK.231). Precedent (P18.278).
+**Matrix** all after-cells = tsgo (optional-vs-required x3, `Simplify` + `Partial`, `D<boolean>`/`E<boolean>`,
+`true | false`, `keyof` tuple, `S<number>` display, `OK<O>` without `IsAny`, ThisType alone / either side / nested / union /
+annotation / generic mapped + explicit type args, `this.clone(1)` TS2554). Residues (missing rows, no FP): a method return
+mismatch against a ThisType context, `this.nope` TS2339 (the property-access reader does not see the frame's `this`), the
+markerless `this` = contextual type (TS2739 vs our TS2741), `f(o)` optional-vs-required TS2345, one extra elaboration line
+for a written `true | false`. **Pins**: `OptionalRelationBooleanAndThisTypeTest` 11; ablation 13 arms 2/1/1/1/1/1/1/1/1/1/2/1/2
+RED. **Gates**: full suite 22,771 / 0 / 44 (+11); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0
+(within ±0.24%); `huge_methods.py --fail-over 0` 0; at-risk sweep 114 classes / 2,180 tests / 0; grid 8 x added=0 removed=0 +
+chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged; library grid on the final classes (orchestrator's `r295`
+vs `b295`): zod 38 -> 26, type-fest 206 -> 203, the rest unchanged, ONE new row position anywhere (the accepted zod row),
+14 type-fest rows rewritten alias-name -> structure; warning gate with probe: probe only.
+
 ### Round (P18.294) — (INV.0) extraction: the MODULE-RESOLUTION family (TS2307 / TS2306 / TS2435 / TS2439 / TS5097 / TS6142 checks, 6 passes + 19 helpers) moves verbatim into `ModuleResolutionChecks`; `Checker.kt` 195,063 -> 193,611 (-1,452); EVERY receipt taken, including the per-pass table — the reordered brief (pins and ablation right after the move) ended the post-move stalls of the two previous extraction rounds (2026-10-04)
 
 One implementation subagent; the brief made it write the pins and run the ablation IMMEDIATELY after the move and
