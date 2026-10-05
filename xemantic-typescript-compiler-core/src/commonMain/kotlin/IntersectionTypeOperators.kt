@@ -50,6 +50,22 @@ internal class IntersectionTypeOperators(private val checker: Checker) {
     }
 
     /**
+     * (P18.301) `keyof (A | B)` = the keys COMMON to every constituent (tsgo `getIndexType` over a
+     * union is the intersection of the constituents' index types): type-fest `KeyAsString<{1; foo}
+     * | {1; bar}>` is `'1'`. Null — the caller keeps its open answer — unless every constituent is
+     * an object whose key set decomposes.
+     */
+    fun keyofUnion(type: Type.Union, keyof: (Type) -> Type): Type? {
+        val sets = ArrayList<List<Type>>(type.types.size)
+        for (c in type.types) {
+            if (c !is Type.Object && c !is Type.Intersection) return null
+            sets.add(keySet(keyof(c)) ?: return null)
+        }
+        val candidates = sets.flatten().distinctBy { keyId(it) }
+        return normalize(candidates.filter { e -> sets.all { covers(it, e) } })
+    }
+
+    /**
      * `keyof (X & (A | B))`: tsgo normalizes the intersection to `(X & A) | (X & B)` and drops a
      * combination that a DISJOINT DISCRIMINANT reduces to `never` (two unit types for one property
      * that cannot be equal — `{ v: E.A } & { v: E.B }`), so `keyof` is taken over the survivors

@@ -115010,6 +115010,19 @@ interface DataView {
             declarationInitializerReducedType(node, rhs)?.let { return it }
         }
         if (rhs != null && rhsIsDefinitelyNonNullish(rhs)) {
+            // (P18.301) a CALL right-hand side of a plain `=` keeps only the declared members its
+            // (non-union) return relates to — tsgo `getAssignmentReducedType`: `let n: Mutable<A | B>;
+            // n = makeA(); n.onlyOnA` (tsc parser.ts:6741, once `Mutable<A | B>` distributes).
+            if (declaredType is Type.Union && node is BinaryExpression && node.operator == SyntaxKind.Equals &&
+                rhs is CallExpression
+            ) {
+                resolvedCallReturnTypeForFlow(rhs)?.takeIf { it !is Type.Union && it !== anyType && it !== errorType }?.let { t ->
+                    val kept = declaredType.types.filter { m -> checkTypeRelatedTo(t, m, assignableRelation) }
+                    if (kept.isNotEmpty() && kept.size < declaredType.types.size) {
+                        return if (kept.size == 1) kept[0] else getUnionType(kept)
+                    }
+                }
+            }
             // Round 416: an assignment OVERWRITES the reference, so its post-state is the
             // DECLARED type with nullish excluded (tsc `getAssignmentReducedType(declared,
             // rhsType)`), NOT `narrowByExcludingNullUndefined(antecedent)`. Using the
@@ -173302,6 +173315,7 @@ interface DataView {
         // Resolve the constraint type (e.g., keyof T, "a" | "b", string)
         val constraint = node.typeParameter.constraint
         if (constraint == null) return anyType
+        homomorphicUnionDistribution(node, constraint)?.let { return it }
         val constraintType = getTypeFromTypeNode(constraint)
         if (constraintType === anyType || constraintType === errorType) return anyType
         // Collect all keys from the constraint
@@ -173508,8 +173522,9 @@ interface DataView {
         // Distribution over unions
         // (P18.293) only a NAKED type parameter distributes: `R[K] extends M ? K : never` with
         // `R[K] = Symbol | undefined` asks about the WHOLE union (tsc `isDistributive`).
+        // (P18.301) a written UNION check type `A | B extends …` is never naked either (type-fest `Sum`).
         if (checkType is Type.Union && nakedCheckTypeParamName(node.checkType) == null &&
-            node.checkType is IndexedAccessType
+            (node.checkType is IndexedAccessType || isWrittenUnionTypeNode(node.checkType))
         ) return evaluateConditional(checkType, extendsType, node)
         // (P18.295) `boolean` is the union `false | true` to a DISTRIBUTIVE conditional (tsc's
         // `booleanType` IS that union): `D<T> = T extends true ? 1 : 2; D<boolean>` is `1 | 2`.
@@ -173573,6 +173588,9 @@ interface DataView {
      * (`[T] extends [U]`, a concrete union, an instantiated reference), which is what keeps
      * the rebinding from reaching a non-distributive conditional.
      */
+    private fun isWrittenUnionTypeNode(node: TypeNode): Boolean =
+        node is UnionType || node is ParenthesizedType && isWrittenUnionTypeNode(node.type)
+
     private fun nakedCheckTypeParamName(node: TypeNode): String? {
         val ref = node as? TypeReference ?: return null
         if (!ref.typeArguments.isNullOrEmpty()) return null
@@ -173593,6 +173611,23 @@ interface DataView {
             typeNodeNamesTypeParam(node.extendsType, name) ||
             typeNodeNamesTypeParam(node.trueType, name) || typeNodeNamesTypeParam(node.falseType, name)
         else -> typeNodeContainsName(node, name)
+    }
+
+    /**
+     * (P18.301) a HOMOMORPHIC mapped type `[K in keyof T]` whose `T` is bound to a union of object
+     * types DISTRIBUTES over it (tsgo `instantiateMappedType`): `Partial<A | B>` is
+     * `Partial<A> | Partial<B>`. Needed since `keyof (A | B)` is the COMMON keys, which would
+     * otherwise drop every non-shared member. Null for any other shape.
+     */
+    private fun homomorphicUnionDistribution(node: MappedType, constraint: TypeNode): Type? {
+        val op = constraint as? TypeOperator ?: return null
+        if (op.operator != SyntaxKind.KeyOfKeyword) return null
+        val name = nakedCheckTypeParamName(op.type) ?: return null
+        val bound = currentTypeAliasArgs?.get(name) as? Type.Union ?: return null
+        if (bound.types.any { it !is Type.Object && it !is Type.Intersection }) return null
+        return getUnionType(bound.types.map { c ->
+            withInstantiationContext(distributionMapper(name, c)) { getTypeFromMappedType(node) }
+        })
     }
 
     /** Round 729: the ambient context with [name] rebound to one distribution [constituent].
@@ -173976,9 +174011,8 @@ interface DataView {
         // narrowing over the result — `Mutable<A | B>` at tsc's binder.ts:962 — measured.)
         if (type is Type.Intersection) intersectionOps.keyofIntersection(type, ::getKeyofType)?.let { return it }
         if (type is Type.Union) {
-            // keyof (A | B) = keyof A & keyof B (intersection of keys)
-            // Simplified: return string for now
-            return stringType
+            // keyof (A | B) = keyof A & keyof B (intersection of keys); open (`string`) unless decomposable.
+            return intersectionOps.keyofUnion(type, ::getKeyofType) ?: stringType
         }
         if (type is Type.TypeParam) {
             // keyof T where T is a type parameter — return string | number | symbol
