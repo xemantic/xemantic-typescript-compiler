@@ -48,7 +48,7 @@ on all eight (orchestrator's `r312`; tally 160); warning gate with probe: probe 
 `checkIdenticallyNamedTypeAssignment` (277 lines, one widening), `checkMultipleDefaultExports` (375, with `DefaultDeclKind`),
 `checkSuperBeforeThis`.
 
-### Round (P18.311) — (LIBS.4) real-library false-positive sweep: eight mechanisms on APPLICATION code — `any` with a bigint operand, expando writes in the weak-type check, flow-narrowed spread operands, `Function` members on a `typeof C`-constrained type parameter, tsgo's `isTypeDerivedFrom` for a negative `instanceof`, `extends Map`/`Set`/`Array` without type arguments, `this[key] =` as a definite assignment, a TS2540 receiver resolved through its own local declaration — tally 179 -> 160, NO added position (2026-10-06)
+### Round (P18.311) — (LIBS.4) real-library false-positive sweep: eight mechanisms on APPLICATION code — `any` with a bigint operand, expando writes in the weak-type check, flow-narrowed spread operands, `Function` members on a `typeof C`-constrained type parameter, tsgo's `isTypeDerivedFrom` for a negative `instanceof`, `extends Map`/`Set`/`Array` without type arguments, `this[key] =` as a definite assignment, a TS2540 receiver resolved through its own local declaration — tally 179 -> 162 (corrected; the builder reported 160), NO added position (2026-10-06)
 
 One implementation subagent; it ran the grid and the at-risk sweep BEFORE ablation (the (P18.310) lesson) and finished. **Where the
 brief was wrong**: the "number vs bigint" rows are `any`-operand arithmetic (`any % 1n` typed `number`, tsgo `bigint`; hono's
