@@ -1,3 +1,37 @@
+### Round (P18.301) — (LIBS.3) round 10, NoInfer unblock step 1: TLT2's join / camel-case rows were ALREADY gone; its 9 live rows were not template-literal defects — a written union check type was distributed, `keyof (A | B)` answered `string`, and the `keyof`-union fix needed (CHK.215)'s homomorphic distribution plus a call-RHS assignment reduction; type-fest 186 -> 180, tally 255 -> 249, NO added position; the `NoInfer` re-measure removes 0 of its 74 rows, so TLT2 was NOT the gate (2026-10-05)
+
+One implementation subagent. **Where the brief / census were wrong**: join (10) and camel-case (4) no longer exist —
+`repro/tltinfer` matches tsgo on the parent and type-fest has no join / camel-case rows; of TLT2's 23 rows 9 were live and
+none is a template-literal defect: sum 4 (a WRITTEN union check type `A | B extends …` treated as distributive),
+key-as-string 2 (`keyof (A | B)` answered `string`), key-as-string 1 (a `[x: symbol]` index signature stored as a string
+index — there is no symbol index info in the model), remove-prefix / remove-suffix 2 (relating a deferred generic
+conditional, census root B). The census guessed the `NoInfer` per-key leak ran through this residue; the measurement
+refutes it. **Mechanisms**: distribution decided at `Checker.kt` ~173525 now also refuses a written `UnionType` check node
+(`isWrittenUnionTypeNode`, parenthesized too — the (P18.293) whole-union exception covered only an indexed access);
+`getKeyofTypeCore` takes the keys COMMON to every union constituent (`IntersectionTypeOperators.keyofUnion`, falling back
+to `string` where a key set does not decompose); that alone breaks `Partial<A | B>` / `Mutable<A | B>` — exactly why
+(CHK.215) refused it — so a homomorphic `[K in keyof T]` with `T` bound to a union of objects now DISTRIBUTES
+(`homomorphicUnionDistribution`, top of `getTypeFromMappedType`); and the distribution exposed a pre-existing gap that put
+one row on the COMPILER PROFILE (`parser.ts:6741` TS2339 on `Mutable<PropertyAssignment | ShorthandPropertyAssignment>`):
+assigning a CALL result to a union-declared variable reset it to the whole declared union (the shipped binary already
+failed `let u: SP | PA; u = mkSP(); u.equalsToken` with a false TS2339) — `narrowByAssignmentRhs` now keeps only the
+declared members the (non-union) return type is assignable to, tsgo's `getAssignmentReducedType`; the profile row is gone.
+`Checker.kt` +34, `IntersectionTypeOperators.kt` +16. **Matrix** all after-cells = tsgo except `kas` 5 (the `'1'` vs `1`
+key kind — numeric object keys produced as string literals — and the symbol index signature, pre-existing). **NoInfer
+re-measure** (`exp1-noinfer.patch` on the final work, not landed): type-fest 180 -> 227, 74 added / 27 removed — the 74
+positions IDENTICAL to (P18.300)'s (whose "+78" counted the same 74); **0 of 74 gone**; they are jsonify 29, is-tuple 11,
+pascal-case 10 (a whole alias collapsing to `string`, not a deferred span), schema 8, is-writable-key-of /
+is-readonly-key-of 4 each, 8 others — so the next step is a census of those 74 by mechanism (the `IsTuple<{}>` poisoning is
+the 11). **Pins**: `UnionKeyofCheckTypeTest` 9; ablation a1 2 / a2 2 / a3 1 / a4 2 RED. **Gates**: full suite 22,859 / 0 / 44 (+9);
+corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` FAILED on `typeNode.bypassed` +2.92% (+2.8% against
+the frozen parent, 151,122 -> 155,357) — all of it, by ablation, the homomorphic distribution: mapped types over unions are
+now evaluated per constituent instead of collapsing to `any`, each under an instantiation context, which bypasses the
+type-node cache — REBASELINED; `huge_methods.py --fail-over 0` 0; at-risk sweep 53 classes / 458 tests; grid 8 x added=0
+removed=0 + chain OK (the compiler profile row the distribution exposed is fixed), rxjs / marked / cronstrue / mitt 0 / date-fns
+1 unchanged; library grid on the final classes (orchestrator's `r301` vs `r300`): type-fest 186 -> 180 (`sum.ts`
+29 / 30 / 32 / 33, `key-as-string.ts` 22 / 23), the rest unchanged, NO added position (tally 255 -> 249); warning gate with
+probe: probe only.
+
 ### Round (P18.300) — (LIBS.3) round 9, EXCEPT: INVESTIGATION — type-fest's `Except<…>` is `any` because of FOUR STACKED causes, the deepest being the standing `NoInfer` refusal; the three others are each correct and each ADD type-fest false rows while `NoInfer` stands (+52 / +19 / +78, all three +324), so only the fourth landed: `keyof` a TUPLE now includes its Array / ReadonlyArray base keys (5 false positives gone in the matrix); tally 255 -> 255, NO added position (2026-10-05)
 
 One implementation subagent, briefed to land nothing if the fix proved too wide. **Where the brief was wrong**: the step

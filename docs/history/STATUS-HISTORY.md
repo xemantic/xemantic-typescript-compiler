@@ -1,5 +1,9 @@
 
 
+**(P18.306) — (LIBS.3): `NoInfer<T>` EVALUATION LANDED with the alias-constraint fix and five exposed-row fixes — type-fest 170 -> 141, TALLY 238 -> 209, NO ADDED POSITION; type-fest wall +4.5 s accepted (tsgo takes 17.1 s there, we 15.6 s); +10 PINS, 22,904 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; mitt and date-fns hold.
+
+
 **(P18.305) — (CHK.233): LAZY TUPLE MEMBERS PAY BACK THE DEPTH-BUDGET COST — type-fest 15.0 -> 10.5 s and RSS 3.12 -> 1.52 GB, no OOM at 512 MB, diagnostics byte-identical everywhere; +7 PINS, 22,894 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; libraries unchanged (238); cost counters identical.
 
