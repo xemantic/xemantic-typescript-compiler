@@ -1,5 +1,9 @@
 
 
+**(P18.302) — (LIBS.3) THE `NoInfer` GATE: ITS 74 EXPOSED ROWS ARE A FOUR-LAYER STACK; FIVE ROOT-CAUSE FIXES LANDED (Object-prototype members, `Lowercase<string>` types, optional `infer` slots, `void` in conditionals, homomorphic readonly) — TALLY 249 -> 244, NO ADDED POSITION; `NoInfer` now adds 45 (was 74); the deepest gate is our alias depth budget 10 vs tsgo's 100; +7 PINS, 22,866 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; mitt and date-fns hold.
+
+
 **(P18.301) — (LIBS.3): `keyof (A | B)`, NON-distribution of a written union check type, HOMOMORPHIC MAPPED TYPES OVER A UNION, and assignment of a call result narrowing a union — type-fest 186 -> 180, TALLY 255 -> 249, NO ADDED POSITION; the `NoInfer` gate is NOT the template residue (0 of 74 rows moved); +9 PINS, 22,859 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; mitt and date-fns hold; `typeNode.bypassed` +2.8% rebaselined (mapped types over unions now evaluated).
 

@@ -1,3 +1,38 @@
+### Round (P18.297) — (LIBS.3) round 7, hono: (a) a relative augmentation `declare module '../..'` resolves through the directory's `index.ts` (Bundler; NodeNext keeps tsgo's TS2664), (b) T1 `typeof x === 'function'` narrowing — FOUR mechanisms, not one, (c) the four "TS2537 symbol" rows were F15 (computed `unique symbol` keys in a CONTEXTUALLY-typed pattern parameter); hono 46 -> 29, tally 279 -> 262, NO added position; one pin asserting the opposite of tsgo re-pointed (2026-10-05)
+
+One implementation subagent. **Where the brief / census were wrong**: (c) is not a `{}` reduction — tsgo never prints
+TS2537 for a symbol key (an uncontextual `unique symbol` key gives TS7031 only, a plain `symbol` key TS2538); basic-auth
+102/109 is F18 (an aliased `in` check invalidated by a property assignment), not T1, and is unchanged; T1 was four
+mechanisms: the legacy if-arm helper installed `any` in the then-branch (CLAUDE.md's `typeofTypeGuardToType` widening), a
+ternary did not narrow references NESTED in a branch (the callee of `o(1)`), assigning a union RHS never reduced the
+declared type, and the global `Function` interface / class instances were mis-classified (a class with a declared
+constructor carries construct signatures in our instance-type model, so `typeof x === 'function'` kept it).
+**Mechanisms**: `NameResolver.augmentationDirectoryIndex` (`<dir>/index.ts|.tsx|.d.ts` under Bundler, skipped for
+Node16/NodeNext) inside `augmentationTargetFile`, shared by all three augmentation consumers so the augmented members
+reach importers; `extractNullNarrowing` filters `"function"` / `"object"` through `narrowByTypeOfGuard`;
+`ternaryBranchType` / `ternaryConditionNarrowings` install the condition's narrowing per branch FILTER-ONLY (an
+unrestricted install turned `unknown` into `Promise<any>` in hono `jsx/base.ts` and added a row at :199 — measured); the
+literal-branch ternary arm types its other branch under the condition; `unionSubsetAssignmentReduced` reduces the declared
+type for a union RHS whose members all belong to it (an optional parameter's `undefined` carried); `isGlobalFunctionInterface`
+/ `hasRealConstructSignatures` in `narrowByTypeOfGuard`, and a union callee narrowed to `Function` is an untyped call;
+(c) `emitB94ForFnLikeParams` skips a contextually-typed parameter, `isUniqueSymbolConstKey` / `emitB94SymbolKey` produce
+tsgo's TS2538. `Checker.kt` +149, `NameResolver.kt` +23. **Pin that contradicted tsgo**: `AndConditionNarrowsEveryOperandTest`
+"a typeof-object conjunct is refused…" asserted `'string | object'` while its own KDoc said tsc reports `object`; tsgo 7.0.2
+prints `Type 'object' is not assignable to type 'string'.` for both the `&&` and the single-condition form — re-pointed, plus a
+single-condition pin. **Matrix** all = tsgo (then / else, `===` / `!==` / `==`, `| undefined` / `| null`, `typeof "object"`,
+callable interface, `typeof K`, early return; ternary `? o(1) : o` / `? o : null`; `o = typeof o === 'function' ? o(1) : o`;
+`RO | Function`; class with a declared ctor; augmentation Bundler / NodeNext / no index). Residues (none a hono row this
+round): a type parameter `T extends RO | F` prints `'T'` where tsgo prints `'F'` / `'RO'` (position matches);
+`x instanceof Function` -> `'F | Function'`; `o = g!` keeps `F` (weak-type relation); an `as` RHS is not reduced; extra TS7031
+on string / number / symbol pattern keys; the `? o(1) : 0` head prints `'RO'` vs tsgo `'0 | RO'`; ky `Ky.ts:81` (early-return
+reader) and F18 unchanged. **Pins**: `TypeofFunctionNarrowingAndDirectoryAugmentationTest` 17 + 1; ablation 14 arms
+(a1 1, a1b 1, a2 6, a3 2, a3b 1, a4 2, a5 1, a5b 1, a5c 1, a6 1, a7 1, a8 1, a9 2, a10 2 RED; a3b and a7 were blind at first and
+their FIXTURES were fixed). **Gates**: full suite 22,796 / 0 / 44 (+18); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` 0 (within ±0.5%); `huge_methods.py --fail-over 0` 0; spine audit OK; at-risk sweep 310 classes / 2,936 tests;
+grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged; library grid on the final
+classes (orchestrator's `r297` vs `b297`): hono 46 -> 29 (TS2664 x4, jsx-renderer TS2339 x5, TS2537 x4, TS2349 x4), the
+rest unchanged, NO added position (tally 279 -> 262); warning gate with probe: probe only.
+
 ### Round (P18.296) — (CHK.231) CLOSED (it was not an inheritance bug: `I["def"]` resolved from the type parameter's CONSTRAINT even on a direct instantiation, and a bare reference to a defaulted generic interface never filled its defaults) + (LIBS.3) GENLIT closed (tsgo's `isLiteralOfContextualType` for literal arguments against a constrained type parameter); the accepted zod row is GONE; zod 26 -> 21, type-fest 203 -> 193, tally 294 -> 279, NO added position; two hand-written pins found asserting the OPPOSITE of tsgo and re-pointed (2026-10-04)
 
 One implementation subagent. **Where the brief / queue were wrong**: (CHK.231) reproduces with NO heritage — a direct
