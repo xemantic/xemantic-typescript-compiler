@@ -1,3 +1,46 @@
+### Round (P18.299) — (CHK.232) CLOSED (tsgo's `mergeSymbol` meaning rules replayed for script top-level declarations; augmentation-vs-re-export gated on the re-export's MEANING; enum-augmentation specifiers resolved relative to the file) + (LIBS.3) FBOUND partly: the exact.ts rows were mostly a REACH gap (a file-level `{}` block was not a scope, block-local arrow / object / array / `as` `const`s were never typed), not F-bound inference; type-fest 193 -> 186, tally 262 -> 255, NO added position; two `residue - …` pins closed to tsgo's answer (2026-10-05)
+
+One implementation subagent. **Where the brief / queue were wrong**: c12b is ORDER-DEPENDENT in tsgo itself — its global
+merge reports TS2649 in harness order (initial, final; tsgo's own `noSymbolForMergeCrash` baseline) and TS2300 at three
+declarations in the CLI's alphabetical order (final, initial), so "both answers are correct for their order"; FBOUND is
+not mainly an F-bound inference problem — in `exact.ts` the callee `const function_ = <T…>(…) => …` and the argument
+`const input` sit in a file-level `{}` block, and the argument walker read both as `any` (`LocalShadowGuard` did not count
+a file-level block as a scope; an un-annotated local arrow `const` and a local object / array / `as` initializer were
+never typed); the "instantiate the F-bound constraint" step the brief asked for was built, ablated to 0 RED with type-fest
+unchanged, and REMOVED; REQONE's 13 type-fest rows are blocked on `Except<…>` / `ApplyDefaultOptions` evaluating to
+`any` (the argument half landed; the local repro matches tsgo). **Mechanisms**: `CrossFileConflictChecks.
+checkCrossFileTypeAliasNamespaceConflict` rewritten to replay tsgo's `mergeSymbol` (checker.go:14072) over script
+top-level meanings in program order with `mergeExcludes` (TS2649 when the accumulated target is a namespace, else TS2300 at
+every declaration with tsgo's related rows); `checkModuleAugmentationReexportDuplicates` gated on the re-export's resolved
+meaning (`exportedMeaning`; an unresolved re-export stays silent); `checkModuleAugmentationEnumMerge` /
+`findExportedDeclAcrossReexports` resolve specifiers relative to the file; `LocalShadowGuard` counts a file-level block as a
+scope; `ccetApplyDeclRecordings` types, at a declaration's leave, a `const` arrow / function expression whose parameters are
+all annotated and a `const` object / array literal / `as` expression; `tryInferSingleTypeParamFromArgs` binds a type
+parameter whose inferred type fails its constraint to the constraint when no emitter reported (tsgo's `getInferredType`);
+`caasTypeParamConstraintArg` decides an object argument against a primitive constraint (source displayed via
+`relationErrorSourceDisplay`); `argObjLitVsCompositeCheckable` / `objLitCompositeExcess` / `literalSensitive` relate a plain
+object literal against a union / intersection of concrete object types with tsgo's TS2353 first — refusing targets with
+literal-typed members (without that refusal: 55 false positives, date-fns 19 + zod 36, from our own literal widening —
+measured); and two relation defects those exposed, both already false positives on the parent: `Relater.
+structuredTypeRelatedTo` relates an enum's own type to a literal union member by member (hono `jws.ts`),
+`signatureRelatedTo` compares a rest-only source against a longer rest-carrying target position by position (the
+`String.replace` replacer; tsc `editorServices.ts:5257`). `Checker.kt` +136, `CrossFileConflictChecks.kt` +167,
+`LocalShadowGuard.kt` +3, `Relater.kt` +31. **Pins that asserted the opposite of tsgo** (both verified against tsgo):
+`CrossFileConflictChecksCollaboratorTest` `residue - … ours-only TS2649` -> silent; `BodyLocalLiteralArgumentTest`
+`residue - a body-local object member is not recorded` -> tsgo's TS2345 row. **Matrix**: CHK.232 32 cells, 15 differing ->
+all 32 = tsgo; argument cells all = tsgo but A3 (a block-local `const` SHADOWING a file-level one still reads `any`).
+Residues: exact.ts 21 rows (anonymous object candidates refused at the inference "named-like" gate; `ExactObject<…>`
+displayed expanded); REQONE (`Except` -> `any`); the constraint fallback not applied at return-type sites; missing TS2313
+for a circular conditional constraint (pre-existing ours-only TS2345 there). **Pins**: `CrossFileMeaningMergeTest` 21 +
+`ArgumentReachP18299Test` 13; ablation a1 2 / a2 4 / a3 2 / a4 1 / a5 2 / a6 1 / a7 2 / a8 1 / a10 3 / a11 1 / a12 1 / a13 1 / a14 1
+RED, a9 0 -> removed. **Gates**: full suite 22,846 / 0 / 44 (+34); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` FAILED on `typeNode.cacheHits` +2.36% (+1.93% against a rebuilt parent, 128,936 -> 131,426; `typeOfExpr.calls`
++0.48%) — cache HITS from the new leave-time typing of local initializers, i.e. answers re-used, not resolution work added —
+REBASELINED; `huge_methods.py --fail-over 0` 0; at-risk sweep 357 classes; grid 8 x added=0 removed=0 + chain OK, rxjs /
+marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to `LocalShadowGuard`); library grid on the final
+classes (orchestrator's `r299` vs `r298`): type-fest 193 -> 186 (exact.ts 14 / 20 / 36 / 42 / 58 / 75 / 107), the rest
+unchanged, NO added position (tally 262 -> 255); warning gate with probe: probe only.
+
 ### Round (P18.298) — (INV.0) extraction: the CROSS-FILE DUPLICATE / CONFLICT family (12 passes + helpers, TS2300 / TS2451 / TS2567 / TS2649 …) moves verbatim into `CrossFileConflictChecks`; `Checker.kt` 194,032 -> 192,648 (-1,384); every receipt identical, per-pass table included (2026-10-05)
 
 One implementation subagent, briefed in the (P18.294) order (move+proof -> pins -> ablation -> receipts); it finished.

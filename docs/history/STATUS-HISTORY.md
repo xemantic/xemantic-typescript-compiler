@@ -1,5 +1,9 @@
 
 
+**(P18.304) — (LIBS.3): THE ALIAS DEPTH BUDGET NOW RUNS AT tsgo's LIMITS (depth 100, tail 1,000, a fan-out count cap, a 10,000-element tuple cap); the old OOM was a 2^depth fan-out, not depth — TALLY 244 -> 238, NO ADDED POSITION; compiler profile cost unchanged, type-fest +6 s from one fixture (lazy tuple members queued as (CHK.233)); +8 PINS, 22,887 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; mitt and date-fns hold; cost counters identical.
+
+
 **(P18.303) — (INV.0) EXTRACTION: THE CIRCULARITY CHECKS MOVE OUT OF `Checker.kt` (1,328 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 191,529; +13 PINS, 22,879 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; libraries unchanged.
 
