@@ -315,13 +315,18 @@ class AnnotatedBodyLocalReceiverTest {
         assert(rows == listOf("16,66: TS2339 Property 'zzzNope' does not exist on type 'ZzzBox<number>'."))
     }
 
-    /** REFUSAL. An INTERSECTION, refused by the trust predicate's `Type.Intersection` line. */
+    /**
+     * An INTERSECTION is still refused by this route's trust predicate (its `Type.Intersection`
+     * line), but since (CHK.234) round (P18.309) the general intersection rule reports the
+     * member no constituent has — as tsgo 7.0.2 does (`t.ts(17,71): error TS2339`). This pin
+     * asserted silence before, which contradicted tsgo.
+     */
     @Test
-    fun `refusal - an INTERSECTION annotation stays silent`() {
+    fun `an INTERSECTION annotation reports through the intersection rule`() {
         val d = diagnose(
             prelude + "export function f(): void { const v: ZzzCfg & ZzzOther = zzzIsectV; v.zzzNope; }"
         )
-        assert(d.none { it.code == 2339 })
+        assert(d.filter { it.code == 2339 }.map { it.message } == listOf("Property 'zzzNope' does not exist on type 'ZzzCfg & ZzzOther'."))
     }
 
     /**

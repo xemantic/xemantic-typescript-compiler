@@ -37,13 +37,9 @@ import kotlin.test.Test
  * row is tsgo 7.0.2's (cells under `build/bench/p18308-agent/matrix/`, 1-based column); all cells
  * read byte-identical on both arms of the move.
  *
- * Pre-existing divergences shared by both arms, NOT asserted here: `static e: T[keyof U]` misses
- * tsgo's TS2302 on the `U` inside `keyof` (no `TypeOperator` arm in the type walker); a write
- * `(this.b = 2, …)` in a field initializer is silent here where tsgo reports TS2729 at the write
- * target; and a field of a class on a cyclic `extends` chain misses its TS2729, because the cycle
- * makes the class's own members read as inherited. In a MODULE file a base class is looked up in
- * `globals` and so is never found, which makes an inherited field re-declared below its read an
- * ours-only TS2729 (tsgo is silent); the inherited-name pin is therefore a SCRIPT file.
+ * The pre-existing divergences this class used to list (the `TypeOperator` arm, a write target,
+ * a cyclic `extends` chain, the `globals`-only base lookup) are fixed and pinned by
+ * `PropertyInitOrderAncestorTest` ((P18.309)).
  */
 class StaticAndInitOrderChecksCollaboratorTest {
 

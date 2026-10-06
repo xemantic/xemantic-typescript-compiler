@@ -94,21 +94,13 @@ internal class PropertyInitOrderChecks(
     }
 
     private fun checkClassPropertyUseBeforeInit(classDecl: ClassDeclaration, source: String, fileName: String) {
-        // Determine which properties are inherited from base classes (extends, not implements)
-        val inheritedNames = mutableSetOf<String>()
-        classDecl.heritageClauses?.forEach { clause ->
-            if (clause.token != SyntaxKind.ExtendsKeyword) return@forEach
-            for (typeExpr in clause.types) {
-                val baseName = when (val tn = typeExpr.expression) {
-                    is Identifier -> tn.text
-                    is PropertyAccessExpression -> (tn.name).text
-                    else -> null
-                } ?: continue
-                val baseSymbol = checker.globals[baseName] ?: continue
-                collectInheritedPropertyNames(baseSymbol, inheritedNames)
-            }
-        }
-
+        // (P18.309) tsgo's `isPropertyDeclaredInAncestorClass` gate, asked lazily at the report
+        // site: under `useDefineForClassFields` a redeclared inherited field is still read before
+        // its own initializer runs, so nothing is suppressed; otherwise the base is resolved by
+        // the resolution that gives the class its MEMBERS ([Checker.getTypeFromBaseTypeExpression])
+        // — the old `globals[baseName]` consult never found a module-local, imported,
+        // namespace-qualified or block-scoped base (an ours-only TS2729).
+        val ancestorGateLive = !checker.useDefineForClassFields
         // Collect property declarations in order, tracking which are "initialized"
         data class PropInfo(val name: String, val pos: Int, val hasInit: Boolean, val hasExcl: Boolean, val hasQuestion: Boolean, val isStatic: Boolean)
         val props = mutableListOf<PropInfo>()
@@ -144,9 +136,6 @@ internal class PropertyInitOrderChecks(
                 collectThisPropertyRefs(initExpr, refs, prop.isStatic, className)
 
                 for ((refName, refPos) in refs) {
-                    // Check if refName is inherited from base class
-                    if (refName in inheritedNames) continue
-
                     // Find the property declaration for refName
                     val refProp = props.find { it.name == refName && it.isStatic == prop.isStatic }
                     if (refProp == null) continue // not a class property (might be inherited or doesn't exist)
@@ -161,10 +150,12 @@ internal class PropertyInitOrderChecks(
                         // `undefined` so reading it is fine.
                         !refProp.hasInit && !refProp.hasExcl && !refProp.hasQuestion
                     } else {
-                        // Declared below or self-reference — an error (unless has `!`)
-                        !refProp.hasExcl
+                        // Declared below or self-reference — an error unless OPTIONAL (tsgo's
+                        // `isOptionalPropertyDeclaration`); a definite `!` does not exempt it.
+                        !refProp.hasQuestion
                     }
 
+                    if (isBeforeInit && ancestorGateLive && isDeclaredInAncestorClass(classDecl, refName)) continue
                     if (isBeforeInit) {
                         val (line, character) = checker.getLineAndCharacterOfPosition(source, refPos)
                         val length = refName.length
@@ -194,43 +185,66 @@ internal class PropertyInitOrderChecks(
         }
     }
 
-    /** Collect inherited property names from base class chain (extends only). */
-    private fun collectInheritedPropertyNames(
-        symbol: Symbol, names: MutableSet<String>,
-        // Cycle guard (keyed on symbol id): a cyclic `extends` chain
-        // (`class A extends B`, `class B extends A`, or `class A extends A`)
-        // would otherwise recurse until a StackOverflowError. Re-entry on an
-        // already-seen symbol simply stops — its members were already collected.
-        // Default-valued so the external caller is unchanged; recursion threads
-        // the same set down.
-        visited: MutableSet<Int> = HashSet(),
-    ) {
-        if (!visited.add(symbol.id)) return
-        for (decl in symbol.declarations) {
-            if (decl !is ClassDeclaration) continue
-            for (member in decl.members) {
-                if (member is PropertyDeclaration) {
-                    val name = (member.name as? Identifier)?.text ?: continue
-                    names.add(name)
-                }
-                if (member is MethodDeclaration) {
-                    val name = (member.name as? Identifier)?.text ?: continue
-                    names.add(name)
-                }
-            }
-            // Recurse into base classes
-            decl.heritageClauses?.forEach { clause ->
-                if (clause.token != SyntaxKind.ExtendsKeyword) return@forEach
-                for (typeExpr in clause.types) {
-                    val baseName = when (val tn = typeExpr.expression) {
-                        is Identifier -> tn.text
-                        else -> null
-                    } ?: continue
-                    val baseSymbol = checker.globals[baseName] ?: continue
-                    collectInheritedPropertyNames(baseSymbol, names, visited)
-                }
-            }
+    /**
+     * (P18.309) tsgo's `isPropertyDeclaredInAncestorClass`: the class's (first) `extends` base,
+     * resolved as its members are, has an INSTANCE property [name] with a value declaration
+     * (inherited, merged and lib members included — `extends Error` answers `message`). A class
+     * in an `extends` cycle has no base types in tsgo (TS2506), so nothing is inherited.
+     * Statics are deliberately asked on the INSTANCE side too, as tsgo does.
+     */
+    private fun isDeclaredInAncestorClass(classDecl: ClassDeclaration, name: String): Boolean {
+        val ext = firstExtends(classDecl) ?: return false
+        if (inExtendsCycle(classDecl)) return false
+        val base = checker.getTypeFromBaseTypeExpression(ext)
+        // A base this resolution cannot type at all — a mixin CALL (`extends Mix(Base)`), a class
+        // expression — is answered conservatively: tsgo types it and usually finds the member,
+        // and a false TS2729 on legal code outranks a missing one. An entity-name base that does
+        // not resolve stays unsuppressed (tsgo's base is then `any` / an error, which has none).
+        if (base === errorType) return !isEntityName(ext.expression)
+        if (base === anyType) return false
+        val decl = checker.getPropertyOfType(base, name)?.valueDeclaration ?: return false
+        // This checker's instance member table also carries STATIC members (TS2576 is decided
+        // from it), which tsgo's instance type does not have.
+        if (isStaticMember(decl)) return false
+        // A base that is itself in an `extends` cycle has no base types in tsgo: only the
+        // members it declares itself count.
+        val baseDecl = classDeclOf(base)
+        if (baseDecl != null && inExtendsCycle(baseDecl)) return (decl as NodeBase).parent === baseDecl
+        return true
+    }
+
+    private fun isEntityName(e: Expression): Boolean = when (e) {
+        is Identifier -> true
+        is PropertyAccessExpression -> isEntityName(e.expression)
+        else -> false
+    }
+
+    private fun isStaticMember(decl: Node): Boolean = when (decl) {
+        is PropertyDeclaration -> ModifierFlag.Static in decl.modifiers
+        is MethodDeclaration -> ModifierFlag.Static in decl.modifiers
+        is GetAccessor -> ModifierFlag.Static in decl.modifiers
+        is SetAccessor -> ModifierFlag.Static in decl.modifiers
+        else -> false
+    }
+
+    private fun classDeclOf(t: Type): ClassDeclaration? {
+        val sym = (if (t is Type.Reference) t.target else t as? Type.Object)?.symbol
+        return sym?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+    }
+
+    private fun firstExtends(classDecl: ClassDeclaration): ExpressionWithTypeArguments? =
+        classDecl.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }?.types?.firstOrNull()
+
+    /** Whether the `extends` chain starting at [classDecl] returns to it (bounded walk). */
+    private fun inExtendsCycle(classDecl: ClassDeclaration): Boolean {
+        var cur: ClassDeclaration = classDecl
+        repeat(64) {
+            val ext = firstExtends(cur) ?: return false
+            val next = classDeclOf(checker.getTypeFromBaseTypeExpression(ext)) ?: return false
+            if (next === classDecl) return true
+            cur = next
         }
+        return false
     }
 
     /** Collect this.X (or ClassName.X for statics) property references in an expression.
@@ -270,20 +284,9 @@ internal class PropertyInitOrderChecks(
                 expr.arguments.forEach { collectThisPropertyRefs(it, refs, isStatic, className) }
             }
             is BinaryExpression -> {
-                // A simple assignment `this.X = ...` WRITES X — that is not a "use" of
-                // X (TypeScript doesn't flag it). Skip the direct ref of the LHS name but
-                // still recurse into the receiver (so `this.a.b = ...` still counts a use
-                // of `this.a`) and the RHS.
-                val left = expr.left
-                val isWriteTargetRef = expr.operator == SyntaxKind.Equals &&
-                    left is PropertyAccessExpression &&
-                    (if (isStatic) (left.expression as? Identifier)?.text == className
-                     else (left.expression as? Identifier)?.text == "this")
-                if (isWriteTargetRef) {
-                    collectThisPropertyRefs((left).expression, refs, isStatic, className)
-                } else {
-                    collectThisPropertyRefs(expr.left, refs, isStatic, className)
-                }
+                // (P18.309) a write target `this.X = …` is a use too: tsgo's
+                // `checkPropertyNotUsedBeforeDeclaration` runs for every property access.
+                collectThisPropertyRefs(expr.left, refs, isStatic, className)
                 collectThisPropertyRefs(expr.right, refs, isStatic, className)
             }
             is ConditionalExpression -> {

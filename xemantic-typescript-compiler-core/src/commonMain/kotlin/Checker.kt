@@ -532,6 +532,7 @@ class Checker(
     /** (CHK.220) TS2536 on an element access whose index is a type parameter; see `GenericIndexAccess.kt`. */
     private val genericIndexAccess = GenericIndexAccess(this)
     internal val intersectionOps = IntersectionTypeOperators(this)
+    private val intersectionMemberAccess = IntersectionMemberAccess(this)
     internal val indexedAccessParams = IndexedAccessParams(this)
     internal val contextualLiteralArgs = ContextualLiteralArgs(this) // (LIBS.3) GENLIT
     /** (LIBS.2) GSIG — the `IsEqual` generic-signature trick; see `GenericSignatureConditionals.kt`. */
@@ -8555,6 +8556,8 @@ class Checker(
     private var cmamInGuardExhausted = false
 
     private var cmamFlowBase = -1
+    /** (CHK.234) the receiver type [cmamPropertyResolvesOnReceiver] computed last (null when it returned before computing one). */
+    private var cmamPreGateRaw: Type? = null
 
     /** `--verifyDeferSuppression`: the predicate's verdict evaluated EAGERLY, at
      *  the position the blocks used to run, before the body. */
@@ -10918,7 +10921,6 @@ class Checker(
         pass("checkNarrowedTypeofCallbackCalls") { checkNarrowedTypeofCallbackCalls() }
         // 82d. B271: empty-DOM-element-stub receivers — additive intersection emission +
         // TS2339→TS2812 rewrite when @lib is explicit without 'dom'.
-        pass("checkEmptyDomIntersectionAccess") { checkEmptyDomIntersectionAccess() }
         // unresolvableSelfReferencingAwaitedUnion (#49646/#49723/#42948): a recursive-Promise union
         // alias `X = … | Promise<X> | <other-self-ref>` is an UNRESOLVABLE Awaited<X> → `await x`
         // (x:X) is TS1062. We model neither Awaited<> nor `instanceof Function` narrowing, so we FP
@@ -43700,7 +43702,7 @@ class Checker(
      * `Transformer`'s own same-shaped getter deliberately keeps `effectiveTarget`
      * because ITS question is an emit one.
      */
-    private val useDefineForClassFields: Boolean
+    internal val useDefineForClassFields: Boolean
         get() = options.useDefineForClassFields
             ?: (options.defaultedTarget >= ScriptTarget.ES2022)
 
@@ -148431,45 +148433,6 @@ interface DataView {
         }
     }
 
-    /** B271 (additive half): `(x as A & B).prop` where EVERY intersection constituent is an
-     *  empty user interface — the access can never succeed, so TS2339 with the `A & B`
-     *  display always fires (Object.prototype members excluded). Top-level statements only. */
-    private fun checkEmptyDomIntersectionAccess() {
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            for (stmt in result.sourceFile.statements) {
-                val pa = (stmt as? ExpressionStatement)?.expression as? PropertyAccessExpression ?: continue
-                var recv: Expression = pa.expression
-                while (recv is ParenthesizedExpression) recv = recv.expression
-                val asExpr = recv as? AsExpression ?: continue
-                val inter = asExpr.type as? IntersectionType ?: continue
-                val names = intersectionEmptyIfaceNames(inter, fileName) ?: continue
-                if (pa.name.text in OBJECT_PROTOTYPE_PROPERTIES) continue
-                val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
-                diagnostics.add(Diagnostic(
-                    message = "Property '${pa.name.text}' does not exist on type '${names.joinToString(" & ")}'.",
-                    category = DiagnosticCategory.Error, code = 2339,
-                    fileName = fileName, line = line, character = ch,
-                    start = pa.name.pos, length = pa.name.text.length,
-                ))
-            }
-        }
-    }
-
-    private fun intersectionEmptyIfaceNames(node: IntersectionType, fileName: String): List<String>? {
-        val names = mutableListOf<String>()
-        for (t in node.types) {
-            val tr = t as? TypeReference ?: return null
-            if (!tr.typeArguments.isNullOrEmpty()) return null
-            val n = (tr.typeName as? Identifier)?.text ?: return null
-            if (!isEmptyUserInterface(n, fileName)) return null
-            names.add(n)
-        }
-        return if (names.size >= 2) names else null
-    }
-
     /** B271 (rewrite half): mirror of TS's containerSeemsToBeEmptyDomElement — when @lib is
      *  EXPLICIT and excludes 'dom', a TS2339 whose receiver display is built entirely of
      *  empty user interfaces named like DOM types (`EventTarget|Node|(HTML…)?Element`)
@@ -148607,6 +148570,7 @@ interface DataView {
      * decides it — how many of those calls emit a diagnostic today.
      */
     private fun cmamPropertyResolvesOnReceiver(objectExprIn: Expression, propName: String): Boolean {
+        cmamPreGateRaw = null
         if (propName.isEmpty()) return false
         // A later-lib member RESOLVES and is still an error: TS2550 says "not at
         // this target", never "does not exist". [LIB_MIN_TARGET_PROPS] is the
@@ -148615,6 +148579,7 @@ interface DataView {
         var e = objectExprIn
         while (e is ParenthesizedExpression) e = e.expression
         val raw = getTypeOfExpression(e)
+        cmamPreGateRaw = raw
         if (raw is Type.Union || raw === anyType || raw === errorType || raw === neverType) return false
         val app = getApparentType(raw)
         // A CLASS receiver's two sides are not cleanly separated in our member
@@ -148845,6 +148810,7 @@ interface DataView {
         var pgPass = false
         var pgD0 = 0
         var pgT0 = 0L
+        cmamPreGateRaw = null
         if (CpaSections.preGateProbe) {
             pgD0 = diagnostics.size
             val gt0 = CpaSections.t()
@@ -148858,6 +148824,8 @@ interface DataView {
             // `preGatePassEmitted` column is the falsifier rather than a tautology.
             return
         }
+        // (CHK.234) the pre-gate's receiver type, read before the body can call it again.
+        val preGateRaw = cmamPreGateRaw
         checkMemberAccessMissingCore(
             objectExprIn, propName, diagStart, diagLength, source, fileName,
             enclosingClassType, emitTs2728RelatedInfo, keySuggestion,
@@ -148870,6 +148838,14 @@ interface DataView {
             CpaSections.notePreGate(pgPass, diagnostics.size > pgD0)
         }
         val base = cmamFlowBase
+        // (CHK.234) a property read on an INTERSECTION receiver that the body above did not
+        // speak to: tsgo's any-constituent rule, inside the deferred flow suppression's reach.
+        if (base >= 0 && diagnostics.size == base && preGateRaw is Type.Intersection) {
+            cmamIntersectionMissingMember(
+                objectExprIn, preGateRaw, propName, diagStart, diagLength, source, fileName,
+                elementAccess = keySuggestion != null && !keySuggestion.startsWith("."),
+            )
+        }
         val eagerVerdict = cmamEagerVerdict
         val eagerNarrowed = cmamEagerNarrowed
         cmamFlowBase = savedBase
@@ -148903,6 +148879,60 @@ interface DataView {
         if (emitted && honour) {
             while (diagnostics.size > base) diagnostics.removeAt(diagnostics.size - 1)
         }
+    }
+
+    /**
+     * (CHK.234) round (P18.309) — TS2339 / TS2551 for a member no constituent of an
+     * INTERSECTION receiver has, decided by [IntersectionMemberAccess] (conservative: an
+     * undecidable constituent reports nothing). TypeScript files only — a JavaScript
+     * receiver's typing is not trusted to decide absence.
+     */
+    private fun cmamIntersectionMissingMember(
+        objectExprIn: Expression, recv: Type.Intersection, propName: String, diagStart: Int, diagLength: Int,
+        source: String, fileName: String, elementAccess: Boolean,
+    ) {
+        if (isJsLikeFileName(fileName)) return
+        if (intersectionMemberAccess.missing(recv, propName) != true) return
+        val suggestion = getSpellingSuggestionFromNames(propName, intersectionMemberAccess.ownMemberNames(recv))
+        // A literal-key element access with no suggestion is [tryEmitIntersectionIndexAccess]'s
+        // TS7053; with one, tsgo reports TS2551 — only under `noImplicitAny`.
+        if (elementAccess && (suggestion == null ||
+                !(options.noImplicitAny || (!options.noImplicitAnyExplicitlyFalse && !options.strictExplicitlyFalse)))) return
+        var e = objectExprIn
+        while (e is ParenthesizedExpression) e = e.expression
+        // `if ('c' in x) x.c` narrows to `x & Record<'c', unknown>` in tsgo.
+        if (cmamInGuardMayAddProperty(e, propName, refuseOnExhaustion = false)) return
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        val display = typeToString(recv)
+        // tsgo attaches the related row to the property-access form only.
+        val related = if (elementAccess) emptyList() else suggestion?.let { intersectionSuggestionRelated(recv, it) } ?: emptyList()
+        diagnostics.add(Diagnostic(
+            message = if (suggestion != null) "Property '$propName' does not exist on type '$display'. Did you mean '$suggestion'?"
+                else "Property '$propName' does not exist on type '$display'.",
+            category = DiagnosticCategory.Error, code = if (suggestion != null) 2551 else 2339,
+            fileName = fileName, line = line, character = character,
+            start = diagStart, length = diagLength,
+            relatedInformation = related,
+        ))
+    }
+
+    /** tsgo's "'x' is declared here." for a suggested member written in a program (non-lib) file. */
+    private fun intersectionSuggestionRelated(recv: Type.Intersection, name: String): List<Diagnostic> {
+        val decl = intersectionMemberAccess.ownMemberDeclaration(recv, name) ?: return emptyList()
+        if (decl in builtinLibDecls || libFileOfDecl(decl) != null) return emptyList()
+        val nameNode = when (decl) {
+            is PropertyDeclaration -> decl.name
+            is MethodDeclaration -> decl.name
+            is GetAccessor -> decl.name
+            is SetAccessor -> decl.name
+            else -> return emptyList()
+        } as? Identifier ?: return emptyList()
+        val sf = owningSourceFile(decl) ?: return emptyList()
+        val (l, c) = getLineAndCharacterOfPosition(sf.text, nameNode.pos)
+        return listOf(Diagnostic(
+            message = "'$name' is declared here.", category = DiagnosticCategory.Message, code = 2728,
+            fileName = sf.fileName, line = l, character = c, start = nameNode.pos, length = name.length,
+        ))
     }
 
     /**
@@ -153063,6 +153093,47 @@ interface DataView {
      *    stringified VALUE is missing, unique symbol → '[symName]'.
      * Returns true when a diagnostic was emitted (caller must return).
      */
+    /**
+     * (CHK.234) round (P18.309) — TS7053 for a string-literal key no constituent of an
+     * INTERSECTION receiver has (`(A & B)['c']`), decided by [IntersectionMemberAccess]
+     * (conservative). A receiver with a `get` / `set` member is left alone (tsgo's TS7052
+     * "did you mean to call" family), and so is a key with a spelling suggestion.
+     */
+    private fun tryEmitIntersectionIndexAccess(
+        expr: ElementAccessExpression, source: String, fileName: String,
+    ): Boolean {
+        if (!(options.noImplicitAny || (!options.noImplicitAnyExplicitlyFalse && !options.strictExplicitlyFalse))) return false
+        val arg = expr.argumentExpression
+        val key = when (arg) {
+            is StringLiteralNode -> arg.text
+            is Identifier -> (getTypeOfExpression(arg) as? Type.StringLiteral)?.value ?: return false
+            else -> return false
+        }
+        val recvExpr = expr.expression
+        val rt = getTypeOfExpression(recvExpr) as? Type.Intersection ?: return false
+        if (intersectionMemberAccess.missing(rt, key) != true) return false
+        // A numeric index signature turns a string key into tsgo's TS7015 instead.
+        if (intersectionMemberAccess.hasNumberIndex(rt)) return false
+        if (intersectionMemberAccess.missing(rt, "get") != true || intersectionMemberAccess.missing(rt, "set") != true) return false
+        if (getSpellingSuggestionFromNames(key, intersectionMemberAccess.ownMemberNames(rt)) != null) return false
+        val argEnd = expressionTrueEnd(arg)
+        var cb = argEnd
+        while (cb < source.length && source[cb] != ']') cb++
+        val accessEnd = if (cb < source.length) cb + 1 else argEnd
+        val spanStart = recvExpr.pos
+        val spanLength = (accessEnd - spanStart).coerceAtLeast(1)
+        val recvDisplay = typeToString(rt)
+        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+        diagnostics.add(Diagnostic(
+            message = "Element implicitly has an 'any' type because expression of type '\"$key\"' can't be used to index type '$recvDisplay'.",
+            category = DiagnosticCategory.Error, code = 7053,
+            messageChain = listOf("  Property '$key' does not exist on type '$recvDisplay'."),
+            fileName = fileName,
+            line = line, character = character, start = spanStart, length = spanLength,
+        ))
+        return true
+    }
+
     private fun tryEmitNoImplicitAnyIndexAccess(
         expr: ElementAccessExpression, source: String, fileName: String,
     ): Boolean {
@@ -153571,6 +153642,7 @@ interface DataView {
         // TS2339). Runs BEFORE the r167 union-key block so non-fresh receivers get
         // the tsc TS7053 chain; fresh-receiver union keys deliberately fall through
         // to r167 (its domain).
+        if (tryEmitIntersectionIndexAccess(expr, source, fileName)) return
         if (tryEmitNoImplicitAnyIndexAccess(expr, source, fileName)) return
         // (CHK.179)(a2) a string- / number-typed key on an index-less receiver.
         if (elementAccessMissing.nonLiteralKey(expr, source, fileName)) return

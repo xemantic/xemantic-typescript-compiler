@@ -234,6 +234,22 @@ internal class StaticTypeParamRefChecks(
                 findTypeParamRefsInType(typeNode.objectType, typeParamNames, source, fileName)
                 findTypeParamRefsInType(typeNode.indexType, typeParamNames, source, fileName)
             }
+            // (P18.309) the arms the walker lacked: `keyof U` / `readonly T[]`, a named tuple
+            // member, a template literal type's spans, a type predicate's type, and a mapped
+            // type (its own parameter shadows a class type parameter of the same name in the
+            // name type and the template, never in the constraint).
+            is TypeOperator -> findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+            is NamedTupleMember -> findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+            is TemplateLiteralType -> typeNode.templateSpans.forEach { findTypeParamRefsInType(it.type, typeParamNames, source, fileName) }
+            is TypePredicate -> typeNode.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+            is MappedType -> {
+                typeNode.typeParameter.constraint?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                val names = typeParamNames - typeNode.typeParameter.name.text
+                if (names.isNotEmpty()) {
+                    typeNode.nameType?.let { findTypeParamRefsInType(it, names, source, fileName) }
+                    typeNode.type?.let { findTypeParamRefsInType(it, names, source, fileName) }
+                }
+            }
             else -> {} // LiteralType, KeywordType, etc.
         }
     }
