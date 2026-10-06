@@ -1,5 +1,9 @@
 
 
+**(P18.305) — (CHK.233): LAZY TUPLE MEMBERS PAY BACK THE DEPTH-BUDGET COST — type-fest 15.0 -> 10.5 s and RSS 3.12 -> 1.52 GB, no OOM at 512 MB, diagnostics byte-identical everywhere; +7 PINS, 22,894 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; libraries unchanged (238); cost counters identical.
+
+
 **(P18.304) — (LIBS.3): THE ALIAS DEPTH BUDGET NOW RUNS AT tsgo's LIMITS (depth 100, tail 1,000, a fan-out count cap, a 10,000-element tuple cap); the old OOM was a 2^depth fan-out, not depth — TALLY 244 -> 238, NO ADDED POSITION; compiler profile cost unchanged, type-fest +6 s from one fixture (lazy tuple members queued as (CHK.233)); +8 PINS, 22,887 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; mitt and date-fns hold; cost counters identical.
 

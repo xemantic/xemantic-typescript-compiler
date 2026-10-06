@@ -1,3 +1,36 @@
+### Round (P18.300) — (LIBS.3) round 9, EXCEPT: INVESTIGATION — type-fest's `Except<…>` is `any` because of FOUR STACKED causes, the deepest being the standing `NoInfer` refusal; the three others are each correct and each ADD type-fest false rows while `NoInfer` stands (+52 / +19 / +78, all three +324), so only the fourth landed: `keyof` a TUPLE now includes its Array / ReadonlyArray base keys (5 false positives gone in the matrix); tally 255 -> 255, NO added position (2026-10-05)
+
+One implementation subagent, briefed to land nothing if the fix proved too wide. **Where the brief was wrong**: the step
+answering `any` is `ApplyDefaultOptions`, not `_Except` — called directly with literal options `_Except` / `Filter` /
+`IsEqual` all match tsgo (the `as` clause and the `IsEqual` signature trick are innocent); for fixed-length-array `Except`
+ALSO failed its own constraint (`KeysType extends keyof ObjectType` refused `'push'` because a tuple's `keyof` had no Array
+keys, and a failed constraint makes the alias `any`). **The four causes, all measured against tsgo**: (a) `NoInfer<T>`
+evaluates only for a genuine `any` (`Checker.kt` ~108391, (CHK.228)), so `IsAny<{}>` is never decided and
+`If<IsAny<Spec>, …>` stays `any`; (b) a BARE `infer` pattern `X extends infer R [extends C] ? R : …` is not handled
+(`ConditionalInferPatterns.isPattern`), so `ApplyDefaultOptions` and `UnionToTuple` answer `any` (tsgo: `R = X`, literals
+kept; 9 cells); (c) an EMPTY mapped type (`[K in keyof {}]`) answers `any` instead of `{}` (`getTypeFromMappedType`
+~173300), swallowing `Merge<D, {}>` / `PickIndexSignature<{}>` (8 cells); (d) `keyof` a tuple returned only its slots and
+`length`. Measured added type-fest rows per arm: (c) +52 (snake / kebab / pascal-case, is-tuple 10), (b) +19 (union-length /
+sum / union-to-tuple via a still-deferred `UnionMember`), (a) alone +78, (a)+(b)+(c) +324 (type-fest 186 -> 472, words.ts
+176). With all three `Except` resolves correctly; a mapped type with an `as` clause over a TUPLE still answers `any` (tsgo:
+an object type), so `FixedLengthArray` stays open even then. Patches kept: `build/bench/p18300-agent/exp1-noinfer.patch`,
+`fix1.patch` (c), `all3.patch`. A sub-variant of (d) — reading a well-known-symbol member `[Symbol.iterator]` as a SYMBOL
+key — was built and REVERTED: a mapped type cannot enumerate a non-literal key, so `Readonly<ReadonlyMap<infer K, infer V>>`
+became `any`, every `ReadonlyDeep<T>` `any`, and two new TS2578 positions appeared. **Mechanism landed**: `getKeyofType`
+unions a tuple's own keys with its Array / ReadonlyArray base's keys (`getKeyofTypeCore` keeps the old body). `Checker.kt`
++13. **Matrix** (`build/bench/p18300-agent/r12`): `keyof [1,2] = 'push' | 'map'`, `keyof readonly [1] = 'map'`,
+`Get<[1,2], 'map'>` — 5 false positives -> silent = tsgo; `readonly [1]` `'push'`, `'nope'`, `'2'`, `Get<readonly […], 'push'>`
+still report = tsgo (display: tsgo prints `keyof [1, 2]`, we the expanded union — form only). Residues: well-known-symbol
+keys read as strings; `[1,2]['map']` answers `any`; `Simplify` / `Merge` displayed by alias name; importing a NON-exported
+type is not reported (tsgo TS2459). **Pins**: `KeyofTupleArrayBaseTest` 4; ablation a1 3 RED. **Gates**: full suite
+22,850 / 0 / 44 (+4); corpus screen 8725 / 0 and `--include ''` the same 41; `cost_gate.py` 0; `huge_methods.py --fail-over 0`
+0; at-risk sweep 41 classes / 568 tests; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns
+1 unchanged; library grid on the final classes (orchestrator's `r300` vs `r299`): every count unchanged, NO added or
+removed position, 4 type-fest messages rewritten at the same positions; warning gate with probe: probe only.
+**Consequence for the queue**: `NoInfer` is now the single gate in front of DEFK2 (19), REQONE (13), fixed-length-array
+(12) and EXCEPT-dependent paths / non-nullable-deep — so its unblock order (TLT2 template-literal residue -> the
+`IsTuple<{}>` first-touch poisoning -> `NoInfer` everywhere -> (b) + (c) -> the `as`-over-tuple mapped type) is the next arc.
+
 ### Round (P18.299) — (CHK.232) CLOSED (tsgo's `mergeSymbol` meaning rules replayed for script top-level declarations; augmentation-vs-re-export gated on the re-export's MEANING; enum-augmentation specifiers resolved relative to the file) + (LIBS.3) FBOUND partly: the exact.ts rows were mostly a REACH gap (a file-level `{}` block was not a scope, block-local arrow / object / array / `as` `const`s were never typed), not F-bound inference; type-fest 193 -> 186, tally 262 -> 255, NO added position; two `residue - …` pins closed to tsgo's answer (2026-10-05)
 
 One implementation subagent. **Where the brief / queue were wrong**: c12b is ORDER-DEPENDENT in tsgo itself — its global
