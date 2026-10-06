@@ -1,3 +1,41 @@
+### Round (P18.302) — (LIBS.3) round 11, the `NoInfer` gate: its 74 exposed rows are a STACK four layers deep, not five families; five root-cause fixes landed (Object-prototype members in the relation, a `Type.StringMapping` for `Lowercase<string>` & co., optional slots before a trailing rest in `infer`, `void` vs `undefined` in conditionals, homomorphic readonly) — type-fest 180 -> 175, tally 249 -> 244, NO added position; `NoInfer` NOT landed (45 added with the patch, down from 74); the deepest gate is now the alias / mapped DEPTH BUDGET of 10 (tsgo 100) (2026-10-05)
+
+One implementation subagent. **Where the brief was wrong**: jsonify (29) has nothing to do with `NoInfer` — it is a relation
+defect (`{x:1}` related to `Boolean`: a target member only `Object` supplies was skipped); is-tuple (11) is not a cache-order
+bug — an alias's type-parameter CONSTRAINT was resolved under the CALLER's alias arguments, so `IsTuple`'s own `Options`
+leaked into `ApplyDefaultOptions`' `Defaults` constraint, the constraint failed, the reference collapsed to `errorType` and
+(P18.293)'s defaults fallback took the declared type (the order-dependence only decides which call runs first); pascal-case
+/ kebab / snake / schema are that constraint leak plus `ApplyDefaultOptions` always `any` (cause (c) empty mapped
+`PickIndexSignature<X>`, cause (b) bare `infer … extends C`). **Mechanisms landed**: `Relater` (~1460) compares a target
+member that only `Object` supplies (`toString`, `valueOf`, …) against `Object`'s declaration (`getObjectPrototypeMemberType`
+made `internal`) — jsonify 29 -> 1 under the patch; a new `Type.StringMapping` for `Lowercase<string>` and the other three
+intrinsics over `string`, PER CHECKER (never process-global, so no worker can mint one), related in
+`StringMappingTypes.relate` from `isSimpleTypeRelatedTo` (a literal relates when the mapping leaves it unchanged; `string`
+and precise templates refused inside conditionals only), a template placeholder, displayed as `Lowercase<string>`;
+`ConditionalInferPatterns.matchOptionalPrefix` for `[(infer F)?, ...infer R]` (absent slots infer `unknown`, the rest
+`unknown[]`, a non-trailing source rest supplies only its fixed prefix; 12 cells = tsgo); `void -> undefined` refused inside
+conditional types; a homomorphic mapped member is readonly exactly when its source property is (`homomorphicSourceReadonly`;
+for an intersection every constituent; a `Readonly<X>` member counts though its declaration has no modifier). `Checker.kt`
++26, `ConditionalInferPatterns.kt` +52, `Relater.kt` +13, `StringMappingTypes.kt` +29, `TemplateLiteralTypes.kt` +1,
+`Type.kt` +11. **Held back, correct**: the alias-constraint fix (resolve a constraint with the alias's own parameters bound
+to its arguments; `r/cl` — silent here, tsgo reports) — with `NoInfer` on it takes the patch to 162 with only 13 added, but
+without it adds `pascal-cased-properties-deep.ts:74` TS2589 (our depth budget 10 vs tsgo's 100): LAND IT TOGETHER WITH
+`NoInfer`. (b) + (c) re-tried on top: `words.ts` +146-189 — reduced (`r/w4`) to the depth budget: a `Words<'aa'>` through one
+wrapper alias bails and keeps the defaults fallback; raising the budget to 25 runs the corpus screen OUT OF HEAP; (b) alone
+conditional-keys +37, union-length +8. **The 13 rows left with patch + constraint fix**: array-slice 5 (`GreaterThan<2,0>`
+`any`, needs (b)), require-* 3 (`typeof foo.a` narrowing over a `Simplify<RequireAllOrNone<…>>` union), remove-prefix 2 (a
+genuine `any` template placeholder), is-readonly / writable-key-of 2 (a mapped type over a `unique symbol` key answers
+`any`), jsonify 1 (`string[] & ['some value']`). Pre-existing FP found, not fixed: `const o: Object = { a: 1 }` reports
+TS2353 (tsgo silent). **Matrix** all after-cells = tsgo (mechanism 4 residue by design: `const r: undefined = f()` for a
+`void` `f` is still missing a row — the refusal applies only inside conditionals). **Pins**: `NoInferUnblockRelationsTest` 7;
+ablation a1-a5 1 / 2 / 1 / 1 / 1 RED. **Gates**: full suite 22,866 / 0 / 44 (+7); corpus screen 8725 / 0 and `--include ''` the
+same 41; `cost_gate.py` 0 (`typeNode.bypassed` +0.25%); `huge_methods.py --fail-over 0` 0; at-risk sweep 105 classes / 1,874
+tests; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended
+to `Type$StringMapping`); library grid on the final classes (orchestrator's `r302` vs `r301`): type-fest 180 -> 175
+(exclude-strict:61, extract-strict:70, is-undefined:9, remove-prefix:102, remove-suffix:100), the rest unchanged, NO added
+position (tally 249 -> 244); warning gate with probe: probe only. **`NoInfer` re-measure on the final work**: type-fest
+180 -> 193, 45 added / 32 removed (is-tuple 11, pascal-case 11, schema 8, array-slice 5, 10 others) — down from 74.
+
 ### Round (P18.301) — (LIBS.3) round 10, NoInfer unblock step 1: TLT2's join / camel-case rows were ALREADY gone; its 9 live rows were not template-literal defects — a written union check type was distributed, `keyof (A | B)` answered `string`, and the `keyof`-union fix needed (CHK.215)'s homomorphic distribution plus a call-RHS assignment reduction; type-fest 186 -> 180, tally 255 -> 249, NO added position; the `NoInfer` re-measure removes 0 of its 74 rows, so TLT2 was NOT the gate (2026-10-05)
 
 One implementation subagent. **Where the brief / census were wrong**: join (10) and camel-case (4) no longer exist —

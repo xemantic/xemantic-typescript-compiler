@@ -1,5 +1,9 @@
 
 
+**(P18.307) — (LIBS.3): BARE `infer`, THE EMPTY MAPPED TYPE AND `as`-OVER-TUPLE MAPPED TYPES LANDED with nine supporting fixes — type-fest 141 -> 123, TALLY 209 -> 191, NO ADDED POSITION; a self-inflicted +10 s type-fest cost (uncached conditional-alias results) found and fixed — 15.9 s vs tsgo's 17.1 s; +12 PINS, 22,916 / 0 / 44 (2026-10-06).**
+Screen 0; grid 8x0; mitt and date-fns hold.
+
+
 **(P18.306) — (LIBS.3): `NoInfer<T>` EVALUATION LANDED with the alias-constraint fix and five exposed-row fixes — type-fest 170 -> 141, TALLY 238 -> 209, NO ADDED POSITION; type-fest wall +4.5 s accepted (tsgo takes 17.1 s there, we 15.6 s); +10 PINS, 22,904 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; mitt and date-fns hold.
 
