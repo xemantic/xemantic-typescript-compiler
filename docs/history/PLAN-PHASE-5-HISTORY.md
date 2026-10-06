@@ -1,3 +1,27 @@
+### Round (P18.298) — (INV.0) extraction: the CROSS-FILE DUPLICATE / CONFLICT family (12 passes + helpers, TS2300 / TS2451 / TS2567 / TS2649 …) moves verbatim into `CrossFileConflictChecks`; `Checker.kt` 194,032 -> 192,648 (-1,384); every receipt identical, per-pass table included (2026-10-05)
+
+One implementation subagent, briefed in the (P18.294) order (move+proof -> pins -> ablation -> receipts); it finished.
+**Choice**: the switch family reads the walk variable `fallthroughFlowGraph`; the module-augmentation / interop run
+(P18.294) named would need 16 widenings and leave two helpers behind; the cross-file conflict run needed 5. **Moved**:
+4911-4915 (the B93 hand-off set `crossFileIdentifierHandledBlockNames`, used only here) and 190932-192311 — the 12 passes
+registered in `initCheckPasses7`, `duplicateCallRelatedInfos` + `DuplicateRelatedTarget`, the hub / amalgamation emitters,
+`resolveAugmentationTargetFile`, the cjs / re-export / global-namespace helpers; three outside callers re-pointed
+(`checkClassShadowsLibType`, `augmentationTargetFileJsAware`). 20 checker members read, no walk ambient, no spine state,
+no mutable field; widenings `getMemberNameText`, `isLibFileName`, `libFileOfDecl`, `umdExportAsNamespaceOccurrences`,
+`DEPRECATED_STRING_HTML_HELPERS` (the two functions were already refused "callee is too large" at every site).
+`UmdExportAsNamespace.kt` KDoc links re-pointed (class md5 unchanged). **Receipts**: verbatim proof three ways; per-pass
+`--passTiming` 416 rows + 33 counter lines identical, diagnostics md5 identical; PrintInlining `checkArgumentsAgainstSignature`
+identical; a 17-cell tsgo matrix byte-identical before / after (13 agree with tsgo; pre-existing divergences this family owns:
+c08 an ours-only TS2300 pair for a type-alias augmentation against a value re-export, c12 an ours-only TS2649 for a script
+`type N` beside `namespace N`, c12b TS2649 where tsgo reports TS2300 x3, c10 / c10b the enum-augmentation-through-`export *`
+TS2567 pair depends on the file-name shape — queued below); corpus screen 8725 / 0; `cost_gate.py` 0; spine audit clean.
+**Pins**: `CrossFileConflictChecksCollaboratorTest` 16 (one `residue - …` TS2649 pin so its entry point's ablation is
+visible); ablation one arm per entry point, 14 arms, all RED (1 / 1 / 1 / 1 / 2 / 1 / 1 / 2 / 1 / 1 / 1 / 1 / 1 / 2).
+**Gates**: full suite 22,812 / 0 / 44 (+16); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs /
+marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to `CrossFileConflictChecks`); library grid
+row sets identical to `r297` on all eight (orchestrator's `r298`); warning gate with probe: probe only. Ledger row 24.
+Next candidates: the module-interop run (~16 widenings) and the mutable-free runs needing a closure census.
+
 ### Round (P18.297) — (LIBS.3) round 7, hono: (a) a relative augmentation `declare module '../..'` resolves through the directory's `index.ts` (Bundler; NodeNext keeps tsgo's TS2664), (b) T1 `typeof x === 'function'` narrowing — FOUR mechanisms, not one, (c) the four "TS2537 symbol" rows were F15 (computed `unique symbol` keys in a CONTEXTUALLY-typed pattern parameter); hono 46 -> 29, tally 279 -> 262, NO added position; one pin asserting the opposite of tsgo re-pointed (2026-10-05)
 
 One implementation subagent. **Where the brief / census were wrong**: (c) is not a `{}` reduction — tsgo never prints

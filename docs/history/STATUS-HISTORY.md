@@ -1,5 +1,9 @@
 
 
+**(P18.303) — (INV.0) EXTRACTION: THE CIRCULARITY CHECKS MOVE OUT OF `Checker.kt` (1,328 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 191,529; +13 PINS, 22,879 / 0 / 44 (2026-10-05).**
+Screen 0; grid 8x0; libraries unchanged.
+
+
 **(P18.302) — (LIBS.3) THE `NoInfer` GATE: ITS 74 EXPOSED ROWS ARE A FOUR-LAYER STACK; FIVE ROOT-CAUSE FIXES LANDED (Object-prototype members, `Lowercase<string>` types, optional `infer` slots, `void` in conditionals, homomorphic readonly) — TALLY 249 -> 244, NO ADDED POSITION; `NoInfer` now adds 45 (was 74); the deepest gate is our alias depth budget 10 vs tsgo's 100; +7 PINS, 22,866 / 0 / 44 (2026-10-05).**
 Screen 0; grid 8x0; mitt and date-fns hold.
 
