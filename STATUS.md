@@ -99,7 +99,7 @@ tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 **(P18.312) — (INV.0) EXTRACTION: THE `in`-RHS TYPE-PARAMETER CHECKS AND THE TYPE-AS-NAMESPACE FAMILY MOVE OUT OF `Checker.kt` (730 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 190,700; +11 PINS, 22,985 / 0 / 44 (2026-10-06).**
 Screen 0; grid 8x0; libraries unchanged.
 
-**(P18.311) — (LIBS.4) REAL-LIBRARY FALSE-POSITIVE SWEEP: eight mechanisms on application code (bigint arithmetic with `any`, a negative `instanceof` narrowing to `never`, shadowed readonly receivers, `extends Map` without type arguments, `this[key] =` assignments, …) — zod 21 -> 14, ky 9 -> 5, immer 5 -> 1, TALLY 179 -> 160, NO ADDED POSITION; +9 PINS, 22,974 / 0 / 44 (2026-10-06).**
+**(P18.311) — (LIBS.4) REAL-LIBRARY FALSE-POSITIVE SWEEP: eight mechanisms on application code (bigint arithmetic with `any`, a negative `instanceof` narrowing to `never`, shadowed readonly receivers, `extends Map` without type arguments, `this[key] =` assignments, …) — zod 21 -> 14, ky 9 -> 5, immer 5 -> 1, TALLY 179 -> 162, NO ADDED POSITION; +9 PINS, 22,974 / 0 / 44 (2026-10-06).**
 Screen 0; grid 8x0; mitt and date-fns hold.
 
 **(P18.310) — (LIBS.3): `Omit` / `Pick` MATERIALIZATION COMPLETED + TYPE-LEVEL `X['k']` TS2339 — type-fest fixed-length-array closed, TALLY 191 -> 179, NO ADDED POSITION; the builder stalled and the orchestrator's gates caught 6 stale hover pins (re-pointed to tsgo's hover) and a false positive on tsc's own `scriptInfo.ts` (fixed); +14 PINS, 22,965 / 0 / 44 (2026-10-06).**
