@@ -29,7 +29,7 @@ import kotlin.test.Test
  * TS2339 / TS2551 for a property access, TS7053 for a string-literal key — against tsgo 7.0.2
  * (cells under `build/bench/p18309-agent/m2/`; every expected row is tsgo's, 1-based column).
  * The rule is deliberately conservative: a constituent whose member table this checker cannot
- * vouch for (a mapped / utility type such as `Omit<…>`, a nested union, `any`) reports nothing.
+ * vouch for (a nested union, `any`, a utility type copied from an in-flight table) reports nothing.
  */
 class IntersectionMemberAccessTest {
 
@@ -181,9 +181,7 @@ class IntersectionMemberAccessTest {
     }
 
     @Test
-    fun `residue - a mapped or utility constituent is not trusted and reports nothing`() {
-        // tsgo: TS2339 for `c` and `zz` on 'Omit<O, "c"> & { d: 1; }' (3,31) and (3,36); this checker's
-        // `Omit` materialization is known to drop members (measured on `ky`), so it stays silent.
+    fun `an Omit constituent decides a missing member - tsgo rows since P18_310 trusts a complete materialization`() {
         val r = rows(
             """
             interface O { a: number; b: string; c: boolean }
@@ -191,6 +189,11 @@ class IntersectionMemberAccessTest {
             export const v = [x.a, x.d, x.c, x.zz];
             """,
         )
-        assert(r.isEmpty())
+        assert(
+            r == listOf(
+                missing(3, 31, "c", "Omit<O, \"c\"> & { d: 1; }"),
+                missing(3, 36, "zz", "Omit<O, \"c\"> & { d: 1; }"),
+            ),
+        )
     }
 }

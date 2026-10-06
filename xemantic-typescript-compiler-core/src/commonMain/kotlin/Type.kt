@@ -229,6 +229,18 @@ sealed class Type {
          */
         var unnamedUniqueSymbolMember: Boolean = false
         /**
+         * (P18.310) The type whose property table this object's members were DRAWN from: the
+         * first argument of a materialized `Omit` / `Pick`, or the modifiers (homomorphic
+         * source) type of a mapped type. `IntersectionMemberAccess` trusts such a type's
+         * member table exactly as far as it trusts this source. Null for every other type.
+         */
+        var memberSetSource: Type? = null
+        /** (P18.310) [memberSetSource]'s member count when this type was built
+         *  (`IntersectionMemberAccess.memberSetSnapshot`): -1 = the source table was in flight or
+         *  provisional (never trusted), -2 = immutable (a tuple). A later count that differs means
+         *  the source was rebuilt after this type copied it. */
+        var memberSetSourceCount: Int = -1
+        /**
          * (CHK.233) A tuple's member table — its numbered element symbols plus the `length`
          * symbol minted with the tuple ([tupleLengthSymbol]) — is built on FIRST READ of
          * [members] or [properties] by this thunk (`Checker.buildTupleFromTypes`), never at

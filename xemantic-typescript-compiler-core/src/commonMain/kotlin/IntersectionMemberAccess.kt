@@ -44,10 +44,23 @@ internal class IntersectionMemberAccess(
 ) {
 
     /** True: no constituent has [name]; false: one has; null: undecidable here. */
-    fun missing(type: Type.Intersection, name: String): Boolean? {
+    fun missing(type: Type.Intersection, name: String): Boolean? = missingIn(type.types, name)
+
+    /**
+     * (P18.310) [missing] for a TYPE-level indexed access `X['k']`, where a plain object type
+     * is read as a one-constituent intersection. A type parameter constituent is GENERIC there
+     * — tsgo reports TS2536, not TS2339, and defers the access — so it is undecidable.
+     */
+    fun missingAtTypeLevel(type: Type, name: String): Boolean? = when (type) {
+        is Type.Intersection -> if (type.types.any { it is Type.TypeParam }) null else missingIn(type.types, name)
+        is Type.Object -> missingIn(listOf(type), name)
+        else -> null
+    }
+
+    private fun missingIn(types: List<Type>, name: String): Boolean? {
         if (name.isEmpty() || name in Checker.OBJECT_PROTOTYPE_PROPERTIES) return false
         var callable = false
-        for (c in type.types) {
+        for (c in types) {
             when (constituentHas(c, name)) {
                 null -> return null
                 HAS -> return false
@@ -64,7 +77,10 @@ internal class IntersectionMemberAccess(
 
     /** Whether a constituent (or a constrained type parameter's constraint) has a numeric index signature. */
     fun hasNumberIndex(type: Type.Intersection): Boolean = type.types.any { c ->
-        val o = (if (c is Type.TypeParam) c.constraint else c) as? Type.Object
+        val base = if (c is Type.TypeParam) c.constraint else c
+        // (P18.310) a primitive answers through its wrapper (`String` has `[index: number]`): tsgo's row for a
+        // non-numeric key there is TS7015, which is not modelled, so the receiver is skipped like any other.
+        val o = (base?.let { checker.primitiveApparentWrapper(it) } ?: base) as? Type.Object
         o != null && run { checker.resolveStructuredTypeMembers(o); o.numberIndexInfo != null }
     }
 
@@ -108,7 +124,13 @@ internal class IntersectionMemberAccess(
         if (c is Type.Intrinsic || c is Type.StringLiteral || c is Type.NumberLiteral || c is Type.BigIntLiteral) {
             if (c === unknownType || c.flags.hasAny(TypeFlags.NonPrimitive)) return NONE
             val wrapper = checker.primitiveApparentWrapper(c) ?: return null
-            return if (checker.getPropertyOfType(wrapper, name) != null) HAS else NONE
+            if (checker.getPropertyOfType(wrapper, name) != null) return HAS
+            // (P18.310) `String`'s `readonly [index: number]: string` covers a numeric key: tsgo accepts
+            // `brandedPath[0]` on `string & { __tag: any }` (tsc's own `scriptInfo.ts:349`).
+            checker.resolveStructuredTypeMembers(wrapper)
+            if (wrapper.stringIndexInfo != null) return HAS
+            if (wrapper.numberIndexInfo != null && name.toDoubleOrNull() != null) return HAS
+            return NONE
         }
         val o = c as? Type.Object ?: return null
         if (o.jsLiteral || o.unnamedUniqueSymbolMember) return null
@@ -131,6 +153,16 @@ internal class IntersectionMemberAccess(
     private fun trusted(o: Type.Object, depth: Int): Boolean {
         if (depth > 8) return false
         if (o.tupleElementTypes != null) return true
+        // (P18.310) A materialized `Omit` / `Pick` and a mapped type draw their members from a
+        // SOURCE table: complete exactly when that source is. A mapped type with no modifiers
+        // source enumerates a literal key set the mapped-type model resolved in full (it answers
+        // `any` for any key domain it cannot enumerate).
+        o.memberSetSource?.let { src ->
+            val snap = o.memberSetSourceCount
+            if (snap == -1 || (snap >= 0 && memberSetSnapshot(src) != snap)) return false
+            return sourceTrusted(src, depth + 1)
+        }
+        if (o.declaredAt is MappedType) return true
         val decl = (if (o is Type.Reference) o.target else o)
         if (decl is Type.Interface) {
             val decls = decl.symbol?.declarations ?: return false
@@ -141,6 +173,7 @@ internal class IntersectionMemberAccess(
                     it !is VariableDeclaration && it !is ModuleDeclaration }) return false
             if (decl.heritageIncomplete) return false
             checker.resolveStructuredTypeMembers(decl)
+            if (decl.membersProvisional) return false // (P18.310) a table planted over an in-flight base
             if (!decl.baseTypes.orEmpty().all { b -> b is Type.Object && trusted(b, depth + 1) }) return false
             return decls.all { d ->
                 when (d) {
@@ -155,6 +188,41 @@ internal class IntersectionMemberAccess(
             is FunctionType, is ConstructorType -> true
             else -> false
         }
+    }
+
+    /**
+     * (P18.310) The size of [s]'s member table, recorded when a materialized `Omit` / `Pick` /
+     * `Readonly` or a mapped type copies it: -1 when the table is in flight, provisional (a
+     * heritage base was still resolving — ky's `interface Options extends KyOptions`, whose
+     * table is rebuilt later, (CHK.219)(e)) or unresolved; -2 for an immutable tuple (its lazy
+     * table is never forced here). Read without forcing a resolution.
+     */
+    fun memberSetSnapshot(s: Type): Int = when (s) {
+        is Type.Object -> {
+            val d = if (s is Type.Reference) s.target else s
+            when {
+                s.tupleElementTypes != null -> IMMUTABLE
+                checker.memberTableInFlight(s) || checker.memberTableInFlight(d) -> -1
+                d is Type.Interface && (d.membersProvisional || d.heritageIncomplete) -> -1
+                else -> s.properties?.size ?: -1
+            }
+        }
+        is Type.Intersection -> {
+            var n = 0
+            for (c in s.types) {
+                val k = if (c is Type.Object) memberSetSnapshot(c) else -1
+                if (k == -1) return -1
+                if (k >= 0) n += k
+            }
+            n
+        }
+        else -> -1
+    }
+
+    private fun sourceTrusted(s: Type, depth: Int): Boolean = when (s) {
+        is Type.Object -> !s.jsLiteral && !s.unnamedUniqueSymbolMember && trusted(s, depth)
+        is Type.Intersection -> s.types.all { it is Type.Object && sourceTrusted(it, depth + 1) }
+        else -> false
     }
 
     /**
@@ -193,5 +261,6 @@ internal class IntersectionMemberAccess(
         const val NONE = 0
         const val HAS = 1
         const val CALLABLE = 2
+        const val IMMUTABLE = -2
     }
 }

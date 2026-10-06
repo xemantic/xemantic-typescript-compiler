@@ -86,7 +86,12 @@ class CaptureDisplayResolutionTest {
 
     private val caller =
         "import { make } from \"./api.js\";\n" +
-            "export const q = make;\n"
+            "import type { Info } from \"./types.js\";\n" +
+            "export const q = make;\n" +
+            "declare const pk: Pick<Info, \"fileName\">;\n" +
+            "export const fn = pk.fileName;\n" +
+            "declare const ro: Readonly<Info>;\n" +
+            "export const cn = ro.count;\n"
 
     private val callerFile = "/work/caller.ts"
 
@@ -135,18 +140,43 @@ class CaptureDisplayResolutionTest {
         return captured.first().typeText
     }
 
+    /**
+     * (P18.310) The captured type at the declaration name `const <name>` in the caller. A `Pick` / `Readonly`
+     * reference DISPLAYS by its alias name (tsgo: `(file: Pick<Info, "fileName">, r: Readonly<Info>) => void`), so
+     * whether its MEMBERS resolve under a narrowed build is probed through a member read instead.
+     */
+    private fun renderedAt(recheckOnly: Set<String>?, name: String): String {
+        val start = caller.indexOf("const $name ") + "const ".length
+        val result = ProjectCompiler(vfs()).build(
+            "/work",
+            noEmit = true,
+            recheckOnly = recheckOnly,
+            typeCapture = TypeCaptureRequest(callerSpans()),
+        )
+        val captured = result.capturedTypes.filter { it.fileName == callerFile && it.start == start }
+        assert(captured.isNotEmpty())
+        return captured.first().typeText
+    }
+
+    /** tsgo 7.0.2's hover for `q` (`tsc --lsp -stdio`). */
+    private val tsgoMakeDisplay = "(file: Pick<Info, \"fileName\">, r: Readonly<Info>) => void"
+
     @Test
-    fun `a narrowed build renders a Pick member with its declared type`() {
+    fun `a narrowed build displays the Pick and Readonly parameters by their alias names as tsgo does`() {
         val narrowed = renderedMakeType(setOf(callerFile))
-        assert("fileName: string" in narrowed)
-        assert("fileName: any" !in narrowed)
+        assert(narrowed == tsgoMakeDisplay)
     }
 
     @Test
-    fun `a narrowed build renders a Readonly member with its declared type`() {
-        val narrowed = renderedMakeType(setOf(callerFile))
-        assert("count?: number | undefined" in narrowed)
-        assert("count?: any | undefined" !in narrowed)
+    fun `a narrowed build resolves a Pick member to its declared type`() {
+        val fn = renderedAt(setOf(callerFile), "fn")
+        assert(fn == "string")
+    }
+
+    @Test
+    fun `a narrowed build resolves a Readonly optional member to its declared type`() {
+        val cn = renderedAt(setOf(callerFile), "cn")
+        assert(cn == "number | undefined")
     }
 
     @Test
@@ -155,14 +185,17 @@ class CaptureDisplayResolutionTest {
         // TYPE, so the two arms may not disagree. Compared as strings — never as a
         // Type — for the power-assert renderer's sake.
         assert(renderedMakeType(null) == renderedMakeType(setOf(callerFile)))
+        assert(renderedAt(null, "fn") == renderedAt(setOf(callerFile), "fn"))
+        assert(renderedAt(null, "cn") == renderedAt(setOf(callerFile), "cn"))
     }
 
     @Test
     fun `negative control - the whole-program arm is not itself collapsed to any`() {
-        // Without this the agreement above could be an agreement on the WRONG answer,
-        // which is exactly what the same fixture measures with `a_probe.ts` removed.
-        val full = renderedMakeType(null)
-        assert("fileName: string" in full)
-        assert("any" !in full)
+        // Without this the agreement above could be an agreement on the WRONG answer.
+        assert(renderedMakeType(null) == tsgoMakeDisplay)
+        val fn = renderedAt(null, "fn")
+        val cn = renderedAt(null, "cn")
+        assert(fn == "string")
+        assert(cn == "number | undefined")
     }
 }

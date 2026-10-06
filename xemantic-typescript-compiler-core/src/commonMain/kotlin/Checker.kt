@@ -616,6 +616,9 @@ class Checker(
     internal val symbolTypes get() = state.symbolTypes
     private val symbolTypeResolutionInProgress get() = state.symbolTypeResolutionInProgress
     /** (CHK.219)(e) No symbol-type or type-node resolution is in flight. */
+    /** (P18.310) Whether [t]'s member table is being resolved right now (B202.1's in-flight set). */
+    internal fun memberTableInFlight(t: Type.Object): Boolean = t.id in memberResolutionInProgress
+
     internal fun typeResolutionIdle(): Boolean =
         state.symbolTypeResolutionInProgress.isEmpty() && state.nodeTypeResolutionInProgress.isEmpty()
     private val nodeTypeResolutionInProgress get() = state.nodeTypeResolutionInProgress
@@ -107704,17 +107707,41 @@ interface DataView {
         return symbol.declarations.isNotEmpty() && symbol.declarations.all { it in builtinLibDecls }
     }
 
+    /** (P18.310) A class member `keyof` leaves out: `private` / `protected` (a parameter property
+     *  too) or an ECMAScript `#private` name. */
+    private fun isNonPublicMember(sym: Symbol): Boolean {
+        if (sym.name.startsWith("#")) return true
+        return sym.declarations.any { d ->
+            val mods = when (d) {
+                is PropertyDeclaration -> d.modifiers
+                is MethodDeclaration -> d.modifiers
+                is GetAccessor -> d.modifiers
+                is SetAccessor -> d.modifiers
+                is Parameter -> d.modifiers
+                else -> return@any false
+            }
+            ModifierFlag.Private in mods || ModifierFlag.Protected in mods
+        }
+    }
+
     private fun materializeMemberSetUtility(name: String, typeArgs: List<TypeNode>?): Type? {
         val args = typeArgs ?: return null
         if (args.size != 2) return null
+        var indexInfos: Pair<IndexInfo?, IndexInfo?>? = null
         val src = getTypeFromTypeNode(args[0])
         if (src === anyType || src === errorType) return null
         val srcProps = if (src is Type.Intersection) intersectionOps.properties(src) ?: return null else { // (CHK.226)
         val srcObj = src as? Type.Object ?: return null
         if (srcObj is Type.Reference) return null // generic instantiations: defer (members may be lazy/substituted)
         resolveStructuredTypeMembers(srcObj)
-        // index signatures complicate key-set semantics → don't materialize
-        if (srcObj.stringIndexInfo != null || srcObj.numberIndexInfo != null) return null
+        // (P18.310) an index signature is a `string` / `number` key in `keyof T`: `Omit` keeps
+        // it (tsgo's `Exclude<keyof T, K>` cannot remove a non-literal key), and a STRING index
+        // ABSORBS every named key of `keyof T`, so the result is the index signatures alone.
+        // `Pick` with a literal key set never reaches an index signature.
+        if (srcObj.stringIndexInfo != null || srcObj.numberIndexInfo != null) {
+            if (name != "Omit") return null
+            indexInfos = srcObj.stringIndexInfo to srcObj.numberIndexInfo
+        }
         srcObj.properties ?: return null }
         val k = getTypeFromTypeNode(args[1])
         // K must be a string-literal key set (single or union of string literals).
@@ -107729,14 +107756,25 @@ interface DataView {
         val keySet = keyLits.toSet()
         val chosen: List<Symbol> = when (name) {
             "Pick" -> srcProps.filter { it.name in keySet }
-            "Omit" -> srcProps.filter { it.name !in keySet }
+            // (P18.310) `keyof T` holds no private / protected / `#private` member, so `Omit`
+            // (a `Pick` over `Exclude<keyof T, K>`) never carries one; under a string index
+            // signature no named key survives at all.
+            "Omit" -> if (indexInfos?.first != null) emptyList()
+                else srcProps.filter { it.name !in keySet && !isNonPublicMember(it) }
             else -> return null
         }
         val result = Type.Object()
+        indexInfos?.let { (si, ni) ->
+            result.stringIndexInfo = si
+            // `T[number]` under a string index alone reads the string index's type.
+            result.numberIndexInfo = ni ?: si?.let { IndexInfo(numberType, it.type, it.isReadonly, it.declaration) }
+        }
         val members = symbolTable()
         for (p in chosen) members[p.name] = p
         result.members = members
         result.properties = chosen
+        result.memberSetSource = src // (P18.310)
+        result.memberSetSourceCount = intersectionMemberAccess.memberSetSnapshot(src)
         return result
     }
 
@@ -107768,6 +107806,8 @@ interface DataView {
         val result = Type.Object()
         val members = symbolTable()
         val newProps = mutableListOf<Symbol>()
+        result.memberSetSource = srcObj // (P18.310)
+        result.memberSetSourceCount = intersectionMemberAccess.memberSetSnapshot(srcObj)
         for (p in srcProps) {
             val copy = Symbol(p.flags, p.name)
             copy.declarations.addAll(p.declarations)
@@ -107991,9 +108031,18 @@ interface DataView {
             if (isBuiltinUtilityAlias(name, symbol)) {
                 when (name) {
                     "Omit", "Pick" ->
-                        materializeMemberSetUtility(name, node.typeArguments)?.let { return it }
+                        materializeMemberSetUtility(name, node.typeArguments)?.let {
+                            // (P18.310) tsgo displays the reference, `Omit<O, "c">`, not its members.
+                            val ta = node.typeArguments.orEmpty()
+                            if (it.id !in aliasDisplayMap.keys) aliasDisplayMap[it.id] = symbol.name to ta.map { a -> getTypeFromTypeNode(a) }
+                            return it
+                        }
                     "Readonly" ->
-                        materializeModifierUtility(name, node.typeArguments)?.let { return it }
+                        materializeModifierUtility(name, node.typeArguments)?.let {
+                            val ta = node.typeArguments.orEmpty() // (P18.310) displayed as the reference
+                            if (it.id !in aliasDisplayMap.keys) aliasDisplayMap[it.id] = symbol.name to ta.map { a -> getTypeFromTypeNode(a) }
+                            return it
+                        }
                     "Parameters", "ConstructorParameters", "ReturnType" ->
                         materializeSignatureUtility(name, node.typeArguments)?.let { return it }
                 }
@@ -153106,9 +153155,12 @@ interface DataView {
         val arg = expr.argumentExpression
         val key = when (arg) {
             is StringLiteralNode -> arg.text
+            // (P18.310) a numeric literal key, displayed bare (`'3'`, not `'"3"'`)
+            is NumericLiteralNode -> arg.text.takeIf { it.isNotEmpty() && it.all(Char::isDigit) && (it == "0" || it[0] != '0') } ?: return false
             is Identifier -> (getTypeOfExpression(arg) as? Type.StringLiteral)?.value ?: return false
             else -> return false
         }
+        val keyDisplay = if (arg is NumericLiteralNode) key else "\"$key\""
         val recvExpr = expr.expression
         val rt = getTypeOfExpression(recvExpr) as? Type.Intersection ?: return false
         if (intersectionMemberAccess.missing(rt, key) != true) return false
@@ -153125,7 +153177,7 @@ interface DataView {
         val recvDisplay = typeToString(rt)
         val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
         diagnostics.add(Diagnostic(
-            message = "Element implicitly has an 'any' type because expression of type '\"$key\"' can't be used to index type '$recvDisplay'.",
+            message = "Element implicitly has an 'any' type because expression of type '$keyDisplay' can't be used to index type '$recvDisplay'.",
             category = DiagnosticCategory.Error, code = 7053,
             messageChain = listOf("  Property '$key' does not exist on type '$recvDisplay'."),
             fileName = fileName,
@@ -171759,6 +171811,8 @@ interface DataView {
             result.declaredAt = node
             result.members = orderedMembers
             result.properties = orderedProperties
+            result.memberSetSource = homomorphicSourceType // (P18.310)
+            homomorphicSourceType?.let { result.memberSetSourceCount = intersectionMemberAccess.memberSetSnapshot(it) }
             // B57.3c: at the outermost mapped-type level, if the bail flag was raised
             // inside body resolution (and wasn't already set on entry), record info
             // about THIS mapped type so the alias-body consumer can emit TS2615
@@ -189118,6 +189172,56 @@ interface DataView {
         }
     }
 
+    /**
+     * (P18.310) TS2339 for a TYPE-level indexed access `X['k']` (or `X[0]`, or a union of literal
+     * keys) on a non-generic object or intersection type no constituent of which has the key —
+     * tsgo's `getPropertyTypeForIndexType` with the index type node as the error node. Decided by
+     * [IntersectionMemberAccess.missingAtTypeLevel] (conservative: undecidable reports nothing),
+     * and refused anywhere a type parameter could be in scope, where the access is generic.
+     */
+    private fun checkTypeLevelIndexMissingMember(node: IndexedAccessType, source: String, fileName: String) {
+        fun keyOf(t: TypeNode): String? = when (val lit = (t as? LiteralType)?.literal) {
+            is StringLiteralNode -> lit.text
+            is NumericLiteralNode -> lit.text.takeIf { it.isNotEmpty() && it.all(Char::isDigit) && (it == "0" || it[0] != '0') }
+            else -> null
+        }
+        val idx = intersectionOps.unparenthesized(node.indexType)
+        val keys = if (idx is UnionType) idx.types.map { keyOf(it) ?: return } else listOf(keyOf(idx) ?: return)
+        var p: Node? = (node as NodeBase).parent
+        while (p != null) {
+            val tps = when (p) {
+                is TypeAliasDeclaration -> p.typeParameters
+                is InterfaceDeclaration -> p.typeParameters
+                is ClassDeclaration -> p.typeParameters
+                is ClassExpression -> p.typeParameters
+                is FunctionDeclaration -> p.typeParameters
+                is FunctionExpression -> p.typeParameters
+                is ArrowFunction -> p.typeParameters
+                is MethodDeclaration -> p.typeParameters
+                is FunctionType -> p.typeParameters
+                is ConstructorType -> p.typeParameters
+                is MappedType, is ConditionalType -> return
+                else -> null
+            }
+            if (!tps.isNullOrEmpty()) return
+            p = (p as? NodeBase)?.parent
+        }
+        val objectType = getTypeFromTypeNode(node.objectType)
+        val missingKey = keys.firstOrNull { intersectionMemberAccess.missingAtTypeLevel(objectType, it) == true } ?: return
+        // Every key must be DECIDED: one undecidable key leaves the whole access unjudged.
+        if (keys.any { intersectionMemberAccess.missingAtTypeLevel(objectType, it) == null }) return
+        val start = node.indexType.pos
+        var end = source.indexOf(']', start)
+        if (end < 0) return
+        while (end > start && source[end - 1].isWhitespace()) end--
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Property '$missingKey' does not exist on type '${typeToString(objectType)}'.",
+            category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+            line = line, character = character, start = start, length = end - start,
+        ))
+    }
+
     private fun collectTpConstraints(tps: List<TypeParameter>?): Map<String, TypeNode> {
         if (tps.isNullOrEmpty()) return emptyMap()
         val m = mutableMapOf<String, TypeNode>()
@@ -189151,6 +189255,7 @@ interface DataView {
             is IndexedAccessType -> {
                 walkTypeForIndexedAccess(type.objectType, tpConstraints, source, fileName)
                 walkTypeForIndexedAccess(type.indexType, tpConstraints, source, fileName)
+                checkTypeLevelIndexMissingMember(type, source, fileName)
                 val keyLit = type.indexType as? LiteralType ?: return
                 val keyStr = (keyLit.literal as? StringLiteralNode)?.text ?: return
                 if (indexedAccessHasPrivateMember(type.objectType, keyStr, tpConstraints, mutableSetOf())) {

@@ -90,6 +90,9 @@ class CaptureModifierMemberDisplayTest {
         "import { State } from \"./state.js\";\n" +
             "export namespace Caller {\n" +
             "  export const q = State.create;\n" +
+            "  declare const s: Readonly<State>;\n" +
+            "  export const fi = s.fileInfos;\n" +
+            "  export const ex = s.extra;\n" +
             "}\n"
 
     private val callerFile = "/work/caller.ts"
@@ -133,33 +136,55 @@ class CaptureModifierMemberDisplayTest {
         return captured.first().typeText
     }
 
-    @Test
-    fun `a narrowed build renders a Readonly member inside a namespace with its declared type`() {
-        val narrowed = renderedCreateType(setOf(callerFile))
-        assert("fileInfos: Info" in narrowed)
-        assert("fileInfos: any" !in narrowed)
+    /**
+     * (P18.310) The captured type at the declaration name `const <name>` in the caller. `Readonly<State>` DISPLAYS by
+     * its alias name (tsgo: `(s: Readonly<State>) => void`), so whether its MEMBERS resolve under a narrowed build is
+     * probed through member reads instead.
+     */
+    private fun renderedAt(recheckOnly: Set<String>?, name: String): String {
+        val start = caller.indexOf("const $name ") + "const ".length
+        val result = ProjectCompiler(vfs()).build(
+            "/work",
+            noEmit = true,
+            recheckOnly = recheckOnly,
+            typeCapture = TypeCaptureRequest(callerSpans()),
+        )
+        val captured = result.capturedTypes.filter { it.fileName == callerFile && it.start == start }
+        assert(captured.isNotEmpty())
+        return captured.first().typeText
     }
 
     @Test
-    fun `a narrowed build renders an OPTIONAL Readonly member with its declared type`() {
+    fun `a narrowed build displays a Readonly parameter inside a namespace by its alias name as tsgo does`() {
         val narrowed = renderedCreateType(setOf(callerFile))
-        assert("extra?: Info" in narrowed)
-        assert("extra?: any" !in narrowed)
+        assert(narrowed == "(s: Readonly<State>) => void")
+    }
+
+    @Test
+    fun `a narrowed build resolves a Readonly member inside a namespace to its declared type`() {
+        val fi = renderedAt(setOf(callerFile), "fi")
+        assert(fi == "Info")
+    }
+
+    @Test
+    fun `a narrowed build resolves an OPTIONAL Readonly member to its declared type`() {
+        val ex = renderedAt(setOf(callerFile), "ex")
+        assert(ex == "Info | undefined")
     }
 
     @Test
     fun `negative control - the whole-program arm is not itself collapsed to any`() {
-        // On the un-fixed compiler BOTH arms render `{ fileInfos: any; extra?: any | …`,
-        // so an arms-agree assertion alone would pass vacuously. This is the assertion
-        // that was measured red before the fix.
-        val full = renderedCreateType(null)
-        assert("fileInfos: Info" in full)
-        assert("fileInfos: any" !in full)
+        val fi = renderedAt(null, "fi")
+        val ex = renderedAt(null, "ex")
+        assert(fi == "Info")
+        assert(ex == "Info | undefined")
     }
 
     @Test
     fun `the whole-program control renders the same string as the narrowed build`() {
         assert(renderedCreateType(null) == renderedCreateType(setOf(callerFile)))
+        assert(renderedAt(null, "fi") == renderedAt(setOf(callerFile), "fi"))
+        assert(renderedAt(null, "ex") == renderedAt(setOf(callerFile), "ex"))
     }
 
     @Test
