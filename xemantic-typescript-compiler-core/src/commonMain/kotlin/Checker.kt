@@ -21599,6 +21599,21 @@ class Checker(
                             assigned.add(left.name.text)
                         }
                     }
+                    // (P18.311) `this[DRAFT_STATE] = …` assigns the computed member `[DRAFT_STATE]`
+                    // (tsgo's definite-assignment walk matches the element access by reference);
+                    // a literal key assigns the member both spellings name.
+                    if (left is ElementAccessExpression && (left.expression as? Identifier)?.text == "this") {
+                        fun dotted(e: Expression): String? = when (e) {
+                            is Identifier -> e.text
+                            is PropertyAccessExpression -> dotted(e.expression)?.let { "$it.${e.name.text}" }
+                            else -> null
+                        }
+                        when (val arg = left.argumentExpression) {
+                            is StringLiteralNode -> { assigned.add(arg.text); assigned.add("[\"${arg.text}\"]") }
+                            is NumericLiteralNode -> assigned.add("[${arg.text}]")
+                            else -> dotted(arg)?.let { assigned.add("[$it]") }
+                        }
+                    }
                     // `this.a = this.b = x` — the right side may be another assignment.
                     collectThisAssignment(expr.right, assigned)
                 }
@@ -24983,7 +24998,9 @@ class Checker(
                     // extends clause whose base has a value var declaration.
                     val skipArityForValueExtends = clause.token == SyntaxKind.ExtendsKeyword &&
                         type.typeArguments.isNullOrEmpty() &&
-                        (type.expression as? Identifier)?.text?.let { heritageBaseHasValueVarDecl(it) } == true
+                        (type.expression as? Identifier)?.text?.let {
+                            heritageBaseHasValueVarDecl(it) || libValueExtendsTakesNoTypeArgs(it, fileName)
+                        } == true
                     if (!skipArityForValueExtends) {
                         checkHeritageTypeArgCount(type, classScope, source, fileName)
                     }
@@ -25305,7 +25322,9 @@ class Checker(
             spineUResEmit {
                 emitTS2864ForPrimitiveImplements(clause, classScope, spineSource, spineFileName)
                 for (type in clause.types) {
-                    checkHeritageTypeArgCount(type, classScope, spineSource, spineFileName)
+                    val libValueBase = clause.token == SyntaxKind.ExtendsKeyword && type.typeArguments.isNullOrEmpty() &&
+                        (type.expression as? Identifier)?.text?.let { libValueExtendsTakesNoTypeArgs(it, spineFileName) } == true
+                    if (!libValueBase) checkHeritageTypeArgCount(type, classScope, spineSource, spineFileName)
                     type.typeArguments?.forEach { spineUResMarkTypeRoot(it) }
                 }
             }
@@ -54122,6 +54141,23 @@ interface DataView {
      * the generic-arity TS2314 for `class C extends name` — an `extends` of a value uses its
      * construct signature (not the same-named generic interface), so no arity check applies.
      */
+    /**
+     * (P18.311) `class D extends Map {}`: a class `extends` clause names a VALUE, and tsgo
+     * resolves the base from its construct signatures (`getInstantiatedConstructorsForTypeArguments`),
+     * never from the same-named generic interface — so a lib `declare var Map: MapConstructor`
+     * whose constructor has a signature needing no type argument (`new (): Map<any, any>`, or
+     * `Set`'s defaulted `new <T = any>`) takes none and no TS2314 is owed. Lib-only (every
+     * declaration a lib one) and not shadowed by a file-level local of the same name.
+     */
+    private fun libValueExtendsTakesNoTypeArgs(name: String, fileName: String): Boolean {
+        val sym = globals[name] ?: return false
+        if (!sym.flags.hasAny(SymbolFlags.Variable) || sym.flags.hasAny(SymbolFlags.Class)) return false
+        if (sym.declarations.isEmpty() || !sym.declarations.all { it in builtinLibDecls }) return false
+        if (fileResults[fileName]?.locals?.get(name) != null) return false
+        val sigs = getConstructSignaturesOfType(getTypeOfSymbol(sym))
+        return sigs.any { sig -> sig.typeParameters.isNullOrEmpty() || sig.typeParameters.all { it.default != null } }
+    }
+
     private fun heritageBaseHasValueVarDecl(name: String): Boolean {
         for (result in binderResults) {
             for (stmt in result.sourceFile.statements) {
@@ -74434,6 +74470,62 @@ interface DataView {
     }
 
     /** Check if a property access targets a readonly property. */
+    /**
+     * (P18.311) The type of a receiver [id] bound by a LOCAL declaration between it and its
+     * file — a `let`/`const`/`var` of an enclosing block or function body, or an annotated
+     * parameter — answered from that declaration's ANNOTATION; `anyType` when the innermost binding is
+     * local but unannotated (nothing here can type it, so no readonly verdict), null when no
+     * local binds it or an unannotated / destructured PARAMETER does (the caller's ordinary
+     * typing answers).
+     */
+    private fun readonlyReceiverLocalType(id: Identifier): Type? {
+        val name = id.text
+        // A destructuring leaf binding the name matches too; its type is not the annotation's.
+        fun declIn(list: VariableDeclarationList?): VariableDeclaration? =
+            list?.declarations?.firstOrNull { name in LocalShadowGuard.bindingLeaves(it.name) }
+        fun inStatements(sts: List<Statement>): VariableDeclaration? {
+            for (st in sts) if (st is VariableStatement) declIn(st.declarationList)?.let { return it }
+            return null
+        }
+        var cur: Node? = (id as NodeBase).parent
+        while (cur != null && cur !is SourceFile && cur !is ModuleBlock) {
+            val params: List<Parameter>? = when (cur) {
+                is FunctionDeclaration -> cur.parameters
+                is FunctionExpression -> cur.parameters
+                is ArrowFunction -> cur.parameters
+                is MethodDeclaration -> cur.parameters
+                is Constructor -> cur.parameters
+                is GetAccessor -> cur.parameters
+                is SetAccessor -> cur.parameters
+                else -> null
+            }
+            if (params != null) {
+                // A parameter shadows the same way; its annotation answers (an unannotated or
+                // destructured one is left to the ordinary typing, which may know more).
+                val p = params.firstOrNull { name in LocalShadowGuard.bindingLeaves(it.name) }
+                if (p != null) return if (p.name is Identifier) p.type?.let { getTypeFromTypeNode(it) } else null
+                cur = (cur as NodeBase).parent
+                continue
+            }
+            val decl: VariableDeclaration? = when (cur) {
+                is Block -> inStatements(cur.statements)
+                is CaseClause -> inStatements(cur.statements)
+                is DefaultClause -> inStatements(cur.statements)
+                is ForStatement -> declIn(cur.initializer as? VariableDeclarationList)
+                is ForOfStatement -> declIn(cur.initializer as? VariableDeclarationList)
+                is ForInStatement -> declIn(cur.initializer as? VariableDeclarationList)
+                is CatchClause -> cur.variableDeclaration?.takeIf { name in LocalShadowGuard.bindingLeaves(it.name) }
+                else -> null
+            }
+            if (decl != null) {
+                if (decl.name !is Identifier) return anyType
+                return decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return null
+    }
+
     private fun isReadonlyPropertyAccess(expr: PropertyAccessExpression, fileName: String? = null): Boolean {
         val objExpr = expr.expression
         val propName = expr.name.text
@@ -74504,7 +74596,12 @@ interface DataView {
             }
         }
         // Check interface/class readonly property members via type system
-        val objectType = getTypeOfExpression(objExpr)
+        // (P18.311) The spine anchor that asks this runs with the FILE-level local types
+        // installed, so a body-local receiver answered the same-named FILE binding's type
+        // (`const ky: Partial<Mutable<I>>` inside a function, `const ky: I` at file level:
+        // `ky.stop = …` read `stop` as readonly). The receiver's own declaration decides.
+        val objectType = (objExpr as? Identifier)?.let { readonlyReceiverLocalType(it) }
+            ?: getTypeOfExpression(objExpr)
         if (objectType === anyType || objectType === errorType) return false
         // B98.r24: intersection-property writes. `x: A & B; x.p = v` is a TS2540 error only
         // when `p` is readonly in EVERY constituent that declares it — a single writable
@@ -111677,7 +111774,7 @@ interface DataView {
      */
     private fun tryEmitWeakValuePosition(
         value: Expression, targetType: Type, start: Int, length: Int,
-        source: String, fileName: String,
+        source: String, fileName: String, hostDecl: VariableDeclaration? = null,
     ): Boolean {
         if (length <= 0) return false
         if (targetType === errorType || targetType === anyType) return false
@@ -111697,8 +111794,11 @@ interface DataView {
         // closed. `build/chk59/ora/wa.ts` carries both rows.
         if (value is FunctionExpression) return false
         if (weakPositionTarget(targetType) == null) return false
-        val argType = getTypeOfExpression(value)
-        if (argType === anyType || argType === errorType) return false
+        val argType0 = getTypeOfExpression(value)
+        if (argType0 === anyType || argType0 === errorType) return false
+        // (P18.311) an annotated `const` host's expando writes (`ky.stop = …`) are members
+        // of the SOURCE the weak check compares, exactly as at the relation (P18.292).
+        val argType = hostDecl?.let { annotatedExpandoSource(it, value, argType0) } ?: argType0
         val srcType = argType
         val display = literalTypeOfExpression(value) ?: srcType
         // (CHK.59) The 2560 anchor: the EXPRESSION's own span. Computed here rather than
@@ -111960,7 +112060,7 @@ interface DataView {
             val cU = topLevelWeakSource(init)?.let { (aT, sD) ->
                 weakUnionRefusalConstituent(aT, targetType)?.let { Triple(aT, sD, it) }
             } ?: return tryEmitWeakValuePosition(
-                init, targetType, name.pos, name.text.length, source, fileName)
+                init, targetType, name.pos, name.text.length, source, fileName, hostDecl = decl)
             return tryEmitWeakTypeAssignment(cU.first, cU.third, name.pos, name.text.length,
                 source, fileName, displayType = cU.first, srcDisplayOverride = cU.second)
         }
@@ -111973,7 +112073,7 @@ interface DataView {
         // the walker through `typeToString`).
         val (argType, srcDisplay) = topLevelWeakSource(init)
             ?: return tryEmitWeakValuePosition(
-                init, targetType, name.pos, name.text.length, source, fileName)
+                init, targetType, name.pos, name.text.length, source, fileName, hostDecl = decl)
         val tgtDisplay = formatTypeForDisplay(ann) ?: typeToString(targetType)
         return tryEmitWeakTypeAssignment(argType, targetType, name.pos, name.text.length,
             source, fileName, displayType = argType, targetDisplay = tgtDisplay,
@@ -119788,7 +119888,7 @@ interface DataView {
                     }
                 }
             } else {
-                t.types.filter { !isInstanceOfClass(it, classType) }
+                t.types.filter { !instanceOfNegativeDrops(it, classType) }
             }
             val narrowed = getUnionType(filtered)
             // (CHK.143) the union arm's own tail. When every constituent is dropped the
@@ -119825,7 +119925,7 @@ interface DataView {
         if (isMatch && t === anyType) {
             return if (isGlobalObjectOrFunctionType(classType)) t else classType
         }
-        val matches = isInstanceOfClass(t, classType)
+        val matches = if (isMatch) isInstanceOfClass(t, classType) else instanceOfNegativeDrops(t, classType)
         return when {
             matches == isMatch -> t
             // (CHK.143) this was `-> classType` UNCONDITIONALLY, which is the defect:
@@ -119895,6 +119995,43 @@ interface DataView {
      * assignable. Falls back to assignability for non-Interface shapes (e.g. when
      * narrowing a non-class instance type like `string`).
      */
+    /**
+     * (P18.311) The NEGATIVE `instanceof` branch, tsgo's `getNarrowedType(…, assumeTrue =
+     * false, checkDerived = true)`: a constituent is dropped only when it is DERIVED from the
+     * class (`isTypeDerivedFrom` — a base-chain walk, through a type parameter's constraint).
+     * [isInstanceOfClass] is nominal only for a bare `Type.Interface`; a generic instance
+     * (`Base<any>`) or a type parameter fell to ASSIGNABILITY, so `Base<any>` — assignable
+     * to every subclass that adds no members — was washed to `never` by `!(x instanceof
+     * Sub)` and the next `else if (x instanceof Other)` then read the declared type.
+     * Scoped to a reference / type-parameter subject against a CLASS candidate; every
+     * other pair keeps [isInstanceOfClass]'s answer.
+     */
+    private fun instanceOfNegativeDrops(t: Type, cls: Type): Boolean {
+        if (t is Type.Reference || t is Type.TypeParam) {
+            val nc = (cls as? Type.Reference)?.target ?: cls as? Type.Interface
+            val ns = nominalInstanceOf(t, 0)
+            if (nc != null && ns != null && nc.symbol?.flags?.hasAny(SymbolFlags.Class) == true) {
+                return derivesNominally(ns, nc, 0)
+            }
+        }
+        return isInstanceOfClass(t, cls)
+    }
+
+    /** tsgo `hasBaseType`: the base chain by SYMBOL, through generic (`Reference`) bases too. */
+    private fun derivesNominally(t: Type.Interface, cls: Type.Interface, depth: Int): Boolean {
+        if (t.symbol != null && t.symbol === cls.symbol) return true
+        if (depth > 32) return false
+        return t.baseTypes?.any { b -> nominalInstanceOf(b, 0)?.let { derivesNominally(it, cls, depth + 1) } ?: false } ?: false
+    }
+
+    private fun nominalInstanceOf(t: Type, depth: Int): Type.Interface? = when {
+        depth > 8 -> null
+        t is Type.Interface -> t
+        t is Type.Reference -> t.target
+        t is Type.TypeParam -> t.constraint?.let { nominalInstanceOf(it, depth + 1) }
+        else -> null
+    }
+
     private fun isInstanceOfClass(t: Type, cls: Type): Boolean {
         if (t !is Type.Interface || cls !is Type.Interface) {
             return checkTypeRelatedTo(t, cls, assignableRelation)
@@ -130263,8 +130400,9 @@ interface DataView {
             SyntaxKind.GreaterThanGreaterThanGreaterThan ->
                 // B283: both-bigint arithmetic yields bigint (tsc bothAreBigIntLike branch);
                 // anything else (incl. mixed/unions) keeps the historical number result.
-                if (isBigIntLikeType(leftType) &&
-                    isBigIntLikeType(getTypeOfExpression(right))) bigintType else numberType
+                // (P18.311) tsgo `isTypeAssignableToKind(any, BigIntLike)` is TRUE, so `any`
+                // pairs with a bigint operand (`d % 1n` is `bigint`); two `any`s stay `number`.
+                arithBothBigIntResult(leftType, right)
 
             // Comparison → boolean
             SyntaxKind.LessThan, SyntaxKind.GreaterThan,
@@ -152698,6 +152836,11 @@ interface DataView {
             functionOnlyInstanceInvalid && objectType is Type.Interface &&
             objectType.baseTypes.isNullOrEmpty() &&
             objectType.symbol?.flags?.hasAny(SymbolFlags.Class) == true
+        // (P18.311) `cls: T` with `T extends typeof C`: the member table reached is the class's
+        // CONSTRUCTOR side, a function value, so Function's own members (`cls.name`) exist —
+        // tsgo resolves them through the constraint's apparent type `Function`.
+        if (functionOnlyInstanceInvalid && displayTypeOverride is Type.TypeParam &&
+            classConstructorTypes.isConstructorType(objectType)) return
         if (propName in RUNTIME_PROPERTIES && !thisInstanceFunctionPropReportable) {
             if (displayTypeOverride == null) return
             if (getPropertyOfType(objectType, propName) != null) return
@@ -152943,7 +153086,9 @@ interface DataView {
         val rawTypeName = typeToString(displayTypeOverride ?: objectType)
         // (CHK.196) a constructor-side type already renders as `typeof Name`; only the
         // instance hybrid a class identifier still reads as needs the prefix.
+        // (P18.311) a type-parameter receiver prints as itself (`T`), as tsgo's does.
         val typeName = if (!isThisAccess && objectType.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
+            displayTypeOverride !is Type.TypeParam &&
             !classConstructorTypes.isConstructorType(displayTypeOverride ?: objectType)) {
             "typeof $rawTypeName"
         } else {
@@ -174644,7 +174789,28 @@ interface DataView {
             }
         }
         val t = if (annType != null) getTypeFromTypeNode(annType) else getTypeOfExpression(operand)
-        if (isDefinitelyInvalidSpreadType(t)) spread2698Emit(el, source, fileName)
+        if (isDefinitelyInvalidSpreadType(t) && !spreadOperandFlowRescued(operand, t, fileName)) {
+            spread2698Emit(el, source, fileName)
+        }
+    }
+
+    /**
+     * (P18.311) The operand type above is the DECLARED one (an annotation, or
+     * [getTypeOfExpression], which never flow-narrows), so `if (typeof r !== 'object')
+     * return; {...r}` reported the `number` member a guard had already removed — tsgo
+     * spreads the NARROWED type. Suppression-only: the declared type is replaced only when
+     * the flow walk answers a narrower type that is no longer definitely invalid.
+     */
+    private fun spreadOperandFlowRescued(operand: Expression, declared: Type, fileName: String): Boolean {
+        var inner: Expression = operand
+        while (inner is ParenthesizedExpression) inner = inner.expression
+        if (inner !is Identifier && inner !is PropertyAccessExpression) return false
+        val graph = fileResults[fileName]?.flowGraph ?: return false
+        if (getReferencePath(inner) == null || graph.flowAt(inner) == null) return false
+        val saved = currentFlowGraph
+        currentFlowGraph = graph
+        val narrowed = try { getNarrowedTypeForReference(declared, inner) } finally { currentFlowGraph = saved }
+        return narrowed !== declared && !isDefinitelyInvalidSpreadType(narrowed)
     }
 
     private fun spread2698Emit(el: SpreadAssignment, source: String, fileName: String) {
@@ -186057,6 +186223,18 @@ interface DataView {
         // member being number-like suffices.
         if (type is Type.Intersection) return type.types.any { isNumberLikeType(it) }
         return false
+    }
+
+    /** (P18.311) Result of a non-`+` arithmetic/bitwise operator: `bigint` when both operands
+     *  are bigint-like, where `any` counts as bigint-like (tsgo `bothAreBigIntLike` asks
+     *  `isTypeAssignableTo(any, bigint)`) unless BOTH are `any` (tsgo's first branch:
+     *  any-and-any is `number`). The right operand is typed only when the left could pair. */
+    private fun arithBothBigIntResult(leftType: Type, right: Expression): Type {
+        val lAny = leftType.flags.hasAny(TypeFlags.Any)
+        if (!lAny && !isBigIntLikeType(leftType)) return numberType
+        val rightType = getTypeOfExpression(right)
+        val rAny = rightType.flags.hasAny(TypeFlags.Any)
+        return if ((rAny || isBigIntLikeType(rightType)) && !(lAny && rAny)) bigintType else numberType
     }
 
     /** Check if type is bigint or bigint literal. */
