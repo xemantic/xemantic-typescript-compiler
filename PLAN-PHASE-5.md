@@ -395,6 +395,37 @@ to. The (P18.44) restore had placed it directly ABOVE the first queue item, wher
 ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
 notices it is gone.
 
+**ADDENDUM 2026-10-06 (owner) — THE ORDER'S HEAD IS NOW THE tsgo PORT SPIKE.** JetBrains declined
+xtsc because a different implementation logic "will always miss some stuff" and did a mirror port
+of tsgo themselves. The owner approved porting tsgo to Kotlin with a hybrid mechanical + LLM porter
+— plan, modules, lowering rules and the go/no-go gate in **`docs/tsgo-port-plan.md`**. (TSGO.0)
+holds the owner decisions; (TSGO.1) is the spike and is TIMEBOXED. Until the gate is decided,
+`-core` takes only fixes the products need now (D4, proposed) — the (CHK.\*)/(INV.\*) items below
+stay as a record and as the fallback if the gate says no-go.
+
+- [ ] **(TSGO.0) OWNER DECISIONS before the spike — `docs/tsgo-port-plan.md` § 6.** D1 Go 1.26
+  toolchain downloaded to gitignored `tools/go-1.26/` (dev-time only, for `goport-extract`); D2
+  licence of `-tsgo` (recommended Apache-2.0, keeping Microsoft's notices); D3 ask JetBrains
+  whether their port is or will be open source; D4 freeze `-core` parity rounds while the spike
+  runs. **BLOCKED-PENDING-USER** for D1–D3; nothing is installed or published until answered.
+- [ ] **(TSGO.1) SPIKE: scanner + parser + AST + API encoder through the porter, gated on
+  encoded-AST byte equality against `tools/tsgo-7.0.2/lib/tsc --api` `getSourceFile`.** ~57k Go
+  lines (~20k generated). Steps: (a) `goport-extract` (go/packages + go/types → typed JSON IR,
+  per-function source hash); (b) `-goport` module: lowering for the closure, `overrides/` with
+  hash-staleness failing the build; (c) `-tsgo` module, generated + checked in, `commonMain`;
+  (d) the byte-equality harness over the conformance cases, tsc's 78 sources and the library
+  probes. GATE (§ 4.1): ≥ 99.5% files byte-identical with every miss explained, ≥ 90% of Go lines
+  lowered mechanically, ≤ ~50 overrides, parse within 1.5x of `-core`'s `Parser` warm,
+  `huge_methods.py --fail-over 0` green. Timebox 3 weeks of rounds; a no-go writes up which
+  lowering class failed. Needs (TSGO.0) D1.
+- [ ] **(TSGO.2) binder + checker through the porter (after a GO on (TSGO.1)).** ~64k Go. Oracle:
+  diagnostics differential against tsgo over all four baseline layers, and the ~2,800
+  hand-written pins run against BOTH engines.
+- [ ] **(TSGO.3) program, module resolution, transformers, printer; expose `internal/api` through
+  the `Project` API (the type oracle).**
+- [ ] **(TSGO.4) re-base externals, KIR and the LSP onto `-tsgo`; decide `-core`'s retirement on
+  measured parity.** Kotlin/Native measured separately (no escape analysis).
+
 - [x] **(CHK.134) CLOSED 2026-09-12 ((P18.81) note: (2) `bind` — `Checker.bindType`, the two real overloads built per call, `OmitThisParameter` as the receiver itself when its `this` is absent/`unknown`/`any`; residues: a union receiver, an optional-chain receiver, a spread partial, the bare `f.bind` display, a class value displayed without `typeof`). (1) `call`/`apply` LANDED 2026-09-12 ((P18.80) note) — `functionObjectMemberType` /
   `bindCallApplyType` BUILD the member from the receiver's last signature (no inference: each of `T`/`A`/`R` has one
   candidate), `strictBindCallApply` now exists (flag if set, else `strict`; tsc's own sources set it `false`, which
