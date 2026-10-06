@@ -4,12 +4,10 @@ Owner decision 2026-10-06. Queue items: (TSGO.0) – (TSGO.4) in `PLAN-PHASE-5.m
 
 ## 1. Why
 
-JetBrains (Piotr, Oct 2026) evaluated xtsc for WebStorm and decided against it: *"What we wanted
-to use is a close mirror of the Go compiler. Having a different implementation logic will always
-miss some stuff. A problem for us was also a huge difference in the data structures."* They then
-did a mirror port of tsgo themselves, LLM-assisted, and report it working and faster than Go.
+A checker reconstructed from tsgo's outputs keeps diverging from it, in behaviour and in data
+structures. With current LLM tooling, a mirror port of tsgo is a practical alternative.
 
-Our own record agrees with the diagnosis. TypeScript has no spec; tsgo *is* the definition, and
+Our own record agrees. TypeScript has no spec; tsgo *is* the definition, and
 xtsc reconstructs it from outputs. Measured on 2026-10-06:
 
 | | lines |
@@ -25,7 +23,7 @@ post-hoc type oracle (`CheckedProgram.kt`, `TypeCapture.kt`, `docs/type-oracle.m
 
 A mirror port fixes the root cause: the same algorithms, the same data structures, the same
 answers — and tsgo's own `internal/api` (142 methods: `getTypeAtLocation`, `getSymbolAtLocation`,
-`isTypeAssignableTo`, …) comes along for free, which is exactly the oracle JetBrains needed.
+`isTypeAssignableTo`, …) comes along for free, which is exactly the oracle an IDE integration needs.
 
 **What stays xtsc's differentiation** is unchanged by this decision and gets a better engine
 underneath it: the embeddable `Project` API, the Kotlin externals generator with resolved types,
@@ -174,12 +172,9 @@ analysis (CLAUDE.md: 4–29x per primitive), so it needs its own measurement.
   exception. Apache-2.0 code may be incorporated into an AGPLv3 work, so either works legally;
   either way every generated file keeps Microsoft's copyright line and the Apache notice, and the
   module ships tsgo's `LICENSE`/`NOTICE`. Option A: `-tsgo` stays **Apache-2.0** (simplest
-  provenance; leaves room to collaborate with JetBrains or upstream). Option B: AGPL like the
+  provenance; leaves room to collaborate upstream). Option B: AGPL like the
   rest. Recommendation: A.
-- **D3 — ask JetBrains whether their port is, or will be, open source.** If it is, porting tsgo a
-  second time duplicates work, and the better move may be to build xtsc's products on theirs.
-  Worth one email before (TSGO.1) starts.
-- **D4 — `-core` freeze.** Recommendation: from (TSGO.1) on, `-core` takes only fixes that the
+- **D3 — `-core` freeze.** Recommendation: from (TSGO.1) on, `-core` takes only fixes that the
   products need now; no new (CHK.\*)/(INV.\*) parity rounds unless the gate fails.
 
 ## 7. Facts this plan rests on (re-check before relying on them)

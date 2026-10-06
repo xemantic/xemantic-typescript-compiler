@@ -346,7 +346,7 @@ Text below is verbatim from `cc09770a3` minus those items; the dated addendum at
 where the arc actually stands. **A completed item may not be archived without checking whether a
 load-bearing note travels with it.**
 
-**THE PROJECT IS RE-POINTED.** The JetBrains WebStorm evaluation paused: their need was a
+**THE PROJECT IS RE-POINTED.** The IDE-integration need is a
 post-hoc TYPE ORACLE with the query shape of tsgo's `tsc/internal/api/proto.go` (142 methods),
 and this checker cannot serve one — its answers are functions of walk-scoped state, which
 `CheckedProgram.kt` and `TypeCapture.kt` already document. tsgo is the free, official default;
@@ -395,19 +395,18 @@ to. The (P18.44) restore had placed it directly ABOVE the first queue item, wher
 ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
 notices it is gone.
 
-**ADDENDUM 2026-10-06 (owner) — THE ORDER'S HEAD IS NOW THE tsgo PORT SPIKE.** JetBrains declined
-xtsc because a different implementation logic "will always miss some stuff" and did a mirror port
-of tsgo themselves. The owner approved porting tsgo to Kotlin with a hybrid mechanical + LLM porter
+**ADDENDUM 2026-10-06 (owner) — THE ORDER'S HEAD IS NOW THE tsgo PORT SPIKE.** Reconstructing tsgo
+from its outputs keeps missing behaviour and cannot share its data structures, so the checker
+should mirror tsgo instead. The owner approved porting tsgo to Kotlin with a hybrid mechanical + LLM porter
 — plan, modules, lowering rules and the go/no-go gate in **`docs/tsgo-port-plan.md`**. (TSGO.0)
 holds the owner decisions; (TSGO.1) is the spike and is TIMEBOXED. Until the gate is decided,
-`-core` takes only fixes the products need now (D4, proposed) — the (CHK.\*)/(INV.\*) items below
+`-core` takes only fixes the products need now (D3, proposed) — the (CHK.\*)/(INV.\*) items below
 stay as a record and as the fallback if the gate says no-go.
 
 - [ ] **(TSGO.0) OWNER DECISIONS before the spike — `docs/tsgo-port-plan.md` § 6.** D1 Go 1.26
   toolchain downloaded to gitignored `tools/go-1.26/` (dev-time only, for `goport-extract`); D2
-  licence of `-tsgo` (recommended Apache-2.0, keeping Microsoft's notices); D3 ask JetBrains
-  whether their port is or will be open source; D4 freeze `-core` parity rounds while the spike
-  runs. **BLOCKED-PENDING-USER** for D1–D3; nothing is installed or published until answered.
+  licence of `-tsgo` (recommended Apache-2.0, keeping Microsoft's notices); D3 freeze `-core`
+  parity rounds while the spike runs. **BLOCKED-PENDING-USER** for D1–D2; nothing is installed or published until answered.
 - [ ] **(TSGO.1) SPIKE: scanner + parser + AST + API encoder through the porter, gated on
   encoded-AST byte equality against `tools/tsgo-7.0.2/lib/tsc --api` `getSourceFile`.** ~57k Go
   lines (~20k generated). Steps: (a) `goport-extract` (go/packages + go/types → typed JSON IR,

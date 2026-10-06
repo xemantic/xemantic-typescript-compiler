@@ -1472,7 +1472,7 @@ taken — decided the other way, and its two surviving reasons say when to prefe
 
 **(P18.141) — (INV.2b) COMMIT 1: `Project.typeOracle()`, A MISSION-LEG DELIVERABLE, 20,044 / 0 / 53 (2026-09-20).**
 The first (INV.*) round since 2026-09-10 and NOT a parity row: leg 2, "an embeddable whole-program checker", and the
-documented reason the JetBrains/WebStorm evaluation paused. (INV.1)/(INV.2) landed the store and the Stage-2 facade
+documented IDE type-oracle need. (INV.1)/(INV.2) landed the store and the Stage-2 facade
 in September and had **no consumer**; this gives them one. **`Checker.kt` is UNTOUCHED** (the item required it), so
 `cost_gate.py` is a control and reads identical to (P18.140), and no 8-profile grid was run — `--listAll` never
 builds an oracle, so the two binaries cannot differ in any diagnostic. **A stale oracle answers a WRONG `Type`, not
@@ -3043,7 +3043,7 @@ context; then ONE two-agent worktree wave landed **(EXT.1)** — Kotlin external
 CHECKED program, alias-resolution pin `Species`->`String`, metadata-compile gate with a
 negative control, 15 pins — and **(LSP.1)** — JSON-RPC/LSP over `Project`, initialize +
 didOpen + hover, **LSP UTF-16 = Project offsets CONFIRMED identical modulo the 1-base** at
-an astral-char pin, 42 pins. `docs/INVERSION-DESIGN.md` answers the WebStorm question:
+an astral-char pin, 42 pins. `docs/INVERSION-DESIGN.md` answers the IDE type-oracle question:
 of tsgo's 142 API methods, **A=94 answerable post-hoc today, B=15 walk-scoped (13 closable
 by a record-during-walk NodeLinks store — (INV.1) proposal BLOCKED-PENDING-USER), C=33 not
 checker questions**; on-demand flow is NOT required for the census. **The LSP's first
@@ -3057,7 +3057,7 @@ passes); `huge_methods.py --fail-over 0` clean (core-only census: a CONTROL for 
 modules, per its own gotcha).
 
 **(P18.0) — THE PROJECT IS RE-POINTED: TYPESCRIPT FOR THE JVM AND KOTLIN (owner directive
-2026-09-01).** The WebStorm evaluation paused — their need was a post-hoc TYPE ORACLE (the
+2026-09-01).** The IDE-integration need is a post-hoc TYPE ORACLE (the
 query shape of tsgo's `tsc/internal/api/proto.go`, 142 methods) and this checker's answers are
 functions of walk-scoped state; tsgo is the free official default, so "a TypeScript compiler"
 is not the mission. **The mission: no Node and no Go in the toolchain; an embeddable

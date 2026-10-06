@@ -6379,8 +6379,8 @@ script that does not exist is the frozen-instrument problem in its cheapest form
 ### Round (P18.141) — (INV.2b) commit 1: `Project.typeOracle()`, the capability without the decision (2026-09-20)
 
 **The first (INV.\*) round since 2026-09-10, and a MISSION-LEG deliverable rather than a parity row**: leg 2, "an
-embeddable whole-program checker", and the documented reason the JetBrains/WebStorm evaluation paused — their need
-was a post-hoc TYPE ORACLE and this checker could not serve one. (INV.1) and (INV.2) landed the store and the
+embeddable whole-program checker", and the documented IDE-integration need
+— a post-hoc TYPE ORACLE and this checker could not serve one. (INV.1) and (INV.2) landed the store and the
 Stage-2 facade in September and were **core-only in the sense of having NO CONSUMER**; this gives them one.
 Suite **20,044 / 0 / 53** (+17 = exactly the new pins, skipped unchanged), `-project` module 937 / 0 / 0, warning
 gate clean with a live positive control, `huge_methods --fail-over 0` exit 0, `cost_gate.py` exit 0 and IDENTICAL
@@ -11142,7 +11142,7 @@ Text below is verbatim from `cc09770a3` minus those items; the dated addendum at
 where the arc actually stands. **A completed item may not be archived without checking whether a
 load-bearing note travels with it.**
 
-**THE PROJECT IS RE-POINTED.** The JetBrains WebStorm evaluation paused: their need was a
+**THE PROJECT IS RE-POINTED.** The IDE-integration need is a
 post-hoc TYPE ORACLE with the query shape of tsgo's `tsc/internal/api/proto.go` (142 methods),
 and this checker cannot serve one — its answers are functions of walk-scoped state, which
 `CheckedProgram.kt` and `TypeCapture.kt` already document. tsgo is the free, official default;
@@ -14278,7 +14278,7 @@ hidden**: the owner labels the CONTRIBUTING decision "(LIC.2)" but the queue's (
 already the POM-drift item — the deliverable is queued as (LIC.3), the POM item stays
 separately BLOCKED-PENDING-USER (the licence-string decision does not by itself approve a
 build.gradle.kts edit, which is Guardrail-gated). `docs/inputs/` does not exist, so there
-is no JetBrains API-shape reply to add to (INV.D)'s inputs — checked, not skipped.
+is no external API-shape input to add to (INV.D)'s inputs — checked, not skipped.
 
 **(LIC.3) DONE** — CONTRIBUTING.md created (root): external PRs cannot be merged until the
 contributor agreement exists; issues and minimal reproductions welcomed, with the repo's
@@ -71218,7 +71218,7 @@ SYMLINKS a fresh worktree needs (dir-only patterns), so agents must remove them 
 ending clean; both agents' first builds were ~6-8 min cold core compiles, serialized.
 
 
-### Round (P18.1) — the doc arc landed, and the 142-method census answers the WebStorm question with three numbers (2026-09-01)
+### Round (P18.1) — the doc arc landed, and the 142-method census answers the IDE type-oracle question with three numbers (2026-09-01)
 
 **(LIC.1), (DOC.1), (DOC.2), (INV.D) DONE; two modules scaffolded; (EXT.1)/(LSP.1) in
 flight as a worktree wave.** (LIC.1): README now says `AGPL-3.0-only WITH
@@ -71252,8 +71252,8 @@ ARCHITECTURE-RETHINK INV.0-7 series is § 8 of the design — do not confuse the
 
 ### Round (P18.0) — the project is re-pointed: TypeScript for the JVM and Kotlin (2026-09-01)
 
-**OWNER DIRECTIVE, PERSISTED BEFORE ANY OTHER WORK.** The WebStorm evaluation paused — their
-need was a post-hoc type oracle (tsgo's `tsc/internal/api/proto.go` query shape, 142 methods)
+**OWNER DIRECTIVE, PERSISTED BEFORE ANY OTHER WORK.** The IDE-integration need is
+a post-hoc type oracle (tsgo's `tsc/internal/api/proto.go` query shape, 142 methods)
 and this checker's answers are functions of walk-scoped state (`CheckedProgram.kt`,
 `TypeCapture.kt` document exactly that). tsgo is the free official default; "a TypeScript
 compiler" is not the differentiator. **The mission is now: TypeScript for the JVM and Kotlin**
@@ -71349,7 +71349,7 @@ when it is absent rather than fall back to tsgo.
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
 
-**THE PROJECT IS RE-POINTED.** The JetBrains WebStorm evaluation paused: their need was a
+**THE PROJECT IS RE-POINTED.** The IDE-integration need is a
 post-hoc TYPE ORACLE with the query shape of tsgo's `tsc/internal/api/proto.go` (142 methods),
 and this checker cannot serve one — its answers are functions of walk-scoped state, which
 `CheckedProgram.kt` and `TypeCapture.kt` already document. tsgo is the free, official default;

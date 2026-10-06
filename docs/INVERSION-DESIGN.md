@@ -1,8 +1,7 @@
 # INVERSION-DESIGN — the post-hoc type oracle: what xtsc can answer today, what needs the inversion, and what the inversion costs
 
 Written 2026-09-01 under the Phase 18 owner directive ((INV.D) — an ANALYSIS item; no
-code ships with this document). It answers the question the WebStorm evaluation left
-behind: **which of tsgo's 142 API queries can xtsc answer, which cannot be answered
+code ships with this document). It answers the IDE type-oracle question: **which of tsgo's 142 API queries can xtsc answer, which cannot be answered
 without changing the checker's architecture, and what is the smallest change that
 closes the gap.** The two consumers being built this session — the Kotlin externals
 generator (EXT.\*) and the LSP server (LSP.\*) — are the concrete query inventory this
@@ -86,7 +85,7 @@ So there are **three lanes** today:
   re-check just the file with a capture request installed. Costs one narrowed build
   (~94-110 ms floor at 2,401 files, ~200 ms on the tsc profile).
 
-**The WebStorm-shaped gap, stated exactly:** tsgo's API is lane-G-priced for
+**The IDE-oracle gap, stated exactly:** tsgo's API is lane-G-priced for
 lane-R-quality answers at arbitrary nodes. We can give lane-R quality only by
 pre-stating spans or paying lane N per fresh question. An IDE oracle that asks
 thousands of small questions in unpredictable order is priced out of lane N and cannot
@@ -403,7 +402,7 @@ Each stage is many small commits; every commit passes the full corpus suite,
   this design** for LSP.1/LSP.2; Stage 1-2 would turn its per-fresh-caret narrowed
   build into a lookup, which is a latency nicety, not a blocker ((INC.90): the
   narrowed query is 93-217 ms).
-- **A WebStorm-class post-hoc oracle**: Stages 1-2 for the 13 B/R methods (the four
+- **An IDE-class post-hoc oracle**: Stages 1-2 for the 13 B/R methods (the four
   hot ones included), Stage 3 for the last 2. That is the honest answer to the
   directive's question.
 
