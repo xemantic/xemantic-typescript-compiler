@@ -223,6 +223,12 @@ sealed class Type {
          */
         var jsLiteral: Boolean = false
         /**
+         * (P18.307) A type literal declared a member keyed by a `unique symbol` (`{ readonly [tag]: T }`, type-fest's
+         * `Tagged`) that this model cannot name, so the member is absent from [members]. The type is NOT the empty
+         * object `{}` it otherwise looks like: no primitive has that member, so `Relater` refuses a primitive source.
+         */
+        var unnamedUniqueSymbolMember: Boolean = false
+        /**
          * (CHK.233) A tuple's member table — its numbered element symbols plus the `length`
          * symbol minted with the tuple ([tupleLengthSymbol]) — is built on FIRST READ of
          * [members] or [properties] by this thunk (`Checker.buildTupleFromTypes`), never at

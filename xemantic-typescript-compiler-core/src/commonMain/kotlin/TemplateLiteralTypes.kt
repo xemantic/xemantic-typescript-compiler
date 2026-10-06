@@ -255,15 +255,45 @@ internal class TemplateLiteralTypes(private val checker: Checker) {
         source: Type, node: TemplateLiteralType, spanType: (TypeNode) -> Type, constraintOf: (InferType) -> Type?,
         compare: (Type, Type) -> Boolean,
     ): Map<String, Type>? {
+        // A checked span's type, resolved once (null for an `infer` span).
+        val spanTypes = node.templateSpans.map { span ->
+            var st = span.type
+            while (st is ParenthesizedType) st = st.type
+            if (st is InferType) null else spanType(st)
+        }
+        // (P18.307) tsgo's `getTemplateLiteralType` DISTRIBUTES a union span (`${infer R}${Whitespace}` is a union of
+        // templates, one per member), and inference to a union target tries each member: answer the one alternative
+        // that matches, NO_MATCH when none does, and leave several differing matches to the old path.
+        val unionAt = spanTypes.indexOfFirst { t -> t is Type.Union && t.types.all { templateStringFor(it) != null } }
+        if (unionAt >= 0) {
+            val members = (spanTypes[unionAt] as Type.Union).types
+            if (members.size > MAX_SPAN_DISTRIBUTION) return null
+            var found: Map<String, Type>? = null
+            for (m in members) {
+                val r = matchInferPatternWith(source, node, spanTypes.toMutableList().also { it[unionAt] = m }, constraintOf, compare)
+                    ?: return null
+                if (r === NO_MATCH) continue
+                if (found != null && found != r) return null
+                found = r
+            }
+            return found ?: NO_MATCH
+        }
+        return matchInferPatternWith(source, node, spanTypes, constraintOf, compare)
+    }
+
+    private fun matchInferPatternWith(
+        source: Type, node: TemplateLiteralType, spanTypes: List<Type?>, constraintOf: (InferType) -> Type?,
+        compare: (Type, Type) -> Boolean,
+    ): Map<String, Type>? {
         // The pattern's texts, with a literal span folded into its neighbours.
         val texts = arrayListOf(node.head.text)
         val spans = ArrayList<Any>() // InferType, or the placeholder Type of a checked span
-        for (span in node.templateSpans) {
+        for ((spanIdx, span) in node.templateSpans.withIndex()) {
             val lit = (span.literal as? StringLiteralNode)?.text ?: ""
             var st = span.type
             while (st is ParenthesizedType) st = st.type
             if (st is InferType) { spans.add(st); texts.add(lit); continue }
-            val t = spanType(st)
+            val t = spanTypes[spanIdx]!!
             val str = templateStringFor(t)
             when {
                 str != null -> texts[texts.size - 1] = texts.last() + str + lit
@@ -394,6 +424,9 @@ internal class TemplateLiteralTypes(private val checker: Checker) {
     companion object {
         /** [matchInferPattern]'s "definitely not matched" answer (compared by identity). */
         val NO_MATCH: Map<String, Type> = HashMap()
+
+        /** The largest union span [matchInferPattern] distributes over (type-fest's `Whitespace` has 25 members). */
+        private const val MAX_SPAN_DISTRIBUTION = 64
 
         private val DECIMAL = Regex("^[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?$")
 

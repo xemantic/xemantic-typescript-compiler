@@ -47,6 +47,9 @@ internal class ConditionalInferPatterns(private val checker: Checker) {
     fun isPattern(extendsType: TypeNode): Boolean {
         val p = unparen(extendsType)
         val shape = (p as? TypeOperator)?.takeIf { it.operator == SyntaxKind.ReadonlyKeyword }?.let { unparen(it.type) } ?: p
+        // (P18.307) a BARE `infer R` (optionally `infer R extends C`) is the whole pattern: tsgo infers `R` as the
+        // check type itself (type-fest's `ApplyDefaultOptions`); [bind] decides it.
+        if (p is InferType) return true
         return (shape is TupleType || shape is TemplateLiteralType || arrayPatternElement(shape) != null ||
             collectionPatternName(shape) != null) && containsInfer(shape)
     }

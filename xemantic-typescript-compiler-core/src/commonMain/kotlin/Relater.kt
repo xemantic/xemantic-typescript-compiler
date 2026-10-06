@@ -1159,6 +1159,12 @@ internal class Relater(
         // an async function returning `1` should compare via Awaited unwrapping,
         // not via Number-wrapper-extends-Object). Also skip wrapper interfaces
         // themselves so TS2322 keeps firing for primitive→mismatched-wrapper.
+        // (P18.307) a target with a `unique symbol`-keyed member this model could not name has a member no
+        // primitive carries (type-fest `Tagged<string, 'UserId'>` is not a supertype of `string`).
+        if (target is Type.Object && target.unnamedUniqueSymbolMember &&
+            (source is Type.StringLiteral || source is Type.NumberLiteral || source is Type.BigIntLiteral ||
+                source is Type.Intrinsic && source.intrinsicName in PRIMITIVE_NAMES)
+        ) return false
         if (target is Type.Interface &&
             (source is Type.Intrinsic || source is Type.StringLiteral ||
                 source is Type.NumberLiteral || source is Type.BigIntLiteral)) {
@@ -2063,5 +2069,8 @@ internal class Relater(
         /** (CHK.223) Declared-variance bits — see [declaredVariances]. */
         const val VARIANCE_OUT = 1
         const val VARIANCE_IN = 2
+
+        /** (P18.307) The primitive intrinsics no object type literal's `unique symbol` member is carried by. */
+        val PRIMITIVE_NAMES = setOf("string", "number", "bigint", "boolean", "symbol", "true", "false")
     }
 }

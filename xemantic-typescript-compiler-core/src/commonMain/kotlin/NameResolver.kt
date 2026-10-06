@@ -436,13 +436,13 @@ internal class NameResolver(
                             // the directory's `index` / `package.json` entry, which no string
                             // transformation of the specifier above can reach — so a default
                             // import of one typed `any` while the named-import resolver, which
-                            // takes this leg, did not. The crawl's own answer, gated to a RELATIVE
-                            // specifier (a bare package's default import is a wider family) and to
+                            // takes this leg, did not. The crawl's own answer — since (P18.307) for a BARE
+                            // package specifier too (type-fest's `import tag from 'tagged-tag'`) — gated to
                             // a non-NAMESPACE import: a namespace object over a star barrel reads
                             // the target's `locals`, which a star re-export does not populate, so
                             // resolving one invents TS2694 rows (zod: 1,251 of them).
                             ?: specifier.takeIf {
-                                isRelativeModuleSpecifier(it) && decl.importClause?.namedBindings !is NamespaceImport
+                                decl.importClause?.namedBindings !is NamespaceImport
                             }?.let { resolveImportTargetFallback(it, ctxFileName) }
                         if (targetFile == null) {
                             // (CHK.73) AMBIENT module — B113's second chance, which the

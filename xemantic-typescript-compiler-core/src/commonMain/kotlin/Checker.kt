@@ -108181,7 +108181,11 @@ interface DataView {
                             // (CHK.228) which arguments are a GENUINE `any` — part of the key, since
                             // a conditional over one evaluates where one over a washed `any` does not.
                             val genuineNames = genuineAny.argNames(argNodes, declTPs, resolvedArgs, currentTypeAliasArgs)
-                            val cacheKey = "${symbol.id}|${resolvedArgs.joinToString(",") { it.id.toString() }}" +
+                            // (P18.307) literal and empty-object arguments key by VALUE: a literal type is not
+                            // interned (each `Words<'ab'>` mints its own `'ab'`) and each written or defaulted `{}`
+                            // resolves to a fresh type, so keyed by id every such reference missed and was evaluated
+                            // in full again (44 ms per repeated `Words<'…'>` once its options resolve).
+                            val cacheKey = "${symbol.id}|${resolvedArgs.joinToString(",") { aliasCacheKeyPart(it) }}" +
                                 (if (genuineNames.isEmpty()) "" else "|g" + genuineNames.sorted().joinToString(","))
                             substitutionResultCache[cacheKey]?.let { return it }
                             // INV.5(b2b) round 549d: the install is an explicit mapper —
@@ -108220,6 +108224,7 @@ interface DataView {
                                 val savedGenuine = genuineAny.frame
                                 genuineAny.frame = if (genuineNames.isEmpty()) null else argMap to genuineNames
                                 val bailBefore = deepInstantiationBailed
+                                AliasSubstitutionCensus.bodyEvaluations++
                                 val result = try {
                                     getTypeFromTypeNodeWithMapper(decl.type, mapper)
                                 } finally {
@@ -108308,6 +108313,14 @@ interface DataView {
                                     // leak — silently, and only for whoever asked second
                                     // (round 778's write gate, (INC.19)'s first-touch freeze).
                                     if (!relaxedConstraint) substitutionResultCache[cacheKey] = result
+                                } else if (result !== errorType && !relaxedConstraint && deepInstantiationBailed == bailBefore &&
+                                    intersectionOps.unparenthesized(decl.type) is ConditionalType
+                                ) {
+                                    // (P18.307) a CONDITIONAL body's result is cached too — only its alias DISPLAY is
+                                    // withheld above. Coupled to the display, a tail-recursive conditional alias
+                                    // (type-fest's `WordsImplementation`, every `ApplyDefaultOptions` reference) was
+                                    // re-evaluated in full at every reference: 44 ms per repeated `Words<'…'>`.
+                                    substitutionResultCache[cacheKey] = result
                                 }
                                 return result
                             } finally {
@@ -143717,12 +143730,14 @@ interface DataView {
     internal fun isEmptyObjectLiteralType(t: Type): Boolean = isEmptyObjectTypeLiteral(t) // (P18.288)
 
     private fun isEmptyObjectTypeLiteral(t: Type): Boolean =
+        // (P18.307) the tuple test FIRST: `properties` / `members` force a tuple's lazy member table ((CHK.233)),
+        // and this predicate is now asked of every alias-cache key argument and intersection constituent.
         t is Type.Object && t !is Type.Interface && t !is Type.Reference &&
-            t.symbol == null &&
+            t.symbol == null && t.tupleElementTypes == null &&
             t.properties.isNullOrEmpty() && t.members.isNullOrEmpty() &&
             t.callSignatures.isNullOrEmpty() && t.constructSignatures.isNullOrEmpty() &&
             t.stringIndexInfo == null && t.numberIndexInfo == null &&
-            t.tupleElementTypes == null
+            !t.unnamedUniqueSymbolMember
 
     /**
      * Round 725: does a TypeParam constituent of the INTERSECTION type argument [arg] carry
@@ -171863,6 +171878,7 @@ interface DataView {
         var sawMappedTypePlaceholder = false
         // Round 938 — (CHK.5)(b): the own PROPERTY names already declared by this literal.
         val ownLiteralPropertyNames = HashSet<String>()
+        var droppedUniqueSymbolMember = false
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> {
@@ -171872,7 +171888,11 @@ interface DataView {
                     // `type T = { ["s"]: number }` and `type T = { [K]: number }` alike
                     // declared NO member and `t.s` / `t.p` FP'd TS2339 on `{}`, where
                     // tsc reads them as ordinary members (measured, 7.0.2).
-                    val name = declaredMemberName(member.name) ?: continue
+                    val name = declaredMemberName(member.name) ?: run {
+                        if (((member.name as? ComputedPropertyName)?.expression?.let { isUniqueSymbolConstKey(unwrapParensExpr(it)) }) == true)
+                            droppedUniqueSymbolMember = true // (P18.307)
+                        null
+                    } ?: continue
                     if (name.isEmpty()) {
                         // Parser placeholder for `[K in T]: V` — skip; emit anyType for the literal.
                         sawMappedTypePlaceholder = true
@@ -172027,6 +172047,7 @@ interface DataView {
         if (constructSignatures.isNotEmpty()) objType.constructSignatures = constructSignatures
         objType.stringIndexInfo = stringIndexInfo
         objType.numberIndexInfo = numberIndexInfo
+        objType.unnamedUniqueSymbolMember = droppedUniqueSymbolMember
         return objType
     }
 
@@ -172037,7 +172058,11 @@ interface DataView {
                 keyofTypeQueryEnumMemberNames(node.type)
                     ?: run {
                         val operand = getTypeFromTypeNode(node.type)
-                        getKeyofType(operand)
+                        // (P18.307) a mapped type literal whose key set this model could not enumerate
+                        // answers `any` as its "unknown" sentinel; its keys are that unknown set, never
+                        // `keyof any`'s CLOSED `string | number | symbol` (type-fest `_ConditionalKeys`).
+                        if (operand === anyType && node.type.let { (it as? ParenthesizedType)?.type ?: it } is MappedType) anyType
+                        else getKeyofType(operand)
                     }
             SyntaxKind.UniqueKeyword -> esSymbolType // unique symbol
             SyntaxKind.ReadonlyKeyword -> {
@@ -172135,6 +172160,46 @@ interface DataView {
         return getPropertyOfType(src, key)?.let { ro(it) }
     }
 
+    /** (P18.307) An alias-substitution cache key part: a literal by its value (and freshness), an empty object
+     *  type literal as `{}`, anything else by its id. */
+    private fun aliasCacheKeyPart(t: Type): String = when {
+        t is Type.StringLiteral -> (if (t.regularType != null && t.regularType !== t) "S" else "s") + t.value.length + ":" + t.value
+        t is Type.NumberLiteral -> (if (t.regularType != null && t.regularType !== t) "N" else "n") + t.value.toString()
+        t is Type.BigIntLiteral -> (if (t.regularType != null && t.regularType !== t) "B" else "b") + t.value
+        isEmptyObjectTypeLiteral(t) -> "{}"
+        else -> t.id.toString()
+    }
+
+    private fun emptyMappedObject(node: MappedType): Type =
+        Type.Object().apply { declaredAt = node; members = symbolTable(); properties = emptyList() }
+
+    /** (P18.307) Whether a mapped type's key constraint reads a type parameter still unbound here: tsgo keeps such a
+     *  mapped type DEFERRED, so a `never` this model computes for it (tsc's own `{ [P in OverloadKeys<T>]: … }` over an
+     *  `any`-washed `T`) is not evidence of an empty key set. */
+    private fun mappedConstraintIsGeneric(constraint: TypeNode): Boolean {
+        var generic = false
+        fun mentionsTypeParam(t: Type, depth: Int): Boolean = depth < 4 && when (t) {
+            is Type.TypeParam -> true
+            is Type.Union -> t.types.any { mentionsTypeParam(it, depth + 1) }
+            is Type.Intersection -> t.types.any { mentionsTypeParam(it, depth + 1) }
+            is Type.Reference -> t.resolvedTypeArguments?.any { mentionsTypeParam(it, depth + 1) } == true
+            else -> false
+        }
+        fun visit(n: Node) {
+            if (generic) return
+            if (n is TypeReference) (n.typeName as? Identifier)?.text?.let { name ->
+                val bound = currentTypeAliasArgs?.get(name)
+                if (if (bound != null) mentionsTypeParam(bound, 0) else currentTypeParamScope?.containsKey(name) == true) {
+                    generic = true
+                    return
+                }
+            }
+            forEachChild(n, ::visit)
+        }
+        visit(constraint)
+        return generic
+    }
+
     private fun getTypeFromMappedType(node: MappedType): Type {
         // B57.3b: depth-bail to signal excessive recursion. Mirror the alias-
         // substitution depth-bail pattern at getTypeFromTypeReference (~50362).
@@ -172150,6 +172215,9 @@ interface DataView {
         homomorphicUnionDistribution(node, constraint)?.let { return it }
         val constraintType = getTypeFromTypeNode(constraint)
         if (constraintType === anyType || constraintType === errorType) return anyType
+        // (P18.307) an EMPTY key set (`[K in never]`, `[K in keyof {}]`) maps to an empty object type, as
+        // tsgo's `resolveMappedTypeMembers` does — `any` absorbed every intersection it took part in.
+        if (constraintType === neverType && !mappedConstraintIsGeneric(constraint)) return emptyMappedObject(node)
         // Collect all keys from the constraint
         var keys = when (constraintType) {
             is Type.StringLiteral -> listOf(constraintType.value)
@@ -172162,8 +172230,18 @@ interface DataView {
             // silently enumerating the partial set.
             is Type.Union -> {
                 val lits = constraintType.types.map { it as? Type.StringLiteral }
-                if (lits.any { it == null }) return anyType
-                lits.map { it!!.value }
+                // (P18.307) under an `as` clause a non-literal key (`number` from a tuple's / array's `keyof`) whose
+                // remapped name is `never` contributes nothing (tsgo `addMemberForKeyTypeWorker`), so type-fest's
+                // `Except<TupleOf<3, E>, number | 'length' | …>` maps to an OBJECT, not `any`.
+                if (lits.any { it == null }) {
+                    val nt = node.nameType ?: return anyType
+                    for (c in constraintType.types) {
+                        if (c is Type.StringLiteral) continue
+                        val remapped = getTypeFromTypeNodeWithMapper(nt, layeredAliasMapper(mapOf(node.typeParameter.name.text to c)))
+                        if (remapped !== neverType) return anyType
+                    }
+                }
+                lits.filterNotNull().map { it.value }
             }
             else -> return anyType // Can't enumerate keys for non-literal constraints
         }
@@ -172193,7 +172271,7 @@ interface DataView {
             }
             if (pairs.map { it.first }.toSet().size != pairs.size) return anyType
             keys = pairs.map { it.first }; sourceKeys = pairs.map { it.second }
-            if (keys.isEmpty()) return Type.Object().apply { declaredAt = node; members = symbolTable(); properties = emptyList() }
+            if (keys.isEmpty()) return emptyMappedObject(node)
         }
         val isOutermost = mappedTypeResolutionDepth == 0
         // B57.3c: capture bail-flag transition at the outermost mapped-type call so
@@ -173360,6 +173438,7 @@ interface DataView {
         // what keeps round 777's refusal (no distribution of OBJECT intersections at
         // construction) intact: that view's operands and this one's are complements.
         reducePrimitiveDomainIntersection(filtered)?.let { return it }
+        reduceObjectAndEmptyObjectIntersection(filtered)?.let { return it }
         reduceUnionAndEmptyObjectIntersection(filtered)?.let { return it }
         reduceUnionAndNullishIntersection(filtered)?.let { return it }
         // B8.1: reduce `A & B` to `never` when a property name appears in 2+
@@ -173385,6 +173464,20 @@ interface DataView {
      * two-constituent shape is reduced; round 777's refusal of distributing OBJECT
      * intersections at construction is untouched.
      */
+    /**
+     * (P18.307) `X & {}` for an OBJECT `X` is `X` — tsgo's `removeRedundantSupertypes` drops an empty anonymous
+     * object constituent whenever another constituent is definitely non-nullable. Kept whole, the intersection
+     * hid every member read on it (type-fest's `Except<…>` is `{ [K in keyof T as …]: … } & {}`: `e.push` and
+     * `e[0]` were silent). Only OBJECT partners are reduced here; primitive and type-parameter partners keep
+     * today's construction.
+     */
+    private fun reduceObjectAndEmptyObjectIntersection(types: List<Type>): Type? {
+        if (types.none { isEmptyObjectTypeLiteral(it) }) return null
+        if (types.none { it is Type.Object && !isEmptyObjectTypeLiteral(it) }) return null
+        val kept = types.filterNot { isEmptyObjectTypeLiteral(it) }
+        return if (kept.size == 1) kept[0] else getIntersectionType(kept)
+    }
+
     private fun reduceUnionAndEmptyObjectIntersection(types: List<Type>): Type? {
         if (types.size != 2) return null
         // (P18.288) `NonNullable<undefined>` — a lone `null` / `undefined` with `{}` is `never` (tsgo).
