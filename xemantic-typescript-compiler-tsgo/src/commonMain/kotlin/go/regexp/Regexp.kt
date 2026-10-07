@@ -30,6 +30,7 @@ import com.xemantic.typescript.tsgo.runtime.GoError
 import com.xemantic.typescript.tsgo.runtime.GoPlainError
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.Tuple2
+import com.xemantic.typescript.tsgo.runtime.goDecodeRune
 import com.xemantic.typescript.tsgo.runtime.goPanic
 
 /**
@@ -66,6 +67,61 @@ class Regexp internal constructor(private val expr: String, private val re: Rege
 
     /** `re.String()`: the ORIGINAL (Go) source. */
     fun string(): String = expr
+
+    /**
+     * Go's `allMatches`: successive leftmost matches from `pos`; an EMPTY match right after the
+     * previous match's end is skipped, and after an empty match the scan advances one rune.
+     * [deliver] gets (start, end); at most [n] matches when `n >= 0`.
+     */
+    private fun allMatches(s: String, n: Int, deliver: (Int, Int) -> Unit) {
+        var pos = 0
+        var i = 0
+        var prevMatchEnd = -1
+        val end = s.length
+        while ((n < 0 || i < n) && pos <= end) {
+            val m = re.find(s, pos) ?: break
+            val m0 = m.range.first
+            val m1 = m.range.last + 1
+            var accept = true
+            if (m1 == pos) {
+                if (m0 == prevMatchEnd) accept = false
+                pos += if (pos < end) ((goDecodeRune(s, pos) ushr 32).toInt()) else end + 1
+            } else {
+                pos = m1
+            }
+            prevMatchEnd = m1
+            if (accept) {
+                deliver(m0, m1)
+                i++
+            }
+        }
+    }
+
+    /** `re.FindAllString(s, n)`: the nil slice when there is no match. */
+    fun findAllString(s: String, n: Int): GoSlice<String> {
+        var out = GoElem.STRING.nilSlice
+        allMatches(s, n) { a, b -> out = out.append1(s.substring(a, b)) }
+        return out
+    }
+
+    /** `re.Split(s, n)`: Go's rules (`n == 0` → nil; an empty input with a non-empty pattern → `[""]`). */
+    fun split(s: String, n: Int): GoSlice<String> {
+        if (n == 0) return GoElem.STRING.nilSlice
+        if (expr.isNotEmpty() && s.isEmpty()) return GoSlice.of(GoElem.STRING, "")
+        val matches = ArrayList<IntArray>()
+        allMatches(s, n) { a, b -> matches += intArrayOf(a, b) }
+        var out = GoSlice.make(GoElem.STRING, 0, matches.size)
+        var beg = 0
+        var end = 0
+        for (match in matches) {
+            if (n > 0 && out.len == n - 1) break
+            end = match[0]
+            if (match[1] != 0) out = out.append1(s.substring(beg, end))
+            beg = match[1]
+        }
+        if (end != s.length) out = out.append1(s.substring(beg))
+        return out
+    }
 
     /**
      * Go's `Regexp.expand` for a template: `$$` is `$`; `$name` takes the LONGEST run of

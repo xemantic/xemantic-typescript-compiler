@@ -78,6 +78,24 @@ fun sprintln(vararg a: Any?): String {
     return p.buf.toString()
 }
 
+/** Writes a formatted byte string to [w]: Go's `w.Write(p.buf)` and its (n, err). */
+private fun writeTo(w: com.xemantic.typescript.tsgo.go.io.Writer?, text: String): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, GoError?> {
+    if (w == null) throw NullPointerException("fmt: nil io.Writer")
+    return w.write(com.xemantic.typescript.tsgo.runtime.goStringToBytes(text))
+}
+
+/** `fmt.Fprintf(w, format, a...)` → (n, err). */
+fun fprintf(w: com.xemantic.typescript.tsgo.go.io.Writer?, format: String, vararg a: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, GoError?> =
+    writeTo(w, sprintf(format, *a))
+
+/** `fmt.Fprint(w, a...)`. */
+fun fprint(w: com.xemantic.typescript.tsgo.go.io.Writer?, vararg a: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, GoError?> =
+    writeTo(w, sprint(*a))
+
+/** `fmt.Fprintln(w, a...)`. */
+fun fprintln(w: com.xemantic.typescript.tsgo.go.io.Writer?, vararg a: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, GoError?> =
+    writeTo(w, sprintln(*a))
+
 private class WrapError(private val msg: String, private val err: GoError?) : GoError, GoUnwrapper {
     override fun error(): String = msg
     override fun unwrap(): GoError? = err

@@ -23,36 +23,7 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-package com.xemantic.typescript.tsgo.go.io
+package com.xemantic.typescript.tsgo.go.testing
 
-import com.xemantic.typescript.tsgo.runtime.GoError
-import com.xemantic.typescript.tsgo.runtime.GoPlainError
-import com.xemantic.typescript.tsgo.runtime.GoSlice
-import com.xemantic.typescript.tsgo.runtime.Tuple2
-
-/** `io.Reader`. */
-interface Reader {
-    fun read(p: GoSlice<Int>): Tuple2<Int, GoError?>
-}
-
-/** `io.Writer`. */
-interface Writer {
-    fun write(p: GoSlice<Int>): Tuple2<Int, GoError?>
-}
-
-/** `io.Closer`. */
-interface Closer {
-    fun close(): GoError?
-}
-
-/** `io.ReadCloser`, `io.WriteCloser`. */
-interface ReadCloser : Reader, Closer
-interface WriteCloser : Writer, Closer
-
-/** `io.StringWriter`. */
-interface StringWriter {
-    fun writeString(s: String): Tuple2<Int, GoError?>
-}
-
-/** `io.EOF`. */
-val EOF: GoError = GoPlainError("EOF")
+/** `testing.Testing()`: the port's code is never a `go test` binary — false. */
+fun testing(): Boolean = false

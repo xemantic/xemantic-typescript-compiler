@@ -23,36 +23,18 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-package com.xemantic.typescript.tsgo.go.io
+package com.xemantic.typescript.tsgo.go.runtime
 
-import com.xemantic.typescript.tsgo.runtime.GoError
-import com.xemantic.typescript.tsgo.runtime.GoPlainError
-import com.xemantic.typescript.tsgo.runtime.GoSlice
-import com.xemantic.typescript.tsgo.runtime.Tuple2
+import com.xemantic.typescript.tsgo.runtime.Tuple4
 
-/** `io.Reader`. */
-interface Reader {
-    fun read(p: GoSlice<Int>): Tuple2<Int, GoError?>
-}
+/**
+ * `runtime.Caller(skip)` → (pc, file, line, ok). The port has no Go source positions, so it
+ * always answers `ok = false` (tsgo's only use is `bundled`'s test-only source-directory lookup,
+ * which panics on it).
+ */
+@Suppress("UNUSED_PARAMETER")
+fun caller(skip: Int): Tuple4<ULong, String, Int, Boolean> = Tuple4(0uL, "", 0, false)
 
-/** `io.Writer`. */
-interface Writer {
-    fun write(p: GoSlice<Int>): Tuple2<Int, GoError?>
-}
-
-/** `io.Closer`. */
-interface Closer {
-    fun close(): GoError?
-}
-
-/** `io.ReadCloser`, `io.WriteCloser`. */
-interface ReadCloser : Reader, Closer
-interface WriteCloser : Writer, Closer
-
-/** `io.StringWriter`. */
-interface StringWriter {
-    fun writeString(s: String): Tuple2<Int, GoError?>
-}
-
-/** `io.EOF`. */
-val EOF: GoError = GoPlainError("EOF")
+/** `runtime.GOOS`, `runtime.GOARCH`: the port reports a Linux/amd64-like host (tsgo branches on GOOS only for Windows paths). */
+const val GOOS: String = "linux"
+const val GOARCH: String = "amd64"

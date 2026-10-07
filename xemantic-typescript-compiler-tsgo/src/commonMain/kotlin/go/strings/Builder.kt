@@ -40,7 +40,7 @@ import com.xemantic.typescript.tsgo.runtime.goPanic
  * Every write returns Go's results (`(n, nil)` / `nil`); the lowering discards them when the Go
  * call is an expression statement.
  */
-class Builder : Writer {
+class Builder : Writer, com.xemantic.typescript.tsgo.go.io.StringWriter {
 
     private var buf: StringBuilder = StringBuilder()
 
@@ -84,7 +84,7 @@ class Builder : Writer {
     }
 
     /** `b.WriteString(s)`. */
-    fun writeString(s: String): Tuple2<Int, GoError?> {
+    override fun writeString(s: String): Tuple2<Int, GoError?> {
         buf.append(s)
         return Tuple2(s.length, null)
     }

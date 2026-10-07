@@ -27,14 +27,11 @@
 
 package com.xemantic.typescript.tsgo.go.sync
 
-// Go's `sync`, THREAD-SAFE, in common Kotlin (no `java.*`): every primitive is built on
+// Go's `sync`, THREAD-SAFE, in common Kotlin: every primitive is built on
 // `kotlin.concurrent.atomics` (volatile semantics, so a successful acquire happens-after the
-// matching release, as Go's memory model requires). Common Kotlin cannot PARK a thread, so a
-// contended lock SPINS ([spinWait]) instead of sleeping; the uncontended path is one CAS. That is
-// the right trade while goroutines are refused by the lowering (design § 4) and contention only
-// arises between independent compilations sharing a process-global (the IntelliJ host runs one
-// compiler thread per project in one JVM); a parallel checker port needs an `expect`/`actual`
-// park before it holds a lock for long. `WaitGroup.Go` runs its function synchronously.
+// matching release, as Go's memory model requires). The uncontended path is one CAS; a contended
+// caller spins briefly and then PARKS in a [WaitQueue] (an `expect`/`actual` park: LockSupport on
+// the JVM), and the releasing side wakes it. `WaitGroup.Go` runs its function synchronously.
 // docs/goport-runtime.md § 9a.
 
 import com.xemantic.typescript.tsgo.runtime.goPanic
@@ -56,23 +53,27 @@ internal fun spinWait(round: Int, probe: AtomicInt) {
     }
 }
 
+/** `sync.Locker`. */
+interface Locker {
+    fun lock()
+    fun unlock()
+}
+
 /** `sync.Mutex`: not reentrant (a second `Lock` from the same thread never returns, as in Go). */
-class Mutex {
+class Mutex : Locker {
     // 0 = unlocked, 1 = locked
     private val state = AtomicInt(0)
+    private val waiters = WaitQueue()
 
-    fun lock() {
+    override fun lock() {
         if (state.compareAndSet(0, 1)) return
-        var round = 0
-        while (true) {
-            if (state.load() == 0 && state.compareAndSet(0, 1)) return
-            spinWait(round++, state)
-        }
+        waiters.await(state) { state.load() == 0 && state.compareAndSet(0, 1) }
     }
 
     /** Go's `fatal error: sync: unlock of unlocked mutex` — a [goPanic] here (Go cannot recover it). */
-    fun unlock() {
+    override fun unlock() {
         if (!state.compareAndSet(1, 0)) goPanic("sync: unlock of unlocked mutex")
+        if (waiters.waiting.load() != 0) waiters.signalOne()
     }
 
     fun tryLock(): Boolean = state.compareAndSet(0, 1)
@@ -85,51 +86,55 @@ class Mutex {
  * `sync.RWMutex`: any number of readers or one writer. As in Go, a writer waiting in [lock] blocks
  * NEW readers (so a recursive `RLock` can deadlock, and writers do not starve).
  */
-class RWMutex {
+class RWMutex : Locker {
     // > 0 = that many readers, -1 = a writer, 0 = free
     private val state = AtomicInt(0)
     private val writersWaiting = AtomicInt(0)
+    private val waiters = WaitQueue()
 
-    fun lock() {
+    override fun lock() {
         if (state.compareAndSet(0, -1)) return
         writersWaiting.incrementAndFetch()
-        var round = 0
-        while (true) {
-            if (state.load() == 0 && state.compareAndSet(0, -1)) break
-            spinWait(round++, state)
-        }
+        waiters.await(state) { state.load() == 0 && state.compareAndSet(0, -1) }
         writersWaiting.decrementAndFetch()
     }
 
     fun tryLock(): Boolean = state.compareAndSet(0, -1)
 
-    fun unlock() {
+    override fun unlock() {
         if (!state.compareAndSet(-1, 0)) goPanic("sync: Unlock of unlocked RWMutex")
+        if (waiters.waiting.load() != 0) waiters.signalAll()
     }
 
     fun rLock() {
-        var round = 0
-        while (true) {
-            if (writersWaiting.load() == 0) {
-                val s = state.load()
-                if (s >= 0 && state.compareAndSet(s, s + 1)) return
-            }
-            spinWait(round++, state)
-        }
+        if (tryRLock()) return
+        waiters.await(state) { tryRLock() }
     }
 
     fun tryRLock(): Boolean {
-        if (writersWaiting.load() != 0) return false
-        val s = state.load()
-        return s >= 0 && state.compareAndSet(s, s + 1)
+        while (true) {
+            if (writersWaiting.load() != 0) return false
+            val s = state.load()
+            if (s < 0) return false
+            if (state.compareAndSet(s, s + 1)) return true
+        }
     }
 
     fun rUnlock() {
         while (true) {
             val s = state.load()
             if (s <= 0) goPanic("sync: RUnlock of unlocked RWMutex")
-            if (state.compareAndSet(s, s - 1)) return
+            if (state.compareAndSet(s, s - 1)) {
+                if (s == 1 && waiters.waiting.load() != 0) waiters.signalAll()
+                return
+            }
         }
+    }
+
+    /** `rw.RLocker()`: a [Locker] whose lock/unlock are [rLock]/[rUnlock]. */
+    fun rLocker(): Locker = object : Locker {
+        override fun lock() = rLock()
+        override fun unlock() = rUnlock()
     }
 
     fun goCopy(): RWMutex = RWMutex().also { it.state.store(state.load()) }
@@ -223,12 +228,15 @@ class Pool(var new: (() -> Any?)? = null) {
     fun goCopy(): Pool = Pool(new)
 }
 
-/** `sync.WaitGroup`: `Go` runs the function synchronously; [wait] spins until the counter is zero. */
+/** `sync.WaitGroup`: `Go` runs the function synchronously; [wait] blocks until the counter is zero. */
 class WaitGroup {
     private val count = AtomicInt(0)
+    private val waiters = WaitQueue()
 
     fun add(delta: Int) {
-        if (count.addAndFetch(delta) < 0) goPanic("sync: negative WaitGroup counter")
+        val v = count.addAndFetch(delta)
+        if (v < 0) goPanic("sync: negative WaitGroup counter")
+        if (v == 0 && waiters.waiting.load() != 0) waiters.signalAll()
     }
 
     fun done() {
@@ -247,8 +255,8 @@ class WaitGroup {
     // `wait()V` would clash with java.lang.Object.wait on the JVM.
     @kotlin.jvm.JvmName("goWait")
     fun wait() {
-        var round = 0
-        while (count.load() != 0) spinWait(round++, count)
+        if (count.load() == 0) return
+        waiters.await(count) { count.load() == 0 }
     }
 
     fun goCopy(): WaitGroup = WaitGroup().also { it.count.store(count.load()) }

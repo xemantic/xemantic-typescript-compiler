@@ -34,8 +34,9 @@ import com.xemantic.typescript.tsgo.runtime.goBytesToString
 // `HashString128`), ported from the library's pure-Go generic path (`hash64.go`, `hash128.go`,
 // `accumScalar` in `accum_generic.go`). The SIMD paths the Go library picks on amd64/arm64 compute
 // the same function by design; the oracle vectors in `Xxh3OracleTest` are real Go output on amd64
-// (so they exercise the AVX2 path against this scalar port). NOT ported: the seeded variants and the
-// streaming `Hasher` (the checker's cache keys need it; outside the spike closure).
+// (so they exercise the AVX2 path against this scalar port), and so are the streaming [Hasher]'s
+// (`New`, `Write`, `WriteString`, `Sum64`, `Sum128` — the checker's cache keys). NOT ported: the
+// seeded variants.
 //
 // Inputs are Go byte strings (docs/goport-runtime.md § 5): every char is one byte. All arithmetic is
 // on `Long` (two's complement wraps exactly like Go's `uint64`); unsigned shifts are `ushr`.
@@ -79,6 +80,135 @@ fun hashString128(s: String): Uint128 {
     hashAny128(s, r)
     return Uint128(r[0].toULong(), r[1].toULong())
 }
+
+/**
+ * `xxh3.Hasher` (unseeded), Go's streaming state machine verbatim (`hasher.go`): input is buffered
+ * up to one block plus one stripe; a full buffer is folded into the accumulators only when MORE
+ * input arrives, and a first write longer than the buffer is consumed block by block without
+ * copying. `Sum64`/`Sum128` do not change the state and equal the one-shot hash of everything
+ * written. Go's zero value is usable (it resets itself on first use); so is `Hasher()`.
+ */
+class Hasher {
+    private val acc = LongArray(8)
+    private var blk = 0L
+    private var len = 0
+    private var keyed = false
+    private val buf = CharArray(BLOCK + STRIPE)
+
+    /** `h.Reset()`. */
+    fun reset() {
+        initialAccs().copyInto(acc)
+        blk = 0
+        len = 0
+    }
+
+    /** `h.BlockSize()`, `h.Size()`. */
+    fun blockSize(): Int = STRIPE
+    fun size(): Int = 8
+
+    /** `h.Write(b)` → (len(b), nil). */
+    fun write(b: GoSlice<Int>): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, com.xemantic.typescript.tsgo.runtime.GoError?> {
+        update(goBytesToString(b))
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(b.len, null)
+    }
+
+    /** `h.WriteString(s)` → (len(s), nil). */
+    fun writeString(s: String): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, com.xemantic.typescript.tsgo.runtime.GoError?> {
+        update(s)
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(s.length, null)
+    }
+
+    private fun ensureKey() {
+        if (!keyed) {
+            keyed = true
+            reset()
+        }
+    }
+
+    private fun update(s: String) {
+        ensureKey()
+        var p = 0
+        val n = s.length
+        // first write of more than a buffer: whole blocks straight from the input
+        while (len == 0 && n - p > buf.size) {
+            accumBlock(acc, s, p)
+            p += BLOCK
+            blk++
+        }
+        while (p < n) {
+            if (len < buf.size) {
+                val k = minOf(buf.size - len, n - p)
+                for (i in 0 until k) buf[len + i] = s[p + i]
+                len += k
+                p += k
+                continue
+            }
+            accumBlock(acc, buf.concatToString(0, BLOCK), 0)
+            blk++
+            len = STRIPE
+            buf.copyInto(buf, 0, BLOCK, BLOCK + STRIPE)
+        }
+    }
+
+    /** `h.Sum64()`. */
+    fun sum64(): ULong {
+        ensureKey()
+        val data = buf.concatToString(0, len)
+        if (blk == 0L) return hashAny(data).toULong()
+        val l = blk * BLOCK + len
+        var a = l * PRIME64_1
+        val accs = acc.copyOf()
+        if (len > 0) accumScalar(accs, data, len)
+        a += mulFold64(accs[0] xor K[11], accs[1] xor K[19])
+        a += mulFold64(accs[2] xor K[27], accs[3] xor K[35])
+        a += mulFold64(accs[4] xor K[43], accs[5] xor K[51])
+        a += mulFold64(accs[6] xor K[59], accs[7] xor K[67])
+        return xxh3Avalanche(a).toULong()
+    }
+
+    /** `h.Sum128()`. */
+    fun sum128(): Uint128 {
+        ensureKey()
+        val data = buf.concatToString(0, len)
+        if (blk == 0L) return hashString128(data)
+        val l = blk * BLOCK + len
+        var lo = l * PRIME64_1
+        var hi = (l * PRIME64_2).inv()
+        val accs = acc.copyOf()
+        if (len > 0) accumScalar(accs, data, len)
+        lo += mulFold64(accs[0] xor K[11], accs[1] xor K[19])
+        hi += mulFold64(accs[0] xor K[117], accs[1] xor K[125])
+        lo += mulFold64(accs[2] xor K[27], accs[3] xor K[35])
+        hi += mulFold64(accs[2] xor K[133], accs[3] xor K[141])
+        lo += mulFold64(accs[4] xor K[43], accs[5] xor K[51])
+        hi += mulFold64(accs[4] xor K[149], accs[5] xor K[157])
+        lo += mulFold64(accs[6] xor K[59], accs[7] xor K[67])
+        hi += mulFold64(accs[6] xor K[165], accs[7] xor K[173])
+        return Uint128(xxh3Avalanche(hi).toULong(), xxh3Avalanche(lo).toULong())
+    }
+
+    /** `h.Sum(b)`: [b] with the big-endian `Sum64` appended. */
+    fun sum(b: GoSlice<Int>): GoSlice<Int> {
+        val v = sum64()
+        var out = b
+        for (i in 0 until 8) out = out.append1(((v shr (56 - 8 * i)) and 0xFFuL).toInt())
+        return out
+    }
+
+    /** A Go value copy (the checker embeds a `Hasher` by value in its key builder). */
+    fun goCopy(): Hasher {
+        val c = Hasher()
+        acc.copyInto(c.acc)
+        c.blk = blk
+        c.len = len
+        c.keyed = keyed
+        buf.copyInto(c.buf)
+        return c
+    }
+}
+
+/** `xxh3.New()`. */
+fun new(): Hasher = Hasher()
 
 // ---- constants (consts.go) ----
 
@@ -235,6 +365,18 @@ private fun accumScalar(accs: LongArray, s: String, len: Int) {
         for (i in 0 until t) accumulateStripe(accs, s, p + i * STRIPE, 8 * i)
         // the last stripe ends at the end of the input, against the secret at 192 - 64 - 7
         accumulateStripe(accs, s, len - STRIPE, 121)
+    }
+}
+
+/** `accumBlockScalar`: one 1024-byte block at [p] (16 stripes) then the scramble. */
+private fun accumBlock(accs: LongArray, s: String, p: Int) {
+    for (i in 0 until 16) accumulateStripe(accs, s, p + i * STRIPE, 8 * i)
+    for (j in 0 until 8) {
+        var a = accs[j]
+        a = a xor (a ushr 47)
+        a = a xor K[128 + 8 * j]
+        a *= PRIME32_1
+        accs[j] = a
     }
 }
 

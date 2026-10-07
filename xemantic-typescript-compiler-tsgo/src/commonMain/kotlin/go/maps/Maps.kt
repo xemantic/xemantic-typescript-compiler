@@ -87,3 +87,19 @@ fun <K, V> insert(m: GoMap<K, V>, seq: Seq2<K, V>) {
         true
     }
 }
+
+/** `maps.EqualFunc(m1, m2, eq)`. */
+fun <K, V1, V2> equalFunc(m1: GoMap<K, V1>, m2: GoMap<K, V2>, eq: (V1, V2) -> Boolean): Boolean {
+    if (m1.len != m2.len) return false
+    var result = true
+    m1.range { k, v1 ->
+        val (v2, ok) = m2.lookup(k)
+        if (!ok || !eq(v1, v2)) {
+            result = false
+            false
+        } else {
+            true
+        }
+    }
+    return result
+}

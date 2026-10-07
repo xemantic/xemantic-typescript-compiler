@@ -23,36 +23,16 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-package com.xemantic.typescript.tsgo.go.io
+package com.xemantic.typescript.tsgo.go.sync
 
-import com.xemantic.typescript.tsgo.runtime.GoError
-import com.xemantic.typescript.tsgo.runtime.GoPlainError
-import com.xemantic.typescript.tsgo.runtime.GoSlice
-import com.xemantic.typescript.tsgo.runtime.Tuple2
+import java.util.concurrent.locks.LockSupport
 
-/** `io.Reader`. */
-interface Reader {
-    fun read(p: GoSlice<Int>): Tuple2<Int, GoError?>
+internal actual fun parkToken(): Any = Thread.currentThread()
+
+internal actual fun park(blocker: Any) {
+    LockSupport.park(blocker)
 }
 
-/** `io.Writer`. */
-interface Writer {
-    fun write(p: GoSlice<Int>): Tuple2<Int, GoError?>
+internal actual fun unpark(token: Any) {
+    LockSupport.unpark(token as Thread)
 }
-
-/** `io.Closer`. */
-interface Closer {
-    fun close(): GoError?
-}
-
-/** `io.ReadCloser`, `io.WriteCloser`. */
-interface ReadCloser : Reader, Closer
-interface WriteCloser : Writer, Closer
-
-/** `io.StringWriter`. */
-interface StringWriter {
-    fun writeString(s: String): Tuple2<Int, GoError?>
-}
-
-/** `io.EOF`. */
-val EOF: GoError = GoPlainError("EOF")

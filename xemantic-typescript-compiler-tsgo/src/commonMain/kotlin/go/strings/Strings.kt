@@ -599,3 +599,57 @@ fun indexAnyAt(s: String, from: Int, chars: String): Int {
 
 /** `strings.ContainsAny(s[from:], chars)`. */
 fun containsAnyAt(s: String, from: Int, chars: String): Boolean = indexAnyAt(s, from, chars) >= 0
+
+/** `strings.Clone(s)`: Kotlin strings are immutable, so the string itself (Go allocates a copy; equal either way). */
+fun clone(s: String): String = s
+
+/**
+ * `strings.Replacer`: [replace] scans left to right and, at each position, takes the old string
+ * with the HIGHEST PRIORITY (the earliest argument pair) that is a prefix of the rest — not the
+ * longest — exactly as Go's `genericReplacer` (whose byte-only special cases have the same
+ * semantics). An empty old string matches at every position, but not twice in a row.
+ */
+class Replacer internal constructor(private val oldnew: Array<out String>) {
+
+    /** `r.Replace(s)`. */
+    fun replace(s: String): String {
+        if (oldnew.isEmpty()) return s
+        val sb = StringBuilder(s.length)
+        var last = 0
+        var prevMatchEmpty = false
+        var i = 0
+        while (i <= s.length) {
+            var best = -1
+            var k = 0
+            while (k < oldnew.size) {
+                val old = oldnew[k]
+                if ((old.isNotEmpty() || !prevMatchEmpty) && s.startsWith(old, i)) {
+                    best = k
+                    break
+                }
+                k += 2
+            }
+            if (best >= 0) {
+                val keylen = oldnew[best].length
+                prevMatchEmpty = keylen == 0
+                sb.append(s, last, i)
+                sb.append(oldnew[best + 1])
+                i += keylen
+                last = i
+                continue
+            }
+            prevMatchEmpty = false
+            i++
+        }
+        if (last != s.length) sb.append(s, last, s.length)
+        return sb.toString()
+    }
+
+    fun goCopy(): Replacer = this
+}
+
+/** `strings.NewReplacer(oldnew...)`: panics on an odd argument count, as Go does. */
+fun newReplacer(vararg oldnew: String): Replacer {
+    if (oldnew.size % 2 == 1) goPanic("strings.NewReplacer: odd argument count")
+    return Replacer(oldnew)
+}

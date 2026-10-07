@@ -54,3 +54,12 @@ fun rotateLeft64(x: ULong, k: Int): ULong = x.rotateLeft(k)
 
 /** `bits.RotateLeft32(x, k)`. */
 fun rotateLeft32(x: UInt, k: Int): UInt = x.rotateLeft(k)
+
+/** `bits.OnesCount(x)` (`uint` is 64-bit). */
+fun onesCount(x: ULong): Int = x.countOneBits()
+
+/** `bits.OnesCount16(x)`. */
+fun onesCount16(x: Int): Int = (x and 0xFFFF).countOneBits()
+
+/** `bits.OnesCount8(x)`. */
+fun onesCount8(x: Int): Int = (x and 0xFF).countOneBits()

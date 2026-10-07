@@ -250,3 +250,51 @@ fun <T> appendSeq(s: GoSlice<T>, seq: Seq<T>): GoSlice<T> {
 /** `slices.Collect(seq)` (the element kind is needed for the result). */
 fun <T> collect(elem: com.xemantic.typescript.tsgo.runtime.GoElem<T>, seq: Seq<T>): GoSlice<T> =
     appendSeq(elem.nilSlice, seq)
+
+/** `slices.Sorted(seq)`: [collect] then [sort] (nil for an empty sequence, as in Go). */
+fun <T : Comparable<T>> sorted(elem: com.xemantic.typescript.tsgo.runtime.GoElem<T>, seq: Seq<T>): GoSlice<T> {
+    val s = collect(elem, seq)
+    sort(s)
+    return s
+}
+
+/** `slices.SortedFunc(seq, cmp)`. */
+fun <T> sortedFunc(elem: com.xemantic.typescript.tsgo.runtime.GoElem<T>, seq: Seq<T>, cmp: (T, T) -> Int): GoSlice<T> {
+    val s = collect(elem, seq)
+    sortFunc(s, cmp)
+    return s
+}
+
+/** `slices.Compact(s)`: drops consecutive duplicates (`==`) in place and zeroes the vacated tail (Go 1.22+). */
+fun <T> compact(s: GoSlice<T>): GoSlice<T> = compactFunc(s) { a, b -> goEq(a, b) }
+
+/** `slices.CompactFunc(s, eq)`: as [compact] with [eq]; keeps the FIRST of each run. */
+fun <T> compactFunc(s: GoSlice<T>, eq: (T, T) -> Boolean): GoSlice<T> {
+    if (s.len < 2) return s
+    for (k0 in 1 until s.len) {
+        if (eq(s[k0], s[k0 - 1])) {
+            var k = k0
+            val s2 = s.slice(k0)
+            for (k2 in 1 until s2.len) {
+                if (!eq(s2[k2], s2[k2 - 1])) {
+                    s[k] = s2[k2]
+                    k++
+                }
+            }
+            goClear(s.slice(k))
+            return s.slice(0, k)
+        }
+    }
+    return s
+}
+
+/** `slices.Repeat(x, count)`: a fresh (non-nil) slice; Go's panics for a negative or overflowing count. */
+fun <T> repeat(x: GoSlice<T>, count: Int): GoSlice<T> {
+    if (count < 0) goPanic("cannot be negative")
+    val total = x.len.toLong() * count.toLong()
+    if (total > Int.MAX_VALUE) goPanic("the result of (len(x) * count) overflows")
+    val out = GoSlice.make(x.elem, total.toInt())
+    var n = goCopy(out, x)
+    while (n < out.len) n += goCopy(out.slice(n), out.slice(0, n))
+    return out
+}
