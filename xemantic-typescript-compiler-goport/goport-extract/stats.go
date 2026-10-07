@@ -1,0 +1,352 @@
+package main
+
+// The closure census: declaration counts, line counts, risky Go features per
+// function, and the EXTERNAL SYMBOL SURFACE — every stdlib / non-tsgo symbol
+// the closure references, which is exactly what the hand-written shims must
+// implement.
+
+import (
+	"fmt"
+	"go/ast"
+	"go/token"
+	"go/types"
+	"sort"
+	"strings"
+)
+
+type pkgStat struct {
+	path                               string
+	files, genFiles, lines, genLines   int
+	funcs, methods, typeSpecs, aliases int
+	vars, consts, constGroups, imports int
+	genFuncs                           int
+	irBytes                            int
+	irSha                              string
+}
+
+type extSym struct {
+	key, pkg, cat, kind string
+	uses                int
+	usedBy              map[string]bool // tsgo packages referencing it
+}
+
+type stats struct {
+	module   string
+	closure  map[string]bool
+	pkgs     map[string]*pkgStat
+	ext      map[string]*extSym
+	featFns  map[string]int // number of top-level declarations using the feature
+	featOcc  map[string]int // total occurrences
+	featList map[string][]string
+	declsAll int
+	extImpls [][3]string // closure type, external interface key, via
+}
+
+func newStats(module string, closure map[string]bool) *stats {
+	return &stats{module: module, closure: closure, pkgs: map[string]*pkgStat{}, ext: map[string]*extSym{},
+		featFns: map[string]int{}, featOcc: map[string]int{}, featList: map[string][]string{}}
+}
+
+func (s *stats) pkg(path string) *pkgStat {
+	ps := s.pkgs[path]
+	if ps == nil {
+		ps = &pkgStat{path: path}
+		s.pkgs[path] = ps
+	}
+	return ps
+}
+
+func (s *stats) addFile(path string, gen bool, lines int) {
+	ps := s.pkg(path)
+	ps.files++
+	ps.lines += lines
+	if gen {
+		ps.genFiles++
+		ps.genLines += lines
+	}
+}
+
+func (s *stats) addFunc(path, kind, q string, ff *funcFacts, gen bool) {
+	ps := s.pkg(path)
+	if kind == "method" {
+		ps.methods++
+	} else {
+		ps.funcs++
+	}
+	if gen {
+		ps.genFuncs++
+	}
+	s.addFacts(q, ff)
+}
+
+func (s *stats) addGen(path, q string, d *ast.GenDecl, ff *funcFacts, gen bool) {
+	ps := s.pkg(path)
+	for _, sp := range d.Specs {
+		switch sp := sp.(type) {
+		case *ast.ImportSpec:
+			ps.imports++
+		case *ast.TypeSpec:
+			if sp.Assign.IsValid() {
+				ps.aliases++
+			} else {
+				ps.typeSpecs++
+			}
+		case *ast.ValueSpec:
+			if d.Tok == token.CONST {
+				ps.consts += len(sp.Names)
+			} else {
+				ps.vars += len(sp.Names)
+			}
+		}
+	}
+	if d.Tok == token.CONST && d.Lparen.IsValid() {
+		ps.constGroups++
+	}
+	if d.Tok != token.IMPORT {
+		s.addFacts(q, ff)
+	}
+}
+
+func (s *stats) addFacts(q string, f *funcFacts) {
+	s.declsAll++
+	add := func(name string, n int) {
+		if n > 0 {
+			s.featFns[name]++
+			s.featOcc[name] += n
+			s.featList[name] = append(s.featList[name], q)
+		}
+	}
+	b := func(x bool) int {
+		if x {
+			return 1
+		}
+		return 0
+	}
+	add("defer", f.Defer)
+	add("recover", f.Recover)
+	add("panic", f.Panic)
+	add("goto", f.Goto)
+	add("go statement", f.Go)
+	add("channel ops", f.ChanOps)
+	add("select", f.Select)
+	add("unsafe", f.Unsafe)
+	add("reflect", f.Reflect)
+	add("fallthrough", f.Fallthrough)
+	add("labels", f.Labels)
+	add("closures (func literals)", f.Closures)
+	add("generic declaration (type params)", b(f.TypeParams))
+	add("instantiates generics", b(f.Instantiates))
+	add("address-taken locals", f.AddrLocals)
+	add("closure-captured locals", f.CapturedLocals)
+	add("struct/array value copies", f.StructCopies)
+	add("multiple results", b(f.MultiResult))
+	add("named results", b(f.NamedResults))
+	add("bare return", f.BareReturn)
+}
+
+func (s *stats) category(path string) string {
+	switch {
+	case s.closure[path]:
+		return "closure"
+	case path == s.module || strings.HasPrefix(path, s.module+"/"):
+		return "tsgo-outside-closure"
+	case !strings.Contains(strings.SplitN(path, "/", 2)[0], "."):
+		return "stdlib"
+	default:
+		return "module"
+	}
+}
+
+func (s *stats) addUse(p *px, o types.Object) {
+	var path, cat string
+	if o.Pkg() == nil {
+		path, cat = "builtin", "builtin"
+	} else {
+		path = o.Pkg().Path()
+		cat = s.category(path)
+		if cat == "closure" {
+			return
+		}
+	}
+	if _, isPkg := o.(*types.PkgName); isPkg {
+		return // the import itself, not a symbol
+	}
+	key := p.objKey(o)
+	if key == "" {
+		if v, ok := o.(*types.Var); ok && v.Kind() == types.FieldVar {
+			key = path + ".?." + o.Name() // field of an anonymous struct
+		} else {
+			key = path + ".?" + o.Name()
+		}
+	}
+	e := s.ext[key]
+	if e == nil {
+		e = &extSym{key: key, pkg: path, cat: cat, kind: objKind(o), usedBy: map[string]bool{}}
+		s.ext[key] = e
+	}
+	e.uses++
+	e.usedBy[p.pkg.PkgPath] = true
+}
+
+func (s *stats) shortPkg(path string) string {
+	return strings.TrimPrefix(path, s.module+"/")
+}
+
+func (s *stats) markdown(pkgOrder []string, elapsed string) string {
+	var b strings.Builder
+	w := func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }
+	w("# goport closure census\n\n")
+	w("GENERATED by `goport-extract --stats` (xemantic-typescript-compiler-goport/goport-extract) — do not edit.\n")
+	w("Source: `typescript-go-repo` at the pinned tag; closure = the packages below. ")
+	w("Schema of the IR it was taken from: `docs/goport-ir.md`.\n\n")
+
+	var t pkgStat
+	for _, p := range pkgOrder {
+		ps := s.pkgs[p]
+		t.files += ps.files
+		t.genFiles += ps.genFiles
+		t.lines += ps.lines
+		t.genLines += ps.genLines
+		t.funcs += ps.funcs
+		t.methods += ps.methods
+		t.typeSpecs += ps.typeSpecs
+		t.aliases += ps.aliases
+		t.vars += ps.vars
+		t.consts += ps.consts
+		t.constGroups += ps.constGroups
+		t.imports += ps.imports
+		t.irBytes += ps.irBytes
+		t.genFuncs += ps.genFuncs
+	}
+	w("## Headline\n\n")
+	w("| | |\n|---|---|\n")
+	w("| packages | %d |\n", len(pkgOrder))
+	w("| Go files | %d (%d generated) |\n", t.files, t.genFiles)
+	w("| Go lines | %d total = %d hand-written + %d generated |\n", t.lines, t.lines-t.genLines, t.genLines)
+	w("| functions / methods | %d / %d (%d of them in generated files) |\n", t.funcs, t.methods, t.genFuncs)
+	w("| type declarations / aliases | %d / %d |\n", t.typeSpecs, t.aliases)
+	w("| package vars / consts (const groups) | %d / %d (%d) |\n", t.vars, t.consts, t.constGroups)
+	nExt, nExtUses := 0, 0
+	for _, e := range s.ext {
+		if e.cat != "builtin" {
+			nExt++
+			nExtUses += e.uses
+		}
+	}
+	w("| distinct external symbols (stdlib + modules + tsgo outside closure) | %d (%d uses) |\n", nExt, nExtUses)
+	w("| IR size | %.1f MB |\n", float64(t.irBytes)/1e6)
+	if elapsed != "" {
+		w("| extraction time | %s |\n", elapsed)
+	}
+	w("\n## Per package\n\n")
+	w("| package | files (gen) | lines | generated lines | funcs | methods | types | aliases | vars | consts | IR bytes |\n")
+	w("|---|---|---|---|---|---|---|---|---|---|---|\n")
+	for _, p := range pkgOrder {
+		ps := s.pkgs[p]
+		w("| `%s` | %d (%d) | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n", s.shortPkg(p), ps.files, ps.genFiles,
+			ps.lines, ps.genLines, ps.funcs, ps.methods, ps.typeSpecs, ps.aliases, ps.vars, ps.consts, ps.irBytes)
+	}
+
+	w("\n## Risky Go features\n\n")
+	w("Counted per TOP-LEVEL declaration (a func/method, or a var/const/type group) out of %d; ", s.declsAll)
+	w("closures nested in a declaration count toward it. \"occurrences\" is the total number of sites.\n\n")
+	w("| feature | declarations using it | occurrences | lowering (`docs/goport-design.md`) |\n|---|---|---|---|\n")
+	lower := map[string]string{
+		"defer": "try/finally", "recover": "catch GoPanic", "panic": "throw GoPanic", "goto": "rule or refusal",
+		"go statement": "REFUSED → override", "channel ops": "REFUSED → override", "select": "REFUSED → override",
+		"unsafe": "REFUSED → override", "reflect": "REFUSED → override", "fallthrough": "rule or refusal",
+		"labels": "Kotlin labels", "closures (func literals)": "lambdas", "generic declaration (type params)": "Kotlin generics",
+		"instantiates generics": "Kotlin generics", "address-taken locals": "GoPtr box", "closure-captured locals": "captured var",
+		"struct/array value copies": "goCopy()", "multiple results": "TupleN", "named results": "locals", "bare return": "return named results",
+	}
+	feats := []string{"defer", "recover", "panic", "goto", "fallthrough", "labels", "go statement", "channel ops", "select",
+		"unsafe", "reflect", "closures (func literals)", "closure-captured locals", "address-taken locals",
+		"struct/array value copies", "generic declaration (type params)", "instantiates generics",
+		"multiple results", "named results", "bare return"}
+	for _, f := range feats {
+		w("| %s | %d | %d | %s |\n", f, s.featFns[f], s.featOcc[f], lower[f])
+	}
+	w("\n### Declarations using refused features\n\n")
+	for _, f := range []string{"go statement", "channel ops", "select", "unsafe", "reflect", "goto", "recover"} {
+		l := append([]string{}, s.featList[f]...)
+		sort.Strings(l)
+		if len(l) == 0 {
+			w("- **%s**: none\n", f)
+			continue
+		}
+		var sh []string
+		for _, q := range l {
+			sh = append(sh, "`"+s.shortPkg(q)+"`")
+		}
+		w("- **%s** (%d): %s\n", f, len(l), strings.Join(sh, ", "))
+	}
+
+	w("\n## Closure types satisfying EXTERNAL interfaces\n\n")
+	w("A shim package may call these methods through the interface (e.g. `fmt` calling `String()`, `encoding/json/v2` calling `MarshalJSONTo`), ")
+	w("which no identifier use in the closure shows. Generic named types are not checked (`implementsSkipped`).\n\n")
+	w("| closure type | interface | via |\n|---|---|---|\n")
+	ei := append([][3]string{}, s.extImpls...)
+	sort.Slice(ei, func(i, j int) bool {
+		if ei[i][1] != ei[j][1] {
+			return ei[i][1] < ei[j][1]
+		}
+		return ei[i][0] < ei[j][0]
+	})
+	for _, r := range ei {
+		w("| `%s` | `%s` | %s |\n", s.shortPkg(r[0]), r[1], r[2])
+	}
+
+	// External surface.
+	type pkgAgg struct {
+		path, cat string
+		syms      []*extSym
+		uses      int
+	}
+	aggs := map[string]*pkgAgg{}
+	for _, e := range s.ext {
+		a := aggs[e.pkg]
+		if a == nil {
+			a = &pkgAgg{path: e.pkg, cat: e.cat}
+			aggs[e.pkg] = a
+		}
+		a.syms = append(a.syms, e)
+		a.uses += e.uses
+	}
+	var al []*pkgAgg
+	for _, a := range aggs {
+		sort.Slice(a.syms, func(i, j int) bool {
+			if a.syms[i].uses != a.syms[j].uses {
+				return a.syms[i].uses > a.syms[j].uses
+			}
+			return a.syms[i].key < a.syms[j].key
+		})
+		al = append(al, a)
+	}
+	sort.Slice(al, func(i, j int) bool {
+		if al[i].uses != al[j].uses {
+			return al[i].uses > al[j].uses
+		}
+		return al[i].path < al[j].path
+	})
+	w("\n## External symbol surface (the shim surface)\n\n")
+	w("Every identifier USE whose object lives outside the closure (go/types `Uses`, which includes field and method selectors, ")
+	w("embedded-field promotions and qualified identifiers). Methods are keyed by the type that DECLARES them ")
+	w("(`pkg.Type.Method`), so a promoted method shows under its real receiver. Not visible here: methods an external ")
+	w("package calls on a closure type through an interface (e.g. `fmt` calling `String()`); see `docs/goport-ir.md` § Limits.\n\n")
+	w("| package | category | distinct symbols | uses |\n|---|---|---|---|\n")
+	for _, a := range al {
+		w("| `%s` | %s | %d | %d |\n", a.path, a.cat, len(a.syms), a.uses)
+	}
+	for _, a := range al {
+		w("\n### `%s` (%s)\n\n| symbol | kind | uses | used by |\n|---|---|---|---|\n", a.path, a.cat)
+		for _, e := range a.syms {
+			var by []string
+			for k := range e.usedBy {
+				by = append(by, s.shortPkg(k))
+			}
+			sort.Strings(by)
+			w("| `%s` | %s | %d | %s |\n", strings.TrimPrefix(e.key, a.path+"."), e.kind, e.uses, strings.Join(by, ", "))
+		}
+	}
+	return b.String()
+}
