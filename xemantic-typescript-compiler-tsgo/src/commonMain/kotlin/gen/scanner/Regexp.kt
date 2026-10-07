@@ -228,13 +228,13 @@ fun com.xemantic.typescript.tsgo.scanner.regExpParser?.char(): Int {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.charAt d16cb275
-fun com.xemantic.typescript.tsgo.scanner.regExpParser?.charAt(pos: Int): Int {
-    return this!!.scanner.charAt(pos - this.pos())
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.charAt(pos_1: Int): Int {
+    return this!!.scanner.charAt(pos_1 - this.pos())
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.error dbe334b8
-fun com.xemantic.typescript.tsgo.scanner.regExpParser?.error(msg: Message?, pos: Int, length: Int, args: GoSlice<Any?>) {
-    this!!.scanner.errorAt(msg, pos, length, args)
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.error(msg: Message?, pos_1: Int, length: Int, args: GoSlice<Any?>) {
+    this!!.scanner.errorAt(msg, pos_1, length, args)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.text 4aae977e

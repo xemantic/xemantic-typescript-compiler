@@ -360,14 +360,14 @@ fun ParsedCommandLine?.wildcardDirectories(): GoMap<String, Boolean> {
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.ParsedCommandLine.WildcardDirectoryGlobs 8e6a0949
 fun ParsedCommandLine?.wildcardDirectoryGlobs(): GoSlice<Glob?> {
-    val wildcardDirectories: GoMap<String, Boolean> = this.wildcardDirectories()
-    if (wildcardDirectories.isNil) {
+    val wildcardDirectories_1: GoMap<String, Boolean> = this.wildcardDirectories()
+    if (wildcardDirectories_1.isNil) {
         return GoElem.ref<Glob?>().nilSlice
     }
     this!!.includeGlobsOnce.`do`(fun() {
         if (this!!.includeGlobs.isNil) {
-            var globs: GoSlice<Glob?> = GoSlice.make(GoElem.ref<Glob?>(), 0, wildcardDirectories.len)
-            val m0 = wildcardDirectories
+            var globs: GoSlice<Glob?> = GoSlice.make(GoElem.ref<Glob?>(), 0, wildcardDirectories_1.len)
+            val m0 = wildcardDirectories_1
             l0@ for (k1 in m0.keysSnapshot()) {
                 val e2 = m0.probe(k1)
                 if (e2 === GoMapAbsent) continue
@@ -488,9 +488,9 @@ fun ParsedCommandLine?.possiblyMatchesFileName(fileName: String): Boolean {
             }
         }
     }
-    val wildcardDirectoryGlobs: GoSlice<Glob?> = this.wildcardDirectoryGlobs()
-    if (wildcardDirectoryGlobs.len > 0) {
-        val s3 = wildcardDirectoryGlobs
+    val wildcardDirectoryGlobs_1: GoSlice<Glob?> = this.wildcardDirectoryGlobs()
+    if (wildcardDirectoryGlobs_1.len > 0) {
+        val s3 = wildcardDirectoryGlobs_1
         l1@ for (i4 in 0 until s3.len) {
             val glob: Glob? = s3[i4]
             if (glob.match(fileName)) {
@@ -543,9 +543,9 @@ fun ParsedCommandLine?.getMatchedIncludeSpec(fileName: String): Tuple2<String, B
 fun ParsedCommandLine?.reloadFileNamesOfParsedCommandLine(fs: FS?): ParsedCommandLine? {
     val parsedConfig: ParsedOptions = this!!.parsedConfig!!.goCopy()
     val t0 = getFileNamesFromConfigSpecs(this!!.configFile!!.configFileSpecs!!.goCopy(), this!!.getCurrentDirectory(), this.compilerOptions(), fs, this!!.extraFileExtensions)
-    val fileNames: GoSlice<String> = t0.first
+    val fileNames_1: GoSlice<String> = t0.first
     val literalFileNamesLen: Int = t0.second
-    parsedConfig.fileNames = fileNames
+    parsedConfig.fileNames = fileNames_1
     val parsedCommandLine: ParsedCommandLine = ParsedCommandLine(parsedConfig = parsedConfig, configFile = this!!.configFile, errors = this!!.errors, raw = this!!.raw, compileOnSave = this!!.compileOnSave, comparePathsOptions = this!!.comparePathsOptions.goCopy(), wildcardDirectories = this!!.wildcardDirectories, includeGlobs = this!!.includeGlobs, extraFileExtensions = this!!.extraFileExtensions, literalFileNamesLen = literalFileNamesLen)
     return parsedCommandLine
 }

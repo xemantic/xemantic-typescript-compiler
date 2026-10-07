@@ -363,7 +363,7 @@ fun com.xemantic.typescript.tsgo.glob.group.string(): String {
 
 // go: github.com/microsoft/typescript-go/internal/glob.Glob.Match d0515326
 fun Glob?.match(input: String): Boolean {
-    return match(this!!.elems, input)
+    return com.xemantic.typescript.tsgo.glob.match(this!!.elems, input)
 }
 
 // go: github.com/microsoft/typescript-go/internal/glob.match be07a6e4

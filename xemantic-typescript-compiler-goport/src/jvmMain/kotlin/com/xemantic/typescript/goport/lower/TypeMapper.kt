@@ -474,14 +474,25 @@ class TypeMapper(
         return hasGoCopy(t)
     }
 
-    fun hasGoCopy(t: NamedType): Boolean {
+    fun hasGoCopy(t: NamedType): Boolean = hasMember(t, "goCopy")
+
+    /** Whether struct [t]'s Kotlin class (generated, or the shim class a struct alias names) has [member]. */
+    fun hasMember(t: NamedType, member: String): Boolean {
         val origin = t.origin?.let { types.unalias(it) as NamedType } ?: t
         if (origin.pkg in pc.prog.ported) {
             val target = pc.prog.structAliasTarget(origin) ?: return true
-            return pc.prog.shims.classHas(target.first, target.second, "goCopy")
+            return pc.prog.shims.classHas(target.first, target.second, member)
         }
         if (origin.pkg == null) return true
-        return pc.prog.shims.classHas(Naming.kotlinPackage(origin.pkg), origin.name, "goCopy")
+        return pc.prog.shims.classHas(Naming.kotlinPackage(origin.pkg), origin.name, member)
+    }
+
+    /** A struct value compared field by field through `goEquals` (generated, or a shim class that has it). */
+    fun hasGoEquals(id: Int): Boolean {
+        val t = types.unalias(id) as? NamedType ?: return false
+        if (types.under(id) !is StructType || isEmptyStruct(id)) return false
+        if (isPortedNamed(t) && namedKind(t) == NamedKind.STRUCT) return true
+        return hasMember(t, "goEquals")
     }
 
     /** True when [id]'s Kotlin form is nullable (zero is `null`). */

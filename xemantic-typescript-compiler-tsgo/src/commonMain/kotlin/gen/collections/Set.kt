@@ -112,8 +112,8 @@ fun <T> Set<T>?.clone(): Set<T>? {
     if (this == null) {
         return null
     }
-    val clone: Set<T>? = Set<T>(goElem_T = this!!.goElem_T, m = com.xemantic.typescript.tsgo.go.maps.clone<T, Unit>(this!!.m))
-    return clone
+    val clone_1: Set<T>? = Set<T>(goElem_T = this!!.goElem_T, m = com.xemantic.typescript.tsgo.go.maps.clone<T, Unit>(this!!.m))
+    return clone_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.Set.Union b219f1fe

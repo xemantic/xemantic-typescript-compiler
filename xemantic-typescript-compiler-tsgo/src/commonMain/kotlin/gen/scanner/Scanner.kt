@@ -356,9 +356,9 @@ fun hasJSDocTag(text: String, tags: GoSlice<String>): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.SetText 030d02a7
-fun Scanner?.setText(text: String) {
-    this!!.text = text
-    this!!.end = text.length
+fun Scanner?.setText(text_1: String) {
+    this!!.text = text_1
+    this!!.end = text_1.length
     this!!.scannerState = ScannerState()
 }
 
@@ -426,12 +426,12 @@ fun Scanner?.charAndSize(): Tuple2<Int, Int> {
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.scanASCIIWhile e705e82f
 inline fun Scanner?.scanASCIIWhile(pred: ((Int) -> Boolean)) {
-    val text_b0: String = this!!.text
-    val text_o1: Int = this!!.scannerState.pos
-    val text_n2: Int = goStrView(text_b0, text_o1, this!!.end)
+    val text_1_b0: String = this!!.text
+    val text_1_o1: Int = this!!.scannerState.pos
+    val text_1_n2: Int = goStrView(text_1_b0, text_1_o1, this!!.end)
     var i: Int = 0
-    l0@ while (i < text_n2) {
-        val b: Int = goViewByte(text_b0, text_o1, text_n2, i)
+    l0@ while (i < text_1_n2) {
+        val b: Int = goViewByte(text_1_b0, text_1_o1, text_1_n2, i)
         if (b >= 128 || !pred(b)) {
             break@l0
         }
@@ -1529,21 +1529,21 @@ fun Scanner?.scanJSDocToken(): Kind {
         }
     }
     if (isIdentifierStart(ch)) {
-        var char: Int = ch
+        var char_1: Int = ch
         l2@ while (true) {
             if (this!!.scannerState.pos >= this!!.text.length) {
                 break@l2
             }
             val t3 = this.charAndSize()
-            char = t3.first
+            char_1 = t3.first
             size = t3.second
-            if (!isIdentifierPart(char) && char != 45) {
+            if (!isIdentifierPart(char_1) && char_1 != 45) {
                 break@l2
             }
             this!!.scannerState.pos += size
         }
         this!!.scannerState.tokenValue = this!!.text.substring(this!!.scannerState.tokenStart, this!!.scannerState.pos)
-        if (char == 92) {
+        if (char_1 == 92) {
             this!!.scannerState.tokenValue += this.scanIdentifierParts()
         }
         this!!.scannerState.token = getIdentifierToken(this!!.scannerState.tokenValue)
@@ -1678,7 +1678,7 @@ fun Scanner?.scanTemplateAndSetTokenValue(shouldEmitInvalidEscapeError: Boolean)
     this!!.scannerState.pos = this!!.scannerState.pos + 1
     var start: Int = this!!.scannerState.pos
     var parts: GoSlice<String> = GoSlice.make(GoElem.STRING, 0, 4)
-    var token: Kind = Kind(0)
+    var token_1: Kind = Kind(0)
     l0@ while (true) {
         this.scanASCIIWhile(fun(b: Int): Boolean {
             return b != 96 && b != 36 && b != 92 && b != 13
@@ -1692,13 +1692,13 @@ fun Scanner?.scanTemplateAndSetTokenValue(shouldEmitInvalidEscapeError: Boolean)
                 this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 4)
                 this.error(com.xemantic.typescript.tsgo.diagnostics.unterminated_template_literal)
             }
-            token = com.xemantic.typescript.tsgo.core.ifElse<Kind>(Kind.ELEM, startedWithBacktick, Kind(14), Kind(17))
+            token_1 = com.xemantic.typescript.tsgo.core.ifElse<Kind>(Kind.ELEM, startedWithBacktick, Kind(14), Kind(17))
             break@l0
         }
         if (ch == 36 && this.charAt(1) == 123) {
             parts = parts.append1(this!!.text.substring(start, this!!.scannerState.pos))
             this!!.scannerState.pos += 2
-            token = com.xemantic.typescript.tsgo.core.ifElse<Kind>(Kind.ELEM, startedWithBacktick, Kind(15), Kind(16))
+            token_1 = com.xemantic.typescript.tsgo.core.ifElse<Kind>(Kind.ELEM, startedWithBacktick, Kind(15), Kind(16))
             break@l0
         }
         if (ch == 92) {
@@ -1720,7 +1720,7 @@ fun Scanner?.scanTemplateAndSetTokenValue(shouldEmitInvalidEscapeError: Boolean)
         this!!.scannerState.pos = this!!.scannerState.pos + 1
     }
     this!!.scannerState.tokenValue = com.xemantic.typescript.tsgo.go.strings.join(parts, "")
-    return token
+    return token_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.scanEscapeSequence 19ddc5e5
@@ -2272,12 +2272,12 @@ fun Scanner?.scanBigIntSuffix(): Kind {
     if (ok) {
         this!!.scannerState.tokenValue = cached
     } else {
-        var tokenValue: String = com.xemantic.typescript.tsgo.jsnum.fromString(this!!.scannerState.tokenValue).string()
-        if (tokenValue == this!!.scannerState.tokenValue) {
-            tokenValue = this!!.scannerState.tokenValue
+        var tokenValue_1: String = com.xemantic.typescript.tsgo.jsnum.fromString(this!!.scannerState.tokenValue).string()
+        if (tokenValue_1 == this!!.scannerState.tokenValue) {
+            tokenValue_1 = this!!.scannerState.tokenValue
         }
-        this!!.numberCache[this!!.scannerState.tokenValue] = tokenValue
-        this!!.scannerState.tokenValue = tokenValue
+        this!!.numberCache[this!!.scannerState.tokenValue] = tokenValue_1
+        this!!.scannerState.tokenValue = tokenValue_1
     }
     return Kind(8)
 }

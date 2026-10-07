@@ -1212,10 +1212,10 @@ fun Relater?.signatureRelatedTo(source_0: Signature?, target_1: Signature?, eras
         source = this!!.c.getErasedSignature(source)
         target = this!!.c.getErasedSignature(target)
     }
-    val isRelatedToWorker: ((Type?, Type?, Boolean) -> Ternary)? = fun(source_1: Type?, target_2: Type?, reportErrors_1: Boolean): Ternary {
+    val isRelatedToWorker_1: ((Type?, Type?, Boolean) -> Ternary)? = fun(source_1: Type?, target_2: Type?, reportErrors_1: Boolean): Ternary {
         return this.isRelatedToEx(source_1, target_2, RecursionFlagsBoth, reportErrors_1, null, intersectionState)
     }
-    return this!!.c.compareSignaturesRelated(source, target, checkMode, reportErrors, run { val r2 = this; fun(p0: Message?, p1: GoSlice<Any?>) = r2.reportError(p0, p1) }, isRelatedToWorker, this!!.c!!.reportUnreliableMapper)
+    return this!!.c.compareSignaturesRelated(source, target, checkMode, reportErrors, run { val r2 = this; fun(p0: Message?, p1: GoSlice<Any?>) = r2.reportError(p0, p1) }, isRelatedToWorker_1, this!!.c!!.reportUnreliableMapper)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Relater.signaturesIdenticalTo bbc176f2

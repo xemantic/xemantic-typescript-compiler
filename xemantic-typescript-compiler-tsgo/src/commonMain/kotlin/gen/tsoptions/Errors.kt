@@ -68,7 +68,7 @@ fun getCompilerOptionValueTypeString(option: CommandLineOption?): String {
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.commandLineParser.createUnknownOptionError 7788ca5c
 fun com.xemantic.typescript.tsgo.tsoptions.commandLineParser?.createUnknownOptionError(unknownOption: String, unknownOptionErrorText: String, node: Node?, sourceFile: SourceFile?): Diagnostic? {
-    return createUnknownOptionError(unknownOption, this.unknownOptionDiagnostic(), unknownOptionErrorText, node, sourceFile, this.alternateMode())
+    return com.xemantic.typescript.tsgo.tsoptions.createUnknownOptionError(unknownOption, this.unknownOptionDiagnostic(), unknownOptionErrorText, node, sourceFile, this.alternateMode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.createUnknownOptionError 9e92b979

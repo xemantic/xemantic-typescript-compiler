@@ -210,18 +210,18 @@ fun Diagnostic?.repopulateInfo(): RepopulateDiagnosticInfo? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.SetFile 14577e14
-fun Diagnostic?.setFile(file: SourceFile?) {
-    this!!.file = file
+fun Diagnostic?.setFile(file_1: SourceFile?) {
+    this!!.file = file_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.SetLocation 0261778e
-fun Diagnostic?.setLocation(loc: TextRange) {
-    this!!.loc = loc.goCopy()
+fun Diagnostic?.setLocation(loc_1: TextRange) {
+    this!!.loc = loc_1.goCopy()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.SetCategory d868037c
-fun Diagnostic?.setCategory(category: Category) {
-    this!!.category = category
+fun Diagnostic?.setCategory(category_1: Category) {
+    this!!.category = category_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.SetSkippedOnNoEmit f94b323c
@@ -235,29 +235,29 @@ fun Diagnostic?.setRepopulateInfo(info: RepopulateDiagnosticInfo?) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.SetMessageChain 9c5a4d1c
-fun Diagnostic?.setMessageChain(messageChain: GoSlice<Diagnostic?>): Diagnostic? {
-    this!!.messageChain = messageChain
+fun Diagnostic?.setMessageChain(messageChain_1: GoSlice<Diagnostic?>): Diagnostic? {
+    this!!.messageChain = messageChain_1
     return this
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.AddMessageChain 39709df4
-fun Diagnostic?.addMessageChain(messageChain: Diagnostic?): Diagnostic? {
-    if (messageChain != null) {
-        this!!.messageChain = this!!.messageChain.append1(messageChain)
+fun Diagnostic?.addMessageChain(messageChain_1: Diagnostic?): Diagnostic? {
+    if (messageChain_1 != null) {
+        this!!.messageChain = this!!.messageChain.append1(messageChain_1)
     }
     return this
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.SetRelatedInfo 34ee1445
-fun Diagnostic?.setRelatedInfo(relatedInformation: GoSlice<Diagnostic?>): Diagnostic? {
-    this!!.relatedInformation = relatedInformation
+fun Diagnostic?.setRelatedInfo(relatedInformation_1: GoSlice<Diagnostic?>): Diagnostic? {
+    this!!.relatedInformation = relatedInformation_1
     return this
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.AddRelatedInfo b7066504
-fun Diagnostic?.addRelatedInfo(relatedInformation: Diagnostic?): Diagnostic? {
-    if (relatedInformation != null) {
-        this!!.relatedInformation = this!!.relatedInformation.append1(relatedInformation)
+fun Diagnostic?.addRelatedInfo(relatedInformation_1: Diagnostic?): Diagnostic? {
+    if (relatedInformation_1 != null) {
+        this!!.relatedInformation = this!!.relatedInformation.append1(relatedInformation_1)
     }
     return this
 }

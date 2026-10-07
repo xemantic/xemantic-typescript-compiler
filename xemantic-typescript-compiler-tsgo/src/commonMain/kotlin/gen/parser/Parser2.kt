@@ -335,12 +335,12 @@ fun Parser?.parseParameters(flags: ParseFlags): NodeList? {
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseParametersWorker 728cca4e
 fun Parser?.parseParametersWorker(flags: ParseFlags, allowAmbiguity: Boolean): NodeList? {
-    val inAwaitContext: Boolean = this!!.contextFlags.value and 8192u != 0u
+    val inAwaitContext_1: Boolean = this!!.contextFlags.value and 8192u != 0u
     val saveContextFlags: NodeFlags = this!!.contextFlags
     this.setContextFlags(NodeFlags(2048u), flags.value and 1u != 0u)
     this.setContextFlags(NodeFlags(8192u), flags.value and 2u != 0u)
     val parameters: NodeList? = this.parseDelimitedList(PCParameters, fun(p: Parser?): Node? {
-        val parameter: Node? = p.parseParameterEx(inAwaitContext, allowAmbiguity)
+        val parameter: Node? = p.parseParameterEx(inAwaitContext_1, allowAmbiguity)
         if (parameter != null && flags.value and 4u == 0u) {
             p.checkJSSyntax(parameter)
         }
@@ -2618,13 +2618,13 @@ fun Parser?.parseIdentifierWithDiagnostic(diagnosticMessage: Message?, privateId
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.createIdentifier e210bf33
-fun Parser?.createIdentifier(isIdentifier: Boolean): Node? {
-    return this.createIdentifierWithDiagnostic(isIdentifier, null, null)
+fun Parser?.createIdentifier(isIdentifier_1: Boolean): Node? {
+    return this.createIdentifierWithDiagnostic(isIdentifier_1, null, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.createIdentifierWithDiagnostic ca8c27b3
-fun Parser?.createIdentifierWithDiagnostic(isIdentifier: Boolean, diagnosticMessage: Message?, privateIdentifierDiagnosticMessage: Message?): Node? {
-    if (isIdentifier) {
+fun Parser?.createIdentifierWithDiagnostic(isIdentifier_1: Boolean, diagnosticMessage: Message?, privateIdentifierDiagnosticMessage: Message?): Node? {
+    if (isIdentifier_1) {
         var pos: Int = 0
         if (this!!.scanner.hasPrecedingJSDocLeadingAsterisks()) {
             pos = this!!.scanner.tokenStart()

@@ -185,15 +185,15 @@ fun EmitContext?.onCreate(node: Node?) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.onUpdate ba37d186
-fun EmitContext?.onUpdate(updated: Node?, original: Node?) {
-    this.setOriginal(updated, original)
+fun EmitContext?.onUpdate(updated: Node?, original_1: Node?) {
+    this.setOriginal(updated, original_1)
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.onClone 43e528aa
-fun EmitContext?.onClone(updated: Node?, original: Node?) {
-    this.setOriginal(updated, original)
+fun EmitContext?.onClone(updated: Node?, original_1: Node?) {
+    this.setOriginal(updated, original_1)
     if (com.xemantic.typescript.tsgo.ast.isIdentifier(updated) || com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(updated)) {
-        val autoGenerate: AutoGenerateInfo? = this!!.autoGenerate[original]
+        val autoGenerate: AutoGenerateInfo? = this!!.autoGenerate[original_1]
         if (autoGenerate != null) {
             val autoGenerateCopy: AutoGenerateInfo = autoGenerate!!.goCopy()
             this!!.autoGenerate[updated] = autoGenerateCopy
@@ -457,20 +457,20 @@ fun EmitContext?.getNodeForGeneratedName(name: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.getNodeForGeneratedNameWorker 02ad7a4b
 fun EmitContext?.getNodeForGeneratedNameWorker(node_0: Node?, autoGenerateId: AutoGenerateId): Node? {
     var node: Node? = node_0
-    var original: Node? = this.original(node)
-    l0@ while (original != null) {
-        node = original
+    var original_1: Node? = this.original(node)
+    l0@ while (original_1 != null) {
+        node = original_1
         if (com.xemantic.typescript.tsgo.ast.isMemberName(node)) {
             val autoGenerate: AutoGenerateInfo? = this!!.autoGenerate[node]
             if (autoGenerate == null || autoGenerate!!.flags.isNode() && autoGenerate!!.id.value != autoGenerateId.value) {
                 break@l0
             }
             if (autoGenerate!!.flags.isNode()) {
-                original = autoGenerate!!.node
+                original_1 = autoGenerate!!.node
                 continue@l0
             }
         }
-        original = this.original(node)
+        original_1 = this.original(node)
     }
     return node
 }
@@ -543,8 +543,8 @@ class AutoGenerateInfo(
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.SetOriginal 88ce32c3
-fun EmitContext?.setOriginal(node: Node?, original: Node?) {
-    this.setOriginalEx(node, original, false)
+fun EmitContext?.setOriginal(node: Node?, original_1: Node?) {
+    this.setOriginalEx(node, original_1, false)
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.UnsetOriginal 12a64036
@@ -553,8 +553,8 @@ fun EmitContext?.unsetOriginal(node: Node?) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.SetOriginalEx 3ff5229b
-fun EmitContext?.setOriginalEx(node: Node?, original: Node?, allowOverwrite: Boolean) {
-    if (original == null) {
+fun EmitContext?.setOriginalEx(node: Node?, original_1: Node?, allowOverwrite: Boolean) {
+    if (original_1 == null) {
         goPanic("Original cannot be nil.")
     }
     if (this!!.original.isNil) {
@@ -564,15 +564,15 @@ fun EmitContext?.setOriginalEx(node: Node?, original: Node?, allowOverwrite: Boo
     val existing: Node? = goProbeValue<Node?>(t0) { null }
     val ok: Boolean = t0 !== GoMapAbsent
     if (!ok) {
-        this!!.original[node] = original
-        val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(original)
+        this!!.original[node] = original_1
+        val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(original_1)
         if (emitNode != null) {
             this!!.emitNodes.get(node).copyFrom(emitNode)
         }
-    } else if (!allowOverwrite && existing !== original) {
+    } else if (!allowOverwrite && existing !== original_1) {
         goPanic("Original node already set.")
     } else if (allowOverwrite) {
-        this!!.original[node] = original
+        this!!.original[node] = original_1
     }
 }
 
@@ -585,10 +585,10 @@ fun EmitContext?.original(node: Node?): Node? {
 fun EmitContext?.mostOriginal(node_0: Node?): Node? {
     var node: Node? = node_0
     if (node != null) {
-        var original: Node? = this.original(node)
-        l0@ while (original != null) {
-            node = original
-            original = this.original(node)
+        var original_1: Node? = this.original(node)
+        l0@ while (original_1 != null) {
+            node = original_1
+            original_1 = this.original(node)
         }
     }
     return node
@@ -762,10 +762,10 @@ fun EmitContext?.assignSourceMapRange(to: Node?, from: Node?) {
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.AssignCommentAndSourceMapRanges 4245a017
 fun EmitContext?.assignCommentAndSourceMapRanges(to: Node?, from: Node?) {
     val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.get(to)
-    val commentRange: TextRange = this.commentRange(from)
-    val sourceMapRange: TextRange = this.sourceMapRange(from)
-    emitNode!!.commentRange = commentRange.goCopy()
-    emitNode!!.sourceMapRange = sourceMapRange.goCopy()
+    val commentRange_1: TextRange = this.commentRange(from)
+    val sourceMapRange_1: TextRange = this.sourceMapRange(from)
+    emitNode!!.commentRange = commentRange_1.goCopy()
+    emitNode!!.sourceMapRange = sourceMapRange_1.goCopy()
     emitNode!!.flags = com.xemantic.typescript.tsgo.printer.emitNodeFlags(emitNode!!.flags.value or 3u)
 }
 
@@ -816,11 +816,11 @@ fun EmitContext?.classThis(node: Node?): Node? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.SetClassThis ad034cd7
-fun EmitContext?.setClassThis(node: Node?, classThis: Node?) {
+fun EmitContext?.setClassThis(node: Node?, classThis_1: Node?) {
     if (this!!.classThis.isNil) {
         this!!.classThis = GoMap.make<Node?, Node?>(GoElem.ref<Node?>())
     }
-    this!!.classThis[node] = classThis
+    this!!.classThis[node] = classThis_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.RequestEmitHelper 0436b942
@@ -893,9 +893,9 @@ fun EmitContext?.getEmitHelpers(node: Node?): GoSlice<EmitHelper?> {
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.GetExternalHelpersModuleName 321fa49a
 fun EmitContext?.getExternalHelpersModuleName(node: SourceFile?): Node? {
-    val parseNode: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
-    if (parseNode != null) {
-        val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(parseNode)
+    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
+    if (parseNode_1 != null) {
+        val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(parseNode_1)
         if (emitNode != null) {
             return emitNode!!.externalHelpersModuleName
         }
@@ -905,19 +905,19 @@ fun EmitContext?.getExternalHelpersModuleName(node: SourceFile?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.SetExternalHelpersModuleName 7c2110a2
 fun EmitContext?.setExternalHelpersModuleName(node: SourceFile?, name: Node?) {
-    val parseNode: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
-    if (parseNode == null) {
+    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
+    if (parseNode_1 == null) {
         goPanic("Node must be a parse tree node or have an Original pointer to a parse tree node.")
     }
-    val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.get(parseNode)
+    val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.get(parseNode_1)
     emitNode!!.externalHelpersModuleName = name
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.HasRecordedExternalHelpers a2c4fd31
 fun EmitContext?.hasRecordedExternalHelpers(node: SourceFile?): Boolean {
-    val parseNode: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
-    if (parseNode != null) {
-        val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(parseNode)
+    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
+    if (parseNode_1 != null) {
+        val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(parseNode_1)
         return emitNode != null && (emitNode!!.externalHelpersModuleName != null || emitNode!!.emitFlags.value and 262144u != 0u)
     }
     return false

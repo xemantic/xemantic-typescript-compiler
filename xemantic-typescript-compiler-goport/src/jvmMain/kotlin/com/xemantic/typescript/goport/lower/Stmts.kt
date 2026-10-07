@@ -818,6 +818,11 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             w.line("when {")
             w.indent {
                 var default: Node? = null
+                // Go's typed nil: an interface holding a nil `*T` matches `case *T`; Kotlin has one null.
+                // When no clause names `nil`, the first single-pointer-type clause whose body tests its
+                // variable against nil also takes null (`printer.tryGetEnd`).
+                val nilCase = clauses.any { c -> c.list("types").any { te -> te.str("m") == "nil" || (te.k == "Ident" && te.str("name") == "nil") } }
+                var nilTaken = nilCase
                 for (c in clauses) {
                     if (c.bool("default")) {
                         default = c
@@ -827,10 +832,16 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                     val conds = tys.map { te ->
                         if (te.str("m") == "nil" || (te.k == "Ident" && te.str("name") == "nil")) "$xv == null"
                         else "$xv is ${isCheck(ty(te))}"
+                    }.toMutableList()
+                    val takesNil = !nilTaken && tys.size == 1 && types.under(ty(tys[0])) is PointerType &&
+                        c.int("implicit")?.let { comparesToNil(c["body"], it) } == true
+                    if (takesNil) {
+                        conds += "$xv == null"
+                        nilTaken = true
                     }
                     w.line("${conds.joinToString(" || ")} -> {")
                     w.indent {
-                        bindTypeCase(c, xv, if (tys.size == 1 && tys[0].str("m") != "nil") ty(tys[0]) else null)
+                        bindTypeCase(c, xv, if (tys.size == 1 && tys[0].str("m") != "nil") ty(tys[0]) else null, takesNil)
                         body(c.list("body"))
                     }
                     w.line("}")
@@ -854,12 +865,26 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         }
     }
 
-    private fun bindTypeCase(c: Node, xv: String, single: Int?) {
+    private fun comparesToNil(body: Any?, id: Int): Boolean {
+        var found = false
+        Program.walk(body) { n ->
+            if (n.str("k") == "BinaryExpr" && n.bool("cmp")) {
+                val x = n.obj("x")
+                val y = n.obj("y")
+                if ((x?.int("obj") == id && y?.str("m") == "nil") || (y?.int("obj") == id && x?.str("m") == "nil")) found = true
+            }
+            !found
+        }
+        return found
+    }
+
+    private fun bindTypeCase(c: Node, xv: String, single: Int?, nullable: Boolean = false) {
         val id = c.int("implicit") ?: return
         if (!usesObj(c["body"], id)) return
         val n = fn.declare(id)
         val t = pc.obj(id).int("t")!!
         if (single != null && tm.boxOf(single) != null) w.line("val $n: ${tm.kt(t)} = ($xv as ${castTarget(single)}).value")
+        else if (single != null && nullable) w.line("val $n: ${tm.kt(t)} = $xv as ${castTarget(single)}?")
         else if (single != null) w.line("val $n: ${tm.kt(t)} = $xv as ${castTarget(single)}")
         else w.line("val $n: ${tm.kt(t)} = $xv")
     }

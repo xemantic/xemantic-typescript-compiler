@@ -2188,11 +2188,11 @@ fun Checker?.getConditionalType(root_0: ConditionalRoot?, mapper_1: TypeMapper?,
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getTailRecursionRoot d809c7c0
-fun Checker?.getTailRecursionRoot(newType: Type?, newMapper: TypeMapper?): Tuple2<ConditionalRoot?, TypeMapper?> {
-    if (newType!!.flags.value and 67108864u != 0u && newMapper != null) {
-        val newRoot: ConditionalRoot? = newType.asConditionalType()!!.root
+fun Checker?.getTailRecursionRoot(newType_1: Type?, newMapper: TypeMapper?): Tuple2<ConditionalRoot?, TypeMapper?> {
+    if (newType_1!!.flags.value and 67108864u != 0u && newMapper != null) {
+        val newRoot: ConditionalRoot? = newType_1.asConditionalType()!!.root
         if (newRoot!!.outerTypeParameters.len != 0) {
-            val typeParamMapper: TypeMapper? = this.combineTypeMappers(newType.asConditionalType()!!.mapper, newMapper)
+            val typeParamMapper: TypeMapper? = this.combineTypeMappers(newType_1.asConditionalType()!!.mapper, newMapper)
             val typeArguments: GoSlice<Type?> = com.xemantic.typescript.tsgo.core.map<Type?, Type?>(GoElem.ref<Type?>(), GoElem.ref<Type?>(), newRoot!!.outerTypeParameters, fun(t: Type?): Type? {
                 return typeParamMapper!!.map(t)
             })

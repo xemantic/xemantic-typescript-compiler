@@ -134,7 +134,7 @@ fun newNode(kind: Kind, data: com.xemantic.typescript.tsgo.ast.nodeData?, hooks:
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.newNode 49fa3a81
 fun NodeFactory?.newNode(kind: Kind, data: com.xemantic.typescript.tsgo.ast.nodeData?): Node? {
     this!!.nodeCount = this!!.nodeCount + 1
-    return newNode(kind, data, this!!.hooks.goCopy())
+    return com.xemantic.typescript.tsgo.ast.newNode(kind, data, this!!.hooks.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.NodeCount c4e9ddd1
@@ -943,18 +943,18 @@ fun Node?.canHaveStatements(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.Node.ModifierFlags 22e4d55a
 fun Node?.modifierFlags(): ModifierFlags {
-    val modifiers: ModifierList? = this.modifiers()
-    if (modifiers != null) {
-        return modifiers!!.modifierFlags
+    val modifiers_1: ModifierList? = this.modifiers()
+    if (modifiers_1 != null) {
+        return modifiers_1!!.modifierFlags
     }
     return ModifierFlagsNone
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Node.ModifierNodes 8989d6ad
 fun Node?.modifierNodes(): GoSlice<Node?> {
-    val modifiers: ModifierList? = this.modifiers()
-    if (modifiers != null) {
-        return modifiers!!.nodeList.nodes
+    val modifiers_1: ModifierList? = this.modifiers()
+    if (modifiers_1 != null) {
+        return modifiers_1!!.nodeList.nodes
     }
     return GoElem.ref<Node?>().nilSlice
 }
@@ -1311,11 +1311,11 @@ fun Node?.propertyName(): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/ast.Node.PropertyNameOrName b42acc1c
 fun Node?.propertyNameOrName(): Node? {
-    var name: Node? = this.propertyName()
-    if (name == null) {
-        name = this.name()
+    var name_1: Node? = this.propertyName()
+    if (name_1 == null) {
+        name_1 = this.name()
     }
-    return name
+    return name_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Node.IsTypeOnly 200a434f
@@ -2228,8 +2228,8 @@ fun ModifiersBase?.modifiers(): ModifierList? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.ModifiersBase.setModifiers 160b17ea
-fun ModifiersBase?.setModifiers(modifiers: ModifierList?) {
-    this!!.modifiers = modifiers
+fun ModifiersBase?.setModifiers(modifiers_1: ModifierList?) {
+    this!!.modifiers = modifiers_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.LocalsContainerBase.LocalsContainerData 9d63d902
@@ -2392,8 +2392,8 @@ fun NamedMemberBase?.modifiers(): ModifierList? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NamedMemberBase.setModifiers 05b784f5
-fun NamedMemberBase?.setModifiers(modifiers: ModifierList?) {
-    this!!.modifiersBase.modifiers = modifiers
+fun NamedMemberBase?.setModifiers(modifiers_1: ModifierList?) {
+    this!!.modifiersBase.modifiers = modifiers_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NamedMemberBase.Name de0837a8
@@ -2415,11 +2415,11 @@ fun Node?.getResolutionModeOverride(): Tuple2<ModuleKind, Boolean> {
     if (this == null) {
         return Tuple2<ModuleKind, Boolean>(ModuleKind(0), false)
     }
-    val attributes: NodeList? = this.asImportAttributes()!!.attributes
-    if (attributes!!.nodes.len != 1) {
+    val attributes_1: NodeList? = this.asImportAttributes()!!.attributes
+    if (attributes_1!!.nodes.len != 1) {
         return Tuple2<ModuleKind, Boolean>(ModuleKind(0), false)
     }
-    val elem: ImportAttribute? = attributes!!.nodes[0].asImportAttribute()
+    val elem: ImportAttribute? = attributes_1!!.nodes[0].asImportAttribute()
     if (!isStringLiteralLike(elem!!.name())) {
         return Tuple2<ModuleKind, Boolean>(ModuleKind(0), false)
     }
@@ -3079,13 +3079,13 @@ fun SourceFile?.getNameTable(): GoMap<String, Int> {
         var walk: ((Node?) -> Boolean)? = null
         walk = fun(node: Node?): Boolean {
             if (isIdentifier(node) && !isTagName(node) && node.text() != "" || isStringOrNumericLiteralLike(node) && literalIsName(node) || isPrivateIdentifier(node)) {
-                val text: String = node.text()
-                val t0 = nameTable.probe(text)
+                val text_1: String = node.text()
+                val t0 = nameTable.probe(text_1)
                 val ok: Boolean = t0 !== GoMapAbsent
                 if (ok) {
-                    nameTable[text] = -1
+                    nameTable[text_1] = -1
                 } else {
-                    nameTable[text] = node!!.pos()
+                    nameTable[text_1] = node!!.pos()
                 }
             }
             node.forEachChild(walk)
@@ -3129,12 +3129,12 @@ fun SourceFile?.bindOnce(bind: (() -> Unit)?) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.GetOrCreateToken eafe1b93
-fun SourceFile?.getOrCreateToken(kind: Kind, pos: Int, end: Int, parent: Node?, flags: TokenFlags): Node? {
+fun SourceFile?.getOrCreateToken(kind: Kind, pos_1: Int, end_1: Int, parent: Node?, flags: TokenFlags): Node? {
     return withDefers({ null }) { df0 ->
         this!!.tokenCacheMu.lock()
         val dr1 = this!!.tokenCacheMu
         df0.defer { dr1.unlock() }
-        val loc: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(pos, end)
+        val loc: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(pos_1, end_1)
         val key: TokenCacheKey = TokenCacheKey(parent = parent, loc = loc.goCopy())
         val t2 = this!!.tokenCache.probe(key.goCopy())
         val token: Node? = goProbeValue<Node?>(t2) { null }
@@ -3151,7 +3151,7 @@ fun SourceFile?.getOrCreateToken(kind: Kind, pos: Int, end: Int, parent: Node?, 
         if (this!!.tokenCache.isNil) {
             this!!.tokenCache = GoMap.make<TokenCacheKey, Node?>(GoElem.ref<Node?>())
         }
-        val token_1: Node? = createToken(kind, this, pos, end, flags)
+        val token_1: Node? = createToken(kind, this, pos_1, end_1, flags)
         token_1!!.loc = loc.goCopy()
         token_1!!.parent = parent
         this!!.tokenCache[key.goCopy()] = token_1
@@ -3223,9 +3223,9 @@ fun SourceFile?.getDeclarationMap(): GoMap<String, GoSlice<Node?>> {
 fun SourceFile?.computeDeclarationMap(): GoMap<String, GoSlice<Node?>> {
     val result: GoMap<String, GoSlice<Node?>> = GoMap.make<String, GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()))
     val addDeclaration: ((Node?) -> Unit)? = fun(declaration: Node?) {
-        val name: String = getDeclarationName(declaration)
-        if (name != "") {
-            result[name] = result[name].append1(declaration)
+        val name_1: String = getDeclarationName(declaration)
+        if (name_1 != "") {
+            result[name_1] = result[name_1].append1(declaration)
         }
     }
     var visit_1: ((Node?) -> Boolean)? = null
@@ -3263,9 +3263,9 @@ fun SourceFile?.computeDeclarationMap(): GoMap<String, GoSlice<Node?>> {
                     if (!hasSyntacticModifier(node, ModifierFlagsParameterPropertyModifier)) {
                         return@sw0
                     }
-                    val name_1: Node? = node.name()
-                    if (name_1 != null) {
-                        if (isBindingPattern(name_1)) {
+                    val name_2: Node? = node.name()
+                    if (name_2 != null) {
+                        if (isBindingPattern(name_2)) {
                             node.name().forEachChild(visit_1)
                         } else {
                             if (node.initializer() != null) {
@@ -3276,9 +3276,9 @@ fun SourceFile?.computeDeclarationMap(): GoMap<String, GoSlice<Node?>> {
                     }
                 }
                 261, 209 -> {
-                    val name_1: Node? = node.name()
-                    if (name_1 != null) {
-                        if (isBindingPattern(name_1)) {
+                    val name_2: Node? = node.name()
+                    if (name_2 != null) {
+                        if (isBindingPattern(name_2)) {
                             node.name().forEachChild(visit_1)
                         } else {
                             if (node.initializer() != null) {
@@ -3306,12 +3306,12 @@ fun SourceFile?.computeDeclarationMap(): GoMap<String, GoSlice<Node?>> {
                     }
                 }
                 273 -> {
-                    val importClause: Node? = node.asImportDeclaration()!!.importClause
-                    if (importClause != null) {
-                        if (importClause.name() != null) {
-                            addDeclaration!!(importClause.name())
+                    val importClause_1: Node? = node.asImportDeclaration()!!.importClause
+                    if (importClause_1 != null) {
+                        if (importClause_1.name() != null) {
+                            addDeclaration!!(importClause_1.name())
                         }
-                        val namedBindings: Node? = importClause.asImportClause()!!.namedBindings
+                        val namedBindings: Node? = importClause_1.asImportClause()!!.namedBindings
                         if (namedBindings != null) {
                             if (namedBindings!!.kind.value == 275) {
                                 addDeclaration!!(namedBindings)

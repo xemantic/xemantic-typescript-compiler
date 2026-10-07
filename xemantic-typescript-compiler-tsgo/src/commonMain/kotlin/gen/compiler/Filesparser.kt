@@ -137,9 +137,9 @@ fun com.xemantic.typescript.tsgo.compiler.parseTask?.load(loader: com.xemantic.t
             val df1 = loader!!.opts.tracing.push(Phase("program"), "findSourceFile", GoMap.make<String, Any?>(GoElem.ref<Any?>()).also { it["fileName"] = this!!.normalizedFilePath }, false)
             df0.defer { df1!!() }
         }
-        val redirect: String = loader!!.projectReferenceFileMapper.getParseFileRedirect(this)
-        if (redirect != "") {
-            this.redirect(loader, redirect)
+        val redirect_1: String = loader!!.projectReferenceFileMapper.getParseFileRedirect(this)
+        if (redirect_1 != "") {
+            this.redirect(loader, redirect_1)
             return
         }
         if (com.xemantic.typescript.tsgo.tspath.hasExtension(this!!.normalizedFilePath)) {
@@ -209,8 +209,8 @@ fun com.xemantic.typescript.tsgo.compiler.parseTask?.load(loader: com.xemantic.t
 }
 
 // go: github.com/microsoft/typescript-go/internal/compiler.parseTask.redirect b1a69691
-fun com.xemantic.typescript.tsgo.compiler.parseTask?.redirect(loader: com.xemantic.typescript.tsgo.compiler.fileLoader?, fileName: String) {
-    this!!.redirectedParseTask = com.xemantic.typescript.tsgo.compiler.parseTask(normalizedFilePath = com.xemantic.typescript.tsgo.tspath.normalizePath(fileName), libFile = this!!.libFile, includeReason = this!!.includeReason)
+fun com.xemantic.typescript.tsgo.compiler.parseTask?.redirect(loader: com.xemantic.typescript.tsgo.compiler.fileLoader?, fileName_1: String) {
+    this!!.redirectedParseTask = com.xemantic.typescript.tsgo.compiler.parseTask(normalizedFilePath = com.xemantic.typescript.tsgo.tspath.normalizePath(fileName_1), libFile = this!!.libFile, includeReason = this!!.includeReason)
     this!!.subTasks = GoSlice.of(GoElem.ref<com.xemantic.typescript.tsgo.compiler.parseTask?>(), this!!.redirectedParseTask)
 }
 

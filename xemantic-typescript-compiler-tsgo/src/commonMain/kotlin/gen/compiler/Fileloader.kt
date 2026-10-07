@@ -241,9 +241,9 @@ class DuplicateSourceFile(
         scriptKind = o.scriptKind
     }
 
-    fun goEquals(o: DuplicateSourceFile): Boolean = parseOptions.goEquals(o.parseOptions) && hash == o.hash && scriptKind == o.scriptKind
+    fun goEquals(o: DuplicateSourceFile): Boolean = parseOptions.goEquals(o.parseOptions) && hash.goEquals(o.hash) && scriptKind == o.scriptKind
 
-    fun goHash(): Int = 31 * parseOptions.goHash() + 31 * hash.hashCode() + 31 * scriptKind.hashCode()
+    fun goHash(): Int = 31 * parseOptions.goHash() + 31 * hash.goHash() + 31 * scriptKind.hashCode()
 
     companion object {
         val ELEM: GoElem<DuplicateSourceFile> = GoElem({ DuplicateSourceFile() }, { it.goCopy() })

@@ -868,7 +868,7 @@ fun Checker?.narrowTypeByDiscriminantProperty(t: Type?, access: Node?, operator:
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.narrowTypeByDiscriminant d154879e
-fun Checker?.narrowTypeByDiscriminant(t: Type?, access: Node?, narrowType: ((Type?) -> Type?)?): Type? {
+fun Checker?.narrowTypeByDiscriminant(t: Type?, access: Node?, narrowType_1: ((Type?) -> Type?)?): Type? {
     val t0 = this.getAccessedPropertyName(access)
     val propName: String = t0.first
     val ok: Boolean = t0.second
@@ -888,7 +888,7 @@ fun Checker?.narrowTypeByDiscriminant(t: Type?, access: Node?, narrowType: ((Typ
     if (removeNullable && optionalChain) {
         propType = this.getOptionalType(propType, false)
     }
-    val narrowedPropType: Type? = narrowType!!(propType)
+    val narrowedPropType: Type? = narrowType_1!!(propType)
     return this.filterType(t, fun(t_1: Type?): Boolean {
         val discriminantType: Type? = com.xemantic.typescript.tsgo.core.orElse<Type?>(GoElem.ref<Type?>(), this.getTypeOfPropertyOrIndexSignatureOfType(t_1, propName), this!!.unknownType)
         return discriminantType!!.flags.value and 262144u == 0u && narrowedPropType!!.flags.value and 262144u == 0u && this.areTypesComparable(narrowedPropType, discriminantType)
@@ -1042,9 +1042,9 @@ fun Checker?.getNarrowedTypeWorker(t_0: Type?, candidate: Type?, assumeTrue: Boo
                 }
             }
         }
-        var mapType: ((Type?) -> Type?)? = null
+        var mapType_1: ((Type?) -> Type?)? = null
         if (checkDerived) {
-            mapType = fun(t_3: Type?): Type? {
+            mapType_1 = fun(t_3: Type?): Type? {
                 when {
                     this.isTypeDerivedFrom(t_3, n) -> {
                         return t_3
@@ -1056,7 +1056,7 @@ fun Checker?.getNarrowedTypeWorker(t_0: Type?, candidate: Type?, assumeTrue: Boo
                 return this!!.neverType
             }
         } else {
-            mapType = fun(t_4: Type?): Type? {
+            mapType_1 = fun(t_4: Type?): Type? {
                 when {
                     this.isTypeStrictSubtypeOf(t_4, n) -> {
                         return t_4
@@ -1074,7 +1074,7 @@ fun Checker?.getNarrowedTypeWorker(t_0: Type?, candidate: Type?, assumeTrue: Boo
                 return this!!.neverType
             }
         }
-        val directlyRelated: Type? = this.mapType(matching, mapType)
+        val directlyRelated: Type? = this.mapType(matching, mapType_1)
         if (directlyRelated!!.flags.value and 262144u == 0u) {
             return directlyRelated
         }
@@ -1149,10 +1149,10 @@ fun Checker?.narrowTypeByPrivateIdentifierInInExpression(f: FlowState?, t: Type?
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.narrowTypeByInKeyword 67ace7e0
 fun Checker?.narrowTypeByInKeyword(f: FlowState?, t: Type?, nameType: Type?, assumeTrue: Boolean): Type? {
     val name: String = getPropertyNameFromTypeImpl(nameType)
-    val isKnownProperty: Boolean = someType(t, fun(t_1: Type?): Boolean {
+    val isKnownProperty_1: Boolean = someType(t, fun(t_1: Type?): Boolean {
         return this.isTypePresencePossible(t_1, name, true)
     })
-    if (isKnownProperty) {
+    if (isKnownProperty_1) {
         return this.filterType(t, fun(t_2: Type?): Boolean {
             return this.isTypePresencePossible(t_2, name, assumeTrue)
         })
@@ -1461,7 +1461,7 @@ fun Checker?.getTypeAtFlowLoopLabel(f: FlowState?, flow: FlowNode?): FlowType {
     if (f!!.refKey.isZero()) {
         f!!.refKey = this.getFlowReferenceKey(f)
     }
-    if (f!!.refKey == nonDottedNameCacheKey) {
+    if (f!!.refKey.goEquals(nonDottedNameCacheKey)) {
         return FlowType(t = f!!.declaredType)
     }
     val key: FlowLoopKey = FlowLoopKey(flowNode = flow, refKey = f!!.refKey.goCopy())
@@ -1913,7 +1913,7 @@ fun Checker?.tryGetNameFromEntityNameExpression(node: Node?): Tuple2<String, Boo
     }
     val t: Type? = this.tryGetTypeFromTypeNode(declaration)
     if (t != null) {
-        val t0 = tryGetNameFromType(t)
+        val t0 = com.xemantic.typescript.tsgo.checker.tryGetNameFromType(t)
         val name: String = t0.first
         val ok: Boolean = t0.second
         if (ok) {
@@ -1925,7 +1925,7 @@ fun Checker?.tryGetNameFromEntityNameExpression(node: Node?): Tuple2<String, Boo
         if (initializer != null) {
             val initializerType: Type? = this.getTypeOfExpression(initializer)
             if (initializerType != null) {
-                return tryGetNameFromType(initializerType)
+                return com.xemantic.typescript.tsgo.checker.tryGetNameFromType(initializerType)
             }
         } else if (com.xemantic.typescript.tsgo.ast.isEnumMember(declaration)) {
             return com.xemantic.typescript.tsgo.ast.tryGetTextOfPropertyName(declaration.name())

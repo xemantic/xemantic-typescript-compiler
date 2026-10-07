@@ -377,7 +377,7 @@ fun Checker?.hasBaseType(t: Type?, checkBase: Type?): Boolean {
     var check: ((Type?) -> Boolean)? = null
     check = fun(t_1: Type?): Boolean {
         if (t_1!!.objectFlags.value and 7u != 0u) {
-            val target: Type? = getTargetType(t_1)
+            val target: Type? = com.xemantic.typescript.tsgo.checker.getTargetType(t_1)
             return target === checkBase || com.xemantic.typescript.tsgo.core.some<Type?>(GoElem.ref<Type?>(), this.getBaseTypesImpl(target), check!!)
         }
         if (t_1!!.flags.value and 268435456u != 0u) {
@@ -493,7 +493,7 @@ fun Checker?.getIndexInfosOfIndexSymbol(indexSymbol: Symbol?, siblingSymbols: Go
                         valueType = this.getTypeFromTypeNodeImpl(returnTypeNode)
                     }
                     forEachType(this.getTypeFromTypeNodeImpl(typeNode), fun(keyType: Type?) {
-                        if (this.isValidIndexKeyType(keyType) && findIndexInfo(indexInfos, keyType) == null) {
+                        if (this.isValidIndexKeyType(keyType) && com.xemantic.typescript.tsgo.checker.findIndexInfo(indexInfos, keyType) == null) {
                             val indexInfo: IndexInfo? = this.newIndexInfo(keyType, valueType, com.xemantic.typescript.tsgo.ast.hasModifier(declaration, ModifierFlags(8u)), declaration, GoElem.ref<Node?>().nilSlice)
                             indexInfos = indexInfos.append1(indexInfo)
                         }
@@ -513,7 +513,7 @@ fun Checker?.getIndexInfosOfIndexSymbol(indexSymbol: Symbol?, siblingSymbols: Go
             } else {
                 keyType_1 = this.checkComputedPropertyName(declName)
             }
-            if (findIndexInfo(indexInfos, keyType_1) != null) {
+            if (com.xemantic.typescript.tsgo.checker.findIndexInfo(indexInfos, keyType_1) != null) {
                 continue@l0
             }
             if (this.isTypeAssignableToImpl(keyType_1, this!!.stringNumberSymbolType)) {
@@ -545,13 +545,13 @@ fun Checker?.getIndexInfosOfIndexSymbol(indexSymbol: Symbol?, siblingSymbols: Go
                 propertySymbols = propertySymbols.append1(sym)
             }
         }
-        if (hasComputedStringProperty && findIndexInfo(indexInfos, this!!.stringType) == null) {
+        if (hasComputedStringProperty && com.xemantic.typescript.tsgo.checker.findIndexInfo(indexInfos, this!!.stringType) == null) {
             indexInfos = indexInfos.append1(this.getObjectLiteralIndexInfo(readonlyComputedStringProperty, propertySymbols, this!!.stringType))
         }
-        if (hasComputedNumberProperty && findIndexInfo(indexInfos, this!!.numberType) == null) {
+        if (hasComputedNumberProperty && com.xemantic.typescript.tsgo.checker.findIndexInfo(indexInfos, this!!.numberType) == null) {
             indexInfos = indexInfos.append1(this.getObjectLiteralIndexInfo(readonlyComputedNumberProperty, propertySymbols, this!!.numberType))
         }
-        if (hasComputedSymbolProperty && findIndexInfo(indexInfos, this!!.esSymbolType) == null) {
+        if (hasComputedSymbolProperty && com.xemantic.typescript.tsgo.checker.findIndexInfo(indexInfos, this!!.esSymbolType) == null) {
             indexInfos = indexInfos.append1(this.getObjectLiteralIndexInfo(readonlyComputedSymbolProperty, propertySymbols, this!!.esSymbolType))
         }
     }

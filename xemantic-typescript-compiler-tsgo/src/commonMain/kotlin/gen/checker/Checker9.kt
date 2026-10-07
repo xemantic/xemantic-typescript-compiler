@@ -674,22 +674,22 @@ fun Checker?.intersectUnionsOfPrimitiveTypes(types_0: GoSlice<Type?>): Tuple2<Go
         return Tuple2<GoSlice<Type?>, Boolean>(types, false)
     }
     var i: Int = index + 1
-    var unionTypes: GoSlice<Type?> = types.slice3(index, i, i)
+    var unionTypes_1: GoSlice<Type?> = types.slice3(index, i, i)
     l0@ while (i < types.len) {
         val t: Type? = types[i]
         if (t!!.objectFlags.value and 32768u != 0u) {
-            unionTypes = unionTypes.append1(t)
+            unionTypes_1 = unionTypes_1.append1(t)
             types = com.xemantic.typescript.tsgo.go.slices.delete<Type?>(types, i, i + 1)
         } else {
             i++
         }
     }
-    if (unionTypes.len == 1) {
+    if (unionTypes_1.len == 1) {
         return Tuple2<GoSlice<Type?>, Boolean>(types, false)
     }
     var checked: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice
     var result: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice
-    val s1 = unionTypes
+    val s1 = unionTypes_1
     l1@ for (i2 in 0 until s1.len) {
         val u: Type? = s1[i2]
         val s3 = u.types()
@@ -700,7 +700,7 @@ fun Checker?.intersectUnionsOfPrimitiveTypes(types_0: GoSlice<Type?>): Tuple2<Go
             checked = t5.first
             inserted = t5.second
             if (inserted) {
-                if (this.eachUnionContains(unionTypes, t_1)) {
+                if (this.eachUnionContains(unionTypes_1, t_1)) {
                     if (t_1 === this!!.undefinedType && result.len != 0 && result[0] === this!!.missingType) {
                         continue@l2
                     }
@@ -719,8 +719,8 @@ fun Checker?.intersectUnionsOfPrimitiveTypes(types_0: GoSlice<Type?>): Tuple2<Go
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.eachUnionContains 325bb667
-fun Checker?.eachUnionContains(unionTypes: GoSlice<Type?>, t: Type?): Boolean {
-    val s0 = unionTypes
+fun Checker?.eachUnionContains(unionTypes_1: GoSlice<Type?>, t: Type?): Boolean {
+    val s0 = unionTypes_1
     l0@ for (i1 in 0 until s0.len) {
         val u: Type? = s0[i1]
         val types: GoSlice<Type?> = u.types()
@@ -1256,7 +1256,7 @@ fun Checker?.getIndexTypeForMappedType(t: Type?, indexFlags: IndexFlags): Type? 
     } else {
         result = this.getUnionTypeImpl(keyTypes)
     }
-    if (result!!.flags.value and 134217728u != 0u && constraintType!!.flags.value and 134217728u != 0u && getTypeListKey(result.types()) == getTypeListKey(constraintType.types())) {
+    if (result!!.flags.value and 134217728u != 0u && constraintType!!.flags.value and 134217728u != 0u && getTypeListKey(result.types()).goEquals(getTypeListKey(constraintType.types()))) {
         return constraintType
     }
     return result
@@ -2064,7 +2064,7 @@ fun compareTypesEqual(s: Type?, t: Type?): Ternary {
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.markPropertyAsReferenced 9f0fa11b
-fun Checker?.markPropertyAsReferenced(prop: Symbol?, nodeForCheckWriteOnly: Node?, isSelfTypeAccess: Boolean) {
+fun Checker?.markPropertyAsReferenced(prop: Symbol?, nodeForCheckWriteOnly: Node?, isSelfTypeAccess_1: Boolean) {
     if (prop!!.flags.value and 106500u == 0u || prop!!.valueDeclaration == null) {
         return
     }
@@ -2076,7 +2076,7 @@ fun Checker?.markPropertyAsReferenced(prop: Symbol?, nodeForCheckWriteOnly: Node
     if (nodeForCheckWriteOnly != null && com.xemantic.typescript.tsgo.ast.isWriteOnlyAccess(nodeForCheckWriteOnly) && prop!!.flags.value and 65536u == 0u) {
         return
     }
-    if (isSelfTypeAccess) {
+    if (isSelfTypeAccess_1) {
         val containingMethod: Node? = com.xemantic.typescript.tsgo.ast.findAncestor(nodeForCheckWriteOnly, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isFunctionLikeDeclaration(p0))
         if (containingMethod != null && containingMethod.symbol() === prop) {
             return

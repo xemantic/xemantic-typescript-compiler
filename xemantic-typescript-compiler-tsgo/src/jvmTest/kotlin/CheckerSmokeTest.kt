@@ -109,6 +109,13 @@ class CheckerSmokeTest {
         assert(diags == listOf("TS2322: Type 'string' is not assignable to type 'number'."))
     }
 
+    /** Debugging aid: `TSGO_SNIPPET=<file.ts>` prints the ported checker's diagnostics for that file. */
+    @Test
+    fun `snippet`() = onDeepStack {
+        val f = System.getenv("TSGO_SNIPPET")?.takeIf { it.isNotEmpty() } ?: return@onDeepStack
+        check(java.io.File(f).readText()).forEach { println("SNIPPET $it") }
+    }
+
     @Test
     fun `negative control - a well-typed file has no semantic diagnostics`() = onDeepStack {
         assert(check("const x: number = 1;\nexport const y: string[] = [\"a\"].map(s => s + x);\n").isEmpty())

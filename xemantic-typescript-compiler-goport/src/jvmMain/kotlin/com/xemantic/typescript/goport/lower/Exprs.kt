@@ -328,9 +328,7 @@ open class ExprLowering(val fn: FnCtx) {
             u is PointerType && (types.under(u.elem) is StructType || types.under(u.elem) is ArrayType) && types.under(ty(y)) is PointerType ->
                 Ex("${lower(x).at(EQ + 1)} ${if (neg) "!==" else "==="} ${lower(y).at(EQ + 1)}", EQ)
             u is StructType || u is ArrayType -> {
-                val gen = u is ArrayType || ((types.unalias(xt) as? NamedType)?.let { n ->
-                    tm.isPortedNamed(n) && tm.namedKind(n) == TypeMapper.NamedKind.STRUCT
-                } ?: false)
+                val gen = u is ArrayType || tm.hasGoEquals(xt)
                 if (types.under(ty(y)) is InterfaceType || !gen) Ex("${lower(x).at(EQ + 1)} $k ${lower(y).at(EQ + 1)}", EQ)
                 else {
                     val eqx = "${lower(x).at(PRIMARY)}.goEquals(${lower(y).code})"

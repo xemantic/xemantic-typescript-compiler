@@ -57,17 +57,17 @@ class Transformer(
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers.Transformer.NewTransformer 1a1dc3e5
-fun Transformer?.newTransformer(visit: ((Node?) -> Node?)?, emitContext_0: EmitContext?): Transformer? {
-    var emitContext: EmitContext? = emitContext_0
+fun Transformer?.newTransformer(visit: ((Node?) -> Node?)?, emitContext_1_0: EmitContext?): Transformer? {
+    var emitContext_1: EmitContext? = emitContext_1_0
     if (this!!.emitContext != null) {
         goPanic("Transformer already initialized")
     }
-    if (emitContext == null) {
-        emitContext = com.xemantic.typescript.tsgo.printer.newEmitContext()
+    if (emitContext_1 == null) {
+        emitContext_1 = com.xemantic.typescript.tsgo.printer.newEmitContext()
     }
-    this!!.emitContext = emitContext
-    this!!.factory = emitContext!!.factory
-    this!!.visitor = emitContext.newNodeVisitor(visit)
+    this!!.emitContext = emitContext_1
+    this!!.factory = emitContext_1!!.factory
+    this!!.visitor = emitContext_1.newNodeVisitor(visit)
     return this
 }
 

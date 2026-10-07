@@ -2516,14 +2516,14 @@ fun TupleType?.isReadonly(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.TupleType.ElementFlags f18b6f19
 fun TupleType?.elementFlags(): GoSlice<ElementFlags> {
-    val elementFlags: GoSlice<ElementFlags> = GoSlice.make(ElementFlags.ELEM, this!!.elementInfos.len)
+    val elementFlags_1: GoSlice<ElementFlags> = GoSlice.make(ElementFlags.ELEM, this!!.elementInfos.len)
     val s0 = this!!.elementInfos
     l0@ for (i1 in 0 until s0.len) {
         val i: Int = i1
         val info: TupleElementInfo = s0[i1].goCopy()
-        elementFlags[i] = info.flags
+        elementFlags_1[i] = info.flags
     }
-    return elementFlags
+    return elementFlags_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.TupleType.ElementInfos 0506a22c

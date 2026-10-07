@@ -1814,16 +1814,16 @@ fun Printer?.emitDirective(kind: String, refs: GoSlice<FileReference?>) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitList cc6aaad3
-fun Printer?.emitList(emit: ((Printer?, Node?) -> Unit)?, parentNode: Node?, children: NodeList?, format_0: ListFormat) {
+fun Printer?.emitList(emit_1: ((Printer?, Node?) -> Unit)?, parentNode: Node?, children: NodeList?, format_0: ListFormat) {
     var format: ListFormat = format_0
     if (this.shouldEmitOnMultipleLines(parentNode)) {
         format = ListFormat(format.value or 65664)
     }
-    this.emitListRange(emit, parentNode, children, format, -1, -1)
+    this.emitListRange(emit_1, parentNode, children, format, -1, -1)
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitListRange b3671459
-fun Printer?.emitListRange(emit: ((Printer?, Node?) -> Unit)?, parentNode: Node?, children: NodeList?, format: ListFormat, start_0: Int, count_1: Int) {
+fun Printer?.emitListRange(emit_1: ((Printer?, Node?) -> Unit)?, parentNode: Node?, children: NodeList?, format: ListFormat, start_0: Int, count_1: Int) {
     var start: Int = start_0
     var count: Int = count_1
     val isNil: Boolean = children == null
@@ -1867,7 +1867,7 @@ fun Printer?.emitListRange(emit: ((Printer?, Node?) -> Unit)?, parentNode: Node?
         }
     } else {
         val end: Int = minOf(start + count, length)
-        this.emitListItems(emit, parentNode, children!!.nodes.slice(start, end), format, this.hasTrailingComma(parentNode, children), children!!.loc.goCopy())
+        this.emitListItems(emit_1, parentNode, children!!.nodes.slice(start, end), format, this.hasTrailingComma(parentNode, children), children!!.loc.goCopy())
     }
     if (this!!.printHandlers.onAfterEmitNodeList != null) {
         this!!.printHandlers.onAfterEmitNodeList!!(children)
@@ -1975,7 +1975,7 @@ fun Printer?.writeDelimiter(format: ListFormat) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitListItems 0f2ed56f
-fun Printer?.emitListItems(emit: ((Printer?, Node?) -> Unit)?, parentNode: Node?, children: GoSlice<Node?>, format: ListFormat, hasTrailingComma: Boolean, childrenTextRange: TextRange) {
+fun Printer?.emitListItems(emit_1: ((Printer?, Node?) -> Unit)?, parentNode: Node?, children: GoSlice<Node?>, format: ListFormat, hasTrailingComma_1: Boolean, childrenTextRange: TextRange) {
     val mayEmitInterveningComments: Boolean = format.value and 262144 == 0
     var shouldEmitInterveningComments: Boolean = mayEmitInterveningComments
     var leadingLineTerminatorCount: Int = 0
@@ -2034,7 +2034,7 @@ fun Printer?.emitListItems(emit: ((Printer?, Node?) -> Unit)?, parentNode: Node?
             shouldEmitInterveningComments = mayEmitInterveningComments
         }
         this!!.nextListElementPos = child!!.pos()
-        emit!!(this, child)
+        emit_1!!(this, child)
         if (shouldDecreaseIndentAfterEmit) {
             this.decreaseIndent()
             shouldDecreaseIndentAfterEmit = false
@@ -2042,7 +2042,7 @@ fun Printer?.emitListItems(emit: ((Printer?, Node?) -> Unit)?, parentNode: Node?
         previousSibling = child
     }
     val skipTrailingComments: Boolean = this!!.commentsDisabled || !this.shouldEmitTrailingComments(previousSibling)
-    val emitTrailingComma: Boolean = hasTrailingComma && format.value and 64 != 0 && format.value and 16 != 0
+    val emitTrailingComma: Boolean = hasTrailingComma_1 && format.value and 64 != 0 && format.value and 16 != 0
     if (emitTrailingComma) {
         if (previousSibling != null && !skipTrailingComments) {
             this.emitToken(Kind(27), previousSibling!!.end(), WriteKindPunctuation, previousSibling)

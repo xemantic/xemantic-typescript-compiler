@@ -646,8 +646,8 @@ fun originalNodesHaveSameParent(emitContext: EmitContext?, nodeA_0: Node?, nodeB
 fun tryGetEnd(node: Iface_End_22b3828e?): Tuple2<Int, Boolean> {
     val x0 = node
     when {
-        x0 is Node -> {
-            val v: Node? = x0 as Node
+        x0 is Node || x0 == null -> {
+            val v: Node? = x0 as Node?
             if (v != null) {
                 return Tuple2<Int, Boolean>(v!!.end(), true)
             }

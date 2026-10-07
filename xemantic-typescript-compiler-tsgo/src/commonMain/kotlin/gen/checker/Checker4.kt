@@ -609,13 +609,13 @@ fun Checker?.invocationErrorDetails(errorTarget: Node?, apparentType: Type?, kin
     }
     if (apparentType!!.flags.value and 134217728u != 0u) {
         val types: GoSlice<Type?> = apparentType.types()
-        var hasSignatures: Boolean = false
+        var hasSignatures_1: Boolean = false
         val s0 = types
         l0@ for (i1 in 0 until s0.len) {
             val constituent: Type? = s0[i1]
             val signatures: GoSlice<Signature?> = this.getSignaturesOfTypeImpl(constituent, kind)
             if (signatures.len != 0) {
-                hasSignatures = true
+                hasSignatures_1 = true
                 if (diagnostic != null) {
                     break@l0
                 }
@@ -624,12 +624,12 @@ fun Checker?.invocationErrorDetails(errorTarget: Node?, apparentType: Type?, kin
                     diagnostic = newDiagnosticForNode(target, com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), isCall, com.xemantic.typescript.tsgo.diagnostics.type_0_has_no_call_signatures, com.xemantic.typescript.tsgo.diagnostics.type_0_has_no_construct_signatures), GoSlice.of(GoElem.ref<Any?>(), this.typeToString(constituent)))
                     diagnostic = newDiagnosticChainForNode(diagnostic, target, com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), isCall, com.xemantic.typescript.tsgo.diagnostics.not_all_constituents_of_type_0_are_callable, com.xemantic.typescript.tsgo.diagnostics.not_all_constituents_of_type_0_are_constructable), GoSlice.of(GoElem.ref<Any?>(), this.typeToString(apparentType)))
                 }
-                if (hasSignatures) {
+                if (hasSignatures_1) {
                     break@l0
                 }
             }
         }
-        if (!hasSignatures) {
+        if (!hasSignatures_1) {
             diagnostic = newDiagnosticForNode(target, com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), isCall, com.xemantic.typescript.tsgo.diagnostics.no_constituent_of_type_0_is_callable, com.xemantic.typescript.tsgo.diagnostics.no_constituent_of_type_0_is_constructable), GoSlice.of(GoElem.ref<Any?>(), this.typeToString(apparentType)))
         }
         if (diagnostic == null) {
@@ -1346,7 +1346,7 @@ fun Checker?.getInstantiationExpressionType(exprType: Type?, node: Node?): Type?
     }
     var getInstantiatedType: ((Type?) -> Type?)? = null
     getInstantiatedType = fun(t: Type?): Type? {
-        var hasSignatures: Boolean = false
+        var hasSignatures_1: Boolean = false
         var hasApplicableSignature: Boolean = false
         var getInstantiatedTypePart: ((Type?) -> Type?)? = null
         getInstantiatedTypePart = fun(t_1: Type?): Type? {
@@ -1354,7 +1354,7 @@ fun Checker?.getInstantiationExpressionType(exprType: Type?, node: Node?): Type?
                 val resolved: StructuredType? = this.resolveStructuredTypeMembers(t_1)
                 val callSignatures: GoSlice<Signature?> = getInstantiatedSignatures!!(resolved.callSignatures())
                 val constructSignatures: GoSlice<Signature?> = getInstantiatedSignatures!!(resolved.constructSignatures())
-                hasSignatures = hasSignatures || resolved.callSignatures().len != 0 || resolved.constructSignatures().len != 0
+                hasSignatures_1 = hasSignatures_1 || resolved.callSignatures().len != 0 || resolved.constructSignatures().len != 0
                 hasApplicableSignature = hasApplicableSignature || callSignatures.len != 0 || constructSignatures.len != 0
                 if (!com.xemantic.typescript.tsgo.core.same<Signature?>(GoElem.ref<Signature?>(), callSignatures, resolved.callSignatures()) || !com.xemantic.typescript.tsgo.core.same<Signature?>(GoElem.ref<Signature?>(), constructSignatures, resolved.constructSignatures())) {
                     val result: Type? = this.newObjectType(ObjectFlags(16777232u), this.newSymbol(SymbolFlags(0u), "\u00FEinstantiationExpression"))
@@ -1379,7 +1379,7 @@ fun Checker?.getInstantiationExpressionType(exprType: Type?, node: Node?): Type?
         }
         val result_1: Type? = getInstantiatedTypePart!!(t)
         hasSomeApplicableSignature = hasSomeApplicableSignature || hasApplicableSignature
-        if (hasSignatures && !hasApplicableSignature) {
+        if (hasSignatures_1 && !hasApplicableSignature) {
             if (nonApplicableType == null) {
                 nonApplicableType = t
             }
@@ -2630,7 +2630,7 @@ fun Checker?.getEnclosingClassFromThisParameter(node: Node?): Type? {
         }
     }
     if (thisType != null && thisType!!.objectFlags.value and 7u != 0u) {
-        return getTargetType(thisType)
+        return com.xemantic.typescript.tsgo.checker.getTargetType(thisType)
     }
     return null
 }

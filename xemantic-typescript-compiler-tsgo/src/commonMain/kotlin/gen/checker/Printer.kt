@@ -485,7 +485,7 @@ fun Checker?.typePredicateToStringEx(typePredicate: TypePredicate?, enclosingDec
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.valueToString 3bd792c7
 fun Checker?.valueToString(value_1: Any?): String {
-    return valueToString(value_1)
+    return com.xemantic.typescript.tsgo.checker.valueToString(value_1)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.formatUnionTypes cb3f6e35

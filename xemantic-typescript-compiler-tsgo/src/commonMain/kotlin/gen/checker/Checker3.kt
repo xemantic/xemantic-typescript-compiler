@@ -1493,11 +1493,11 @@ fun Checker?.getUniqueTypeParameters(context: InferenceContext?, typeParameters:
         if (hasTypeParameterByName(context!!.inferredTypeParameters, name) || hasTypeParameterByName(result, name)) {
             val newName: String = getUniqueTypeParameterName(com.xemantic.typescript.tsgo.core.concatenate<Type?>(GoElem.ref<Type?>(), context!!.inferredTypeParameters, result), name)
             val symbol: Symbol? = this.newSymbol(SymbolFlags(262144u), newName)
-            val newTypeParameter: Type? = this.newTypeParameter(symbol)
-            newTypeParameter.asTypeParameter()!!.target = tp
+            val newTypeParameter_1: Type? = this.newTypeParameter(symbol)
+            newTypeParameter_1.asTypeParameter()!!.target = tp
             oldTypeParameters = oldTypeParameters.append1(tp)
-            newTypeParameters = newTypeParameters.append1(newTypeParameter)
-            result = result.append1(newTypeParameter)
+            newTypeParameters = newTypeParameters.append1(newTypeParameter_1)
+            result = result.append1(newTypeParameter_1)
         } else {
             result = result.append1(tp)
         }

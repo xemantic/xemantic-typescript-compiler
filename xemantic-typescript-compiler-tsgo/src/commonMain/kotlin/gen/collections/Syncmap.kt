@@ -142,11 +142,11 @@ fun <K, V> SyncMap<K, V>?.keys(): Seq<K>? {
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Clone d4109552
 fun <K, V> SyncMap<K, V>?.clone(): SyncMap<K, V>? {
-    val clone: SyncMap<K, V>? = SyncMap<K, V>(goElem_K = this!!.goElem_K, goElem_V = this!!.goElem_V)
+    val clone_1: SyncMap<K, V>? = SyncMap<K, V>(goElem_K = this!!.goElem_K, goElem_V = this!!.goElem_V)
     this!!.m.range(fun(key: Any?, value_1: Any?): Boolean {
-        clone!!.m.store(key, value_1)
+        clone_1!!.m.store(key, value_1)
         return true
     })
-    return clone
+    return clone_1
 }
 

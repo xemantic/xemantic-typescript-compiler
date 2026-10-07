@@ -169,7 +169,7 @@ fun Message?.reportsDeprecated(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.Message.Localize 842a49c5
 fun Message?.localize(locale: Locale, args: GoSlice<Any?>): String {
-    return localize(locale.goCopy(), this, Key(""), stringifyArgs(args))
+    return com.xemantic.typescript.tsgo.diagnostics.localize(locale.goCopy(), this, Key(""), stringifyArgs(args))
 }
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.Localize d1691fbe
@@ -193,7 +193,7 @@ fun localize(locale: Locale, message_0: Message?, key: Key, args: GoSlice<String
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.getLocalizedMessages fe2bcf59
 fun getLocalizedMessages(loc: Tag): GoMap<Key, String> {
-    if (loc == com.xemantic.typescript.tsgo.go.golang_org.x.text.language.und) {
+    if (loc.goEquals(com.xemantic.typescript.tsgo.go.golang_org.x.text.language.und)) {
         return GoMap.nil<Key, String>(GoElem.STRING)
     }
     val t0 = localizedMessagesCache.load(loc.goCopy())

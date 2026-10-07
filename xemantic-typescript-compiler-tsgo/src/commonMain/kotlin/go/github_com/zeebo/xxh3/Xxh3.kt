@@ -52,6 +52,12 @@ class Uint128(var hi: ULong = 0uL, var lo: ULong = 0uL) {
 
     fun goHash(): Int = hi.hashCode() * 31 + lo.hashCode()
 
+    // A map KEY by value (`map[CacheHashKey]*Type`, the checker's instantiation caches): Go compares the
+    // struct, so Kotlin's equals/hashCode must too (added by the (TSGO.2) lowering round).
+    override fun equals(other: Any?): Boolean = other is Uint128 && goEquals(other)
+
+    override fun hashCode(): Int = goHash()
+
     /** `u.Bytes()`: the canonical big-endian 16 bytes. */
     fun bytes(): GoArray<Int> {
         val a = GoArray(16, GoElem.INT)

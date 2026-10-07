@@ -178,10 +178,10 @@ val PollingKindFixedChunkSize: PollingKind = PollingKind(4)
 
 // go: github.com/microsoft/typescript-go/internal/core.WatchOptions.WatchInterval f6ef9656
 fun WatchOptions?.watchInterval(): Duration {
-    var watchInterval: Duration = Duration(2000000000L)
+    var watchInterval_1: Duration = Duration(2000000000L)
     if (this != null && this!!.interval != null) {
-        watchInterval = Duration(this!!.interval!!.value.toLong() * 1000000L)
+        watchInterval_1 = Duration(this!!.interval!!.value.toLong() * 1000000L)
     }
-    return watchInterval
+    return watchInterval_1
 }
 

@@ -88,7 +88,8 @@ class DiagParityTest {
 
     class CaseFS(private val files: Map<String, String>, private val symlinks: Map<String, String>, private val caseSensitive: Boolean) : FS {
         private val dirs: Set<String> = (files.keys + symlinks.keys).flatMap { f ->
-            f.split('/').dropLast(1).runningReduce { a, b -> "$a/$b" }.map { it.ifEmpty { "/" } }
+            // Every ancestor directory; a Windows-style root (`A:`) is spelled `A:/` as tspath does.
+            f.split('/').dropLast(1).runningReduce { a, b -> "$a/$b" }.map { if (it.length == 2 && it[1] == ':') "$it/" else it.ifEmpty { "/" } }
         }.toSet() + "/"
 
         private fun canon(p: String) = if (caseSensitive) p else p.lowercase()
@@ -192,7 +193,7 @@ class DiagParityTest {
             val fo = f.obj()
             if (fo["role"].str() == "tsconfig") continue
             val path = fo["path"].str()
-            files[path] = String(File(dir, "vfs$path").readBytes(), Charsets.ISO_8859_1)
+            files[path] = String(File(dir, "vfs/" + path.removePrefix("/")).readBytes(), Charsets.ISO_8859_1)
         }
         val symlinks = (case["symlinks"] as? GoMap<*, *>)?.let { m -> m.keysSnapshot().associate { k -> (k as String).let(GoString::toUtf16) to (m.obj()[k]).str() } } ?: emptyMap()
         val currentDirectory = case["currentDirectory"].str()
@@ -288,33 +289,35 @@ class DiagParityTest {
         var crashed = 0
         val crashes = LinkedHashMap<String, Int>()
         val t0 = System.nanoTime()
-        var failure: Throwable? = null
-        val th = Thread(null, {
-            try {
-                for ((case, variation) in entries) {
-                    val dst = File(out, "$case/$variation.jsonl")
-                    dst.parentFile.mkdirs()
-                    try {
-                        val lines = runConfiguration(File(cases, "$case/$variation"))
-                        dst.writeText(lines.joinToString("") { "$it\n" })
-                        ok++
-                    } catch (t: Throwable) {
-                        dst.delete()
-                        crashed++
-                        val where = t.stackTrace.firstOrNull { it.className.startsWith("com.xemantic.typescript.tsgo") }?.let { "${it.className.substringAfterLast('.')}.${it.methodName}" } ?: "?"
-                        val key = "${t::class.simpleName}: ${t.message?.take(100)} @ $where"
-                        crashes[key] = (crashes[key] ?: 0) + 1
-                        if (crashes[key] == 1) File(out, "crashes.txt").appendText("== $case/$variation: $key\n${t.stackTraceToString().lines().take(30).joinToString("\n")}\n")
-                    }
-                }
-            } catch (t: Throwable) {
-                failure = t
-            }
-        }, "tsgo-diag", 1L shl 30)
         File(out, "crashes.txt").delete()
-        th.start()
-        th.join()
-        failure?.let { throw it }
+        val timeoutMs = (System.getenv("TSGO_DIAG_TIMEOUT") ?: "60").toLong() * 1000
+        for ((case, variation) in entries) {
+            val dst = File(out, "$case/$variation.jsonl")
+            dst.parentFile.mkdirs()
+            // One deep-stack thread per configuration, with a deadline: a ported loop that does not
+            // terminate (a porting bug) costs that configuration, not the run. Such a thread cannot be
+            // stopped on the JVM; it is a daemon and keeps its core until the run ends.
+            var result: List<String>? = null
+            var error: Throwable? = null
+            val th = Thread(null, {
+                try { result = runConfiguration(File(cases, "$case/$variation")) } catch (t: Throwable) { error = t }
+            }, "tsgo-diag", 1L shl 30)
+            th.isDaemon = true
+            th.start()
+            th.join(timeoutMs)
+            val t = if (th.isAlive) IllegalStateException("timeout after ${timeoutMs / 1000} s at ${th.stackTrace.take(4).joinToString(" <- ") { "${it.className.substringAfterLast('.')}.${it.methodName}" }}") else error
+            if (t == null) {
+                dst.writeText(result!!.joinToString("") { "$it\n" })
+                ok++
+            } else {
+                dst.delete()
+                crashed++
+                val where = t.stackTrace.firstOrNull { it.className.startsWith("com.xemantic.typescript.tsgo") }?.let { "${it.className.substringAfterLast('.')}.${it.methodName}" } ?: "?"
+                val key = "${t::class.simpleName}: ${t.message?.take(140)} @ $where"
+                crashes[key] = (crashes[key] ?: 0) + 1
+                File(out, "crashes.txt").appendText("== $case/$variation: $key\n" + (if (crashes[key] == 1) t.stackTraceToString().lines().take(30).joinToString("\n") + "\n" else ""))
+            }
+        }
         println("DiagParityTest: ${entries.size} configurations, $ok written, $crashed crashed (${(System.nanoTime() - t0) / 1_000_000} ms)")
         crashes.entries.sortedByDescending { it.value }.take(25).forEach { (k, v) -> println("  $v × $k") }
     }

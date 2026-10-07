@@ -228,6 +228,14 @@ class PackageEmitter(
         val tm = TypeMapper(fc, tpNames + (member?.tpNames ?: emptyMap()), tpElems + (member?.tpElems ?: emptyMap()))
         val fn = FnCtx(fc, qname, tm)
         member?.let { fn.classMembers = it.memberNames }
+        // An extension method's body: a package-level function or variable named like a method of
+        // the receiver type would resolve to the method (implicit `this`) — qualify those (FnCtx.classMembers).
+        if (member == null && recvField != null) {
+            val rn = recvNamed(recvField)
+            val ro = rn.origin?.let { types.unalias(it) as NamedType } ?: rn
+            fn.classMembers = (prog.methodsByType[ro.key] ?: emptyList()).map { (_, m) -> prog.methodName(m.str("qname")!!, m.str("name")!!) }.toSet() +
+                methodSetNames(ro).keys
+        }
         // An inline function (docs/goport-lowering.md § 3): non-null func-typed parameters.
         val inlineIdx = if (member == null) prog.inlineFuncs[qname] else null
         inlineIdx?.let { fn.nonNullParamIdx = it }
@@ -736,20 +744,15 @@ class PackageEmitter(
         else -> code
     }
 
-    private fun generatedStruct(t: Int, tm: TypeMapper): Boolean {
-        val n = types.unalias(t) as? NamedType ?: return false
-        return tm.isPortedNamed(n) && tm.namedKind(n) == TypeMapper.NamedKind.STRUCT
-    }
-
     private fun fieldHash(n: String, t: Int, tm: TypeMapper): String = when {
-        tm.isStructValue(t) && !tm.isEmptyStruct(t) && generatedStruct(t, tm) -> "$n.goHash()"
+        tm.hasGoEquals(t) -> "$n.goHash()"
         types.under(t) is ArrayType -> "$n.goHash()"
         tm.nullable(t) -> "$n.hashCode()"
         else -> "$n.hashCode()"
     }
 
     private fun fieldEq(n: String, t: Int, tm: TypeMapper): String = when {
-        tm.isStructValue(t) && !tm.isEmptyStruct(t) && generatedStruct(t, tm) -> "$n.goEquals(o.$n)"
+        tm.hasGoEquals(t) -> "$n.goEquals(o.$n)"
         types.under(t) is ArrayType -> "$n.goEquals(o.$n)"
         types.under(t) is PointerType && types.under((types.under(t) as PointerType).elem) is StructType -> "$n === o.$n"
         else -> "$n == o.$n"

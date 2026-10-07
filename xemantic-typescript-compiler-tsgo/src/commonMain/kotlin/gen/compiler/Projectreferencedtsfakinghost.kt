@@ -215,8 +215,8 @@ fun com.xemantic.typescript.tsgo.compiler.projectReferenceDtsFakingVfs?.handleDi
 
 // go: github.com/microsoft/typescript-go/internal/compiler.projectReferenceDtsFakingVfs.fileOrDirectoryExistsUsingSource 9a9760eb
 fun com.xemantic.typescript.tsgo.compiler.projectReferenceDtsFakingVfs?.fileOrDirectoryExistsUsingSource(fileOrDirectory: String, isFile: Boolean): Boolean {
-    val fileOrDirectoryExistsUsingSource: ((String) -> Tristate)? = com.xemantic.typescript.tsgo.core.ifElse<((String) -> Tristate)?>(GoElem.ref<((String) -> Tristate)?>(), isFile, run { val r0 = this; fun(p0: String): Tristate = r0.fileExistsIfProjectReferenceDts(p0) }, run { val r1 = this; fun(p0: String): Tristate = r1.directoryExistsIfProjectReferenceDeclDir(p0) })
-    val result: Tristate = fileOrDirectoryExistsUsingSource!!(fileOrDirectory)
+    val fileOrDirectoryExistsUsingSource_1: ((String) -> Tristate)? = com.xemantic.typescript.tsgo.core.ifElse<((String) -> Tristate)?>(GoElem.ref<((String) -> Tristate)?>(), isFile, run { val r0 = this; fun(p0: String): Tristate = r0.fileExistsIfProjectReferenceDts(p0) }, run { val r1 = this; fun(p0: String): Tristate = r1.directoryExistsIfProjectReferenceDeclDir(p0) })
+    val result: Tristate = fileOrDirectoryExistsUsingSource_1!!(fileOrDirectory)
     if (result.value != 0) {
         return result.value == 2
     }
@@ -247,7 +247,7 @@ fun com.xemantic.typescript.tsgo.compiler.projectReferenceDtsFakingVfs?.fileOrDi
         if (!hasPrefix) {
             return true
         }
-        exists = fileOrDirectoryExistsUsingSource!!(knownDirectoryLink!!.realPath.value + relative).isTrue()
+        exists = fileOrDirectoryExistsUsingSource_1!!(knownDirectoryLink!!.realPath.value + relative).isTrue()
         if (exists) {
             if (isFile) {
                 val absolutePath: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(fileOrDirectory, this!!.projectReferenceFileMapper!!.opts.host!!.getCurrentDirectory())

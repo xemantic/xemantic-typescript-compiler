@@ -87,16 +87,16 @@ fun <K, V> MultiMap<K, V>?.add(key: K, value_1: V) {
 // go: github.com/microsoft/typescript-go/internal/collections.MultiMap.Remove 517b151f
 fun <K, V> MultiMap<K, V>?.remove(key: K, value_1: V) {
     val t0 = this!!.m.probe(key)
-    var values: GoSlice<V> = goProbeValue<GoSlice<V>>(t0) { this!!.goElem_V.nilSlice }
+    var values_1: GoSlice<V> = goProbeValue<GoSlice<V>>(t0) { this!!.goElem_V.nilSlice }
     val ok: Boolean = t0 !== GoMapAbsent
     if (ok) {
-        val i: Int = com.xemantic.typescript.tsgo.go.slices.index<V>(values, value_1)
+        val i: Int = com.xemantic.typescript.tsgo.go.slices.index<V>(values_1, value_1)
         if (i >= 0) {
-            if (values.len == 1) {
+            if (values_1.len == 1) {
                 this!!.m.delete(key)
             } else {
-                values = values.slice(0, i).appendSlice(values.slice(i + 1))
-                this!!.m[key] = values
+                values_1 = values_1.slice(0, i).appendSlice(values_1.slice(i + 1))
+                this!!.m[key] = values_1
             }
         }
     }

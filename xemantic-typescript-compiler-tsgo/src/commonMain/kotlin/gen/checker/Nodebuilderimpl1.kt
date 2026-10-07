@@ -2113,7 +2113,7 @@ fun Checker?.getExpandedParametersImpl(sig: Signature?, skipUnionExpanding: Bool
         val restIndex: Int = sig!!.parameters.len - 1
         val restSymbol: Symbol? = sig!!.parameters[restIndex]
         val restType: Type? = this.getTypeOfSymbolImpl(restSymbol)
-        val getUniqAssociatedNamesFromTupleType: ((Type?, Symbol?) -> GoSlice<String>)? = fun(t: Type?, restSymbol_1: Symbol?): GoSlice<String> {
+        val getUniqAssociatedNamesFromTupleType_1: ((Type?, Symbol?) -> GoSlice<String>)? = fun(t: Type?, restSymbol_1: Symbol?): GoSlice<String> {
             val names: GoSlice<String> = com.xemantic.typescript.tsgo.core.mapIndex<TupleElementInfo, String>(TupleElementInfo.ELEM, GoElem.STRING, t.target().asTupleType()!!.elementInfos, fun(info: TupleElementInfo, i: Int): String {
                 return this.getTupleElementLabel(info.goCopy(), restSymbol_1, i)
             })
@@ -2161,9 +2161,9 @@ fun Checker?.getExpandedParametersImpl(sig: Signature?, skipUnionExpanding: Bool
             }
             return names
         }
-        val expandSignatureParametersWithTupleMembers: ((Type?, Int, Symbol?) -> GoSlice<Symbol?>)? = fun(restType_1: Type?, restIndex_1: Int, restSymbol_2: Symbol?): GoSlice<Symbol?> {
+        val expandSignatureParametersWithTupleMembers_1: ((Type?, Int, Symbol?) -> GoSlice<Symbol?>)? = fun(restType_1: Type?, restIndex_1: Int, restSymbol_2: Symbol?): GoSlice<Symbol?> {
             val elementTypes: GoSlice<Type?> = this.getTypeArgumentsImpl(restType_1)
-            val associatedNames: GoSlice<String> = getUniqAssociatedNamesFromTupleType!!(restType_1, restSymbol_2)
+            val associatedNames: GoSlice<String> = getUniqAssociatedNamesFromTupleType_1!!(restType_1, restSymbol_2)
             val restParams: GoSlice<Symbol?> = com.xemantic.typescript.tsgo.core.mapIndex<Type?, Symbol?>(GoElem.ref<Type?>(), GoElem.ref<Symbol?>(), elementTypes, fun(t_1: Type?, i_3: Int): Symbol? {
                 val name_2: String = associatedNames[i_3]
                 val flags: ElementFlags = restType_1.target().asTupleType()!!.elementInfos[i_3].flags
@@ -2188,10 +2188,10 @@ fun Checker?.getExpandedParametersImpl(sig: Signature?, skipUnionExpanding: Bool
             return com.xemantic.typescript.tsgo.core.concatenate<Symbol?>(GoElem.ref<Symbol?>(), sig!!.parameters.slice(0, restIndex_1), restParams)
         }
         if (isTupleTypeImpl(restType)) {
-            return GoSlice.of(GoElem.slice(GoElem.ref<Symbol?>()), expandSignatureParametersWithTupleMembers!!(restType, restIndex, restSymbol))
+            return GoSlice.of(GoElem.slice(GoElem.ref<Symbol?>()), expandSignatureParametersWithTupleMembers_1!!(restType, restIndex, restSymbol))
         } else if (!skipUnionExpanding && restType!!.flags.value and 134217728u != 0u && com.xemantic.typescript.tsgo.core.every<Type?>(GoElem.ref<Type?>(), restType.asUnionType()!!.unionOrIntersectionType.types, fun(p0: Type?): Boolean = isTupleTypeImpl(p0))) {
             return com.xemantic.typescript.tsgo.core.map<Type?, GoSlice<Symbol?>>(GoElem.ref<Type?>(), GoElem.slice(GoElem.ref<Symbol?>()), restType.asUnionType()!!.unionOrIntersectionType.types, fun(t_2: Type?): GoSlice<Symbol?> {
-                return expandSignatureParametersWithTupleMembers!!(t_2, restIndex, restSymbol)
+                return expandSignatureParametersWithTupleMembers_1!!(t_2, restIndex, restSymbol)
             })
         }
     }

@@ -419,15 +419,15 @@ fun Generator?.addNamedSourceMapping(generatedLine: Int, generatedCharacter: UTF
 // go: github.com/microsoft/typescript-go/internal/sourcemap.Generator.RawSourceMap f0b8452e
 fun Generator?.rawSourceMap(): RawSourceMap? {
     this.commitPendingMapping()
-    var sources: GoSlice<String> = com.xemantic.typescript.tsgo.go.slices.clone<String>(this!!.sources)
-    if (sources.isNil) {
-        sources = GoSlice.make(GoElem.STRING, 0)
+    var sources_1: GoSlice<String> = com.xemantic.typescript.tsgo.go.slices.clone<String>(this!!.sources)
+    if (sources_1.isNil) {
+        sources_1 = GoSlice.make(GoElem.STRING, 0)
     }
     var names: GoSlice<String> = com.xemantic.typescript.tsgo.go.slices.clone<String>(this!!.names)
     if (names.isNil) {
         names = GoSlice.make(GoElem.STRING, 0)
     }
-    return RawSourceMap(version = 3, file = this!!.file, sourceRoot = this!!.sourceRoot, sources = sources, names = names, mappings = this!!.mappings.string(), sourcesContent = com.xemantic.typescript.tsgo.go.slices.clone<GoPtr<String>?>(this!!.sourcesContent))
+    return RawSourceMap(version = 3, file = this!!.file, sourceRoot = this!!.sourceRoot, sources = sources_1, names = names, mappings = this!!.mappings.string(), sourcesContent = com.xemantic.typescript.tsgo.go.slices.clone<GoPtr<String>?>(this!!.sourcesContent))
 }
 
 // go: github.com/microsoft/typescript-go/internal/sourcemap.Generator.bytes 7863a952

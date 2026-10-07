@@ -1009,15 +1009,15 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.setCurrentClassElementAnd 6190d007
-inline fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.setCurrentClassElementAnd(classElement: Node?, visitor: ((com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, Node?) -> Node?), node: Node?): Node? {
+inline fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.setCurrentClassElementAnd(classElement: Node?, visitor_1: ((com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, Node?) -> Node?), node: Node?): Node? {
     if (classElement !== this!!.currentClassElement) {
         val saved: Node? = this!!.currentClassElement
         this!!.currentClassElement = classElement
-        val result: Node? = visitor(this, node)
+        val result: Node? = visitor_1(this, node)
         this!!.currentClassElement = saved
         return result
     }
-    return visitor(this, node)
+    return visitor_1(this, node)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitEachChildOfNode a781adb0
@@ -1026,15 +1026,15 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.setInIterationStatementAnd 43ea7341
-inline fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.setInIterationStatementAnd(inIteration: Boolean, visitor: ((com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, Node?) -> Node?), node: Node?): Node? {
+inline fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.setInIterationStatementAnd(inIteration: Boolean, visitor_1: ((com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, Node?) -> Node?), node: Node?): Node? {
     if (this!!.inIterationStatement != inIteration) {
         val saved: Boolean = this!!.inIterationStatement
         this!!.inIterationStatement = inIteration
-        val result: Node? = visitor(this, node)
+        val result: Node? = visitor_1(this, node)
         this!!.inIterationStatement = saved
         return result
     }
-    return visitor(this, node)
+    return visitor_1(this, node)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.clearClassElementAndVisitEachChild 4299d998
@@ -1822,7 +1822,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitInNewClassLexicalEnvironment 6bcd0ad5
-fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitInNewClassLexicalEnvironment(node: Node?, visitor: ((com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, Node?, com.xemantic.typescript.tsgo.transformers.estransforms.classFacts) -> Node?)?): Node? {
+fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitInNewClassLexicalEnvironment(node: Node?, visitor_1: ((com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, Node?, com.xemantic.typescript.tsgo.transformers.estransforms.classFacts) -> Node?)?): Node? {
     val savedCurrentClassContainer: Node? = this!!.currentClassContainer
     val savedPendingExpressions: GoSlice<Node?> = this!!.pendingExpressions
     val savedLexicalEnvironment: com.xemantic.typescript.tsgo.transformers.estransforms.classLexicalEnv? = this!!.lexicalEnvironment
@@ -1860,7 +1860,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
     if (facts.value != 0) {
         this.getClassLexicalEnvironment()!!.facts = facts
     }
-    val result: Node? = visitor!!(this, node, facts)
+    val result: Node? = visitor_1!!(this, node, facts)
     this!!.enclosingClassDeclarations.delete(original)
     this.endClassLexicalEnvironment()
     com.xemantic.typescript.tsgo.debug.assert(this!!.lexicalEnvironment === savedLexicalEnvironment, GoElem.ref<Any?>().nilSlice)

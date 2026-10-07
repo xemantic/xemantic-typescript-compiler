@@ -2774,7 +2774,7 @@ fun Checker?.checkVariableLikeDeclaration(node: Node?) {
         return
     }
     if (com.xemantic.typescript.tsgo.ast.isBindingPattern(name)) {
-        if (isInAmbientOrTypeNode(node)) {
+        if (com.xemantic.typescript.tsgo.checker.isInAmbientOrTypeNode(node)) {
             return
         }
         val needCheckInitializer: Boolean = initializer != null && node!!.parent!!.parent!!.kind.value != 250

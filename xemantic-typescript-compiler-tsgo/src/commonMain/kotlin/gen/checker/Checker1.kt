@@ -682,9 +682,9 @@ class UnionOfUnionKey(
         a = o.a.goCopy()
     }
 
-    fun goEquals(o: UnionOfUnionKey): Boolean = id1 == o.id1 && id2 == o.id2 && r == o.r && a == o.a
+    fun goEquals(o: UnionOfUnionKey): Boolean = id1 == o.id1 && id2 == o.id2 && r == o.r && a.goEquals(o.a)
 
-    fun goHash(): Int = 31 * id1.hashCode() + 31 * id2.hashCode() + 31 * r.hashCode() + 31 * a.hashCode()
+    fun goHash(): Int = 31 * id1.hashCode() + 31 * id2.hashCode() + 31 * r.hashCode() + 31 * a.goHash()
 
     override fun equals(other: Any?): Boolean = other is UnionOfUnionKey && goEquals(other as UnionOfUnionKey)
 
@@ -708,9 +708,9 @@ class CachedSignatureKey(
         key = o.key.goCopy()
     }
 
-    fun goEquals(o: CachedSignatureKey): Boolean = sig === o.sig && key == o.key
+    fun goEquals(o: CachedSignatureKey): Boolean = sig === o.sig && key.goEquals(o.key)
 
-    fun goHash(): Int = 31 * sig.hashCode() + 31 * key.hashCode()
+    fun goHash(): Int = 31 * sig.hashCode() + 31 * key.goHash()
 
     override fun equals(other: Any?): Boolean = other is CachedSignatureKey && goEquals(other as CachedSignatureKey)
 
@@ -976,9 +976,9 @@ class FlowLoopKey(
         refKey = o.refKey.goCopy()
     }
 
-    fun goEquals(o: FlowLoopKey): Boolean = flowNode === o.flowNode && refKey == o.refKey
+    fun goEquals(o: FlowLoopKey): Boolean = flowNode === o.flowNode && refKey.goEquals(o.refKey)
 
-    fun goHash(): Int = 31 * flowNode.hashCode() + 31 * refKey.hashCode()
+    fun goHash(): Int = 31 * flowNode.hashCode() + 31 * refKey.goHash()
 
     override fun equals(other: Any?): Boolean = other is FlowLoopKey && goEquals(other as FlowLoopKey)
 

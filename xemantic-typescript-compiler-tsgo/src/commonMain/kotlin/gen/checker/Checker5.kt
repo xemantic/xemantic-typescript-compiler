@@ -2772,7 +2772,7 @@ fun Checker?.createModuleNotFoundChain(resolvedModule: ResolvedModule?, errorNod
     if (storedPackageName == moduleReference) {
         storedPackageName = ""
     }
-    val details: DiagnosticDetails = createModuleNotFoundChain(this!!.program, com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(errorNode), moduleReference, mode, packageName)
+    val details: DiagnosticDetails = com.xemantic.typescript.tsgo.checker.createModuleNotFoundChain(this!!.program, com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(errorNode), moduleReference, mode, packageName)
     val result: Diagnostic? = newDiagnosticForNode(errorNode, details.message, details.args)
     result.setRepopulateInfo(RepopulateDiagnosticInfo(kind = RepopulateDiagnosticKind(2), moduleReference = moduleReference, mode = mode, packageName = storedPackageName))
     return result
@@ -2780,7 +2780,7 @@ fun Checker?.createModuleNotFoundChain(resolvedModule: ResolvedModule?, errorNod
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.createModeMismatchDetails 884cea1b
 fun Checker?.createModeMismatchDetails(sourceFile: SourceFile?, errorNode: Node?): Diagnostic? {
-    val details: DiagnosticDetails = createModeMismatchDetails(this!!.program, sourceFile)
+    val details: DiagnosticDetails = com.xemantic.typescript.tsgo.checker.createModeMismatchDetails(this!!.program, sourceFile)
     val result: Diagnostic? = newDiagnosticForNode(errorNode, details.message, details.args)
     result.setRepopulateInfo(RepopulateDiagnosticInfo(kind = RepopulateDiagnosticKind(1)))
     return result
@@ -2965,11 +2965,11 @@ fun Checker?.isCommonJSRequire(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.createDefaultPropertyWrapperForModule 6adfd068
 fun Checker?.createDefaultPropertyWrapperForModule(symbol: Symbol?, originalSymbol: Symbol?, anonymousSymbol: Symbol?): Type? {
     val memberTable: SymbolTable = GoMap.make<String, Symbol?>(GoElem.ref<Symbol?>())
-    val newSymbol: Symbol? = this.newSymbol(SymbolFlags(2097152u), "default")
-    newSymbol!!.parent = originalSymbol
-    this!!.valueSymbolLinks.get(newSymbol)!!.nameType = this.getStringLiteralType("default")
-    this!!.aliasSymbolLinks.get(newSymbol)!!.aliasTarget = this.resolveSymbol(symbol)
-    memberTable["default"] = newSymbol
+    val newSymbol_1: Symbol? = this.newSymbol(SymbolFlags(2097152u), "default")
+    newSymbol_1!!.parent = originalSymbol
+    this!!.valueSymbolLinks.get(newSymbol_1)!!.nameType = this.getStringLiteralType("default")
+    this!!.aliasSymbolLinks.get(newSymbol_1)!!.aliasTarget = this.resolveSymbol(symbol)
+    memberTable["default"] = newSymbol_1
     return this.newAnonymousType(anonymousSymbol, memberTable, GoElem.ref<Signature?>().nilSlice, GoElem.ref<Signature?>().nilSlice, GoElem.ref<IndexInfo?>().nilSlice)
 }
 

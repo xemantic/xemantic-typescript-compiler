@@ -1293,9 +1293,9 @@ fun Checker?.getInferredTypeParameterConstraint(t: Type?, omitTypeReferences: Bo
                         inferences = inferences.append1(this!!.stringNumberSymbolType)
                     }
                     com.xemantic.typescript.tsgo.ast.isMappedTypeNode(parent) && parent.type() != null && com.xemantic.typescript.tsgo.ast.skipParentheses(parent.type()) === declaration!!.parent && com.xemantic.typescript.tsgo.ast.isConditionalTypeNode(parent!!.parent) && parent!!.parent.asConditionalTypeNode()!!.extendsType === parent && com.xemantic.typescript.tsgo.ast.isMappedTypeNode(parent!!.parent.asConditionalTypeNode()!!.checkType) && parent!!.parent.asConditionalTypeNode()!!.checkType.type() != null -> {
-                        val checkMappedType: Node? = parent!!.parent.asConditionalTypeNode()!!.checkType
-                        val nodeType: Type? = this.getTypeFromTypeNodeImpl(checkMappedType.type())
-                        val checkMappedTypeParameter: Node? = checkMappedType.asMappedTypeNode()!!.typeParameter
+                        val checkMappedType_1: Node? = parent!!.parent.asConditionalTypeNode()!!.checkType
+                        val nodeType: Type? = this.getTypeFromTypeNodeImpl(checkMappedType_1.type())
+                        val checkMappedTypeParameter: Node? = checkMappedType_1.asMappedTypeNode()!!.typeParameter
                         val mapper_1: TypeMapper? = newSimpleTypeMapper(this.getDeclaredTypeOfTypeParameter(this.getSymbolOfDeclaration(checkMappedTypeParameter)), com.xemantic.typescript.tsgo.core.ifElse<Type?>(GoElem.ref<Type?>(), checkMappedTypeParameter.asTypeParameterDeclaration()!!.constraint != null, this.getTypeFromTypeNodeImpl(checkMappedTypeParameter.asTypeParameterDeclaration()!!.constraint), this!!.stringNumberSymbolType))
                         inferences = inferences.append1(this.instantiateType(nodeType, mapper_1))
                     }
@@ -1525,7 +1525,7 @@ typealias CacheHashKey = Uint128
 
 // go: github.com/microsoft/typescript-go/internal/checker.CacheHashKey.IsZero 90031db9
 fun CacheHashKey.isZero(): Boolean {
-    return this == Uint128()
+    return this.goEquals(Uint128())
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.keyBuilder a656edb2
@@ -2485,7 +2485,7 @@ fun Checker?.widenTypeForVariableLikeDeclaration(t_0: Type?, declaration: Node?,
         t = this!!.anyType
     }
     if (reportErrors) {
-        if (!declarationBelongsToPrivateAmbientMember(declaration)) {
+        if (!com.xemantic.typescript.tsgo.checker.declarationBelongsToPrivateAmbientMember(declaration)) {
             this.reportImplicitAny(declaration, t, WideningKindNormal)
         }
     }
@@ -3250,7 +3250,7 @@ fun Checker?.getIndexInfosOfStructuredType(t: Type?): GoSlice<IndexInfo?> {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getIndexInfoOfType 87719bf2
 fun Checker?.getIndexInfoOfTypeImpl(t: Type?, keyType: Type?): IndexInfo? {
-    return findIndexInfo(this.getIndexInfosOfTypeImpl(t), keyType)
+    return com.xemantic.typescript.tsgo.checker.findIndexInfo(this.getIndexInfosOfTypeImpl(t), keyType)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getIndexTypeOfType 3dd10466
@@ -3434,7 +3434,7 @@ fun Checker?.resolveObjectTypeMembers(t: Type?, source: Type?, typeParameters: G
                 inheritedIndexInfos = GoSlice.of(GoElem.ref<IndexInfo?>(), this!!.anyBaseTypeIndexInfo)
             }
             indexInfos = com.xemantic.typescript.tsgo.core.concatenate<IndexInfo?>(GoElem.ref<IndexInfo?>(), indexInfos, com.xemantic.typescript.tsgo.core.filter<IndexInfo?>(GoElem.ref<IndexInfo?>(), inheritedIndexInfos, fun(info: IndexInfo?): Boolean {
-                return findIndexInfo(indexInfos, info!!.keyType) == null
+                return com.xemantic.typescript.tsgo.checker.findIndexInfo(indexInfos, info!!.keyType) == null
             }))
         }
         t!!.objectFlags = ObjectFlags(t!!.objectFlags.value and 536870912u.inv())

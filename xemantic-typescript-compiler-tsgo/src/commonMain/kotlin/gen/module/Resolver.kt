@@ -543,7 +543,7 @@ fun com.xemantic.typescript.tsgo.module.resolutionState?.getCandidateFromTypeRoo
 
 // go: github.com/microsoft/typescript-go/internal/module.resolutionState.mangleScopedPackageName fc1afcaf
 fun com.xemantic.typescript.tsgo.module.resolutionState?.mangleScopedPackageName(name: String): String {
-    val mangled: String = mangleScopedPackageName(name)
+    val mangled: String = com.xemantic.typescript.tsgo.module.mangleScopedPackageName(name)
     if (this!!.tracer != null && mangled != name) {
         this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.scoped_package_detected_looking_in_0, GoSlice.of(GoElem.ref<Any?>(), mangled))
     }

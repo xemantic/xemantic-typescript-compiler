@@ -364,7 +364,7 @@ fun com.xemantic.typescript.tsgo.tsoptions.commandLineParser?.parseOptionValue(a
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.commandLineParser.parseListTypeOption f84a8c07
 fun com.xemantic.typescript.tsgo.tsoptions.commandLineParser?.parseListTypeOption(opt: CommandLineOption?, value_1: String): Tuple2<GoSlice<Any?>, GoSlice<Diagnostic?>> {
-    return parseListTypeOption(opt, value_1)
+    return com.xemantic.typescript.tsgo.tsoptions.parseListTypeOption(opt, value_1)
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.ParseListTypeOption ff409c40
