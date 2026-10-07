@@ -156,6 +156,14 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   single-bound copies in `gen/` 48 → 34. Pins: `WindowShimTest` (`-tsgo`, values printed by
   go1.27.1), `LoweringRulesTest` (named parse-path functions carry no copy; census does not grow).
 
+- **Single-probe comma-ok map read** (`Stmts.multi`, map `range`). `v, ok := m[k]` lowered to
+  `GoMap.lookup` — `containsKey` + `get` (two hash probes) + a `Tuple2` per call — and
+  `internIdentifier` does one per identifier. Now `val t = m.probe(k)` (one probe; a second only
+  when the stored value is `null`), `v = goProbeValue<V>(t) { zero }` (inline, the zero built only
+  when absent), `ok = t !== GoMapAbsent`; a struct value is `goCopy()`d as Go copies it (as the map
+  `range` already did). Every generated `GoMap.lookup` call is gone. Pins: `MapProbeTest`,
+  `LoweringRulesTest`.
+
 Pins: `-goport/src/jvmTest/.../LoweringRulesTest.kt` (naming, byte-string literals, constant edges);
 the end-to-end gates are `-tsgo/src/jvmTest/kotlin/OracleParityTest.kt` (corpus, opt-in) and
 `TsgoPinTest.kt` (always on).

@@ -46,9 +46,9 @@ fun toLowerJS(str: String): String {
         if (isSurrogate(r)) {
             builder.writeString(encodeJSStringRune(r))
         } else {
-            val t2 = specialCasingMappings.lookup(r)
-            val mapping: specialCasingMapping = t2.first
-            val ok_1: Boolean = t2.second
+            val t2 = specialCasingMappings.probe(r)
+            val mapping: specialCasingMapping = goProbeValue<specialCasingMapping>(t2) { specialCasingMapping() }.goCopy()
+            val ok_1: Boolean = t2 !== GoMapAbsent
             if (ok_1) {
                 if (mapping.condition.value == 1 && isFinalSigmaContext(casedBefore, str, i)) {
                     builder.writeString(mapping.conditionalLower)
@@ -84,9 +84,9 @@ fun toUpperJS(str: String): String {
         if (isSurrogate(r)) {
             builder.writeString(str.substring(i, i + size))
         } else {
-            val t2 = specialCasingMappings.lookup(r)
-            val mapping: specialCasingMapping = t2.first
-            val ok_1: Boolean = t2.second
+            val t2 = specialCasingMappings.probe(r)
+            val mapping: specialCasingMapping = goProbeValue<specialCasingMapping>(t2) { specialCasingMapping() }.goCopy()
+            val ok_1: Boolean = t2 !== GoMapAbsent
             if (ok_1) {
                 builder.writeString(mapping.upper)
             } else {

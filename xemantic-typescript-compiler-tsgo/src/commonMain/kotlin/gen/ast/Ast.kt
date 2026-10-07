@@ -2599,9 +2599,9 @@ fun <T> getSourceFileDataCell(goElem_T: GoElem<T>, file: SourceFile?, key: Sourc
         if (file!!.data.isNil) {
             file!!.data = GoMap.make<sourceFileDataKey, Any?>(GoElem.ref<Any?>())
         }
-        val t2 = file!!.data.lookup(key!!.key)
-        val cell: Any? = t2.first
-        val ok: Boolean = t2.second
+        val t2 = file!!.data.probe(key!!.key)
+        val cell: Any? = goProbeValue<Any?>(t2) { null }
+        val ok: Boolean = t2 !== GoMapAbsent
         if (ok) {
             return cell as sourceFileDataCell<T>
         }
@@ -2961,9 +2961,9 @@ fun SourceFile?.resolveJSDoc(n: Node?): GoSlice<Node?> {
             goPanic("resolveJSDoc called but parseJSDocForNode is not registered; ensure the parser package is imported")
         }
         this!!.jsdocMu.rLock()
-        val t1 = this!!.jsdocCache.lookup(n)
-        val jsdocs: GoSlice<Node?> = t1.first
-        val ok: Boolean = t1.second
+        val t1 = this!!.jsdocCache.probe(n)
+        val jsdocs: GoSlice<Node?> = goProbeValue<GoSlice<Node?>>(t1) { GoElem.ref<Node?>().nilSlice }
+        val ok: Boolean = t1 !== GoMapAbsent
         if (ok) {
             this!!.jsdocMu.rUnlock()
             return jsdocs
@@ -2972,9 +2972,9 @@ fun SourceFile?.resolveJSDoc(n: Node?): GoSlice<Node?> {
         this!!.jsdocMu.lock()
         val dr2 = this!!.jsdocMu
         df0.defer { dr2.unlock() }
-        val t3 = this!!.jsdocCache.lookup(n)
-        val jsdocs_1: GoSlice<Node?> = t3.first
-        val ok_1: Boolean = t3.second
+        val t3 = this!!.jsdocCache.probe(n)
+        val jsdocs_1: GoSlice<Node?> = goProbeValue<GoSlice<Node?>>(t3) { GoElem.ref<Node?>().nilSlice }
+        val ok_1: Boolean = t3 !== GoMapAbsent
         if (ok_1) {
             return jsdocs_1
         }
@@ -3041,8 +3041,8 @@ fun SourceFile?.getNameTable(): GoMap<String, Int> {
         walk = fun(node: Node?): Boolean {
             if (isIdentifier(node) && !isTagName(node) && node.text() != "" || isStringOrNumericLiteralLike(node) && literalIsName(node) || isPrivateIdentifier(node)) {
                 val text: String = node.text()
-                val t0 = nameTable.lookup(text)
-                val ok: Boolean = t0.second
+                val t0 = nameTable.probe(text)
+                val ok: Boolean = t0 !== GoMapAbsent
                 if (ok) {
                     nameTable[text] = -1
                 } else {
@@ -3097,9 +3097,9 @@ fun SourceFile?.getOrCreateToken(kind: Kind, pos: Int, end: Int, parent: Node?, 
         df0.defer { dr1.unlock() }
         val loc: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(pos, end)
         val key: TokenCacheKey = TokenCacheKey(parent = parent, loc = loc.goCopy())
-        val t2 = this!!.tokenCache.lookup(key.goCopy())
-        val token: Node? = t2.first
-        val ok: Boolean = t2.second
+        val t2 = this!!.tokenCache.probe(key.goCopy())
+        val token: Node? = goProbeValue<Node?>(t2) { null }
+        val ok: Boolean = t2 !== GoMapAbsent
         if (ok) {
             if (token!!.kind.value != kind.value) {
                 goPanic(com.xemantic.typescript.tsgo.go.fmt.sprintf("Token cache mismatch: %v != %v", token!!.kind, kind))

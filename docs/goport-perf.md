@@ -26,7 +26,8 @@ a quiet box before quoting the 1.50x as anything but "at the line".
 | after | tsgo arm | core arm | ratio | paired | commit |
 |---|---|---|---|---|---|
 | HEAD as generated | 42,163 ms | 313.9 ms | 134x | core 3/3 | `3ce760c6e` |
-| **substring elimination** (window rule, § 2) | 338.5 ms (312.8–352.3, 11.7%) | 236.1 ms (224.5–243.6, 8.1%) | **1.43x** | core 4/4 (1.34–1.47) | this round |
+| **substring elimination** (window rule, § 2) | 338.5 ms (312.8–352.3, 11.7%) | 236.1 ms (224.5–243.6, 8.1%) | **1.43x** | core 4/4 (1.34–1.47) | `1c9db2fe5` |
+| **single-probe comma-ok map read** | 314.6 ms (306.1–323.1, 5.4%) | 248.8 ms (235.1–257.8, 9.1%) | **1.26x** | core 4/4 (1.23–1.34) | this round |
 
 ## 1. Setup
 

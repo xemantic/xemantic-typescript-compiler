@@ -61,8 +61,8 @@ fun <K, V> LinkStore<K, V>?.get(key: K): V {
 
 // go: github.com/microsoft/typescript-go/internal/core.LinkStore.Has 7d2e7898
 fun <K, V> LinkStore<K, V>?.has(key: K): Boolean {
-    val t0 = this!!.entries.lookup(key)
-    val ok: Boolean = t0.second
+    val t0 = this!!.entries.probe(key)
+    val ok: Boolean = t0 !== GoMapAbsent
     return ok
 }
 

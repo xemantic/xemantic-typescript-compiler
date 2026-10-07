@@ -2477,9 +2477,9 @@ fun getModuleInstanceStateCached(node: Node?, ancestors: GoSlice<Node?>, visited
         visited = GoMap.make<NodeId, ModuleInstanceState>(ModuleInstanceState.ELEM)
     }
     val nodeId: NodeId = getNodeId(node)
-    val t1 = visited.lookup(nodeId)
-    val cached: ModuleInstanceState = t1.first
-    val ok: Boolean = t1.second
+    val t1 = visited.probe(nodeId)
+    val cached: ModuleInstanceState = goProbeValue<ModuleInstanceState>(t1) { ModuleInstanceState(0) }
+    val ok: Boolean = t1 !== GoMapAbsent
     if (ok) {
         if (cached.value != 0) {
             return cached
@@ -2991,9 +2991,9 @@ fun getPragmaFromSourceFile(file: SourceFile?, name: String): Pragma? {
 // go: github.com/microsoft/typescript-go/internal/ast.GetPragmaArgument 5e315b5a
 fun getPragmaArgument(pragma: Pragma?, name: String): String {
     if (pragma != null) {
-        val t0 = pragma!!.args.lookup(name)
-        val arg: PragmaArgument = t0.first
-        val ok: Boolean = t0.second
+        val t0 = pragma!!.args.probe(name)
+        val arg: PragmaArgument = goProbeValue<PragmaArgument>(t0) { PragmaArgument() }.goCopy()
+        val ok: Boolean = t0 !== GoMapAbsent
         if (ok) {
             return arg.value
         }

@@ -52,8 +52,8 @@ fun <T> Set<T>?.has(key: T): Boolean {
     if (this == null) {
         return false
     }
-    val t0 = this!!.m.lookup(key)
-    val ok: Boolean = t0.second
+    val t0 = this!!.m.probe(key)
+    val ok: Boolean = t0 !== GoMapAbsent
     return ok
 }
 
@@ -163,8 +163,8 @@ fun <T> Set<T>?.isSubsetOf(other: Set<T>?): Boolean {
     }
     val m0 = this!!.m
     l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.lookup(k1)
-        if (!e2.second) continue
+        val e2 = m0.probe(k1)
+        if (e2 === GoMapAbsent) continue
         val key: T = k1
         if (!other.has(key)) {
             return false
@@ -180,8 +180,8 @@ fun <T> Set<T>?.intersects(other: Set<T>?): Boolean {
     }
     val m0 = this!!.m
     l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.lookup(k1)
-        if (!e2.second) continue
+        val e2 = m0.probe(k1)
+        if (e2 === GoMapAbsent) continue
         val key: T = k1
         if (other.has(key)) {
             return true

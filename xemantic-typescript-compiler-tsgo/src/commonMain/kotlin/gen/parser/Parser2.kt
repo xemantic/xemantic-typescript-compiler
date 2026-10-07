@@ -2673,9 +2673,9 @@ fun Parser?.createIdentifierWithDiagnostic(isIdentifier: Boolean, diagnosticMess
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.internIdentifier 7b7ba05f
 fun Parser?.internIdentifier(text: String): String {
-    val t0 = this!!.identifiers.lookup(text)
-    val identifier: String = t0.first
-    val ok: Boolean = t0.second
+    val t0 = this!!.identifiers.probe(text)
+    val identifier: String = goProbeValue<String>(t0) { "" }
+    val ok: Boolean = t0 !== GoMapAbsent
     if (ok) {
         return identifier
     }

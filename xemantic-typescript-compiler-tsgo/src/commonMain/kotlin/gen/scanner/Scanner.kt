@@ -684,9 +684,9 @@ fun Scanner?.scan(): Kind {
                         if (this!!.hexNumberCache.isNil) {
                             this!!.hexNumberCache = GoMap.make<String, String>(GoElem.STRING)
                         }
-                        val t3 = this!!.hexNumberCache.lookup(digits)
-                        val cachedValue: String = t3.first
-                        val ok: Boolean = t3.second
+                        val t3 = this!!.hexNumberCache.probe(digits)
+                        val cachedValue: String = goProbeValue<String>(t3) { "" }
+                        val ok: Boolean = t3 !== GoMapAbsent
                         if (ok) {
                             this!!.scannerState.tokenValue = cachedValue
                         } else {
@@ -1171,9 +1171,9 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
                     break@l4
                 }
                 if (shouldReportErrors) {
-                    val t2 = charCodeToRegExpFlag.lookup(ch_3)
-                    val flag: regularExpressionFlags = t2.first
-                    val ok: Boolean = t2.second
+                    val t2 = charCodeToRegExpFlag.probe(ch_3)
+                    val flag: regularExpressionFlags = goProbeValue<regularExpressionFlags>(t2) { regularExpressionFlags(0) }
+                    val ok: Boolean = t2 !== GoMapAbsent
                     if (!ok) {
                         this.errorAt(com.xemantic.typescript.tsgo.diagnostics.unknown_regular_expression_flag, p, size_1, GoElem.ref<Any?>().nilSlice)
                     } else if (regExpFlags.value and flag.value != 0) {
@@ -2202,9 +2202,9 @@ fun Scanner?.scanHexDigits(minCount: Int, scanAsManyAsPossible: Boolean, canHave
     if (this!!.hexDigitCache.isNil) {
         this!!.hexDigitCache = GoMap.make<String, String>(GoElem.STRING)
     }
-    val t0 = this!!.hexDigitCache.lookup(digits)
-    val cached: String = t0.first
-    val ok: Boolean = t0.second
+    val t0 = this!!.hexDigitCache.probe(digits)
+    val cached: String = goProbeValue<String>(t0) { "" }
+    val ok: Boolean = t0 !== GoMapAbsent
     if (ok) {
         return cached
     } else {
@@ -2264,9 +2264,9 @@ fun Scanner?.scanBigIntSuffix(): Kind {
     if (this!!.numberCache.isNil) {
         this!!.numberCache = GoMap.make<String, String>(GoElem.STRING)
     }
-    val t0 = this!!.numberCache.lookup(this!!.scannerState.tokenValue)
-    val cached: String = t0.first
-    val ok: Boolean = t0.second
+    val t0 = this!!.numberCache.probe(this!!.scannerState.tokenValue)
+    val cached: String = goProbeValue<String>(t0) { "" }
+    val ok: Boolean = t0 !== GoMapAbsent
     if (ok) {
         this!!.scannerState.tokenValue = cached
     } else {
@@ -2347,9 +2347,9 @@ fun tokenToString(token: Kind): String {
 
 // go: github.com/microsoft/typescript-go/internal/scanner.StringToToken 77c5a1fc
 fun stringToToken(s: String): Kind {
-    val t0 = textToToken.lookup(s)
-    val kind: Kind = t0.first
-    val ok: Boolean = t0.second
+    val t0 = textToToken.probe(s)
+    val kind: Kind = goProbeValue<Kind>(t0) { Kind(0) }
+    val ok: Boolean = t0 !== GoMapAbsent
     if (ok) {
         return kind
     }
@@ -2361,8 +2361,8 @@ fun getViableKeywordSuggestions(): GoSlice<String> {
     var result: GoSlice<String> = GoSlice.make(GoElem.STRING, 0, textToKeyword.len)
     val m0 = textToKeyword
     l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.lookup(k1)
-        if (!e2.second) continue
+        val e2 = m0.probe(k1)
+        if (e2 === GoMapAbsent) continue
         val text: String = k1
         if (text.length > 2) {
             result = result.append1(text)
@@ -3079,10 +3079,10 @@ fun iterateCommentRanges(f: NodeFactory?, text: String, pos_0: Int, trailing: Bo
     val result: GoArray<String> = GoArray(351, GoElem.STRING)
     val m0 = textToToken
     l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.lookup(k1)
-        if (!e2.second) continue
+        val e2 = m0.probe(k1)
+        if (e2 === GoMapAbsent) continue
         val text: String = k1
-        val kind: Kind = e2.first
+        val kind: Kind = goProbeValue<Kind>(e2) { Kind(0) }
         result[kind.value] = text
     }
     return result.goCopy()

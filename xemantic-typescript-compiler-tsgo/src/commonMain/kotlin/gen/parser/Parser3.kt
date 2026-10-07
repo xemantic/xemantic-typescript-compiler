@@ -479,24 +479,24 @@ fun Parser?.processPragmasIntoFields(context: SourceFile?) {
         val pragma: Pragma = s0[i1].goCopy()
         when (pragma.name) {
             "reference" -> {
-                val t2 = pragma.args.lookup("types")
-                val types: PragmaArgument = t2.first
-                val typesOk: Boolean = t2.second
-                val t3 = pragma.args.lookup("lib")
-                val lib: PragmaArgument = t3.first
-                val libOk: Boolean = t3.second
-                val t4 = pragma.args.lookup("path")
-                val path: PragmaArgument = t4.first
-                val pathOk: Boolean = t4.second
-                val t5 = pragma.args.lookup("resolution-mode")
-                val resolutionMode: PragmaArgument = t5.first
-                val resolutionModeOk: Boolean = t5.second
-                val t6 = pragma.args.lookup("preserve")
-                val preserve: PragmaArgument = t6.first
-                val preserveOk: Boolean = t6.second
-                val t7 = pragma.args.lookup("no-default-lib")
-                val noDefaultLib: PragmaArgument = t7.first
-                val noDefaultLibOk: Boolean = t7.second
+                val t2 = pragma.args.probe("types")
+                val types: PragmaArgument = goProbeValue<PragmaArgument>(t2) { PragmaArgument() }.goCopy()
+                val typesOk: Boolean = t2 !== GoMapAbsent
+                val t3 = pragma.args.probe("lib")
+                val lib: PragmaArgument = goProbeValue<PragmaArgument>(t3) { PragmaArgument() }.goCopy()
+                val libOk: Boolean = t3 !== GoMapAbsent
+                val t4 = pragma.args.probe("path")
+                val path: PragmaArgument = goProbeValue<PragmaArgument>(t4) { PragmaArgument() }.goCopy()
+                val pathOk: Boolean = t4 !== GoMapAbsent
+                val t5 = pragma.args.probe("resolution-mode")
+                val resolutionMode: PragmaArgument = goProbeValue<PragmaArgument>(t5) { PragmaArgument() }.goCopy()
+                val resolutionModeOk: Boolean = t5 !== GoMapAbsent
+                val t6 = pragma.args.probe("preserve")
+                val preserve: PragmaArgument = goProbeValue<PragmaArgument>(t6) { PragmaArgument() }.goCopy()
+                val preserveOk: Boolean = t6 !== GoMapAbsent
+                val t7 = pragma.args.probe("no-default-lib")
+                val noDefaultLib: PragmaArgument = goProbeValue<PragmaArgument>(t7) { PragmaArgument() }.goCopy()
+                val noDefaultLibOk: Boolean = t7 !== GoMapAbsent
                 when {
                     noDefaultLibOk && noDefaultLib.value == "true" -> {
                     }

@@ -400,8 +400,8 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
         }
         nodes = appendUint32s(nodes, GoSlice.of(GoElem.UINT, node!!.kind.value.toUInt(), utf16!!(node.pos()), utf16!!(node.end()), 0u, parentIndex, getNodeData(node, strs, positionMap, extendedData, structuredData), node!!.flags.value))
         if (!nodeIndexMap.isNil) {
-            val t12 = nodeIndexMap.lookup(node)
-            val ok: Boolean = t12.second
+            val t12 = nodeIndexMap.probe(node)
+            val ok: Boolean = t12 !== GoMapAbsent
             if (ok) {
                 nodeIndexMap[node] = nodeCount
             }

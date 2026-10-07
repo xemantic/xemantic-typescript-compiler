@@ -65,6 +65,18 @@ class GoMap<K, V> private constructor(
         return Tuple2(b[key] as V, true)
     }
 
+    /**
+     * NOT Go API — `v, ok := m[k]` in ONE hash probe and no tuple: the stored value, or
+     * [GoMapAbsent] when [key] is absent (the lowering reads it with [goProbeValue] and `!== GoMapAbsent`).
+     * A second probe happens only when the stored value is `null` (a nil pointer/interface value).
+     */
+    fun probe(key: K): Any? {
+        val b = backing ?: return GoMapAbsent
+        val v = b[key]
+        if (v != null) return v
+        return if (b.containsKey(key)) null else GoMapAbsent
+    }
+
     /** `_, ok := m[k]`. */
     fun contains(key: K): Boolean = backing?.containsKey(key) ?: false
 
@@ -87,9 +99,10 @@ class GoMap<K, V> private constructor(
     /** `for k, v := range m`. Return `false` from [body] to stop (Go `break`). */
     inline fun range(body: (K, V) -> Boolean) {
         for (k in keysSnapshot()) {
-            val r = lookup(k)
-            if (!r.second) continue // deleted during iteration
-            if (!body(k, r.first)) return
+            val r = probe(k)
+            if (r === GoMapAbsent) continue // deleted during iteration
+            @Suppress("UNCHECKED_CAST")
+            if (!body(k, r as V)) return
         }
     }
 
@@ -119,3 +132,10 @@ class GoMap<K, V> private constructor(
     }
 
 }
+
+/** NOT Go API — the "absent" answer of [GoMap.probe] (never a stored value). */
+object GoMapAbsent
+
+/** NOT Go API — the value half of `v, ok := m[k]` from a [GoMap.probe] result: the zero value when absent. */
+@Suppress("UNCHECKED_CAST")
+inline fun <V> goProbeValue(probed: Any?, zero: () -> V): V = if (probed === GoMapAbsent) zero() else probed as V

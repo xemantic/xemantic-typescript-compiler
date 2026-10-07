@@ -876,12 +876,12 @@ fun <K, V1, V2> diffMapsFunc(goElem_K: GoElem<K>, goElem_V1: GoElem<V1>, goElem_
     if (onAdded != null) {
         val m0 = m2
         l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.lookup(k1)
-            if (!e2.second) continue
+            val e2 = m0.probe(k1)
+            if (e2 === GoMapAbsent) continue
             val k: K = k1
-            val v2: V2 = e2.first
-            val t3 = m1.lookup(k)
-            val ok: Boolean = t3.second
+            val v2: V2 = goProbeValue<V2>(e2) { goElem_V2.zeroValue() }
+            val t3 = m1.probe(k)
+            val ok: Boolean = t3 !== GoMapAbsent
             if (!ok) {
                 onAdded!!(k, v2)
             }
@@ -892,13 +892,13 @@ fun <K, V1, V2> diffMapsFunc(goElem_K: GoElem<K>, goElem_V1: GoElem<V1>, goElem_
     }
     val m4 = m1
     l1@ for (k5 in m4.keysSnapshot()) {
-        val e6 = m4.lookup(k5)
-        if (!e6.second) continue
+        val e6 = m4.probe(k5)
+        if (e6 === GoMapAbsent) continue
         val k_1: K = k5
-        val v1: V1 = e6.first
-        val t7 = m2.lookup(k_1)
-        val v2_1: V2 = t7.first
-        val ok_1: Boolean = t7.second
+        val v1: V1 = goProbeValue<V1>(e6) { goElem_V1.zeroValue() }
+        val t7 = m2.probe(k_1)
+        val v2_1: V2 = goProbeValue<V2>(t7) { goElem_V2.zeroValue() }
+        val ok_1: Boolean = t7 !== GoMapAbsent
         if (ok_1) {
             if (onChanged != null && !equalValues!!(v1, v2_1)) {
                 onChanged!!(k_1, v1, v2_1)

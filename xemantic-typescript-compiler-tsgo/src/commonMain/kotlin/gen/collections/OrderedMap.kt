@@ -125,8 +125,8 @@ fun <K, V> OrderedMap<K, V>?.set(key: K, value_1: V) {
     if (this!!.mp.isNil) {
         this!!.mp = GoMap.make<K, V>(this!!.goElem_V)
     }
-    val t0 = this!!.mp.lookup(key)
-    val ok: Boolean = t0.second
+    val t0 = this!!.mp.probe(key)
+    val ok: Boolean = t0 !== GoMapAbsent
     if (!ok) {
         this!!.keys = this!!.keys.append1(key)
     }
@@ -135,9 +135,9 @@ fun <K, V> OrderedMap<K, V>?.set(key: K, value_1: V) {
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.Get 1c34f06d
 fun <K, V> OrderedMap<K, V>?.get(key: K): Tuple2<V, Boolean> {
-    val t0 = this!!.mp.lookup(key)
-    val v: V = t0.first
-    val ok: Boolean = t0.second
+    val t0 = this!!.mp.probe(key)
+    val v: V = goProbeValue<V>(t0) { this!!.goElem_V.zeroValue() }
+    val ok: Boolean = t0 !== GoMapAbsent
     return Tuple2<V, Boolean>(v, ok)
 }
 
@@ -160,16 +160,16 @@ fun <K, V> OrderedMap<K, V>?.entryAt(index: Int): Tuple3<K, V, Boolean> {
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.Has 2b8c6ac8
 fun <K, V> OrderedMap<K, V>?.has(key: K): Boolean {
-    val t0 = this!!.mp.lookup(key)
-    val ok: Boolean = t0.second
+    val t0 = this!!.mp.probe(key)
+    val ok: Boolean = t0 !== GoMapAbsent
     return ok
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.Delete 03bd4608
 fun <K, V> OrderedMap<K, V>?.delete(key: K): Tuple2<V, Boolean> {
-    val t0 = this!!.mp.lookup(key)
-    val v: V = t0.first
-    val ok: Boolean = t0.second
+    val t0 = this!!.mp.probe(key)
+    val v: V = goProbeValue<V>(t0) { this!!.goElem_V.zeroValue() }
+    val ok: Boolean = t0 !== GoMapAbsent
     if (!ok) {
         val zero: V = this!!.goElem_V.zeroValue()
         return Tuple2<V, Boolean>(zero, false)

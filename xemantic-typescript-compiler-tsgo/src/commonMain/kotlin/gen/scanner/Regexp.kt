@@ -76,9 +76,9 @@ val regularExpressionFlagsModifiers: regularExpressionFlags = regularExpressionF
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.checkRegularExpressionFlagAvailability df28d9b9
 fun Scanner?.checkRegularExpressionFlagAvailability(flag: regularExpressionFlags, pos: Int, size: Int) {
-    val t0 = regExpFlagToFirstAvailableLanguageVersion.lookup(flag)
-    val availableFrom: ScriptTarget = t0.first
-    val ok: Boolean = t0.second
+    val t0 = regExpFlagToFirstAvailableLanguageVersion.probe(flag)
+    val availableFrom: ScriptTarget = goProbeValue<ScriptTarget>(t0) { ScriptTarget(0) }
+    val ok: Boolean = t0 !== GoMapAbsent
     if (ok && this.languageVersion().value < availableFrom.value) {
         this.errorAt(com.xemantic.typescript.tsgo.diagnostics.this_regular_expression_flag_is_only_available_when_targeting_0_or_later, pos, size, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.go.strings.toLower(availableFrom.string())))
     }
@@ -455,9 +455,9 @@ fun regExpParser?.scanPatternModifiers(currFlags_0: regularExpressionFlags): reg
         if (ch == 65533 || !isIdentifierPart(ch)) {
             break@l0
         }
-        val t2 = charCodeToRegExpFlag.lookup(ch)
-        val flag: regularExpressionFlags = t2.first
-        val ok: Boolean = t2.second
+        val t2 = charCodeToRegExpFlag.probe(ch)
+        val flag: regularExpressionFlags = goProbeValue<regularExpressionFlags>(t2) { regularExpressionFlags(0) }
+        val ok: Boolean = t2 !== GoMapAbsent
         if (!ok) {
             this.error(com.xemantic.typescript.tsgo.diagnostics.unknown_regular_expression_flag, this.pos(), size, GoElem.ref<Any?>().nilSlice)
         } else if (currFlags.value and flag.value != 0) {

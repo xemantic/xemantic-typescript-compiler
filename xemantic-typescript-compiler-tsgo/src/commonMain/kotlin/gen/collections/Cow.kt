@@ -47,16 +47,16 @@ class CopyOnWriteMap<K, V>(
 
 // go: github.com/microsoft/typescript-go/internal/collections.CopyOnWriteMap.Get c6bc1bef
 fun <K, V> CopyOnWriteMap<K, V>?.get(k: K): Tuple2<V, Boolean> {
-    val t0 = this!!.m.lookup(k)
-    val v: V = t0.first
-    val ok: Boolean = t0.second
+    val t0 = this!!.m.probe(k)
+    val v: V = goProbeValue<V>(t0) { this!!.goElem_V.zeroValue() }
+    val ok: Boolean = t0 !== GoMapAbsent
     return Tuple2<V, Boolean>(v, ok)
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.CopyOnWriteMap.Has bedd3edf
 fun <K, V> CopyOnWriteMap<K, V>?.has(k: K): Boolean {
-    val t0 = this!!.m.lookup(k)
-    val ok: Boolean = t0.second
+    val t0 = this!!.m.probe(k)
+    val ok: Boolean = t0 !== GoMapAbsent
     return ok
 }
 

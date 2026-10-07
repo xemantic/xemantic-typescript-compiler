@@ -62,8 +62,8 @@ fun <K, V> groupBy(goElem_K: GoElem<K>, goElem_V: GoElem<V>, items: GoSlice<V>, 
 
 // go: github.com/microsoft/typescript-go/internal/collections.MultiMap.Has 3f473dbf
 fun <K, V> MultiMap<K, V>?.has(key: K): Boolean {
-    val t0 = this!!.m.lookup(key)
-    val ok: Boolean = t0.second
+    val t0 = this!!.m.probe(key)
+    val ok: Boolean = t0 !== GoMapAbsent
     return ok
 }
 
@@ -82,9 +82,9 @@ fun <K, V> MultiMap<K, V>?.add(key: K, value_1: V) {
 
 // go: github.com/microsoft/typescript-go/internal/collections.MultiMap.Remove 517b151f
 fun <K, V> MultiMap<K, V>?.remove(key: K, value_1: V) {
-    val t0 = this!!.m.lookup(key)
-    var values: GoSlice<V> = t0.first
-    val ok: Boolean = t0.second
+    val t0 = this!!.m.probe(key)
+    var values: GoSlice<V> = goProbeValue<GoSlice<V>>(t0) { this!!.goElem_V.nilSlice }
+    val ok: Boolean = t0 !== GoMapAbsent
     if (ok) {
         val i: Int = com.xemantic.typescript.tsgo.go.slices.index<V>(values, value_1)
         if (i >= 0) {

@@ -144,4 +144,15 @@ class LoweringRulesTest {
         // 48 as first generated; 34 after the window rule (2026-10-07). Lower it as rules land.
         assert(n <= 34)
     }
+
+    @Test
+    fun `a comma-ok map read is one probe and no tuple`() {
+        // `identifier, ok := p.identifiers[text]` in internIdentifier, the hottest map read of a parse.
+        val intern = genFunction("parser/Parser2.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.internIdentifier")
+        assert(intern.contains(".probe(text)") && intern.contains("!== GoMapAbsent"))
+        // No generated code calls the two-probe, tuple-allocating GoMap.lookup any more.
+        val calls = Regex("""\b[mte]\d*\.lookup\(|\.(identifiers|args)\.lookup\(""")
+        val n = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f -> calls.findAll(f.readText()).count() }
+        assert(n == 0)
+    }
 }

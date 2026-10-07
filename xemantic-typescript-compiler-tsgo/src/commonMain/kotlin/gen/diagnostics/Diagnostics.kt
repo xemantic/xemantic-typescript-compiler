@@ -174,9 +174,9 @@ fun localize(locale: Locale, message_0: Message?, key: Key, args: GoSlice<String
         goPanic("Unknown diagnostic message: " + key.value)
     }
     var text: String = message!!.text
-    val t1 = getLocalizedMessages(locale.goCopy()).lookup(message!!.key)
-    val localized: String = t1.first
-    val ok: Boolean = t1.second
+    val t1 = getLocalizedMessages(locale.goCopy()).probe(message!!.key)
+    val localized: String = goProbeValue<String>(t1) { "" }
+    val ok: Boolean = t1 !== GoMapAbsent
     if (ok) {
         text = localized
     }

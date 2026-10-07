@@ -1045,8 +1045,9 @@ fun getCommonParentsWorker(componentGroups: GoSlice<GoSlice<String>>, minCompone
                     l3@ for (i6 in 0 until s5.len) {
                         val g: GoSlice<String> = s5[i6]
                         val key: Path = toPath(g[lastCommonIndex], options.currentDirectory, options.useCaseSensitiveFileNames)
-                        val t7 = newGroups.lookup(key)
-                        val ok: Boolean = t7.second
+                        val t7 = newGroups.probe(key)
+                        goProbeValue<AnonStruct_4ca9520d>(t7) { AnonStruct_4ca9520d() }.goCopy()
+                        val ok: Boolean = t7 !== GoMapAbsent
                         if (!ok) {
                             orderedGroups = orderedGroups.append1(key)
                         }

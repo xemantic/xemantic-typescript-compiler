@@ -261,8 +261,24 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         if (r.bool("commaOk")) {
             when (r.k) {
                 "IndexExpr" -> {
-                    val m = raw(r.reqObj("x"))
-                    w.line("val $t = ${m.at(PRIMARY)}.lookup(${flow(r.reqObj("index")).code})")
+                    // One hash probe and no tuple: `val t = m.probe(k)`; `v` reads it, `ok` tests it.
+                    val mx = r.reqObj("x")
+                    val m = raw(mx)
+                    val mt = types.under(types.core(ty(mx))) as? MapType ?: refuse("commaok-map-type")
+                    w.line("val $t = ${m.at(PRIMARY)}.probe(${flow(r.reqObj("index")).code})")
+                    val impls = r.nullableList("implTuple")
+                    lhs.forEachIndexed { i, l ->
+                        if (l.bool("blank")) return@forEachIndexed
+                        val v = when {
+                            impls.getOrNull(i)?.str("k") == "nil" -> Ex.primary(tm.zero(impls[i]!!.int("to")!!))
+                            // Go copies a struct value out of the map (as the map range below does).
+                            i == 0 -> Ex.primary("goProbeValue<${tm.kt(mt.elem)}>($t) { ${tm.zero(mt.elem)} }" +
+                                (if (tm.isStructValue(mt.elem) && tm.hasGoCopy(mt.elem) && tm.kt(mt.elem) != "Unit") ".goCopy()" else ""))
+                            else -> Ex("$t !== GoMapAbsent", Ex.EQ)
+                        }
+                        single(l, v, define)
+                    }
+                    return
                 }
                 "TypeAssertExpr" -> {
                     val x = lower(r.reqObj("x"))
@@ -588,11 +604,12 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                     w.line("val $m = ${raw(x).code}")
                     w.block("${t.kLabel}@ for ($k in $m.keysSnapshot())") {
                         val lv = fn.fresh("e")
-                        w.line("val $lv = $m.lookup($k)")
-                        w.line("if (!$lv.second) continue")
+                        w.line("val $lv = $m.probe($k)")
+                        w.line("if ($lv === GoMapAbsent) continue")
                         bindRange(key, Ex.primary(k), define)
                         val vt = (types.under(types.core(ty(x))) as MapType).elem
-                        val vv = if ((s.bool("valueCopy") || tm.isStructValue(vt)) && tm.hasGoCopy(vt)) "$lv.first.goCopy()" else "$lv.first"
+                        val read = "goProbeValue<${tm.kt(vt)}>($lv) { ${tm.zero(vt)} }"
+                        val vv = if ((s.bool("valueCopy") || tm.isStructValue(vt)) && tm.hasGoCopy(vt)) "$read.goCopy()" else read
                         bindRange(value, Ex.primary(vv), define)
                         body(s.reqObj("body").list("list"))
                     }
