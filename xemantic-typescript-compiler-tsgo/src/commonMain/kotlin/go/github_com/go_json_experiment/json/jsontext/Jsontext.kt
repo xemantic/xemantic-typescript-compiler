@@ -489,9 +489,6 @@ class Decoder internal constructor(private val src: String, internal val flags: 
                     return err(pos, "invalid character " + quoteRune(src, pos) + if (obj) " at start of string (expecting '\"')" else " at start of value")
                 }
             }
-            if (obj && lengths.last() % 2 == 0 && pos < src.length && src[pos] != '"' && !(len == 0 && src[pos] == '}')) {
-                return err(pos, "invalid character " + quoteRune(src, pos) + " at start of string (expecting '\"')")
-            }
         }
         prepared = true
         return null
@@ -529,6 +526,10 @@ class Decoder internal constructor(private val src: String, internal val flags: 
         }
         val start = pos
         val c = src[pos]
+        // an object member name must be a string (PeekKind reports the raw kind; ReadToken refuses)
+        if (kinds.isNotEmpty() && kinds.last() && lengths.last() % 2 == 0 && c != '"' && c != '}') {
+            return fail(err(pos, "invalid character " + quoteRune(src, pos) + " at start of string (expecting '\"')"))
+        }
         val tok: Token
         when (c) {
             '{', '[' -> {

@@ -405,8 +405,19 @@ private fun stringValue(raw: String): String =
 
 /** `any`: objects → `map[string]any`, arrays → `[]any`, numbers → float64. */
 private fun decodeAny(dec: Decoder): Tuple2<Any?, GoError?> {
+    // Go takes its reflective path for `any` when AllowDuplicateNames is set: it first makes the
+    // zero value of the PEEKED kind, which a failed scalar read then leaves behind (oracle-tested).
+    val peek = if (dec.flags.allowDuplicateNames) dec.peekKind().value else 0
     val (t, e) = dec.readToken()
-    if (e != null) return Tuple2(null, e)
+    if (e != null) {
+        val zero: Any? = when (peek.toChar()) {
+            '0' -> 0.0
+            '"' -> ""
+            't', 'f' -> false
+            else -> null
+        }
+        return Tuple2(zero, e)
+    }
     return when (t.kind().value.toChar()) {
         'n' -> Tuple2(null, null)
         't' -> Tuple2(true, null)

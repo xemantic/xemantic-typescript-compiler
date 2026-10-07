@@ -31,9 +31,11 @@ import com.xemantic.typescript.tsgo.go.sync.Mutex
 import com.xemantic.typescript.tsgo.go.sync.Once
 import com.xemantic.typescript.tsgo.go.sync.Pool
 import com.xemantic.typescript.tsgo.go.sync.RWMutex
+import com.xemantic.typescript.tsgo.go.sync.WaitGroup
 import com.xemantic.typescript.tsgo.go.sync.atomic.Int64
 import com.xemantic.typescript.tsgo.go.sync.atomic.Pointer
 import com.xemantic.typescript.tsgo.go.sync.onceValue
+import java.lang.management.ManagementFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
@@ -149,5 +151,89 @@ class SyncConcurrencyTest {
             if (p.compareAndSwap(null, Any())) wins.incrementAndGet()
         }
         assert(failures.isEmpty() && n.load() == threads * 20_000L && wins.get() == 1)
+    }
+    private val cpu = ManagementFactory.getThreadMXBean()
+
+    /** CPU nanoseconds the current thread spends in [block] (a parked thread spends ~none). */
+    private fun cpuOf(block: () -> Unit): Long {
+        val t0 = cpu.currentThreadCpuTime
+        block()
+        return cpu.currentThreadCpuTime - t0
+    }
+
+    @Test
+    fun `contended Mutex waiters park instead of spinning`() {
+        val m = Mutex()
+        m.lock()
+        val cpuNanos = java.util.Collections.synchronizedList(ArrayList<Long>())
+        val acquired = AtomicInteger(0)
+        val waiters = (0 until 4).map {
+            Thread {
+                cpuNanos += cpuOf { m.lock() }
+                acquired.incrementAndGet()
+                m.unlock()
+            }.also { it.start() }
+        }
+        Thread.sleep(400)
+        val before = acquired.get()
+        m.unlock()
+        waiters.forEach { it.join() }
+        // a spinning waiter would burn ~400 ms of CPU while the lock was held
+        assert(before == 0 && acquired.get() == 4 && cpuNanos.all { it < 150_000_000L })
+    }
+
+    @Test
+    fun `WaitGroup Wait blocks without spinning until another thread is Done`() {
+        val wg = WaitGroup()
+        wg.add(2)
+        var waited = -1L
+        val waiter = Thread { waited = cpuOf { wg.wait() } }.also { it.start() }
+        Thread.sleep(200)
+        wg.done()
+        Thread.sleep(200)
+        val stillWaiting = waiter.isAlive
+        wg.done()
+        waiter.join(5_000)
+        assert(stillWaiting && !waiter.isAlive && waited in 0L until 150_000_000L)
+    }
+
+    @Test
+    fun `a waiting RWMutex writer blocks new readers and goes first`() {
+        val m = RWMutex()
+        m.rLock()
+        val order = java.util.Collections.synchronizedList(ArrayList<String>())
+        val writer = Thread {
+            m.lock()
+            order += "writer"
+            m.unlock()
+        }.also { it.start() }
+        Thread.sleep(150) // the writer is now waiting
+        val lateReader = Thread {
+            m.rLock()
+            order += "reader"
+            m.rUnlock()
+        }.also { it.start() }
+        Thread.sleep(150)
+        val blocked = order.isEmpty()
+        m.rUnlock()
+        writer.join(5_000)
+        lateReader.join(5_000)
+        assert(blocked && order == listOf("writer", "reader"))
+    }
+
+    @Test
+    fun `a Mutex handed between many threads under long critical sections loses no wake-up`() {
+        val m = Mutex()
+        var counter = 0
+        val failures = race {
+            repeat(200) {
+                m.lock()
+                val c = counter
+                Thread.yield()
+                counter = c + 1
+                m.unlock()
+            }
+        }
+        assert(failures.isEmpty() && counter == threads * 200)
     }
 }
