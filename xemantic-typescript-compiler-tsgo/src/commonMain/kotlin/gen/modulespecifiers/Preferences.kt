@@ -150,7 +150,47 @@ class ModuleSpecifierPreferences(
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.GetAllowedEndingsInPreferredOrder d1100bda
 fun getAllowedEndingsInPreferredOrder(prefs: UserPreferences, host: ModuleSpecifierGenerationHost?, compilerOptions: CompilerOptions?, importingSourceFile: SourceFileForSpecifierGeneration?, oldImportSpecifier: String, syntaxImpliedNodeFormat: ModuleKind): GoSlice<ModuleSpecifierEnding> {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/modulespecifiers.GetAllowedEndingsInPreferredOrder")
+    var preferredEnding: ModuleSpecifierEnding = getPreferredEnding(prefs.goCopy(), host, compilerOptions, importingSourceFile, oldImportSpecifier, ModuleKind(0))
+    val resolutionMode: ModuleKind = host!!.getDefaultResolutionModeForFile(importingSourceFile)
+    if (resolutionMode.value != syntaxImpliedNodeFormat.value) {
+        preferredEnding = getPreferredEnding(prefs.goCopy(), host, compilerOptions, importingSourceFile, oldImportSpecifier, syntaxImpliedNodeFormat)
+    }
+    val moduleResolution: ModuleResolutionKind = compilerOptions.getModuleResolutionKind()
+    val moduleResolutionIsNodeNext: Boolean = 3 <= moduleResolution.value && moduleResolution.value <= 99
+    val allowImportingTsExtension: Boolean = shouldAllowImportingTsExtension(compilerOptions, importingSourceFile!!.fileName())
+    if (syntaxImpliedNodeFormat.value == 99 && moduleResolutionIsNodeNext) {
+        if (allowImportingTsExtension) {
+            return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingTsExtension, ModuleSpecifierEndingJsExtension)
+        }
+        return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingJsExtension)
+    }
+    when (preferredEnding.value) {
+        2 -> {
+            if (allowImportingTsExtension) {
+                return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingJsExtension, ModuleSpecifierEndingTsExtension, ModuleSpecifierEndingMinimal, ModuleSpecifierEndingIndex)
+            }
+            return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingJsExtension, ModuleSpecifierEndingMinimal, ModuleSpecifierEndingIndex)
+        }
+        3 -> {
+            return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingTsExtension, ModuleSpecifierEndingMinimal, ModuleSpecifierEndingJsExtension, ModuleSpecifierEndingIndex)
+        }
+        1 -> {
+            if (allowImportingTsExtension) {
+                return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingIndex, ModuleSpecifierEndingMinimal, ModuleSpecifierEndingTsExtension, ModuleSpecifierEndingJsExtension)
+            }
+            return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingIndex, ModuleSpecifierEndingMinimal, ModuleSpecifierEndingJsExtension)
+        }
+        0 -> {
+            if (allowImportingTsExtension) {
+                return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingMinimal, ModuleSpecifierEndingIndex, ModuleSpecifierEndingTsExtension, ModuleSpecifierEndingJsExtension)
+            }
+            return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingMinimal, ModuleSpecifierEndingIndex, ModuleSpecifierEndingJsExtension)
+        }
+        else -> {
+            com.xemantic.typescript.tsgo.debug.assertNever(preferredEnding, GoElem.ref<Any?>().nilSlice)
+        }
+    }
+    return GoSlice.of(ModuleSpecifierEnding.ELEM, ModuleSpecifierEndingMinimal)
 }
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.getModuleSpecifierPreferences 5089be90

@@ -507,7 +507,21 @@ fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanAtomEscape() {
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanDecimalEscape 3953f23c
 fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanDecimalEscape(): Boolean {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanDecimalEscape")
+    com.xemantic.typescript.tsgo.debug.assert(this.pos() > 0 && this.text()[this.pos() - 1].code == 92, GoElem.ref<Any?>().nilSlice)
+    val ch: Int = this.char()
+    if (ch >= 49 && ch <= 57) {
+        val start: Int = this.pos()
+        this.scanDigits()
+        val t0 = com.xemantic.typescript.tsgo.go.strconv.atoi(this!!.scanner!!.scannerState.tokenValue)
+        var val_: Int = t0.first
+        val err: GoError? = t0.second
+        if (err != null) {
+            val_ = Int.MAX_VALUE
+        }
+        this!!.decimalEscapes = this!!.decimalEscapes.append1(com.xemantic.typescript.tsgo.scanner.decimalEscapeValue(pos = start, end = this.pos(), value = val_))
+        return true
+    }
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanCharacterEscape 21619599

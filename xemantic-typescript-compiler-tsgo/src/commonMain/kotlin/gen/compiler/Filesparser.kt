@@ -294,7 +294,10 @@ class filesParser(
 
 // go: github.com/microsoft/typescript-go/internal/compiler.getParseTaskData df5fa296
 fun getParseTaskData(task: com.xemantic.typescript.tsgo.compiler.parseTask?): com.xemantic.typescript.tsgo.compiler.parseTaskData? {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/compiler.getParseTaskData")
+    val td: com.xemantic.typescript.tsgo.compiler.parseTaskData? = parseTaskDataPool.get() as com.xemantic.typescript.tsgo.compiler.parseTaskData
+    td!!.tasks[task!!.normalizedFilePath] = task
+    td!!.lowestDepth = Int.MAX_VALUE
+    return td
 }
 
 // go: github.com/microsoft/typescript-go/internal/compiler.putParseTaskData dffd014f

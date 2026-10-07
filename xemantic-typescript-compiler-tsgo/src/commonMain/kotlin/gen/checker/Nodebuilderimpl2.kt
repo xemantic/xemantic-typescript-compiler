@@ -48,6 +48,7 @@ import com.xemantic.typescript.tsgo.ast.ModifierFlags
 import com.xemantic.typescript.tsgo.ast.ModifierList
 import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.modulespecifiers.ModuleSpecifierOptions
+import com.xemantic.typescript.tsgo.collections.MultiMap
 import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeFactory
 import com.xemantic.typescript.tsgo.ast.NodeFlags
@@ -164,6 +165,7 @@ import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.get
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.set
+import com.xemantic.typescript.tsgo.collections.values
 import com.xemantic.typescript.tsgo.core.get
 import com.xemantic.typescript.tsgo.core.getModuleResolutionKind
 import com.xemantic.typescript.tsgo.core.has

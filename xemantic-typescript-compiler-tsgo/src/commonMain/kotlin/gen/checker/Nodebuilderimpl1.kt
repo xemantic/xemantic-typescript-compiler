@@ -48,6 +48,7 @@ import com.xemantic.typescript.tsgo.ast.ModifierFlags
 import com.xemantic.typescript.tsgo.ast.ModifierList
 import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.modulespecifiers.ModuleSpecifierOptions
+import com.xemantic.typescript.tsgo.collections.MultiMap
 import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeFactory
 import com.xemantic.typescript.tsgo.ast.NodeFlags
@@ -164,6 +165,7 @@ import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.get
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.set
+import com.xemantic.typescript.tsgo.collections.values
 import com.xemantic.typescript.tsgo.core.get
 import com.xemantic.typescript.tsgo.core.getModuleResolutionKind
 import com.xemantic.typescript.tsgo.core.has
@@ -629,7 +631,103 @@ fun NodeBuilderImpl?.createElidedInformationPlaceholder(): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.mapToTypeNodes e9cac384
 fun NodeBuilderImpl?.mapToTypeNodes(list: GoSlice<Type?>, isBareList: Boolean): NodeList? {
-    TODO("goport: refused local-type: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.mapToTypeNodes")
+    if (list.len == 0) {
+        return null
+    }
+    if (this.checkTruncationLength()) {
+        if (!isBareList) {
+            var node: Node? = null
+            if (this!!.ctx!!.flags.value and 1u != 0u) {
+                node = this!!.e.addSyntheticLeadingComment(this!!.f.newKeywordTypeNode(Kind(132)), Kind(3), "elided", false)
+            } else {
+                node = this!!.f.newTypeReferenceNode(this!!.f.newIdentifier("..."), null)
+            }
+            return this!!.f.newNodeList(GoSlice.of(GoElem.ref<Node?>(), node))
+        } else if (list.len > 2) {
+            val nodes: GoSlice<Node?> = GoSlice.of(GoElem.ref<Node?>(), this.typeToTypeNode(list[0]), null, this.typeToTypeNode(list[list.len - 1]))
+            if (this!!.ctx!!.flags.value and 1u != 0u) {
+                nodes[1] = this!!.e.addSyntheticLeadingComment(this!!.f.newKeywordTypeNode(Kind(132)), Kind(3), com.xemantic.typescript.tsgo.go.fmt.sprintf("... %d more elided ...", list.len - 2), false)
+            } else {
+                val text: String = com.xemantic.typescript.tsgo.go.fmt.sprintf("... %d more ...", list.len - 2)
+                nodes[1] = this!!.f.newTypeReferenceNode(this!!.f.newIdentifier(text), null)
+            }
+            return this!!.f.newNodeList(nodes)
+        }
+    }
+    val mayHaveNameCollisions: Boolean = this!!.ctx!!.flags.value and 64u == 0u
+    var seenNames: MultiMap<String, com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes>? = null
+    if (mayHaveNameCollisions) {
+        seenNames = MultiMap<String, com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes>(goElem_K = GoElem.STRING, goElem_V = com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes.ELEM)
+    }
+    var result: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0, list.len)
+    val s0 = list
+    l0@ for (i1 in 0 until s0.len) {
+        val i: Int = i1
+        val t: Type? = s0[i1]
+        val displayIndex: Int = i + 1
+        if (this.checkTruncationLength() && (displayIndex + 2 < list.len - 1)) {
+            if (this!!.ctx!!.flags.value and 1u != 0u) {
+                result = result.append1(this!!.e.addSyntheticLeadingComment(this!!.f.newKeywordTypeNode(Kind(132)), Kind(3), com.xemantic.typescript.tsgo.go.fmt.sprintf("... %d more elided ...", list.len - displayIndex), false))
+            } else {
+                val text_1: String = com.xemantic.typescript.tsgo.go.fmt.sprintf("... %d more ...", list.len - displayIndex)
+                result = result.append1(this!!.f.newTypeReferenceNode(this!!.f.newIdentifier(text_1), null))
+            }
+            val typeNode: Node? = this.typeToTypeNode(list[list.len - 1])
+            if (typeNode != null) {
+                result = result.append1(typeNode)
+            }
+            break@l0
+        }
+        this!!.ctx!!.approximateLength += 2
+        val typeNode_1: Node? = this.typeToTypeNode(t)
+        if (typeNode_1 != null) {
+            result = result.append1(typeNode_1)
+            if (seenNames != null && isIdentifierTypeReference(typeNode_1)) {
+                seenNames.add(typeNode_1.asTypeReferenceNode()!!.typeName.text(), com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes(t = t, i = result.len - 1))
+            }
+        }
+    }
+    if (seenNames != null) {
+        val restoreFlags: (() -> Unit)? = this.saveRestoreFlags()
+        this!!.ctx!!.flags = Flags(this!!.ctx!!.flags.value or 64u)
+        seenNames.values()!!(fun(y2: GoSlice<com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes>): Boolean {
+                    val types: GoSlice<com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes> = y2
+                    if (!arrayIsHomogeneous<com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes>(com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes.ELEM, types, fun(a: com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes, b: com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes): Boolean {
+                        return typesAreSameReference(a.t, b.t)
+                    })) {
+                        val s3 = types
+                        l2@ for (i4 in 0 until s3.len) {
+                            val seen: com.xemantic.typescript.tsgo.checker.seenName_NodeBuilderImpl_mapToTypeNodes = s3[i4].goCopy()
+                            result[seen.i] = this.typeToTypeNode(seen.t)
+                        }
+                    }
+                    return true
+        })
+        restoreFlags!!()
+    }
+    return this!!.f.newNodeList(result)
+}
+
+// go: github.com/microsoft/typescript-go/internal/checker.seenName_NodeBuilderImpl_mapToTypeNodes 
+class seenName_NodeBuilderImpl_mapToTypeNodes(
+    @kotlin.jvm.JvmField var t: Type? = null,
+    @kotlin.jvm.JvmField var i: Int = 0,
+) {
+
+    fun goCopy(): seenName_NodeBuilderImpl_mapToTypeNodes = seenName_NodeBuilderImpl_mapToTypeNodes(t = t, i = i)
+
+    fun goSet(o: seenName_NodeBuilderImpl_mapToTypeNodes) {
+        t = o.t
+        i = o.i
+    }
+
+    fun goEquals(o: seenName_NodeBuilderImpl_mapToTypeNodes): Boolean = t === o.t && i == o.i
+
+    fun goHash(): Int = 31 * t.hashCode() + 31 * i.hashCode()
+
+    companion object {
+        val ELEM: GoElem<seenName_NodeBuilderImpl_mapToTypeNodes> = GoElem({ seenName_NodeBuilderImpl_mapToTypeNodes() }, { it.goCopy() })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.serializeTypeName b6ec56df

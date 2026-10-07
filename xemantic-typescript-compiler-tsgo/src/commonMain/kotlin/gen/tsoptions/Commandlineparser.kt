@@ -112,9 +112,9 @@ fun parseBuildCommandLine(commandLine_0: GoSlice<String>, host: ParseConfigHost?
     }
     val parser: com.xemantic.typescript.tsgo.tsoptions.commandLineParser? = parseCommandLineWorker(buildOptionsDidYouMeanDiagnostics, commandLine, host!!.fs(), host!!.getCurrentDirectory())
     val compilerOptions: CompilerOptions? = CompilerOptions()
-    parser!!.options.entries()!!(fun(y1: String, y2: Any?): Boolean {
-            val key: String = y1
-            val value_1: Any? = y2
+    parser!!.options.entries()!!(fun(y2: String, y3: Any?): Boolean {
+            val key: String = y2
+            val value_1: Any? = y3
             val buildOption: CommandLineOption? = buildNameMap.get(key)
             if (buildOption === tscBuildOption || buildOption === compilerNameMap.get(key)) {
                 parseCompilerOptions(key, value_1, compilerOptions)

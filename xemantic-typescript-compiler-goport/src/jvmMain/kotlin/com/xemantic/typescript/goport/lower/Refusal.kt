@@ -34,7 +34,7 @@ import java.io.File
  */
 class Refusal(val reason: String, val detail: String = "") : RuntimeException("$reason${if (detail.isEmpty()) "" else ": $detail"}")
 
-fun refuse(reason: String, detail: String = ""): Nothing = throw Refusal(reason, detail)
+fun refuse(reason: String, detail: String = ""): Nothing { if (System.getenv("GOPORT_TRACE") == reason) Throwable("refuse $reason $detail").printStackTrace(); throw Refusal(reason, detail) }
 
 /**
  * The hand-written shims' declared names (`-tsgo/src/commonMain/kotlin/{go,runtime}`), scanned

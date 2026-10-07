@@ -365,7 +365,19 @@ fun <T> elementOrNil(goElem_T: GoElem<T>, slice: GoSlice<T>, index: Int): T {
 
 // go: github.com/microsoft/typescript-go/internal/core.FirstOrNilSeq 12af5032
 fun <T> firstOrNilSeq(goElem_T: GoElem<T>, seq: Seq<T>?): T {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/core.FirstOrNilSeq")
+    if (seq != null) {
+        var rfDone0 = false
+        var rfRet1: T? = null
+        seq!!(fun(y2: T): Boolean {
+                    val value_1: T = y2
+                    rfRet1 = value_1
+                    rfDone0 = true
+                    return false
+                    return true
+        })
+        if (rfDone0) return rfRet1 as T
+    }
+    return goElem_T.zeroValue() as T
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FirstNonNil 58dfbcd5
@@ -853,12 +865,43 @@ fun <T> singleElementSlice(goElem_T: GoElem<T>, element: T?): GoSlice<T?> {
 
 // go: github.com/microsoft/typescript-go/internal/core.ConcatenateSeq 188d8ba0
 fun <T> concatenateSeq(goElem_T: GoElem<T>, seqs: GoSlice<Seq<T>?>): Seq<T>? {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/core.ConcatenateSeq")
+    return fun(yield: ((T) -> Boolean)?) {
+        val s0 = seqs
+        l0@ for (i1 in 0 until s0.len) {
+            val seq: Seq<T>? = s0[i1]
+            if (seq == null) {
+                continue@l0
+            }
+            var rfDone2 = false
+            seq!!(fun(y4: T): Boolean {
+                            val e: T = y4
+                            if (!yield!!(e)) {
+                                rfDone2 = true
+                                return false
+                            }
+                            return true
+            })
+            if (rfDone2) return
+        }
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Enumerate ff0ae2f3
 fun <T> enumerate(goElem_T: GoElem<T>, seq: Seq<T>?): Seq2<Int, T>? {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/core.Enumerate")
+    return fun(yield: ((Int, T) -> Boolean)?) {
+        var i: Int = 0
+        var rfDone0 = false
+        seq!!(fun(y2: T): Boolean {
+                    val v: T = y2
+                    if (!yield!!(i, v)) {
+                        rfDone0 = true
+                        return false
+                    }
+                    i++
+                    return true
+        })
+        if (rfDone0) return
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.comparableValuesEqual 2fcd59a8

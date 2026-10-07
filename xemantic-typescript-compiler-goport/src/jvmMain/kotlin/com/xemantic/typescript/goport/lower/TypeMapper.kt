@@ -138,8 +138,13 @@ class TypeMapper(
     /** Kotlin class reference of a named type (no type arguments, no nullability). */
     fun namedRef(n: NamedType): String {
         if (n.pkg == null) return if (n.name == "error") "GoError" else refuse("universe-type", n.name)
-        if (n.localAt != null) refuse("local-type", n.name)
         val origin = if (n.origin != null) types.unalias(n.origin) as NamedType else n
+        if (n.localAt != null) {
+            // A function-local type, hoisted to the package top level (Program.localTypeQnames).
+            val q = pc.prog.localTypeQnames[origin.key] ?: refuse("local-type", n.name)
+            if (n.targs.isNotEmpty() || origin.tparams.isNotEmpty()) refuse("local-type-generic", n.name)
+            return "${Naming.kotlinPackage(origin.pkg!!)}.${pc.prog.localTypeNames.getValue(q)}"
+        }
         val kpkg = Naming.kotlinPackage(origin.pkg!!)
         val name = if (origin.pkg in pc.prog.ported) pc.prog.typeName(origin.key, origin.name) else origin.name
         if (origin.pkg !in pc.prog.ported && !pc.prog.shims.hasTop(kpkg, name)) refuse("shim-missing", "${origin.pkg}.$name")

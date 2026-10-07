@@ -83,12 +83,14 @@ import com.xemantic.typescript.tsgo.ast.body
 import com.xemantic.typescript.tsgo.ast.expression
 import com.xemantic.typescript.tsgo.ast.modifiers
 import com.xemantic.typescript.tsgo.ast.name
+import com.xemantic.typescript.tsgo.ast.newArrayLiteralExpression
 import com.xemantic.typescript.tsgo.ast.newBlock
 import com.xemantic.typescript.tsgo.ast.newExpressionStatement
 import com.xemantic.typescript.tsgo.ast.newIdentifier
 import com.xemantic.typescript.tsgo.ast.newNodeList
 import com.xemantic.typescript.tsgo.ast.newParameterDeclaration
 import com.xemantic.typescript.tsgo.ast.newReturnStatement
+import com.xemantic.typescript.tsgo.ast.newSpreadElement
 import com.xemantic.typescript.tsgo.ast.newToken
 import com.xemantic.typescript.tsgo.ast.newVariableDeclaration
 import com.xemantic.typescript.tsgo.ast.newVariableDeclarationList
@@ -127,10 +129,13 @@ import com.xemantic.typescript.tsgo.printer.addVariableDeclaration
 import com.xemantic.typescript.tsgo.printer.emitFlags
 import com.xemantic.typescript.tsgo.printer.endAndMergeVariableEnvironmentList
 import com.xemantic.typescript.tsgo.printer.inlineExpressions
+import com.xemantic.typescript.tsgo.printer.mergeEnvironmentList
 import com.xemantic.typescript.tsgo.printer.mostOriginal
 import com.xemantic.typescript.tsgo.printer.newAssignmentExpression
+import com.xemantic.typescript.tsgo.printer.newAwaiterHelper
 import com.xemantic.typescript.tsgo.printer.newGeneratedNameForNodeEx
 import com.xemantic.typescript.tsgo.printer.newNodeVisitor
+import com.xemantic.typescript.tsgo.printer.newUniqueName
 import com.xemantic.typescript.tsgo.printer.newUniqueNameEx
 import com.xemantic.typescript.tsgo.printer.readEmitHelpers
 import com.xemantic.typescript.tsgo.printer.setOriginal
@@ -787,7 +792,111 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.tra
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.asyncTransformer.transformAsyncFunctionBody 413928c9
 fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.transformAsyncFunctionBody(node: Node?, outerParameters: NodeList?): Node? {
-    TODO("goport: refused untyped-no-default: github.com/microsoft/typescript-go/internal/transformers/estransforms.asyncTransformer.transformAsyncFunctionBody")
+    val isArrow: Boolean = node!!.kind.value == 220
+    val savedCapturedSuperProperties: OrderedSet<String>? = this!!.superAccessState.capturedSuperProperties
+    val savedHasSuperElementAccess: Boolean = this!!.superAccessState.hasSuperElementAccess
+    val savedHasSuperPropertyAssignment: Boolean = this!!.superAccessState.hasSuperPropertyAssignment
+    val savedSuperBinding: Node? = this!!.superAccessState.superBinding
+    val savedSuperIndexBinding: Node? = this!!.superAccessState.superIndexBinding
+    if (!isArrow) {
+        this!!.superAccessState.capturedSuperProperties = OrderedSet<String>(goElem_T = GoElem.STRING)
+        this!!.superAccessState.hasSuperElementAccess = false
+        this!!.superAccessState.hasSuperPropertyAssignment = false
+        this!!.superAccessState.superBinding = this!!.transformer.factory().newUniqueNameEx("_super", AutoGenerateOptions(flags = GeneratedIdentifierFlags(48)))
+        this!!.superAccessState.superIndexBinding = this!!.transformer.factory().newUniqueNameEx("_superIndex", AutoGenerateOptions(flags = GeneratedIdentifierFlags(48)))
+    }
+    var innerParameters: NodeList? = null
+    if (!isSimpleParameterList(node.parameters())) {
+        innerParameters = this!!.transformer.emitContext().visitParameters(node.parameterList(), this!!.transformer.visitor())
+    }
+    val savedLexicalArguments: com.xemantic.typescript.tsgo.transformers.estransforms.lexicalArgumentsInfo = this!!.lexicalArguments.goCopy()
+    val captureLexicalArguments: Boolean = this!!.lexicalArguments.binding == null
+    if (captureLexicalArguments) {
+        this!!.lexicalArguments = com.xemantic.typescript.tsgo.transformers.estransforms.lexicalArgumentsInfo(binding = this!!.transformer.factory().newUniqueName("arguments"))
+    }
+    var argumentsExpression: Node? = null
+    if (innerParameters != null) {
+        if (isArrow) {
+            var parameterBindings: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
+            val outerLen: Int = outerParameters!!.nodes.len
+            val s0 = node.parameters()
+            l0@ for (i1 in 0 until s0.len) {
+                val i: Int = i1
+                val param: Node? = s0[i1]
+                if (i >= outerLen) {
+                    break@l0
+                }
+                val originalParameter: ParameterDeclaration? = param.asParameterDeclaration()
+                val outerParameter: ParameterDeclaration? = outerParameters!!.nodes[i].asParameterDeclaration()
+                if (originalParameter!!.initializer != null || originalParameter!!.dotDotDotToken != null) {
+                    parameterBindings = parameterBindings.append1(this!!.transformer.factory()!!.nodeFactory.newSpreadElement(outerParameter!!.name()))
+                    break@l0
+                }
+                parameterBindings = parameterBindings.append1(outerParameter!!.name())
+            }
+            argumentsExpression = this!!.transformer.factory()!!.nodeFactory.newArrayLiteralExpression(this!!.transformer.factory()!!.nodeFactory.newNodeList(parameterBindings), false)
+        } else {
+            argumentsExpression = this!!.transformer.factory()!!.nodeFactory.newIdentifier("arguments")
+        }
+    }
+    val savedEnclosingFunctionParameterNames: com.xemantic.typescript.tsgo.collections.Set<String>? = this!!.enclosingFunctionParameterNames
+    this!!.enclosingFunctionParameterNames = com.xemantic.typescript.tsgo.collections.Set<String>(goElem_T = GoElem.STRING)
+    val s2 = node.parameters()
+    l1@ for (i3 in 0 until s2.len) {
+        val parameter: Node? = s2[i3]
+        this.recordDeclarationName(parameter, this!!.enclosingFunctionParameterNames)
+    }
+    val hasLexicalThis: Boolean = this.inHasLexicalThisContext()
+    var asyncBody: Node? = this.transformAsyncFunctionBodyWorker(node.body())
+    asyncBody = this!!.transformer.factory()!!.nodeFactory.updateBlock(asyncBody.asBlock(), this!!.transformer.emitContext().endAndMergeVariableEnvironmentList(asyncBody.statementList()), asyncBody.asBlock()!!.multiLine)
+    val emitSuperHelpers: Boolean = this!!.superAccessState.capturedSuperProperties != null && (this!!.superAccessState.capturedSuperProperties.size() > 0 || this!!.superAccessState.hasSuperElementAccess)
+    if (emitSuperHelpers) {
+        innerParameters = this!!.superAccessState.superAccessVisitor.visitNodes(innerParameters)
+        asyncBody = this!!.superAccessState.substituteSuperAccessesInBody(asyncBody)
+    }
+    var result: Node? = null
+    if (!isArrow) {
+        this!!.transformer.emitContext().startVariableEnvironment()
+        if (emitSuperHelpers) {
+            if (this!!.superAccessState.capturedSuperProperties.size() > 0) {
+                this!!.transformer.emitContext().addInitializationStatement(this!!.superAccessState.createSuperAccessVariableStatement())
+            }
+        }
+        if (captureLexicalArguments && this!!.lexicalArguments.used) {
+            this!!.transformer.emitContext().addInitializationStatement(this.createCaptureArgumentsStatement())
+        }
+        val statements: GoSlice<Node?> = GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newReturnStatement(this!!.transformer.factory().newAwaiterHelper(hasLexicalThis, argumentsExpression, innerParameters, asyncBody)))
+        val block: Node? = this!!.transformer.factory()!!.nodeFactory.newBlock(this!!.transformer.emitContext().endAndMergeVariableEnvironmentList(this!!.transformer.factory()!!.nodeFactory.newNodeList(statements)), true)
+        block!!.loc = node.body()!!.loc.goCopy()
+        if (emitSuperHelpers && this!!.superAccessState.hasSuperElementAccess) {
+            if (this!!.superAccessState.hasSuperPropertyAssignment) {
+                this!!.transformer.emitContext().addEmitHelper(block, GoSlice.of(GoElem.ref<EmitHelper?>(), com.xemantic.typescript.tsgo.printer.advancedAsyncSuperHelper))
+            } else {
+                this!!.transformer.emitContext().addEmitHelper(block, GoSlice.of(GoElem.ref<EmitHelper?>(), com.xemantic.typescript.tsgo.printer.asyncSuperHelper))
+            }
+        }
+        result = block
+    } else {
+        result = this!!.transformer.factory().newAwaiterHelper(hasLexicalThis, argumentsExpression, innerParameters, asyncBody)
+        if (captureLexicalArguments && this!!.lexicalArguments.used) {
+            val block_1: Node? = this.convertToFunctionBlock(result)
+            result = this!!.transformer.factory()!!.nodeFactory.updateBlock(block_1.asBlock(), this!!.transformer.emitContext().mergeEnvironmentList(block_1.statementList(), GoSlice.of(GoElem.ref<Node?>(), this.createCaptureArgumentsStatement())), block_1.asBlock()!!.multiLine)
+        }
+    }
+    this!!.enclosingFunctionParameterNames = savedEnclosingFunctionParameterNames
+    if (!isArrow) {
+        this!!.superAccessState.capturedSuperProperties = savedCapturedSuperProperties
+        this!!.superAccessState.hasSuperElementAccess = savedHasSuperElementAccess
+        this!!.superAccessState.hasSuperPropertyAssignment = savedHasSuperPropertyAssignment
+        this!!.superAccessState.superBinding = savedSuperBinding
+        this!!.superAccessState.superIndexBinding = savedSuperIndexBinding
+        this!!.lexicalArguments = savedLexicalArguments.goCopy()
+    } else if (captureLexicalArguments && !this!!.lexicalArguments.used) {
+        this!!.lexicalArguments = savedLexicalArguments.goCopy()
+    } else if (captureLexicalArguments) {
+        this!!.lexicalArguments.used = false
+    }
+    return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.asyncTransformer.transformAsyncFunctionBodyWorker d488c5c6

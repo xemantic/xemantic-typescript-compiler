@@ -88,6 +88,10 @@ object Literals {
             val v = intValue(c)
             when {
                 v == INT_MIN -> Ex.primary("Int.MIN_VALUE")
+                // `math.MaxInt` / `math.MinInt` (64-bit in Go) as an `int` sentinel: the 32-bit `int`'s
+                // bounds (design § 3: `int` values are < 2^31, so the sentinel keeps its meaning).
+                v == BigInteger.valueOf(Long.MAX_VALUE) -> Ex.primary("Int.MAX_VALUE")
+                v == BigInteger.valueOf(Long.MIN_VALUE) -> Ex.primary("Int.MIN_VALUE")
                 v.bitLength() > 31 -> {
                     // An untyped constant reaching an `int` slot out of 32-bit range: the 32-bit
                     // `int` assumption (design § 3) does not hold for this value.

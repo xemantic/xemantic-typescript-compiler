@@ -51,6 +51,26 @@ Per package (mechanical share): api/encoder 100.0, ast 99.9, binder 100.0, colle
 core 87.1, debug 100, diagnostics 100, jsnum 100, json 98.6, locale 100, parser 100, scanner 99.6,
 stringutil 100, tspath 95.9.
 
+## 1b. (TSGO.2) closure — everything `internal/compiler` needs (2026-10-07)
+
+`goport-extract`'s default closure is now `go list -deps ./internal/compiler` plus `bundled`: **42
+packages, 181,376 Go lines** (checker 59,818). `--check`: no holes.
+
+| | |
+|---|---|
+| Go lines of top-level declarations | 146,763 |
+| lowered mechanically | **145,618 (99.2%)** |
+| stubbed / omitted | 1,083 / 19 |
+| overrides | 4 (`ast.getCombinedFlags`, `checker.hashWrite32`, `checker.hashWrite64`, `tsoptions.floatOrInt32ToFlag`: the four basic-set type-parameter generics, § 4) |
+| `-tsgo` `compileKotlinJvm` | compiles, warning-clean, 0 methods over 8,000 bytecodes |
+| bound oracle | 7,774 / 7,774 |
+| **milestone** | `CheckerSmokeTest`: `compiler.NewProgram` over an in-memory `vfs.FS` + `bundled.WrapFS` → `GetSemanticDiagnostics` reports `TS2322: Type 'string' is not assignable to type 'number'.` for `const x: number = "s"`, and nothing for a well-typed file |
+
+Open refusals (Go lines): `reflect` + three `jsontext` streaming calls 908 (`tsoptions` config
+parsing, `collections.OrderedMap` JSON, `packagejson`), `int-overflow` 60 (folded expressions
+over `math.MaxInt`), `go` 130 (`core.BreadthFirstSearchParallelEx`), `chan`/`make(chan)`/`select` 19
+(`core` semaphores/throttle), `recover` 19, `api/encoder.noStructuredData` (uint32 sentinel).
+
 ## 2. Architecture (who owns what)
 
 | file (under `src/jvmMain/kotlin/com/xemantic/typescript/goport/`) | concern |
@@ -138,6 +158,53 @@ reference); literal tables over 150 elements are filled by hoisted private helpe
   first-written cases in part 0 — tsgo's tables give no hotness profile); a byte-string tag
   dispatches by `<` over contiguous ranges of the sorted constants (one constant per clause
   required; `String.compareTo` is the same on every target). The report lists every split.
+
+(TSGO.2) rules, added for the compiler/checker closure:
+
+- **Case collisions** (`Program.autoMethodRenames`/`autoFunRenames`): exported `Foo` and unexported `foo`
+  on one type (or at one package's top level) — the unexported one becomes `fooImpl`, for EVERY method
+  and interface method of that name in the package (unexported names are package-scoped). `renames.txt` wins.
+- **Structural interface supers** (`Program.structuralIfaceSupers`): Go assigns an interface value to
+  any interface whose method set is a subset, with no conversion in the IR — so a named interface
+  extends every named interface of the run with a subset method set (equal sets: by key; never one
+  that embeds it, which would be a cycle). Method identity = name (package-qualified when unexported)
+  + parameter/result type keys (`Program.methodIdentity`, no parameter names, no receiver).
+  Redeclared methods get `override`. Generic types (`implementsSkipped`) are matched the same way
+  (`Program.genericImplements`).
+- **Named empty interface** (`type TypeSystemEntity any`) → `typealias … = Any?`.
+- **Pointers**: `*T` for an opaque type parameter is `T?` (its deref is an unchecked `as T`, no
+  assertion: `*new(T)` is legitimately nil when T is a pointer); `*[N]T` is the `GoArray` reference
+  (like a struct); `&[]T{}` / `&map…{}` is a `GoBox`.
+- **Boxed named non-struct types** (`Program.boxedNamed`): a named slice/map/func type with an
+  `implements` list (`glob.group`) gets a `<Name>_Box` class implementing the interfaces; an
+  interface conversion wraps, a type assertion/switch unwraps `.value`.
+- **Receivers**: a value-receiver extension on a non-nullable alias type takes a non-null receiver;
+  a nil-safe (extension) method an implemented interface requires also gets a member that delegates
+  through `synth.goNullable(this)`; `(*T)(nil).M()` with M never reading its receiver is called on a
+  zero instance.
+- **Shim generics with element dictionaries** (`ShimIndex.elemDictCount`): a shim function whose
+  leading parameters are `GoElem<…>` (`slices.Collect`) gets `elem(targ)` per type argument.
+- **Multi-value arguments** `f(g())` → `run { val ta = g(); f(ta.first, ta.second) }` (variadic
+  packing applies). **`return` in a range-over-func body**: the yield function sets a flag/result
+  and returns false; the function returns after the iterator call (nested loops share them).
+- **Function-local types** are hoisted to the package as `<Name>_<function>` (not when they mention
+  the function's type parameters).
+- **Big structs** (`Program.bigStruct`, > 120 fields: `checker.Checker` has ~500 and a JVM
+  constructor takes 255 slots) keep their fields in the class body; composite literals construct
+  then assign.
+- **`//go:embed`** (extractor: `ValueSpec.embed`): a string variable's file is read from
+  `typescript-go-repo/internal/<pkg>/` and written as `EmbedData<n>.kt` (16,000-char byte-string
+  constants, ~240 KB per file) plus `EmbedIndex.kt` (`goEmbed_<var>()` concatenates them); the
+  variable is initialized from it. `bundled`'s 108 lib files are 3.9 MB of generated Kotlin.
+- Smaller: lowercase (unexported) type names are always qualified (a field of the same name shadows
+  them); a Boolean-subject `when` gets `else -> {}`; generic structs get `goEquals`/`goHash`; `math.MaxInt`/
+  `MinInt` reaching an `int` are `Int.MAX_VALUE`/`MIN_VALUE`; `unsafe.String(&b[i], n)` is
+  `goBytesToString(b.slice(i, i + n))`; `(*T)(nil)` conversions are the zero; extension methods used
+  via method expressions are imported; anonymous-struct value-class fields use JvmName accessors.
+- Debugging: `GOPORT_TRACE=<reason>` prints the porter stack of every refusal with that reason.
+
+Extractor fixes: an indexed func-typed FIELD call (`m.targets[i]()`) is `call: "dynamic"`; the
+underlying interface of `comparable` has key `interface{comparable}` (it collided with `any`).
 
 Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a hand edit of `gen/`):
 

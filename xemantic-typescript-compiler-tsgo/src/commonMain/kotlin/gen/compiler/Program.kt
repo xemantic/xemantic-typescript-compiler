@@ -40,6 +40,7 @@ import com.xemantic.typescript.tsgo.ast.HasFileName
 import com.xemantic.typescript.tsgo.checker.Host
 import com.xemantic.typescript.tsgo.packagejson.InfoCacheEntry
 import com.xemantic.typescript.tsgo.symlinks.KnownSymlinks
+import com.xemantic.typescript.tsgo.core.LanguageVariant
 import com.xemantic.typescript.tsgo.locale.Locale
 import com.xemantic.typescript.tsgo.diagnostics.Message
 import com.xemantic.typescript.tsgo.module.ModeAwareCache
@@ -48,8 +49,11 @@ import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.core.ModuleResolutionKind
 import com.xemantic.typescript.tsgo.modulespecifiers.ModuleSpecifierGenerationHost
 import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.ast.NodeList
 import com.xemantic.typescript.tsgo.ast.ObjectLiteralExpression
 import com.xemantic.typescript.tsgo.go.sync.Once
+import com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.Options
+import com.xemantic.typescript.tsgo.outputpaths.OutputPaths
 import com.xemantic.typescript.tsgo.outputpaths.OutputPathsHost
 import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
 import com.xemantic.typescript.tsgo.tspath.Path
@@ -78,6 +82,7 @@ import com.xemantic.typescript.tsgo.ast.bindDiagnostics
 import com.xemantic.typescript.tsgo.ast.clone
 import com.xemantic.typescript.tsgo.ast.code
 import com.xemantic.typescript.tsgo.ast.diagnostics
+import com.xemantic.typescript.tsgo.ast.elementList
 import com.xemantic.typescript.tsgo.ast.forEachChild
 import com.xemantic.typescript.tsgo.ast.getDiagnosticsForFile
 import com.xemantic.typescript.tsgo.ast.getGlobalDiagnostics
@@ -96,19 +101,25 @@ import com.xemantic.typescript.tsgo.checker.getDiagnostics
 import com.xemantic.typescript.tsgo.checker.getSuggestionDiagnostics
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.addIfAbsent
+import com.xemantic.typescript.tsgo.collections.entries
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.load
 import com.xemantic.typescript.tsgo.collections.loadOrStore
+import com.xemantic.typescript.tsgo.core.getAllowJS
 import com.xemantic.typescript.tsgo.core.getEmitDeclarations
 import com.xemantic.typescript.tsgo.core.getEmitModuleKind
 import com.xemantic.typescript.tsgo.core.getIsolatedModules
+import com.xemantic.typescript.tsgo.core.getModuleResolutionKind
+import com.xemantic.typescript.tsgo.core.getStrictOptionValue
 import com.xemantic.typescript.tsgo.diagnostics.code
 import com.xemantic.typescript.tsgo.module.getPackageScopeForPath
 import com.xemantic.typescript.tsgo.module.isResolved
 import com.xemantic.typescript.tsgo.module.packageJsonCacheEntries
 import com.xemantic.typescript.tsgo.module.resolveModuleName
 import com.xemantic.typescript.tsgo.module.resolvePackageDirectory
+import com.xemantic.typescript.tsgo.outputpaths.declarationMapPath
+import com.xemantic.typescript.tsgo.outputpaths.sourceMapFilePath
 import com.xemantic.typescript.tsgo.packagejson.exists
 import com.xemantic.typescript.tsgo.packagejson.getContents
 import com.xemantic.typescript.tsgo.packagejson.getRuntimeDependencyNames
@@ -1140,7 +1151,415 @@ fun Program?.getSourceFilesToEmit(targetSourceFile: SourceFile?, forceDtsEmit: B
 
 // go: github.com/microsoft/typescript-go/internal/compiler.Program.verifyCompilerOptions 8780c276
 fun Program?.verifyCompilerOptions() {
-    TODO("goport: refused tuple-arg: github.com/microsoft/typescript-go/internal/compiler.Program.verifyCompilerOptions")
+    val options: CompilerOptions? = this!!.options()
+    val sourceFile: (() -> SourceFile?)? = com.xemantic.typescript.tsgo.core.memoize<SourceFile?>(GoElem.ref<SourceFile?>(), fun(): SourceFile? {
+        val configFile: TsConfigSourceFile? = this!!.opts.config!!.configFile
+        if (configFile == null) {
+            return null
+        }
+        return configFile!!.sourceFile
+    })
+    val configFilePath: (() -> String)? = com.xemantic.typescript.tsgo.core.memoize<String>(GoElem.STRING, fun(): String {
+        val file: SourceFile? = sourceFile!!()
+        if (file != null) {
+            return file!!.fileName()
+        }
+        return ""
+    })
+    val getCompilerOptionsPropertySyntax: (() -> PropertyAssignment?)? = com.xemantic.typescript.tsgo.core.memoize<PropertyAssignment?>(GoElem.ref<PropertyAssignment?>(), fun(): PropertyAssignment? {
+        return com.xemantic.typescript.tsgo.tsoptions.forEachTsConfigPropArray<PropertyAssignment>(PropertyAssignment.ELEM, sourceFile!!(), "compilerOptions", fun(p0: PropertyAssignment?): PropertyAssignment? = com.xemantic.typescript.tsgo.core.identity(GoElem.ref<PropertyAssignment?>(), p0))
+    })
+    val getCompilerOptionsObjectLiteralSyntax: (() -> ObjectLiteralExpression?)? = com.xemantic.typescript.tsgo.core.memoize<ObjectLiteralExpression?>(GoElem.ref<ObjectLiteralExpression?>(), fun(): ObjectLiteralExpression? {
+        val compilerOptionsProperty: PropertyAssignment? = getCompilerOptionsPropertySyntax!!()
+        if (compilerOptionsProperty != null && compilerOptionsProperty!!.initializer != null && com.xemantic.typescript.tsgo.ast.isObjectLiteralExpression(compilerOptionsProperty!!.initializer)) {
+            return compilerOptionsProperty!!.initializer.asObjectLiteralExpression()
+        }
+        return null
+    })
+    val createOptionDiagnosticInObjectLiteralSyntax: ((ObjectLiteralExpression?, Boolean, String, String, Message?, GoSlice<Any?>) -> Diagnostic?)? = fun(objectLiteral: ObjectLiteralExpression?, onKey: Boolean, key1: String, key2: String, message: Message?, args: GoSlice<Any?>): Diagnostic? {
+        val diag: Diagnostic? = com.xemantic.typescript.tsgo.tsoptions.forEachPropertyAssignment<Diagnostic>(Diagnostic.ELEM, objectLiteral, key1, fun(property: PropertyAssignment?): Diagnostic? {
+            return com.xemantic.typescript.tsgo.tsoptions.createDiagnosticForNodeInSourceFile(sourceFile!!(), com.xemantic.typescript.tsgo.core.ifElse<Node?>(GoElem.ref<Node?>(), onKey, property!!.name(), property!!.initializer), message, args)
+        }, GoSlice.of(GoElem.STRING, key2))
+        if (diag != null) {
+            this!!.programDiagnostics = this!!.programDiagnostics.append1(diag)
+        }
+        return diag
+    }
+    val createCompilerOptionsDiagnostic: ((Message?, GoSlice<Any?>) -> Diagnostic?)? = fun(message_1: Message?, args_1: GoSlice<Any?>): Diagnostic? {
+        val compilerOptionsProperty_1: PropertyAssignment? = getCompilerOptionsPropertySyntax!!()
+        var diag_1: Diagnostic? = null
+        if (compilerOptionsProperty_1 != null) {
+            diag_1 = com.xemantic.typescript.tsgo.tsoptions.createDiagnosticForNodeInSourceFile(sourceFile!!(), compilerOptionsProperty_1!!.name(), message_1, args_1)
+        } else {
+            diag_1 = com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(message_1, args_1)
+        }
+        this!!.programDiagnostics = this!!.programDiagnostics.append1(diag_1)
+        return diag_1
+    }
+    val createDiagnosticForOption: ((Boolean, String, String, Message?, GoSlice<Any?>) -> Diagnostic?)? = fun(onKey_1: Boolean, option1: String, option2: String, message_2: Message?, args_2: GoSlice<Any?>): Diagnostic? {
+        var diag_2: Diagnostic? = createOptionDiagnosticInObjectLiteralSyntax!!(getCompilerOptionsObjectLiteralSyntax!!(), onKey_1, option1, option2, message_2, args_2)
+        if (diag_2 == null) {
+            diag_2 = createCompilerOptionsDiagnostic!!(message_2, args_2)
+        }
+        return diag_2
+    }
+    val createDiagnosticForOptionName: ((Message?, String, String, GoSlice<Any?>) -> Unit)? = fun(message_3: Message?, option1_1: String, option2_1: String, args_3: GoSlice<Any?>) {
+        var newArgs: GoSlice<Any?> = GoSlice.make(GoElem.ref<Any?>(), 0, args_3.len + 2)
+        newArgs = newArgs.append(option1_1, option2_1)
+        newArgs = newArgs.appendSlice(args_3)
+        createDiagnosticForOption!!(true, option1_1, option2_1, message_3, newArgs)
+    }
+    val createOptionValueDiagnostic: ((String, Message?, GoSlice<Any?>) -> Unit)? = fun(option1_2: String, message_4: Message?, args_4: GoSlice<Any?>) {
+        createDiagnosticForOption!!(false, option1_2, "", message_4, args_4)
+    }
+    val createRemovedOptionDiagnostic: ((String, String, String) -> Unit)? = fun(name: String, value_1: String, useInstead: String) {
+        var message_5: Message? = null
+        var args_5: GoSlice<Any?> = GoElem.ref<Any?>().nilSlice
+        if (value_1 == "") {
+            message_5 = com.xemantic.typescript.tsgo.diagnostics.option_0_has_been_removed_Please_remove_it_from_your_configuration
+            args_5 = GoSlice.of(GoElem.ref<Any?>(), name)
+        } else {
+            message_5 = com.xemantic.typescript.tsgo.diagnostics.option_0_1_has_been_removed_Please_remove_it_from_your_configuration
+            args_5 = GoSlice.of(GoElem.ref<Any?>(), name, value_1)
+        }
+        val diag_3: Diagnostic? = createDiagnosticForOption!!(value_1 == "", name, "", message_5, args_5)
+        if (useInstead != "") {
+            diag_3.addMessageChain(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.use_0_instead, GoSlice.of(GoElem.ref<Any?>(), useInstead)))
+        }
+    }
+    if (options!!.baseUrl != "") {
+        var useInstead_1: String = ""
+        if (configFilePath!!() != "") {
+            var relative: String = com.xemantic.typescript.tsgo.tspath.getRelativePathFromFile(configFilePath!!(), options!!.baseUrl, this!!.comparePathsOptions.goCopy())
+            if (!(com.xemantic.typescript.tsgo.go.strings.hasPrefix(relative, "./") || com.xemantic.typescript.tsgo.go.strings.hasPrefix(relative, "../"))) {
+                relative = "./" + relative
+            }
+            val suggestion: String = com.xemantic.typescript.tsgo.tspath.combinePaths(relative, GoSlice.of(GoElem.STRING, "*"))
+            useInstead_1 = com.xemantic.typescript.tsgo.go.fmt.sprintf("\"paths\": {\"*\": [%s]}", run { val ta0 = com.xemantic.typescript.tsgo.json.marshal(suggestion, GoElem.ref<Options?>().nilSlice); com.xemantic.typescript.tsgo.core.must<GoSlice<Int>>(GoElem.slice(GoElem.INT), ta0.first, ta0.second) })
+        }
+        createRemovedOptionDiagnostic!!("baseUrl", "", useInstead_1)
+    }
+    if (options!!.outFile != "") {
+        createRemovedOptionDiagnostic!!("outFile", "", "")
+    }
+    if (options!!.target.value == 1) {
+        createRemovedOptionDiagnostic!!("target", "ES5", "")
+    }
+    if (options!!.module.value == 2) {
+        createRemovedOptionDiagnostic!!("module", "AMD", "")
+    }
+    if (options!!.module.value == 4) {
+        createRemovedOptionDiagnostic!!("module", "System", "")
+    }
+    if (options!!.module.value == 3) {
+        createRemovedOptionDiagnostic!!("module", "UMD", "")
+    }
+    if (options!!.moduleResolution.value == 1) {
+        createRemovedOptionDiagnostic!!("moduleResolution", "Classic", "")
+    }
+    if (options!!.alwaysStrict.isFalse()) {
+        createRemovedOptionDiagnostic!!("alwaysStrict", "false", "")
+    }
+    if (options!!.esModuleInterop.isFalse()) {
+        createRemovedOptionDiagnostic!!("esModuleInterop", "false", "")
+    }
+    if (options!!.allowSyntheticDefaultImports.isFalse()) {
+        createRemovedOptionDiagnostic!!("allowSyntheticDefaultImports", "false", "")
+    }
+    if (options!!.moduleResolution.value == 2) {
+        createRemovedOptionDiagnostic!!("moduleResolution", "node10", "")
+    }
+    if (!options!!.downlevelIteration.isUnknown()) {
+        createRemovedOptionDiagnostic!!("downlevelIteration", "", "")
+    }
+    if (options!!.strictPropertyInitialization.isTrue() && !options.getStrictOptionValue(options!!.strictNullChecks)) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1, "strictPropertyInitialization", "strictNullChecks", GoElem.ref<Any?>().nilSlice)
+    }
+    if (options!!.exactOptionalPropertyTypes.isTrue() && !options.getStrictOptionValue(options!!.strictNullChecks)) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1, "exactOptionalPropertyTypes", "strictNullChecks", GoElem.ref<Any?>().nilSlice)
+    }
+    if (options!!.isolatedDeclarations.isTrue()) {
+        if (options.getAllowJS()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_with_option_1, "allowJs", "isolatedDeclarations", GoElem.ref<Any?>().nilSlice)
+        }
+        if (!options.getEmitDeclarations()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1_or_option_2, "isolatedDeclarations", "declaration", GoSlice.of(GoElem.ref<Any?>(), "composite"))
+        }
+    }
+    if (options!!.inlineSourceMap.isTrue()) {
+        if (options!!.sourceMap.isTrue()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_with_option_1, "sourceMap", "inlineSourceMap", GoElem.ref<Any?>().nilSlice)
+        }
+        if (options!!.mapRoot != "") {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_with_option_1, "mapRoot", "inlineSourceMap", GoElem.ref<Any?>().nilSlice)
+        }
+    }
+    if (options!!.composite.isTrue()) {
+        if (options!!.declaration.isFalse()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.composite_projects_may_not_disable_declaration_emit, "declaration", "", GoElem.ref<Any?>().nilSlice)
+        }
+        if (options!!.incremental.isFalse()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.composite_projects_may_not_disable_incremental_compilation, "declaration", "", GoElem.ref<Any?>().nilSlice)
+        }
+    }
+    if (options!!.tsBuildInfoFile == "" && options!!.incremental.isTrue() && options!!.configFilePath == "") {
+        createCompilerOptionsDiagnostic!!(com.xemantic.typescript.tsgo.diagnostics.option_incremental_is_only_valid_with_a_known_configuration_file_like_tsconfig_json_or_when_tsBuildInfoFile_is_explicitly_provided, GoElem.ref<Any?>().nilSlice)
+    }
+    this.verifyProjectReferences()
+    if (options!!.composite.isTrue()) {
+        val rootPaths: com.xemantic.typescript.tsgo.collections.Set<Path> = com.xemantic.typescript.tsgo.collections.Set<Path>(goElem_T = Path.ELEM)
+        val s1 = this!!.opts.config.fileNames()
+        l0@ for (i2 in 0 until s1.len) {
+            val fileName: String = s1[i2]
+            rootPaths.add(this.toPath(fileName))
+        }
+        val s3 = this!!.processedFiles.files
+        l1@ for (i4 in 0 until s3.len) {
+            val file_1: SourceFile? = s3[i4]
+            if (sourceFileMayBeEmitted(file_1, this, false) && !rootPaths.has(file_1!!.path())) {
+                this!!.processedFiles.includeProcessor.addProcessingDiagnostic(GoSlice.of(GoElem.ref<com.xemantic.typescript.tsgo.compiler.processingDiagnostic?>(), com.xemantic.typescript.tsgo.compiler.processingDiagnostic(kind = processingDiagnosticKindExplainingFileInclude, data = com.xemantic.typescript.tsgo.compiler.includeExplainingDiagnostic(file = file_1!!.path(), message = com.xemantic.typescript.tsgo.diagnostics.file_0_is_not_listed_within_the_file_list_of_project_1_Projects_must_list_all_files_or_use_an_include_pattern, args = GoSlice.of(GoElem.ref<Any?>(), file_1!!.fileName(), configFilePath!!())))))
+            }
+        }
+    }
+    val forEachOptionPathsSyntax: ((((PropertyAssignment?) -> Diagnostic?)?) -> Diagnostic?)? = fun(callback: ((PropertyAssignment?) -> Diagnostic?)?): Diagnostic? {
+        return com.xemantic.typescript.tsgo.tsoptions.forEachPropertyAssignment<Diagnostic>(Diagnostic.ELEM, getCompilerOptionsObjectLiteralSyntax!!(), "paths", callback!!, GoElem.STRING.nilSlice)
+    }
+    val createDiagnosticForOptionPaths: ((Boolean, String, Message?, GoSlice<Any?>) -> Diagnostic?)? = fun(onKey_2: Boolean, key: String, message_6: Message?, args_6: GoSlice<Any?>): Diagnostic? {
+        var diag_4: Diagnostic? = forEachOptionPathsSyntax!!(fun(pathProp: PropertyAssignment?): Diagnostic? {
+            if (com.xemantic.typescript.tsgo.ast.isObjectLiteralExpression(pathProp!!.initializer)) {
+                return createOptionDiagnosticInObjectLiteralSyntax!!(pathProp!!.initializer.asObjectLiteralExpression(), onKey_2, key, "", message_6, args_6)
+            }
+            return null
+        })
+        if (diag_4 == null) {
+            diag_4 = createCompilerOptionsDiagnostic!!(message_6, args_6)
+        }
+        return diag_4
+    }
+    val createDiagnosticForOptionPathKeyValue: ((String, Int, Message?, GoSlice<Any?>) -> Diagnostic?)? = fun(key_1: String, valueIndex: Int, message_7: Message?, args_7: GoSlice<Any?>): Diagnostic? {
+        var diag_6: Diagnostic? = forEachOptionPathsSyntax!!(fun(pathProp_1: PropertyAssignment?): Diagnostic? {
+            if (com.xemantic.typescript.tsgo.ast.isObjectLiteralExpression(pathProp_1!!.initializer)) {
+                return com.xemantic.typescript.tsgo.tsoptions.forEachPropertyAssignment<Diagnostic>(Diagnostic.ELEM, pathProp_1!!.initializer.asObjectLiteralExpression(), key_1, fun(keyProps: PropertyAssignment?): Diagnostic? {
+                    val initializer: Node? = keyProps!!.initializer
+                    if (com.xemantic.typescript.tsgo.ast.isArrayLiteralExpression(initializer)) {
+                        val elements: NodeList? = initializer.elementList()
+                        if (elements != null && elements!!.nodes.len > valueIndex) {
+                            val diag_5: Diagnostic? = com.xemantic.typescript.tsgo.tsoptions.createDiagnosticForNodeInSourceFile(sourceFile!!(), elements!!.nodes[valueIndex], message_7, args_7)
+                            this!!.programDiagnostics = this!!.programDiagnostics.append1(diag_5)
+                            return diag_5
+                        }
+                    }
+                    return null
+                }, GoElem.STRING.nilSlice)
+            }
+            return null
+        })
+        if (diag_6 == null) {
+            diag_6 = createCompilerOptionsDiagnostic!!(message_7, args_7)
+        }
+        return diag_6
+    }
+    options!!.paths.entries()!!(fun(y5: String, y6: GoSlice<String>): Boolean {
+            val key_2: String = y5
+            val value_2: GoSlice<String> = y6
+            if (!hasZeroOrOneAsteriskCharacter(key_2)) {
+                createDiagnosticForOptionPaths!!(true, key_2, com.xemantic.typescript.tsgo.diagnostics.pattern_0_can_have_at_most_one_Asterisk_character, GoSlice.of(GoElem.ref<Any?>(), key_2))
+            }
+            if (value_2.isNil) {
+                createDiagnosticForOptionPaths!!(false, key_2, com.xemantic.typescript.tsgo.diagnostics.substitutions_for_pattern_0_should_be_an_array, GoSlice.of(GoElem.ref<Any?>(), key_2))
+            } else if (value_2.len == 0) {
+                createDiagnosticForOptionPaths!!(false, key_2, com.xemantic.typescript.tsgo.diagnostics.substitutions_for_pattern_0_shouldn_t_be_an_empty_array, GoSlice.of(GoElem.ref<Any?>(), key_2))
+            }
+            val s7 = value_2
+            l3@ for (i8 in 0 until s7.len) {
+                val i: Int = i8
+                val subst: String = s7[i8]
+                if (!hasZeroOrOneAsteriskCharacter(subst)) {
+                    createDiagnosticForOptionPathKeyValue!!(key_2, i, com.xemantic.typescript.tsgo.diagnostics.substitution_0_in_pattern_1_can_have_at_most_one_Asterisk_character, GoSlice.of(GoElem.ref<Any?>(), subst, key_2))
+                }
+                if (!com.xemantic.typescript.tsgo.tspath.pathIsRelative(subst) && !com.xemantic.typescript.tsgo.tspath.pathIsAbsolute(subst)) {
+                    createDiagnosticForOptionPathKeyValue!!(key_2, i, com.xemantic.typescript.tsgo.diagnostics.non_relative_paths_are_not_allowed_Did_you_forget_a_leading_Slash, GoElem.ref<Any?>().nilSlice)
+                }
+            }
+            return true
+    })
+    if (options!!.sourceMap.isFalseOrUnknown() && options!!.inlineSourceMap.isFalseOrUnknown()) {
+        if (options!!.inlineSources.isTrue()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_can_only_be_used_when_either_option_inlineSourceMap_or_option_sourceMap_is_provided, "inlineSources", "", GoElem.ref<Any?>().nilSlice)
+        }
+        if (options!!.sourceRoot != "") {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_can_only_be_used_when_either_option_inlineSourceMap_or_option_sourceMap_is_provided, "sourceRoot", "", GoElem.ref<Any?>().nilSlice)
+        }
+    }
+    if (options!!.mapRoot != "" && !(options!!.sourceMap.isTrue() || options!!.declarationMap.isTrue())) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1_or_option_2, "mapRoot", "sourceMap", GoSlice.of(GoElem.ref<Any?>(), "declarationMap"))
+    }
+    if (options!!.declarationDir != "") {
+        if (!options.getEmitDeclarations()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1_or_option_2, "declarationDir", "declaration", GoSlice.of(GoElem.ref<Any?>(), "composite"))
+        }
+    }
+    if (options!!.declarationMap.isTrue() && !options.getEmitDeclarations()) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1_or_option_2, "declarationMap", "declaration", GoSlice.of(GoElem.ref<Any?>(), "composite"))
+    }
+    if (!options!!.lib.isNil && options!!.noLib.isTrue()) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_with_option_1, "lib", "noLib", GoElem.ref<Any?>().nilSlice)
+    }
+    if (options!!.isolatedModules.isTrue() || options!!.verbatimModuleSyntax.isTrue()) {
+        if (options!!.preserveConstEnums.isFalse()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_preserveConstEnums_cannot_be_disabled_when_0_is_enabled, com.xemantic.typescript.tsgo.core.ifElse<String>(GoElem.STRING, options!!.verbatimModuleSyntax.isTrue(), "verbatimModuleSyntax", "isolatedModules"), "preserveConstEnums", GoElem.ref<Any?>().nilSlice)
+        }
+    }
+    if (options!!.outDir != "" || options!!.rootDir != "" || options!!.sourceRoot != "" || options!!.mapRoot != "" || (options.getEmitDeclarations() && options!!.declarationDir != "")) {
+        val dir: String = this!!.commonSourceDirectory()
+        if (options!!.outDir != "" && dir == "" && com.xemantic.typescript.tsgo.core.some<SourceFile?>(GoElem.ref<SourceFile?>(), this!!.processedFiles.files, fun(f: SourceFile?): Boolean {
+            return com.xemantic.typescript.tsgo.tspath.getRootLength(f!!.fileName()) > 1
+        })) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.cannot_find_the_common_subdirectory_path_for_the_input_files, "outDir", "", GoElem.ref<Any?>().nilSlice)
+        }
+    }
+    if (!options!!.noEmit.isTrue() && !options!!.composite.isTrue() && options!!.rootDir == "" && options!!.configFilePath != "" && (options!!.outDir != "" || (options.getEmitDeclarations() && options!!.declarationDir != "") || options!!.outFile != "")) {
+        val dir_1: String = this!!.commonSourceDirectory()
+        var emittedFiles: GoSlice<String> = GoElem.STRING.nilSlice
+        val s9 = this!!.processedFiles.files
+        l4@ for (i10 in 0 until s9.len) {
+            val file_2: SourceFile? = s9[i10]
+            if (!file_2!!.isDeclarationFile && sourceFileMayBeEmitted(file_2, this, false)) {
+                emittedFiles = emittedFiles.append1(file_2!!.fileName())
+            }
+        }
+        val dir59: String = com.xemantic.typescript.tsgo.outputpaths.getComputedCommonSourceDirectory(emittedFiles, this!!.getCurrentDirectory(), this!!.useCaseSensitiveFileNames())
+        if (dir59 != "" && com.xemantic.typescript.tsgo.tspath.getCanonicalFileName(dir_1, this!!.useCaseSensitiveFileNames()) != com.xemantic.typescript.tsgo.tspath.getCanonicalFileName(dir59, this!!.useCaseSensitiveFileNames())) {
+            var option1_3: String = ""
+            if (options!!.outFile != "") {
+                option1_3 = "outFile"
+            } else if (options!!.outDir != "") {
+                option1_3 = "outDir"
+            } else {
+                option1_3 = "declarationDir"
+            }
+            var option2_2: String = ""
+            if (options!!.outFile == "" && options!!.outDir != "") {
+                option2_2 = "declarationDir"
+            }
+            val diag_7: Diagnostic? = createDiagnosticForOption!!(true, option1_3, option2_2, com.xemantic.typescript.tsgo.diagnostics.the_common_source_directory_of_0_is_1_The_rootDir_setting_must_be_explicitly_set_to_this_or_another_path_to_adjust_your_output_s_file_layout, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.tspath.getBaseFileName(options!!.configFilePath), com.xemantic.typescript.tsgo.tspath.getRelativePathFromFile(options!!.configFilePath, dir59, this!!.comparePathsOptions.goCopy())))
+            diag_7.addMessageChain(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.visit_https_Colon_Slash_Slashaka_ms_Slashts6_for_migration_information, GoElem.ref<Any?>().nilSlice))
+        }
+    }
+    if (options!!.checkJs.isTrue() && !options.getAllowJS()) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1, "checkJs", "allowJs", GoElem.ref<Any?>().nilSlice)
+    }
+    if (options!!.emitDeclarationOnly.isTrue()) {
+        if (!options.getEmitDeclarations()) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1_or_option_2, "emitDeclarationOnly", "declaration", GoSlice.of(GoElem.ref<Any?>(), "composite"))
+        }
+    }
+    if (options!!.emitDecoratorMetadata.isTrue() && options!!.experimentalDecorators.isFalseOrUnknown()) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1, "emitDecoratorMetadata", "experimentalDecorators", GoElem.ref<Any?>().nilSlice)
+    }
+    if (options!!.jsxFactory != "") {
+        if (options!!.reactNamespace != "") {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_with_option_1, "reactNamespace", "jsxFactory", GoElem.ref<Any?>().nilSlice)
+        }
+        if (options!!.jsx.value == 4 || options!!.jsx.value == 5) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_when_option_jsx_is_1, "jsxFactory", options!!.jsx.string(), GoElem.ref<Any?>().nilSlice)
+        }
+        if (com.xemantic.typescript.tsgo.parser.parseIsolatedEntityName(options!!.jsxFactory) == null) {
+            createOptionValueDiagnostic!!("jsxFactory", com.xemantic.typescript.tsgo.diagnostics.invalid_value_for_jsxFactory_0_is_not_a_valid_identifier_or_qualified_name, GoSlice.of(GoElem.ref<Any?>(), options!!.jsxFactory))
+        }
+    } else if (options!!.reactNamespace != "" && !com.xemantic.typescript.tsgo.scanner.isIdentifierText(options!!.reactNamespace, LanguageVariant(0))) {
+        createOptionValueDiagnostic!!("reactNamespace", com.xemantic.typescript.tsgo.diagnostics.invalid_value_for_reactNamespace_0_is_not_a_valid_identifier, GoSlice.of(GoElem.ref<Any?>(), options!!.reactNamespace))
+    }
+    if (options!!.jsxFragmentFactory != "") {
+        if (options!!.jsxFactory == "") {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_without_specifying_option_1, "jsxFragmentFactory", "jsxFactory", GoElem.ref<Any?>().nilSlice)
+        }
+        if (options!!.jsx.value == 4 || options!!.jsx.value == 5) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_when_option_jsx_is_1, "jsxFragmentFactory", options!!.jsx.string(), GoElem.ref<Any?>().nilSlice)
+        }
+        if (com.xemantic.typescript.tsgo.parser.parseIsolatedEntityName(options!!.jsxFragmentFactory) == null) {
+            createOptionValueDiagnostic!!("jsxFragmentFactory", com.xemantic.typescript.tsgo.diagnostics.invalid_value_for_jsxFragmentFactory_0_is_not_a_valid_identifier_or_qualified_name, GoSlice.of(GoElem.ref<Any?>(), options!!.jsxFragmentFactory))
+        }
+    }
+    if (options!!.reactNamespace != "") {
+        if (options!!.jsx.value == 4 || options!!.jsx.value == 5) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_when_option_jsx_is_1, "reactNamespace", options!!.jsx.string(), GoElem.ref<Any?>().nilSlice)
+        }
+    }
+    if (options!!.jsxImportSource != "") {
+        if (options!!.jsx.value == 3) {
+            createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_cannot_be_specified_when_option_jsx_is_1, "jsxImportSource", options!!.jsx.string(), GoElem.ref<Any?>().nilSlice)
+        }
+    }
+    val moduleKind: ModuleKind = options.getEmitModuleKind()
+    if (options!!.allowImportingTsExtensions.isTrue() && !(options!!.noEmit.isTrue() || options!!.emitDeclarationOnly.isTrue() || options!!.rewriteRelativeImportExtensions.isTrue())) {
+        createOptionValueDiagnostic!!("allowImportingTsExtensions", com.xemantic.typescript.tsgo.diagnostics.option_allowImportingTsExtensions_can_only_be_used_when_one_of_noEmit_emitDeclarationOnly_or_rewriteRelativeImportExtensions_is_set, GoElem.ref<Any?>().nilSlice)
+    }
+    val moduleResolution: ModuleResolutionKind = options.getModuleResolutionKind()
+    if (options!!.resolvePackageJsonExports.isTrue() && !moduleResolutionSupportsPackageJsonExportsAndImports(moduleResolution)) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_can_only_be_used_when_moduleResolution_is_set_to_node16_nodenext_or_bundler, "resolvePackageJsonExports", "", GoElem.ref<Any?>().nilSlice)
+    }
+    if (options!!.resolvePackageJsonImports.isTrue() && !moduleResolutionSupportsPackageJsonExportsAndImports(moduleResolution)) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_can_only_be_used_when_moduleResolution_is_set_to_node16_nodenext_or_bundler, "resolvePackageJsonImports", "", GoElem.ref<Any?>().nilSlice)
+    }
+    if (!options!!.customConditions.isNil && !moduleResolutionSupportsPackageJsonExportsAndImports(moduleResolution)) {
+        createDiagnosticForOptionName!!(com.xemantic.typescript.tsgo.diagnostics.option_0_can_only_be_used_when_moduleResolution_is_set_to_node16_nodenext_or_bundler, "customConditions", "", GoElem.ref<Any?>().nilSlice)
+    }
+    if (moduleResolution.value == 100 && !emitModuleKindIsNonNodeESM(moduleKind) && moduleKind.value != 200 && moduleKind.value != 1) {
+        createOptionValueDiagnostic!!("moduleResolution", com.xemantic.typescript.tsgo.diagnostics.option_0_can_only_be_used_when_module_is_set_to_preserve_commonjs_or_es2015_or_later, GoSlice.of(GoElem.ref<Any?>(), "bundler"))
+    }
+    if (100 <= moduleKind.value && moduleKind.value <= 199 && !(3 <= moduleResolution.value && moduleResolution.value <= 99)) {
+        val moduleKindName: String = moduleKind.string()
+        var moduleResolutionName: String = ""
+        val t11 = com.xemantic.typescript.tsgo.core.moduleKindToModuleResolutionKind.probe(moduleKind)
+        val v: ModuleResolutionKind = goProbeValue<ModuleResolutionKind>(t11) { ModuleResolutionKind(0) }
+        val ok: Boolean = t11 !== GoMapAbsent
+        if (ok) {
+            moduleResolutionName = v.string()
+        } else {
+            moduleResolutionName = "Node16"
+        }
+        createOptionValueDiagnostic!!("moduleResolution", com.xemantic.typescript.tsgo.diagnostics.option_moduleResolution_must_be_set_to_0_or_left_unspecified_when_option_module_is_set_to_1, GoSlice.of(GoElem.ref<Any?>(), moduleResolutionName, moduleKindName))
+    } else if (3 <= moduleResolution.value && moduleResolution.value <= 99 && !(100 <= moduleKind.value && moduleKind.value <= 199)) {
+        val moduleResolutionName_1: String = moduleResolution.string()
+        createOptionValueDiagnostic!!("module", com.xemantic.typescript.tsgo.diagnostics.option_module_must_be_set_to_0_when_option_moduleResolution_is_set_to_1, GoSlice.of(GoElem.ref<Any?>(), moduleResolutionName_1, moduleResolutionName_1))
+    }
+    if (!options!!.noEmit.isTrue() && !options!!.suppressOutputPathCheck.isTrue()) {
+        val emitFilesSeen: com.xemantic.typescript.tsgo.collections.Set<String> = com.xemantic.typescript.tsgo.collections.Set<String>(goElem_T = GoElem.STRING)
+        val verifyEmitFilePath: ((String) -> Unit)? = fun(emitFileName: String) {
+            if (emitFileName != "") {
+                val emitFilePath: Path = this.toPath(emitFileName)
+                val t12 = this!!.processedFiles.filesByPath.probe(emitFilePath)
+                val ok_1: Boolean = t12 !== GoMapAbsent
+                if (ok_1) {
+                    val diag_8: Diagnostic? = com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.cannot_write_file_0_because_it_would_overwrite_input_file, GoSlice.of(GoElem.ref<Any?>(), emitFileName))
+                    if (configFilePath!!() == "") {
+                        diag_8.addMessageChain(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.adding_a_tsconfig_json_file_will_help_organize_projects_that_contain_both_TypeScript_and_JavaScript_files_Learn_more_at_https_Colon_Slash_Slashaka_ms_Slashtsconfig, GoElem.ref<Any?>().nilSlice))
+                    }
+                    this.blockEmittingOfFile(emitFileName, diag_8)
+                }
+                var emitFileKey: String = ""
+                if (!this.host()!!.fs()!!.useCaseSensitiveFileNames()) {
+                    emitFileKey = com.xemantic.typescript.tsgo.tspath.toFileNameLowerCase(emitFilePath.value)
+                } else {
+                    emitFileKey = emitFilePath.value
+                }
+                if (emitFilesSeen.has(emitFileKey)) {
+                    this.blockEmittingOfFile(emitFileName, com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.cannot_write_file_0_because_it_would_be_overwritten_by_multiple_input_files, GoSlice.of(GoElem.ref<Any?>(), emitFileName)))
+                } else {
+                    emitFilesSeen.add(emitFileKey)
+                }
+            }
+        }
+        com.xemantic.typescript.tsgo.outputpaths.forEachEmittedFile(this, options, fun(emitFileNames: OutputPaths?, sourceFile_1: SourceFile?): Boolean {
+            verifyEmitFilePath!!(emitFileNames!!.jsFilePath())
+            verifyEmitFilePath!!(emitFileNames.sourceMapFilePath())
+            verifyEmitFilePath!!(emitFileNames!!.declarationFilePath())
+            verifyEmitFilePath!!(emitFileNames.declarationMapPath())
+            return false
+        }, this.getSourceFilesToEmit(null, false), false)
+        verifyEmitFilePath!!(this!!.opts.config.getBuildInfoFileName())
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/compiler.Program.blockEmittingOfFile 0c0cbb43

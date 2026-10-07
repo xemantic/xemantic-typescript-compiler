@@ -35,6 +35,7 @@ import com.xemantic.typescript.tsgo.module.ResolvedEntrypoint
 import com.xemantic.typescript.tsgo.core.ScriptKind
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.collections.keys
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.regexPatternCacheKey fa36b13a
 class regexPatternCacheKey(
@@ -232,13 +233,13 @@ fun extensionFromPath(path: String): String {
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetAnyFileFromPath 10e579d2
 fun tryGetAnyFileFromPath(host: ModuleSpecifierGenerationHost?, path: String): Boolean {
-    val extGroups: GoSlice<GoSlice<String>> = com.xemantic.typescript.tsgo.tsoptions.getSupportedExtensions(CompilerOptions(allowJs = Tristate(2)), GoSlice.of(FileExtensionInfo.ELEM, FileExtensionInfo(extension = "node", isMixedContent = false, scriptKind = ScriptKind(5)), FileExtensionInfo(extension = "json", isMixedContent = false, scriptKind = ScriptKind(6))))
-    val s0 = extGroups
-    l0@ for (i1 in 0 until s0.len) {
-        val exts: GoSlice<String> = s0[i1]
-        val s2 = exts
-        l1@ for (i3 in 0 until s2.len) {
-            val e: String = s2[i3]
+    val extGroups: GoSlice<GoSlice<String>> = com.xemantic.typescript.tsgo.tsoptions.getSupportedExtensions(CompilerOptions().also { o0 -> o0.allowJs = Tristate(2) }, GoSlice.of(FileExtensionInfo.ELEM, FileExtensionInfo(extension = "node", isMixedContent = false, scriptKind = ScriptKind(5)), FileExtensionInfo(extension = "json", isMixedContent = false, scriptKind = ScriptKind(6))))
+    val s1 = extGroups
+    l0@ for (i2 in 0 until s1.len) {
+        val exts: GoSlice<String> = s1[i2]
+        val s3 = exts
+        l1@ for (i4 in 0 until s3.len) {
+            val e: String = s3[i4]
             val fullPath: String = path + e
             if (host!!.fileExists(com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(fullPath, host!!.getCurrentDirectory()))) {
                 return true
@@ -412,7 +413,19 @@ fun getNodeModulesPackageName(compilerOptions: CompilerOptions?, importingSource
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.allKeysStartWithDot 9a7ec67e
 fun allKeysStartWithDot(obj: OrderedMap<String, ExportsOrImports>?): Boolean {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/modulespecifiers.allKeysStartWithDot")
+    var rfDone0 = false
+    var rfRet1: Boolean? = null
+    obj.keys()!!(fun(y2: String): Boolean {
+            val k: String = y2
+            if (!com.xemantic.typescript.tsgo.go.strings.hasPrefix(k, ".")) {
+                rfRet1 = false
+                rfDone0 = true
+                return false
+            }
+            return true
+    })
+    if (rfDone0) return rfRet1 as Boolean
+    return true
 }
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.GetPackageNameFromDirectory 6d2d5ec9

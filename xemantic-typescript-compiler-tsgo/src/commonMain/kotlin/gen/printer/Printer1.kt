@@ -1265,7 +1265,28 @@ fun Printer?.shouldEmitDetachedComments(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.hasCommentsAtPosition ee2f55e4
 fun Printer?.hasCommentsAtPosition(pos: Int): Boolean {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/printer.Printer.hasCommentsAtPosition")
+    if (this!!.currentSourceFile == null) {
+        return false
+    }
+    var rfDone0 = false
+    var rfRet1: Boolean? = null
+    com.xemantic.typescript.tsgo.scanner.getTrailingCommentRanges(this!!.emitContext!!.factory!!.nodeFactory.asNodeFactory(), this!!.currentSourceFile!!.text(), pos + 1)!!(fun(y2: CommentRange): Boolean {
+            rfRet1 = true
+            rfDone0 = true
+            return false
+            return true
+    })
+    if (rfDone0) return rfRet1 as Boolean
+    var rfDone3 = false
+    var rfRet4: Boolean? = null
+    com.xemantic.typescript.tsgo.scanner.getLeadingCommentRanges(this!!.emitContext!!.factory!!.nodeFactory.asNodeFactory(), this!!.currentSourceFile!!.text(), pos + 1)!!(fun(y5: CommentRange): Boolean {
+            rfRet4 = true
+            rfDone3 = true
+            return false
+            return true
+    })
+    if (rfDone3) return rfRet4 as Boolean
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.shouldEmitIndirectCall 6f3b796b
@@ -1737,7 +1758,70 @@ fun Printer?.emitNestedModuleName(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitModifierList 7baa9868
 fun Printer?.emitModifierList(parentNode: Node?, modifiers: ModifierList?, allowDecorators: Boolean): Int {
-    TODO("goport: refused local-type: github.com/microsoft/typescript-go/internal/printer.Printer.emitModifierList")
+    if (modifiers == null || modifiers!!.nodeList.nodes.len == 0) {
+        return parentNode!!.pos()
+    }
+    if (com.xemantic.typescript.tsgo.core.every<Node?>(GoElem.ref<Node?>(), modifiers!!.nodeList.nodes, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isModifier(p0))) {
+        this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitKeywordNode(p1), parentNode, modifiers!!.nodeList, LFModifiers)
+    } else if (com.xemantic.typescript.tsgo.core.every<Node?>(GoElem.ref<Node?>(), modifiers!!.nodeList.nodes, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isDecorator(p0))) {
+        if (!allowDecorators) {
+            return parentNode!!.pos()
+        }
+        this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitModifierLike(p1), parentNode, modifiers!!.nodeList, LFDecorators)
+    } else {
+        if (this!!.printHandlers.onBeforeEmitNodeList != null) {
+            this!!.printHandlers.onBeforeEmitNodeList!!(modifiers!!.nodeList)
+        }
+        var lastMode: com.xemantic.typescript.tsgo.printer.Mode_Printer_emitModifierList = com.xemantic.typescript.tsgo.printer.Mode_Printer_emitModifierList(0)
+        var mode: com.xemantic.typescript.tsgo.printer.Mode_Printer_emitModifierList = com.xemantic.typescript.tsgo.printer.Mode_Printer_emitModifierList(0)
+        var start: Int = 0
+        var pos: Int = 0
+        var lastModifier: Node? = null
+        l0@ while (start < modifiers!!.nodeList.nodes.len) {
+            l1@ while (pos < modifiers!!.nodeList.nodes.len) {
+                lastModifier = modifiers!!.nodeList.nodes[pos]
+                if (com.xemantic.typescript.tsgo.ast.isDecorator(lastModifier)) {
+                    mode = com.xemantic.typescript.tsgo.printer.Mode_Printer_emitModifierList(2)
+                } else {
+                    mode = com.xemantic.typescript.tsgo.printer.Mode_Printer_emitModifierList(1)
+                }
+                if (lastMode.value == 0) {
+                    lastMode = mode
+                } else if (mode.value != lastMode.value) {
+                    break@l1
+                }
+                pos++
+            }
+            var textRange: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(-1, -1)
+            if (start == 0) {
+                textRange = com.xemantic.typescript.tsgo.core.newTextRange(modifiers!!.nodeList.pos(), textRange.end())
+            }
+            if (pos == modifiers!!.nodeList.nodes.len - 1) {
+                textRange = com.xemantic.typescript.tsgo.core.newTextRange(textRange.pos(), modifiers!!.nodeList.end())
+            }
+            if (allowDecorators || lastMode.value == 1) {
+                this.emitListItems(fun(p0: Printer?, p1: Node?) = p0.emitModifierLike(p1), parentNode, modifiers!!.nodeList.nodes.slice(start, pos), com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, lastMode.value == 1, LFModifiers, LFDecorators), false, textRange.goCopy())
+            }
+            start = pos
+            lastMode = mode
+            pos++
+        }
+        if (this!!.printHandlers.onAfterEmitNodeList != null) {
+            this!!.printHandlers.onAfterEmitNodeList!!(modifiers!!.nodeList)
+        }
+    }
+    return greatestEnd(parentNode!!.pos(), GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), com.xemantic.typescript.tsgo.core.lastOrNil<Node?>(GoElem.ref<Node?>(), modifiers!!.nodeList.nodes)))
+}
+
+// go: github.com/microsoft/typescript-go/internal/printer.Mode_Printer_emitModifierList 
+@kotlin.jvm.JvmInline
+value class Mode_Printer_emitModifierList(val value: Int) : Comparable<Mode_Printer_emitModifierList> {
+
+    override fun compareTo(other: Mode_Printer_emitModifierList): Int = value.compareTo(other.value)
+
+    companion object {
+        val ELEM: GoElem<Mode_Printer_emitModifierList> = GoElem({ Mode_Printer_emitModifierList(0) })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeParameter dc8d8246
@@ -3369,7 +3453,52 @@ fun Printer?.emitMetaProperty(node: MetaProperty?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPartiallyEmittedExpression 877e4d3a
 fun Printer?.emitPartiallyEmittedExpression(node_0: PartiallyEmittedExpression?) {
-    TODO("goport: refused local-type: github.com/microsoft/typescript-go/internal/printer.Printer.emitPartiallyEmittedExpression")
+    var node: PartiallyEmittedExpression? = node_0
+    val stack: Stack<com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression> = Stack<com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression>(goElem_T = com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression.ELEM)
+    l0@ while (true) {
+        val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        val emitFlags: EmitFlags = this!!.emitContext.emitFlags(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        if (emitFlags.value and 128u == 0u && node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos() != node!!.expression!!.pos()) {
+            this.emitTrailingCommentsOfPosition(node!!.expression!!.pos(), false, false)
+        }
+        stack.push(com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression(node = node, state = state.goCopy()))
+        if (!com.xemantic.typescript.tsgo.ast.isPartiallyEmittedExpression(node!!.expression)) {
+            break@l0
+        }
+        node = node!!.expression.asPartiallyEmittedExpression()
+    }
+    this.emitExpression(node!!.expression, OperatorPrecedence(0))
+    l1@ while (stack.len() > 0) {
+        val entry: com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression = stack.pop()
+        val emitFlags_1: EmitFlags = this!!.emitContext.emitFlags(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        if (emitFlags_1.value and 256u == 0u && node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end() != node!!.expression!!.end()) {
+            this.emitLeadingCommentsOfPosition(node!!.expression!!.end())
+        }
+        this.exitNode(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), entry.state.goCopy())
+        node = entry.node
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/printer.entry_Printer_emitPartiallyEmittedExpression 
+class entry_Printer_emitPartiallyEmittedExpression(
+    @kotlin.jvm.JvmField var node: PartiallyEmittedExpression? = null,
+    @kotlin.jvm.JvmField var state: com.xemantic.typescript.tsgo.printer.printerState = com.xemantic.typescript.tsgo.printer.printerState(),
+) {
+
+    fun goCopy(): entry_Printer_emitPartiallyEmittedExpression = entry_Printer_emitPartiallyEmittedExpression(node = node, state = state.goCopy())
+
+    fun goSet(o: entry_Printer_emitPartiallyEmittedExpression) {
+        node = o.node
+        state = o.state.goCopy()
+    }
+
+    fun goEquals(o: entry_Printer_emitPartiallyEmittedExpression): Boolean = node === o.node && state.goEquals(o.state)
+
+    fun goHash(): Int = 31 * node.hashCode() + 31 * state.goHash()
+
+    companion object {
+        val ELEM: GoElem<entry_Printer_emitPartiallyEmittedExpression> = GoElem({ entry_Printer_emitPartiallyEmittedExpression() }, { it.goCopy() })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.commentWillEmitNewLine a37b15d8
@@ -3384,7 +3513,50 @@ fun Printer?.syntheticCommentWillEmitNewLine(comment: SynthesizedComment): Boole
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.willEmitLeadingNewLine de29dff7
 fun Printer?.willEmitLeadingNewLine(node: Node?): Boolean {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/printer.Printer.willEmitLeadingNewLine")
+    if (this!!.currentSourceFile == null) {
+        return false
+    }
+    var hasLeadingCommentRanges: Boolean = false
+    var hasNewLineComment: Boolean = false
+    com.xemantic.typescript.tsgo.scanner.getLeadingCommentRanges(this!!.emitContext!!.factory!!.nodeFactory.asNodeFactory(), this!!.currentSourceFile!!.text(), node!!.pos())!!(fun(y0: CommentRange): Boolean {
+            val comment: CommentRange = y0
+            hasLeadingCommentRanges = true
+            if (this.commentWillEmitNewLine(comment.goCopy())) {
+                hasNewLineComment = true
+            }
+            return true
+    })
+    if (hasLeadingCommentRanges) {
+        val parseNode: Node? = this!!.emitContext.parseNode(node)
+        if (parseNode != null && com.xemantic.typescript.tsgo.ast.isParenthesizedExpression(parseNode!!.parent)) {
+            return true
+        }
+    }
+    if (hasNewLineComment) {
+        return true
+    }
+    if (com.xemantic.typescript.tsgo.go.slices.containsFunc<SynthesizedComment>(this!!.emitContext.getSyntheticLeadingComments(node), (run { val r1 = this; fun(p0: SynthesizedComment): Boolean = r1.syntheticCommentWillEmitNewLine(p0) })!!)) {
+        return true
+    }
+    if (com.xemantic.typescript.tsgo.ast.isPartiallyEmittedExpression(node)) {
+        val pee: PartiallyEmittedExpression? = node.asPartiallyEmittedExpression()
+        if (node!!.pos() != pee!!.expression!!.pos()) {
+            var rfDone2 = false
+            var rfRet3: Boolean? = null
+            com.xemantic.typescript.tsgo.scanner.getTrailingCommentRanges(this!!.emitContext!!.factory!!.nodeFactory.asNodeFactory(), this!!.currentSourceFile!!.text(), pee!!.expression!!.pos())!!(fun(y4: CommentRange): Boolean {
+                            val comment_1: CommentRange = y4
+                            if (this.commentWillEmitNewLine(comment_1.goCopy())) {
+                                rfRet3 = true
+                                rfDone2 = true
+                                return false
+                            }
+                            return true
+            })
+            if (rfDone2) return rfRet3 as Boolean
+        }
+        return this.willEmitLeadingNewLine(pee!!.expression)
+    }
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.parenthesizeExpressionForNoAsi 771dffca
@@ -3615,13 +3787,5 @@ fun Printer?.emitExpression(node: Node?, precedence: OperatorPrecedence) {
     if (parens) {
         this.writePunctuation(")")
     }
-}
-
-// go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateSpan c312297e
-fun Printer?.emitTemplateSpan(node: TemplateSpan?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitExpression(node!!.expression, OperatorPrecedence(0))
-    this.emitTemplateMiddleTail(node!!.literal)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
 }
 

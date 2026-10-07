@@ -60,7 +60,8 @@ val UsageDirectories: Usage = Usage(1)
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.UsageExclude ebee1c6b
 val UsageExclude: Usage = Usage(2)
 
-// goport: refused int-overflow: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.UnlimitedDepth (constant)
+// go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.UnlimitedDepth be57e093
+const val UnlimitedDepth: Int = Int.MAX_VALUE
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.ReadDirectory 4c8d9a47
 fun readDirectory(host: FS?, currentDir: String, path: String, extensions: GoSlice<String>, excludes: GoSlice<String>, includes: GoSlice<String>, depth: Int): GoSlice<String> {
@@ -702,7 +703,57 @@ class globVisitor(
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.globVisitor.visit 8ca2ffad
 fun com.xemantic.typescript.tsgo.vfs.vfsmatch.globVisitor?.visit(path: String, absolutePath: String, depth_0: Int, resolvedRealPath: String) {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.globVisitor.visit")
+    var depth: Int = depth_0
+    var realPath: String = ""
+    if (resolvedRealPath != "") {
+        realPath = resolvedRealPath
+    } else {
+        realPath = this!!.host!!.realpath(absolutePath)
+    }
+    val canonicalPath: String = com.xemantic.typescript.tsgo.tspath.getCanonicalFileName(realPath, this!!.useCaseSensitiveFileNames)
+    if (this!!.visited.has(canonicalPath)) {
+        return
+    }
+    this!!.visited.add(canonicalPath)
+    val entries: Entries = this!!.host!!.getAccessibleEntries(absolutePath)
+    val pathPrefix: String = ensureTrailingSlash(path)
+    val absPrefix: String = ensureTrailingSlash(absolutePath)
+    val s1 = entries.files
+    l0@ for (i2 in 0 until s1.len) {
+        val file: String = s1[i2]
+        if (this!!.extensions.len > 0 && !com.xemantic.typescript.tsgo.tspath.fileExtensionIsOneOf(file, this!!.extensions)) {
+            continue@l0
+        }
+        val t3 = this!!.fileMatcher.matchesFileParts(absPrefix, file)
+        val idx: Int = t3.first
+        val ok: Boolean = t3.second
+        if (ok) {
+            this!!.results[idx] = this!!.results[idx].append1(pathPrefix + file)
+        }
+    }
+    if (depth != Int.MAX_VALUE) {
+        depth--
+        if (depth == 0) {
+            return
+        }
+    }
+    val s4 = entries.directories
+    l1@ for (i5 in 0 until s4.len) {
+        val dir: String = s4[i5]
+        if (!this!!.directoryMatcher.matchesDirectoryParts(absPrefix, dir)) {
+            continue@l1
+        }
+        val absDir: String = absPrefix + dir
+        var childRealPath: String = ""
+        if (!entries.symlinks.isNil) {
+            val t6 = entries.symlinks.probe(dir)
+            val isSymlink: Boolean = t6 !== GoMapAbsent
+            if (!isSymlink) {
+                childRealPath = com.xemantic.typescript.tsgo.tspath.combinePaths(realPath, GoSlice.of(GoElem.STRING, dir))
+            }
+        }
+        this.visit(pathPrefix + dir, absDir, depth, childRealPath)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.matchFiles e68a5361

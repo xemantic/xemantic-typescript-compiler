@@ -32,9 +32,11 @@ import com.xemantic.typescript.tsgo.ast.ExportAssignment
 import com.xemantic.typescript.tsgo.ast.ForInOrOfStatement
 import com.xemantic.typescript.tsgo.ast.ForStatement
 import com.xemantic.typescript.tsgo.printer.GeneratedIdentifierFlags
+import com.xemantic.typescript.tsgo.ast.Kind
 import com.xemantic.typescript.tsgo.ast.ModifierFlags
 import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeFlags
+import com.xemantic.typescript.tsgo.ast.NodeList
 import com.xemantic.typescript.tsgo.ast.OuterExpressionKinds
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.transformers.TransformOptions
@@ -61,10 +63,15 @@ import com.xemantic.typescript.tsgo.ast.newArrayLiteralExpression
 import com.xemantic.typescript.tsgo.ast.newAwaitExpression
 import com.xemantic.typescript.tsgo.ast.newBlock
 import com.xemantic.typescript.tsgo.ast.newCatchClause
+import com.xemantic.typescript.tsgo.ast.newExportAssignment
+import com.xemantic.typescript.tsgo.ast.newExportDeclaration
 import com.xemantic.typescript.tsgo.ast.newExportSpecifier
 import com.xemantic.typescript.tsgo.ast.newExpressionStatement
 import com.xemantic.typescript.tsgo.ast.newIdentifier
 import com.xemantic.typescript.tsgo.ast.newIfStatement
+import com.xemantic.typescript.tsgo.ast.newModifier
+import com.xemantic.typescript.tsgo.ast.newModifierList
+import com.xemantic.typescript.tsgo.ast.newNamedExports
 import com.xemantic.typescript.tsgo.ast.newNodeList
 import com.xemantic.typescript.tsgo.ast.newObjectLiteralExpression
 import com.xemantic.typescript.tsgo.ast.newPropertyAccessExpression
@@ -79,12 +86,16 @@ import com.xemantic.typescript.tsgo.ast.text
 import com.xemantic.typescript.tsgo.ast.updateBlock
 import com.xemantic.typescript.tsgo.ast.updateForInOrOfStatement
 import com.xemantic.typescript.tsgo.ast.updateForStatement
+import com.xemantic.typescript.tsgo.ast.updateSourceFile
 import com.xemantic.typescript.tsgo.ast.updateVariableDeclaration
 import com.xemantic.typescript.tsgo.ast.updateVariableStatement
 import com.xemantic.typescript.tsgo.ast.visitEachChild
 import com.xemantic.typescript.tsgo.ast.visitNode
+import com.xemantic.typescript.tsgo.ast.visitSlice
+import com.xemantic.typescript.tsgo.printer.addEmitHelper
 import com.xemantic.typescript.tsgo.printer.addVariableDeclaration
 import com.xemantic.typescript.tsgo.printer.emitFlags
+import com.xemantic.typescript.tsgo.printer.endVariableEnvironment
 import com.xemantic.typescript.tsgo.printer.getDeclarationName
 import com.xemantic.typescript.tsgo.printer.getLocalName
 import com.xemantic.typescript.tsgo.printer.inlineExpressions
@@ -98,6 +109,7 @@ import com.xemantic.typescript.tsgo.printer.newTrueExpression
 import com.xemantic.typescript.tsgo.printer.newUniqueName
 import com.xemantic.typescript.tsgo.printer.newUniqueNameEx
 import com.xemantic.typescript.tsgo.printer.newVoidZeroExpression
+import com.xemantic.typescript.tsgo.printer.readEmitHelpers
 import com.xemantic.typescript.tsgo.printer.restoreOuterExpressions
 import com.xemantic.typescript.tsgo.printer.setCommentRange
 import com.xemantic.typescript.tsgo.printer.setEmitFlags
@@ -190,12 +202,84 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.visitSourceFile ddb5f409
 fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTransformer?.visitSourceFile(node: SourceFile?): Node? {
-    TODO("goport: refused tuple-arg: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.visitSourceFile")
+    if (node!!.isDeclarationFile) {
+        return node!!.nodeBase.nodeDefault.asNode()
+    }
+    var visited: Node? = null
+    val usingKind: com.xemantic.typescript.tsgo.transformers.estransforms.usingKind = getUsingKindOfStatements(node!!.statements!!.nodes)
+    if (usingKind.value != 0uL) {
+        this!!.transformer.emitContext().startVariableEnvironment()
+        this!!.exportBindings = GoMap.make<String, Node?>(GoElem.ref<Node?>())
+        this!!.exportVars = GoElem.ref<Node?>().nilSlice
+        val t0 = this!!.transformer.factory().splitStandardPrologue(node!!.statements!!.nodes)
+        val prologue: GoSlice<Node?> = t0.first
+        val rest: GoSlice<Node?> = t0.second
+        val topLevelStatements: GoBox<GoSlice<Node?>> = GoBox(GoElem.ref<Node?>().nilSlice)
+        topLevelStatements.value = topLevelStatements.value.appendSlice(run { val ta1 = this!!.transformer.visitor().visitSlice(prologue); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta1.first, GoSlice.of(GoElem.ref<Any?>(), ta1.second)) })
+        var pos: Int = 0
+        l0@ while (pos < rest.len) {
+            val statement: Node? = rest[pos]
+            if (getUsingKind(statement).value != 0uL) {
+                if (pos > 0) {
+                    topLevelStatements.value = topLevelStatements.value.appendSlice(run { val ta2 = this!!.transformer.visitor().visitSlice(rest.slice(0, pos)); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta2.first, GoSlice.of(GoElem.ref<Any?>(), ta2.second)) })
+                }
+                break@l0
+            }
+            pos++
+        }
+        if (pos >= rest.len) {
+            goPanic("Should have encountered at least one 'using' statement.")
+        }
+        val envBinding: Node? = this.createEnvBinding()
+        val bodyStatements: GoSlice<Node?> = this.transformUsingDeclarations(rest.slice(pos), envBinding, topLevelStatements)
+        if (this!!.exportBindings.len > 0) {
+            var exportSpecifiers: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0, this!!.exportBindingNames.len)
+            val s3 = this!!.exportBindingNames
+            l1@ for (i4 in 0 until s3.len) {
+                val name: String = s3[i4]
+                val specifier: Node? = this!!.exportBindings[name]
+                com.xemantic.typescript.tsgo.debug.assert(specifier != null, GoSlice.of(GoElem.ref<Any?>(), "Missing export binding for hoisted export name"))
+                exportSpecifiers = exportSpecifiers.append1(specifier)
+            }
+            topLevelStatements.value = topLevelStatements.value.append1(this!!.transformer.factory()!!.nodeFactory.newExportDeclaration(null, false, this!!.transformer.factory()!!.nodeFactory.newNamedExports(this!!.transformer.factory()!!.nodeFactory.newNodeList(exportSpecifiers)), null, null))
+        }
+        topLevelStatements.value = topLevelStatements.value.appendSlice(this!!.transformer.emitContext().endVariableEnvironment())
+        if (this!!.exportVars.len > 0) {
+            topLevelStatements.value = topLevelStatements.value.append1(this!!.transformer.factory()!!.nodeFactory.newVariableStatement(this!!.transformer.factory()!!.nodeFactory.newModifierList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newModifier(Kind(94)))), this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(this!!.exportVars), NodeFlags(1u))))
+        }
+        topLevelStatements.value = topLevelStatements.value.appendSlice(this.createDownlevelUsingStatements(bodyStatements, envBinding, usingKind.value == 2uL))
+        if (this!!.exportEqualsBinding != null) {
+            topLevelStatements.value = topLevelStatements.value.append1(this!!.transformer.factory()!!.nodeFactory.newExportAssignment(null, true, null, this!!.exportEqualsBinding))
+        }
+        visited = this!!.transformer.factory()!!.nodeFactory.updateSourceFile(node, this!!.transformer.factory()!!.nodeFactory.newNodeList(topLevelStatements.value), node!!.endOfFileToken)
+    } else {
+        visited = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    }
+    this!!.transformer.emitContext().addEmitHelper(visited, this!!.transformer.emitContext().readEmitHelpers())
+    this!!.exportVars = GoElem.ref<Node?>().nilSlice
+    this!!.exportBindings = GoMap.nil<String, Node?>(GoElem.ref<Node?>())
+    this!!.exportBindingNames = GoElem.STRING.nilSlice
+    this!!.defaultExportBinding = null
+    this!!.exportEqualsBinding = null
+    return visited
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.visitBlock 1e79e92e
 fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTransformer?.visitBlock(node: Block?): Node? {
-    TODO("goport: refused tuple-arg: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.visitBlock")
+    val usingKind: com.xemantic.typescript.tsgo.transformers.estransforms.usingKind = getUsingKindOfStatements(node!!.statements!!.nodes)
+    if (usingKind.value != 0uL) {
+        val t0 = this!!.transformer.factory().splitStandardPrologue(node!!.statements!!.nodes)
+        val prologue: GoSlice<Node?> = t0.first
+        val rest: GoSlice<Node?> = t0.second
+        val envBinding: Node? = this.createEnvBinding()
+        var statements: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0, prologue.len + 2)
+        statements = statements.appendSlice(run { val ta1 = this!!.transformer.visitor().visitSlice(prologue); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta1.first, GoSlice.of(GoElem.ref<Any?>(), ta1.second)) })
+        statements = statements.appendSlice(this.createDownlevelUsingStatements(this.transformUsingDeclarations(rest, envBinding, null), envBinding, usingKind.value == 2uL))
+        val statementList: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(statements)
+        statementList!!.loc = node!!.statements!!.loc.goCopy()
+        return this!!.transformer.factory()!!.nodeFactory.updateBlock(node, statementList, node!!.multiLine)
+    }
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.visitForStatement dc658e2e

@@ -33,6 +33,7 @@ import com.xemantic.typescript.goport.ir.int
 import com.xemantic.typescript.goport.ir.ints
 import com.xemantic.typescript.goport.ir.k
 import com.xemantic.typescript.goport.ir.list
+import com.xemantic.typescript.goport.ir.nullableList
 import com.xemantic.typescript.goport.ir.obj
 import com.xemantic.typescript.goport.ir.reqObj
 import com.xemantic.typescript.goport.ir.str
@@ -101,7 +102,24 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
 
     private fun args0(e: Node, sig: SignatureType, shimVararg: Boolean): List<String> {
         val args = e.list("args")
-        if (e.bool("tupleArg")) refuse("tuple-arg")
+        if (e.bool("tupleArg")) {
+            // `f(g())` with a multi-value g: bind the tuple, pass its components ([withTuplePrelude] wraps the call).
+            val g = args.single()
+            val tt = types.unalias(ty(g)) as? com.xemantic.typescript.goport.types.TupleType ?: refuse("tuple-arg-type")
+            val t = fn.fresh("ta")
+            tuplePrelude = "val $t = ${lower(g).code}"
+            val impls = g.nullableList("implTuple")
+            val comps = tt.elems.indices.map { i ->
+                val im = impls.getOrNull(i)
+                if (im?.str("k") == "nil") tm.zero(im.int("to")!!) else "$t.${listOf("first", "second", "third", "fourth", "fifth")[i]}"
+            }
+            val from = e.int("variadicFrom") ?: if (sig.variadic) sig.params.size - 1 else null
+            if (from == null || shimVararg) return comps
+            val sliceT = sig.params.last().t
+            val elemT = (types.under(sliceT) as? SliceType)?.elem ?: refuse("variadic-not-slice")
+            val rest = comps.drop(from)
+            return comps.take(from) + if (rest.isEmpty()) "${tm.elem(elemT)}.nilSlice" else "GoSlice.of(${tm.elem(elemT)}, ${rest.joinToString(", ")})"
+        }
         val from = e.int("variadicFrom")
         if (from == null) {
             if (e.bool("spread") && shimVararg) {
@@ -119,6 +137,16 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val elemT = (types.under(sliceT) as? SliceType)?.elem ?: refuse("variadic-not-slice")
         val packed = if (rest.isEmpty()) "${tm.elem(elemT)}.nilSlice" else "GoSlice.of(${tm.elem(elemT)}, ${rest.joinToString(", ") { flow(it).code }})"
         return fixed + packed
+    }
+
+    /** The `val t = g()` binding of a tuple argument, set by [args0] for the call being lowered. */
+    private var tuplePrelude: String? = null
+
+    /** Wraps [call] in `run { <tuple binding>; call }` when its arguments came from a multi-value call. */
+    private fun withTuplePrelude(call: Ex): Ex {
+        val p = tuplePrelude ?: return call
+        tuplePrelude = null
+        return Ex.primary("run { $p; ${call.code} }")
     }
 
     private fun sigOf(e: Node): SignatureType =
@@ -191,7 +219,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             val wref = ref.substringBeforeLast('.', "").let { if (it.isEmpty()) "" else "$it." } + prog.windowName(o.str("key")!!, o.str("name")!!)
             return Ex.primary("$wref(${codes.joinToString(", ")})")
         }
-        return Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + inlineArgs(e, o.str("key"), args(e, sig, shim && sig.variadic, shim))).joinToString(", ")})")
+        return withTuplePrelude(Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + inlineArgs(e, o.str("key"), args(e, sig, shim && sig.variadic, shim))).joinToString(", ")})"))
     }
 
     /** Lowering rules for specific shim calls (docs/goport-runtime.md § 9). */
@@ -291,7 +319,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val sig = sigOf(e)
         val mo = pc.obj(sel.reqObj("sel").int("obj")!!)
         val shim = mo.str("pkg") != null && mo.str("pkg") !in prog.ported
-        return Ex.primary("${recv.at(PRIMARY)}.$name(${inlineArgs(e, mo.str("key"), args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})")
+        return withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$name(${inlineArgs(e, mo.str("key"), args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})"))
     }
 
     fun methodExprCall(e: Node): Ex {
@@ -309,12 +337,12 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
     fun dynamicCall(e: Node): Ex {
         val f = e.reqObj("fun")
         val sig = sigOf(e)
-        val a = args(e, sig, false).joinToString(", ")
         val callee = raw(f)
-        if (f.k == "FuncLit" || (f.k == "ParenExpr" && f.reqObj("x").k == "FuncLit")) return Ex.primary("(${callee.code})($a)")
+        val a = args(e, sig, false).joinToString(", ")
+        if (f.k == "FuncLit" || (f.k == "ParenExpr" && f.reqObj("x").k == "FuncLit")) return withTuplePrelude(Ex.primary("(${callee.code})($a)"))
         // A non-null func-typed parameter of an inline function ([Program.inlineFuncs]): no `!!`.
-        if (f.k == "Ident" && f.int("obj") in fn.nonNullFnParams) return Ex.primary("${callee.at(PRIMARY)}($a)")
-        return Ex.primary("${callee.at(PRIMARY)}!!($a)")
+        if (f.k == "Ident" && f.int("obj") in fn.nonNullFnParams) return withTuplePrelude(Ex.primary("${callee.at(PRIMARY)}($a)"))
+        return withTuplePrelude(Ex.primary("${callee.at(PRIMARY)}!!($a)"))
     }
 
     private val SIMPLE_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*")
@@ -394,6 +422,8 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         if (e.str("m") == "const" && e.obj("c") != null) return constant(e)
         val to = e.int("to") ?: ty(e)
         val x = e.list("args").single()
+        // `(*T)(nil)`, `[]T(nil)`: the zero of the target type.
+        if (x.str("m") == "nil") return Ex.primary(tm.zero(to))
         val tu = types.under(to)
         val fu = types.under(ty(x))
         if (tu is InterfaceType) return tm.boxOf(ty(x))?.let { Ex.primary("$it(${lower(x).code})") } ?: lower(x)
@@ -587,8 +617,16 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
                 wrap(Ex.primary(call), ty(e))
             }
             "unsafe.String" -> {
-                // unsafe.String(&b[0], n) / (unsafe.SliceData(b), len(b)): a byte view → a copy.
-                refuse("unsafe")
+                // unsafe.String(&b[i], n) / (unsafe.SliceData(b), n): a byte view of b → a copy (byte strings).
+                val p = args[0].let { if (it.k == "ParenExpr") it.reqObj("x") else it }
+                val n = intIndex(args[1]).code
+                val (b, i) = when {
+                    p.k == "UnaryExpr" && p.str("op") == "&" && p.reqObj("x").k == "IndexExpr" && p.reqObj("x").str("ik") == "slice" ->
+                        raw(p.reqObj("x").reqObj("x")).code to intIndex(p.reqObj("x").reqObj("index")).code
+                    p.k == "CallExpr" && p.str("builtin") == "unsafe.SliceData" -> raw(p.list("args")[0]).code to "0"
+                    else -> refuse("unsafe")
+                }
+                Ex.primary("goBytesToString(${Ex(b, 0).at(PRIMARY)}.slice($i, $i + $n))")
             }
             else -> refuse("builtin", name)
         }

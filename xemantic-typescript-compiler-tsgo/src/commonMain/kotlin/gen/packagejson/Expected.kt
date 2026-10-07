@@ -111,6 +111,6 @@ fun <T> Expected<T>?.getValue(): Tuple2<T, Boolean> {
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.ExpectedOf d12fb475
 fun <T> expectedOf(goElem_T: GoElem<T>, value_1: T): Expected<T> {
-    TODO("goport: refused untyped-no-default: github.com/microsoft/typescript-go/internal/packagejson.ExpectedOf")
+    return Expected<T>(goElem_T = goElem_T, value = value_1, valid = true, actualJSONType = Expected<T>(goElem_T = goElem_T).expectedJSONType())
 }
 

@@ -54,7 +54,15 @@ class SyncMap<K, V>(
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Load 60b37e9f
 fun <K, V> SyncMap<K, V>?.load(key: K): Tuple2<V, Boolean> {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/collections.SyncMap.Load")
+    var value_1: V = this!!.goElem_V.zeroValue()
+    var ok: Boolean = false
+    val t0 = this!!.m.load(key)
+    val val_: Any? = t0.first
+    ok = t0.second
+    if (!ok || val_ == null) {
+        return Tuple2<V, Boolean>(value_1, ok)
+    }
+    return Tuple2<V, Boolean>(val_ as V, true)
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Store a3be0683
@@ -64,7 +72,15 @@ fun <K, V> SyncMap<K, V>?.store(key: K, value_1: V) {
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.LoadOrStore 6c1560b5
 fun <K, V> SyncMap<K, V>?.loadOrStore(key: K, value_1: V): Tuple2<V, Boolean> {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/collections.SyncMap.LoadOrStore")
+    var actual: V = this!!.goElem_V.zeroValue()
+    var loaded: Boolean = false
+    val t0 = this!!.m.loadOrStore(key, value_1)
+    val actualAny: Any? = t0.first
+    loaded = t0.second
+    if (actualAny == null) {
+        return Tuple2<V, Boolean>(actual, loaded)
+    }
+    return Tuple2<V, Boolean>(actualAny as V, loaded)
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Delete a615c4e6
@@ -79,26 +95,58 @@ fun <K, V> SyncMap<K, V>?.clear() {
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Range 3e5f6984
 fun <K, V> SyncMap<K, V>?.range(f: ((K, V) -> Boolean)?) {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/collections.SyncMap.Range")
+    this!!.m.range(fun(key: Any?, value_1: Any?): Boolean {
+        var k: K = this!!.goElem_K.zeroValue()
+        if (key != null) {
+            k = key as K
+        }
+        var v: V = this!!.goElem_V.zeroValue()
+        if (value_1 != null) {
+            v = value_1 as V
+        }
+        return f!!(k, v)
+    })
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Size 9a5306e1
 fun <K, V> SyncMap<K, V>?.size(): Int {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/collections.SyncMap.Size")
+    var count: Int = 0
+    this!!.m.range(fun(unused0: Any?, unused1: Any?): Boolean {
+        count++
+        return true
+    })
+    return count
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.ToMap ed86a365
 fun <K, V> SyncMap<K, V>?.toMap(): GoMap<K, V> {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/collections.SyncMap.ToMap")
+    val m: GoMap<K, V> = GoMap.make<K, V>(this!!.goElem_V, this.size())
+    this!!.m.range(fun(key: Any?, value_1: Any?): Boolean {
+        m[key as K] = value_1 as V
+        return true
+    })
+    return m
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Keys ef89b807
 fun <K, V> SyncMap<K, V>?.keys(): Seq<K>? {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/collections.SyncMap.Keys")
+    return fun(yield: ((K) -> Boolean)?) {
+        this!!.m.range(fun(key: Any?, value_1: Any?): Boolean {
+            if (!yield!!(key as K)) {
+                return false
+            }
+            return true
+        })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Clone d4109552
 fun <K, V> SyncMap<K, V>?.clone(): SyncMap<K, V>? {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/collections.SyncMap.Clone")
+    val clone: SyncMap<K, V>? = SyncMap<K, V>(goElem_K = this!!.goElem_K, goElem_V = this!!.goElem_V)
+    this!!.m.range(fun(key: Any?, value_1: Any?): Boolean {
+        clone!!.m.store(key, value_1)
+        return true
+    })
+    return clone
 }
 

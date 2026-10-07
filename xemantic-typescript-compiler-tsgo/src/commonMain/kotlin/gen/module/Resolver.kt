@@ -46,6 +46,8 @@ import com.xemantic.typescript.tsgo.core.TextRange
 import com.xemantic.typescript.tsgo.packagejson.TypeValidatedField
 import com.xemantic.typescript.tsgo.packagejson.VersionPaths
 import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.clone
+import com.xemantic.typescript.tsgo.collections.entries
 import com.xemantic.typescript.tsgo.collections.get
 import com.xemantic.typescript.tsgo.collections.getOrZero
 import com.xemantic.typescript.tsgo.collections.has
@@ -820,7 +822,171 @@ fun com.xemantic.typescript.tsgo.module.resolutionState?.loadModuleFromExportsOr
 
 // go: github.com/microsoft/typescript-go/internal/module.resolutionState.loadModuleFromTargetExportOrImport 11a6c262
 fun com.xemantic.typescript.tsgo.module.resolutionState?.loadModuleFromTargetExportOrImport(extensions: com.xemantic.typescript.tsgo.module.extensions, moduleName: String, scope: InfoCacheEntry?, isImports: Boolean, target: ExportsOrImports, subpath: String, isPattern: Boolean, key: String): com.xemantic.typescript.tsgo.module.resolved? {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/module.resolutionState.loadModuleFromTargetExportOrImport")
+    return withDefers({ null }) { df0 ->
+        when (target.jsonValue.type.value) {
+            2 -> {
+                val x2 = target.jsonValue.value
+                val t1 = if (x2 is String) Tuple2(x2 as String, true) else Tuple2("", false)
+                val targetString: String = t1.first
+                if (!isPattern && subpath.length > 0 && !com.xemantic.typescript.tsgo.go.strings.hasSuffix(targetString, "/")) {
+                    if (this!!.tracer != null) {
+                        this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.x_package_json_scope_0_has_invalid_type_for_target_of_specifier_1, GoSlice.of(GoElem.ref<Any?>(), scope!!.packageDirectory, moduleName))
+                    }
+                    return continueSearching()
+                }
+                if (!com.xemantic.typescript.tsgo.go.strings.hasPrefix(targetString, "./")) {
+                    if (isImports && !com.xemantic.typescript.tsgo.go.strings.hasPrefix(targetString, "../") && !com.xemantic.typescript.tsgo.go.strings.hasPrefix(targetString, "/") && !com.xemantic.typescript.tsgo.tspath.isRootedDiskPath(targetString)) {
+                        var combinedLookup: String = targetString + subpath
+                        if (isPattern) {
+                            combinedLookup = com.xemantic.typescript.tsgo.go.strings.replaceAll(targetString, "*", subpath)
+                        }
+                        val scopeContainingDirectory: String = com.xemantic.typescript.tsgo.tspath.ensureTrailingDirectorySeparator(scope!!.packageDirectory)
+                        if (this!!.tracer != null) {
+                            this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.using_0_subpath_1_with_target_2, GoSlice.of(GoElem.ref<Any?>(), "imports", key, combinedLookup))
+                            this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.resolving_module_0_from_1, GoSlice.of(GoElem.ref<Any?>(), combinedLookup, scopeContainingDirectory))
+                        }
+                        val t3 = this!!.name
+                        val t4 = this!!.containingDirectory
+                        val name: String = t3
+                        val containingDirectory: String = t4
+                        val t5 = combinedLookup
+                        val t6 = scopeContainingDirectory
+                        this!!.name = t5
+                        this!!.containingDirectory = t6
+                        df0.defer(fun() {
+                            val t7 = name
+                            val t8 = containingDirectory
+                            this!!.name = t7
+                            this!!.containingDirectory = t8
+                        })
+                        val result: ResolvedModule? = this.resolveNodeLike()
+                        if (result.isResolved()) {
+                            return com.xemantic.typescript.tsgo.module.resolved(path = result!!.resolvedFileName, extension = result!!.extension, packageId = result!!.packageId.goCopy(), originalPath = result!!.originalPath, resolvedUsingTsExtension = result!!.resolvedUsingTsExtension)
+                        }
+                        return continueSearching()
+                    }
+                    if (this!!.tracer != null) {
+                        this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.x_package_json_scope_0_has_invalid_type_for_target_of_specifier_1, GoSlice.of(GoElem.ref<Any?>(), scope!!.packageDirectory, moduleName))
+                    }
+                    return continueSearching()
+                }
+                var parts: GoSlice<String> = GoElem.STRING.nilSlice
+                if (com.xemantic.typescript.tsgo.tspath.pathIsRelative(targetString)) {
+                    parts = com.xemantic.typescript.tsgo.tspath.getPathComponents(targetString, "").slice(1)
+                } else {
+                    parts = com.xemantic.typescript.tsgo.tspath.getPathComponents(targetString, "")
+                }
+                val partsAfterFirst: GoSlice<String> = parts.slice(1)
+                if (com.xemantic.typescript.tsgo.go.slices.contains<String>(partsAfterFirst, "..") || com.xemantic.typescript.tsgo.go.slices.contains<String>(partsAfterFirst, ".") || com.xemantic.typescript.tsgo.go.slices.contains<String>(partsAfterFirst, "node_modules")) {
+                    if (this!!.tracer != null) {
+                        this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.x_package_json_scope_0_has_invalid_type_for_target_of_specifier_1, GoSlice.of(GoElem.ref<Any?>(), scope!!.packageDirectory, moduleName))
+                    }
+                    return continueSearching()
+                }
+                val resolvedTarget: String = com.xemantic.typescript.tsgo.tspath.combinePaths(scope!!.packageDirectory, GoSlice.of(GoElem.STRING, targetString))
+                val subpathParts: GoSlice<String> = com.xemantic.typescript.tsgo.tspath.getPathComponents(subpath, "")
+                if (com.xemantic.typescript.tsgo.go.slices.contains<String>(subpathParts, "..") || com.xemantic.typescript.tsgo.go.slices.contains<String>(subpathParts, ".") || com.xemantic.typescript.tsgo.go.slices.contains<String>(subpathParts, "node_modules")) {
+                    if (this!!.tracer != null) {
+                        this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.x_package_json_scope_0_has_invalid_type_for_target_of_specifier_1, GoSlice.of(GoElem.ref<Any?>(), scope!!.packageDirectory, moduleName))
+                    }
+                    return continueSearching()
+                }
+                if (this!!.tracer != null) {
+                    var messageTarget: String = ""
+                    if (isPattern) {
+                        messageTarget = com.xemantic.typescript.tsgo.go.strings.replaceAll(targetString, "*", subpath)
+                    } else {
+                        messageTarget = targetString + subpath
+                    }
+                    this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.using_0_subpath_1_with_target_2, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.core.ifElse<String>(GoElem.STRING, isImports, "imports", "exports"), key, messageTarget))
+                }
+                var finalPath: String = ""
+                if (isPattern) {
+                    finalPath = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(com.xemantic.typescript.tsgo.go.strings.replaceAll(resolvedTarget, "*", subpath), this!!.resolver!!.host!!.getCurrentDirectory())
+                } else {
+                    finalPath = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(resolvedTarget + subpath, this!!.resolver!!.host!!.getCurrentDirectory())
+                }
+                val inputLink: com.xemantic.typescript.tsgo.module.resolved? = this.tryLoadInputFileForPath(finalPath, subpath, com.xemantic.typescript.tsgo.tspath.combinePaths(scope!!.packageDirectory, GoSlice.of(GoElem.STRING, "package.json")), isImports)
+                if (!inputLink.shouldContinueSearching()) {
+                    inputLink!!.packageId = this.getPackageId(inputLink!!.path, scope)
+                    return inputLink
+                }
+                val result_1: com.xemantic.typescript.tsgo.module.resolved? = this.loadFileNameFromPackageJSONField(extensions, finalPath, targetString)
+                if (!result_1.shouldContinueSearching()) {
+                    result_1!!.packageId = this.getPackageId(result_1!!.path, scope)
+                    return result_1
+                }
+                return continueSearching()
+            }
+            6 -> {
+                if (this!!.tracer != null) {
+                    this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.entering_conditional_exports, GoElem.ref<Any?>().nilSlice)
+                }
+                var rfDone9 = false
+                var rfRet10: com.xemantic.typescript.tsgo.module.resolved? = null
+                target.asObject().keys()!!(fun(y11: String): Boolean {
+                                    val condition: String = y11
+                                    if (this.conditionMatches(condition)) {
+                                        if (this!!.tracer != null) {
+                                            this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.matched_0_condition_1, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.core.ifElse<String>(GoElem.STRING, isImports, "imports", "exports"), condition))
+                                        }
+                                        val t12 = target.asObject().get(condition)
+                                        val subTarget: ExportsOrImports = t12.first
+                                        val result_2: com.xemantic.typescript.tsgo.module.resolved? = this.loadModuleFromTargetExportOrImport(extensions, moduleName, scope, isImports, subTarget.goCopy(), subpath, isPattern, key)
+                                        if (!result_2.shouldContinueSearching()) {
+                                            if (result_2.isResolved() && this!!.tracer != null) {
+                                                this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.resolved_under_condition_0, GoSlice.of(GoElem.ref<Any?>(), condition))
+                                            }
+                                            if (this!!.tracer != null) {
+                                                this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.exiting_conditional_exports, GoElem.ref<Any?>().nilSlice)
+                                            }
+                                            rfRet10 = result_2
+                                            rfDone9 = true
+                                            return false
+                                        } else if (this!!.tracer != null) {
+                                            this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.failed_to_resolve_under_condition_0, GoSlice.of(GoElem.ref<Any?>(), condition))
+                                        }
+                                    } else {
+                                        if (this!!.tracer != null) {
+                                            this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.saw_non_matching_condition_0, GoSlice.of(GoElem.ref<Any?>(), condition))
+                                        }
+                                    }
+                                    return true
+                })
+                if (rfDone9) return rfRet10 as com.xemantic.typescript.tsgo.module.resolved?
+                if (this!!.tracer != null) {
+                    this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.exiting_conditional_exports, GoElem.ref<Any?>().nilSlice)
+                }
+                return continueSearching()
+            }
+            5 -> {
+                if (target.asArray().len == 0) {
+                    if (this!!.tracer != null) {
+                        this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.x_package_json_scope_0_has_invalid_type_for_target_of_specifier_1, GoSlice.of(GoElem.ref<Any?>(), scope!!.packageDirectory, moduleName))
+                    }
+                    return continueSearching()
+                }
+                val s13 = target.asArray()
+                l2@ for (i14 in 0 until s13.len) {
+                    val elem: ExportsOrImports = s13[i14].goCopy()
+                    val result_3: com.xemantic.typescript.tsgo.module.resolved? = this.loadModuleFromTargetExportOrImport(extensions, moduleName, scope, isImports, elem.goCopy(), subpath, isPattern, key)
+                    if (!result_3.shouldContinueSearching()) {
+                        return result_3
+                    }
+                }
+            }
+            1 -> {
+                if (this!!.tracer != null) {
+                    this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.x_package_json_scope_0_explicitly_maps_specifier_1_to_null, GoSlice.of(GoElem.ref<Any?>(), scope!!.packageDirectory, moduleName))
+                }
+                return unresolved()
+            }
+        }
+        if (this!!.tracer != null) {
+            this!!.tracer.write(com.xemantic.typescript.tsgo.diagnostics.x_package_json_scope_0_has_invalid_type_for_target_of_specifier_1, GoSlice.of(GoElem.ref<Any?>(), scope!!.packageDirectory, moduleName))
+        }
+        return continueSearching()
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/module.resolutionState.tryLoadInputFileForPath a968a6f9
@@ -1975,7 +2141,7 @@ fun extensionIsOk(extensions: com.xemantic.typescript.tsgo.module.extensions, ex
 
 // go: github.com/microsoft/typescript-go/internal/module.ResolveConfig eaa8d6bf
 fun resolveConfig(moduleName: String, containingFile: String, host: ResolutionHost?): ResolvedModule? {
-    val resolver: Resolver? = newResolver(host, CompilerOptions(moduleResolution = ModuleResolutionKind(99)), "", "")
+    val resolver: Resolver? = newResolver(host, CompilerOptions().also { o0 -> o0.moduleResolution = ModuleResolutionKind(99) }, "", "")
     return resolver.resolveConfig(moduleName, containingFile)
 }
 
@@ -2089,7 +2255,34 @@ fun ResolvedEntrypoint?.symlinkOrRealpath(): String {
 
 // go: github.com/microsoft/typescript-go/internal/module.Resolver.GetEntrypointsFromPackageJsonInfo d5dd31d8
 fun Resolver?.getEntrypointsFromPackageJsonInfo(packageJson: InfoCacheEntry?, packageName: String, enableDirectorySearch: Boolean): GoSlice<ResolvedEntrypoint?> {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/module.Resolver.GetEntrypointsFromPackageJsonInfo")
+    val extensions: com.xemantic.typescript.tsgo.module.extensions = com.xemantic.typescript.tsgo.module.extensions(5)
+    val features: NodeResolutionFeatures = NodeResolutionFeaturesAll
+    val state: com.xemantic.typescript.tsgo.module.resolutionState? = com.xemantic.typescript.tsgo.module.resolutionState(resolver = this, extensions = extensions, features = features, compilerOptions = this!!.compilerOptions)
+    if (packageJson.exists() && packageJson!!.contents!!.fields.pathFields.exports.jsonValue.isPresent()) {
+        val entrypoints: GoSlice<ResolvedEntrypoint?> = state.loadEntrypointsFromExportMap(packageJson, packageName, packageJson!!.contents!!.fields.pathFields.exports.goCopy())
+        return entrypoints
+    }
+    var result: GoSlice<ResolvedEntrypoint?> = GoElem.ref<ResolvedEntrypoint?>().nilSlice
+    val mainResolution: com.xemantic.typescript.tsgo.module.resolved? = state.loadNodeModuleFromDirectoryWorker(extensions, packageJson!!.packageDirectory, packageJson)
+    if (mainResolution.isResolved()) {
+        result = result.append1(this.createResolvedEntrypointHandlingSymlink(mainResolution!!.path, packageName, null, null, EndingFixed))
+    }
+    if (enableDirectorySearch) {
+        val otherFiles: GoSlice<String> = com.xemantic.typescript.tsgo.vfs.vfsmatch.readDirectory(this!!.host!!.fs(), this!!.host!!.getCurrentDirectory(), packageJson!!.packageDirectory, extensions.array(), GoSlice.of(GoElem.STRING, "node_modules"), GoSlice.of(GoElem.STRING, "**/*"), Int.MAX_VALUE)
+        val comparePathsOptions: ComparePathsOptions = ComparePathsOptions(useCaseSensitiveFileNames = this!!.host!!.fs()!!.useCaseSensitiveFileNames())
+        val s0 = otherFiles
+        l0@ for (i1 in 0 until s0.len) {
+            val file: String = s0[i1]
+            if (mainResolution.isResolved() && com.xemantic.typescript.tsgo.tspath.comparePaths(file, mainResolution!!.path, comparePathsOptions.goCopy()) == 0) {
+                continue@l0
+            }
+            result = result.append1(this.createResolvedEntrypointHandlingSymlink(file, com.xemantic.typescript.tsgo.tspath.resolvePath(packageName, GoSlice.of(GoElem.STRING, com.xemantic.typescript.tsgo.tspath.getRelativePathFromDirectory(packageJson!!.packageDirectory, file, comparePathsOptions.goCopy()))), null, null, EndingChangeable))
+        }
+    }
+    if (result.len > 0) {
+        return result
+    }
+    return GoElem.ref<ResolvedEntrypoint?>().nilSlice
 }
 
 // go: github.com/microsoft/typescript-go/internal/module.Resolver.createResolvedEntrypointHandlingSymlink c7ffb8d1
@@ -2106,7 +2299,110 @@ fun Resolver?.createResolvedEntrypointHandlingSymlink(fileName: String, moduleSp
 
 // go: github.com/microsoft/typescript-go/internal/module.resolutionState.loadEntrypointsFromExportMap bc181e13
 fun com.xemantic.typescript.tsgo.module.resolutionState?.loadEntrypointsFromExportMap(packageJson: InfoCacheEntry?, packageName: String, exports: ExportsOrImports): GoSlice<ResolvedEntrypoint?> {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/module.resolutionState.loadEntrypointsFromExportMap")
+    var loadEntrypointsFromTargetExports: ((String, com.xemantic.typescript.tsgo.collections.Set<String>?, com.xemantic.typescript.tsgo.collections.Set<String>?, ExportsOrImports) -> Unit)? = null
+    var entrypoints: GoSlice<ResolvedEntrypoint?> = GoElem.ref<ResolvedEntrypoint?>().nilSlice
+    loadEntrypointsFromTargetExports = fun(subpath: String, includeConditions: com.xemantic.typescript.tsgo.collections.Set<String>?, excludeConditions_0: com.xemantic.typescript.tsgo.collections.Set<String>?, exports_1: ExportsOrImports) {
+        var excludeConditions: com.xemantic.typescript.tsgo.collections.Set<String>? = excludeConditions_0
+        if (exports_1.jsonValue.type.value == 2 && com.xemantic.typescript.tsgo.go.strings.hasPrefix(exports_1.jsonValue.asString(), "./")) {
+            if (com.xemantic.typescript.tsgo.go.strings.containsRune(exports_1.jsonValue.asString(), 42)) {
+                if (com.xemantic.typescript.tsgo.go.strings.indexByte(exports_1.jsonValue.asString(), 42) != com.xemantic.typescript.tsgo.go.strings.lastIndexByte(exports_1.jsonValue.asString(), 42)) {
+                    return
+                }
+                val patternPath: String = com.xemantic.typescript.tsgo.tspath.resolvePath(packageJson!!.packageDirectory, GoSlice.of(GoElem.STRING, exports_1.jsonValue.asString()))
+                val t1 = com.xemantic.typescript.tsgo.go.strings.cut(patternPath, "*")
+                val leadingSlice: String = t1.first
+                val trailingSlice: String = t1.second
+                val caseSensitive: Boolean = this!!.resolver!!.host!!.fs()!!.useCaseSensitiveFileNames()
+                val files: GoSlice<String> = com.xemantic.typescript.tsgo.vfs.vfsmatch.readDirectory(this!!.resolver!!.host!!.fs(), this!!.resolver!!.host!!.getCurrentDirectory(), packageJson!!.packageDirectory, this!!.extensions.array(), GoElem.STRING.nilSlice, GoSlice.of(GoElem.STRING, com.xemantic.typescript.tsgo.tspath.changeFullExtension(com.xemantic.typescript.tsgo.go.strings.replace(exports_1.jsonValue.asString(), "*", "**/*", 1), ".*")), Int.MAX_VALUE)
+                val s2 = files
+                l0@ for (i3 in 0 until s2.len) {
+                    val file: String = s2[i3]
+                    val t4 = this.getMatchedStarForPatternEntrypoint(file, leadingSlice, trailingSlice, caseSensitive)
+                    val matchedStar: String = t4.first
+                    val ok: Boolean = t4.second
+                    if (!ok) {
+                        continue@l0
+                    }
+                    val moduleSpecifier: String = com.xemantic.typescript.tsgo.tspath.resolvePath(packageName, GoSlice.of(GoElem.STRING, com.xemantic.typescript.tsgo.go.strings.replace(subpath, "*", matchedStar, 1)))
+                    entrypoints = entrypoints.append1(this!!.resolver.createResolvedEntrypointHandlingSymlink(file, moduleSpecifier, includeConditions, excludeConditions, com.xemantic.typescript.tsgo.core.ifElse<Ending>(Ending.ELEM, com.xemantic.typescript.tsgo.go.strings.hasSuffix(exports_1.jsonValue.asString(), "*"), EndingExtensionChangeable, EndingFixed)))
+                }
+            } else {
+                val partsAfterFirst: GoSlice<String> = com.xemantic.typescript.tsgo.tspath.getPathComponents(exports_1.jsonValue.asString(), "").slice(2)
+                if (com.xemantic.typescript.tsgo.go.slices.contains<String>(partsAfterFirst, "..") || com.xemantic.typescript.tsgo.go.slices.contains<String>(partsAfterFirst, ".") || com.xemantic.typescript.tsgo.go.slices.contains<String>(partsAfterFirst, "node_modules")) {
+                    return
+                }
+                val resolvedTarget: String = com.xemantic.typescript.tsgo.tspath.resolvePath(packageJson!!.packageDirectory, GoSlice.of(GoElem.STRING, exports_1.jsonValue.asString()))
+                val result: com.xemantic.typescript.tsgo.module.resolved? = this.loadFileNameFromPackageJSONField(this!!.extensions, resolvedTarget, exports_1.jsonValue.asString())
+                if (result.isResolved()) {
+                    entrypoints = entrypoints.append1(this!!.resolver.createResolvedEntrypointHandlingSymlink(result!!.path, com.xemantic.typescript.tsgo.tspath.resolvePath(packageName, GoSlice.of(GoElem.STRING, subpath)), includeConditions, excludeConditions, com.xemantic.typescript.tsgo.core.ifElse<Ending>(Ending.ELEM, com.xemantic.typescript.tsgo.go.strings.hasSuffix(exports_1.jsonValue.asString(), "*"), EndingExtensionChangeable, EndingFixed)))
+                }
+            }
+        } else if (exports_1.jsonValue.type.value == 5) {
+            val s5 = exports_1.asArray()
+            l1@ for (i6 in 0 until s5.len) {
+                val element: ExportsOrImports = s5[i6].goCopy()
+                loadEntrypointsFromTargetExports!!(subpath, includeConditions, excludeConditions, element.goCopy())
+            }
+        } else if (exports_1.jsonValue.type.value == 6) {
+            var prevConditions: GoSlice<String> = GoElem.STRING.nilSlice
+            exports_1.asObject().entries()!!(fun(y7: String, y8: ExportsOrImports): Boolean {
+                            val condition: String = y7
+                            val export: ExportsOrImports = y8
+                            if (excludeConditions != null && excludeConditions.has(condition)) {
+                                return true
+                            }
+                            val conditionAlwaysMatches: Boolean = condition == "default" || condition == "types" || isApplicableVersionedTypesKey(condition)
+                            var newIncludeConditions: com.xemantic.typescript.tsgo.collections.Set<String>? = includeConditions
+                            if (!conditionAlwaysMatches) {
+                                newIncludeConditions = includeConditions.clone()
+                                excludeConditions = excludeConditions.clone()
+                                if (newIncludeConditions == null) {
+                                    newIncludeConditions = com.xemantic.typescript.tsgo.collections.Set<String>(goElem_T = GoElem.STRING)
+                                }
+                                newIncludeConditions.add(condition)
+                                val s9 = prevConditions
+                                l3@ for (i10 in 0 until s9.len) {
+                                    val prevCondition: String = s9[i10]
+                                    if (excludeConditions == null) {
+                                        excludeConditions = com.xemantic.typescript.tsgo.collections.Set<String>(goElem_T = GoElem.STRING)
+                                    }
+                                    excludeConditions.add(prevCondition)
+                                }
+                            }
+                            prevConditions = prevConditions.append1(condition)
+                            loadEntrypointsFromTargetExports!!(subpath, newIncludeConditions, excludeConditions, export.goCopy())
+                            if (conditionAlwaysMatches) {
+                                return false
+                            }
+                            return true
+            })
+        }
+    }
+    when (exports.jsonValue.type.value) {
+        5 -> {
+            val s11 = exports.asArray()
+            l5@ for (i12 in 0 until s11.len) {
+                val element_1: ExportsOrImports = s11[i12].goCopy()
+                loadEntrypointsFromTargetExports!!(".", null, null, element_1.goCopy())
+            }
+        }
+        6 -> {
+            if (exports.goCopy().isSubpaths()) {
+                exports.asObject().entries()!!(fun(y13: String, y14: ExportsOrImports): Boolean {
+                                    val subpath_1: String = y13
+                                    val export_1: ExportsOrImports = y14
+                                    loadEntrypointsFromTargetExports!!(subpath_1, null, null, export_1.goCopy())
+                                    return true
+                })
+            } else {
+                loadEntrypointsFromTargetExports!!(".", null, null, exports.goCopy())
+            }
+        }
+        else -> {
+            loadEntrypointsFromTargetExports!!(".", null, null, exports.goCopy())
+        }
+    }
+    return entrypoints
 }
 
 // go: github.com/microsoft/typescript-go/internal/module.resolutionState.getMatchedStarForPatternEntrypoint e2a227d0

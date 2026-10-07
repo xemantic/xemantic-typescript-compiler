@@ -264,6 +264,7 @@ import com.xemantic.typescript.tsgo.ast.typeParameters
 import com.xemantic.typescript.tsgo.binder.resolve
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.clear
+import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.len
@@ -1435,7 +1436,149 @@ fun Checker?.getTypeWithoutSignatures(t: Type?): Type? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkKindsOfPropertyMemberOverrides 4f6ad583
 fun Checker?.checkKindsOfPropertyMemberOverrides(t: Type?, baseType: Type?) {
-    TODO("goport: refused local-type: github.com/microsoft/typescript-go/internal/checker.Checker.checkKindsOfPropertyMemberOverrides")
+    var notImplementedInfo: GoMap<Node?, com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides> = GoMap.nil<Node?, com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides>(com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides.ELEM)
+    val s0 = this.getPropertiesOfTypeImpl(baseType)
+    l0@ for (i1 in 0 until s0.len) {
+        val baseProperty: Symbol? = s0[i1]
+        val base: Symbol? = this.getTargetSymbol(baseProperty)
+        if (base!!.flags.value and 4194304u != 0u) {
+            continue@l0
+        }
+        val baseSymbol: Symbol? = this.getPropertyOfObjectType(t, base!!.name)
+        if (baseSymbol == null) {
+            continue@l0
+        }
+        val derived: Symbol? = this.getTargetSymbol(baseSymbol)
+        val baseDeclarationFlags: ModifierFlags = getDeclarationModifierFlagsFromSymbolImpl(base)
+        if (derived === base) {
+            if (baseDeclarationFlags.value and 64u != 0u) {
+                val derivedClassDecl: Node? = com.xemantic.typescript.tsgo.ast.getClassLikeDeclarationOfSymbol(t!!.symbol)
+                if (derivedClassDecl == null || !com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(derivedClassDecl, ModifierFlags(64u))) {
+                    val s2 = this.getBaseTypesImpl(t)
+                    l1@ for (i3 in 0 until s2.len) {
+                        val otherBaseType: Type? = s2[i3]
+                        if (otherBaseType === baseType) {
+                            continue@l1
+                        }
+                        val baseSymbol_1: Symbol? = this.getPropertyOfObjectType(otherBaseType, base!!.name)
+                        if (baseSymbol_1 != null && base !== this.getTargetSymbol(baseSymbol_1)) {
+                            continue@l0
+                        }
+                    }
+                    val baseTypeName: String = this.typeToString(baseType)
+                    val typeName: String = this.typeToString(t)
+                    val missedProperties: GoSlice<String> = notImplementedInfo[derivedClassDecl].missedProperties.append1(this.symbolToStringImpl(baseProperty))
+                    if (notImplementedInfo.isNil) {
+                        notImplementedInfo = GoMap.make<Node?, com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides>(com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides.ELEM)
+                    }
+                    notImplementedInfo[derivedClassDecl] = com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides(baseTypeName = baseTypeName, typeName = typeName, missedProperties = missedProperties)
+                }
+            }
+        } else {
+            val derivedDeclarationFlags: ModifierFlags = getDeclarationModifierFlagsFromSymbolImpl(derived)
+            if (baseDeclarationFlags.value and 2u != 0u || derivedDeclarationFlags.value and 2u != 0u) {
+                continue@l0
+            }
+            var errorMessage: Message? = null
+            val basePropertyFlags: SymbolFlags = SymbolFlags(base!!.flags.value and 98308u)
+            val derivedPropertyFlags: SymbolFlags = SymbolFlags(derived!!.flags.value and 98308u)
+            if (basePropertyFlags.value != 0u && derivedPropertyFlags.value != 0u) {
+                if (base!!.checkFlags.value and 262144u != 0u || derived!!.valueDeclaration != null && com.xemantic.typescript.tsgo.ast.isBinaryExpression(derived!!.valueDeclaration) || this.arePropertiesAbstractOrInterface(base, baseDeclarationFlags)) {
+                    continue@l0
+                }
+                val overriddenInstanceProperty: Boolean = basePropertyFlags.value != 4u && derivedPropertyFlags.value == 4u
+                val overriddenInstanceAccessor: Boolean = basePropertyFlags.value == 4u && derivedPropertyFlags.value != 4u
+                if (overriddenInstanceProperty || overriddenInstanceAccessor) {
+                    val errorMessage_1: Message? = com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), overriddenInstanceProperty, com.xemantic.typescript.tsgo.diagnostics.x_0_is_defined_as_an_accessor_in_class_1_but_is_overridden_here_in_2_as_an_instance_property, com.xemantic.typescript.tsgo.diagnostics.x_0_is_defined_as_a_property_in_class_1_but_is_overridden_here_in_2_as_an_accessor)
+                    this.error(com.xemantic.typescript.tsgo.core.orElse<Node?>(GoElem.ref<Node?>(), com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(derived!!.valueDeclaration), derived!!.valueDeclaration), errorMessage_1, GoSlice.of(GoElem.ref<Any?>(), this.symbolToStringImpl(base), this.typeToString(baseType), this.typeToString(t)))
+                } else if (this!!.compilerOptions.getUseDefineForClassFields()) {
+                    val uninitialized: Node? = com.xemantic.typescript.tsgo.core.find<Node?>(GoElem.ref<Node?>(), derived!!.declarations, fun(d: Node?): Boolean {
+                        return com.xemantic.typescript.tsgo.ast.isPropertyDeclaration(d) && d.initializer() == null
+                    })
+                    if (uninitialized != null && derived!!.flags.value and 33554432u == 0u && baseDeclarationFlags.value and 64u == 0u && derivedDeclarationFlags.value and 64u == 0u && !com.xemantic.typescript.tsgo.core.some<Node?>(GoElem.ref<Node?>(), derived!!.declarations, fun(d_1: Node?): Boolean {
+                        return d_1!!.flags.value and 8388608u != 0u
+                    })) {
+                        val constructor: Node? = com.xemantic.typescript.tsgo.ast.findConstructorDeclaration(com.xemantic.typescript.tsgo.ast.getClassLikeDeclarationOfSymbol(t!!.symbol))
+                        val propName: Node? = uninitialized.name()
+                        if (isExclamationToken(uninitialized.postfixToken()) || constructor == null || !com.xemantic.typescript.tsgo.ast.isIdentifier(propName) || !this!!.strictNullChecks || !this.isPropertyInitializedInConstructor(propName, t, constructor)) {
+                            val errorMessage_2: Message? = com.xemantic.typescript.tsgo.diagnostics.property_0_will_overwrite_the_base_property_in_1_If_this_is_intentional_add_an_initializer_Otherwise_add_a_declare_modifier_or_remove_the_redundant_declaration
+                            this.error(com.xemantic.typescript.tsgo.core.orElse<Node?>(GoElem.ref<Node?>(), com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(derived!!.valueDeclaration), derived!!.valueDeclaration), errorMessage_2, GoSlice.of(GoElem.ref<Any?>(), this.symbolToStringImpl(base), this.typeToString(baseType)))
+                        }
+                    }
+                }
+                continue@l0
+            } else if (isPrototypeProperty(base)) {
+                if (isPrototypeProperty(derived) || derived!!.flags.value and 4u != 0u) {
+                    continue@l0
+                } else {
+                    errorMessage = com.xemantic.typescript.tsgo.diagnostics.class_0_defines_instance_member_function_1_but_extended_class_2_defines_it_as_instance_member_accessor
+                }
+            } else if (base!!.flags.value and 98304u != 0u) {
+                errorMessage = com.xemantic.typescript.tsgo.diagnostics.class_0_defines_instance_member_accessor_1_but_extended_class_2_defines_it_as_instance_member_function
+            } else {
+                errorMessage = com.xemantic.typescript.tsgo.diagnostics.class_0_defines_instance_member_property_1_but_extended_class_2_defines_it_as_instance_member_function
+            }
+            this.error(com.xemantic.typescript.tsgo.core.orElse<Node?>(GoElem.ref<Node?>(), com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(derived!!.valueDeclaration), derived!!.valueDeclaration), errorMessage, GoSlice.of(GoElem.ref<Any?>(), this.typeToString(baseType), this.symbolToStringImpl(base), this.typeToString(t)))
+        }
+    }
+    val m4 = notImplementedInfo
+    l2@ for (k5 in m4.keysSnapshot()) {
+        val e6 = m4.probe(k5)
+        if (e6 === GoMapAbsent) continue
+        val errorNode: Node? = k5
+        val memberInfo: com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides = goProbeValue<com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides>(e6) { com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides() }.goCopy()
+        when {
+            memberInfo.missedProperties.len == 1 -> {
+                val missedProperty: String = memberInfo.missedProperties[0]
+                if (com.xemantic.typescript.tsgo.ast.isClassExpression(errorNode)) {
+                    this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.non_abstract_class_expression_does_not_implement_inherited_abstract_member_0_from_class_1, GoSlice.of(GoElem.ref<Any?>(), missedProperty, memberInfo.baseTypeName))
+                } else {
+                    this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.non_abstract_class_0_does_not_implement_inherited_abstract_member_1_from_class_2, GoSlice.of(GoElem.ref<Any?>(), memberInfo.typeName, missedProperty, memberInfo.baseTypeName))
+                }
+            }
+            memberInfo.missedProperties.len > 5 -> {
+                val missedProperties_1: String = com.xemantic.typescript.tsgo.go.strings.join(com.xemantic.typescript.tsgo.core.map<String, String>(GoElem.STRING, GoElem.STRING, memberInfo.missedProperties.slice(0, 4), fun(prop: String): String {
+                    return "'" + prop + "'"
+                }), ", ")
+                val remainingMissedProperties: Int = memberInfo.missedProperties.len - 4
+                if (com.xemantic.typescript.tsgo.ast.isClassExpression(errorNode)) {
+                    this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.non_abstract_class_expression_is_missing_implementations_for_the_following_members_of_0_Colon_1_and_2_more, GoSlice.of(GoElem.ref<Any?>(), memberInfo.baseTypeName, missedProperties_1, remainingMissedProperties))
+                } else {
+                    this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.non_abstract_class_0_is_missing_implementations_for_the_following_members_of_1_Colon_2_and_3_more, GoSlice.of(GoElem.ref<Any?>(), memberInfo.typeName, memberInfo.baseTypeName, missedProperties_1, remainingMissedProperties))
+                }
+            }
+            else -> {
+                val missedProperties_2: String = com.xemantic.typescript.tsgo.go.strings.join(com.xemantic.typescript.tsgo.core.map<String, String>(GoElem.STRING, GoElem.STRING, memberInfo.missedProperties, fun(prop_1: String): String {
+                    return "'" + prop_1 + "'"
+                }), ", ")
+                if (com.xemantic.typescript.tsgo.ast.isClassExpression(errorNode)) {
+                    this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.non_abstract_class_expression_is_missing_implementations_for_the_following_members_of_0_Colon_1, GoSlice.of(GoElem.ref<Any?>(), memberInfo.baseTypeName, missedProperties_2))
+                } else {
+                    this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.non_abstract_class_0_is_missing_implementations_for_the_following_members_of_1_Colon_2, GoSlice.of(GoElem.ref<Any?>(), memberInfo.typeName, memberInfo.baseTypeName, missedProperties_2))
+                }
+            }
+        }
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides 
+class MemberInfo_Checker_checkKindsOfPropertyMemberOverrides(
+    @kotlin.jvm.JvmField var missedProperties: GoSlice<String> = GoElem.STRING.nilSlice,
+    @kotlin.jvm.JvmField var baseTypeName: String = "",
+    @kotlin.jvm.JvmField var typeName: String = "",
+) {
+
+    fun goCopy(): MemberInfo_Checker_checkKindsOfPropertyMemberOverrides = MemberInfo_Checker_checkKindsOfPropertyMemberOverrides(missedProperties = missedProperties, baseTypeName = baseTypeName, typeName = typeName)
+
+    fun goSet(o: MemberInfo_Checker_checkKindsOfPropertyMemberOverrides) {
+        missedProperties = o.missedProperties
+        baseTypeName = o.baseTypeName
+        typeName = o.typeName
+    }
+
+    companion object {
+        val ELEM: GoElem<MemberInfo_Checker_checkKindsOfPropertyMemberOverrides> = GoElem({ MemberInfo_Checker_checkKindsOfPropertyMemberOverrides() }, { it.goCopy() })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.arePropertiesAbstractOrInterface 5c9dfca9

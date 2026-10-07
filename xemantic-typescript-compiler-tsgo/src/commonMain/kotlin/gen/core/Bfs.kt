@@ -27,8 +27,11 @@ import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.sync.atomic.Int64
 import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.collections.SyncSet
+import com.xemantic.typescript.tsgo.go.sync.WaitGroup
 import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
+import com.xemantic.typescript.tsgo.collections.size
+import com.xemantic.typescript.tsgo.collections.values
 
 // go: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchResult 39e8419d
 class BreadthFirstSearchResult<N>(
@@ -110,7 +113,16 @@ fun <K, N> BreadthFirstSearchLevel<K, N>?.delete(key: K) {
 
 // go: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchLevel.Range 2b805bc1
 fun <K, N> BreadthFirstSearchLevel<K, N>?.range(f: ((N) -> Boolean)?) {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchLevel.Range")
+    var rfDone0 = false
+    this!!.jobs.values()!!(fun(y2: com.xemantic.typescript.tsgo.core.breadthFirstSearchJob<N>?): Boolean {
+            val job: com.xemantic.typescript.tsgo.core.breadthFirstSearchJob<N>? = y2
+            if (!f!!(job!!.node)) {
+                rfDone0 = true
+                return false
+            }
+            return true
+    })
+    if (rfDone0) return
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchOptions 084fffc8
@@ -144,7 +156,7 @@ fun <N> breadthFirstSearchParallel(goElem_N: GoElem<N>, start: N, neighbors: ((N
 
 // go: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchParallelEx a0aa22b8
 fun <K, N> breadthFirstSearchParallelEx(goElem_K: GoElem<K>, goElem_N: GoElem<N>, start: N, neighbors: ((N) -> GoSlice<N>)?, visit: ((N) -> Tuple2<Boolean, Boolean>)?, options: BreadthFirstSearchOptions<K, N>, getKey: ((N) -> K)?): BreadthFirstSearchResult<N> {
-    TODO("goport: refused local-type: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchParallelEx")
+    TODO("goport: refused go: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchParallelEx")
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.updateMin 26dc71a9

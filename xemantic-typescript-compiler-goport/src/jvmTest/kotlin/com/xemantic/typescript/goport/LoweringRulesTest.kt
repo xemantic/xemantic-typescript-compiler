@@ -83,12 +83,18 @@ class LoweringRulesTest {
     @Test
     fun `a constant out of the 32-bit int range is refused, not wrapped`() {
         val refused = try {
-            Literals.raw(c("int", "9223372036854775807"), TypeMapper.Rep.INT)
+            Literals.raw(c("int", "9223372036854775806"), TypeMapper.Rep.INT)
             false
         } catch (_: com.xemantic.typescript.goport.lower.Refusal) {
             true
         }
         assert(refused)
+    }
+
+    @Test
+    fun `math MaxInt and MinInt as an int sentinel become the 32-bit bounds`() {
+        assert(Literals.raw(c("int", "9223372036854775807"), TypeMapper.Rep.INT).code == "Int.MAX_VALUE")
+        assert(Literals.raw(c("int", "-9223372036854775808"), TypeMapper.Rep.INT).code == "Int.MIN_VALUE")
     }
 
     // ---- substring elimination (docs/goport-lowering.md § 3) — a census over the checked-in gen/

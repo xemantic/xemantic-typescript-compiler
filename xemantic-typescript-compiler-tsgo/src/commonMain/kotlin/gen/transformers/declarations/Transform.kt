@@ -500,7 +500,62 @@ fun DeclarationTransformer?.shouldStripInternal(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.isInternalDeclaration dbbc58ad
 fun DeclarationTransformer?.isInternalDeclaration(node: Node?, sourceFile: SourceFile?): Boolean {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.isInternalDeclaration")
+    if (node == null) {
+        return false
+    }
+    val parseTreeNode: Node? = this!!.transformer.emitContext().mostOriginal(node)
+    if (!com.xemantic.typescript.tsgo.ast.isParseTreeNode(parseTreeNode)) {
+        return false
+    }
+    if (parseTreeNode!!.kind.value == 170) {
+        val params: GoSlice<Node?> = parseTreeNode!!.parent.parameters()
+        val paramIdx: Int = com.xemantic.typescript.tsgo.go.slices.indexFunc<Node?>(params, fun(p: Node?): Boolean {
+            return p.asNode() === parseTreeNode
+        })
+        var previousSibling: Node? = null
+        if (paramIdx > 0) {
+            previousSibling = params[paramIdx - 1].asNode()
+        }
+        val text: String = sourceFile!!.text()
+        var commentRanges: GoSlice<CommentRange> = CommentRange.ELEM.nilSlice
+        if (previousSibling != null) {
+            val trailingPos: Int = com.xemantic.typescript.tsgo.scanner.skipTriviaEx(text, previousSibling!!.end() + 1, SkipTriviaOptions(stopAtComments = true))
+            com.xemantic.typescript.tsgo.scanner.getTrailingCommentRanges(this!!.transformer.factory()!!.nodeFactory.asNodeFactory(), text, trailingPos)!!(fun(y0: CommentRange): Boolean {
+                            val comment: CommentRange = y0
+                            commentRanges = commentRanges.append1(comment.goCopy())
+                            return true
+            })
+            com.xemantic.typescript.tsgo.scanner.getLeadingCommentRanges(this!!.transformer.factory()!!.nodeFactory.asNodeFactory(), text, node!!.pos())!!(fun(y1: CommentRange): Boolean {
+                            val comment_1: CommentRange = y1
+                            commentRanges = commentRanges.append1(comment_1.goCopy())
+                            return true
+            })
+        } else {
+            val trailingPos_1: Int = com.xemantic.typescript.tsgo.scanner.skipTriviaEx(text, node!!.pos(), SkipTriviaOptions(stopAtComments = true))
+            com.xemantic.typescript.tsgo.scanner.getTrailingCommentRanges(this!!.transformer.factory()!!.nodeFactory.asNodeFactory(), text, trailingPos_1)!!(fun(y2: CommentRange): Boolean {
+                            val comment_2: CommentRange = y2
+                            commentRanges = commentRanges.append1(comment_2.goCopy())
+                            return true
+            })
+        }
+        if (commentRanges.len > 0) {
+            return hasInternalAnnotation(commentRanges[commentRanges.len - 1].goCopy(), sourceFile)
+        }
+        return false
+    }
+    var rfDone3 = false
+    var rfRet4: Boolean? = null
+    this.getLeadingCommentRangesOfNode(parseTreeNode, sourceFile)!!(fun(y5: CommentRange): Boolean {
+            val commentRange: CommentRange = y5
+            if (hasInternalAnnotation(commentRange.goCopy(), sourceFile)) {
+                rfRet4 = true
+                rfDone3 = true
+                return false
+            }
+            return true
+    })
+    if (rfDone3) return rfRet4 as Boolean
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.getLeadingCommentRangesOfNode cbe01653

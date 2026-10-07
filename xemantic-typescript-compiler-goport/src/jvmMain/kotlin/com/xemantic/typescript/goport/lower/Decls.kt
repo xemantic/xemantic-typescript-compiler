@@ -133,9 +133,11 @@ class PackageEmitter(
                         // A method lives in its type's class — unless nil-safe (an extension on T?).
                         val q = d.str("qname")!!
                         if (q in prog.extensionMethods) items += Item(d.reqInt("lines"), funcDecl(d, fc, extension = true), false)
+                        hoistLocalTypes(d, fc, items)
                         continue
                     }
                     items += Item(d.reqInt("lines"), funcDecl(d, fc, extension = false), false)
+                    hoistLocalTypes(d, fc, items)
                 }
                 "GenDecl" -> when (d.str("tok")) {
                     "import" -> {}
@@ -157,6 +159,14 @@ class PackageEmitter(
         // Kotlin initializes a file's properties in textual order and rejects a forward
         // reference; Go initializes package variables in dependency order (the IR's initOrder).
         return items.filter { !it.isVar } + items.filter { it.isVar }.sortedBy { it.initOrder }
+    }
+
+    /** The function-local types of [d], as top-level declarations (Program.localTypeQnames). */
+    private fun hoistLocalTypes(d: Node, fc: FileCtx, items: MutableList<Item>) {
+        for ((sq, spec) in prog.localTypeSpecs[d.str("qname")] ?: return) {
+            val synth = kotlinx.serialization.json.JsonObject(spec + ("qname" to kotlinx.serialization.json.JsonPrimitive(sq)))
+            items += Item(1, typeSpec(synth, fc), false)
+        }
     }
 
     private fun lines(s: Node, d: Node): Int {
@@ -581,19 +591,33 @@ class PackageEmitter(
         val (supers, overrideNames) = supertypes(named, tm, mset.keys)
         val w = CodeWriter()
         w.line(traceLine(qname, s.str("hash")))
+        // A struct with more fields than a JVM constructor takes arguments (255 slots: `checker.Checker`)
+        // keeps its fields in the body; composite literals then assign them (Program.bigStruct).
+        val big = prog.bigStruct(st)
         w.line("class $name$tpDecl(")
         w.indent {
             for (tp in dict) w.line("@kotlin.jvm.JvmField val goElem_$tp: GoElem<${Naming.escape(tp)}>,")
-            st.fields.forEachIndexed { i, f ->
+            if (!big) st.fields.forEachIndexed { i, f ->
                 // @JvmField: no accessors (a Go `SetText` method would clash with `text`'s setter), and direct field access.
                 w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${tm.kt(f.t)} = ${tm.zero(f.t)},")
             }
         }
         w.line(")${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
         w.indent {
+            if (big) st.fields.forEachIndexed { i, f ->
+                w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${tm.kt(f.t)} = ${tm.zero(f.t)}")
+            }
             w.line()
-            val copyArgs = dict.map { "goElem_$it = goElem_$it" } + st.fields.indices.map { "${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm)}" }
-            w.line("fun goCopy(): $self = $name(${copyArgs.joinToString(", ")})")
+            if (big) {
+                w.block("fun goCopy(): $self") {
+                    w.line("val goOut = $name(${dict.joinToString(", ") { "goElem_$it = goElem_$it" }})")
+                    st.fields.indices.forEach { w.line("goOut.${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm)}") }
+                    w.line("return goOut")
+                }
+            } else {
+                val copyArgs = dict.map { "goElem_$it = goElem_$it" } + st.fields.indices.map { "${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm)}" }
+                w.line("fun goCopy(): $self = $name(${copyArgs.joinToString(", ")})")
+            }
             w.line()
             w.block("fun goSet(o: $self)") {
                 st.fields.forEachIndexed { i, f -> w.line("${fieldNames[i]} = ${copyField("o." + fieldNames[i], f.t, tm)}") }
@@ -857,6 +881,21 @@ class PackageEmitter(
         try {
             pinned[qn.first()]?.let { refuse("pinned:$it") }
             if (values.size == 1 && names.size > 1) refuse("var-tuple-init")
+            val embed = (s["embed"] as? kotlinx.serialization.json.JsonArray)?.map { (it as kotlinx.serialization.json.JsonPrimitive).content } ?: emptyList()
+            if (embed.isNotEmpty()) {
+                // `//go:embed file` on a string variable: its content, generated as Kotlin (docs/goport-lowering.md § 3).
+                val pat = embed.singleOrNull() ?: refuse("embed-multi")
+                if (names.size != 1 || values.isNotEmpty() || pat.any { it in "*?[" }) refuse("embed-shape")
+                val t = pc.obj(names[0].reqInt("obj")).reqInt("t")
+                if (!types.isString(t)) refuse("embed-non-string", types[t].key)
+                val name = prog.varName(qn[0], names[0].str("name")!!)
+                val fnName = "goEmbed_" + name.trim('`')
+                prog.embeds.getOrPut(pc.pkg.path) { ArrayList() } += fnName to pat
+                w.line(traceLine(qn[0], s.str("hash")))
+                w.line("@kotlin.jvm.JvmField val $name: String = $fnName()")
+                report.lowered(pc.pkg, qn.first(), s.int("lines") ?: 1)
+                return w.toString()
+            }
             names.forEachIndexed { i, n ->
                 val goName = n.str("name")!!
                 val o = pc.obj(n.reqInt("obj"))

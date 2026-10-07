@@ -308,7 +308,49 @@ class EmitResolver(
 
     // go: github.com/microsoft/typescript-go/internal/checker.EmitResolver.IsImportRequiredByAugmentation 3c54020c
     override fun isImportRequiredByAugmentation(decl: ImportDeclaration?): Boolean {
-        TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/checker.EmitResolver.IsImportRequiredByAugmentation")
+        return withDefers({ false }) { df0 ->
+            if (!com.xemantic.typescript.tsgo.ast.isParseTreeNode(decl!!.statementBase.nodeBase.nodeDefault.asNode())) {
+                return false
+            }
+            val file: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(decl!!.statementBase.nodeBase.nodeDefault.asNode())
+            if (file!!.declarationBase.symbol == null) {
+                return false
+            }
+            val importTarget: SourceFile? = this.getExternalModuleFileFromDeclaration(decl!!.statementBase.nodeBase.nodeDefault.asNode())
+            if (importTarget == null) {
+                return false
+            }
+            if (importTarget === file) {
+                return false
+            }
+            this.checkerMu!!.lock()
+            val dr1 = this.checkerMu!!
+            df0.defer { dr1.unlock() }
+            val exports: SymbolTable = this.checker.getExportsOfModuleImpl(file!!.declarationBase.symbol)
+            var rfDone2 = false
+            var rfRet3: Boolean? = null
+            com.xemantic.typescript.tsgo.go.maps.values<String, Symbol?>(exports)!!(fun(y4: Symbol?): Boolean {
+                        val s: Symbol? = y4
+                        val merged: Symbol? = this.checker.getMergedSymbolImpl(s)
+                        if (merged !== s) {
+                            if (merged!!.declarations.len > 0) {
+                                val s5 = merged!!.declarations
+                                l1@ for (i6 in 0 until s5.len) {
+                                    val d: Node? = s5[i6]
+                                    val declFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(d)
+                                    if (declFile === importTarget) {
+                                        rfRet3 = true
+                                        rfDone2 = true
+                                        return false
+                                    }
+                                }
+                            }
+                        }
+                        return true
+            })
+            if (rfDone2) return rfRet3 as Boolean
+            return false
+        }
     }
 
     // go: github.com/microsoft/typescript-go/internal/checker.EmitResolver.IsDefinitelyReferenceToGlobalSymbolObject 91010fc2

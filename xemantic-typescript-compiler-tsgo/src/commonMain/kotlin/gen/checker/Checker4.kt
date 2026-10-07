@@ -264,6 +264,7 @@ import com.xemantic.typescript.tsgo.ast.typeParameters
 import com.xemantic.typescript.tsgo.binder.resolve
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.clear
+import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.len
@@ -354,7 +355,129 @@ fun Checker?.addImplementationSuccessElaboration(s: CallState?, failed: Signatur
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getArgumentArityError 60715a13
 fun Checker?.getArgumentArityError(node: Node?, signatures: GoSlice<Signature?>, args: GoSlice<Node?>, headMessage: Message?): Diagnostic? {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/checker.Checker.getArgumentArityError")
+    val spreadIndex: Int = this.getSpreadArgumentIndex(args)
+    if (spreadIndex > -1) {
+        return newDiagnosticForNode(args[spreadIndex], com.xemantic.typescript.tsgo.diagnostics.a_spread_argument_must_either_have_a_tuple_type_or_be_passed_to_a_rest_parameter, GoElem.ref<Any?>().nilSlice)
+    }
+    var minCount: Int = Int.MAX_VALUE
+    var maxCount: Int = Int.MIN_VALUE
+    var maxBelow: Int = Int.MIN_VALUE
+    var minAbove: Int = Int.MAX_VALUE
+    var closestSignature: Signature? = null
+    val s0 = signatures
+    l0@ for (i1 in 0 until s0.len) {
+        val sig: Signature? = s0[i1]
+        val minParameter: Int = this.getMinArgumentCount(sig)
+        val maxParameter: Int = this.getParameterCount(sig)
+        if (minParameter < minCount) {
+            minCount = minParameter
+            closestSignature = sig
+        }
+        maxCount = maxOf(maxCount, maxParameter)
+        if (minParameter < args.len && minParameter > maxBelow) {
+            maxBelow = minParameter
+        }
+        if (args.len < maxParameter && maxParameter < minAbove) {
+            minAbove = maxParameter
+        }
+    }
+    val hasRestParameter_1: Boolean = com.xemantic.typescript.tsgo.core.some<Signature?>(GoElem.ref<Signature?>(), signatures, (run { val r2 = this; fun(p0: Signature?): Boolean = r2.hasEffectiveRestParameterImpl(p0) })!!)
+    var parameterRange: String = ""
+    when {
+        hasRestParameter_1 -> {
+            parameterRange = com.xemantic.typescript.tsgo.go.strconv.itoa(minCount)
+        }
+        minCount < maxCount -> {
+            parameterRange = com.xemantic.typescript.tsgo.go.strconv.itoa(minCount) + "-" + com.xemantic.typescript.tsgo.go.strconv.itoa(maxCount)
+        }
+        else -> {
+            parameterRange = com.xemantic.typescript.tsgo.go.strconv.itoa(minCount)
+        }
+    }
+    val isVoidPromiseError: Boolean = !hasRestParameter_1 && parameterRange == "1" && args.len == 0 && this.isPromiseResolveArityError(node)
+    val errorNode: Node? = getErrorNodeForCallNode(node)
+    if (isVoidPromiseError && com.xemantic.typescript.tsgo.ast.isInJSFile(node)) {
+        return newDiagnosticForNode(errorNode, com.xemantic.typescript.tsgo.diagnostics.expected_1_argument_but_got_0_new_Promise_needs_a_JSDoc_hint_to_produce_a_resolve_that_can_be_called_without_arguments, GoElem.ref<Any?>().nilSlice)
+    }
+    var message: Message? = null
+    when {
+        com.xemantic.typescript.tsgo.ast.isDecorator(node) -> {
+            if (hasRestParameter_1) {
+                message = com.xemantic.typescript.tsgo.diagnostics.the_runtime_will_invoke_the_decorator_with_1_arguments_but_the_decorator_expects_at_least_0
+            } else {
+                message = com.xemantic.typescript.tsgo.diagnostics.the_runtime_will_invoke_the_decorator_with_1_arguments_but_the_decorator_expects_0
+            }
+        }
+        hasRestParameter_1 -> {
+            message = com.xemantic.typescript.tsgo.diagnostics.expected_at_least_0_arguments_but_got_1
+        }
+        isVoidPromiseError -> {
+            message = com.xemantic.typescript.tsgo.diagnostics.expected_0_arguments_but_got_1_Did_you_forget_to_include_void_in_your_type_argument_to_Promise
+        }
+        else -> {
+            message = com.xemantic.typescript.tsgo.diagnostics.expected_0_arguments_but_got_1
+        }
+    }
+    when {
+        minCount < args.len && args.len < maxCount -> {
+            var diagnostic: Diagnostic? = newDiagnosticForNode(errorNode, com.xemantic.typescript.tsgo.diagnostics.no_overload_expects_0_arguments_but_overloads_do_exist_that_expect_either_1_or_2_arguments, GoSlice.of(GoElem.ref<Any?>(), args.len, maxBelow, minAbove))
+            if (headMessage != null) {
+                diagnostic = com.xemantic.typescript.tsgo.ast.newDiagnosticChain(diagnostic, headMessage, GoElem.ref<Any?>().nilSlice)
+            }
+            return diagnostic
+        }
+        args.len < minCount -> {
+            var diagnostic_1: Diagnostic? = newDiagnosticForNode(errorNode, message, GoSlice.of(GoElem.ref<Any?>(), parameterRange, args.len))
+            if (headMessage != null) {
+                diagnostic_1 = com.xemantic.typescript.tsgo.ast.newDiagnosticChain(diagnostic_1, headMessage, GoElem.ref<Any?>().nilSlice)
+            }
+            var parameter: Node? = null
+            if (closestSignature != null && closestSignature!!.declaration != null) {
+                parameter = com.xemantic.typescript.tsgo.core.elementOrNil<Node?>(GoElem.ref<Node?>(), closestSignature!!.declaration.parameters(), args.len + com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, closestSignature!!.thisParameter != null, 1, 0))
+            }
+            if (parameter != null) {
+                var related: Diagnostic? = null
+                when {
+                    com.xemantic.typescript.tsgo.ast.isBindingPattern(parameter.name()) -> {
+                        related = newDiagnosticForNode(parameter, com.xemantic.typescript.tsgo.diagnostics.an_argument_matching_this_binding_pattern_was_not_provided, GoElem.ref<Any?>().nilSlice)
+                    }
+                    isRestParameter(parameter) -> {
+                        related = newDiagnosticForNode(parameter, com.xemantic.typescript.tsgo.diagnostics.arguments_for_the_rest_parameter_0_were_not_provided, GoSlice.of(GoElem.ref<Any?>(), parameter.name().text()))
+                    }
+                    else -> {
+                        related = newDiagnosticForNode(parameter, com.xemantic.typescript.tsgo.diagnostics.an_argument_for_0_was_not_provided, GoSlice.of(GoElem.ref<Any?>(), parameter.name().text()))
+                    }
+                }
+                diagnostic_1.addRelatedInfo(related)
+            }
+            return diagnostic_1
+        }
+        else -> {
+            if (maxCount >= args.len) {
+                var diagnostic_2: Diagnostic? = newDiagnosticForNode(errorNode, message, GoSlice.of(GoElem.ref<Any?>(), parameterRange, args.len))
+                if (headMessage != null) {
+                    diagnostic_2 = com.xemantic.typescript.tsgo.ast.newDiagnosticChain(diagnostic_2, headMessage, GoElem.ref<Any?>().nilSlice)
+                }
+                return diagnostic_2
+            }
+            val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
+            var pos: Int = args[maxCount]!!.pos()
+            var end: Int = args[args.len - 1]!!.end()
+            if (end == pos) {
+                end++
+            }
+            pos = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile!!.text(), pos)
+            if (end < pos) {
+                end = pos
+            }
+            var diagnostic_3: Diagnostic? = com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, com.xemantic.typescript.tsgo.core.newTextRange(pos, end), message, GoSlice.of(GoElem.ref<Any?>(), parameterRange, args.len))
+            if (headMessage != null) {
+                diagnostic_3 = com.xemantic.typescript.tsgo.ast.newDiagnosticChain(diagnostic_3, headMessage, GoElem.ref<Any?>().nilSlice)
+            }
+            return diagnostic_3
+        }
+    }
+    goUnreachable()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.isPromiseResolveArityError 894542c9
@@ -392,7 +515,44 @@ fun getErrorNodeForCallNode(node_0: Node?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getTypeArgumentArityError aeb9e8e8
 fun Checker?.getTypeArgumentArityError(node: Node?, signatures: GoSlice<Signature?>, typeArguments: GoSlice<Node?>, headMessage: Message?): Diagnostic? {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/checker.Checker.getTypeArgumentArityError")
+    var diagnostic: Diagnostic? = null
+    val argCount: Int = typeArguments.len
+    val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
+    val typeArgumentList: NodeList? = node.typeArgumentList()
+    val loc: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile!!.text(), typeArgumentList!!.loc.pos()), typeArgumentList!!.loc.end())
+    if (signatures.len == 1) {
+        val sig: Signature? = signatures[0]
+        val minCount: Int = this.getMinTypeArgumentCountImpl(sig!!.typeParameters)
+        val maxCount: Int = sig!!.typeParameters.len
+        var expected: String = com.xemantic.typescript.tsgo.go.strconv.itoa(minCount)
+        if (minCount < maxCount) {
+            expected = expected + "-" + com.xemantic.typescript.tsgo.go.strconv.itoa(maxCount)
+        }
+        diagnostic = com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.expected_0_type_arguments_but_got_1, GoSlice.of(GoElem.ref<Any?>(), expected, argCount))
+    } else {
+        var belowArgCount: Int = Int.MIN_VALUE
+        var aboveArgCount: Int = Int.MAX_VALUE
+        val s0 = signatures
+        l0@ for (i1 in 0 until s0.len) {
+            val sig_1: Signature? = s0[i1]
+            val minCount_1: Int = this.getMinTypeArgumentCountImpl(sig_1!!.typeParameters)
+            val maxCount_1: Int = sig_1!!.typeParameters.len
+            if (minCount_1 > argCount) {
+                aboveArgCount = minOf(aboveArgCount, minCount_1)
+            } else if (maxCount_1 < argCount) {
+                belowArgCount = maxOf(belowArgCount, maxCount_1)
+            }
+        }
+        if (belowArgCount != Int.MIN_VALUE && aboveArgCount != Int.MAX_VALUE) {
+            diagnostic = com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.no_overload_expects_0_type_arguments_but_overloads_do_exist_that_expect_either_1_or_2_type_arguments, GoSlice.of(GoElem.ref<Any?>(), argCount, belowArgCount, aboveArgCount))
+        } else {
+            diagnostic = com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.expected_0_type_arguments_but_got_1, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, belowArgCount == Int.MIN_VALUE, aboveArgCount, belowArgCount), argCount))
+        }
+    }
+    if (headMessage != null) {
+        diagnostic = com.xemantic.typescript.tsgo.ast.newDiagnosticChain(diagnostic, headMessage, GoElem.ref<Any?>().nilSlice)
+    }
+    return diagnostic
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.reportCannotInvokePossiblyNullOrUndefinedError 017cd2ed

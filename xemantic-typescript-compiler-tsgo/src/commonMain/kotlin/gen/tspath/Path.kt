@@ -594,7 +594,41 @@ fun getCanonicalFileName(fileName: String, useCaseSensitiveFileNames: Boolean): 
 
 // go: github.com/microsoft/typescript-go/internal/tspath.ToFileNameLowerCase 834480b5
 fun toFileNameLowerCase(fileName: String): String {
-    TODO("goport: refused unsafe: github.com/microsoft/typescript-go/internal/tspath.ToFileNameLowerCase")
+    var ascii: Boolean = true
+    var needsLower: Boolean = false
+    val fileNameLen: Int = fileName.length
+    l0@ for (i0 in 0 until fileNameLen) {
+        val i: Int = i0
+        val c: Int = fileName[i].code
+        if (c >= 128) {
+            ascii = false
+            break@l0
+        }
+        if (65 <= c && c <= 90) {
+            needsLower = true
+        }
+    }
+    if (ascii) {
+        if (!needsLower) {
+            return fileName
+        }
+        val b: GoSlice<Int> = GoSlice.make(GoElem.INT, fileNameLen)
+        l1@ for (i1 in 0 until fileNameLen) {
+            val i_1: Int = i1
+            var c_1: Int = fileName[i_1].code
+            if (65 <= c_1 && c_1 <= 90) {
+                c_1 = goUint8(c_1 + 32)
+            }
+            b[i_1] = c_1
+        }
+        return goBytesToString((b).slice(0, 0 + b.len))
+    }
+    return com.xemantic.typescript.tsgo.go.strings.map(fun(r: Int): Int {
+        if (r == 304) {
+            return r
+        }
+        return com.xemantic.typescript.tsgo.go.unicode.toLower(r)
+    }, fileName)
 }
 
 // go: github.com/microsoft/typescript-go/internal/tspath.ToPath d24d7554

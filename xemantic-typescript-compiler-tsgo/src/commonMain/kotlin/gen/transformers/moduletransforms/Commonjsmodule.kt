@@ -176,6 +176,7 @@ import com.xemantic.typescript.tsgo.ast.updatePostfixUnaryExpression
 import com.xemantic.typescript.tsgo.ast.updatePrefixUnaryExpression
 import com.xemantic.typescript.tsgo.ast.updatePropertyAssignment
 import com.xemantic.typescript.tsgo.ast.updateShorthandPropertyAssignment
+import com.xemantic.typescript.tsgo.ast.updateSourceFile
 import com.xemantic.typescript.tsgo.ast.updateSpreadAssignment
 import com.xemantic.typescript.tsgo.ast.updateSpreadElement
 import com.xemantic.typescript.tsgo.ast.updateSwitchStatement
@@ -195,11 +196,14 @@ import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.get
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.len
+import com.xemantic.typescript.tsgo.collections.values
 import com.xemantic.typescript.tsgo.core.getEmitModuleKind
 import com.xemantic.typescript.tsgo.core.getEmitScriptTarget
 import com.xemantic.typescript.tsgo.printer.addEmitFlags
+import com.xemantic.typescript.tsgo.printer.addEmitHelper
 import com.xemantic.typescript.tsgo.printer.addVariableDeclaration
 import com.xemantic.typescript.tsgo.printer.assignCommentAndSourceMapRanges
+import com.xemantic.typescript.tsgo.printer.endAndMergeVariableEnvironment
 import com.xemantic.typescript.tsgo.printer.getAutoGenerateInfo
 import com.xemantic.typescript.tsgo.printer.getDeclarationName
 import com.xemantic.typescript.tsgo.printer.getExportName
@@ -218,6 +222,8 @@ import com.xemantic.typescript.tsgo.printer.newStringLiteralFromNode
 import com.xemantic.typescript.tsgo.printer.newTempVariable
 import com.xemantic.typescript.tsgo.printer.newTrueExpression
 import com.xemantic.typescript.tsgo.printer.newUniqueNameEx
+import com.xemantic.typescript.tsgo.printer.newVoidZeroExpression
+import com.xemantic.typescript.tsgo.printer.readEmitHelpers
 import com.xemantic.typescript.tsgo.printer.setCommentRange
 import com.xemantic.typescript.tsgo.printer.setEmitFlags
 import com.xemantic.typescript.tsgo.printer.setOriginal
@@ -557,7 +563,79 @@ fun CommonJSModuleTransformer?.createUnderscoreUnderscoreESModule(): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.transformCommonJSModule 755dcd90
 fun CommonJSModuleTransformer?.transformCommonJSModule(node: SourceFile?): Node? {
-    TODO("goport: refused tuple-arg: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.transformCommonJSModule")
+    this!!.transformer.emitContext().startVariableEnvironment()
+    val t0 = this!!.transformer.factory().splitStandardPrologue(node!!.statements!!.nodes)
+    val prologue: GoSlice<Node?> = t0.first
+    var rest: GoSlice<Node?> = t0.second
+    var statements: GoSlice<Node?> = com.xemantic.typescript.tsgo.go.slices.clone<Node?>(prologue)
+    val t1 = this!!.transformer.factory().splitCustomPrologue(rest)
+    val custom: GoSlice<Node?> = t1.first
+    rest = t1.second
+    statements = statements.appendSlice(run { val ta2 = this!!.topLevelVisitor.visitSlice(custom); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta2.first, GoSlice.of(GoElem.ref<Any?>(), ta2.second)) })
+    if (this.shouldEmitUnderscoreUnderscoreESModule()) {
+        statements = statements.append1(this.createUnderscoreUnderscoreESModule())
+    }
+    if (this!!.currentModuleInfo!!.exportedNames.len > 0) {
+        val l: Int = this!!.currentModuleInfo!!.exportedNames.len
+        var i: Int = 0
+        l0@ while (i < l) {
+            var right: Node? = this!!.transformer.factory().newVoidZeroExpression()
+            val s3 = this!!.currentModuleInfo!!.exportedNames.slice(i, minOf(i + 50, l))
+            l1@ for (i4 in 0 until s3.len) {
+                val nextId: Node? = s3[i4]
+                var left: Node? = null
+                if (nextId!!.kind.value == 10) {
+                    left = this!!.transformer.factory()!!.nodeFactory.newElementAccessExpression(this!!.transformer.factory()!!.nodeFactory.newIdentifier("exports"), null, this!!.transformer.factory().newStringLiteralFromNode(nextId), NodeFlags(0u))
+                } else {
+                    val name: Node? = nextId.clone(this!!.transformer.factory())
+                    this!!.transformer.emitContext().setEmitFlags(name, EmitFlags(396u))
+                    left = this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(this!!.transformer.factory()!!.nodeFactory.newIdentifier("exports"), null, name, NodeFlags(0u))
+                }
+                right = this!!.transformer.factory().newAssignmentExpression(left, right)
+            }
+            val statement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(right)
+            this!!.transformer.emitContext().addEmitFlags(statement, EmitFlags(65536u))
+            statements = statements.append1(statement)
+            i += 50
+        }
+    }
+    val exportedFunctionsStart: Int = statements.len
+    this!!.currentModuleInfo!!.exportedFunctions.values()!!(fun(y5: Node?): Boolean {
+            val f: Node? = y5
+            statements = this.appendExportsOfClassOrFunctionDeclaration(statements, f.asNode())
+            return true
+    })
+    val s6 = statements.slice(exportedFunctionsStart)
+    l3@ for (i7 in 0 until s6.len) {
+        val s: Node? = s6[i7]
+        this!!.transformer.emitContext().addEmitFlags(s, EmitFlags(65536u))
+    }
+    val t8 = this!!.topLevelVisitor.visitSlice(rest)
+    rest = t8.first
+    statements = statements.appendSlice(rest)
+    statements = this.appendExportEqualsIfNeeded(statements)
+    statements = this!!.transformer.emitContext().endAndMergeVariableEnvironment(statements)
+    val statementList: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(statements)
+    statementList!!.loc = node!!.statements!!.loc.goCopy()
+    var result: SourceFile? = this!!.transformer.factory()!!.nodeFactory.updateSourceFile(node, statementList, node!!.endOfFileToken).asSourceFile()
+    this!!.transformer.emitContext().addEmitHelper(result!!.nodeBase.nodeDefault.asNode(), this!!.transformer.emitContext().readEmitHelpers())
+    val externalHelpersImportDeclaration: Node? = createExternalHelpersImportDeclarationIfNeeded(this!!.transformer.emitContext(), result, this!!.compilerOptions, this!!.getEmitModuleFormatOfFile!!(node), false, false, false)
+    if (externalHelpersImportDeclaration != null) {
+        val t9 = this!!.transformer.factory().splitStandardPrologue(result!!.statements!!.nodes)
+        val prologue_1: GoSlice<Node?> = t9.first
+        var rest_1: GoSlice<Node?> = t9.second
+        val t10 = this!!.transformer.factory().splitCustomPrologue(rest_1)
+        val custom_1: GoSlice<Node?> = t10.first
+        rest_1 = t10.second
+        var statements_1: GoSlice<Node?> = com.xemantic.typescript.tsgo.go.slices.clone<Node?>(prologue_1)
+        statements_1 = statements_1.appendSlice(custom_1)
+        statements_1 = statements_1.append1(this!!.topLevelVisitor.visitNode(externalHelpersImportDeclaration))
+        statements_1 = statements_1.appendSlice(rest_1)
+        val statementList_1: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(statements_1)
+        statementList_1!!.loc = result!!.statements!!.loc.goCopy()
+        result = this!!.transformer.factory()!!.nodeFactory.updateSourceFile(result, statementList_1, node!!.endOfFileToken).asSourceFile()
+    }
+    return result!!.nodeBase.nodeDefault.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.appendExportEqualsIfNeeded 725bebc8

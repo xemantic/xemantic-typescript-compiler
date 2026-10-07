@@ -34,6 +34,7 @@ import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.core.Tristate
 import com.xemantic.typescript.tsgo.go.reflect.Value
 import com.xemantic.typescript.tsgo.collections.delete
+import com.xemantic.typescript.tsgo.collections.entries
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.size
@@ -175,7 +176,20 @@ fun filterSameAsDefaultInclude(specs: GoSlice<String>): GoSlice<String> {
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.getNameOfCompilerOptionValue 9d42683b
 fun getNameOfCompilerOptionValue(value_1: Any?, enumMap: OrderedMap<String, Any?>?): String {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/tsoptions.getNameOfCompilerOptionValue")
+    var rfDone0 = false
+    var rfRet1: String? = null
+    enumMap.entries()!!(fun(y2: String, y3: Any?): Boolean {
+            val k: String = y2
+            val v: Any? = y3
+            if (v == value_1) {
+                rfRet1 = k
+                rfDone0 = true
+                return false
+            }
+            return true
+    })
+    if (rfDone0) return rfRet1 as String
+    return ""
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.serializeCompilerOptions 1cf45779

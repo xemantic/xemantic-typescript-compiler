@@ -72,11 +72,13 @@ import com.xemantic.typescript.tsgo.ast.newStringLiteral
 import com.xemantic.typescript.tsgo.ast.newVariableDeclaration
 import com.xemantic.typescript.tsgo.ast.newVariableDeclarationList
 import com.xemantic.typescript.tsgo.ast.newVariableStatement
+import com.xemantic.typescript.tsgo.ast.updateCallExpression
 import com.xemantic.typescript.tsgo.ast.updateExportDeclaration
 import com.xemantic.typescript.tsgo.ast.updateImportDeclaration
 import com.xemantic.typescript.tsgo.ast.updateSourceFile
 import com.xemantic.typescript.tsgo.ast.visitEachChild
 import com.xemantic.typescript.tsgo.ast.visitNode
+import com.xemantic.typescript.tsgo.ast.visitSlice
 import com.xemantic.typescript.tsgo.core.getEmitModuleKind
 import com.xemantic.typescript.tsgo.core.getIsolatedModules
 import com.xemantic.typescript.tsgo.printer.addEmitFlags
@@ -302,7 +304,23 @@ fun ESModuleTransformer?.visitCallExpression(node: CallExpression?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.visitImportOrRequireCall 8d4e91ba
 fun ESModuleTransformer?.visitImportOrRequireCall(node: CallExpression?): Node? {
-    TODO("goport: refused tuple-arg: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.visitImportOrRequireCall")
+    if (node!!.arguments!!.nodes.len == 0) {
+        return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    }
+    val expression: Node? = this!!.transformer.visitor().visitNode(node!!.expression)
+    var argument: Node? = null
+    if (com.xemantic.typescript.tsgo.ast.isStringLiteralLike(node!!.arguments!!.nodes[0])) {
+        argument = rewriteModuleSpecifier(this!!.transformer.emitContext(), node!!.arguments!!.nodes[0], this!!.compilerOptions)
+    } else {
+        argument = this!!.transformer.factory().newRewriteRelativeImportExtensionsHelper(node!!.arguments!!.nodes[0], this!!.compilerOptions!!.jsx.value == 1)
+    }
+    var arguments: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
+    arguments = arguments.append1(argument)
+    val rest: GoSlice<Node?> = run { val ta0 = this!!.transformer.visitor().visitSlice(node!!.arguments!!.nodes.slice(1)); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta0.first, GoSlice.of(GoElem.ref<Any?>(), ta0.second)) }
+    arguments = arguments.appendSlice(rest)
+    val argumentList: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(arguments)
+    argumentList!!.loc = node!!.arguments!!.loc.goCopy()
+    return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, expression, node!!.questionDotToken, null, argumentList, node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.createRequireCall dca62341

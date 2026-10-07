@@ -398,6 +398,14 @@ import com.xemantic.typescript.tsgo.sourcemap.addSource
 import com.xemantic.typescript.tsgo.sourcemap.addSourceMapping
 import com.xemantic.typescript.tsgo.sourcemap.setSourceContent
 
+// go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateSpan c312297e
+fun Printer?.emitTemplateSpan(node: TemplateSpan?) {
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    this.emitExpression(node!!.expression, OperatorPrecedence(0))
+    this.emitTemplateMiddleTail(node!!.literal)
+    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+}
+
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateSpanNode 59d00ba8
 fun Printer?.emitTemplateSpanNode(node: Node?) {
     this.emitTemplateSpan(node.asTemplateSpan())

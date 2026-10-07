@@ -72,9 +72,11 @@ import com.xemantic.typescript.tsgo.collections.getOrZero
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.size
+import com.xemantic.typescript.tsgo.collections.values
 import com.xemantic.typescript.tsgo.core.getAllowJS
 import com.xemantic.typescript.tsgo.core.getResolveJsonModule
 import com.xemantic.typescript.tsgo.module.isResolved
+import com.xemantic.typescript.tsgo.vfs.vfsmatch.matchIndex
 import com.xemantic.typescript.tsgo.vfs.vfsmatch.matchString
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.extendsResult a1cdd781
@@ -893,7 +895,7 @@ fun getDefaultCompilerOptions(configFileName: String): CompilerOptions? {
     var options: CompilerOptions? = CompilerOptions()
     if (configFileName != "" && com.xemantic.typescript.tsgo.tspath.getBaseFileName(configFileName) == "jsconfig.json") {
         val depth: GoBox<Int> = GoBox(2)
-        options = CompilerOptions(allowJs = Tristate(2), maxNodeModuleJsDepth = depth, skipLibCheck = Tristate(2), noEmit = Tristate(2))
+        options = CompilerOptions().also { o1 -> o1.allowJs = Tristate(2); o1.maxNodeModuleJsDepth = depth; o1.skipLibCheck = Tristate(2); o1.noEmit = Tristate(2) }
     }
     return options
 }
@@ -1318,7 +1320,82 @@ fun removeWildcardFilesWithLowerPriorityExtension(file: String, wildcardFiles: O
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.getFileNamesFromConfigSpecs 5aef6eb0
 fun getFileNamesFromConfigSpecs(configFileSpecs: com.xemantic.typescript.tsgo.tsoptions.configFileSpecs, basePath_0: String, options: CompilerOptions?, host: FS?, extraFileExtensions_1: GoSlice<FileExtensionInfo>): Tuple2<GoSlice<String>, Int> {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/tsoptions.getFileNamesFromConfigSpecs")
+    var basePath: String = basePath_0
+    var extraFileExtensions: GoSlice<FileExtensionInfo> = extraFileExtensions_1
+    extraFileExtensions = GoSlice.make(FileExtensionInfo.ELEM, 0)
+    basePath = com.xemantic.typescript.tsgo.tspath.normalizePath(basePath)
+    val keyMappper: ((String) -> String)? = fun(value_1: String): String {
+        return com.xemantic.typescript.tsgo.tspath.getCanonicalFileName(value_1, host!!.useCaseSensitiveFileNames())
+    }
+    val literalFileMap: OrderedMap<String, String> = OrderedMap<String, String>(goElem_K = GoElem.STRING, goElem_V = GoElem.STRING)
+    val wildcardFileMap: OrderedMap<String, String> = OrderedMap<String, String>(goElem_K = GoElem.STRING, goElem_V = GoElem.STRING)
+    val wildCardJsonFileMap: OrderedMap<String, String> = OrderedMap<String, String>(goElem_K = GoElem.STRING, goElem_V = GoElem.STRING)
+    val validatedFilesSpec: GoSlice<String> = configFileSpecs.validatedFilesSpec
+    val validatedIncludeSpecs: GoSlice<String> = configFileSpecs.validatedIncludeSpecs
+    val validatedExcludeSpecs: GoSlice<String> = configFileSpecs.validatedExcludeSpecs
+    val supportedExtensions: GoSlice<GoSlice<String>> = getSupportedExtensions(options, extraFileExtensions)
+    val supportedExtensionsWithJsonIfResolveJsonModule: GoSlice<GoSlice<String>> = getSupportedExtensionsWithJsonIfResolveJsonModule(options, supportedExtensions)
+    val s2 = validatedFilesSpec
+    l0@ for (i3 in 0 until s2.len) {
+        val fileName: String = s2[i3]
+        val file: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(fileName, basePath)
+        literalFileMap.set(keyMappper!!(fileName), file)
+    }
+    var jsonOnlyIncludeMatchers: SpecMatcher? = null
+    if (validatedIncludeSpecs.len > 0) {
+        val files: GoSlice<String> = com.xemantic.typescript.tsgo.vfs.vfsmatch.readDirectory(host, basePath, basePath, com.xemantic.typescript.tsgo.core.flatten<String>(GoElem.STRING, supportedExtensionsWithJsonIfResolveJsonModule), validatedExcludeSpecs, validatedIncludeSpecs, Int.MAX_VALUE)
+        val s4 = files
+        l1@ for (i5 in 0 until s4.len) {
+            val file_1: String = s4[i5]
+            if (com.xemantic.typescript.tsgo.tspath.fileExtensionIs(file_1, ".json")) {
+                if (jsonOnlyIncludeMatchers == null) {
+                    val includes: GoSlice<String> = com.xemantic.typescript.tsgo.core.filter<String>(GoElem.STRING, validatedIncludeSpecs, fun(include: String): Boolean {
+                        return com.xemantic.typescript.tsgo.go.strings.hasSuffix(include, ".json")
+                    })
+                    jsonOnlyIncludeMatchers = com.xemantic.typescript.tsgo.vfs.vfsmatch.newSpecMatcher(includes, basePath, Usage(0), host!!.useCaseSensitiveFileNames())
+                }
+                var includeIndex: Int = -1
+                if (jsonOnlyIncludeMatchers != null) {
+                    includeIndex = jsonOnlyIncludeMatchers.matchIndex(file_1)
+                }
+                if (includeIndex != -1) {
+                    val key: String = keyMappper!!(file_1)
+                    if (!literalFileMap.has(key) && !wildCardJsonFileMap.has(key)) {
+                        wildCardJsonFileMap.set(key, file_1)
+                    }
+                }
+                continue@l1
+            }
+            if (hasFileWithHigherPriorityExtension(file_1, supportedExtensions, fun(fileName_1: String): Boolean {
+                val canonicalFileName: String = keyMappper!!(fileName_1)
+                return literalFileMap.has(canonicalFileName) || wildcardFileMap.has(canonicalFileName)
+            })) {
+                continue@l1
+            }
+            removeWildcardFilesWithLowerPriorityExtension(file_1, wildcardFileMap, supportedExtensions, keyMappper)
+            val key_1: String = keyMappper!!(file_1)
+            if (!literalFileMap.has(key_1) && !wildcardFileMap.has(key_1)) {
+                wildcardFileMap.set(key_1, file_1)
+            }
+        }
+    }
+    var files_1: GoSlice<String> = GoSlice.make(GoElem.STRING, 0, literalFileMap.size() + wildcardFileMap.size() + wildCardJsonFileMap.size())
+    literalFileMap.values()!!(fun(y6: String): Boolean {
+            val file_2: String = y6
+            files_1 = files_1.append1(file_2)
+            return true
+    })
+    wildcardFileMap.values()!!(fun(y7: String): Boolean {
+            val file_3: String = y7
+            files_1 = files_1.append1(file_3)
+            return true
+    })
+    wildCardJsonFileMap.values()!!(fun(y8: String): Boolean {
+            val file_4: String = y8
+            files_1 = files_1.append1(file_4)
+            return true
+    })
+    return Tuple2<GoSlice<String>, Int>(files_1, literalFileMap.size())
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.GetSupportedExtensions 012a03ef

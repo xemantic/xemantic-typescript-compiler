@@ -80,6 +80,12 @@ class Program(
     /** Methods lowered as EXTENSION functions: nil-safe ones and those of [aliasTypes]. */
     val extensionMethods = HashSet<String>()
 
+    /** A struct whose fields do not fit a JVM constructor's 255 argument slots (Decls.structClass). */
+    fun bigStruct(st: com.xemantic.typescript.goport.types.StructType): Boolean = st.fields.size > 120
+
+    /** Pointer-receiver methods whose body never reads the receiver (qnames and object keys). */
+    val recvUnusedMethods = HashSet<String>()
+
     /** Value-receiver methods (struct receivers) that write their receiver: the call site must copy. */
     val receiverMutators = HashSet<String>()
 
@@ -141,6 +147,22 @@ class Program(
      * generated `<Name>_Box` class (docs/goport-lowering.md § 3).
      */
     val boxedNamed = HashSet<String>()
+
+    /**
+     * `//go:embed <file>` string variables, per package path: (Kotlin function name, pattern relative
+     * to the package directory). Main writes the file contents as generated Kotlin (`EmbedData*.kt`).
+     */
+    val embeds = HashMap<String, MutableList<Pair<String, String>>>()
+
+    /**
+     * Function-local named types (`type MemberInfo struct{…}` inside a function), hoisted to the
+     * package top level as `<Name>_<function>`: type key → synthetic qname, and qname → Kotlin name.
+     */
+    val localTypeQnames = HashMap<String, String>()
+    val localTypeNames = HashMap<String, String>()
+
+    /** The local TypeSpecs of one top-level declaration, by its qname (with their synthetic qnames). */
+    val localTypeSpecs = HashMap<String, MutableList<Pair<String, Node>>>()
 
     /**
      * Automatic case-collision renames (docs/goport-lowering.md § 3): Go's exported `Foo` and
@@ -214,8 +236,45 @@ class Program(
             (if (s.variadic) "..." else "") + "|" + s.results.joinToString(",") { tt[it.t].key }
     }
 
+    private fun referencesObj(body: Node, id: Int): Boolean {
+        var found = false
+        walk(body) { n ->
+            if (n.str("k") == "Ident" && n.int("obj") == id) found = true
+            !found
+        }
+        return found
+    }
+
     private fun index(p: IrPackage) {
         val tt = TypeTable(p)
+        for (f in p.files) for (d in f.list("decls")) {
+            if (d.k != "FuncDecl") continue
+            val q = d.str("qname") ?: continue
+            walk(d.obj("body")) { n ->
+                if (n.str("k") == "DeclStmt" && n.obj("decl")?.str("tok") == "type") {
+                    for (spec in n.obj("decl")!!.list("specs")) {
+                        val goName = spec.str("name") ?: continue
+                        if (spec.bool("alias")) continue
+                        val t = spec.obj("nameNode")?.int("obj")?.let { p.obj(it).int("t") } ?: continue
+                        val key = tt[t].key
+                        // A local type over the enclosing function's type parameters cannot be hoisted.
+                        var tpRef = false
+                        walkTypes(tt, (tt[t] as? com.xemantic.typescript.goport.types.NamedType)?.underlying ?: t) {
+                            tpRef = tpRef || it is com.xemantic.typescript.goport.types.TypeParamType
+                        }
+                        if (tpRef) continue
+                        val encl = q.substringAfterLast('/').substringAfter('.').replace('.', '_').replace('#', '_')
+                        var kname = "${goName}_$encl"
+                        while (kname in localTypeNames.values) kname += "_"
+                        val sq = "${p.path}.$kname"
+                        localTypeQnames[key] = sq
+                        localTypeNames[sq] = kname
+                        localTypeSpecs.getOrPut(q) { ArrayList() } += sq to spec
+                    }
+                }
+                true
+            }
+        }
         for (i in 0 until tt.size) {
             val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
             if (n.pkg != p.path || !n.isGenericOrigin || n.localAt != null) continue
@@ -272,6 +331,12 @@ class Program(
                     val rf = recv.list("list").first()
                     val recvObj = rf.list("names").firstOrNull()?.int("obj")
                     val ptr = rf.obj("type")?.str("star") == "pointerType"
+                    // A pointer method that never reads its receiver: `(*Expected[T])(nil).ExpectedJSONType()`
+                    // may call it on any instance (ExprLowering.methodTarget).
+                    if (ptr && d.obj("body") != null && (recvObj == null || !referencesObj(d.obj("body")!!, recvObj))) {
+                        recvUnusedMethods += q
+                        d.int("obj")?.let { p.obj(it).str("key") }?.let { recvUnusedMethods += it }
+                    }
                     if (recvObj != null) {
                         val body = d.obj("body")
                         if (ptr && body != null && comparesToNil(body, recvObj)) nilSafeMethods += q
@@ -510,7 +575,7 @@ class Program(
     }
     fun varName(qname: String, goName: String): String = renames.lookup(qname) ?: Naming.escape(Naming.lowerCamel(goName))
     fun constName(qname: String, goName: String): String = renames.lookup(qname) ?: Naming.escape(goName)
-    fun typeName(qname: String, goName: String): String = renames.lookup(qname) ?: Naming.escape(goName)
+    fun typeName(qname: String, goName: String): String = renames.lookup(qname) ?: localTypeNames[qname] ?: Naming.escape(goName)
 
     fun methodName(key: String, goName: String): String {
         renames.lookup(key)?.let { return it }

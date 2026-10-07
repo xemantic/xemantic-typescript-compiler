@@ -428,7 +428,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                 }
             }
             "const" -> {} // constants are inlined from their exact values at every use
-            "type" -> refuse("local-type")
+            "type" -> {} // hoisted to the package top level (Program.localTypeQnames)
             else -> refuse("decl", d.str("tok") ?: "?")
         }
     }
@@ -437,6 +437,17 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
 
     private fun returnStmt(s: Node) {
         val f = fn.frame
+        f.rangeReturn?.let { (done, ret) ->
+            // Inside a range-over-func body: record the result, stop the iterator.
+            val vals: List<String> = if (s.bool("bare")) (f.namedResults ?: refuse("bare-return")).map { lower(identOf(it)).code }
+                else s.list("results").let { rs ->
+                    if (rs.size == 1 && f.results.size > 1) refuse("range-func-return-tuple") else rs.map { flow(it).code }
+                }
+            if (vals.isNotEmpty()) w.line("$ret = ${tupleOf(vals, f.results)}")
+            w.line("$done = true")
+            w.line("return false")
+            return
+        }
         if (s.bool("bare")) {
             val named = f.namedResults ?: refuse("bare-return")
             val vals = named.map { lower(identOf(it)).code }
@@ -643,7 +654,18 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         fn.frame.targets.removeLast()
         val ft = Target(t.goLabel, Target.Kind.RANGE_FUNC, t.kLabel)
         fn.frame.targets.addLast(ft)
-        if (containsReturn(s.reqObj("body"))) refuse("range-func-return")
+        // A `return` in the body: the yield function records it and stops the iteration; the
+        // function returns after the iterator call (nested range-over-func loops share the locals).
+        val hasReturn = containsReturn(s.reqObj("body"))
+        val outerReturn = fn.frame.rangeReturn
+        if (hasReturn && outerReturn == null) {
+            val done = fn.fresh("rfDone")
+            val ret = fn.fresh("rfRet")
+            w.line("var $done = false")
+            val res = fn.frame.results
+            if (res.isNotEmpty()) w.line("var $ret: ${tm.resultKt(res).removeSuffix("?")}? = null")
+            fn.frame.rangeReturn = done to ret
+        }
         val x = s.reqObj("x")
         val seqT = types.under(types.core(ty(x))) as? SignatureType ?: refuse("range-func-type")
         val yieldT = types.under(seqT.params[0].t) as SignatureType
@@ -663,6 +685,16 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         w.line("${raw(x).at(PRIMARY)}!!(fun($decl): Boolean {")
         w.raw(inner.toString().trimEnd())
         w.line("})")
+        if (hasReturn) {
+            val (done, ret) = fn.frame.rangeReturn!!
+            if (outerReturn != null) {
+                w.line("if ($done) return false")
+            } else {
+                fn.frame.rangeReturn = null
+                val res = fn.frame.results
+                if (res.isEmpty()) w.line("if ($done) return") else w.line("if ($done) return $ret as ${tm.resultKt(res)}")
+            }
+        }
     }
 
     private fun containsReturn(body: Node): Boolean {

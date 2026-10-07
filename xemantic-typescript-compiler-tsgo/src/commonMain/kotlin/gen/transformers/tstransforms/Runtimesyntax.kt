@@ -56,6 +56,7 @@ import com.xemantic.typescript.tsgo.core.TextRange
 import com.xemantic.typescript.tsgo.ast.TokenFlags
 import com.xemantic.typescript.tsgo.transformers.TransformOptions
 import com.xemantic.typescript.tsgo.transformers.Transformer
+import com.xemantic.typescript.tsgo.ast.TryStatement
 import com.xemantic.typescript.tsgo.ast.VariableDeclaration
 import com.xemantic.typescript.tsgo.ast.VariableStatement
 import com.xemantic.typescript.tsgo.ast.asBlock
@@ -72,6 +73,7 @@ import com.xemantic.typescript.tsgo.ast.asModuleDeclaration
 import com.xemantic.typescript.tsgo.ast.asNode
 import com.xemantic.typescript.tsgo.ast.asParameterDeclaration
 import com.xemantic.typescript.tsgo.ast.asShorthandPropertyAssignment
+import com.xemantic.typescript.tsgo.ast.asTryStatement
 import com.xemantic.typescript.tsgo.ast.asVariableDeclaration
 import com.xemantic.typescript.tsgo.ast.asVariableDeclarationList
 import com.xemantic.typescript.tsgo.ast.asVariableStatement
@@ -105,11 +107,13 @@ import com.xemantic.typescript.tsgo.ast.parameterList
 import com.xemantic.typescript.tsgo.ast.parameters
 import com.xemantic.typescript.tsgo.ast.subtreeFacts
 import com.xemantic.typescript.tsgo.ast.text
+import com.xemantic.typescript.tsgo.ast.updateBlock
 import com.xemantic.typescript.tsgo.ast.updateClassDeclaration
 import com.xemantic.typescript.tsgo.ast.updateClassExpression
 import com.xemantic.typescript.tsgo.ast.updateConstructorDeclaration
 import com.xemantic.typescript.tsgo.ast.updateFunctionDeclaration
 import com.xemantic.typescript.tsgo.ast.updateShorthandPropertyAssignment
+import com.xemantic.typescript.tsgo.ast.updateTryStatement
 import com.xemantic.typescript.tsgo.ast.visitEachChild
 import com.xemantic.typescript.tsgo.ast.visitModifiers
 import com.xemantic.typescript.tsgo.ast.visitNode
@@ -805,12 +809,81 @@ fun RuntimeSyntaxTransformer?.visitConstructorDeclaration(node: ConstructorDecla
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitConstructorBody 5a28c104
 fun RuntimeSyntaxTransformer?.visitConstructorBody(body: Block?, constructor: Node?): Node? {
-    TODO("goport: refused tuple-arg: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitConstructorBody")
+    val parameterProperties: GoSlice<ParameterDeclaration?> = this.getParameterProperties(constructor)
+    if (parameterProperties.len == 0) {
+        return this!!.transformer.emitContext().visitFunctionBody(body!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.transformer.visitor())
+    }
+    val grandparentOfBody: Node? = this.pushNode(body!!.statementBase.nodeBase.nodeDefault.asNode())
+    val t0 = this.pushScope(body!!.statementBase.nodeBase.nodeDefault.asNode())
+    val savedCurrentScope: Node? = t0.first
+    val savedCurrentScopeFirstDeclarationsOfName: GoMap<String, Node?> = t0.second
+    this!!.transformer.emitContext().startVariableEnvironment()
+    val t1 = this!!.transformer.factory().splitStandardPrologue(body!!.statements!!.nodes)
+    val prologue: GoSlice<Node?> = t1.first
+    val rest: GoSlice<Node?> = t1.second
+    var statements: GoSlice<Node?> = com.xemantic.typescript.tsgo.go.slices.clone<Node?>(prologue)
+    var parameterPropertyAssignments: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
+    val s2 = parameterProperties
+    l0@ for (i3 in 0 until s2.len) {
+        val parameter: ParameterDeclaration? = s2[i3]
+        if (com.xemantic.typescript.tsgo.ast.isIdentifier(parameter!!.name())) {
+            val propertyName: Node? = parameter!!.name().clone(this!!.transformer.factory())
+            propertyName!!.parent = parameter!!.name()!!.parent
+            this!!.transformer.emitContext().addEmitFlags(propertyName, EmitFlags(396u))
+            val localName: Node? = parameter!!.name().clone(this!!.transformer.factory())
+            localName!!.parent = parameter!!.name()!!.parent
+            this!!.transformer.emitContext().addEmitFlags(localName, EmitFlags(384u))
+            val parameterProperty: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(this!!.transformer.factory().newAssignmentExpression(this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(this!!.transformer.factory().newThisExpression(), null, propertyName, NodeFlags(0u)), localName))
+            this!!.transformer.emitContext().setOriginal(parameterProperty, parameter!!.nodeBase.nodeDefault.asNode())
+            this!!.transformer.emitContext().addEmitFlags(parameterProperty, EmitFlags(524288u))
+            parameterPropertyAssignments = parameterPropertyAssignments.append1(parameterProperty)
+        }
+    }
+    val superPath: GoSlice<Int> = com.xemantic.typescript.tsgo.transformers.findSuperStatementIndexPath(rest, 0)
+    if (superPath.len > 0) {
+        statements = statements.appendSlice(this.transformConstructorBodyWorker(rest, superPath, parameterPropertyAssignments))
+    } else {
+        statements = statements.appendSlice(parameterPropertyAssignments)
+        statements = statements.appendSlice(run { val ta4 = this!!.transformer.visitor().visitSlice(rest); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta4.first, GoSlice.of(GoElem.ref<Any?>(), ta4.second)) })
+    }
+    statements = this!!.transformer.emitContext().endAndMergeVariableEnvironment(statements)
+    val statementList: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(statements)
+    statementList!!.loc = body!!.statements!!.loc.goCopy()
+    this.popScope(savedCurrentScope, savedCurrentScopeFirstDeclarationsOfName)
+    this.popNode(grandparentOfBody)
+    val updated: Node? = this!!.transformer.factory()!!.nodeFactory.newBlock(statementList, true)
+    this!!.transformer.emitContext().setOriginal(updated, body!!.statementBase.nodeBase.nodeDefault.asNode())
+    updated!!.loc = body!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy()
+    return updated
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.transformConstructorBodyWorker 234c43fc
 fun RuntimeSyntaxTransformer?.transformConstructorBodyWorker(statementsIn: GoSlice<Node?>, superPath: GoSlice<Int>, initializerStatements: GoSlice<Node?>): GoSlice<Node?> {
-    TODO("goport: refused tuple-arg: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.transformConstructorBodyWorker")
+    var statementsOut: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
+    val superStatementIndex: Int = superPath[0]
+    val superStatement: Node? = statementsIn[superStatementIndex]
+    statementsOut = statementsOut.appendSlice(run { val ta0 = this!!.transformer.visitor().visitSlice(statementsIn.slice(0, superStatementIndex)); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta0.first, GoSlice.of(GoElem.ref<Any?>(), ta0.second)) })
+    if (com.xemantic.typescript.tsgo.ast.isTryStatement(superStatement)) {
+        val tryStatement: TryStatement? = superStatement.asTryStatement()
+        val tryBlock: Block? = tryStatement!!.tryBlock.asBlock()
+        val grandparentOfTryStatement: Node? = this.pushNode(tryStatement!!.statementBase.nodeBase.nodeDefault.asNode())
+        val grandparentOfTryBlock: Node? = this.pushNode(tryBlock!!.statementBase.nodeBase.nodeDefault.asNode())
+        val t1 = this.pushScope(tryBlock!!.statementBase.nodeBase.nodeDefault.asNode())
+        val savedCurrentScope: Node? = t1.first
+        val savedCurrentScopeFirstDeclarationsOfName: GoMap<String, Node?> = t1.second
+        val tryBlockStatements: GoSlice<Node?> = this.transformConstructorBodyWorker(tryBlock!!.statements!!.nodes, superPath.slice(1), initializerStatements)
+        this.popScope(savedCurrentScope, savedCurrentScopeFirstDeclarationsOfName)
+        this.popNode(grandparentOfTryBlock)
+        val tryBlockStatementList: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(tryBlockStatements)
+        tryBlockStatementList!!.loc = tryBlock!!.statements!!.loc.goCopy()
+        statementsOut = statementsOut.append1(this!!.transformer.factory()!!.nodeFactory.updateTryStatement(tryStatement, this!!.transformer.factory()!!.nodeFactory.updateBlock(tryBlock, tryBlockStatementList, tryBlock!!.multiLine), this!!.transformer.visitor().visitNode(tryStatement!!.catchClause), this!!.transformer.visitor().visitNode(tryStatement!!.finallyBlock)))
+        this.popNode(grandparentOfTryStatement)
+    } else {
+        statementsOut = statementsOut.appendSlice(run { val ta2 = this!!.transformer.visitor().visitSlice(statementsIn.slice(superStatementIndex, superStatementIndex + 1)); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta2.first, GoSlice.of(GoElem.ref<Any?>(), ta2.second)) })
+        statementsOut = statementsOut.appendSlice(initializerStatements)
+    }
+    statementsOut = statementsOut.appendSlice(run { val ta3 = this!!.transformer.visitor().visitSlice(statementsIn.slice(superStatementIndex + 1)); com.xemantic.typescript.tsgo.core.firstResult<GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()), ta3.first, GoSlice.of(GoElem.ref<Any?>(), ta3.second)) })
+    return statementsOut
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitShorthandPropertyAssignment 2dcacbc9

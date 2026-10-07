@@ -264,6 +264,7 @@ import com.xemantic.typescript.tsgo.ast.typeParameters
 import com.xemantic.typescript.tsgo.binder.resolve
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.clear
+import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.len
@@ -1766,327 +1767,648 @@ interface Host : ModuleSpecifierGenerationHost, OutputPathsHost {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker 2986cbb2
 class Checker(
-    @get:kotlin.jvm.JvmName("goGet_id") @set:kotlin.jvm.JvmName("goSet_id") var id: UInt = 0u,
-    @kotlin.jvm.JvmField var program: Program? = null,
-    @kotlin.jvm.JvmField var compilerOptions: CompilerOptions? = null,
-    @kotlin.jvm.JvmField var files: GoSlice<SourceFile?> = GoElem.ref<SourceFile?>().nilSlice,
-    @kotlin.jvm.JvmField var fileIndexMap: GoMap<SourceFile?, Int> = GoMap.nil<SourceFile?, Int>(GoElem.INT),
-    @kotlin.jvm.JvmField var compareSymbols: ((Symbol?, Symbol?) -> Int)? = null,
-    @kotlin.jvm.JvmField var compareSymbolChains: ((GoSlice<Symbol?>, GoSlice<Symbol?>) -> Int)? = null,
-    @get:kotlin.jvm.JvmName("goGet_typeCount") @set:kotlin.jvm.JvmName("goSet_typeCount") var typeCount: UInt = 0u,
-    @get:kotlin.jvm.JvmName("goGet_symbolCount") @set:kotlin.jvm.JvmName("goSet_symbolCount") var symbolCount: UInt = 0u,
-    @get:kotlin.jvm.JvmName("goGet_signatureCount") @set:kotlin.jvm.JvmName("goSet_signatureCount") var signatureCount: UInt = 0u,
-    @get:kotlin.jvm.JvmName("goGet_totalInstantiationCount") @set:kotlin.jvm.JvmName("goSet_totalInstantiationCount") var totalInstantiationCount: UInt = 0u,
-    @get:kotlin.jvm.JvmName("goGet_instantiationCount") @set:kotlin.jvm.JvmName("goSet_instantiationCount") var instantiationCount: UInt = 0u,
-    @get:kotlin.jvm.JvmName("goGet_instantiationDepth") @set:kotlin.jvm.JvmName("goSet_instantiationDepth") var instantiationDepth: UInt = 0u,
-    @get:kotlin.jvm.JvmName("goGet_conditionalConstraintDepth") @set:kotlin.jvm.JvmName("goSet_conditionalConstraintDepth") var conditionalConstraintDepth: UInt = 0u,
-    @kotlin.jvm.JvmField var inlineLevel: Int = 0,
-    @kotlin.jvm.JvmField var serializationLevel: Int = 0,
-    @kotlin.jvm.JvmField var currentNode: Node? = null,
-    @kotlin.jvm.JvmField var varianceTypeParameter: Type? = null,
-    @get:kotlin.jvm.JvmName("goGet_languageVersion") @set:kotlin.jvm.JvmName("goSet_languageVersion") var languageVersion: ScriptTarget = ScriptTarget(0),
-    @get:kotlin.jvm.JvmName("goGet_moduleKind") @set:kotlin.jvm.JvmName("goSet_moduleKind") var moduleKind: ModuleKind = ModuleKind(0),
-    @get:kotlin.jvm.JvmName("goGet_moduleResolutionKind") @set:kotlin.jvm.JvmName("goSet_moduleResolutionKind") var moduleResolutionKind: ModuleResolutionKind = ModuleResolutionKind(0),
-    @kotlin.jvm.JvmField var isInferencePartiallyBlocked: Boolean = false,
-    @kotlin.jvm.JvmField var legacyDecorators: Boolean = false,
-    @kotlin.jvm.JvmField var emitStandardClassFields: Boolean = false,
-    @kotlin.jvm.JvmField var strictNullChecks: Boolean = false,
-    @kotlin.jvm.JvmField var strictFunctionTypes: Boolean = false,
-    @kotlin.jvm.JvmField var strictBindCallApply: Boolean = false,
-    @kotlin.jvm.JvmField var strictPropertyInitialization: Boolean = false,
-    @kotlin.jvm.JvmField var strictBuiltinIteratorReturn: Boolean = false,
-    @kotlin.jvm.JvmField var noImplicitAny: Boolean = false,
-    @kotlin.jvm.JvmField var noImplicitThis: Boolean = false,
-    @kotlin.jvm.JvmField var useUnknownInCatchVariables: Boolean = false,
-    @kotlin.jvm.JvmField var exactOptionalPropertyTypes: Boolean = false,
-    @kotlin.jvm.JvmField var canCollectSymbolAliasAccessibilityData: Boolean = false,
-    @kotlin.jvm.JvmField var wasCanceled: Boolean = false,
-    @kotlin.jvm.JvmField var saveDeferredDiagnostics: Boolean = false,
-    @kotlin.jvm.JvmField var arrayVariances: GoSlice<VarianceFlags> = VarianceFlags.ELEM.nilSlice,
-    @kotlin.jvm.JvmField var globals: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()),
-    @kotlin.jvm.JvmField var evaluate: Evaluator = null,
-    @kotlin.jvm.JvmField var stringLiteralTypes: GoMap<String, Type?> = GoMap.nil<String, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var numberLiteralTypes: GoMap<com.xemantic.typescript.tsgo.jsnum.Number, Type?> = GoMap.nil<com.xemantic.typescript.tsgo.jsnum.Number, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var nanType: Type? = null,
-    @kotlin.jvm.JvmField var bigintLiteralTypes: GoMap<PseudoBigInt, Type?> = GoMap.nil<PseudoBigInt, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var enumLiteralTypes: GoMap<EnumLiteralKey, Type?> = GoMap.nil<EnumLiteralKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var enumNaNLiteralTypes: GoMap<Symbol?, Type?> = GoMap.nil<Symbol?, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var indexedAccessTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var templateLiteralTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var stringMappingTypes: GoMap<StringMappingKey, Type?> = GoMap.nil<StringMappingKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var uniqueESSymbolTypes: GoMap<Symbol?, Type?> = GoMap.nil<Symbol?, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var thisExpandoKinds: GoMap<Symbol?, com.xemantic.typescript.tsgo.checker.thisAssignmentDeclarationKind> = GoMap.nil<Symbol?, com.xemantic.typescript.tsgo.checker.thisAssignmentDeclarationKind>(com.xemantic.typescript.tsgo.checker.thisAssignmentDeclarationKind.ELEM),
-    @kotlin.jvm.JvmField var thisExpandoLocations: GoMap<Symbol?, Node?> = GoMap.nil<Symbol?, Node?>(GoElem.ref<Node?>()),
-    @kotlin.jvm.JvmField var subtypeReductionCache: GoMap<CacheHashKey, GoSlice<Type?>> = GoMap.nil<CacheHashKey, GoSlice<Type?>>(GoElem.slice(GoElem.ref<Type?>())),
-    @kotlin.jvm.JvmField var cachedTypes: GoMap<CachedTypeKey, Type?> = GoMap.nil<CachedTypeKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var cachedSignatures: GoMap<CachedSignatureKey, Signature?> = GoMap.nil<CachedSignatureKey, Signature?>(GoElem.ref<Signature?>()),
-    @kotlin.jvm.JvmField var undefinedProperties: GoMap<String, Symbol?> = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()),
-    @kotlin.jvm.JvmField var narrowedTypes: GoMap<NarrowedTypeKey, Type?> = GoMap.nil<NarrowedTypeKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var assignmentReducedTypes: GoMap<AssignmentReducedKey, Type?> = GoMap.nil<AssignmentReducedKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var discriminatedContextualTypes: GoMap<DiscriminatedContextualTypeKey, Type?> = GoMap.nil<DiscriminatedContextualTypeKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var instantiationExpressionTypes: GoMap<InstantiationExpressionKey, Type?> = GoMap.nil<InstantiationExpressionKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var substitutionTypes: GoMap<SubstitutionTypeKey, Type?> = GoMap.nil<SubstitutionTypeKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var reverseMappedCache: GoMap<ReverseMappedTypeKey, Type?> = GoMap.nil<ReverseMappedTypeKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var reverseHomomorphicMappedCache: GoMap<ReverseMappedTypeKey, Type?> = GoMap.nil<ReverseMappedTypeKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var iterationTypesCache: GoMap<IterationTypesKey, IterationTypes> = GoMap.nil<IterationTypesKey, IterationTypes>(IterationTypes.ELEM),
-    @kotlin.jvm.JvmField var markerTypes: com.xemantic.typescript.tsgo.collections.Set<Type?> = com.xemantic.typescript.tsgo.collections.Set<Type?>(goElem_T = GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var undefinedSymbol: Symbol? = null,
-    @kotlin.jvm.JvmField var argumentsSymbol: Symbol? = null,
-    @kotlin.jvm.JvmField var requireSymbol: Symbol? = null,
-    @kotlin.jvm.JvmField var unknownSymbol: Symbol? = null,
-    @kotlin.jvm.JvmField var unresolvedSymbols: GoMap<String, Symbol?> = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()),
-    @kotlin.jvm.JvmField var errorTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var moduleSymbols: GoMap<Node?, Symbol?> = GoMap.nil<Node?, Symbol?>(GoElem.ref<Symbol?>()),
-    @kotlin.jvm.JvmField var globalThisSymbol: Symbol? = null,
-    @kotlin.jvm.JvmField var symbolTableAliasCache: GoMap<com.xemantic.typescript.tsgo.checker.symbolTableID, GoSlice<Symbol?>> = GoMap.nil<com.xemantic.typescript.tsgo.checker.symbolTableID, GoSlice<Symbol?>>(GoElem.slice(GoElem.ref<Symbol?>())),
-    @kotlin.jvm.JvmField var classExpressionNameTables: GoMap<NodeId, SymbolTable> = GoMap.nil<NodeId, SymbolTable>(GoElem.map<String, Symbol?>(GoElem.ref<Symbol?>())),
-    @kotlin.jvm.JvmField var resolveName: ((Node?, String, SymbolFlags, Message?, Boolean, Boolean) -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var resolveNameForSymbolSuggestion: ((Node?, String, SymbolFlags, Message?, Boolean, Boolean) -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var tupleTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var unionTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var unionOfUnionTypes: GoMap<UnionOfUnionKey, Type?> = GoMap.nil<UnionOfUnionKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var intersectionTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var propertiesTypes: GoMap<PropertiesTypesKey, Type?> = GoMap.nil<PropertiesTypesKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var diagnostics: DiagnosticsCollection = DiagnosticsCollection(),
-    @kotlin.jvm.JvmField var suggestionDiagnostics: DiagnosticsCollection = DiagnosticsCollection(),
-    @kotlin.jvm.JvmField var symbolArena: Arena<Symbol> = Arena<Symbol>(goElem_T = Symbol.ELEM),
-    @kotlin.jvm.JvmField var signatureArena: Arena<Signature> = Arena<Signature>(goElem_T = Signature.ELEM),
-    @kotlin.jvm.JvmField var indexInfoArena: Arena<IndexInfo> = Arena<IndexInfo>(goElem_T = IndexInfo.ELEM),
-    @kotlin.jvm.JvmField var mergedSymbols: GoMap<Symbol?, Symbol?> = GoMap.nil<Symbol?, Symbol?>(GoElem.ref<Symbol?>()),
-    @kotlin.jvm.JvmField var factory: NodeFactory = NodeFactory(),
-    @kotlin.jvm.JvmField var nodeLinks: LinkStore<Node?, NodeLinks> = LinkStore<Node?, NodeLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = NodeLinks.ELEM),
-    @kotlin.jvm.JvmField var signatureLinks: LinkStore<Node?, SignatureLinks> = LinkStore<Node?, SignatureLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = SignatureLinks.ELEM),
-    @kotlin.jvm.JvmField var symbolNodeLinks: LinkStore<Node?, SymbolNodeLinks> = LinkStore<Node?, SymbolNodeLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = SymbolNodeLinks.ELEM),
-    @kotlin.jvm.JvmField var typeNodeLinks: LinkStore<Node?, TypeNodeLinks> = LinkStore<Node?, TypeNodeLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = TypeNodeLinks.ELEM),
-    @kotlin.jvm.JvmField var enumMemberLinks: LinkStore<Node?, EnumMemberLinks> = LinkStore<Node?, EnumMemberLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = EnumMemberLinks.ELEM),
-    @kotlin.jvm.JvmField var assertionLinks: LinkStore<Node?, AssertionLinks> = LinkStore<Node?, AssertionLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = AssertionLinks.ELEM),
-    @kotlin.jvm.JvmField var arrayLiteralLinks: LinkStore<Node?, ArrayLiteralLinks> = LinkStore<Node?, ArrayLiteralLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = ArrayLiteralLinks.ELEM),
-    @kotlin.jvm.JvmField var switchStatementLinks: LinkStore<Node?, SwitchStatementLinks> = LinkStore<Node?, SwitchStatementLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = SwitchStatementLinks.ELEM),
-    @kotlin.jvm.JvmField var jsxElementLinks: LinkStore<Node?, JsxElementLinks> = LinkStore<Node?, JsxElementLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = JsxElementLinks.ELEM),
-    @kotlin.jvm.JvmField var symbolReferenceLinks: LinkStore<Symbol?, SymbolReferenceLinks> = LinkStore<Symbol?, SymbolReferenceLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = SymbolReferenceLinks.ELEM),
-    @kotlin.jvm.JvmField var valueSymbolLinks: LinkStore<Symbol?, ValueSymbolLinks> = LinkStore<Symbol?, ValueSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ValueSymbolLinks.ELEM),
-    @kotlin.jvm.JvmField var mappedSymbolLinks: LinkStore<Symbol?, MappedSymbolLinks> = LinkStore<Symbol?, MappedSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = MappedSymbolLinks.ELEM),
-    @kotlin.jvm.JvmField var deferredSymbolLinks: LinkStore<Symbol?, DeferredSymbolLinks> = LinkStore<Symbol?, DeferredSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = DeferredSymbolLinks.ELEM),
-    @kotlin.jvm.JvmField var aliasSymbolLinks: LinkStore<Symbol?, AliasSymbolLinks> = LinkStore<Symbol?, AliasSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = AliasSymbolLinks.ELEM),
-    @kotlin.jvm.JvmField var moduleSymbolLinks: LinkStore<Symbol?, ModuleSymbolLinks> = LinkStore<Symbol?, ModuleSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ModuleSymbolLinks.ELEM),
-    @kotlin.jvm.JvmField var lateBoundLinks: LinkStore<Symbol?, LateBoundLinks> = LinkStore<Symbol?, LateBoundLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = LateBoundLinks.ELEM),
-    @kotlin.jvm.JvmField var exportTypeLinks: LinkStore<Symbol?, ExportTypeLinks> = LinkStore<Symbol?, ExportTypeLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ExportTypeLinks.ELEM),
-    @kotlin.jvm.JvmField var membersAndExportsLinks: LinkStore<Symbol?, MembersAndExportsLinks> = LinkStore<Symbol?, MembersAndExportsLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = GoElem<GoArray<SymbolTable>>({ GoArray(2, GoElem.map<String, Symbol?>(GoElem.ref<Symbol?>())) }, { it.goCopy() })),
-    @kotlin.jvm.JvmField var typeAliasLinks: LinkStore<Symbol?, TypeAliasLinks> = LinkStore<Symbol?, TypeAliasLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = TypeAliasLinks.ELEM),
-    @kotlin.jvm.JvmField var declaredTypeLinks: LinkStore<Symbol?, DeclaredTypeLinks> = LinkStore<Symbol?, DeclaredTypeLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = DeclaredTypeLinks.ELEM),
-    @kotlin.jvm.JvmField var spreadLinks: LinkStore<Symbol?, SpreadLinks> = LinkStore<Symbol?, SpreadLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = SpreadLinks.ELEM),
-    @kotlin.jvm.JvmField var varianceLinks: LinkStore<Symbol?, VarianceLinks> = LinkStore<Symbol?, VarianceLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = VarianceLinks.ELEM),
-    @kotlin.jvm.JvmField var reverseMappedSymbolLinks: LinkStore<Symbol?, ReverseMappedSymbolLinks> = LinkStore<Symbol?, ReverseMappedSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ReverseMappedSymbolLinks.ELEM),
-    @kotlin.jvm.JvmField var markedAssignmentSymbolLinks: LinkStore<Symbol?, MarkedAssignmentSymbolLinks> = LinkStore<Symbol?, MarkedAssignmentSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = MarkedAssignmentSymbolLinks.ELEM),
-    @kotlin.jvm.JvmField var symbolContainerLinks: LinkStore<Symbol?, ContainingSymbolLinks> = LinkStore<Symbol?, ContainingSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ContainingSymbolLinks.ELEM),
-    @kotlin.jvm.JvmField var sourceFileLinks: LinkStore<SourceFile?, SourceFileLinks> = LinkStore<SourceFile?, SourceFileLinks>(goElem_K = GoElem.ref<SourceFile?>(), goElem_V = SourceFileLinks.ELEM),
-    @kotlin.jvm.JvmField var regExpScanner: Scanner? = null,
-    @kotlin.jvm.JvmField var patternForType: GoMap<Type?, Node?> = GoMap.nil<Type?, Node?>(GoElem.ref<Node?>()),
-    @kotlin.jvm.JvmField var contextFreeTypes: GoMap<Node?, Type?> = GoMap.nil<Node?, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var anyType: Type? = null,
-    @kotlin.jvm.JvmField var autoType: Type? = null,
-    @kotlin.jvm.JvmField var wildcardType: Type? = null,
-    @kotlin.jvm.JvmField var blockedStringType: Type? = null,
-    @kotlin.jvm.JvmField var errorType: Type? = null,
-    @kotlin.jvm.JvmField var unresolvedType: Type? = null,
-    @kotlin.jvm.JvmField var nonInferrableAnyType: Type? = null,
-    @kotlin.jvm.JvmField var intrinsicMarkerType: Type? = null,
-    @kotlin.jvm.JvmField var unknownType: Type? = null,
-    @kotlin.jvm.JvmField var undefinedType: Type? = null,
-    @kotlin.jvm.JvmField var undefinedWideningType: Type? = null,
-    @kotlin.jvm.JvmField var missingType: Type? = null,
-    @kotlin.jvm.JvmField var undefinedOrMissingType: Type? = null,
-    @kotlin.jvm.JvmField var optionalType: Type? = null,
-    @kotlin.jvm.JvmField var nullType: Type? = null,
-    @kotlin.jvm.JvmField var nullWideningType: Type? = null,
-    @kotlin.jvm.JvmField var stringType: Type? = null,
-    @kotlin.jvm.JvmField var numberType: Type? = null,
-    @kotlin.jvm.JvmField var bigintType: Type? = null,
-    @kotlin.jvm.JvmField var regularFalseType: Type? = null,
-    @kotlin.jvm.JvmField var falseType: Type? = null,
-    @kotlin.jvm.JvmField var regularTrueType: Type? = null,
-    @kotlin.jvm.JvmField var trueType: Type? = null,
-    @kotlin.jvm.JvmField var booleanType: Type? = null,
-    @kotlin.jvm.JvmField var esSymbolType: Type? = null,
-    @kotlin.jvm.JvmField var voidType: Type? = null,
-    @kotlin.jvm.JvmField var neverType: Type? = null,
-    @kotlin.jvm.JvmField var silentNeverType: Type? = null,
-    @kotlin.jvm.JvmField var implicitNeverType: Type? = null,
-    @kotlin.jvm.JvmField var unreachableNeverType: Type? = null,
-    @kotlin.jvm.JvmField var nonPrimitiveType: Type? = null,
-    @kotlin.jvm.JvmField var stringOrNumberType: Type? = null,
-    @kotlin.jvm.JvmField var stringNumberSymbolType: Type? = null,
-    @kotlin.jvm.JvmField var numberOrBigIntType: Type? = null,
-    @kotlin.jvm.JvmField var templateConstraintType: Type? = null,
-    @kotlin.jvm.JvmField var numericStringType: Type? = null,
-    @kotlin.jvm.JvmField var uniqueLiteralType: Type? = null,
-    @kotlin.jvm.JvmField var uniqueLiteralMapper: TypeMapper? = null,
-    @get:kotlin.jvm.JvmName("goGet_reliabilityFlags") @set:kotlin.jvm.JvmName("goSet_reliabilityFlags") var reliabilityFlags: RelationComparisonResult = RelationComparisonResult(0u),
-    @kotlin.jvm.JvmField var reportUnreliableMapper: TypeMapper? = null,
-    @kotlin.jvm.JvmField var reportUnmeasurableMapper: TypeMapper? = null,
-    @kotlin.jvm.JvmField var restrictiveMapper: TypeMapper? = null,
-    @kotlin.jvm.JvmField var permissiveMapper: TypeMapper? = null,
-    @kotlin.jvm.JvmField var emptyObjectType: Type? = null,
-    @kotlin.jvm.JvmField var emptyJsxObjectType: Type? = null,
-    @kotlin.jvm.JvmField var emptyFreshJsxObjectType: Type? = null,
-    @kotlin.jvm.JvmField var emptyTypeLiteralType: Type? = null,
-    @kotlin.jvm.JvmField var unknownEmptyObjectType: Type? = null,
-    @kotlin.jvm.JvmField var unknownUnionType: Type? = null,
-    @kotlin.jvm.JvmField var emptyGenericType: Type? = null,
-    @kotlin.jvm.JvmField var anyFunctionType: Type? = null,
-    @kotlin.jvm.JvmField var noConstraintType: Type? = null,
-    @kotlin.jvm.JvmField var circularConstraintType: Type? = null,
-    @kotlin.jvm.JvmField var resolvingDefaultType: Type? = null,
-    @kotlin.jvm.JvmField var markerSuperType: Type? = null,
-    @kotlin.jvm.JvmField var markerSubType: Type? = null,
-    @kotlin.jvm.JvmField var markerOtherType: Type? = null,
-    @kotlin.jvm.JvmField var markerSuperTypeForCheck: Type? = null,
-    @kotlin.jvm.JvmField var markerSubTypeForCheck: Type? = null,
-    @kotlin.jvm.JvmField var noTypePredicate: TypePredicate? = null,
-    @kotlin.jvm.JvmField var anySignature: Signature? = null,
-    @kotlin.jvm.JvmField var unknownSignature: Signature? = null,
-    @kotlin.jvm.JvmField var resolvingSignature: Signature? = null,
-    @kotlin.jvm.JvmField var silentNeverSignature: Signature? = null,
-    @kotlin.jvm.JvmField var cachedArgumentsReferenced: GoMap<Node?, Boolean> = GoMap.nil<Node?, Boolean>(GoElem.BOOL),
-    @kotlin.jvm.JvmField var enumNumberIndexInfo: IndexInfo? = null,
-    @kotlin.jvm.JvmField var anyBaseTypeIndexInfo: IndexInfo? = null,
-    @kotlin.jvm.JvmField var patternAmbientModules: GoSlice<PatternAmbientModule?> = GoElem.ref<PatternAmbientModule?>().nilSlice,
-    @kotlin.jvm.JvmField var patternAmbientModuleAugmentations: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()),
-    @kotlin.jvm.JvmField var globalObjectType: Type? = null,
-    @kotlin.jvm.JvmField var globalFunctionType: Type? = null,
-    @kotlin.jvm.JvmField var globalCallableFunctionType: Type? = null,
-    @kotlin.jvm.JvmField var globalNewableFunctionType: Type? = null,
-    @kotlin.jvm.JvmField var globalArrayType: Type? = null,
-    @kotlin.jvm.JvmField var globalReadonlyArrayType: Type? = null,
-    @kotlin.jvm.JvmField var globalStringType: Type? = null,
-    @kotlin.jvm.JvmField var globalNumberType: Type? = null,
-    @kotlin.jvm.JvmField var globalBooleanType: Type? = null,
-    @kotlin.jvm.JvmField var globalRegExpType: Type? = null,
-    @kotlin.jvm.JvmField var globalThisType: Type? = null,
-    @kotlin.jvm.JvmField var anyArrayType: Type? = null,
-    @kotlin.jvm.JvmField var autoArrayType: Type? = null,
-    @kotlin.jvm.JvmField var anyReadonlyArrayType: Type? = null,
-    @kotlin.jvm.JvmField var deferredGlobalImportMetaExpressionType: Type? = null,
-    @kotlin.jvm.JvmField var contextualBindingPatterns: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
-    @kotlin.jvm.JvmField var emptyStringType: Type? = null,
-    @kotlin.jvm.JvmField var zeroType: Type? = null,
-    @kotlin.jvm.JvmField var zeroBigIntType: Type? = null,
-    @kotlin.jvm.JvmField var typeofType: Type? = null,
-    @kotlin.jvm.JvmField var typeResolutions: GoSlice<TypeResolution> = TypeResolution.ELEM.nilSlice,
-    @kotlin.jvm.JvmField var resolutionStart: Int = 0,
-    @kotlin.jvm.JvmField var inVarianceComputation: Boolean = false,
-    @kotlin.jvm.JvmField var apparentArgumentCount: GoPtr<Int>? = null,
-    @kotlin.jvm.JvmField var lastGetCombinedNodeFlagsNode: Node? = null,
-    @get:kotlin.jvm.JvmName("goGet_lastGetCombinedNodeFlagsResult") @set:kotlin.jvm.JvmName("goSet_lastGetCombinedNodeFlagsResult") var lastGetCombinedNodeFlagsResult: NodeFlags = NodeFlags(0u),
-    @kotlin.jvm.JvmField var lastGetCombinedModifierFlagsNode: Node? = null,
-    @get:kotlin.jvm.JvmName("goGet_lastGetCombinedModifierFlagsResult") @set:kotlin.jvm.JvmName("goSet_lastGetCombinedModifierFlagsResult") var lastGetCombinedModifierFlagsResult: ModifierFlags = ModifierFlags(0u),
-    @kotlin.jvm.JvmField var freeinferenceState: InferenceState? = null,
-    @kotlin.jvm.JvmField var freeFlowState: FlowState? = null,
-    @kotlin.jvm.JvmField var flowLoopCache: GoMap<FlowLoopKey, Type?> = GoMap.nil<FlowLoopKey, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var flowLoopStack: GoSlice<FlowLoopInfo> = FlowLoopInfo.ELEM.nilSlice,
-    @kotlin.jvm.JvmField var sharedFlows: GoSlice<SharedFlow> = SharedFlow.ELEM.nilSlice,
-    @kotlin.jvm.JvmField var antecedentTypes: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice,
-    @kotlin.jvm.JvmField var flowAnalysisDisabled: Boolean = false,
-    @kotlin.jvm.JvmField var flowInvocationCount: Int = 0,
-    @kotlin.jvm.JvmField var flowTypeCache: GoMap<Node?, Type?> = GoMap.nil<Node?, Type?>(GoElem.ref<Type?>()),
-    @kotlin.jvm.JvmField var lastFlowNode: FlowNode? = null,
-    @kotlin.jvm.JvmField var lastFlowNodeReachable: Boolean = false,
-    @kotlin.jvm.JvmField var flowNodeReachable: GoMap<FlowNode?, Boolean> = GoMap.nil<FlowNode?, Boolean>(GoElem.BOOL),
-    @kotlin.jvm.JvmField var flowNodePostSuper: GoMap<FlowNode?, Boolean> = GoMap.nil<FlowNode?, Boolean>(GoElem.BOOL),
-    @kotlin.jvm.JvmField var renamedBindingElementsInTypes: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
-    @kotlin.jvm.JvmField var contextualInfos: GoSlice<ContextualInfo> = ContextualInfo.ELEM.nilSlice,
-    @kotlin.jvm.JvmField var inferenceContextInfos: GoSlice<InferenceContextInfo> = InferenceContextInfo.ELEM.nilSlice,
-    @kotlin.jvm.JvmField var awaitedTypeStack: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice,
-    @kotlin.jvm.JvmField var reverseMappedSourceStack: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice,
-    @kotlin.jvm.JvmField var reverseMappedTargetStack: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice,
-    @get:kotlin.jvm.JvmName("goGet_reverseExpandingFlags") @set:kotlin.jvm.JvmName("goSet_reverseExpandingFlags") var reverseExpandingFlags: ExpandingFlags = ExpandingFlags(0),
-    @kotlin.jvm.JvmField var freeRelater: Relater? = null,
-    @kotlin.jvm.JvmField var subtypeRelation: Relation? = null,
-    @kotlin.jvm.JvmField var strictSubtypeRelation: Relation? = null,
-    @kotlin.jvm.JvmField var assignableRelation: Relation? = null,
-    @kotlin.jvm.JvmField var comparableRelation: Relation? = null,
-    @kotlin.jvm.JvmField var identityRelation: Relation? = null,
-    @kotlin.jvm.JvmField var enumRelation: GoMap<EnumRelationKey, RelationComparisonResult> = GoMap.nil<EnumRelationKey, RelationComparisonResult>(RelationComparisonResult.ELEM),
-    @kotlin.jvm.JvmField var getGlobalESSymbolType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalBigIntType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalImportMetaType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalImportAttributesType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalImportAttributesTypeChecked: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalNonNullableTypeAliasOrNil: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalExtractSymbol: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalDisposableType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAsyncDisposableType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAwaitedSymbol: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAwaitedSymbolOrNil: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalNaNSymbolOrNil: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalRecordSymbol: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalTemplateStringsArrayType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalESSymbolConstructorSymbolOrNil: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalESSymbolConstructorTypeSymbolOrNil: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalImportCallOptionsType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalImportCallOptionsTypeChecked: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalPromiseType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalPromiseTypeChecked: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalPromiseLikeType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalPromiseConstructorSymbol: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalPromiseConstructorSymbolOrNil: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalOmitSymbol: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalNoInferSymbolOrNil: (() -> Symbol?)? = null,
-    @kotlin.jvm.JvmField var getGlobalIteratorType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalIterableType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalIterableTypeChecked: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalIterableIteratorType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalIterableIteratorTypeChecked: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalIteratorObjectType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalGeneratorType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAsyncIteratorType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAsyncIterableType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAsyncIterableTypeChecked: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAsyncIterableIteratorType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAsyncIterableIteratorTypeChecked: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAsyncIteratorObjectType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalAsyncGeneratorType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalIteratorYieldResultType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalIteratorReturnResultType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalTypedPropertyDescriptorType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassDecoratorContextType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassMethodDecoratorContextType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassGetterDecoratorContextType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassSetterDecoratorContextType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassAccessorDecoratorContxtType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassAccessorDecoratorContextType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassAccessorDecoratorTargetType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassAccessorDecoratorResultType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var getGlobalClassFieldDecoratorContextType: (() -> Type?)? = null,
-    @kotlin.jvm.JvmField var syncIterationTypesResolver: IterationTypesResolver? = null,
-    @kotlin.jvm.JvmField var asyncIterationTypesResolver: IterationTypesResolver? = null,
-    @kotlin.jvm.JvmField var isPrimitiveOrObjectOrEmptyType: ((Type?) -> Boolean)? = null,
-    @kotlin.jvm.JvmField var containsMissingType: ((Type?) -> Boolean)? = null,
-    @kotlin.jvm.JvmField var couldContainTypeVariables: ((Type?) -> Boolean)? = null,
-    @kotlin.jvm.JvmField var isStringIndexSignatureOnlyType: ((Type?) -> Boolean)? = null,
-    @kotlin.jvm.JvmField var markNodeAssignments: ((Node?) -> Boolean)? = null,
-    @kotlin.jvm.JvmField var compareTypesAssignable: TypeComparer = null,
-    @kotlin.jvm.JvmField var emitResolver: EmitResolver? = null,
-    @kotlin.jvm.JvmField var emitResolverOnce: Once = Once(),
-    @kotlin.jvm.JvmField var _jsxNamespace: String = "",
-    @kotlin.jvm.JvmField var _jsxFactoryEntity: Node? = null,
-    @kotlin.jvm.JvmField var skipDirectInferenceNodes: com.xemantic.typescript.tsgo.collections.Set<Node?> = com.xemantic.typescript.tsgo.collections.Set<Node?>(goElem_T = GoElem.ref<Node?>()),
-    @kotlin.jvm.JvmField var ctx: Context? = null,
-    @kotlin.jvm.JvmField var packagesMap: GoMap<String, Boolean> = GoMap.nil<String, Boolean>(GoElem.BOOL),
-    @kotlin.jvm.JvmField var activeMappers: GoSlice<TypeMapper?> = GoElem.ref<TypeMapper?>().nilSlice,
-    @kotlin.jvm.JvmField var activeTypeMappersCaches: GoSlice<GoMap<CacheHashKey, Type?>> = GoElem.map<CacheHashKey, Type?>(GoElem.ref<Type?>()).nilSlice,
-    @kotlin.jvm.JvmField var ambientModulesOnce: Once = Once(),
-    @kotlin.jvm.JvmField var ambientModules: GoSlice<Symbol?> = GoElem.ref<Symbol?>().nilSlice,
-    @kotlin.jvm.JvmField var withinUnreachableCode: Boolean = false,
-    @kotlin.jvm.JvmField var reportedUnreachableNodes: com.xemantic.typescript.tsgo.collections.Set<Node?> = com.xemantic.typescript.tsgo.collections.Set<Node?>(goElem_T = GoElem.ref<Node?>()),
-    @kotlin.jvm.JvmField var nonExistentProperties: com.xemantic.typescript.tsgo.collections.Set<NonExistentPropertyKey> = com.xemantic.typescript.tsgo.collections.Set<NonExistentPropertyKey>(goElem_T = NonExistentPropertyKey.ELEM),
-    @kotlin.jvm.JvmField var deferredDiagnosticCallbacks: GoSlice<(() -> Unit)?> = GoElem.ref<(() -> Unit)?>().nilSlice,
-    @kotlin.jvm.JvmField var typeToStringNodebuilder: NodeBuilder? = null,
-    @kotlin.jvm.JvmField var mu: Mutex = Mutex(),
-    @kotlin.jvm.JvmField var tracer: Tracer? = null,
 ) : CheckerShape {
+    @get:kotlin.jvm.JvmName("goGet_id") @set:kotlin.jvm.JvmName("goSet_id") var id: UInt = 0u
+    @kotlin.jvm.JvmField var program: Program? = null
+    @kotlin.jvm.JvmField var compilerOptions: CompilerOptions? = null
+    @kotlin.jvm.JvmField var files: GoSlice<SourceFile?> = GoElem.ref<SourceFile?>().nilSlice
+    @kotlin.jvm.JvmField var fileIndexMap: GoMap<SourceFile?, Int> = GoMap.nil<SourceFile?, Int>(GoElem.INT)
+    @kotlin.jvm.JvmField var compareSymbols: ((Symbol?, Symbol?) -> Int)? = null
+    @kotlin.jvm.JvmField var compareSymbolChains: ((GoSlice<Symbol?>, GoSlice<Symbol?>) -> Int)? = null
+    @get:kotlin.jvm.JvmName("goGet_typeCount") @set:kotlin.jvm.JvmName("goSet_typeCount") var typeCount: UInt = 0u
+    @get:kotlin.jvm.JvmName("goGet_symbolCount") @set:kotlin.jvm.JvmName("goSet_symbolCount") var symbolCount: UInt = 0u
+    @get:kotlin.jvm.JvmName("goGet_signatureCount") @set:kotlin.jvm.JvmName("goSet_signatureCount") var signatureCount: UInt = 0u
+    @get:kotlin.jvm.JvmName("goGet_totalInstantiationCount") @set:kotlin.jvm.JvmName("goSet_totalInstantiationCount") var totalInstantiationCount: UInt = 0u
+    @get:kotlin.jvm.JvmName("goGet_instantiationCount") @set:kotlin.jvm.JvmName("goSet_instantiationCount") var instantiationCount: UInt = 0u
+    @get:kotlin.jvm.JvmName("goGet_instantiationDepth") @set:kotlin.jvm.JvmName("goSet_instantiationDepth") var instantiationDepth: UInt = 0u
+    @get:kotlin.jvm.JvmName("goGet_conditionalConstraintDepth") @set:kotlin.jvm.JvmName("goSet_conditionalConstraintDepth") var conditionalConstraintDepth: UInt = 0u
+    @kotlin.jvm.JvmField var inlineLevel: Int = 0
+    @kotlin.jvm.JvmField var serializationLevel: Int = 0
+    @kotlin.jvm.JvmField var currentNode: Node? = null
+    @kotlin.jvm.JvmField var varianceTypeParameter: Type? = null
+    @get:kotlin.jvm.JvmName("goGet_languageVersion") @set:kotlin.jvm.JvmName("goSet_languageVersion") var languageVersion: ScriptTarget = ScriptTarget(0)
+    @get:kotlin.jvm.JvmName("goGet_moduleKind") @set:kotlin.jvm.JvmName("goSet_moduleKind") var moduleKind: ModuleKind = ModuleKind(0)
+    @get:kotlin.jvm.JvmName("goGet_moduleResolutionKind") @set:kotlin.jvm.JvmName("goSet_moduleResolutionKind") var moduleResolutionKind: ModuleResolutionKind = ModuleResolutionKind(0)
+    @kotlin.jvm.JvmField var isInferencePartiallyBlocked: Boolean = false
+    @kotlin.jvm.JvmField var legacyDecorators: Boolean = false
+    @kotlin.jvm.JvmField var emitStandardClassFields: Boolean = false
+    @kotlin.jvm.JvmField var strictNullChecks: Boolean = false
+    @kotlin.jvm.JvmField var strictFunctionTypes: Boolean = false
+    @kotlin.jvm.JvmField var strictBindCallApply: Boolean = false
+    @kotlin.jvm.JvmField var strictPropertyInitialization: Boolean = false
+    @kotlin.jvm.JvmField var strictBuiltinIteratorReturn: Boolean = false
+    @kotlin.jvm.JvmField var noImplicitAny: Boolean = false
+    @kotlin.jvm.JvmField var noImplicitThis: Boolean = false
+    @kotlin.jvm.JvmField var useUnknownInCatchVariables: Boolean = false
+    @kotlin.jvm.JvmField var exactOptionalPropertyTypes: Boolean = false
+    @kotlin.jvm.JvmField var canCollectSymbolAliasAccessibilityData: Boolean = false
+    @kotlin.jvm.JvmField var wasCanceled: Boolean = false
+    @kotlin.jvm.JvmField var saveDeferredDiagnostics: Boolean = false
+    @kotlin.jvm.JvmField var arrayVariances: GoSlice<VarianceFlags> = VarianceFlags.ELEM.nilSlice
+    @kotlin.jvm.JvmField var globals: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>())
+    @kotlin.jvm.JvmField var evaluate: Evaluator = null
+    @kotlin.jvm.JvmField var stringLiteralTypes: GoMap<String, Type?> = GoMap.nil<String, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var numberLiteralTypes: GoMap<com.xemantic.typescript.tsgo.jsnum.Number, Type?> = GoMap.nil<com.xemantic.typescript.tsgo.jsnum.Number, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var nanType: Type? = null
+    @kotlin.jvm.JvmField var bigintLiteralTypes: GoMap<PseudoBigInt, Type?> = GoMap.nil<PseudoBigInt, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var enumLiteralTypes: GoMap<EnumLiteralKey, Type?> = GoMap.nil<EnumLiteralKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var enumNaNLiteralTypes: GoMap<Symbol?, Type?> = GoMap.nil<Symbol?, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var indexedAccessTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var templateLiteralTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var stringMappingTypes: GoMap<StringMappingKey, Type?> = GoMap.nil<StringMappingKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var uniqueESSymbolTypes: GoMap<Symbol?, Type?> = GoMap.nil<Symbol?, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var thisExpandoKinds: GoMap<Symbol?, com.xemantic.typescript.tsgo.checker.thisAssignmentDeclarationKind> = GoMap.nil<Symbol?, com.xemantic.typescript.tsgo.checker.thisAssignmentDeclarationKind>(com.xemantic.typescript.tsgo.checker.thisAssignmentDeclarationKind.ELEM)
+    @kotlin.jvm.JvmField var thisExpandoLocations: GoMap<Symbol?, Node?> = GoMap.nil<Symbol?, Node?>(GoElem.ref<Node?>())
+    @kotlin.jvm.JvmField var subtypeReductionCache: GoMap<CacheHashKey, GoSlice<Type?>> = GoMap.nil<CacheHashKey, GoSlice<Type?>>(GoElem.slice(GoElem.ref<Type?>()))
+    @kotlin.jvm.JvmField var cachedTypes: GoMap<CachedTypeKey, Type?> = GoMap.nil<CachedTypeKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var cachedSignatures: GoMap<CachedSignatureKey, Signature?> = GoMap.nil<CachedSignatureKey, Signature?>(GoElem.ref<Signature?>())
+    @kotlin.jvm.JvmField var undefinedProperties: GoMap<String, Symbol?> = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>())
+    @kotlin.jvm.JvmField var narrowedTypes: GoMap<NarrowedTypeKey, Type?> = GoMap.nil<NarrowedTypeKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var assignmentReducedTypes: GoMap<AssignmentReducedKey, Type?> = GoMap.nil<AssignmentReducedKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var discriminatedContextualTypes: GoMap<DiscriminatedContextualTypeKey, Type?> = GoMap.nil<DiscriminatedContextualTypeKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var instantiationExpressionTypes: GoMap<InstantiationExpressionKey, Type?> = GoMap.nil<InstantiationExpressionKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var substitutionTypes: GoMap<SubstitutionTypeKey, Type?> = GoMap.nil<SubstitutionTypeKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var reverseMappedCache: GoMap<ReverseMappedTypeKey, Type?> = GoMap.nil<ReverseMappedTypeKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var reverseHomomorphicMappedCache: GoMap<ReverseMappedTypeKey, Type?> = GoMap.nil<ReverseMappedTypeKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var iterationTypesCache: GoMap<IterationTypesKey, IterationTypes> = GoMap.nil<IterationTypesKey, IterationTypes>(IterationTypes.ELEM)
+    @kotlin.jvm.JvmField var markerTypes: com.xemantic.typescript.tsgo.collections.Set<Type?> = com.xemantic.typescript.tsgo.collections.Set<Type?>(goElem_T = GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var undefinedSymbol: Symbol? = null
+    @kotlin.jvm.JvmField var argumentsSymbol: Symbol? = null
+    @kotlin.jvm.JvmField var requireSymbol: Symbol? = null
+    @kotlin.jvm.JvmField var unknownSymbol: Symbol? = null
+    @kotlin.jvm.JvmField var unresolvedSymbols: GoMap<String, Symbol?> = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>())
+    @kotlin.jvm.JvmField var errorTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var moduleSymbols: GoMap<Node?, Symbol?> = GoMap.nil<Node?, Symbol?>(GoElem.ref<Symbol?>())
+    @kotlin.jvm.JvmField var globalThisSymbol: Symbol? = null
+    @kotlin.jvm.JvmField var symbolTableAliasCache: GoMap<com.xemantic.typescript.tsgo.checker.symbolTableID, GoSlice<Symbol?>> = GoMap.nil<com.xemantic.typescript.tsgo.checker.symbolTableID, GoSlice<Symbol?>>(GoElem.slice(GoElem.ref<Symbol?>()))
+    @kotlin.jvm.JvmField var classExpressionNameTables: GoMap<NodeId, SymbolTable> = GoMap.nil<NodeId, SymbolTable>(GoElem.map<String, Symbol?>(GoElem.ref<Symbol?>()))
+    @kotlin.jvm.JvmField var resolveName: ((Node?, String, SymbolFlags, Message?, Boolean, Boolean) -> Symbol?)? = null
+    @kotlin.jvm.JvmField var resolveNameForSymbolSuggestion: ((Node?, String, SymbolFlags, Message?, Boolean, Boolean) -> Symbol?)? = null
+    @kotlin.jvm.JvmField var tupleTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var unionTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var unionOfUnionTypes: GoMap<UnionOfUnionKey, Type?> = GoMap.nil<UnionOfUnionKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var intersectionTypes: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var propertiesTypes: GoMap<PropertiesTypesKey, Type?> = GoMap.nil<PropertiesTypesKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var diagnostics: DiagnosticsCollection = DiagnosticsCollection()
+    @kotlin.jvm.JvmField var suggestionDiagnostics: DiagnosticsCollection = DiagnosticsCollection()
+    @kotlin.jvm.JvmField var symbolArena: Arena<Symbol> = Arena<Symbol>(goElem_T = Symbol.ELEM)
+    @kotlin.jvm.JvmField var signatureArena: Arena<Signature> = Arena<Signature>(goElem_T = Signature.ELEM)
+    @kotlin.jvm.JvmField var indexInfoArena: Arena<IndexInfo> = Arena<IndexInfo>(goElem_T = IndexInfo.ELEM)
+    @kotlin.jvm.JvmField var mergedSymbols: GoMap<Symbol?, Symbol?> = GoMap.nil<Symbol?, Symbol?>(GoElem.ref<Symbol?>())
+    @kotlin.jvm.JvmField var factory: NodeFactory = NodeFactory()
+    @kotlin.jvm.JvmField var nodeLinks: LinkStore<Node?, NodeLinks> = LinkStore<Node?, NodeLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = NodeLinks.ELEM)
+    @kotlin.jvm.JvmField var signatureLinks: LinkStore<Node?, SignatureLinks> = LinkStore<Node?, SignatureLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = SignatureLinks.ELEM)
+    @kotlin.jvm.JvmField var symbolNodeLinks: LinkStore<Node?, SymbolNodeLinks> = LinkStore<Node?, SymbolNodeLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = SymbolNodeLinks.ELEM)
+    @kotlin.jvm.JvmField var typeNodeLinks: LinkStore<Node?, TypeNodeLinks> = LinkStore<Node?, TypeNodeLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = TypeNodeLinks.ELEM)
+    @kotlin.jvm.JvmField var enumMemberLinks: LinkStore<Node?, EnumMemberLinks> = LinkStore<Node?, EnumMemberLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = EnumMemberLinks.ELEM)
+    @kotlin.jvm.JvmField var assertionLinks: LinkStore<Node?, AssertionLinks> = LinkStore<Node?, AssertionLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = AssertionLinks.ELEM)
+    @kotlin.jvm.JvmField var arrayLiteralLinks: LinkStore<Node?, ArrayLiteralLinks> = LinkStore<Node?, ArrayLiteralLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = ArrayLiteralLinks.ELEM)
+    @kotlin.jvm.JvmField var switchStatementLinks: LinkStore<Node?, SwitchStatementLinks> = LinkStore<Node?, SwitchStatementLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = SwitchStatementLinks.ELEM)
+    @kotlin.jvm.JvmField var jsxElementLinks: LinkStore<Node?, JsxElementLinks> = LinkStore<Node?, JsxElementLinks>(goElem_K = GoElem.ref<Node?>(), goElem_V = JsxElementLinks.ELEM)
+    @kotlin.jvm.JvmField var symbolReferenceLinks: LinkStore<Symbol?, SymbolReferenceLinks> = LinkStore<Symbol?, SymbolReferenceLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = SymbolReferenceLinks.ELEM)
+    @kotlin.jvm.JvmField var valueSymbolLinks: LinkStore<Symbol?, ValueSymbolLinks> = LinkStore<Symbol?, ValueSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ValueSymbolLinks.ELEM)
+    @kotlin.jvm.JvmField var mappedSymbolLinks: LinkStore<Symbol?, MappedSymbolLinks> = LinkStore<Symbol?, MappedSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = MappedSymbolLinks.ELEM)
+    @kotlin.jvm.JvmField var deferredSymbolLinks: LinkStore<Symbol?, DeferredSymbolLinks> = LinkStore<Symbol?, DeferredSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = DeferredSymbolLinks.ELEM)
+    @kotlin.jvm.JvmField var aliasSymbolLinks: LinkStore<Symbol?, AliasSymbolLinks> = LinkStore<Symbol?, AliasSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = AliasSymbolLinks.ELEM)
+    @kotlin.jvm.JvmField var moduleSymbolLinks: LinkStore<Symbol?, ModuleSymbolLinks> = LinkStore<Symbol?, ModuleSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ModuleSymbolLinks.ELEM)
+    @kotlin.jvm.JvmField var lateBoundLinks: LinkStore<Symbol?, LateBoundLinks> = LinkStore<Symbol?, LateBoundLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = LateBoundLinks.ELEM)
+    @kotlin.jvm.JvmField var exportTypeLinks: LinkStore<Symbol?, ExportTypeLinks> = LinkStore<Symbol?, ExportTypeLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ExportTypeLinks.ELEM)
+    @kotlin.jvm.JvmField var membersAndExportsLinks: LinkStore<Symbol?, MembersAndExportsLinks> = LinkStore<Symbol?, MembersAndExportsLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = GoElem<GoArray<SymbolTable>>({ GoArray(2, GoElem.map<String, Symbol?>(GoElem.ref<Symbol?>())) }, { it.goCopy() }))
+    @kotlin.jvm.JvmField var typeAliasLinks: LinkStore<Symbol?, TypeAliasLinks> = LinkStore<Symbol?, TypeAliasLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = TypeAliasLinks.ELEM)
+    @kotlin.jvm.JvmField var declaredTypeLinks: LinkStore<Symbol?, DeclaredTypeLinks> = LinkStore<Symbol?, DeclaredTypeLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = DeclaredTypeLinks.ELEM)
+    @kotlin.jvm.JvmField var spreadLinks: LinkStore<Symbol?, SpreadLinks> = LinkStore<Symbol?, SpreadLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = SpreadLinks.ELEM)
+    @kotlin.jvm.JvmField var varianceLinks: LinkStore<Symbol?, VarianceLinks> = LinkStore<Symbol?, VarianceLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = VarianceLinks.ELEM)
+    @kotlin.jvm.JvmField var reverseMappedSymbolLinks: LinkStore<Symbol?, ReverseMappedSymbolLinks> = LinkStore<Symbol?, ReverseMappedSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ReverseMappedSymbolLinks.ELEM)
+    @kotlin.jvm.JvmField var markedAssignmentSymbolLinks: LinkStore<Symbol?, MarkedAssignmentSymbolLinks> = LinkStore<Symbol?, MarkedAssignmentSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = MarkedAssignmentSymbolLinks.ELEM)
+    @kotlin.jvm.JvmField var symbolContainerLinks: LinkStore<Symbol?, ContainingSymbolLinks> = LinkStore<Symbol?, ContainingSymbolLinks>(goElem_K = GoElem.ref<Symbol?>(), goElem_V = ContainingSymbolLinks.ELEM)
+    @kotlin.jvm.JvmField var sourceFileLinks: LinkStore<SourceFile?, SourceFileLinks> = LinkStore<SourceFile?, SourceFileLinks>(goElem_K = GoElem.ref<SourceFile?>(), goElem_V = SourceFileLinks.ELEM)
+    @kotlin.jvm.JvmField var regExpScanner: Scanner? = null
+    @kotlin.jvm.JvmField var patternForType: GoMap<Type?, Node?> = GoMap.nil<Type?, Node?>(GoElem.ref<Node?>())
+    @kotlin.jvm.JvmField var contextFreeTypes: GoMap<Node?, Type?> = GoMap.nil<Node?, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var anyType: Type? = null
+    @kotlin.jvm.JvmField var autoType: Type? = null
+    @kotlin.jvm.JvmField var wildcardType: Type? = null
+    @kotlin.jvm.JvmField var blockedStringType: Type? = null
+    @kotlin.jvm.JvmField var errorType: Type? = null
+    @kotlin.jvm.JvmField var unresolvedType: Type? = null
+    @kotlin.jvm.JvmField var nonInferrableAnyType: Type? = null
+    @kotlin.jvm.JvmField var intrinsicMarkerType: Type? = null
+    @kotlin.jvm.JvmField var unknownType: Type? = null
+    @kotlin.jvm.JvmField var undefinedType: Type? = null
+    @kotlin.jvm.JvmField var undefinedWideningType: Type? = null
+    @kotlin.jvm.JvmField var missingType: Type? = null
+    @kotlin.jvm.JvmField var undefinedOrMissingType: Type? = null
+    @kotlin.jvm.JvmField var optionalType: Type? = null
+    @kotlin.jvm.JvmField var nullType: Type? = null
+    @kotlin.jvm.JvmField var nullWideningType: Type? = null
+    @kotlin.jvm.JvmField var stringType: Type? = null
+    @kotlin.jvm.JvmField var numberType: Type? = null
+    @kotlin.jvm.JvmField var bigintType: Type? = null
+    @kotlin.jvm.JvmField var regularFalseType: Type? = null
+    @kotlin.jvm.JvmField var falseType: Type? = null
+    @kotlin.jvm.JvmField var regularTrueType: Type? = null
+    @kotlin.jvm.JvmField var trueType: Type? = null
+    @kotlin.jvm.JvmField var booleanType: Type? = null
+    @kotlin.jvm.JvmField var esSymbolType: Type? = null
+    @kotlin.jvm.JvmField var voidType: Type? = null
+    @kotlin.jvm.JvmField var neverType: Type? = null
+    @kotlin.jvm.JvmField var silentNeverType: Type? = null
+    @kotlin.jvm.JvmField var implicitNeverType: Type? = null
+    @kotlin.jvm.JvmField var unreachableNeverType: Type? = null
+    @kotlin.jvm.JvmField var nonPrimitiveType: Type? = null
+    @kotlin.jvm.JvmField var stringOrNumberType: Type? = null
+    @kotlin.jvm.JvmField var stringNumberSymbolType: Type? = null
+    @kotlin.jvm.JvmField var numberOrBigIntType: Type? = null
+    @kotlin.jvm.JvmField var templateConstraintType: Type? = null
+    @kotlin.jvm.JvmField var numericStringType: Type? = null
+    @kotlin.jvm.JvmField var uniqueLiteralType: Type? = null
+    @kotlin.jvm.JvmField var uniqueLiteralMapper: TypeMapper? = null
+    @get:kotlin.jvm.JvmName("goGet_reliabilityFlags") @set:kotlin.jvm.JvmName("goSet_reliabilityFlags") var reliabilityFlags: RelationComparisonResult = RelationComparisonResult(0u)
+    @kotlin.jvm.JvmField var reportUnreliableMapper: TypeMapper? = null
+    @kotlin.jvm.JvmField var reportUnmeasurableMapper: TypeMapper? = null
+    @kotlin.jvm.JvmField var restrictiveMapper: TypeMapper? = null
+    @kotlin.jvm.JvmField var permissiveMapper: TypeMapper? = null
+    @kotlin.jvm.JvmField var emptyObjectType: Type? = null
+    @kotlin.jvm.JvmField var emptyJsxObjectType: Type? = null
+    @kotlin.jvm.JvmField var emptyFreshJsxObjectType: Type? = null
+    @kotlin.jvm.JvmField var emptyTypeLiteralType: Type? = null
+    @kotlin.jvm.JvmField var unknownEmptyObjectType: Type? = null
+    @kotlin.jvm.JvmField var unknownUnionType: Type? = null
+    @kotlin.jvm.JvmField var emptyGenericType: Type? = null
+    @kotlin.jvm.JvmField var anyFunctionType: Type? = null
+    @kotlin.jvm.JvmField var noConstraintType: Type? = null
+    @kotlin.jvm.JvmField var circularConstraintType: Type? = null
+    @kotlin.jvm.JvmField var resolvingDefaultType: Type? = null
+    @kotlin.jvm.JvmField var markerSuperType: Type? = null
+    @kotlin.jvm.JvmField var markerSubType: Type? = null
+    @kotlin.jvm.JvmField var markerOtherType: Type? = null
+    @kotlin.jvm.JvmField var markerSuperTypeForCheck: Type? = null
+    @kotlin.jvm.JvmField var markerSubTypeForCheck: Type? = null
+    @kotlin.jvm.JvmField var noTypePredicate: TypePredicate? = null
+    @kotlin.jvm.JvmField var anySignature: Signature? = null
+    @kotlin.jvm.JvmField var unknownSignature: Signature? = null
+    @kotlin.jvm.JvmField var resolvingSignature: Signature? = null
+    @kotlin.jvm.JvmField var silentNeverSignature: Signature? = null
+    @kotlin.jvm.JvmField var cachedArgumentsReferenced: GoMap<Node?, Boolean> = GoMap.nil<Node?, Boolean>(GoElem.BOOL)
+    @kotlin.jvm.JvmField var enumNumberIndexInfo: IndexInfo? = null
+    @kotlin.jvm.JvmField var anyBaseTypeIndexInfo: IndexInfo? = null
+    @kotlin.jvm.JvmField var patternAmbientModules: GoSlice<PatternAmbientModule?> = GoElem.ref<PatternAmbientModule?>().nilSlice
+    @kotlin.jvm.JvmField var patternAmbientModuleAugmentations: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>())
+    @kotlin.jvm.JvmField var globalObjectType: Type? = null
+    @kotlin.jvm.JvmField var globalFunctionType: Type? = null
+    @kotlin.jvm.JvmField var globalCallableFunctionType: Type? = null
+    @kotlin.jvm.JvmField var globalNewableFunctionType: Type? = null
+    @kotlin.jvm.JvmField var globalArrayType: Type? = null
+    @kotlin.jvm.JvmField var globalReadonlyArrayType: Type? = null
+    @kotlin.jvm.JvmField var globalStringType: Type? = null
+    @kotlin.jvm.JvmField var globalNumberType: Type? = null
+    @kotlin.jvm.JvmField var globalBooleanType: Type? = null
+    @kotlin.jvm.JvmField var globalRegExpType: Type? = null
+    @kotlin.jvm.JvmField var globalThisType: Type? = null
+    @kotlin.jvm.JvmField var anyArrayType: Type? = null
+    @kotlin.jvm.JvmField var autoArrayType: Type? = null
+    @kotlin.jvm.JvmField var anyReadonlyArrayType: Type? = null
+    @kotlin.jvm.JvmField var deferredGlobalImportMetaExpressionType: Type? = null
+    @kotlin.jvm.JvmField var contextualBindingPatterns: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
+    @kotlin.jvm.JvmField var emptyStringType: Type? = null
+    @kotlin.jvm.JvmField var zeroType: Type? = null
+    @kotlin.jvm.JvmField var zeroBigIntType: Type? = null
+    @kotlin.jvm.JvmField var typeofType: Type? = null
+    @kotlin.jvm.JvmField var typeResolutions: GoSlice<TypeResolution> = TypeResolution.ELEM.nilSlice
+    @kotlin.jvm.JvmField var resolutionStart: Int = 0
+    @kotlin.jvm.JvmField var inVarianceComputation: Boolean = false
+    @kotlin.jvm.JvmField var apparentArgumentCount: GoPtr<Int>? = null
+    @kotlin.jvm.JvmField var lastGetCombinedNodeFlagsNode: Node? = null
+    @get:kotlin.jvm.JvmName("goGet_lastGetCombinedNodeFlagsResult") @set:kotlin.jvm.JvmName("goSet_lastGetCombinedNodeFlagsResult") var lastGetCombinedNodeFlagsResult: NodeFlags = NodeFlags(0u)
+    @kotlin.jvm.JvmField var lastGetCombinedModifierFlagsNode: Node? = null
+    @get:kotlin.jvm.JvmName("goGet_lastGetCombinedModifierFlagsResult") @set:kotlin.jvm.JvmName("goSet_lastGetCombinedModifierFlagsResult") var lastGetCombinedModifierFlagsResult: ModifierFlags = ModifierFlags(0u)
+    @kotlin.jvm.JvmField var freeinferenceState: InferenceState? = null
+    @kotlin.jvm.JvmField var freeFlowState: FlowState? = null
+    @kotlin.jvm.JvmField var flowLoopCache: GoMap<FlowLoopKey, Type?> = GoMap.nil<FlowLoopKey, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var flowLoopStack: GoSlice<FlowLoopInfo> = FlowLoopInfo.ELEM.nilSlice
+    @kotlin.jvm.JvmField var sharedFlows: GoSlice<SharedFlow> = SharedFlow.ELEM.nilSlice
+    @kotlin.jvm.JvmField var antecedentTypes: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice
+    @kotlin.jvm.JvmField var flowAnalysisDisabled: Boolean = false
+    @kotlin.jvm.JvmField var flowInvocationCount: Int = 0
+    @kotlin.jvm.JvmField var flowTypeCache: GoMap<Node?, Type?> = GoMap.nil<Node?, Type?>(GoElem.ref<Type?>())
+    @kotlin.jvm.JvmField var lastFlowNode: FlowNode? = null
+    @kotlin.jvm.JvmField var lastFlowNodeReachable: Boolean = false
+    @kotlin.jvm.JvmField var flowNodeReachable: GoMap<FlowNode?, Boolean> = GoMap.nil<FlowNode?, Boolean>(GoElem.BOOL)
+    @kotlin.jvm.JvmField var flowNodePostSuper: GoMap<FlowNode?, Boolean> = GoMap.nil<FlowNode?, Boolean>(GoElem.BOOL)
+    @kotlin.jvm.JvmField var renamedBindingElementsInTypes: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
+    @kotlin.jvm.JvmField var contextualInfos: GoSlice<ContextualInfo> = ContextualInfo.ELEM.nilSlice
+    @kotlin.jvm.JvmField var inferenceContextInfos: GoSlice<InferenceContextInfo> = InferenceContextInfo.ELEM.nilSlice
+    @kotlin.jvm.JvmField var awaitedTypeStack: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice
+    @kotlin.jvm.JvmField var reverseMappedSourceStack: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice
+    @kotlin.jvm.JvmField var reverseMappedTargetStack: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice
+    @get:kotlin.jvm.JvmName("goGet_reverseExpandingFlags") @set:kotlin.jvm.JvmName("goSet_reverseExpandingFlags") var reverseExpandingFlags: ExpandingFlags = ExpandingFlags(0)
+    @kotlin.jvm.JvmField var freeRelater: Relater? = null
+    @kotlin.jvm.JvmField var subtypeRelation: Relation? = null
+    @kotlin.jvm.JvmField var strictSubtypeRelation: Relation? = null
+    @kotlin.jvm.JvmField var assignableRelation: Relation? = null
+    @kotlin.jvm.JvmField var comparableRelation: Relation? = null
+    @kotlin.jvm.JvmField var identityRelation: Relation? = null
+    @kotlin.jvm.JvmField var enumRelation: GoMap<EnumRelationKey, RelationComparisonResult> = GoMap.nil<EnumRelationKey, RelationComparisonResult>(RelationComparisonResult.ELEM)
+    @kotlin.jvm.JvmField var getGlobalESSymbolType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalBigIntType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalImportMetaType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalImportAttributesType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalImportAttributesTypeChecked: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalNonNullableTypeAliasOrNil: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalExtractSymbol: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalDisposableType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAsyncDisposableType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAwaitedSymbol: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalAwaitedSymbolOrNil: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalNaNSymbolOrNil: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalRecordSymbol: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalTemplateStringsArrayType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalESSymbolConstructorSymbolOrNil: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalESSymbolConstructorTypeSymbolOrNil: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalImportCallOptionsType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalImportCallOptionsTypeChecked: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalPromiseType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalPromiseTypeChecked: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalPromiseLikeType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalPromiseConstructorSymbol: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalPromiseConstructorSymbolOrNil: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalOmitSymbol: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalNoInferSymbolOrNil: (() -> Symbol?)? = null
+    @kotlin.jvm.JvmField var getGlobalIteratorType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalIterableType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalIterableTypeChecked: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalIterableIteratorType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalIterableIteratorTypeChecked: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalIteratorObjectType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalGeneratorType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAsyncIteratorType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAsyncIterableType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAsyncIterableTypeChecked: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAsyncIterableIteratorType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAsyncIterableIteratorTypeChecked: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAsyncIteratorObjectType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalAsyncGeneratorType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalIteratorYieldResultType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalIteratorReturnResultType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalTypedPropertyDescriptorType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassDecoratorContextType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassMethodDecoratorContextType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassGetterDecoratorContextType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassSetterDecoratorContextType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassAccessorDecoratorContxtType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassAccessorDecoratorContextType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassAccessorDecoratorTargetType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassAccessorDecoratorResultType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var getGlobalClassFieldDecoratorContextType: (() -> Type?)? = null
+    @kotlin.jvm.JvmField var syncIterationTypesResolver: IterationTypesResolver? = null
+    @kotlin.jvm.JvmField var asyncIterationTypesResolver: IterationTypesResolver? = null
+    @kotlin.jvm.JvmField var isPrimitiveOrObjectOrEmptyType: ((Type?) -> Boolean)? = null
+    @kotlin.jvm.JvmField var containsMissingType: ((Type?) -> Boolean)? = null
+    @kotlin.jvm.JvmField var couldContainTypeVariables: ((Type?) -> Boolean)? = null
+    @kotlin.jvm.JvmField var isStringIndexSignatureOnlyType: ((Type?) -> Boolean)? = null
+    @kotlin.jvm.JvmField var markNodeAssignments: ((Node?) -> Boolean)? = null
+    @kotlin.jvm.JvmField var compareTypesAssignable: TypeComparer = null
+    @kotlin.jvm.JvmField var emitResolver: EmitResolver? = null
+    @kotlin.jvm.JvmField var emitResolverOnce: Once = Once()
+    @kotlin.jvm.JvmField var _jsxNamespace: String = ""
+    @kotlin.jvm.JvmField var _jsxFactoryEntity: Node? = null
+    @kotlin.jvm.JvmField var skipDirectInferenceNodes: com.xemantic.typescript.tsgo.collections.Set<Node?> = com.xemantic.typescript.tsgo.collections.Set<Node?>(goElem_T = GoElem.ref<Node?>())
+    @kotlin.jvm.JvmField var ctx: Context? = null
+    @kotlin.jvm.JvmField var packagesMap: GoMap<String, Boolean> = GoMap.nil<String, Boolean>(GoElem.BOOL)
+    @kotlin.jvm.JvmField var activeMappers: GoSlice<TypeMapper?> = GoElem.ref<TypeMapper?>().nilSlice
+    @kotlin.jvm.JvmField var activeTypeMappersCaches: GoSlice<GoMap<CacheHashKey, Type?>> = GoElem.map<CacheHashKey, Type?>(GoElem.ref<Type?>()).nilSlice
+    @kotlin.jvm.JvmField var ambientModulesOnce: Once = Once()
+    @kotlin.jvm.JvmField var ambientModules: GoSlice<Symbol?> = GoElem.ref<Symbol?>().nilSlice
+    @kotlin.jvm.JvmField var withinUnreachableCode: Boolean = false
+    @kotlin.jvm.JvmField var reportedUnreachableNodes: com.xemantic.typescript.tsgo.collections.Set<Node?> = com.xemantic.typescript.tsgo.collections.Set<Node?>(goElem_T = GoElem.ref<Node?>())
+    @kotlin.jvm.JvmField var nonExistentProperties: com.xemantic.typescript.tsgo.collections.Set<NonExistentPropertyKey> = com.xemantic.typescript.tsgo.collections.Set<NonExistentPropertyKey>(goElem_T = NonExistentPropertyKey.ELEM)
+    @kotlin.jvm.JvmField var deferredDiagnosticCallbacks: GoSlice<(() -> Unit)?> = GoElem.ref<(() -> Unit)?>().nilSlice
+    @kotlin.jvm.JvmField var typeToStringNodebuilder: NodeBuilder? = null
+    @kotlin.jvm.JvmField var mu: Mutex = Mutex()
+    @kotlin.jvm.JvmField var tracer: Tracer? = null
 
-    fun goCopy(): Checker = Checker(id = id, program = program, compilerOptions = compilerOptions, files = files, fileIndexMap = fileIndexMap, compareSymbols = compareSymbols, compareSymbolChains = compareSymbolChains, typeCount = typeCount, symbolCount = symbolCount, signatureCount = signatureCount, totalInstantiationCount = totalInstantiationCount, instantiationCount = instantiationCount, instantiationDepth = instantiationDepth, conditionalConstraintDepth = conditionalConstraintDepth, inlineLevel = inlineLevel, serializationLevel = serializationLevel, currentNode = currentNode, varianceTypeParameter = varianceTypeParameter, languageVersion = languageVersion, moduleKind = moduleKind, moduleResolutionKind = moduleResolutionKind, isInferencePartiallyBlocked = isInferencePartiallyBlocked, legacyDecorators = legacyDecorators, emitStandardClassFields = emitStandardClassFields, strictNullChecks = strictNullChecks, strictFunctionTypes = strictFunctionTypes, strictBindCallApply = strictBindCallApply, strictPropertyInitialization = strictPropertyInitialization, strictBuiltinIteratorReturn = strictBuiltinIteratorReturn, noImplicitAny = noImplicitAny, noImplicitThis = noImplicitThis, useUnknownInCatchVariables = useUnknownInCatchVariables, exactOptionalPropertyTypes = exactOptionalPropertyTypes, canCollectSymbolAliasAccessibilityData = canCollectSymbolAliasAccessibilityData, wasCanceled = wasCanceled, saveDeferredDiagnostics = saveDeferredDiagnostics, arrayVariances = arrayVariances, globals = globals, evaluate = evaluate, stringLiteralTypes = stringLiteralTypes, numberLiteralTypes = numberLiteralTypes, nanType = nanType, bigintLiteralTypes = bigintLiteralTypes, enumLiteralTypes = enumLiteralTypes, enumNaNLiteralTypes = enumNaNLiteralTypes, indexedAccessTypes = indexedAccessTypes, templateLiteralTypes = templateLiteralTypes, stringMappingTypes = stringMappingTypes, uniqueESSymbolTypes = uniqueESSymbolTypes, thisExpandoKinds = thisExpandoKinds, thisExpandoLocations = thisExpandoLocations, subtypeReductionCache = subtypeReductionCache, cachedTypes = cachedTypes, cachedSignatures = cachedSignatures, undefinedProperties = undefinedProperties, narrowedTypes = narrowedTypes, assignmentReducedTypes = assignmentReducedTypes, discriminatedContextualTypes = discriminatedContextualTypes, instantiationExpressionTypes = instantiationExpressionTypes, substitutionTypes = substitutionTypes, reverseMappedCache = reverseMappedCache, reverseHomomorphicMappedCache = reverseHomomorphicMappedCache, iterationTypesCache = iterationTypesCache, markerTypes = markerTypes.goCopy(), undefinedSymbol = undefinedSymbol, argumentsSymbol = argumentsSymbol, requireSymbol = requireSymbol, unknownSymbol = unknownSymbol, unresolvedSymbols = unresolvedSymbols, errorTypes = errorTypes, moduleSymbols = moduleSymbols, globalThisSymbol = globalThisSymbol, symbolTableAliasCache = symbolTableAliasCache, classExpressionNameTables = classExpressionNameTables, resolveName = resolveName, resolveNameForSymbolSuggestion = resolveNameForSymbolSuggestion, tupleTypes = tupleTypes, unionTypes = unionTypes, unionOfUnionTypes = unionOfUnionTypes, intersectionTypes = intersectionTypes, propertiesTypes = propertiesTypes, diagnostics = diagnostics.goCopy(), suggestionDiagnostics = suggestionDiagnostics.goCopy(), symbolArena = symbolArena.goCopy(), signatureArena = signatureArena.goCopy(), indexInfoArena = indexInfoArena.goCopy(), mergedSymbols = mergedSymbols, factory = factory.goCopy(), nodeLinks = nodeLinks.goCopy(), signatureLinks = signatureLinks.goCopy(), symbolNodeLinks = symbolNodeLinks.goCopy(), typeNodeLinks = typeNodeLinks.goCopy(), enumMemberLinks = enumMemberLinks.goCopy(), assertionLinks = assertionLinks.goCopy(), arrayLiteralLinks = arrayLiteralLinks.goCopy(), switchStatementLinks = switchStatementLinks.goCopy(), jsxElementLinks = jsxElementLinks.goCopy(), symbolReferenceLinks = symbolReferenceLinks.goCopy(), valueSymbolLinks = valueSymbolLinks.goCopy(), mappedSymbolLinks = mappedSymbolLinks.goCopy(), deferredSymbolLinks = deferredSymbolLinks.goCopy(), aliasSymbolLinks = aliasSymbolLinks.goCopy(), moduleSymbolLinks = moduleSymbolLinks.goCopy(), lateBoundLinks = lateBoundLinks.goCopy(), exportTypeLinks = exportTypeLinks.goCopy(), membersAndExportsLinks = membersAndExportsLinks.goCopy(), typeAliasLinks = typeAliasLinks.goCopy(), declaredTypeLinks = declaredTypeLinks.goCopy(), spreadLinks = spreadLinks.goCopy(), varianceLinks = varianceLinks.goCopy(), reverseMappedSymbolLinks = reverseMappedSymbolLinks.goCopy(), markedAssignmentSymbolLinks = markedAssignmentSymbolLinks.goCopy(), symbolContainerLinks = symbolContainerLinks.goCopy(), sourceFileLinks = sourceFileLinks.goCopy(), regExpScanner = regExpScanner, patternForType = patternForType, contextFreeTypes = contextFreeTypes, anyType = anyType, autoType = autoType, wildcardType = wildcardType, blockedStringType = blockedStringType, errorType = errorType, unresolvedType = unresolvedType, nonInferrableAnyType = nonInferrableAnyType, intrinsicMarkerType = intrinsicMarkerType, unknownType = unknownType, undefinedType = undefinedType, undefinedWideningType = undefinedWideningType, missingType = missingType, undefinedOrMissingType = undefinedOrMissingType, optionalType = optionalType, nullType = nullType, nullWideningType = nullWideningType, stringType = stringType, numberType = numberType, bigintType = bigintType, regularFalseType = regularFalseType, falseType = falseType, regularTrueType = regularTrueType, trueType = trueType, booleanType = booleanType, esSymbolType = esSymbolType, voidType = voidType, neverType = neverType, silentNeverType = silentNeverType, implicitNeverType = implicitNeverType, unreachableNeverType = unreachableNeverType, nonPrimitiveType = nonPrimitiveType, stringOrNumberType = stringOrNumberType, stringNumberSymbolType = stringNumberSymbolType, numberOrBigIntType = numberOrBigIntType, templateConstraintType = templateConstraintType, numericStringType = numericStringType, uniqueLiteralType = uniqueLiteralType, uniqueLiteralMapper = uniqueLiteralMapper, reliabilityFlags = reliabilityFlags, reportUnreliableMapper = reportUnreliableMapper, reportUnmeasurableMapper = reportUnmeasurableMapper, restrictiveMapper = restrictiveMapper, permissiveMapper = permissiveMapper, emptyObjectType = emptyObjectType, emptyJsxObjectType = emptyJsxObjectType, emptyFreshJsxObjectType = emptyFreshJsxObjectType, emptyTypeLiteralType = emptyTypeLiteralType, unknownEmptyObjectType = unknownEmptyObjectType, unknownUnionType = unknownUnionType, emptyGenericType = emptyGenericType, anyFunctionType = anyFunctionType, noConstraintType = noConstraintType, circularConstraintType = circularConstraintType, resolvingDefaultType = resolvingDefaultType, markerSuperType = markerSuperType, markerSubType = markerSubType, markerOtherType = markerOtherType, markerSuperTypeForCheck = markerSuperTypeForCheck, markerSubTypeForCheck = markerSubTypeForCheck, noTypePredicate = noTypePredicate, anySignature = anySignature, unknownSignature = unknownSignature, resolvingSignature = resolvingSignature, silentNeverSignature = silentNeverSignature, cachedArgumentsReferenced = cachedArgumentsReferenced, enumNumberIndexInfo = enumNumberIndexInfo, anyBaseTypeIndexInfo = anyBaseTypeIndexInfo, patternAmbientModules = patternAmbientModules, patternAmbientModuleAugmentations = patternAmbientModuleAugmentations, globalObjectType = globalObjectType, globalFunctionType = globalFunctionType, globalCallableFunctionType = globalCallableFunctionType, globalNewableFunctionType = globalNewableFunctionType, globalArrayType = globalArrayType, globalReadonlyArrayType = globalReadonlyArrayType, globalStringType = globalStringType, globalNumberType = globalNumberType, globalBooleanType = globalBooleanType, globalRegExpType = globalRegExpType, globalThisType = globalThisType, anyArrayType = anyArrayType, autoArrayType = autoArrayType, anyReadonlyArrayType = anyReadonlyArrayType, deferredGlobalImportMetaExpressionType = deferredGlobalImportMetaExpressionType, contextualBindingPatterns = contextualBindingPatterns, emptyStringType = emptyStringType, zeroType = zeroType, zeroBigIntType = zeroBigIntType, typeofType = typeofType, typeResolutions = typeResolutions, resolutionStart = resolutionStart, inVarianceComputation = inVarianceComputation, apparentArgumentCount = apparentArgumentCount, lastGetCombinedNodeFlagsNode = lastGetCombinedNodeFlagsNode, lastGetCombinedNodeFlagsResult = lastGetCombinedNodeFlagsResult, lastGetCombinedModifierFlagsNode = lastGetCombinedModifierFlagsNode, lastGetCombinedModifierFlagsResult = lastGetCombinedModifierFlagsResult, freeinferenceState = freeinferenceState, freeFlowState = freeFlowState, flowLoopCache = flowLoopCache, flowLoopStack = flowLoopStack, sharedFlows = sharedFlows, antecedentTypes = antecedentTypes, flowAnalysisDisabled = flowAnalysisDisabled, flowInvocationCount = flowInvocationCount, flowTypeCache = flowTypeCache, lastFlowNode = lastFlowNode, lastFlowNodeReachable = lastFlowNodeReachable, flowNodeReachable = flowNodeReachable, flowNodePostSuper = flowNodePostSuper, renamedBindingElementsInTypes = renamedBindingElementsInTypes, contextualInfos = contextualInfos, inferenceContextInfos = inferenceContextInfos, awaitedTypeStack = awaitedTypeStack, reverseMappedSourceStack = reverseMappedSourceStack, reverseMappedTargetStack = reverseMappedTargetStack, reverseExpandingFlags = reverseExpandingFlags, freeRelater = freeRelater, subtypeRelation = subtypeRelation, strictSubtypeRelation = strictSubtypeRelation, assignableRelation = assignableRelation, comparableRelation = comparableRelation, identityRelation = identityRelation, enumRelation = enumRelation, getGlobalESSymbolType = getGlobalESSymbolType, getGlobalBigIntType = getGlobalBigIntType, getGlobalImportMetaType = getGlobalImportMetaType, getGlobalImportAttributesType = getGlobalImportAttributesType, getGlobalImportAttributesTypeChecked = getGlobalImportAttributesTypeChecked, getGlobalNonNullableTypeAliasOrNil = getGlobalNonNullableTypeAliasOrNil, getGlobalExtractSymbol = getGlobalExtractSymbol, getGlobalDisposableType = getGlobalDisposableType, getGlobalAsyncDisposableType = getGlobalAsyncDisposableType, getGlobalAwaitedSymbol = getGlobalAwaitedSymbol, getGlobalAwaitedSymbolOrNil = getGlobalAwaitedSymbolOrNil, getGlobalNaNSymbolOrNil = getGlobalNaNSymbolOrNil, getGlobalRecordSymbol = getGlobalRecordSymbol, getGlobalTemplateStringsArrayType = getGlobalTemplateStringsArrayType, getGlobalESSymbolConstructorSymbolOrNil = getGlobalESSymbolConstructorSymbolOrNil, getGlobalESSymbolConstructorTypeSymbolOrNil = getGlobalESSymbolConstructorTypeSymbolOrNil, getGlobalImportCallOptionsType = getGlobalImportCallOptionsType, getGlobalImportCallOptionsTypeChecked = getGlobalImportCallOptionsTypeChecked, getGlobalPromiseType = getGlobalPromiseType, getGlobalPromiseTypeChecked = getGlobalPromiseTypeChecked, getGlobalPromiseLikeType = getGlobalPromiseLikeType, getGlobalPromiseConstructorSymbol = getGlobalPromiseConstructorSymbol, getGlobalPromiseConstructorSymbolOrNil = getGlobalPromiseConstructorSymbolOrNil, getGlobalOmitSymbol = getGlobalOmitSymbol, getGlobalNoInferSymbolOrNil = getGlobalNoInferSymbolOrNil, getGlobalIteratorType = getGlobalIteratorType, getGlobalIterableType = getGlobalIterableType, getGlobalIterableTypeChecked = getGlobalIterableTypeChecked, getGlobalIterableIteratorType = getGlobalIterableIteratorType, getGlobalIterableIteratorTypeChecked = getGlobalIterableIteratorTypeChecked, getGlobalIteratorObjectType = getGlobalIteratorObjectType, getGlobalGeneratorType = getGlobalGeneratorType, getGlobalAsyncIteratorType = getGlobalAsyncIteratorType, getGlobalAsyncIterableType = getGlobalAsyncIterableType, getGlobalAsyncIterableTypeChecked = getGlobalAsyncIterableTypeChecked, getGlobalAsyncIterableIteratorType = getGlobalAsyncIterableIteratorType, getGlobalAsyncIterableIteratorTypeChecked = getGlobalAsyncIterableIteratorTypeChecked, getGlobalAsyncIteratorObjectType = getGlobalAsyncIteratorObjectType, getGlobalAsyncGeneratorType = getGlobalAsyncGeneratorType, getGlobalIteratorYieldResultType = getGlobalIteratorYieldResultType, getGlobalIteratorReturnResultType = getGlobalIteratorReturnResultType, getGlobalTypedPropertyDescriptorType = getGlobalTypedPropertyDescriptorType, getGlobalClassDecoratorContextType = getGlobalClassDecoratorContextType, getGlobalClassMethodDecoratorContextType = getGlobalClassMethodDecoratorContextType, getGlobalClassGetterDecoratorContextType = getGlobalClassGetterDecoratorContextType, getGlobalClassSetterDecoratorContextType = getGlobalClassSetterDecoratorContextType, getGlobalClassAccessorDecoratorContxtType = getGlobalClassAccessorDecoratorContxtType, getGlobalClassAccessorDecoratorContextType = getGlobalClassAccessorDecoratorContextType, getGlobalClassAccessorDecoratorTargetType = getGlobalClassAccessorDecoratorTargetType, getGlobalClassAccessorDecoratorResultType = getGlobalClassAccessorDecoratorResultType, getGlobalClassFieldDecoratorContextType = getGlobalClassFieldDecoratorContextType, syncIterationTypesResolver = syncIterationTypesResolver, asyncIterationTypesResolver = asyncIterationTypesResolver, isPrimitiveOrObjectOrEmptyType = isPrimitiveOrObjectOrEmptyType, containsMissingType = containsMissingType, couldContainTypeVariables = couldContainTypeVariables, isStringIndexSignatureOnlyType = isStringIndexSignatureOnlyType, markNodeAssignments = markNodeAssignments, compareTypesAssignable = compareTypesAssignable, emitResolver = emitResolver, emitResolverOnce = emitResolverOnce.goCopy(), _jsxNamespace = _jsxNamespace, _jsxFactoryEntity = _jsxFactoryEntity, skipDirectInferenceNodes = skipDirectInferenceNodes.goCopy(), ctx = ctx, packagesMap = packagesMap, activeMappers = activeMappers, activeTypeMappersCaches = activeTypeMappersCaches, ambientModulesOnce = ambientModulesOnce.goCopy(), ambientModules = ambientModules, withinUnreachableCode = withinUnreachableCode, reportedUnreachableNodes = reportedUnreachableNodes.goCopy(), nonExistentProperties = nonExistentProperties.goCopy(), deferredDiagnosticCallbacks = deferredDiagnosticCallbacks, typeToStringNodebuilder = typeToStringNodebuilder, mu = mu.goCopy(), tracer = tracer)
+    fun goCopy(): Checker {
+        val goOut = Checker()
+        goOut.id = id
+        goOut.program = program
+        goOut.compilerOptions = compilerOptions
+        goOut.files = files
+        goOut.fileIndexMap = fileIndexMap
+        goOut.compareSymbols = compareSymbols
+        goOut.compareSymbolChains = compareSymbolChains
+        goOut.typeCount = typeCount
+        goOut.symbolCount = symbolCount
+        goOut.signatureCount = signatureCount
+        goOut.totalInstantiationCount = totalInstantiationCount
+        goOut.instantiationCount = instantiationCount
+        goOut.instantiationDepth = instantiationDepth
+        goOut.conditionalConstraintDepth = conditionalConstraintDepth
+        goOut.inlineLevel = inlineLevel
+        goOut.serializationLevel = serializationLevel
+        goOut.currentNode = currentNode
+        goOut.varianceTypeParameter = varianceTypeParameter
+        goOut.languageVersion = languageVersion
+        goOut.moduleKind = moduleKind
+        goOut.moduleResolutionKind = moduleResolutionKind
+        goOut.isInferencePartiallyBlocked = isInferencePartiallyBlocked
+        goOut.legacyDecorators = legacyDecorators
+        goOut.emitStandardClassFields = emitStandardClassFields
+        goOut.strictNullChecks = strictNullChecks
+        goOut.strictFunctionTypes = strictFunctionTypes
+        goOut.strictBindCallApply = strictBindCallApply
+        goOut.strictPropertyInitialization = strictPropertyInitialization
+        goOut.strictBuiltinIteratorReturn = strictBuiltinIteratorReturn
+        goOut.noImplicitAny = noImplicitAny
+        goOut.noImplicitThis = noImplicitThis
+        goOut.useUnknownInCatchVariables = useUnknownInCatchVariables
+        goOut.exactOptionalPropertyTypes = exactOptionalPropertyTypes
+        goOut.canCollectSymbolAliasAccessibilityData = canCollectSymbolAliasAccessibilityData
+        goOut.wasCanceled = wasCanceled
+        goOut.saveDeferredDiagnostics = saveDeferredDiagnostics
+        goOut.arrayVariances = arrayVariances
+        goOut.globals = globals
+        goOut.evaluate = evaluate
+        goOut.stringLiteralTypes = stringLiteralTypes
+        goOut.numberLiteralTypes = numberLiteralTypes
+        goOut.nanType = nanType
+        goOut.bigintLiteralTypes = bigintLiteralTypes
+        goOut.enumLiteralTypes = enumLiteralTypes
+        goOut.enumNaNLiteralTypes = enumNaNLiteralTypes
+        goOut.indexedAccessTypes = indexedAccessTypes
+        goOut.templateLiteralTypes = templateLiteralTypes
+        goOut.stringMappingTypes = stringMappingTypes
+        goOut.uniqueESSymbolTypes = uniqueESSymbolTypes
+        goOut.thisExpandoKinds = thisExpandoKinds
+        goOut.thisExpandoLocations = thisExpandoLocations
+        goOut.subtypeReductionCache = subtypeReductionCache
+        goOut.cachedTypes = cachedTypes
+        goOut.cachedSignatures = cachedSignatures
+        goOut.undefinedProperties = undefinedProperties
+        goOut.narrowedTypes = narrowedTypes
+        goOut.assignmentReducedTypes = assignmentReducedTypes
+        goOut.discriminatedContextualTypes = discriminatedContextualTypes
+        goOut.instantiationExpressionTypes = instantiationExpressionTypes
+        goOut.substitutionTypes = substitutionTypes
+        goOut.reverseMappedCache = reverseMappedCache
+        goOut.reverseHomomorphicMappedCache = reverseHomomorphicMappedCache
+        goOut.iterationTypesCache = iterationTypesCache
+        goOut.markerTypes = markerTypes.goCopy()
+        goOut.undefinedSymbol = undefinedSymbol
+        goOut.argumentsSymbol = argumentsSymbol
+        goOut.requireSymbol = requireSymbol
+        goOut.unknownSymbol = unknownSymbol
+        goOut.unresolvedSymbols = unresolvedSymbols
+        goOut.errorTypes = errorTypes
+        goOut.moduleSymbols = moduleSymbols
+        goOut.globalThisSymbol = globalThisSymbol
+        goOut.symbolTableAliasCache = symbolTableAliasCache
+        goOut.classExpressionNameTables = classExpressionNameTables
+        goOut.resolveName = resolveName
+        goOut.resolveNameForSymbolSuggestion = resolveNameForSymbolSuggestion
+        goOut.tupleTypes = tupleTypes
+        goOut.unionTypes = unionTypes
+        goOut.unionOfUnionTypes = unionOfUnionTypes
+        goOut.intersectionTypes = intersectionTypes
+        goOut.propertiesTypes = propertiesTypes
+        goOut.diagnostics = diagnostics.goCopy()
+        goOut.suggestionDiagnostics = suggestionDiagnostics.goCopy()
+        goOut.symbolArena = symbolArena.goCopy()
+        goOut.signatureArena = signatureArena.goCopy()
+        goOut.indexInfoArena = indexInfoArena.goCopy()
+        goOut.mergedSymbols = mergedSymbols
+        goOut.factory = factory.goCopy()
+        goOut.nodeLinks = nodeLinks.goCopy()
+        goOut.signatureLinks = signatureLinks.goCopy()
+        goOut.symbolNodeLinks = symbolNodeLinks.goCopy()
+        goOut.typeNodeLinks = typeNodeLinks.goCopy()
+        goOut.enumMemberLinks = enumMemberLinks.goCopy()
+        goOut.assertionLinks = assertionLinks.goCopy()
+        goOut.arrayLiteralLinks = arrayLiteralLinks.goCopy()
+        goOut.switchStatementLinks = switchStatementLinks.goCopy()
+        goOut.jsxElementLinks = jsxElementLinks.goCopy()
+        goOut.symbolReferenceLinks = symbolReferenceLinks.goCopy()
+        goOut.valueSymbolLinks = valueSymbolLinks.goCopy()
+        goOut.mappedSymbolLinks = mappedSymbolLinks.goCopy()
+        goOut.deferredSymbolLinks = deferredSymbolLinks.goCopy()
+        goOut.aliasSymbolLinks = aliasSymbolLinks.goCopy()
+        goOut.moduleSymbolLinks = moduleSymbolLinks.goCopy()
+        goOut.lateBoundLinks = lateBoundLinks.goCopy()
+        goOut.exportTypeLinks = exportTypeLinks.goCopy()
+        goOut.membersAndExportsLinks = membersAndExportsLinks.goCopy()
+        goOut.typeAliasLinks = typeAliasLinks.goCopy()
+        goOut.declaredTypeLinks = declaredTypeLinks.goCopy()
+        goOut.spreadLinks = spreadLinks.goCopy()
+        goOut.varianceLinks = varianceLinks.goCopy()
+        goOut.reverseMappedSymbolLinks = reverseMappedSymbolLinks.goCopy()
+        goOut.markedAssignmentSymbolLinks = markedAssignmentSymbolLinks.goCopy()
+        goOut.symbolContainerLinks = symbolContainerLinks.goCopy()
+        goOut.sourceFileLinks = sourceFileLinks.goCopy()
+        goOut.regExpScanner = regExpScanner
+        goOut.patternForType = patternForType
+        goOut.contextFreeTypes = contextFreeTypes
+        goOut.anyType = anyType
+        goOut.autoType = autoType
+        goOut.wildcardType = wildcardType
+        goOut.blockedStringType = blockedStringType
+        goOut.errorType = errorType
+        goOut.unresolvedType = unresolvedType
+        goOut.nonInferrableAnyType = nonInferrableAnyType
+        goOut.intrinsicMarkerType = intrinsicMarkerType
+        goOut.unknownType = unknownType
+        goOut.undefinedType = undefinedType
+        goOut.undefinedWideningType = undefinedWideningType
+        goOut.missingType = missingType
+        goOut.undefinedOrMissingType = undefinedOrMissingType
+        goOut.optionalType = optionalType
+        goOut.nullType = nullType
+        goOut.nullWideningType = nullWideningType
+        goOut.stringType = stringType
+        goOut.numberType = numberType
+        goOut.bigintType = bigintType
+        goOut.regularFalseType = regularFalseType
+        goOut.falseType = falseType
+        goOut.regularTrueType = regularTrueType
+        goOut.trueType = trueType
+        goOut.booleanType = booleanType
+        goOut.esSymbolType = esSymbolType
+        goOut.voidType = voidType
+        goOut.neverType = neverType
+        goOut.silentNeverType = silentNeverType
+        goOut.implicitNeverType = implicitNeverType
+        goOut.unreachableNeverType = unreachableNeverType
+        goOut.nonPrimitiveType = nonPrimitiveType
+        goOut.stringOrNumberType = stringOrNumberType
+        goOut.stringNumberSymbolType = stringNumberSymbolType
+        goOut.numberOrBigIntType = numberOrBigIntType
+        goOut.templateConstraintType = templateConstraintType
+        goOut.numericStringType = numericStringType
+        goOut.uniqueLiteralType = uniqueLiteralType
+        goOut.uniqueLiteralMapper = uniqueLiteralMapper
+        goOut.reliabilityFlags = reliabilityFlags
+        goOut.reportUnreliableMapper = reportUnreliableMapper
+        goOut.reportUnmeasurableMapper = reportUnmeasurableMapper
+        goOut.restrictiveMapper = restrictiveMapper
+        goOut.permissiveMapper = permissiveMapper
+        goOut.emptyObjectType = emptyObjectType
+        goOut.emptyJsxObjectType = emptyJsxObjectType
+        goOut.emptyFreshJsxObjectType = emptyFreshJsxObjectType
+        goOut.emptyTypeLiteralType = emptyTypeLiteralType
+        goOut.unknownEmptyObjectType = unknownEmptyObjectType
+        goOut.unknownUnionType = unknownUnionType
+        goOut.emptyGenericType = emptyGenericType
+        goOut.anyFunctionType = anyFunctionType
+        goOut.noConstraintType = noConstraintType
+        goOut.circularConstraintType = circularConstraintType
+        goOut.resolvingDefaultType = resolvingDefaultType
+        goOut.markerSuperType = markerSuperType
+        goOut.markerSubType = markerSubType
+        goOut.markerOtherType = markerOtherType
+        goOut.markerSuperTypeForCheck = markerSuperTypeForCheck
+        goOut.markerSubTypeForCheck = markerSubTypeForCheck
+        goOut.noTypePredicate = noTypePredicate
+        goOut.anySignature = anySignature
+        goOut.unknownSignature = unknownSignature
+        goOut.resolvingSignature = resolvingSignature
+        goOut.silentNeverSignature = silentNeverSignature
+        goOut.cachedArgumentsReferenced = cachedArgumentsReferenced
+        goOut.enumNumberIndexInfo = enumNumberIndexInfo
+        goOut.anyBaseTypeIndexInfo = anyBaseTypeIndexInfo
+        goOut.patternAmbientModules = patternAmbientModules
+        goOut.patternAmbientModuleAugmentations = patternAmbientModuleAugmentations
+        goOut.globalObjectType = globalObjectType
+        goOut.globalFunctionType = globalFunctionType
+        goOut.globalCallableFunctionType = globalCallableFunctionType
+        goOut.globalNewableFunctionType = globalNewableFunctionType
+        goOut.globalArrayType = globalArrayType
+        goOut.globalReadonlyArrayType = globalReadonlyArrayType
+        goOut.globalStringType = globalStringType
+        goOut.globalNumberType = globalNumberType
+        goOut.globalBooleanType = globalBooleanType
+        goOut.globalRegExpType = globalRegExpType
+        goOut.globalThisType = globalThisType
+        goOut.anyArrayType = anyArrayType
+        goOut.autoArrayType = autoArrayType
+        goOut.anyReadonlyArrayType = anyReadonlyArrayType
+        goOut.deferredGlobalImportMetaExpressionType = deferredGlobalImportMetaExpressionType
+        goOut.contextualBindingPatterns = contextualBindingPatterns
+        goOut.emptyStringType = emptyStringType
+        goOut.zeroType = zeroType
+        goOut.zeroBigIntType = zeroBigIntType
+        goOut.typeofType = typeofType
+        goOut.typeResolutions = typeResolutions
+        goOut.resolutionStart = resolutionStart
+        goOut.inVarianceComputation = inVarianceComputation
+        goOut.apparentArgumentCount = apparentArgumentCount
+        goOut.lastGetCombinedNodeFlagsNode = lastGetCombinedNodeFlagsNode
+        goOut.lastGetCombinedNodeFlagsResult = lastGetCombinedNodeFlagsResult
+        goOut.lastGetCombinedModifierFlagsNode = lastGetCombinedModifierFlagsNode
+        goOut.lastGetCombinedModifierFlagsResult = lastGetCombinedModifierFlagsResult
+        goOut.freeinferenceState = freeinferenceState
+        goOut.freeFlowState = freeFlowState
+        goOut.flowLoopCache = flowLoopCache
+        goOut.flowLoopStack = flowLoopStack
+        goOut.sharedFlows = sharedFlows
+        goOut.antecedentTypes = antecedentTypes
+        goOut.flowAnalysisDisabled = flowAnalysisDisabled
+        goOut.flowInvocationCount = flowInvocationCount
+        goOut.flowTypeCache = flowTypeCache
+        goOut.lastFlowNode = lastFlowNode
+        goOut.lastFlowNodeReachable = lastFlowNodeReachable
+        goOut.flowNodeReachable = flowNodeReachable
+        goOut.flowNodePostSuper = flowNodePostSuper
+        goOut.renamedBindingElementsInTypes = renamedBindingElementsInTypes
+        goOut.contextualInfos = contextualInfos
+        goOut.inferenceContextInfos = inferenceContextInfos
+        goOut.awaitedTypeStack = awaitedTypeStack
+        goOut.reverseMappedSourceStack = reverseMappedSourceStack
+        goOut.reverseMappedTargetStack = reverseMappedTargetStack
+        goOut.reverseExpandingFlags = reverseExpandingFlags
+        goOut.freeRelater = freeRelater
+        goOut.subtypeRelation = subtypeRelation
+        goOut.strictSubtypeRelation = strictSubtypeRelation
+        goOut.assignableRelation = assignableRelation
+        goOut.comparableRelation = comparableRelation
+        goOut.identityRelation = identityRelation
+        goOut.enumRelation = enumRelation
+        goOut.getGlobalESSymbolType = getGlobalESSymbolType
+        goOut.getGlobalBigIntType = getGlobalBigIntType
+        goOut.getGlobalImportMetaType = getGlobalImportMetaType
+        goOut.getGlobalImportAttributesType = getGlobalImportAttributesType
+        goOut.getGlobalImportAttributesTypeChecked = getGlobalImportAttributesTypeChecked
+        goOut.getGlobalNonNullableTypeAliasOrNil = getGlobalNonNullableTypeAliasOrNil
+        goOut.getGlobalExtractSymbol = getGlobalExtractSymbol
+        goOut.getGlobalDisposableType = getGlobalDisposableType
+        goOut.getGlobalAsyncDisposableType = getGlobalAsyncDisposableType
+        goOut.getGlobalAwaitedSymbol = getGlobalAwaitedSymbol
+        goOut.getGlobalAwaitedSymbolOrNil = getGlobalAwaitedSymbolOrNil
+        goOut.getGlobalNaNSymbolOrNil = getGlobalNaNSymbolOrNil
+        goOut.getGlobalRecordSymbol = getGlobalRecordSymbol
+        goOut.getGlobalTemplateStringsArrayType = getGlobalTemplateStringsArrayType
+        goOut.getGlobalESSymbolConstructorSymbolOrNil = getGlobalESSymbolConstructorSymbolOrNil
+        goOut.getGlobalESSymbolConstructorTypeSymbolOrNil = getGlobalESSymbolConstructorTypeSymbolOrNil
+        goOut.getGlobalImportCallOptionsType = getGlobalImportCallOptionsType
+        goOut.getGlobalImportCallOptionsTypeChecked = getGlobalImportCallOptionsTypeChecked
+        goOut.getGlobalPromiseType = getGlobalPromiseType
+        goOut.getGlobalPromiseTypeChecked = getGlobalPromiseTypeChecked
+        goOut.getGlobalPromiseLikeType = getGlobalPromiseLikeType
+        goOut.getGlobalPromiseConstructorSymbol = getGlobalPromiseConstructorSymbol
+        goOut.getGlobalPromiseConstructorSymbolOrNil = getGlobalPromiseConstructorSymbolOrNil
+        goOut.getGlobalOmitSymbol = getGlobalOmitSymbol
+        goOut.getGlobalNoInferSymbolOrNil = getGlobalNoInferSymbolOrNil
+        goOut.getGlobalIteratorType = getGlobalIteratorType
+        goOut.getGlobalIterableType = getGlobalIterableType
+        goOut.getGlobalIterableTypeChecked = getGlobalIterableTypeChecked
+        goOut.getGlobalIterableIteratorType = getGlobalIterableIteratorType
+        goOut.getGlobalIterableIteratorTypeChecked = getGlobalIterableIteratorTypeChecked
+        goOut.getGlobalIteratorObjectType = getGlobalIteratorObjectType
+        goOut.getGlobalGeneratorType = getGlobalGeneratorType
+        goOut.getGlobalAsyncIteratorType = getGlobalAsyncIteratorType
+        goOut.getGlobalAsyncIterableType = getGlobalAsyncIterableType
+        goOut.getGlobalAsyncIterableTypeChecked = getGlobalAsyncIterableTypeChecked
+        goOut.getGlobalAsyncIterableIteratorType = getGlobalAsyncIterableIteratorType
+        goOut.getGlobalAsyncIterableIteratorTypeChecked = getGlobalAsyncIterableIteratorTypeChecked
+        goOut.getGlobalAsyncIteratorObjectType = getGlobalAsyncIteratorObjectType
+        goOut.getGlobalAsyncGeneratorType = getGlobalAsyncGeneratorType
+        goOut.getGlobalIteratorYieldResultType = getGlobalIteratorYieldResultType
+        goOut.getGlobalIteratorReturnResultType = getGlobalIteratorReturnResultType
+        goOut.getGlobalTypedPropertyDescriptorType = getGlobalTypedPropertyDescriptorType
+        goOut.getGlobalClassDecoratorContextType = getGlobalClassDecoratorContextType
+        goOut.getGlobalClassMethodDecoratorContextType = getGlobalClassMethodDecoratorContextType
+        goOut.getGlobalClassGetterDecoratorContextType = getGlobalClassGetterDecoratorContextType
+        goOut.getGlobalClassSetterDecoratorContextType = getGlobalClassSetterDecoratorContextType
+        goOut.getGlobalClassAccessorDecoratorContxtType = getGlobalClassAccessorDecoratorContxtType
+        goOut.getGlobalClassAccessorDecoratorContextType = getGlobalClassAccessorDecoratorContextType
+        goOut.getGlobalClassAccessorDecoratorTargetType = getGlobalClassAccessorDecoratorTargetType
+        goOut.getGlobalClassAccessorDecoratorResultType = getGlobalClassAccessorDecoratorResultType
+        goOut.getGlobalClassFieldDecoratorContextType = getGlobalClassFieldDecoratorContextType
+        goOut.syncIterationTypesResolver = syncIterationTypesResolver
+        goOut.asyncIterationTypesResolver = asyncIterationTypesResolver
+        goOut.isPrimitiveOrObjectOrEmptyType = isPrimitiveOrObjectOrEmptyType
+        goOut.containsMissingType = containsMissingType
+        goOut.couldContainTypeVariables = couldContainTypeVariables
+        goOut.isStringIndexSignatureOnlyType = isStringIndexSignatureOnlyType
+        goOut.markNodeAssignments = markNodeAssignments
+        goOut.compareTypesAssignable = compareTypesAssignable
+        goOut.emitResolver = emitResolver
+        goOut.emitResolverOnce = emitResolverOnce.goCopy()
+        goOut._jsxNamespace = _jsxNamespace
+        goOut._jsxFactoryEntity = _jsxFactoryEntity
+        goOut.skipDirectInferenceNodes = skipDirectInferenceNodes.goCopy()
+        goOut.ctx = ctx
+        goOut.packagesMap = packagesMap
+        goOut.activeMappers = activeMappers
+        goOut.activeTypeMappersCaches = activeTypeMappersCaches
+        goOut.ambientModulesOnce = ambientModulesOnce.goCopy()
+        goOut.ambientModules = ambientModules
+        goOut.withinUnreachableCode = withinUnreachableCode
+        goOut.reportedUnreachableNodes = reportedUnreachableNodes.goCopy()
+        goOut.nonExistentProperties = nonExistentProperties.goCopy()
+        goOut.deferredDiagnosticCallbacks = deferredDiagnosticCallbacks
+        goOut.typeToStringNodebuilder = typeToStringNodebuilder
+        goOut.mu = mu.goCopy()
+        goOut.tracer = tracer
+        return goOut
+    }
 
     fun goSet(o: Checker) {
         id = o.id
@@ -2434,8 +2756,8 @@ fun newChecker(program: Program?, tracer: Tracer?): Tuple2<Checker?, Mutex?> {
     c!!.compilerOptions = program!!.options()
     c!!.files = program!!.sourceFiles()
     c!!.fileIndexMap = createFileIndexMap(c!!.files)
-    c!!.compareSymbols = run { val r0 = c; fun(p0: Symbol?, p1: Symbol?): Int = r0.compareSymbolsWorker(p0, p1) }
-    c!!.compareSymbolChains = run { val r1 = c; fun(p0: GoSlice<Symbol?>, p1: GoSlice<Symbol?>): Int = r1.compareSymbolChainsWorker(p0, p1) }
+    c!!.compareSymbols = run { val r1 = c; fun(p0: Symbol?, p1: Symbol?): Int = r1.compareSymbolsWorker(p0, p1) }
+    c!!.compareSymbolChains = run { val r2 = c; fun(p0: GoSlice<Symbol?>, p1: GoSlice<Symbol?>): Int = r2.compareSymbolChainsWorker(p0, p1) }
     c!!.languageVersion = c!!.compilerOptions.getEmitScriptTarget()
     c!!.moduleKind = c!!.compilerOptions.getEmitModuleKind()
     c!!.moduleResolutionKind = c!!.compilerOptions.getModuleResolutionKind()
@@ -2453,7 +2775,7 @@ fun newChecker(program: Program?, tracer: Tracer?): Tuple2<Checker?, Mutex?> {
     c!!.canCollectSymbolAliasAccessibilityData = c!!.compilerOptions!!.verbatimModuleSyntax.isFalseOrUnknown()
     c!!.arrayVariances = GoSlice.of(VarianceFlags.ELEM, VarianceFlagsCovariant)
     c!!.globals = GoMap.make<String, Symbol?>(GoElem.ref<Symbol?>(), countGlobalSymbols(c!!.files))
-    c!!.evaluate = com.xemantic.typescript.tsgo.evaluator.newEvaluator(run { val r2 = c; fun(p0: Node?, p1: Node?): Result = r2.evaluateEntity(p0, p1) }, OuterExpressionKinds(1))
+    c!!.evaluate = com.xemantic.typescript.tsgo.evaluator.newEvaluator(run { val r3 = c; fun(p0: Node?, p1: Node?): Result = r3.evaluateEntity(p0, p1) }, OuterExpressionKinds(1))
     c!!.stringLiteralTypes = GoMap.make<String, Type?>(GoElem.ref<Type?>())
     c!!.numberLiteralTypes = GoMap.make<com.xemantic.typescript.tsgo.jsnum.Number, Type?>(GoElem.ref<Type?>())
     c!!.bigintLiteralTypes = GoMap.make<PseudoBigInt, Type?>(GoElem.ref<Type?>())
@@ -2487,8 +2809,8 @@ fun newChecker(program: Program?, tracer: Tracer?): Tuple2<Checker?, Mutex?> {
     c!!.globalThisSymbol = c.newSymbolEx(SymbolFlags(1536u), "globalThis", CheckFlags(8u))
     c!!.globalThisSymbol!!.exports = c!!.globals
     c!!.globals[c!!.globalThisSymbol!!.name] = c!!.globalThisSymbol
-    c!!.resolveName = run { val r3 = c.createNameResolver(); fun(p0: Node?, p1: String, p2: SymbolFlags, p3: Message?, p4: Boolean, p5: Boolean): Symbol? = r3.resolve(p0, p1, p2, p3, p4, p5) }
-    c!!.resolveNameForSymbolSuggestion = run { val r4 = c.createNameResolverForSuggestion(); fun(p0: Node?, p1: String, p2: SymbolFlags, p3: Message?, p4: Boolean, p5: Boolean): Symbol? = r4.resolve(p0, p1, p2, p3, p4, p5) }
+    c!!.resolveName = run { val r4 = c.createNameResolver(); fun(p0: Node?, p1: String, p2: SymbolFlags, p3: Message?, p4: Boolean, p5: Boolean): Symbol? = r4.resolve(p0, p1, p2, p3, p4, p5) }
+    c!!.resolveNameForSymbolSuggestion = run { val r5 = c.createNameResolverForSuggestion(); fun(p0: Node?, p1: String, p2: SymbolFlags, p3: Message?, p4: Boolean, p5: Boolean): Symbol? = r5.resolve(p0, p1, p2, p3, p4, p5) }
     c!!.tupleTypes = GoMap.make<CacheHashKey, Type?>(GoElem.ref<Type?>())
     c!!.unionTypes = GoMap.make<CacheHashKey, Type?>(GoElem.ref<Type?>())
     c!!.unionOfUnionTypes = GoMap.make<UnionOfUnionKey, Type?>(GoElem.ref<Type?>())
@@ -2538,11 +2860,11 @@ fun newChecker(program: Program?, tracer: Tracer?): Tuple2<Checker?, Mutex?> {
     c!!.numericStringType = c.getTemplateLiteralType(GoSlice.of(GoElem.STRING, "", ""), GoSlice.of(GoElem.ref<Type?>(), c!!.numberType))
     c!!.templateConstraintType = c.getUnionTypeImpl(GoSlice.of(GoElem.ref<Type?>(), c!!.stringType, c!!.numberType, c!!.booleanType, c!!.bigintType, c!!.nullType, c!!.undefinedType))
     c!!.uniqueLiteralType = c.newIntrinsicType(TypeFlagsNever, "never")
-    c!!.uniqueLiteralMapper = newFunctionTypeMapper(run { val r5 = c; fun(p0: Type?): Type? = r5.getUniqueLiteralTypeForTypeParameter(p0) })
-    c!!.reportUnreliableMapper = newFunctionTypeMapper(run { val r6 = c; fun(p0: Type?): Type? = r6.reportUnreliableWorker(p0) })
-    c!!.reportUnmeasurableMapper = newFunctionTypeMapper(run { val r7 = c; fun(p0: Type?): Type? = r7.reportUnmeasurableWorker(p0) })
-    c!!.restrictiveMapper = newFunctionTypeMapper(run { val r8 = c; fun(p0: Type?): Type? = r8.restrictiveMapperWorker(p0) })
-    c!!.permissiveMapper = newFunctionTypeMapper(run { val r9 = c; fun(p0: Type?): Type? = r9.permissiveMapperWorker(p0) })
+    c!!.uniqueLiteralMapper = newFunctionTypeMapper(run { val r6 = c; fun(p0: Type?): Type? = r6.getUniqueLiteralTypeForTypeParameter(p0) })
+    c!!.reportUnreliableMapper = newFunctionTypeMapper(run { val r7 = c; fun(p0: Type?): Type? = r7.reportUnreliableWorker(p0) })
+    c!!.reportUnmeasurableMapper = newFunctionTypeMapper(run { val r8 = c; fun(p0: Type?): Type? = r8.reportUnmeasurableWorker(p0) })
+    c!!.restrictiveMapper = newFunctionTypeMapper(run { val r9 = c; fun(p0: Type?): Type? = r9.restrictiveMapperWorker(p0) })
+    c!!.permissiveMapper = newFunctionTypeMapper(run { val r10 = c; fun(p0: Type?): Type? = r10.permissiveMapperWorker(p0) })
     c!!.emptyObjectType = c.newAnonymousType(null, GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()), GoElem.ref<Signature?>().nilSlice, GoElem.ref<Signature?>().nilSlice, GoElem.ref<IndexInfo?>().nilSlice)
     c!!.emptyJsxObjectType = c.newAnonymousType(null, GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()), GoElem.ref<Signature?>().nilSlice, GoElem.ref<Signature?>().nilSlice, GoElem.ref<IndexInfo?>().nilSlice)
     c!!.emptyFreshJsxObjectType = c.newAnonymousType(null, GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()), GoElem.ref<Signature?>().nilSlice, GoElem.ref<Signature?>().nilSlice, GoElem.ref<IndexInfo?>().nilSlice)
@@ -2574,7 +2896,7 @@ fun newChecker(program: Program?, tracer: Tracer?): Tuple2<Checker?, Mutex?> {
     c!!.emptyStringType = c.getStringLiteralType("")
     c!!.zeroType = c.getNumberLiteralType(com.xemantic.typescript.tsgo.jsnum.Number(0.0))
     c!!.zeroBigIntType = c.getBigIntLiteralType(PseudoBigInt())
-    c!!.typeofType = c.getUnionTypeImpl(com.xemantic.typescript.tsgo.core.map<String, Type?>(GoElem.STRING, GoElem.ref<Type?>(), com.xemantic.typescript.tsgo.go.slices.sorted<String>(GoElem.STRING, (com.xemantic.typescript.tsgo.go.maps.keys<String, TypeFacts>(typeofNEFacts))!!), (run { val r10 = c; fun(p0: String): Type? = r10.getStringLiteralType(p0) })!!))
+    c!!.typeofType = c.getUnionTypeImpl(com.xemantic.typescript.tsgo.core.map<String, Type?>(GoElem.STRING, GoElem.ref<Type?>(), com.xemantic.typescript.tsgo.go.slices.sorted<String>(GoElem.STRING, (com.xemantic.typescript.tsgo.go.maps.keys<String, TypeFacts>(typeofNEFacts))!!), (run { val r11 = c; fun(p0: String): Type? = r11.getStringLiteralType(p0) })!!))
     c!!.flowLoopCache = GoMap.make<FlowLoopKey, Type?>(GoElem.ref<Type?>())
     c!!.flowNodeReachable = GoMap.make<FlowNode?, Boolean>(GoElem.BOOL)
     c!!.flowNodePostSuper = GoMap.make<FlowNode?, Boolean>(GoElem.BOOL)

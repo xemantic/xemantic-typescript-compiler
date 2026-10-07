@@ -30,12 +30,14 @@ import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.tspath.Path
 import com.xemantic.typescript.tsgo.collections.SyncMap
 import com.xemantic.typescript.tsgo.semver.Version
+import com.xemantic.typescript.tsgo.semver.VersionRange
 import com.xemantic.typescript.tsgo.collections.entries
 import com.xemantic.typescript.tsgo.collections.load
 import com.xemantic.typescript.tsgo.collections.loadOrStore
 import com.xemantic.typescript.tsgo.collections.range
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.size
+import com.xemantic.typescript.tsgo.semver.test
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.PackageJson c2ca5f43
 class PackageJson(
@@ -81,7 +83,50 @@ class diagnosticAndArgs(
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.PackageJson.GetVersionPaths 071597ed
 fun PackageJson?.getVersionPaths(trace: ((Message?, GoSlice<Any?>) -> Unit)?): VersionPaths {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/packagejson.PackageJson.GetVersionPaths")
+    this!!.once.`do`(fun() {
+        if (this!!.fields.pathFields.typesVersions.type.value == 0) {
+            this!!.versionTraces = this!!.versionTraces.append1(com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs(message = com.xemantic.typescript.tsgo.diagnostics.x_package_json_does_not_have_a_0_field, args = GoSlice.of(GoElem.ref<Any?>(), "typesVersions")))
+            return
+        }
+        if (this!!.fields.pathFields.typesVersions.type.value != 6) {
+            this!!.versionTraces = this!!.versionTraces.append1(com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs(message = com.xemantic.typescript.tsgo.diagnostics.expected_type_of_0_field_in_package_json_to_be_1_got_2, args = GoSlice.of(GoElem.ref<Any?>(), "typesVersions", "object", this!!.fields.pathFields.typesVersions.type.string())))
+            return
+        }
+        this!!.versionTraces = this!!.versionTraces.append1(com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs(message = com.xemantic.typescript.tsgo.diagnostics.x_package_json_has_a_typesVersions_field_with_version_specific_path_mappings, args = GoSlice.of(GoElem.ref<Any?>(), "typesVersions")))
+        var rfDone0 = false
+        this!!.fields.pathFields.typesVersions.asObject().entries()!!(fun(y2: String, y3: JSONValue): Boolean {
+                    val key: String = y2
+                    val value_1: JSONValue = y3
+                    val t4 = com.xemantic.typescript.tsgo.semver.tryParseVersionRange(key)
+                    val keyRange: VersionRange = t4.first
+                    val ok: Boolean = t4.second
+                    if (!ok) {
+                        this!!.versionTraces = this!!.versionTraces.append1(com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs(message = com.xemantic.typescript.tsgo.diagnostics.x_package_json_has_a_typesVersions_entry_0_that_is_not_a_valid_semver_range, args = GoSlice.of(GoElem.ref<Any?>(), key)))
+                        return true
+                    }
+                    if (keyRange.test(typeScriptVersion)) {
+                        if (value_1.type.value != 6) {
+                            this!!.versionTraces = this!!.versionTraces.append1(com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs(message = com.xemantic.typescript.tsgo.diagnostics.expected_type_of_0_field_in_package_json_to_be_1_got_2, args = GoSlice.of(GoElem.ref<Any?>(), "typesVersions['" + key + "']", "object", value_1.type.string())))
+                            rfDone0 = true
+                            return false
+                        }
+                        this!!.versionPaths = VersionPaths(version = key, pathsJSON = value_1.asObject())
+                        rfDone0 = true
+                        return false
+                    }
+                    return true
+        })
+        if (rfDone0) return
+        this!!.versionTraces = this!!.versionTraces.append1(com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs(message = com.xemantic.typescript.tsgo.diagnostics.x_package_json_does_not_have_a_typesVersions_entry_that_matches_version_0, args = GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.core.versionMajorMinor())))
+    })
+    if (trace != null) {
+        val s5 = this!!.versionTraces
+        l1@ for (i6 in 0 until s5.len) {
+            val msg: com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs = s5[i6].goCopy()
+            trace!!(msg.message, msg.args)
+        }
+    }
+    return this!!.versionPaths.goCopy()
 }
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.VersionPaths 01d73cf6

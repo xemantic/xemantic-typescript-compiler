@@ -264,6 +264,7 @@ import com.xemantic.typescript.tsgo.ast.typeParameters
 import com.xemantic.typescript.tsgo.binder.resolve
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.clear
+import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.len

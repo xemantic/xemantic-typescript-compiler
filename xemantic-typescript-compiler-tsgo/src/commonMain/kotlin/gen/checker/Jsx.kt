@@ -36,6 +36,7 @@ import com.xemantic.typescript.tsgo.ast.Symbol
 import com.xemantic.typescript.tsgo.ast.SymbolFlags
 import com.xemantic.typescript.tsgo.ast.SymbolTable
 import com.xemantic.typescript.tsgo.core.TextRange
+import com.xemantic.typescript.tsgo.ast.addRelatedInfo
 import com.xemantic.typescript.tsgo.ast.asJsxElement
 import com.xemantic.typescript.tsgo.ast.asJsxExpression
 import com.xemantic.typescript.tsgo.ast.asJsxFragment
@@ -681,7 +682,112 @@ fun Checker?.resolveJsxOpeningLikeElement(node: Node?, candidatesOutArray: GoPtr
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkApplicableSignatureForJsxCallLikeElement 0d434133
 fun Checker?.checkApplicableSignatureForJsxCallLikeElement(node: Node?, signature: Signature?, relation: Relation?, checkMode: CheckMode, reportErrors: Boolean, diagnosticOutput: GoPtr<GoSlice<Diagnostic?>>?): Boolean {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/checker.Checker.checkApplicableSignatureForJsxCallLikeElement")
+    val paramType: Type? = this.getEffectiveFirstArgumentForJsxSignature(signature, node)
+    var attributesType: Type? = null
+    if (com.xemantic.typescript.tsgo.ast.isJsxOpeningFragment(node)) {
+        attributesType = this.createJsxAttributesTypeFromAttributesProperty(node, CheckModeNormal)
+    } else {
+        attributesType = this.checkExpressionWithContextualType(node.attributes(), paramType, null, checkMode)
+    }
+    var checkAttributesType: Type? = null
+    val checkTagNameDoesNotExpectTooManyArguments: (() -> Boolean)? = fun(): Boolean {
+        if (this.getJsxNamespaceContainerForImplicitImport(node) != null) {
+            return true
+        }
+        var tagType: Type? = null
+        if ((com.xemantic.typescript.tsgo.ast.isJsxOpeningElement(node) || com.xemantic.typescript.tsgo.ast.isJsxSelfClosingElement(node)) && !(isJsxIntrinsicTagName(node.tagName()) || com.xemantic.typescript.tsgo.ast.isJsxNamespacedName(node.tagName()))) {
+            tagType = this.checkExpression(node.tagName())
+        }
+        if (tagType == null) {
+            return true
+        }
+        val tagCallSignatures: GoSlice<Signature?> = this.getSignaturesOfTypeImpl(tagType, SignatureKindCall)
+        if (tagCallSignatures.len == 0) {
+            return true
+        }
+        val factory: Node? = this.getJsxFactoryEntity(node)
+        if (factory == null) {
+            return true
+        }
+        val factorySymbol: Symbol? = this.resolveEntityName(factory, SymbolFlags(111551u), true, false, node)
+        if (factorySymbol == null) {
+            return true
+        }
+        val factoryType: Type? = this.getTypeOfSymbolImpl(factorySymbol)
+        val callSignatures: GoSlice<Signature?> = this.getSignaturesOfTypeImpl(factoryType, SignatureKindCall)
+        if (callSignatures.len == 0) {
+            return true
+        }
+        var hasFirstParamSignatures: Boolean = false
+        var maxParamCount: Int = 0
+        val s0 = callSignatures
+        l0@ for (i1 in 0 until s0.len) {
+            val sig: Signature? = s0[i1]
+            val firstparam: Type? = this.getTypeAtPositionImpl(sig, 0)
+            val signaturesOfParam: GoSlice<Signature?> = this.getSignaturesOfTypeImpl(firstparam, SignatureKindCall)
+            if (signaturesOfParam.len == 0) {
+                continue@l0
+            }
+            val s2 = signaturesOfParam
+            l1@ for (i3 in 0 until s2.len) {
+                val paramSig: Signature? = s2[i3]
+                hasFirstParamSignatures = true
+                if (this.hasEffectiveRestParameterImpl(paramSig)) {
+                    return true
+                }
+                val paramCount: Int = this.getParameterCount(paramSig)
+                if (paramCount > maxParamCount) {
+                    maxParamCount = paramCount
+                }
+            }
+        }
+        if (!hasFirstParamSignatures) {
+            return true
+        }
+        var absoluteMinArgCount: Int = Int.MAX_VALUE
+        val s4 = tagCallSignatures
+        l2@ for (i5 in 0 until s4.len) {
+            val tagSig: Signature? = s4[i5]
+            val tagRequiredArgCount: Int = this.getMinArgumentCount(tagSig)
+            if (tagRequiredArgCount < absoluteMinArgCount) {
+                absoluteMinArgCount = tagRequiredArgCount
+            }
+        }
+        if (absoluteMinArgCount <= maxParamCount) {
+            return true
+        }
+        if (reportErrors) {
+            val tagName: Node? = node.tagName()
+            val diag: Diagnostic? = newDiagnosticForNode(tagName, com.xemantic.typescript.tsgo.diagnostics.tag_0_expects_at_least_1_arguments_but_the_JSX_factory_2_provides_at_most_3, GoSlice.of(GoElem.ref<Any?>(), entityNameToString(tagName), absoluteMinArgCount, entityNameToString(factory), maxParamCount))
+            val tagNameSymbol: Symbol? = this.getSymbolAtLocationImpl(tagName, false)
+            if (tagNameSymbol != null && tagNameSymbol!!.valueDeclaration != null) {
+                diag.addRelatedInfo(newDiagnosticForNode(tagNameSymbol!!.valueDeclaration, com.xemantic.typescript.tsgo.diagnostics.x_0_is_declared_here, GoSlice.of(GoElem.ref<Any?>(), entityNameToString(tagName))))
+            }
+            this.reportDiagnostic(diag, diagnosticOutput)
+        }
+        return false
+    }
+    if (checkMode.value and 4u != 0u) {
+        checkAttributesType = this.getRegularTypeOfObjectLiteral(attributesType)
+    } else {
+        checkAttributesType = attributesType
+    }
+    if (!checkTagNameDoesNotExpectTooManyArguments!!()) {
+        return false
+    }
+    var errorNode: Node? = null
+    if (reportErrors) {
+        if (com.xemantic.typescript.tsgo.ast.isJsxOpeningFragment(node)) {
+            errorNode = node
+        } else {
+            errorNode = node.tagName()
+        }
+    }
+    var attributes: Node? = null
+    if (!com.xemantic.typescript.tsgo.ast.isJsxOpeningFragment(node)) {
+        attributes = node.attributes()
+    }
+    return this.checkTypeRelatedToAndOptionallyElaborate(checkAttributesType, paramType, relation, errorNode, attributes, null, diagnosticOutput)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.createJsxAttributesTypeFromAttributesProperty 43f01574

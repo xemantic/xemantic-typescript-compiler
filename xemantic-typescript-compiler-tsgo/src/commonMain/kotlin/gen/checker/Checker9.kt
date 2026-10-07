@@ -264,6 +264,7 @@ import com.xemantic.typescript.tsgo.ast.typeParameters
 import com.xemantic.typescript.tsgo.binder.resolve
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.clear
+import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.len
@@ -997,7 +998,24 @@ fun Checker?.checkCrossProductUnion(types: GoSlice<Type?>): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getCrossProductUnionSize a43f1b75
 fun Checker?.getCrossProductUnionSize(types: GoSlice<Type?>): Int {
-    TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/checker.Checker.getCrossProductUnionSize")
+    var size: Int = 1
+    val s0 = types
+    l0@ for (i1 in 0 until s0.len) {
+        val t: Type? = s0[i1]
+        when {
+            t!!.flags.value and 134217728u != 0u -> {
+                val n: Int = t.types().len
+                if (n > 0 && size > Int.MAX_VALUE / n) {
+                    return Int.MAX_VALUE
+                }
+                size *= n
+            }
+            t!!.flags.value and 262144u != 0u -> {
+                return 0
+            }
+        }
+    }
+    return size
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getIndexType 192b54ad
@@ -3520,7 +3538,32 @@ fun Checker?.getTemplateStringForType(t: Type?): String {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getStringMappingType e925f1db
 fun Checker?.getStringMappingType(symbol: Symbol?, t: Type?): Type? {
-    TODO("goport: refused tuple-arg: github.com/microsoft/typescript-go/internal/checker.Checker.getStringMappingType")
+    when {
+        t!!.flags.value and 134479872u != 0u -> {
+            return this.mapType(t, fun(t_1: Type?): Type? {
+                return this.getStringMappingType(symbol, t_1)
+            })
+        }
+        t!!.flags.value and 1024u != 0u -> {
+            return this.getStringLiteralType(applyStringMapping(symbol, getStringLiteralValue(t)))
+        }
+        t!!.flags.value and 4194304u != 0u -> {
+            return run { val ta0 = this.applyTemplateStringMapping(symbol, t.asTemplateLiteralType()!!.texts, t.asTemplateLiteralType()!!.types); this.getTemplateLiteralType(ta0.first, ta0.second) }
+        }
+        t!!.flags.value and 8388608u != 0u && symbol === t!!.symbol -> {
+            return t
+        }
+        (t!!.flags.value and 8388641u != 0u || this.isGenericIndexType(t)) -> {
+            return this.getStringMappingTypeForGenericType(symbol, t)
+        }
+        this.isPatternLiteralPlaceholderType(t) -> {
+            return this.getStringMappingTypeForGenericType(symbol, this.getTemplateLiteralType(GoSlice.of(GoElem.STRING, "", ""), GoSlice.of(GoElem.ref<Type?>(), t)))
+        }
+        else -> {
+            return t
+        }
+    }
+    goUnreachable()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.applyStringMapping 020111e1

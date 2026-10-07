@@ -264,6 +264,7 @@ import com.xemantic.typescript.tsgo.ast.typeParameters
 import com.xemantic.typescript.tsgo.binder.resolve
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.clear
+import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.len
@@ -2542,7 +2543,42 @@ fun isPrototypeProperty(symbol: Symbol?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.hasCommonDeclaration 869c2ea0
 fun Checker?.hasCommonDeclaration(symbols: OrderedSet<Symbol?>?): Boolean {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/checker.Checker.hasCommonDeclaration")
+    val commonDeclarations: com.xemantic.typescript.tsgo.collections.Set<Node?> = com.xemantic.typescript.tsgo.collections.Set<Node?>(goElem_T = GoElem.ref<Node?>())
+    var rfDone0 = false
+    var rfRet1: Boolean? = null
+    symbols.values()!!(fun(y2: Symbol?): Boolean {
+            val symbol: Symbol? = y2
+            if (symbol!!.declarations.len == 0) {
+                rfRet1 = false
+                rfDone0 = true
+                return false
+            }
+            if (commonDeclarations.len() == 0) {
+                val s3 = symbol!!.declarations
+                l1@ for (i4 in 0 until s3.len) {
+                    val d: Node? = s3[i4]
+                    commonDeclarations.add(d)
+                }
+                return true
+            }
+            val m5 = commonDeclarations.keys()
+            l2@ for (k6 in m5.keysSnapshot()) {
+                val e7 = m5.probe(k6)
+                if (e7 === GoMapAbsent) continue
+                val d_1: Node? = k6
+                if (!com.xemantic.typescript.tsgo.go.slices.contains<Node?>(symbol!!.declarations, (d_1)!!)) {
+                    commonDeclarations.delete(d_1)
+                }
+            }
+            if (commonDeclarations.len() == 0) {
+                rfRet1 = false
+                rfDone0 = true
+                return false
+            }
+            return true
+    })
+    if (rfDone0) return rfRet1 as Boolean
+    return commonDeclarations.len() != 0
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.createSymbolWithType 546ac849

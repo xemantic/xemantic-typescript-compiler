@@ -27,6 +27,7 @@ import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Decoder
 import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
+import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.size
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.objectKind af5f381a
@@ -118,7 +119,42 @@ class ExportsOrImports(
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.ExportsOrImports.initObjectKind ad96b16b
 fun ExportsOrImports?.initObjectKind() {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/packagejson.ExportsOrImports.initObjectKind")
+    if (this!!.objectKind.value == 0 && this!!.jsonValue.type.value == 6) {
+        val obj: OrderedMap<String, ExportsOrImports>? = this!!.asObject()
+        if (obj.size() > 0) {
+            val t0 = false
+            val t1 = false
+            val t2 = false
+            var seenDot: Boolean = t0
+            var seenHash: Boolean = t1
+            var seenOther: Boolean = t2
+            var rfDone3 = false
+            obj.keys()!!(fun(y5: String): Boolean {
+                            val k: String = y5
+                            if (k.length > 0) {
+                                seenDot = seenDot || k[0].code == 46
+                                seenHash = seenHash || k[0].code == 35
+                                seenOther = seenOther || (k[0].code != 46 && k[0].code != 35)
+                                if (seenOther && (seenDot || seenHash)) {
+                                    this!!.objectKind = objectKindInvalid
+                                    rfDone3 = true
+                                    return false
+                                }
+                            }
+                            return true
+            })
+            if (rfDone3) return
+            if (seenDot) {
+                this!!.objectKind = objectKindSubpaths
+                return
+            }
+            if (seenHash) {
+                this!!.objectKind = objectKindImports
+                return
+            }
+        }
+        this!!.objectKind = objectKindConditions
+    }
 }
 
 

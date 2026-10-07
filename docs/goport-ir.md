@@ -114,13 +114,15 @@ Every top-level declaration has `k`, `qname`, `line`, `lines` (line count), `o`,
 { "k": "GenDecl", "tok": "import"|"const"|"type"|"var", "grouped"?: true, "specs": [...] }
 ImportSpec { "k", "path", "name"? }
 ValueSpec  { "k", "line", "names": [Ident...], "qnames"?: [...], "type"?: Expr, "values"?: [Expr...],
-             "iota"?: n, "implicitRepeat"?: true, "hash"?, "doc"? }
+             "iota"?: n, "implicitRepeat"?: true, "hash"?, "doc"?, "embed"?: [pattern...] }
 TypeSpec   { "k", "line", "name", "qname"?, "nameNode": Ident, "tparams"?: FieldList,
              "alias"?: true, "type": Expr, "hash"?, "doc"? }
 ```
 
 - `qnames`/`qname`/`hash` are present only on TOP-LEVEL specs (a `DeclStmt` inside a function
   carries a `GenDecl` without them).
+- `embed` — the patterns of the spec's `//go:embed` directives (relative to the file's
+  directory; `Doc.Text()` drops directives, so they are not in `doc`).
 - **Constants**: `iota` is the spec's index in its group. `implicitRepeat: true` marks a spec with
   no values (`KindB` after `KindA Kind = iota`): Go repeats the previous spec's type and
   expression. The lowering never re-evaluates: every constant OBJECT carries its exact value

@@ -295,7 +295,7 @@ fun com.xemantic.typescript.tsgo.compiler.emitter?.emitDeclarationFile(sourceFil
         }
         val printerOptions: PrinterOptions = PrinterOptions(removeComments = options!!.removeComments.isTrue(), newLine = options!!.newLine, noEmitHelpers = true, target = options.getEmitScriptTarget(), sourceMap = this!!.emitOnly.value != 3 && options!!.declarationMap.isTrue(), inlineSourceMap = options!!.inlineSourceMap.isTrue(), onlyPrintJSDocStyle = true, omitBraceSourceMapPositions = true)
         val printer: Printer? = com.xemantic.typescript.tsgo.printer.newPrinter(printerOptions.goCopy(), PrintHandlers(), emitContext)
-        val declarationMapOptions: CompilerOptions? = CompilerOptions(sourceMap = com.xemantic.typescript.tsgo.core.ifElse<Tristate>(Tristate.ELEM, this!!.emitOnly.value != 3 && options!!.declarationMap.isTrue(), Tristate(2), Tristate(1)), sourceRoot = options!!.sourceRoot, mapRoot = options!!.mapRoot)
+        val declarationMapOptions: CompilerOptions? = CompilerOptions().also { o8 -> o8.sourceMap = com.xemantic.typescript.tsgo.core.ifElse<Tristate>(Tristate.ELEM, this!!.emitOnly.value != 3 && options!!.declarationMap.isTrue(), Tristate(2), Tristate(1)); o8.sourceRoot = options!!.sourceRoot; o8.mapRoot = options!!.mapRoot }
         this.printSourceFile(declarationFilePath, declarationMapPath, sourceFile, printer, declarationMapOptions, shouldEmitSourceMaps(declarationMapOptions, sourceFile))
     }
 }

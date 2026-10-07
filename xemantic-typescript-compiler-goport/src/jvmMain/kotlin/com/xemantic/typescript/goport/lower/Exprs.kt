@@ -515,6 +515,14 @@ open class ExprLowering(val fn: FnCtx) {
         val nilSafe = key in prog.extensionMethods
         if (nilSafe && mpkg != null && mpkg != pc.pkg.path) fn.fc.importFun(naming(mpkg), name)
         var r = recv
+        // `(*T)(nil).M()` with M never reading its receiver: any instance of T will do.
+        val xi = if (x.k == "ParenExpr") x.reqObj("x") else x
+        if (path.size == 1 && !nilSafe && key in prog.recvUnusedMethods && xi.k == "CallExpr" && xi.str("call") == "conv" &&
+            xi.list("args").singleOrNull()?.str("m") == "nil"
+        ) {
+            val pt = types.under(ty(x)) as? PointerType
+            if (pt != null && tm.isStructValue(pt.elem)) return Triple(Ex.primary(tm.zero(pt.elem)), name, false)
+        }
         val u = types.under(recvT)
         val isPtr = u is PointerType
         if (e.bool("ifaceMethod") || types.under(recvT) is InterfaceType) {
@@ -718,6 +726,12 @@ open class ExprLowering(val fn: FnCtx) {
                     }
                 }
                 val dict = (types.unalias(t) as? NamedType)?.let { tm.dictArgs(it) } ?: emptyList()
+                if (prog.bigStruct(u)) {
+                    // Fields in the class body (Program.bigStruct): construct, then assign.
+                    val o = fn.fresh("o")
+                    val sets = args.map { a -> "$o.${a.substringBefore(" = ")} = ${a.substringAfter(" = ")}" }
+                    return Ex.primary("${tm.kt(t).removeSuffix("?")}(${dict.joinToString(", ")})" + if (sets.isEmpty()) "" else ".also { $o -> ${sets.joinToString("; ")} }")
+                }
                 Ex.primary("${tm.kt(t).removeSuffix("?")}(${(dict + args).joinToString(", ")})")
             }
             is SliceType, is ArrayType -> {

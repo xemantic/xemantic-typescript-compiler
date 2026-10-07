@@ -49,6 +49,7 @@ import com.xemantic.typescript.tsgo.ast.text
 import com.xemantic.typescript.tsgo.collections.entries
 import com.xemantic.typescript.tsgo.collections.load
 import com.xemantic.typescript.tsgo.collections.range
+import com.xemantic.typescript.tsgo.core.getModuleResolutionKind
 import com.xemantic.typescript.tsgo.core.getPathsBasePath
 import com.xemantic.typescript.tsgo.core.getResolvePackageJsonExports
 import com.xemantic.typescript.tsgo.core.getResolvePackageJsonImports
@@ -477,7 +478,71 @@ fun getLocalModuleSpecifier(moduleFileName: String, info: Info, compilerOptions:
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.processEnding 9bb1f18c
 fun processEnding(fileName: String, allowedEndings: GoSlice<ModuleSpecifierEnding>, options: CompilerOptions?, host: ModuleSpecifierGenerationHost?): String {
-    TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/modulespecifiers.processEnding")
+    if (com.xemantic.typescript.tsgo.tspath.fileExtensionIsOneOf(fileName, GoSlice.of(GoElem.STRING, ".json", ".mjs", ".cjs"))) {
+        return fileName
+    }
+    val noExtension: String = com.xemantic.typescript.tsgo.tspath.removeFileExtension(fileName)
+    if (fileName == noExtension) {
+        return fileName
+    }
+    val jsPriority: Int = com.xemantic.typescript.tsgo.go.slices.index<ModuleSpecifierEnding>(allowedEndings, ModuleSpecifierEndingJsExtension)
+    val tsPriority: Int = com.xemantic.typescript.tsgo.go.slices.index<ModuleSpecifierEnding>(allowedEndings, ModuleSpecifierEndingTsExtension)
+    if (com.xemantic.typescript.tsgo.tspath.fileExtensionIsOneOf(fileName, GoSlice.of(GoElem.STRING, ".mts", ".cts")) && tsPriority != -1 && tsPriority < jsPriority) {
+        return fileName
+    }
+    if (com.xemantic.typescript.tsgo.tspath.fileExtensionIsOneOf(fileName, GoSlice.of(GoElem.STRING, ".d.mts", ".d.cts"))) {
+        val inputExt: String = com.xemantic.typescript.tsgo.tspath.getDeclarationFileExtension(fileName)
+        val ext: String = getJSExtensionForDeclarationFileExtension(inputExt)
+        return com.xemantic.typescript.tsgo.tspath.removeExtension(fileName, inputExt) + ext
+    }
+    if (com.xemantic.typescript.tsgo.tspath.fileExtensionIsOneOf(fileName, GoSlice.of(GoElem.STRING, ".mts", ".cts"))) {
+        return noExtension + getJSExtensionForFile(fileName, options)
+    }
+    if (!com.xemantic.typescript.tsgo.tspath.fileExtensionIsOneOf(fileName, GoSlice.of(GoElem.STRING, ".d.ts")) && com.xemantic.typescript.tsgo.tspath.fileExtensionIsOneOf(fileName, GoSlice.of(GoElem.STRING, ".ts")) && com.xemantic.typescript.tsgo.go.strings.contains(fileName, ".d.")) {
+        val result: String = tryGetRealFileNameForNonJSDeclarationFileName(fileName)
+        if (result != "") {
+            return result
+        }
+    }
+    when (allowedEndings[0].value) {
+        0 -> {
+            val withoutIndex: String = com.xemantic.typescript.tsgo.go.strings.trimSuffix(noExtension, "/index")
+            if (host != null && withoutIndex != noExtension && tryGetAnyFileFromPath(host, withoutIndex)) {
+                return noExtension
+            }
+            return withoutIndex
+        }
+        1 -> {
+            return noExtension
+        }
+        2 -> {
+            return noExtension + getJSExtensionForFile(fileName, options)
+        }
+        3 -> {
+            if (com.xemantic.typescript.tsgo.tspath.isDeclarationFileName(fileName)) {
+                var extensionlessPriority: Int = -1
+                val s0 = allowedEndings
+                l1@ for (i1 in 0 until s0.len) {
+                    val i: Int = i1
+                    val e: ModuleSpecifierEnding = s0[i1]
+                    if (e.value == 0 || e.value == 1) {
+                        extensionlessPriority = i
+                        break@l1
+                    }
+                }
+                if (extensionlessPriority != -1 && extensionlessPriority < jsPriority) {
+                    return noExtension
+                }
+                return noExtension + getJSExtensionForFile(fileName, options)
+            }
+            return fileName
+        }
+        else -> {
+            com.xemantic.typescript.tsgo.debug.assertNever(allowedEndings[0], GoElem.ref<Any?>().nilSlice)
+            return ""
+        }
+    }
+    goUnreachable()
 }
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromRootDirs a4241d21
@@ -669,12 +734,84 @@ fun tryDirectoryWithPackageJson(parts: NodeModulePathParts, pathObj: ModulePath,
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromExports 2061ae77
 fun tryGetModuleNameFromExports(options: CompilerOptions?, host: ModuleSpecifierGenerationHost?, targetFilePath: String, packageDirectory: String, packageName: String, exports: ExportsOrImports, conditions: GoSlice<String>): String {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromExports")
+    if (exports.goCopy().isSubpaths()) {
+        var rfDone0 = false
+        var rfRet1: String? = null
+        exports.asObject().entries()!!(fun(y2: String, y3: ExportsOrImports): Boolean {
+                    val k: String = y2
+                    val subk: ExportsOrImports = y3
+                    val subPackageName: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(com.xemantic.typescript.tsgo.tspath.combinePaths(packageName, GoSlice.of(GoElem.STRING, k)), "")
+                    var mode: MatchingMode = MatchingModeExact
+                    if (com.xemantic.typescript.tsgo.go.strings.hasSuffix(k, "/")) {
+                        mode = MatchingModeDirectory
+                    } else if (com.xemantic.typescript.tsgo.go.strings.contains(k, "*")) {
+                        mode = MatchingModePattern
+                    }
+                    val result: String = tryGetModuleNameFromExportsOrImports(options, host, targetFilePath, packageDirectory, subPackageName, subk.goCopy(), conditions, mode, false, false)
+                    if (result.length > 0) {
+                        rfRet1 = result
+                        rfDone0 = true
+                        return false
+                    }
+                    return true
+        })
+        if (rfDone0) return rfRet1 as String
+    }
+    return tryGetModuleNameFromExportsOrImports(options, host, targetFilePath, packageDirectory, packageName, exports.goCopy(), conditions, MatchingModeExact, false, false)
 }
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromPackageJsonImports 46b7f535
 fun tryGetModuleNameFromPackageJsonImports(moduleFileName: String, sourceDirectory: String, options: CompilerOptions?, host: ModuleSpecifierGenerationHost?, importMode: ModuleKind, preferTsExtension: Boolean): String {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromPackageJsonImports")
+    if (!options.getResolvePackageJsonImports()) {
+        return ""
+    }
+    val ancestorDirectoryWithPackageJson: String = host!!.getNearestAncestorDirectoryWithPackageJson(sourceDirectory)
+    if (ancestorDirectoryWithPackageJson.length == 0) {
+        return ""
+    }
+    val packageJsonPath: String = com.xemantic.typescript.tsgo.tspath.combinePaths(ancestorDirectoryWithPackageJson, GoSlice.of(GoElem.STRING, "package.json"))
+    val info: InfoCacheEntry? = host!!.getPackageJsonInfo(packageJsonPath)
+    if (info == null) {
+        return ""
+    }
+    val imports: ExportsOrImports = info.getContents()!!.fields.pathFields.imports.goCopy()
+    when (imports.jsonValue.type.value) {
+        0, 5, 2 -> {
+            return ""
+        }
+        6 -> {
+            val conditions: GoSlice<String> = com.xemantic.typescript.tsgo.module.getConditions(options, importMode)
+            val top: OrderedMap<String, ExportsOrImports>? = imports.asObject()
+            val entries: Seq2<String, ExportsOrImports>? = top.entries()
+            var rfDone0 = false
+            var rfRet1: String? = null
+            entries!!(fun(y2: String, y3: ExportsOrImports): Boolean {
+                            val k: String = y2
+                            val value_1: ExportsOrImports = y3
+                            if (k == "#" || k == "#/" || !com.xemantic.typescript.tsgo.go.strings.hasPrefix(k, "#")) {
+                                return true
+                            }
+                            if (com.xemantic.typescript.tsgo.go.strings.hasPrefix(k, "#/") && options.getModuleResolutionKind().value != 99 && options.getModuleResolutionKind().value != 100) {
+                                return true
+                            }
+                            var mode: MatchingMode = MatchingModeExact
+                            if (com.xemantic.typescript.tsgo.go.strings.hasSuffix(k, "/")) {
+                                mode = MatchingModeDirectory
+                            } else if (com.xemantic.typescript.tsgo.go.strings.contains(k, "*")) {
+                                mode = MatchingModePattern
+                            }
+                            val result: String = tryGetModuleNameFromExportsOrImports(options, host, moduleFileName, ancestorDirectoryWithPackageJson, k, value_1.goCopy(), conditions, mode, true, preferTsExtension)
+                            if (result.length > 0) {
+                                rfRet1 = result
+                                rfDone0 = true
+                                return false
+                            }
+                            return true
+            })
+            if (rfDone0) return rfRet1 as String
+        }
+    }
+    return ""
 }
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.specPair ad3db3f1
@@ -701,7 +838,62 @@ class specPair(
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromPaths d6370029
 fun tryGetModuleNameFromPaths(relativeToBaseUrl: String, paths: OrderedMap<String, GoSlice<String>>?, allowedEndings: GoSlice<ModuleSpecifierEnding>, baseDirectory: String, host: ModuleSpecifierGenerationHost?, compilerOptions: CompilerOptions?): String {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromPaths")
+    val caseSensitive: Boolean = host!!.useCaseSensitiveFileNames()
+    var rfDone0 = false
+    var rfRet1: String? = null
+    paths.entries()!!(fun(y2: String, y3: GoSlice<String>): Boolean {
+            val key: String = y2
+            val values: GoSlice<String> = y3
+            val s4 = values
+            l1@ for (i5 in 0 until s4.len) {
+                val patternText: String = s4[i5]
+                val normalized: String = com.xemantic.typescript.tsgo.tspath.normalizePath(patternText)
+                var pattern: String = getRelativePathIfInSameVolume(normalized, baseDirectory, caseSensitive)
+                if (pattern.length == 0) {
+                    pattern = normalized
+                }
+                val t6 = com.xemantic.typescript.tsgo.go.strings.cut(pattern, "*")
+                val prefix: String = t6.first
+                val suffix: String = t6.second
+                val ok: Boolean = t6.third
+                var candidates: GoSlice<com.xemantic.typescript.tsgo.modulespecifiers.specPair> = com.xemantic.typescript.tsgo.modulespecifiers.specPair.ELEM.nilSlice
+                val s7 = allowedEndings
+                l2@ for (i8 in 0 until s7.len) {
+                    val ending: ModuleSpecifierEnding = s7[i8]
+                    val result: String = processEnding(relativeToBaseUrl, GoSlice.of(ModuleSpecifierEnding.ELEM, ending), compilerOptions, host)
+                    candidates = candidates.append1(com.xemantic.typescript.tsgo.modulespecifiers.specPair(ending = ending, value = result))
+                }
+                if (com.xemantic.typescript.tsgo.tspath.tryGetExtensionFromPath(pattern).length > 0) {
+                    candidates = candidates.append1(com.xemantic.typescript.tsgo.modulespecifiers.specPair(ending = ModuleSpecifierEndingJsExtension, value = relativeToBaseUrl))
+                }
+                if (ok) {
+                    val s9 = candidates
+                    l3@ for (i10 in 0 until s9.len) {
+                        val c: com.xemantic.typescript.tsgo.modulespecifiers.specPair = s9[i10].goCopy()
+                        val value_1: String = c.value
+                        if (value_1.length >= prefix.length + suffix.length && com.xemantic.typescript.tsgo.stringutil.hasPrefix(value_1, prefix, caseSensitive) && com.xemantic.typescript.tsgo.stringutil.hasSuffix(value_1, suffix, caseSensitive) && validateEnding(c.goCopy(), relativeToBaseUrl, compilerOptions, host)) {
+                            val matchedStar: String = value_1.substring(prefix.length, value_1.length - suffix.length)
+                            if (!com.xemantic.typescript.tsgo.tspath.pathIsRelative(matchedStar)) {
+                                rfRet1 = replaceFirstStar(key, matchedStar)
+                                rfDone0 = true
+                                return false
+                            }
+                        }
+                    }
+                } else if (com.xemantic.typescript.tsgo.core.some<com.xemantic.typescript.tsgo.modulespecifiers.specPair>(com.xemantic.typescript.tsgo.modulespecifiers.specPair.ELEM, candidates, fun(c_1: com.xemantic.typescript.tsgo.modulespecifiers.specPair): Boolean {
+                    return c_1.ending.value != 0 && pattern == c_1.value
+                }) || com.xemantic.typescript.tsgo.core.some<com.xemantic.typescript.tsgo.modulespecifiers.specPair>(com.xemantic.typescript.tsgo.modulespecifiers.specPair.ELEM, candidates, fun(c_2: com.xemantic.typescript.tsgo.modulespecifiers.specPair): Boolean {
+                    return c_2.ending.value == 0 && pattern == c_2.value && validateEnding(c_2.goCopy(), relativeToBaseUrl, compilerOptions, host)
+                })) {
+                    rfRet1 = key
+                    rfDone0 = true
+                    return false
+                }
+            }
+            return true
+    })
+    if (rfDone0) return rfRet1 as String
+    return ""
 }
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.validateEnding 3d119771
@@ -711,7 +903,123 @@ fun validateEnding(c: com.xemantic.typescript.tsgo.modulespecifiers.specPair, re
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromExportsOrImports bc3cc16a
 fun tryGetModuleNameFromExportsOrImports(options: CompilerOptions?, host: ModuleSpecifierGenerationHost?, targetFilePath: String, packageDirectory: String, packageName: String, exports: ExportsOrImports, conditions: GoSlice<String>, mode: MatchingMode, isImports: Boolean, preferTsExtension: Boolean): String {
-    TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/modulespecifiers.tryGetModuleNameFromExportsOrImports")
+    when (exports.jsonValue.type.value) {
+        0 -> {
+            return ""
+        }
+        2 -> {
+            val strValue: String = exports.jsonValue.value as String
+            var outputFile: String = ""
+            var declarationFile: String = ""
+            if (isImports) {
+                outputFile = com.xemantic.typescript.tsgo.outputpaths.getOutputJSFileNameWorker(targetFilePath, options, host)
+                declarationFile = com.xemantic.typescript.tsgo.outputpaths.getOutputDeclarationFileNameWorker(targetFilePath, options, host)
+            }
+            val pathOrPattern: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(com.xemantic.typescript.tsgo.tspath.combinePaths(packageDirectory, GoSlice.of(GoElem.STRING, strValue)), "")
+            var extensionSwappedTarget: String = ""
+            if (com.xemantic.typescript.tsgo.tspath.hasTSFileExtension(targetFilePath)) {
+                extensionSwappedTarget = com.xemantic.typescript.tsgo.tspath.removeFileExtension(targetFilePath) + com.xemantic.typescript.tsgo.module.tryGetJSExtensionForFile(targetFilePath, options)
+            }
+            val canTryTsExtension: Boolean = preferTsExtension && com.xemantic.typescript.tsgo.tspath.hasImplementationTSFileExtension(targetFilePath)
+            val compareOpts: ComparePathsOptions = ComparePathsOptions(useCaseSensitiveFileNames = host!!.useCaseSensitiveFileNames(), currentDirectory = host!!.getCurrentDirectory())
+            when (mode.value) {
+                0 -> {
+                    if (extensionSwappedTarget.length > 0 && com.xemantic.typescript.tsgo.tspath.comparePaths(extensionSwappedTarget, pathOrPattern, compareOpts.goCopy()) == 0 || com.xemantic.typescript.tsgo.tspath.comparePaths(targetFilePath, pathOrPattern, compareOpts.goCopy()) == 0 || outputFile.length > 0 && com.xemantic.typescript.tsgo.tspath.comparePaths(outputFile, pathOrPattern, compareOpts.goCopy()) == 0 || declarationFile.length > 0 && com.xemantic.typescript.tsgo.tspath.comparePaths(declarationFile, pathOrPattern, compareOpts.goCopy()) == 0) {
+                        return packageName
+                    }
+                }
+                1 -> {
+                    if (canTryTsExtension && com.xemantic.typescript.tsgo.tspath.containsPath(targetFilePath, pathOrPattern, compareOpts.goCopy())) {
+                        val fragment: String = com.xemantic.typescript.tsgo.tspath.getRelativePathFromDirectory(pathOrPattern, targetFilePath, compareOpts.goCopy())
+                        return com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(com.xemantic.typescript.tsgo.tspath.combinePaths(com.xemantic.typescript.tsgo.tspath.combinePaths(packageName, GoSlice.of(GoElem.STRING, strValue)), GoSlice.of(GoElem.STRING, fragment)), "")
+                    }
+                    if (extensionSwappedTarget.length > 0 && com.xemantic.typescript.tsgo.tspath.containsPath(pathOrPattern, extensionSwappedTarget, compareOpts.goCopy())) {
+                        val fragment_1: String = com.xemantic.typescript.tsgo.tspath.getRelativePathFromDirectory(pathOrPattern, extensionSwappedTarget, compareOpts.goCopy())
+                        return com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(com.xemantic.typescript.tsgo.tspath.combinePaths(com.xemantic.typescript.tsgo.tspath.combinePaths(packageName, GoSlice.of(GoElem.STRING, strValue)), GoSlice.of(GoElem.STRING, fragment_1)), "")
+                    }
+                    if (!canTryTsExtension && com.xemantic.typescript.tsgo.tspath.containsPath(pathOrPattern, targetFilePath, compareOpts.goCopy())) {
+                        val fragment_2: String = com.xemantic.typescript.tsgo.tspath.getRelativePathFromDirectory(pathOrPattern, targetFilePath, compareOpts.goCopy())
+                        return com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(com.xemantic.typescript.tsgo.tspath.combinePaths(com.xemantic.typescript.tsgo.tspath.combinePaths(packageName, GoSlice.of(GoElem.STRING, strValue)), GoSlice.of(GoElem.STRING, fragment_2)), "")
+                    }
+                    if (outputFile.length > 0 && com.xemantic.typescript.tsgo.tspath.containsPath(pathOrPattern, outputFile, compareOpts.goCopy())) {
+                        val fragment_3: String = com.xemantic.typescript.tsgo.tspath.getRelativePathFromDirectory(pathOrPattern, outputFile, compareOpts.goCopy())
+                        return com.xemantic.typescript.tsgo.tspath.combinePaths(packageName, GoSlice.of(GoElem.STRING, fragment_3))
+                    }
+                    if (declarationFile.length > 0 && com.xemantic.typescript.tsgo.tspath.containsPath(pathOrPattern, declarationFile, compareOpts.goCopy())) {
+                        val fragment_4: String = com.xemantic.typescript.tsgo.tspath.getRelativePathFromDirectory(pathOrPattern, declarationFile, compareOpts.goCopy())
+                        val jsExtension: String = getJSExtensionForFile(declarationFile, options)
+                        val fragmentWithJsExtension: String = com.xemantic.typescript.tsgo.tspath.changeExtension(fragment_4, jsExtension)
+                        return com.xemantic.typescript.tsgo.tspath.combinePaths(packageName, GoSlice.of(GoElem.STRING, fragmentWithJsExtension))
+                    }
+                }
+                2 -> {
+                    val t0 = com.xemantic.typescript.tsgo.go.strings.cut(pathOrPattern, "*")
+                    val leadingSlice: String = t0.first
+                    val trailingSlice: String = t0.second
+                    val caseSensitive: Boolean = host!!.useCaseSensitiveFileNames()
+                    if (canTryTsExtension && com.xemantic.typescript.tsgo.stringutil.hasPrefixAndSuffixWithoutOverlap(targetFilePath, leadingSlice, trailingSlice, caseSensitive)) {
+                        val starReplacement: String = targetFilePath.substring(leadingSlice.length, targetFilePath.length - trailingSlice.length)
+                        return replaceFirstStar(packageName, starReplacement)
+                    }
+                    if (extensionSwappedTarget.length > 0 && com.xemantic.typescript.tsgo.stringutil.hasPrefixAndSuffixWithoutOverlap(extensionSwappedTarget, leadingSlice, trailingSlice, caseSensitive)) {
+                        val starReplacement_1: String = extensionSwappedTarget.substring(leadingSlice.length, extensionSwappedTarget.length - trailingSlice.length)
+                        return replaceFirstStar(packageName, starReplacement_1)
+                    }
+                    if (!canTryTsExtension && com.xemantic.typescript.tsgo.stringutil.hasPrefixAndSuffixWithoutOverlap(targetFilePath, leadingSlice, trailingSlice, caseSensitive)) {
+                        val starReplacement_2: String = targetFilePath.substring(leadingSlice.length, targetFilePath.length - trailingSlice.length)
+                        return replaceFirstStar(packageName, starReplacement_2)
+                    }
+                    if (outputFile.length > 0 && com.xemantic.typescript.tsgo.stringutil.hasPrefixAndSuffixWithoutOverlap(outputFile, leadingSlice, trailingSlice, caseSensitive)) {
+                        val starReplacement_3: String = outputFile.substring(leadingSlice.length, outputFile.length - trailingSlice.length)
+                        return replaceFirstStar(packageName, starReplacement_3)
+                    }
+                    if (declarationFile.length > 0 && com.xemantic.typescript.tsgo.stringutil.hasPrefixAndSuffixWithoutOverlap(declarationFile, leadingSlice, trailingSlice, caseSensitive)) {
+                        val starReplacement_4: String = declarationFile.substring(leadingSlice.length, declarationFile.length - trailingSlice.length)
+                        val substituted: String = replaceFirstStar(packageName, starReplacement_4)
+                        val jsExtension_1: String = com.xemantic.typescript.tsgo.module.tryGetJSExtensionForFile(declarationFile, options)
+                        if (jsExtension_1.length > 0) {
+                            return com.xemantic.typescript.tsgo.tspath.changeFullExtension(substituted, jsExtension_1)
+                        }
+                    }
+                }
+            }
+            return ""
+        }
+        5 -> {
+            val arr: GoSlice<ExportsOrImports> = exports.asArray()
+            val s1 = arr
+            l2@ for (i2 in 0 until s1.len) {
+                val e: ExportsOrImports = s1[i2].goCopy()
+                val result: String = tryGetModuleNameFromExportsOrImports(options, host, targetFilePath, packageDirectory, packageName, e.goCopy(), conditions, mode, isImports, preferTsExtension)
+                if (result.length > 0) {
+                    return result
+                }
+            }
+        }
+        6 -> {
+            val obj: OrderedMap<String, ExportsOrImports>? = exports.asObject()
+            var rfDone3 = false
+            var rfRet4: String? = null
+            obj.entries()!!(fun(y5: String, y6: ExportsOrImports): Boolean {
+                            val key: String = y5
+                            val value_1: ExportsOrImports = y6
+                            if (key == "default" || com.xemantic.typescript.tsgo.go.slices.contains<String>(conditions, key) || com.xemantic.typescript.tsgo.go.slices.contains<String>(conditions, "types") && com.xemantic.typescript.tsgo.module.isApplicableVersionedTypesKey(key)) {
+                                val result_1: String = tryGetModuleNameFromExportsOrImports(options, host, targetFilePath, packageDirectory, packageName, value_1.goCopy(), conditions, mode, isImports, preferTsExtension)
+                                if (result_1.length > 0) {
+                                    rfRet4 = result_1
+                                    rfDone3 = true
+                                    return false
+                                }
+                            }
+                            return true
+            })
+            if (rfDone3) return rfRet4 as String
+        }
+        1 -> {
+            return ""
+        }
+    }
+    return ""
 }
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.GetModuleSpecifier 47f2ceca

@@ -395,6 +395,21 @@ func (p *px) genDecl(d *ast.GenDecl, top bool) *O {
 			if s.Doc != nil {
 				sp.S("doc", s.Doc.Text())
 			}
+			// //go:embed directives (Doc.Text() drops directives): the patterns, relative to the file's directory.
+			var embeds []string
+			for _, cg := range []*ast.CommentGroup{s.Doc, d.Doc} {
+				if cg == nil || (cg == d.Doc && len(d.Specs) > 1) {
+					continue
+				}
+				for _, c := range cg.List {
+					if rest, ok := strings.CutPrefix(c.Text, "//go:embed "); ok {
+						embeds = append(embeds, strings.Fields(rest)...)
+					}
+				}
+			}
+			if len(embeds) > 0 {
+				sp.S("embed", embeds)
+			}
 			var names []any
 			var targets []types.Type
 			for _, nm := range s.Names {

@@ -401,7 +401,31 @@ fun <T> runWithInferenceBlockedFromSourceNode(goElem_T: GoElem<T>, c: Checker?, 
 
 // go: github.com/microsoft/typescript-go/internal/checker.GetResolvedSignatureForSignatureHelp 8c07df6c
 fun getResolvedSignatureForSignatureHelp(node: Node?, argumentCount: Int, c: Checker?): Tuple2<Signature?, GoSlice<Signature?>> {
-    TODO("goport: refused local-type: github.com/microsoft/typescript-go/internal/checker.GetResolvedSignatureForSignatureHelp")
+    val res: com.xemantic.typescript.tsgo.checker.result_GetResolvedSignatureForSignatureHelp = runWithoutResolvedSignatureCaching<com.xemantic.typescript.tsgo.checker.result_GetResolvedSignatureForSignatureHelp>(com.xemantic.typescript.tsgo.checker.result_GetResolvedSignatureForSignatureHelp.ELEM, c, node, fun(): com.xemantic.typescript.tsgo.checker.result_GetResolvedSignatureForSignatureHelp {
+        val t0 = c.getResolvedSignatureWorker(node, CheckModeIsForSignatureHelp, argumentCount)
+        val signature: Signature? = t0.first
+        val candidates: GoSlice<Signature?> = t0.second
+        return com.xemantic.typescript.tsgo.checker.result_GetResolvedSignatureForSignatureHelp(signature = signature, candidates = candidates)
+    })
+    return Tuple2<Signature?, GoSlice<Signature?>>(res.signature, res.candidates)
+}
+
+// go: github.com/microsoft/typescript-go/internal/checker.result_GetResolvedSignatureForSignatureHelp 
+class result_GetResolvedSignatureForSignatureHelp(
+    @kotlin.jvm.JvmField var signature: Signature? = null,
+    @kotlin.jvm.JvmField var candidates: GoSlice<Signature?> = GoElem.ref<Signature?>().nilSlice,
+) {
+
+    fun goCopy(): result_GetResolvedSignatureForSignatureHelp = result_GetResolvedSignatureForSignatureHelp(signature = signature, candidates = candidates)
+
+    fun goSet(o: result_GetResolvedSignatureForSignatureHelp) {
+        signature = o.signature
+        candidates = o.candidates
+    }
+
+    companion object {
+        val ELEM: GoElem<result_GetResolvedSignatureForSignatureHelp> = GoElem({ result_GetResolvedSignatureForSignatureHelp() }, { it.goCopy() })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.runWithoutResolvedSignatureCaching 0026e4f8

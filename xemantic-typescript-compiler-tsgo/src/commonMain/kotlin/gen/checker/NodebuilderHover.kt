@@ -50,12 +50,18 @@ import com.xemantic.typescript.tsgo.ast.newClassDeclaration
 import com.xemantic.typescript.tsgo.ast.newConstructorDeclaration
 import com.xemantic.typescript.tsgo.ast.newEnumDeclaration
 import com.xemantic.typescript.tsgo.ast.newEnumMember
+import com.xemantic.typescript.tsgo.ast.newExportDeclaration
+import com.xemantic.typescript.tsgo.ast.newExportSpecifier
+import com.xemantic.typescript.tsgo.ast.newExpressionStatement
 import com.xemantic.typescript.tsgo.ast.newHeritageClause
 import com.xemantic.typescript.tsgo.ast.newIdentifier
 import com.xemantic.typescript.tsgo.ast.newInterfaceDeclaration
 import com.xemantic.typescript.tsgo.ast.newMethodDeclaration
 import com.xemantic.typescript.tsgo.ast.newModifier
 import com.xemantic.typescript.tsgo.ast.newModifierList
+import com.xemantic.typescript.tsgo.ast.newModuleBlock
+import com.xemantic.typescript.tsgo.ast.newModuleDeclaration
+import com.xemantic.typescript.tsgo.ast.newNamedExports
 import com.xemantic.typescript.tsgo.ast.newNodeList
 import com.xemantic.typescript.tsgo.ast.newNumericLiteral
 import com.xemantic.typescript.tsgo.ast.newPropertyDeclaration
@@ -67,6 +73,7 @@ import com.xemantic.typescript.tsgo.ast.newVariableDeclarationList
 import com.xemantic.typescript.tsgo.ast.newVariableStatement
 import com.xemantic.typescript.tsgo.ast.questionToken
 import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.addIfAbsent
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.len
 
@@ -479,7 +486,153 @@ fun NodeBuilderImpl?.serializeNamespaceMember(resolved: Symbol?, name: String): 
 
 // go: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.expandModuleDecl b972c36c
 fun NodeBuilderImpl?.expandModuleDecl(symbol: Symbol?): Node? {
-    TODO("goport: refused local-type: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.expandModuleDecl")
+    return withDefers({ null }) { df0 ->
+        val exports: SymbolTable = this!!.ch.getExportsOfSymbol(symbol)
+        var members: GoSlice<Symbol?> = GoElem.ref<Symbol?>().nilSlice
+        val m1 = exports
+        l0@ for (k2 in m1.keysSnapshot()) {
+            val e3 = m1.probe(k2)
+            if (e3 === GoMapAbsent) continue
+            val sym: Symbol? = goProbeValue<Symbol?>(e3) { null }
+            if (!this.isNamespaceMember(sym)) {
+                continue@l0
+            }
+            if (!com.xemantic.typescript.tsgo.scanner.isIdentifierText(sym!!.name, LanguageVariant(0))) {
+                continue@l0
+            }
+            members = members.append1(sym)
+        }
+        this!!.ch.sortSymbols(members)
+        this!!.ctx!!.approximateLength += 14
+        val oldFlags: Flags = this!!.ctx!!.flags
+        df0.defer(fun() {
+            this!!.ctx!!.flags = oldFlags
+        })
+        this!!.ctx!!.flags = Flags(this!!.ctx!!.flags.value or 514u)
+        val localName: Node? = this.symbolToNode(symbol, SymbolFlags(1073741823u))
+        this!!.ctx!!.flags = oldFlags
+        var bodyStmts: GoSlice<com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl> = com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl.ELEM.nilSlice
+        val emittedLocals: com.xemantic.typescript.tsgo.collections.Set<Symbol?> = com.xemantic.typescript.tsgo.collections.Set<Symbol?>(goElem_T = GoElem.ref<Symbol?>())
+        var i: Int = 0
+        var first4 = true
+        l1@ while (true) {
+            if (first4) first4 = false else {
+                i++
+            }
+            if (!(i < members.len)) break
+            val m: Symbol? = members[i]
+            if (this.checkTruncationLengthIfExpanding() && i + 3 < members.len - 1) {
+                this!!.ctx!!.expansionTruncated = true
+                bodyStmts = bodyStmts.append1(com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl(node = this!!.f.newExpressionStatement(this!!.f.newIdentifier(com.xemantic.typescript.tsgo.go.fmt.sprintf("... (%d more) ...", members.len - i - 1)))))
+                i = members.len - 2
+                continue@l1
+            }
+            if (m!!.flags.value and 2097152u != 0u) {
+                val aliasDecl: Node? = this!!.ch.getDeclarationOfAliasSymbol(m)
+                val target: Symbol? = this!!.ch.getMergedSymbolImpl(this!!.ch.getTargetOfAliasDeclaration(aliasDecl))
+                if (target != null) {
+                    if (target!!.flags.value and 7u != 0u) {
+                        if (emittedLocals.addIfAbsent(target)) {
+                            val localType: Type? = this!!.ch.getWidenedTypeImpl(this!!.ch.getTypeOfSymbolImpl(target))
+                            this!!.ctx!!.approximateLength += (target!!.name.length + 5)
+                            val localStmt: Node? = this!!.f.newVariableStatement(null, this!!.f.newVariableDeclarationList(this!!.f.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.f.newVariableDeclaration(this!!.f.newIdentifier(target!!.name), null, this.serializeTypeForDeclaration(null, localType, target, true), null))), NodeFlags(1u)))
+                            bodyStmts = bodyStmts.append1(com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl(node = localStmt, isLocal = true))
+                        }
+                    }
+                    val targetName: String = target!!.name
+                    this!!.ctx!!.approximateLength += (16 + m!!.name.length)
+                    var propertyName: Node? = null
+                    if (m!!.name != targetName) {
+                        propertyName = this!!.f.newIdentifier(targetName)
+                    }
+                    val stmt: Node? = this!!.f.newExportDeclaration(null, false, this!!.f.newNamedExports(this!!.f.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.f.newExportSpecifier(false, propertyName, this!!.f.newIdentifier(m!!.name))))), null, null)
+                    bodyStmts = bodyStmts.append1(com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl(node = stmt))
+                    continue@l1
+                }
+            }
+            val resolved: Symbol? = this!!.ch.resolveSymbol(m)
+            if (resolved!!.flags.value and 8208u != 0u) {
+                val t: Type? = this!!.ch.getTypeOfSymbolImpl(resolved)
+                val sigs: GoSlice<Signature?> = this!!.ch.getSignaturesOfTypeImpl(t, SignatureKindCall)
+                val s5 = sigs
+                l2@ for (i6 in 0 until s5.len) {
+                    val sig: Signature? = s5[i6]
+                    this!!.ctx!!.approximateLength = this!!.ctx!!.approximateLength + 1
+                    val decl: Node? = this.signatureToSignatureDeclarationHelper(sig, Kind(263), SignatureToSignatureDeclarationOptions(name = this!!.f.newIdentifier(m!!.name)))
+                    bodyStmts = bodyStmts.append1(com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl(node = decl))
+                }
+                val merged: Symbol? = this!!.ch.getMergedSymbolImpl(resolved)
+                val hasModuleExports: Boolean = merged!!.flags.value and 1536u != 0u && !merged!!.exports.isNil && merged!!.exports.len != 0
+                if (!hasModuleExports) {
+                    bodyStmts = bodyStmts.append1(com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl(node = this!!.f.newModuleDeclaration(null, Kind(145), this!!.f.newIdentifier(m!!.name), this!!.f.newModuleBlock(this!!.f.newNodeList(GoElem.ref<Node?>().nilSlice)))))
+                }
+                continue@l1
+            }
+            val node: Node? = this.serializeNamespaceMember(resolved, m!!.name)
+            if (node != null) {
+                bodyStmts = bodyStmts.append1(com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl(node = node))
+            }
+        }
+        val s7 = bodyStmts
+        l3@ for (i8 in 0 until s7.len) {
+            val i_1: Int = i8
+            val s: com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl? = bodyStmts[i_1]
+            if (s!!.isLocal || com.xemantic.typescript.tsgo.ast.isExportDeclaration(s!!.node)) {
+                continue@l3
+            }
+            if (com.xemantic.typescript.tsgo.ast.canHaveModifiers(s!!.node)) {
+                val mf: ModifierFlags = ModifierFlags(s!!.node.modifierFlags().value or 32u)
+                s!!.node = com.xemantic.typescript.tsgo.ast.replaceModifiers(this!!.f, s!!.node, this!!.f.newModifierList(com.xemantic.typescript.tsgo.ast.createModifiersFromModifierFlags(mf, run { val r9 = this!!.f; fun(p0: Kind): Node? = r9.newModifier(p0) })))
+            }
+        }
+        val bodyStatements: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), bodyStmts.len)
+        val s10 = bodyStmts
+        l4@ for (i11 in 0 until s10.len) {
+            val i_2: Int = i11
+            bodyStatements[i_2] = bodyStmts[i_2].node
+        }
+        val allExported: Boolean = bodyStatements.len > 0 && com.xemantic.typescript.tsgo.core.every<Node?>(GoElem.ref<Node?>(), bodyStatements, fun(d: Node?): Boolean {
+            return com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(d, ModifierFlags(32u))
+        })
+        if (allExported) {
+            val s12 = bodyStatements
+            l5@ for (i13 in 0 until s12.len) {
+                val i_3: Int = i13
+                val stmt_1: Node? = s12[i13]
+                if (com.xemantic.typescript.tsgo.ast.canHaveModifiers(stmt_1)) {
+                    val mf_1: ModifierFlags = ModifierFlags(stmt_1.modifierFlags().value and 32u.inv())
+                    bodyStatements[i_3] = com.xemantic.typescript.tsgo.ast.replaceModifiers(this!!.f, stmt_1, this!!.f.newModifierList(com.xemantic.typescript.tsgo.ast.createModifiersFromModifierFlags(mf_1, run { val r14 = this!!.f; fun(p0: Kind): Node? = r14.newModifier(p0) })))
+                }
+            }
+        }
+        var keyword: Kind = Kind(145)
+        if (!com.xemantic.typescript.tsgo.ast.isIdentifier(localName)) {
+            keyword = Kind(144)
+        }
+        return this!!.f.newModuleDeclaration(null, keyword, localName, this!!.f.newModuleBlock(this!!.f.newNodeList(bodyStatements)))
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/checker.hoverStatement_NodeBuilderImpl_expandModuleDecl 
+class hoverStatement_NodeBuilderImpl_expandModuleDecl(
+    @kotlin.jvm.JvmField var node: Node? = null,
+    @kotlin.jvm.JvmField var isLocal: Boolean = false,
+) {
+
+    fun goCopy(): hoverStatement_NodeBuilderImpl_expandModuleDecl = hoverStatement_NodeBuilderImpl_expandModuleDecl(node = node, isLocal = isLocal)
+
+    fun goSet(o: hoverStatement_NodeBuilderImpl_expandModuleDecl) {
+        node = o.node
+        isLocal = o.isLocal
+    }
+
+    fun goEquals(o: hoverStatement_NodeBuilderImpl_expandModuleDecl): Boolean = node === o.node && isLocal == o.isLocal
+
+    fun goHash(): Int = 31 * node.hashCode() + 31 * isLocal.hashCode()
+
+    companion object {
+        val ELEM: GoElem<hoverStatement_NodeBuilderImpl_expandModuleDecl> = GoElem({ hoverStatement_NodeBuilderImpl_expandModuleDecl() }, { it.goCopy() })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.serializeTypeAliasForNamespace 33b207ff

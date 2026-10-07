@@ -34,6 +34,7 @@ import com.xemantic.typescript.goport.lower.Override
 import com.xemantic.typescript.goport.lower.PackageEmitter
 import com.xemantic.typescript.goport.lower.PkgCtx
 import com.xemantic.typescript.goport.lower.Program
+import com.xemantic.typescript.goport.lower.Literals
 import com.xemantic.typescript.goport.lower.ShimIndex
 import com.xemantic.typescript.goport.naming.Naming
 import com.xemantic.typescript.goport.naming.RenameTable
@@ -71,6 +72,10 @@ fun header(goSources: List<String>): String = """
  * parameters, our `!!` mirrors Go's nil dereference even where Kotlin smart-casts, …). The build
  * stays warning-clean; anything NOT on this list surfaces.
  */
+/** `//go:embed` data: chars per string constant and per generated file. */
+const val EMBED_CHUNK = 16_000
+const val EMBED_FILE = 240_000
+
 val SUPPRESS = listOf(
     "UNUSED_PARAMETER", "UNUSED_VARIABLE", "UNUSED_VALUE", "UNCHECKED_CAST", "USELESS_CAST",
     "UNNECESSARY_NOT_NULL_ASSERTION", "UNREACHABLE_CODE", "NAME_SHADOWING", "REDUNDANT_ELSE_IN_WHEN",
@@ -92,6 +97,7 @@ class Args(argv: Array<String>) {
     val refuse = File(m["--refuse"] ?: "xemantic-typescript-compiler-goport/refuse.txt")
     val out = File(m["--out"] ?: "xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/gen")
     val report = m["--report"]?.let { File(it) }
+    val tsgo = File(m["--tsgo"] ?: "typescript-go-repo")
 }
 
 fun loadOverrides(dir: File): Map<String, Override> {
@@ -182,6 +188,41 @@ fun main(argv: Array<String>) {
             }
             File(dir, "PackageInit.kt").writeText(render(pc, fc, listOf(Item(0, body, false)), "internal/${p.shortPath}"))
         }
+    }
+    // `//go:embed` contents (Program.embeds): byte-string chunks of <= EMBED_CHUNK chars (a JVM constant
+    // holds 65,535 UTF-8 bytes; an escaped high byte takes 2), files of <= EMBED_FILE chars.
+    for ((path, list) in prog.embeds) {
+        val p = packages.first { it.path == path }
+        val pc = PkgCtx(prog, p)
+        val dir = File(args.out, p.shortPath)
+        val pkgDir = File(args.tsgo, "internal/${p.shortPath}")
+        val index = StringBuilder()
+        val files = ArrayList<StringBuilder>()
+        var cur = StringBuilder()
+        var size = 0
+        for ((fnName, pat) in list) {
+            val bytes = File(pkgDir, pat).readBytes()
+            val parts = ArrayList<String>()
+            var off = 0
+            while (off < bytes.size || parts.isEmpty()) {
+                val end = minOf(bytes.size, off + EMBED_CHUNK)
+                val cname = "${fnName}_${parts.size}"
+                if (size > EMBED_FILE) { files += cur; cur = StringBuilder(); size = 0 }
+                cur.append("internal const val $cname: String = ${Literals.byteString(bytes.copyOfRange(off, end))}\n")
+                size += end - off
+                parts += cname
+                off = end
+            }
+            index.append("/** The bytes of `$pat` (`//go:embed`). */\n")
+            index.append("internal fun $fnName(): String = StringBuilder(${bytes.size})${parts.joinToString("") { ".append($it)" }}.toString()\n\n")
+        }
+        if (cur.isNotEmpty()) files += cur
+        files.forEachIndexed { i, b ->
+            File(dir, "EmbedData${i + 1}.kt").writeText(render(pc, FileCtx(pc), listOf(Item(0, b.toString(), false)), "go:embed data of internal/${p.shortPath}"))
+            written++
+        }
+        File(dir, "EmbedIndex.kt").writeText(render(pc, FileCtx(pc), listOf(Item(0, index.toString(), false)), "go:embed index of internal/${p.shortPath}"))
+        written++
     }
     // Synthetic interfaces for anonymous Go interfaces.
     if (prog.synth.needNullable) {

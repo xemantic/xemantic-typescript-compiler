@@ -145,6 +145,11 @@ func (p *px) writeKey(b *strings.Builder, t types.Type) {
 		}
 		b.WriteByte('}')
 	case *types.Interface:
+		if t.NumExplicitMethods() == 0 && t.NumEmbeddeds() == 0 && !t.IsMethodSet() {
+			// comparable's underlying interface: no methods, no embeds, yet NOT `any` — the keys must differ.
+			b.WriteString("interface{comparable}")
+			break
+		}
 		b.WriteString("interface{")
 		n := 0
 		for i := 0; i < t.NumExplicitMethods(); i++ {
