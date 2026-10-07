@@ -37,13 +37,17 @@ class Arena<T>(
         data = o.data
     }
 
+    fun goEquals(o: Arena<T>): Boolean = data == o.data
+
+    fun goHash(): Int = 31 * data.hashCode()
+
     companion object {
         fun <T> elem(goElem_T: GoElem<T>): GoElem<Arena<T>> = GoElem({ Arena<T>(goElem_T = goElem_T) }, { it.goCopy() })
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Arena.New a66311d8
-fun <T> Arena<T>?.new(): T {
+fun <T> Arena<T>?.new(): T? {
     if (this!!.data.len == this!!.data.cap) {
         val nextSize: Int = nextArenaSize(this!!.data.len)
         this!!.data = com.xemantic.typescript.tsgo.go.slices.grow<T>(this!!.goElem_T.nilSlice, nextSize)

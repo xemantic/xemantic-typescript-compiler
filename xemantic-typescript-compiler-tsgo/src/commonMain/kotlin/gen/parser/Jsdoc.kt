@@ -41,7 +41,6 @@ import com.xemantic.typescript.tsgo.ast.asArrayTypeNode
 import com.xemantic.typescript.tsgo.ast.asJSDocTypeTag
 import com.xemantic.typescript.tsgo.ast.asQualifiedName
 import com.xemantic.typescript.tsgo.ast.asTypeReferenceNode
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.name
 import com.xemantic.typescript.tsgo.ast.newExpressionWithTypeArguments
 import com.xemantic.typescript.tsgo.ast.newJSDoc
@@ -79,7 +78,6 @@ import com.xemantic.typescript.tsgo.ast.newPropertyAccessExpression
 import com.xemantic.typescript.tsgo.ast.newQualifiedName
 import com.xemantic.typescript.tsgo.ast.newTypeParameterDeclaration
 import com.xemantic.typescript.tsgo.ast.parseOptions
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.tagName
 import com.xemantic.typescript.tsgo.ast.text
 import com.xemantic.typescript.tsgo.ast.type
@@ -116,7 +114,7 @@ fun parseJSDocForNode(sourceFile: SourceFile?, node: Node?): GoSlice<Node?> {
             return GoElem.ref<Node?>().nilSlice
         }
         var jsdoc: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0, ranges.len)
-        var pos: Int = node.pos()
+        var pos: Int = node!!.pos()
         val s2 = ranges
         l0@ for (i3 in 0 until s2.len) {
             val comment: CommentRange = s2[i3].goCopy()
@@ -124,7 +122,7 @@ fun parseJSDocForNode(sourceFile: SourceFile?, node: Node?): GoSlice<Node?> {
             if (parsed != null) {
                 parsed!!.parent = node
                 jsdoc = jsdoc.append1(parsed)
-                pos = parsed.end()
+                pos = parsed!!.end()
             }
         }
         return jsdoc
@@ -143,16 +141,16 @@ value class jsdocState(val value: Int) : Comparable<jsdocState> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.jsdocStateBeginningOfLine 63a00621
-val jsdocStateBeginningOfLine: jsdocState = jsdocState(0)
+val jsdocStateBeginningOfLine: com.xemantic.typescript.tsgo.parser.jsdocState = com.xemantic.typescript.tsgo.parser.jsdocState(0)
 
 // go: github.com/microsoft/typescript-go/internal/parser.jsdocStateSawAsterisk 4a4fdb87
-val jsdocStateSawAsterisk: jsdocState = jsdocState(1)
+val jsdocStateSawAsterisk: com.xemantic.typescript.tsgo.parser.jsdocState = com.xemantic.typescript.tsgo.parser.jsdocState(1)
 
 // go: github.com/microsoft/typescript-go/internal/parser.jsdocStateSavingComments bfbfc77b
-val jsdocStateSavingComments: jsdocState = jsdocState(2)
+val jsdocStateSavingComments: com.xemantic.typescript.tsgo.parser.jsdocState = com.xemantic.typescript.tsgo.parser.jsdocState(2)
 
 // go: github.com/microsoft/typescript-go/internal/parser.jsdocStateSavingBackticks 347bc7c2
-val jsdocStateSavingBackticks: jsdocState = jsdocState(3)
+val jsdocStateSavingBackticks: com.xemantic.typescript.tsgo.parser.jsdocState = com.xemantic.typescript.tsgo.parser.jsdocState(3)
 
 // go: github.com/microsoft/typescript-go/internal/parser.propertyLikeParse c9afe9ed
 @kotlin.jvm.JvmInline
@@ -166,16 +164,16 @@ value class propertyLikeParse(val value: Int) : Comparable<propertyLikeParse> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.propertyLikeParseProperty 6c92a854
-val propertyLikeParseProperty: propertyLikeParse = propertyLikeParse(1)
+val propertyLikeParseProperty: com.xemantic.typescript.tsgo.parser.propertyLikeParse = com.xemantic.typescript.tsgo.parser.propertyLikeParse(1)
 
 // go: github.com/microsoft/typescript-go/internal/parser.propertyLikeParseParameter 136323d6
-val propertyLikeParseParameter: propertyLikeParse = propertyLikeParse(2)
+val propertyLikeParseParameter: com.xemantic.typescript.tsgo.parser.propertyLikeParse = com.xemantic.typescript.tsgo.parser.propertyLikeParse(2)
 
 // go: github.com/microsoft/typescript-go/internal/parser.propertyLikeParseCallbackParameter c6d36c51
-val propertyLikeParseCallbackParameter: propertyLikeParse = propertyLikeParse(4)
+val propertyLikeParseCallbackParameter: com.xemantic.typescript.tsgo.parser.propertyLikeParse = com.xemantic.typescript.tsgo.parser.propertyLikeParse(4)
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.withJSDoc ac87e5e7
-fun Parser?.withJSDoc(node: Node?, info: jsdocScannerInfo): GoSlice<Node?> {
+fun Parser?.withJSDoc(node: Node?, info: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo): GoSlice<Node?> {
     if (info.value and 1 == 0) {
         return GoElem.ref<Node?>().nilSlice
     }
@@ -192,7 +190,7 @@ fun Parser?.withJSDoc(node: Node?, info: jsdocScannerInfo): GoSlice<Node?> {
     this!!.jsdocCommentRangesSpace = ranges.slice(0, 0)
     this!!.hasDeprecatedTag = false
     var jsdoc: GoSlice<Node?> = this!!.nodeSliceArena.newSlice(ranges.len).slice(0, 0)
-    var pos: Int = node.pos()
+    var pos: Int = node!!.pos()
     val s0 = ranges
     l0@ for (i1 in 0 until s0.len) {
         val comment: CommentRange = s0[i1].goCopy()
@@ -200,7 +198,7 @@ fun Parser?.withJSDoc(node: Node?, info: jsdocScannerInfo): GoSlice<Node?> {
         if (parsed != null) {
             parsed!!.parent = node
             jsdoc = jsdoc.append1(parsed)
-            pos = parsed.end()
+            pos = parsed!!.end()
         }
     }
     if (jsdoc.len != 0) {
@@ -297,7 +295,7 @@ fun Parser?.parseJSDocCommentWorker(start: Int, end: Int, fullStart: Int, indent
     var tags: GoSlice<Node?> = this!!.nodeSliceArena.newSlice(1).slice(0, 0)
     var tagsPos: Int = -1
     var tagsEnd: Int = -1
-    var state: jsdocState = jsdocStateSawAsterisk
+    var state: com.xemantic.typescript.tsgo.parser.jsdocState = jsdocStateSawAsterisk
     var backtickCount: Int = 0
     var inFencedCodeBlock: Boolean = false
     var commentParts: GoSlice<Node?> = this!!.nodeSliceArena.newSlice(1).slice(0, 0)
@@ -344,10 +342,10 @@ fun Parser?.parseJSDocCommentWorker(start: Int, end: Int, fullStart: Int, indent
                     }
                     val tag: Node? = this.parseTag(tags, indent)
                     if (tagsPos == -1) {
-                        tagsPos = tag.pos()
+                        tagsPos = tag!!.pos()
                     }
                     tags = tags.append1(tag)
-                    tagsEnd = tag.end()
+                    tagsEnd = tag!!.end()
                     state = jsdocStateBeginningOfLine
                     margin = -1
                 }
@@ -677,7 +675,7 @@ fun Parser?.parseTagComments(indent_0: Int, initialMargin: GoPtr<String>?): Node
     var parts: GoSlice<Node?> = this!!.jsdocTagCommentsPartsSpace
     this!!.jsdocTagCommentsPartsSpace = GoElem.ref<Node?>().nilSlice
     var linkEnd: Int = -1
-    var state: jsdocState = jsdocStateBeginningOfLine
+    var state: com.xemantic.typescript.tsgo.parser.jsdocState = jsdocStateBeginningOfLine
     var backtickCount: Int = 0
     var inFencedCodeBlock: Boolean = false
     if (indent < 0) {
@@ -931,7 +929,7 @@ fun Parser?.tryParseTypeExpression(): Node? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseBracketNameInPropertyAndParamTag 7fac4ac0
-fun Parser?.parseBracketNameInPropertyAndParamTag(target: propertyLikeParse): Tuple2<Node?, Boolean> {
+fun Parser?.parseBracketNameInPropertyAndParamTag(target: com.xemantic.typescript.tsgo.parser.propertyLikeParse): Tuple2<Node?, Boolean> {
     var name: Node? = null
     var isBracketed: Boolean = false
     isBracketed = this.parseOptionalJsdoc(Kind(22))
@@ -974,7 +972,7 @@ fun isObjectOrObjectArrayTypeReference(node: Node?): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseParameterOrPropertyTag e3f7d46f
-fun Parser?.parseParameterOrPropertyTag(start: Int, tagName: Node?, target: propertyLikeParse, indent: Int): Node? {
+fun Parser?.parseParameterOrPropertyTag(start: Int, tagName: Node?, target: com.xemantic.typescript.tsgo.parser.propertyLikeParse, indent: Int): Node? {
     var typeExpression: Node? = this.tryParseTypeExpression()
     var isNameFirst: Boolean = typeExpression == null
     this.skipWhitespaceOrAsterisk()
@@ -1002,7 +1000,7 @@ fun Parser?.parseParameterOrPropertyTag(start: Int, tagName: Node?, target: prop
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseNestedTypeLiteral fd2ed579
-fun Parser?.parseNestedTypeLiteral(typeExpression: Node?, name: Node?, target: propertyLikeParse, indent: Int): Node? {
+fun Parser?.parseNestedTypeLiteral(typeExpression: Node?, name: Node?, target: com.xemantic.typescript.tsgo.parser.propertyLikeParse, indent: Int): Node? {
     if (typeExpression != null && isObjectOrObjectArrayTypeReference(typeExpression.type())) {
         val pos: Int = this.nodePos()
         var children: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
@@ -1033,7 +1031,7 @@ fun Parser?.parseNestedTypeLiteral(typeExpression: Node?, name: Node?, target: p
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseReturnTag 4f0bb278
 fun Parser?.parseReturnTag(previousTags: GoSlice<Node?>, start: Int, tagName: Node?, indent: Int, indentText: String): Node? {
     if (com.xemantic.typescript.tsgo.core.some<Node?>(GoElem.ref<Node?>(), previousTags, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isJSDocReturnTag(p0))) {
-        this.parseErrorAt(tagName.pos(), this!!.scanner.tokenStart(), com.xemantic.typescript.tsgo.diagnostics.x_0_tag_already_specified, GoSlice.of(GoElem.ref<Any?>(), tagName.text()))
+        this.parseErrorAt(tagName!!.pos(), this!!.scanner.tokenStart(), com.xemantic.typescript.tsgo.diagnostics.x_0_tag_already_specified, GoSlice.of(GoElem.ref<Any?>(), tagName.text()))
     }
     val typeExpression: Node? = this.tryParseTypeExpression()
     return this.finishNode(this!!.factory.newJSDocReturnTag(tagName, typeExpression, this.parseTrailingTagComments(start, this.nodePos(), indent, indentText)), start)
@@ -1042,7 +1040,7 @@ fun Parser?.parseReturnTag(previousTags: GoSlice<Node?>, start: Int, tagName: No
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseTypeTag 7d6eb819
 fun Parser?.parseTypeTag(previousTags: GoSlice<Node?>, start: Int, tagName: Node?, indent: Int, indentText: String): Node? {
     if (com.xemantic.typescript.tsgo.core.some<Node?>(GoElem.ref<Node?>(), previousTags, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isJSDocTypeTag(p0))) {
-        this.parseErrorAt(tagName.pos(), this!!.scanner.tokenStart(), com.xemantic.typescript.tsgo.diagnostics.x_0_tag_already_specified, GoSlice.of(GoElem.ref<Any?>(), tagName.text()))
+        this.parseErrorAt(tagName!!.pos(), this!!.scanner.tokenStart(), com.xemantic.typescript.tsgo.diagnostics.x_0_tag_already_specified, GoSlice.of(GoElem.ref<Any?>(), tagName.text()))
     }
     val typeExpression: Node? = this.parseJSDocTypeExpression(true)
     var comments: NodeList? = null
@@ -1216,24 +1214,24 @@ fun Parser?.parseTypedefTag(start: Int, tagName: Node?, indent: Int, indentText:
             } else {
                 var pos: Int = start
                 if (jsdocPropertyTags.len > 0) {
-                    pos = jsdocPropertyTags[0].pos()
+                    pos = jsdocPropertyTags[0]!!.pos()
                 }
                 typeExpression = this.finishNode(jsdocTypeLiteral, pos)
             }
-            end = typeExpression.end()
+            end = typeExpression!!.end()
         }
     }
     if (end == -1) {
         if (hasChildren && typeExpression != null) {
-            end = typeExpression.end()
+            end = typeExpression!!.end()
         } else if (comment != null) {
             end = this.nodePos()
         } else if (fullName != null) {
-            end = fullName.end()
+            end = fullName!!.end()
         } else if (typeExpression != null) {
-            end = typeExpression.end()
+            end = typeExpression!!.end()
         } else {
-            end = tagName.end()
+            end = tagName!!.end()
         }
     }
     if (comment == null) {
@@ -1300,7 +1298,7 @@ fun Parser?.parseCallbackTag(start: Int, tagName: Node?, indent: Int, indentText
     if (comment != null) {
         end = this.nodePos()
     } else {
-        end = typeExpression.end()
+        end = typeExpression!!.end()
     }
     return this.finishNodeWithEnd(this!!.factory.newJSDocCallbackTag(tagName, typeExpression, fullName, comment), start, end)
 }
@@ -1317,7 +1315,7 @@ fun Parser?.parseOverloadTag(start: Int, tagName: Node?, indent: Int, indentText
     if (comment != null) {
         end = this.nodePos()
     } else {
-        end = typeExpression.end()
+        end = typeExpression!!.end()
     }
     return this.finishNodeWithEnd(this!!.factory.newJSDocOverloadTag(tagName, typeExpression, comment), start, end)
 }
@@ -1343,7 +1341,7 @@ fun Parser?.parseChildPropertyTag(indent: Int): Node? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseChildParameterOrPropertyTag 1754afb8
-fun Parser?.parseChildParameterOrPropertyTag(target: propertyLikeParse, indent: Int, name: Node?): Node? {
+fun Parser?.parseChildParameterOrPropertyTag(target: com.xemantic.typescript.tsgo.parser.propertyLikeParse, indent: Int, name: Node?): Node? {
     var canParseTag: Boolean = true
     var seenAsterisk: Boolean = false
     l0@ while (true) {
@@ -1380,7 +1378,7 @@ fun Parser?.parseChildParameterOrPropertyTag(target: propertyLikeParse, indent: 
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.tryParseChildTag e071f295
-fun Parser?.tryParseChildTag(target: propertyLikeParse, indent: Int): Node? {
+fun Parser?.tryParseChildTag(target: com.xemantic.typescript.tsgo.parser.propertyLikeParse, indent: Int): Node? {
     if (this!!.token.value != 59) {
         goPanic("should only be called when at @")
     }
@@ -1388,7 +1386,7 @@ fun Parser?.tryParseChildTag(target: propertyLikeParse, indent: Int): Node? {
     this.nextTokenJSDoc()
     val tagName: Node? = this.parseJSDocIdentifierName(com.xemantic.typescript.tsgo.diagnostics.identifier_expected)
     val indentText: String = this.skipWhitespaceOrAsterisk()
-    var t: propertyLikeParse = propertyLikeParse(0)
+    var t: com.xemantic.typescript.tsgo.parser.propertyLikeParse = com.xemantic.typescript.tsgo.parser.propertyLikeParse(0)
     when (tagName.text()) {
         "type" -> {
             if (target.value == 1) {
@@ -1399,7 +1397,7 @@ fun Parser?.tryParseChildTag(target: propertyLikeParse, indent: Int): Node? {
             t = propertyLikeParseProperty
         }
         "arg", "argument", "param" -> {
-            t = propertyLikeParse(6)
+            t = com.xemantic.typescript.tsgo.parser.propertyLikeParse(6)
         }
         "template" -> {
             return this.parseTemplateTag(start, tagName, indent, indentText)
@@ -1489,7 +1487,7 @@ fun Parser?.parseJSDocEntityName(diagnosticMessage: Message?): Node? {
         if (this.parseOptional(Kind(22))) {
             this.parseExpected(Kind(23))
         }
-        val pos: Int = entity.pos()
+        val pos: Int = entity!!.pos()
         entity = this.finishNode(this!!.factory.newQualifiedName(entity, name), pos)
     }
     return entity

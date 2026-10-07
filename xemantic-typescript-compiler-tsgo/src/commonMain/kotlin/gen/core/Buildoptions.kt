@@ -27,7 +27,7 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/core.BuildOptions d7645317
 class BuildOptions(
-    @kotlin.jvm.JvmField var blank0: noCopy = noCopy(),
+    @kotlin.jvm.JvmField var blank0: com.xemantic.typescript.tsgo.core.noCopy = com.xemantic.typescript.tsgo.core.noCopy(),
     @get:kotlin.jvm.JvmName("goGet_dry") @set:kotlin.jvm.JvmName("goSet_dry") var dry: Tristate = Tristate(0),
     @get:kotlin.jvm.JvmName("goGet_force") @set:kotlin.jvm.JvmName("goSet_force") var force: Tristate = Tristate(0),
     @get:kotlin.jvm.JvmName("goGet_verbose") @set:kotlin.jvm.JvmName("goSet_verbose") var verbose: Tristate = Tristate(0),

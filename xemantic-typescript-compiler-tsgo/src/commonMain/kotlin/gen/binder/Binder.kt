@@ -122,7 +122,6 @@ import com.xemantic.typescript.tsgo.ast.bodyData
 import com.xemantic.typescript.tsgo.ast.declarationData
 import com.xemantic.typescript.tsgo.ast.diagnostics
 import com.xemantic.typescript.tsgo.ast.elements
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.exportableData
 import com.xemantic.typescript.tsgo.ast.expression
 import com.xemantic.typescript.tsgo.ast.flowNodeData
@@ -134,7 +133,6 @@ import com.xemantic.typescript.tsgo.ast.localsContainerData
 import com.xemantic.typescript.tsgo.ast.modifiers
 import com.xemantic.typescript.tsgo.ast.name
 import com.xemantic.typescript.tsgo.ast.parameters
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.postfixToken
 import com.xemantic.typescript.tsgo.ast.properties
 import com.xemantic.typescript.tsgo.ast.questionDotToken
@@ -2998,7 +2996,7 @@ fun Binder?.errorOnNode(node: Node?, message: Message?, args: GoSlice<Any?>) {
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.errorOnFirstToken 60a7a1e0
 fun Binder?.errorOnFirstToken(node: Node?, message: Message?, args: GoSlice<Any?>) {
-    val span: TextRange = com.xemantic.typescript.tsgo.scanner.getRangeOfTokenAtPosition(this!!.file, node.pos())
+    val span: TextRange = com.xemantic.typescript.tsgo.scanner.getRangeOfTokenAtPosition(this!!.file, node!!.pos())
     this.addDiagnostic(com.xemantic.typescript.tsgo.ast.newDiagnostic(this!!.file, span.goCopy(), message, args))
 }
 
@@ -3009,7 +3007,7 @@ fun Binder?.errorOrSuggestionOnNode(isError: Boolean, node: Node?, message: Mess
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.errorOrSuggestionOnRange 0879c71d
 fun Binder?.errorOrSuggestionOnRange(isError: Boolean, startNode: Node?, endNode: Node?, message: Message?) {
-    val textRange: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.getRangeOfTokenAtPosition(this!!.file, startNode.pos()).pos(), endNode.end())
+    val textRange: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.getRangeOfTokenAtPosition(this!!.file, startNode!!.pos()).pos(), endNode!!.end())
     val diagnostic: Diagnostic? = com.xemantic.typescript.tsgo.ast.newDiagnostic(this!!.file, textRange.goCopy(), message, GoElem.ref<Any?>().nilSlice)
     if (isError) {
         this.addDiagnostic(diagnostic)

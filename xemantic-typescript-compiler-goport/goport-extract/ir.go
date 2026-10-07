@@ -1453,6 +1453,10 @@ func (p *px) call(n *O, e *ast.CallExpr, tv types.TypeAndValue) {
 		} else if s, ok := base.(*ast.SelectorExpr); ok {
 			if sel := p.info.Selections[s]; sel != nil && sel.Kind() == types.MethodVal {
 				kind = "method"
+			} else if sel != nil {
+				kind = "dynamic" // indexing a field: m.targets[i]()
+			} else if _, isF := p.info.Uses[s.Sel].(*types.Func); !isF {
+				kind = "dynamic" // a qualified non-function (pkg.Table[i]())
 			}
 		} else {
 			kind = "dynamic"

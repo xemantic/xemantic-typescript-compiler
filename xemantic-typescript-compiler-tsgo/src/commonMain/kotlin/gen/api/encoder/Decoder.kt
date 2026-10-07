@@ -105,7 +105,7 @@ fun decodeSourceFile(data: GoSlice<Int>): Tuple2<SourceFile?, GoError?> {
 // go: github.com/microsoft/typescript-go/internal/api/encoder.DecodeNodes 764bddfb
 fun decodeNodes(data: GoSlice<Int>): Tuple2<Node?, GoError?> {
     val t0 = newASTDecoder(data)
-    val d: astDecoder? = t0.first
+    val d: com.xemantic.typescript.tsgo.api.encoder.astDecoder? = t0.first
     val err: GoError? = t0.second
     if (err != null) {
         return Tuple2<Node?, GoError?>(null, err)
@@ -114,13 +114,13 @@ fun decodeNodes(data: GoSlice<Int>): Tuple2<Node?, GoError?> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.newASTDecoder 20781ffa
-fun newASTDecoder(data: GoSlice<Int>): Tuple2<astDecoder?, GoError?> {
+fun newASTDecoder(data: GoSlice<Int>): Tuple2<com.xemantic.typescript.tsgo.api.encoder.astDecoder?, GoError?> {
     if (data.len < 44) {
-        return Tuple2<astDecoder?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("data too short for header: %d bytes", data.len))
+        return Tuple2<com.xemantic.typescript.tsgo.api.encoder.astDecoder?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("data too short for header: %d bytes", data.len))
     }
     val version: Int = data[3]
     if (version != ProtocolVersion) {
-        return Tuple2<astDecoder?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("unsupported protocol version %d (expected %d)", version, ProtocolVersion))
+        return Tuple2<com.xemantic.typescript.tsgo.api.encoder.astDecoder?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("unsupported protocol version %d (expected %d)", version, ProtocolVersion))
     }
     val strTable: UInt = readLE32(data, 24)
     val strData: UInt = readLE32(data, 28)
@@ -128,31 +128,31 @@ fun newASTDecoder(data: GoSlice<Int>): Tuple2<astDecoder?, GoError?> {
     val nodeOff: UInt = readLE32(data, 40)
     val dataLen: UInt = data.len.toUInt()
     if (strTable > dataLen || strData > dataLen || extData > dataLen || nodeOff > dataLen) {
-        return Tuple2<astDecoder?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("invalid AST header offsets: offsets exceed data length (%d)", dataLen))
+        return Tuple2<com.xemantic.typescript.tsgo.api.encoder.astDecoder?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("invalid AST header offsets: offsets exceed data length (%d)", dataLen))
     }
     if (!(strTable <= strData && strData <= extData && extData <= nodeOff)) {
-        return Tuple2<astDecoder?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("invalid AST header offsets: expected strTable <= strData <= extData <= nodeOff (got %d, %d, %d, %d)", strTable, strData, extData, nodeOff))
+        return Tuple2<com.xemantic.typescript.tsgo.api.encoder.astDecoder?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("invalid AST header offsets: expected strTable <= strData <= extData <= nodeOff (got %d, %d, %d, %d)", strTable, strData, extData, nodeOff))
     }
-    val d: astDecoder? = astDecoder(raw = data, strTable = strTable, strData = strData, extData = extData, nodeOff = nodeOff, factory = com.xemantic.typescript.tsgo.ast.newNodeFactory(NodeFactoryHooks()))
+    val d: com.xemantic.typescript.tsgo.api.encoder.astDecoder? = com.xemantic.typescript.tsgo.api.encoder.astDecoder(raw = data, strTable = strTable, strData = strData, extData = extData, nodeOff = nodeOff, factory = com.xemantic.typescript.tsgo.ast.newNodeFactory(NodeFactoryHooks()))
     d!!.nodeCount = (data.len - d!!.nodeOff.toInt()) / 28
     d!!.allStringData = goBytesToString(data.slice(d!!.strData.toInt()))
-    return Tuple2<astDecoder?, GoError?>(d, null)
+    return Tuple2<com.xemantic.typescript.tsgo.api.encoder.astDecoder?, GoError?>(d, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.allocNodeSlice 79339d0b
-fun astDecoder?.allocNodeSlice(capacity: Int): GoSlice<Node?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.allocNodeSlice(capacity: Int): GoSlice<Node?> {
     val start: Int = this!!.nodeArena.len
     this!!.nodeArena = this!!.nodeArena.slice(0, start + capacity)
     return this!!.nodeArena.slice3(start, start, start + capacity)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.nodeField 986fc9a6
-fun astDecoder?.nodeField(i: Int, field_1: Int): UInt {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.nodeField(i: Int, field_1: Int): UInt {
     return readLE32(this!!.raw, this!!.nodeOff.toInt() + i * 28 + field_1)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.getString b332d22d
-fun astDecoder?.getString(idx: UInt): String {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.getString(idx: UInt): String {
     val offBase: Int = this!!.strTable.toInt() + idx.toInt() * 4
     val start: UInt = readLE32(this!!.raw, offBase)
     val end: UInt = readLE32(this!!.raw, offBase + 4)
@@ -160,7 +160,7 @@ fun astDecoder?.getString(idx: UInt): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.collectChildren afb481ea
-fun astDecoder?.collectChildren(i: Int): GoSlice<Int> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.collectChildren(i: Int): GoSlice<Int> {
     this!!.childBuf = this!!.childBuf.slice(0, 0)
     if (i + 1 >= this!!.nodeCount) {
         return this!!.childBuf
@@ -179,7 +179,7 @@ fun astDecoder?.collectChildren(i: Int): GoSlice<Int> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decode a5d64f0c
-fun astDecoder?.decode(): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decode(): Tuple2<Node?, GoError?> {
     if (this!!.nodeCount < 2) {
         return Tuple2<Node?, GoError?>(null, com.xemantic.typescript.tsgo.go.errors.new("no nodes to decode"))
     }
@@ -226,7 +226,7 @@ fun astDecoder?.decode(): Tuple2<Node?, GoError?> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.getModifierList 636b19e6
-fun astDecoder?.getModifierList(ci: Int): ModifierList? {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.getModifierList(ci: Int): ModifierList? {
     val nl: NodeList? = this!!.nodeLists[ci]
     if (nl == null) {
         return null
@@ -255,12 +255,12 @@ class childIterator(
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.newChildIter 48ea775b
-fun newChildIter(indices: GoSlice<Int>): childIterator {
-    return childIterator(indices = indices)
+fun newChildIter(indices: GoSlice<Int>): com.xemantic.typescript.tsgo.api.encoder.childIterator {
+    return com.xemantic.typescript.tsgo.api.encoder.childIterator(indices = indices)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.childIterator.next 0b0843e1
-fun childIterator?.next(): Int {
+fun com.xemantic.typescript.tsgo.api.encoder.childIterator?.next(): Int {
     if (this!!.pos >= this!!.indices.len) {
         return 0
     }
@@ -270,7 +270,7 @@ fun childIterator?.next(): Int {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.childIterator.nextIf 5888c1f9
-fun childIterator?.nextIf(mask: Int, bit: Int): Int {
+fun com.xemantic.typescript.tsgo.api.encoder.childIterator?.nextIf(mask: Int, bit: Int): Int {
     if (mask and goUint8(goShl(1, bit)) == 0) {
         return 0
     }
@@ -278,7 +278,7 @@ fun childIterator?.nextIf(mask: Int, bit: Int): Int {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.nodeAt c3f09736
-fun astDecoder?.nodeAt(ci: Int): Node? {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.nodeAt(ci: Int): Node? {
     if (ci == 0) {
         return null
     }
@@ -286,7 +286,7 @@ fun astDecoder?.nodeAt(ci: Int): Node? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.nodeListAt 7b8bfbf0
-fun astDecoder?.nodeListAt(ci: Int): NodeList? {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.nodeListAt(ci: Int): NodeList? {
     if (ci == 0) {
         return null
     }
@@ -294,7 +294,7 @@ fun astDecoder?.nodeListAt(ci: Int): NodeList? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.modifierListAt 663bdec9
-fun astDecoder?.modifierListAt(ci: Int): ModifierList? {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.modifierListAt(ci: Int): ModifierList? {
     if (ci == 0) {
         return null
     }
@@ -302,7 +302,7 @@ fun astDecoder?.modifierListAt(ci: Int): ModifierList? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createNode e969bdb7
-fun astDecoder?.createNode(kind: Kind, data: UInt, childIndices: GoSlice<Int>): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createNode(kind: Kind, data: UInt, childIndices: GoSlice<Int>): Tuple2<Node?, GoError?> {
     val dataType: UInt = data and NodeDataTypeMask
     val commonData: Int = goUint8(((data shr 24) and 63u).toInt())
     when (dataType) {
@@ -320,7 +320,7 @@ fun astDecoder?.createNode(kind: Kind, data: UInt, childIndices: GoSlice<Int>): 
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_SourceFile 31b27ed9
-fun astDecoder?.decodeExtendedData_SourceFile(data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_SourceFile(data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val fileNameIdx: UInt = readLE32(this!!.raw, extOff + 4)
@@ -348,7 +348,7 @@ fun astDecoder?.decodeExtendedData_SourceFile(data: UInt, childIndices: GoSlice<
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_TemplateHead 7cdaa62d
-fun astDecoder?.decodeExtendedData_TemplateHead(data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_TemplateHead(data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val rawTextIdx: UInt = readLE32(this!!.raw, extOff + 4)
@@ -357,7 +357,7 @@ fun astDecoder?.decodeExtendedData_TemplateHead(data: UInt, childIndices: GoSlic
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_TemplateMiddle 5a8a115f
-fun astDecoder?.decodeExtendedData_TemplateMiddle(data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_TemplateMiddle(data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val rawTextIdx: UInt = readLE32(this!!.raw, extOff + 4)
@@ -366,7 +366,7 @@ fun astDecoder?.decodeExtendedData_TemplateMiddle(data: UInt, childIndices: GoSl
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_TemplateTail 81173d7c
-fun astDecoder?.decodeExtendedData_TemplateTail(data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_TemplateTail(data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val rawTextIdx: UInt = readLE32(this!!.raw, extOff + 4)
@@ -375,7 +375,7 @@ fun astDecoder?.decodeExtendedData_TemplateTail(data: UInt, childIndices: GoSlic
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.singleChild e37d1632
-fun astDecoder?.singleChild(childIndices: GoSlice<Int>): Node? {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.singleChild(childIndices: GoSlice<Int>): Node? {
     if (childIndices.len == 0) {
         return null
     }
@@ -383,7 +383,7 @@ fun astDecoder?.singleChild(childIndices: GoSlice<Int>): Node? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.singleNodeListChild 5c806f48
-fun astDecoder?.singleNodeListChild(childIndices: GoSlice<Int>): NodeList? {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.singleNodeListChild(childIndices: GoSlice<Int>): NodeList? {
     if (childIndices.len == 0) {
         return null
     }
@@ -404,7 +404,7 @@ fun decodeNodeCommonData_SyntheticExpression(unused0: Int): Tuple2<Any?, Boolean
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_StringLiteral 422bee8c
-fun astDecoder?.decodeExtendedData_StringLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_StringLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val flags: UInt = readLE32(this!!.raw, extOff + 4)
@@ -412,7 +412,7 @@ fun astDecoder?.decodeExtendedData_StringLiteral(data: UInt, unused0: GoSlice<In
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_NumericLiteral 90be4ca6
-fun astDecoder?.decodeExtendedData_NumericLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_NumericLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val flags: UInt = readLE32(this!!.raw, extOff + 4)
@@ -420,7 +420,7 @@ fun astDecoder?.decodeExtendedData_NumericLiteral(data: UInt, unused0: GoSlice<I
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_BigIntLiteral 14d587ee
-fun astDecoder?.decodeExtendedData_BigIntLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_BigIntLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val flags: UInt = readLE32(this!!.raw, extOff + 4)
@@ -428,7 +428,7 @@ fun astDecoder?.decodeExtendedData_BigIntLiteral(data: UInt, unused0: GoSlice<In
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_RegularExpressionLiteral be11f5ac
-fun astDecoder?.decodeExtendedData_RegularExpressionLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_RegularExpressionLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val flags: UInt = readLE32(this!!.raw, extOff + 4)
@@ -436,7 +436,7 @@ fun astDecoder?.decodeExtendedData_RegularExpressionLiteral(data: UInt, unused0:
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.decodeExtendedData_NoSubstitutionTemplateLiteral 0b7b7c65
-fun astDecoder?.decodeExtendedData_NoSubstitutionTemplateLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.decodeExtendedData_NoSubstitutionTemplateLiteral(data: UInt, unused0: GoSlice<Int>, unused1: Int): Tuple2<Node?, GoError?> {
     val extOff: Int = this!!.extData.toInt() + (data and NodeDataStringIndexMask).toInt()
     val textIdx: UInt = readLE32(this!!.raw, extOff)
     val flags: UInt = readLE32(this!!.raw, extOff + 4)

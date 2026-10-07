@@ -24,11 +24,12 @@
 package com.xemantic.typescript.tsgo.core
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.Marshaler
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 
 // go: github.com/microsoft/typescript-go/internal/core.Tristate 7bb9787e
 @kotlin.jvm.JvmInline
-value class Tristate(val value: Int) : Stringer, Comparable<Tristate> {
+value class Tristate(val value: Int) : Marshaler, Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Tristate> {
 
     override fun compareTo(other: Tristate): Int = value.compareTo(other.value)
 
@@ -68,7 +69,7 @@ value class Tristate(val value: Int) : Stringer, Comparable<Tristate> {
     // goport: refused pointer-method-on-value-type: github.com/microsoft/typescript-go/internal/core.Tristate.UnmarshalJSON
 
     // go: github.com/microsoft/typescript-go/internal/core.Tristate.MarshalJSON 014a9a2a
-    fun marshalJSON(): Tuple2<GoSlice<Int>, GoError?> {
+    override fun marshalJSON(): Tuple2<GoSlice<Int>, GoError?> {
         when (this.value) {
             2 -> {
                 return Tuple2<GoSlice<Int>, GoError?>(goStringToBytes("true"), null)

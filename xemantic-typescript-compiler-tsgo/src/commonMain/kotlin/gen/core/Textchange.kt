@@ -25,12 +25,13 @@ package com.xemantic.typescript.tsgo.core
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.strings.Builder
+import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 
 // go: github.com/microsoft/typescript-go/internal/core.TextChange 0a457ad7
 class TextChange(
     @kotlin.jvm.JvmField var textRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var newText: String = "",
-) {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): TextChange = TextChange(textRange = textRange.goCopy(), newText = newText)
 
@@ -47,6 +48,10 @@ class TextChange(
     fun applyTo(text: String): String {
         return text.substring(0, this.textRange.pos()) + this.newText + text.substring(this.textRange.end())
     }
+
+    override fun end(): Int = this.textRange.end()
+
+    override fun pos(): Int = this.textRange.pos()
 
     companion object {
         val ELEM: GoElem<TextChange> = GoElem({ TextChange() }, { it.goCopy() })

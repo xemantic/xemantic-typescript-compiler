@@ -115,7 +115,9 @@ class TypeMapper(
         val origin = n.origin?.let { types.unalias(it) as NamedType } ?: n
         return when (u) {
             is StructType -> if (origin.key in pc.prog.structAliases) NamedKind.ALIAS else NamedKind.STRUCT
-            is InterfaceType -> if (u.isMethodSet) NamedKind.IFACE else NamedKind.CONSTRAINT
+            // A named EMPTY interface (`type TypeSystemEntity any`) is `Any?` (a typealias): every value implements it.
+            is InterfaceType -> if (!u.isMethodSet) NamedKind.CONSTRAINT
+                else if (u.allMethods.isEmpty() && u.methods.isEmpty() && u.embedded.isEmpty()) NamedKind.ALIAS else NamedKind.IFACE
             is BasicType -> NamedKind.VALUE
             // A named slice/map/func type is assignable from its unnamed underlying type without
             // a conversion, and the IR records none: a Kotlin typealias keeps that assignability.
@@ -141,6 +143,9 @@ class TypeMapper(
         val kpkg = Naming.kotlinPackage(origin.pkg!!)
         val name = if (origin.pkg in pc.prog.ported) pc.prog.typeName(origin.key, origin.name) else origin.name
         if (origin.pkg !in pc.prog.ported && !pc.prog.shims.hasTop(kpkg, name)) refuse("shim-missing", "${origin.pkg}.$name")
+        // An unexported Go type (`tempFlags`) is spelled like a field or local of the same name, which
+        // shadows it in expression position (`tempFlags.ELEM`, `tempFlags(0)`): always qualify it.
+        if (name[0].isLowerCase()) return "$kpkg.$name"
         return fc.typeRef(kpkg, name)
     }
 
@@ -161,12 +166,16 @@ class TypeMapper(
                 NamedKind.IFACE -> namedRef(t) + typeArgs(t) + "?"
                 NamedKind.CONSTRAINT -> refuse("constraint-as-type", t.name)
                 NamedKind.STRUCT, NamedKind.VALUE -> namedRef(t) + typeArgs(t)
-                NamedKind.ALIAS -> if (types.under(t.id) is StructType) namedRef(t) + typeArgs(t) else namedRef(t) + typeArgs(t)
+                // A SHIM typealias of a func type is non-null (`iter.Seq`); a ported one already includes `?`.
+                NamedKind.ALIAS -> if (types.under(t.id) is StructType) namedRef(t) + typeArgs(t)
+                    else namedRef(t) + typeArgs(t) + if (!isPortedNamed(t) && nullable(t.underlying)) "?" else ""
             }
             is PointerType -> {
                 when {
-                    types.under(t.elem) is StructType -> kt(t.elem) + "?"
-                    opaqueTP(t.elem) -> kt(t.elem)
+                    // A pointer to a struct or ARRAY is the (mutable) reference itself (design § 3).
+                    types.under(t.elem) is StructType || types.under(t.elem) is ArrayType -> kt(t.elem) + "?"
+                    // `*T` for an opaque T: T stands for the reference (design § 3), and Go's nil pointer is null.
+                    opaqueTP(t.elem) -> kt(t.elem).removeSuffix("?") + "?"
                     else -> "GoPtr<${kt(t.elem)}>?"
                 }
             }
@@ -196,6 +205,13 @@ class TypeMapper(
         val kp = Naming.kotlinPackage(pkg)
         if (!pc.prog.shims.hasTop(kp, a.name)) return null
         return fc.typeRef(kp, a.name)
+    }
+
+    /** The `<Name>_Box` class of a named type in [Program.boxedNamed], or null. */
+    fun boxOf(id: Int): String? {
+        val t = types.unalias(id) as? NamedType ?: return null
+        if (t.key !in pc.prog.boxedNamed) return null
+        return fc.typeRef(Naming.kotlinPackage(t.pkg!!), pc.prog.typeName(t.key, t.name) + "_Box")
     }
 
     fun tpName(t: TypeParamType): String = tpNames[t.id] ?: Naming.escape(t.name)
@@ -264,7 +280,12 @@ class TypeMapper(
             reg[name] = buildString {
                 append("// go: anonymous struct ${t.key.take(160)}\n")
                 append("class $name(\n")
-                for ((n, f) in fs) append("    @kotlin.jvm.JvmField var $n: ${mt.kt(f.t)} = ${mt.zero(f.t)},\n")
+                for ((n, f) in fs) {
+                    // A value-class field cannot be @JvmField (as in struct classes: a JvmName'd accessor).
+                    val vc = mt.isValueClass(f.t) || mt.repOf(f.t).let { it == Rep.UINT || it == Rep.ULONG }
+                    val ann = if (vc) "@get:kotlin.jvm.JvmName(\"goGet_${n.trim('`')}\") @set:kotlin.jvm.JvmName(\"goSet_${n.trim('`')}\")" else "@kotlin.jvm.JvmField"
+                    append("    $ann var $n: ${mt.kt(f.t)} = ${mt.zero(f.t)},\n")
+                }
                 append(") {\n")
                 append("    fun goCopy(): $name = $name(${fs.joinToString(", ") { (n, f) -> "$n = " + if (mt.isStructValue(f.t) && !mt.isEmptyStruct(f.t)) "$n.goCopy()" else n }})\n\n")
                 append("    fun goSet(o: $name) {\n")
@@ -293,7 +314,7 @@ class TypeMapper(
         val sigs = methods.map { m ->
             val s = types.unalias(m.sig) as SignatureType
             val ps = s.params.mapIndexed { i, p -> "p$i: ${mt.kt(p.t)}" }
-            "fun ${pc.prog.methodName("", m.name)}(${ps.joinToString(", ")})${mt.returns(s.results.map { it.t })}"
+            "fun ${pc.prog.methodName(m.fn ?: "", m.name)}(${ps.joinToString(", ")})${mt.returns(s.results.map { it.t })}"
         }
         val name = pc.prog.synth.name(sigs.joinToString(";"), methods.map { it.name })
         pc.prog.synth.bodies.getOrPut(name) {
@@ -322,7 +343,7 @@ class TypeMapper(
                     namedRef(t) + typeArgs(t) + "()"
                 } else zero(t.underlying)
             }
-            is PointerType -> if (opaqueTP(t.elem)) "goZeroTP<${kt(t.elem)}>()" else "null"
+            is PointerType -> "null"
             is SignatureType, is InterfaceType, is ChanType -> "null"
             is SliceType -> elem(t.elem) + ".nilSlice"
             is MapType -> "GoMap.nil<${kt(t.keyType)}, ${kt(t.elem)}>(${elem(t.elem)})"
@@ -422,7 +443,7 @@ class TypeMapper(
         return when (t) {
             is NamedType -> namedKind(t) == NamedKind.IFACE || namedKind(t) == NamedKind.ERROR ||
                 (namedKind(t) == NamedKind.ALIAS && types.under(t.id) !is StructType && nullable(t.underlying))
-            is PointerType -> !opaqueTP(t.elem)
+            is PointerType -> true
             is TypeParamType -> substituted(t)?.let { nullable(it) } ?: false
             is SignatureType, is ChanType -> true
             is InterfaceType -> true

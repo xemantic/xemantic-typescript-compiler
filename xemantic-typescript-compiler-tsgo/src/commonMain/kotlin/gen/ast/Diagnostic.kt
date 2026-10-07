@@ -25,6 +25,7 @@ package com.xemantic.typescript.tsgo.ast
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.diagnostics.Category
+import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 import com.xemantic.typescript.tsgo.diagnostics.Key
 import com.xemantic.typescript.tsgo.locale.Locale
 import com.xemantic.typescript.tsgo.diagnostics.Message
@@ -99,7 +100,7 @@ class Diagnostic(
     @kotlin.jvm.JvmField var reportsDeprecated: Boolean = false,
     @kotlin.jvm.JvmField var skippedOnNoEmit: Boolean = false,
     @kotlin.jvm.JvmField var repopulateInfo: RepopulateDiagnosticInfo? = null,
-) : Stringer {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): Diagnostic = Diagnostic(file = file, loc = loc.goCopy(), code = code, category = category, message = message, messageKey = messageKey, messageArgs = messageArgs, messageChain = messageChain, relatedInformation = relatedInformation, reportsUnnecessary = reportsUnnecessary, reportsDeprecated = reportsDeprecated, skippedOnNoEmit = skippedOnNoEmit, repopulateInfo = repopulateInfo)
 
@@ -119,6 +120,16 @@ class Diagnostic(
         repopulateInfo = o.repopulateInfo
     }
 
+    // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.Pos 512884a0
+    override fun pos(): Int {
+        return this.loc.pos()
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.End 9685bfa0
+    override fun end(): Int {
+        return this.loc.end()
+    }
+
     // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.String 4eb8240d
     override fun string(): String {
         return com.xemantic.typescript.tsgo.diagnostics.localize(com.xemantic.typescript.tsgo.locale.default.goCopy(), this.message, this.messageKey, this.messageArgs)
@@ -132,16 +143,6 @@ class Diagnostic(
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.File 1b628742
 fun Diagnostic?.file(): SourceFile? {
     return this!!.file
-}
-
-// go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.Pos 512884a0
-fun Diagnostic?.pos(): Int {
-    return this!!.loc.pos()
-}
-
-// go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.End 9685bfa0
-fun Diagnostic?.end(): Int {
-    return this!!.loc.end()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.Len 05b5cb7e

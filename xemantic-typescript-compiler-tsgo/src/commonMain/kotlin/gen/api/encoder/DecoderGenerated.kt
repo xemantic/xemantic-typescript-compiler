@@ -216,7 +216,7 @@ import com.xemantic.typescript.tsgo.ast.newWithStatement
 import com.xemantic.typescript.tsgo.ast.newYieldExpression
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createStringNode 75939d91
-fun astDecoder?.createStringNode(kind: Kind, data: UInt, commonData: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createStringNode(kind: Kind, data: UInt, commonData: Int): Tuple2<Node?, GoError?> {
     val strIdx: UInt = data and NodeDataStringIndexMask
     val text: String = this.getString(strIdx)
     when (kind.value) {
@@ -250,7 +250,7 @@ fun astDecoder?.createStringNode(kind: Kind, data: UInt, commonData: Int): Tuple
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createExtendedNode 0ebf4c68
-fun astDecoder?.createExtendedNode(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createExtendedNode(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     when (kind.value) {
         10 -> {
             return this.decodeExtendedData_StringLiteral(data, childIndices, commonData)
@@ -288,7 +288,7 @@ fun astDecoder?.createExtendedNode(kind: Kind, data: UInt, childIndices: GoSlice
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createChildrenNode cdf03592
 // goport: switch-split into 6 parts (docs/goport-lowering.md § 3)
-fun astDecoder?.createChildrenNode(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createChildrenNode(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val tag0 = kind.value
     return when (tag0) {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 97, 98, 99, 100, 102, 103, 104, 106, 108, 110, 112, 113, 114, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 133, 134, 136, 137, 138, 139, 140, 142, 143, 144, 145, 147, 148, 149, 152, 153, 156, 158, 160, 161, 162, 164, 165, 166, 167, 168, 171, 243, 246, 247, 248, 249, 250, 251, 253, 252, 254, 255, 256, 270, 297, 298, 258, 259, 300, 260, 257 -> createChildrenNode_goPart0(kind, data, childIndices, commonData)
@@ -302,14 +302,14 @@ fun astDecoder?.createChildrenNode(kind: Kind, data: UInt, childIndices: GoSlice
 }
 
 // goport: switch-split part 0 of 6 of github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createChildrenNode
-private fun astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+private fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val mask: Int = goUint8((data and NodeDataChildMask).toInt())
     when (kind.value) {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 97, 98, 99, 100, 102, 103, 104, 106, 108, 110, 112, 113, 114, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 133, 134, 136, 137, 138, 139, 140, 142, 143, 144, 145, 147, 148, 149, 152, 153, 156, 158, 160, 161, 162, 164, 165, 166 -> {
             return Tuple2<Node?, GoError?>(this!!.factory.newToken(kind), null)
         }
         167 -> {
-            val it_1: childIterator = newChildIter(childIndices)
+            val it_1: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val left: Node? = this.nodeAt(it_1.nextIf(mask, 0))
             val right: Node? = this.nodeAt(it_1.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newQualifiedName(left, right), null)
@@ -324,26 +324,26 @@ private fun astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newEmptyStatement(), null)
         }
         246 -> {
-            val it_2: childIterator = newChildIter(childIndices)
+            val it_2: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression: Node? = this.nodeAt(it_2.nextIf(mask, 0))
             val thenStatement: Node? = this.nodeAt(it_2.nextIf(mask, 1))
             val elseStatement: Node? = this.nodeAt(it_2.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newIfStatement(expression, thenStatement, elseStatement), null)
         }
         247 -> {
-            val it_3: childIterator = newChildIter(childIndices)
+            val it_3: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val statement: Node? = this.nodeAt(it_3.nextIf(mask, 0))
             val expression_1: Node? = this.nodeAt(it_3.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newDoStatement(statement, expression_1), null)
         }
         248 -> {
-            val it_4: childIterator = newChildIter(childIndices)
+            val it_4: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_2: Node? = this.nodeAt(it_4.nextIf(mask, 0))
             val statement_1: Node? = this.nodeAt(it_4.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newWhileStatement(expression_2, statement_1), null)
         }
         249 -> {
-            val it_5: childIterator = newChildIter(childIndices)
+            val it_5: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val initializer: Node? = this.nodeAt(it_5.nextIf(mask, 0))
             val condition: Node? = this.nodeAt(it_5.nextIf(mask, 1))
             val incrementor: Node? = this.nodeAt(it_5.nextIf(mask, 2))
@@ -351,7 +351,7 @@ private fun astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newForStatement(initializer, condition, incrementor, statement_2), null)
         }
         250, 251 -> {
-            val it_6: childIterator = newChildIter(childIndices)
+            val it_6: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val awaitModifier: Node? = this.nodeAt(it_6.nextIf(mask, 0))
             val initializer_1: Node? = this.nodeAt(it_6.nextIf(mask, 1))
             val expression_3: Node? = this.nodeAt(it_6.nextIf(mask, 2))
@@ -368,13 +368,13 @@ private fun astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newReturnStatement(this.singleChild(childIndices)), null)
         }
         255 -> {
-            val it_7: childIterator = newChildIter(childIndices)
+            val it_7: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_4: Node? = this.nodeAt(it_7.nextIf(mask, 0))
             val statement_4: Node? = this.nodeAt(it_7.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newWithStatement(expression_4, statement_4), null)
         }
         256 -> {
-            val it_8: childIterator = newChildIter(childIndices)
+            val it_8: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_5: Node? = this.nodeAt(it_8.nextIf(mask, 0))
             val caseBlock: Node? = this.nodeAt(it_8.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newSwitchStatement(expression_5, caseBlock), null)
@@ -383,7 +383,7 @@ private fun astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newCaseBlock(this.singleNodeListChild(childIndices)), null)
         }
         297, 298 -> {
-            val it_9: childIterator = newChildIter(childIndices)
+            val it_9: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_6: Node? = this.nodeAt(it_9.nextIf(mask, 0))
             val statements: NodeList? = this.nodeListAt(it_9.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newCaseOrDefaultClause(kind, expression_6, statements), null)
@@ -392,14 +392,14 @@ private fun astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newThrowStatement(this.singleChild(childIndices)), null)
         }
         259 -> {
-            val it_10: childIterator = newChildIter(childIndices)
+            val it_10: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tryBlock: Node? = this.nodeAt(it_10.nextIf(mask, 0))
             val catchClause: Node? = this.nodeAt(it_10.nextIf(mask, 1))
             val finallyBlock: Node? = this.nodeAt(it_10.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newTryStatement(tryBlock, catchClause, finallyBlock), null)
         }
         300 -> {
-            val it_11: childIterator = newChildIter(childIndices)
+            val it_11: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val variableDeclaration: Node? = this.nodeAt(it_11.nextIf(mask, 0))
             val block: Node? = this.nodeAt(it_11.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newCatchClause(variableDeclaration, block), null)
@@ -408,7 +408,7 @@ private fun astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newDebuggerStatement(), null)
         }
         257 -> {
-            val it_12: childIterator = newChildIter(childIndices)
+            val it_12: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val label: Node? = this.nodeAt(it_12.nextIf(mask, 0))
             val statement_5: Node? = this.nodeAt(it_12.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newLabeledStatement(label, statement_5), null)
@@ -421,7 +421,7 @@ private fun astDecoder?.createChildrenNode_goPart0(kind: Kind, data: UInt, child
 }
 
 // goport: switch-split part 1 of 6 of github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createChildrenNode
-private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+private fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val mask: Int = goUint8((data and NodeDataChildMask).toInt())
     when (kind.value) {
         245 -> {
@@ -436,13 +436,13 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newBlock(list, multiLine), null)
         }
         244 -> {
-            val it_1: childIterator = newChildIter(childIndices)
+            val it_1: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers: ModifierList? = this.modifierListAt(it_1.nextIf(mask, 0))
             val declarationList: Node? = this.nodeAt(it_1.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newVariableStatement(modifiers, declarationList), null)
         }
         261 -> {
-            val it_2: childIterator = newChildIter(childIndices)
+            val it_2: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val name: Node? = this.nodeAt(it_2.nextIf(mask, 0))
             val exclamationToken: Node? = this.nodeAt(it_2.nextIf(mask, 1))
             val typeNode: Node? = this.nodeAt(it_2.nextIf(mask, 2))
@@ -456,7 +456,7 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newBindingPattern(kind, this.singleNodeListChild(childIndices)), null)
         }
         170 -> {
-            val it_3: childIterator = newChildIter(childIndices)
+            val it_3: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_1: ModifierList? = this.modifierListAt(it_3.nextIf(mask, 0))
             val dotDotDotToken: Node? = this.nodeAt(it_3.nextIf(mask, 1))
             val name_1: Node? = this.nodeAt(it_3.nextIf(mask, 2))
@@ -466,7 +466,7 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newParameterDeclaration(modifiers_1, dotDotDotToken, name_1, questionToken, typeNode_1, initializer_1), null)
         }
         209 -> {
-            val it_4: childIterator = newChildIter(childIndices)
+            val it_4: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val dotDotDotToken_1: Node? = this.nodeAt(it_4.nextIf(mask, 0))
             val propertyName: Node? = this.nodeAt(it_4.nextIf(mask, 1))
             val name_2: Node? = this.nodeAt(it_4.nextIf(mask, 2))
@@ -481,7 +481,7 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newMissingDeclaration(mods), null)
         }
         263 -> {
-            val it_5: childIterator = newChildIter(childIndices)
+            val it_5: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_2: ModifierList? = this.modifierListAt(it_5.nextIf(mask, 0))
             val asteriskToken: Node? = this.nodeAt(it_5.nextIf(mask, 1))
             val name_3: Node? = this.nodeAt(it_5.nextIf(mask, 2))
@@ -492,7 +492,7 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newFunctionDeclaration(modifiers_2, asteriskToken, name_3, typeParameters, parameters, typeNode_2, null, body), null)
         }
         264 -> {
-            val it_6: childIterator = newChildIter(childIndices)
+            val it_6: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_3: ModifierList? = this.modifierListAt(it_6.nextIf(mask, 0))
             val name_4: Node? = this.nodeAt(it_6.nextIf(mask, 1))
             val typeParameters_1: NodeList? = this.nodeListAt(it_6.nextIf(mask, 2))
@@ -501,7 +501,7 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newClassDeclaration(modifiers_3, name_4, typeParameters_1, heritageClauses, members), null)
         }
         232 -> {
-            val it_7: childIterator = newChildIter(childIndices)
+            val it_7: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_4: ModifierList? = this.modifierListAt(it_7.nextIf(mask, 0))
             val name_5: Node? = this.nodeAt(it_7.nextIf(mask, 1))
             val typeParameters_2: NodeList? = this.nodeListAt(it_7.nextIf(mask, 2))
@@ -517,7 +517,7 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newHeritageClause(token, this.singleNodeListChild(childIndices)), null)
         }
         265 -> {
-            val it_8: childIterator = newChildIter(childIndices)
+            val it_8: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_5: ModifierList? = this.modifierListAt(it_8.nextIf(mask, 0))
             val name_6: Node? = this.nodeAt(it_8.nextIf(mask, 1))
             val typeParameters_3: NodeList? = this.nodeListAt(it_8.nextIf(mask, 2))
@@ -526,7 +526,7 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newInterfaceDeclaration(modifiers_5, name_6, typeParameters_3, heritageClauses_2, members_2), null)
         }
         266, 345 -> {
-            val it_9: childIterator = newChildIter(childIndices)
+            val it_9: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_6: ModifierList? = this.modifierListAt(it_9.nextIf(mask, 0))
             val name_7: Node? = this.nodeAt(it_9.nextIf(mask, 1))
             val typeParameters_4: NodeList? = this.nodeListAt(it_9.nextIf(mask, 2))
@@ -537,13 +537,13 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newTypeAliasDeclaration(modifiers_6, name_7, typeParameters_4, typeNode_3), null)
         }
         306 -> {
-            val it_10: childIterator = newChildIter(childIndices)
+            val it_10: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val name_8: Node? = this.nodeAt(it_10.nextIf(mask, 0))
             val initializer_3: Node? = this.nodeAt(it_10.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newEnumMember(name_8, initializer_3), null)
         }
         267 -> {
-            val it_11: childIterator = newChildIter(childIndices)
+            val it_11: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_7: ModifierList? = this.modifierListAt(it_11.nextIf(mask, 0))
             val name_9: Node? = this.nodeAt(it_11.nextIf(mask, 1))
             val members_3: NodeList? = this.nodeListAt(it_11.nextIf(mask, 2))
@@ -559,7 +559,7 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newNotEmittedTypeElement(), null)
         }
         273, 346 -> {
-            val it_12: childIterator = newChildIter(childIndices)
+            val it_12: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_8: ModifierList? = this.modifierListAt(it_12.nextIf(mask, 0))
             val importClause: Node? = this.nodeAt(it_12.nextIf(mask, 1))
             val moduleSpecifier: Node? = this.nodeAt(it_12.nextIf(mask, 2))
@@ -580,14 +580,14 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
         }
         278 -> {
             val isExportEquals: Boolean = commonData and 1 != 0
-            val it_13: childIterator = newChildIter(childIndices)
+            val it_13: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_9: ModifierList? = this.modifierListAt(it_13.nextIf(mask, 0))
             val typeNode_4: Node? = this.nodeAt(it_13.nextIf(mask, 1))
             val expression: Node? = this.nodeAt(it_13.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newExportAssignment(modifiers_9, isExportEquals, typeNode_4, expression), null)
         }
         271 -> {
-            val it_14: childIterator = newChildIter(childIndices)
+            val it_14: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_10: ModifierList? = this.modifierListAt(it_14.nextIf(mask, 0))
             val name_10: Node? = this.nodeAt(it_14.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newNamespaceExportDeclaration(modifiers_10, name_10), null)
@@ -600,20 +600,20 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
         }
         282 -> {
             val isTypeOnly: Boolean = commonData and 1 != 0
-            val it_15: childIterator = newChildIter(childIndices)
+            val it_15: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val propertyName_1: Node? = this.nodeAt(it_15.nextIf(mask, 0))
             val name_11: Node? = this.nodeAt(it_15.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newExportSpecifier(isTypeOnly, propertyName_1, name_11), null)
         }
         180 -> {
-            val it_16: childIterator = newChildIter(childIndices)
+            val it_16: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val typeParameters_5: NodeList? = this.nodeListAt(it_16.nextIf(mask, 0))
             val parameters_1: NodeList? = this.nodeListAt(it_16.nextIf(mask, 1))
             val typeNode_5: Node? = this.nodeAt(it_16.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newCallSignatureDeclaration(typeParameters_5, parameters_1, typeNode_5), null)
         }
         181 -> {
-            val it_17: childIterator = newChildIter(childIndices)
+            val it_17: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val typeParameters_6: NodeList? = this.nodeListAt(it_17.nextIf(mask, 0))
             val parameters_2: NodeList? = this.nodeListAt(it_17.nextIf(mask, 1))
             val typeNode_6: Node? = this.nodeAt(it_17.nextIf(mask, 2))
@@ -627,11 +627,11 @@ private fun astDecoder?.createChildrenNode_goPart1(kind: Kind, data: UInt, child
 }
 
 // goport: switch-split part 2 of 6 of github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createChildrenNode
-private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+private fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val mask: Int = goUint8((data and NodeDataChildMask).toInt())
     when (kind.value) {
         177 -> {
-            val it_1: childIterator = newChildIter(childIndices)
+            val it_1: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers: ModifierList? = this.modifierListAt(it_1.nextIf(mask, 0))
             val typeParameters: NodeList? = this.nodeListAt(it_1.nextIf(mask, 1))
             val parameters: NodeList? = this.nodeListAt(it_1.nextIf(mask, 2))
@@ -640,7 +640,7 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newConstructorDeclaration(modifiers, typeParameters, parameters, typeNode, null, body), null)
         }
         178 -> {
-            val it_2: childIterator = newChildIter(childIndices)
+            val it_2: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_1: ModifierList? = this.modifierListAt(it_2.nextIf(mask, 0))
             val name: Node? = this.nodeAt(it_2.nextIf(mask, 1))
             val typeParameters_1: NodeList? = this.nodeListAt(it_2.nextIf(mask, 2))
@@ -650,7 +650,7 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newGetAccessorDeclaration(modifiers_1, name, typeParameters_1, parameters_1, typeNode_1, null, body_1), null)
         }
         179 -> {
-            val it_3: childIterator = newChildIter(childIndices)
+            val it_3: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_2: ModifierList? = this.modifierListAt(it_3.nextIf(mask, 0))
             val name_1: Node? = this.nodeAt(it_3.nextIf(mask, 1))
             val typeParameters_2: NodeList? = this.nodeListAt(it_3.nextIf(mask, 2))
@@ -660,14 +660,14 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newSetAccessorDeclaration(modifiers_2, name_1, typeParameters_2, parameters_2, typeNode_2, null, body_2), null)
         }
         182 -> {
-            val it_4: childIterator = newChildIter(childIndices)
+            val it_4: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_3: ModifierList? = this.modifierListAt(it_4.nextIf(mask, 0))
             val parameters_3: NodeList? = this.nodeListAt(it_4.nextIf(mask, 1))
             val typeNode_3: Node? = this.nodeAt(it_4.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newIndexSignatureDeclaration(modifiers_3, parameters_3, typeNode_3), null)
         }
         174 -> {
-            val it_5: childIterator = newChildIter(childIndices)
+            val it_5: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_4: ModifierList? = this.modifierListAt(it_5.nextIf(mask, 0))
             val name_2: Node? = this.nodeAt(it_5.nextIf(mask, 1))
             val postfixToken: Node? = this.nodeAt(it_5.nextIf(mask, 2))
@@ -677,7 +677,7 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newMethodSignatureDeclaration(modifiers_4, name_2, postfixToken, typeParameters_3, parameters_4, typeNode_4), null)
         }
         175 -> {
-            val it_6: childIterator = newChildIter(childIndices)
+            val it_6: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_5: ModifierList? = this.modifierListAt(it_6.nextIf(mask, 0))
             val asteriskToken: Node? = this.nodeAt(it_6.nextIf(mask, 1))
             val name_3: Node? = this.nodeAt(it_6.nextIf(mask, 2))
@@ -689,7 +689,7 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newMethodDeclaration(modifiers_5, asteriskToken, name_3, postfixToken_1, typeParameters_4, parameters_5, typeNode_5, null, body_3), null)
         }
         172 -> {
-            val it_7: childIterator = newChildIter(childIndices)
+            val it_7: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_6: ModifierList? = this.modifierListAt(it_7.nextIf(mask, 0))
             val name_4: Node? = this.nodeAt(it_7.nextIf(mask, 1))
             val postfixToken_2: Node? = this.nodeAt(it_7.nextIf(mask, 2))
@@ -698,7 +698,7 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newPropertySignatureDeclaration(modifiers_6, name_4, postfixToken_2, typeNode_6, initializer), null)
         }
         173 -> {
-            val it_8: childIterator = newChildIter(childIndices)
+            val it_8: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_7: ModifierList? = this.modifierListAt(it_8.nextIf(mask, 0))
             val name_5: Node? = this.nodeAt(it_8.nextIf(mask, 1))
             val postfixToken_3: Node? = this.nodeAt(it_8.nextIf(mask, 2))
@@ -710,7 +710,7 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newSemicolonClassElement(), null)
         }
         176 -> {
-            val it_9: childIterator = newChildIter(childIndices)
+            val it_9: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_8: ModifierList? = this.modifierListAt(it_9.nextIf(mask, 0))
             val body_4: Node? = this.nodeAt(it_9.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newClassStaticBlockDeclaration(modifiers_8, body_4), null)
@@ -722,7 +722,7 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newKeywordExpression(kind), null)
         }
         227 -> {
-            val it_10: childIterator = newChildIter(childIndices)
+            val it_10: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_9: ModifierList? = this.modifierListAt(it_10.nextIf(mask, 0))
             val left: Node? = this.nodeAt(it_10.nextIf(mask, 1))
             val typeNode_8: Node? = this.nodeAt(it_10.nextIf(mask, 2))
@@ -762,13 +762,13 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newPostfixUnaryExpression(this.singleChild(childIndices), operator_1), null)
         }
         230 -> {
-            val it_11: childIterator = newChildIter(childIndices)
+            val it_11: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val asteriskToken_1: Node? = this.nodeAt(it_11.nextIf(mask, 0))
             val expression: Node? = this.nodeAt(it_11.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newYieldExpression(asteriskToken_1, expression), null)
         }
         220 -> {
-            val it_12: childIterator = newChildIter(childIndices)
+            val it_12: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_10: ModifierList? = this.modifierListAt(it_12.nextIf(mask, 0))
             val typeParameters_5: NodeList? = this.nodeListAt(it_12.nextIf(mask, 1))
             val parameters_6: NodeList? = this.nodeListAt(it_12.nextIf(mask, 2))
@@ -778,7 +778,7 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newArrowFunction(modifiers_10, typeParameters_5, parameters_6, typeNode_9, null, equalsGreaterThanToken, body_5), null)
         }
         219 -> {
-            val it_13: childIterator = newChildIter(childIndices)
+            val it_13: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_11: ModifierList? = this.modifierListAt(it_13.nextIf(mask, 0))
             val asteriskToken_2: Node? = this.nodeAt(it_13.nextIf(mask, 1))
             val name_6: Node? = this.nodeAt(it_13.nextIf(mask, 2))
@@ -789,19 +789,19 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newFunctionExpression(modifiers_11, asteriskToken_2, name_6, typeParameters_6, parameters_7, typeNode_10, null, body_6), null)
         }
         235 -> {
-            val it_14: childIterator = newChildIter(childIndices)
+            val it_14: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_1: Node? = this.nodeAt(it_14.nextIf(mask, 0))
             val typeNode_11: Node? = this.nodeAt(it_14.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newAsExpression(expression_1, typeNode_11), null)
         }
         239 -> {
-            val it_15: childIterator = newChildIter(childIndices)
+            val it_15: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_2: Node? = this.nodeAt(it_15.nextIf(mask, 0))
             val typeNode_12: Node? = this.nodeAt(it_15.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newSatisfiesExpression(expression_2, typeNode_12), null)
         }
         228 -> {
-            val it_16: childIterator = newChildIter(childIndices)
+            val it_16: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val condition: Node? = this.nodeAt(it_16.nextIf(mask, 0))
             val questionToken: Node? = this.nodeAt(it_16.nextIf(mask, 1))
             val whenTrue: Node? = this.nodeAt(it_16.nextIf(mask, 2))
@@ -810,14 +810,14 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newConditionalExpression(condition, questionToken, whenTrue, colonToken, whenFalse), null)
         }
         212 -> {
-            val it_17: childIterator = newChildIter(childIndices)
+            val it_17: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_3: Node? = this.nodeAt(it_17.nextIf(mask, 0))
             val questionDotToken: Node? = this.nodeAt(it_17.nextIf(mask, 1))
             val name_7: Node? = this.nodeAt(it_17.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newPropertyAccessExpression(expression_3, questionDotToken, name_7, NodeFlags(0u)), null)
         }
         213 -> {
-            val it_18: childIterator = newChildIter(childIndices)
+            val it_18: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_4: Node? = this.nodeAt(it_18.nextIf(mask, 0))
             val questionDotToken_1: Node? = this.nodeAt(it_18.nextIf(mask, 1))
             val argumentExpression: Node? = this.nodeAt(it_18.nextIf(mask, 2))
@@ -831,11 +831,11 @@ private fun astDecoder?.createChildrenNode_goPart2(kind: Kind, data: UInt, child
 }
 
 // goport: switch-split part 3 of 6 of github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createChildrenNode
-private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+private fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val mask: Int = goUint8((data and NodeDataChildMask).toInt())
     when (kind.value) {
         214 -> {
-            val it_1: childIterator = newChildIter(childIndices)
+            val it_1: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression: Node? = this.nodeAt(it_1.nextIf(mask, 0))
             val questionDotToken: Node? = this.nodeAt(it_1.nextIf(mask, 1))
             val typeArguments: NodeList? = this.nodeListAt(it_1.nextIf(mask, 2))
@@ -843,7 +843,7 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newCallExpression(expression, questionDotToken, typeArguments, arguments, NodeFlags(0u)), null)
         }
         215 -> {
-            val it_2: childIterator = newChildIter(childIndices)
+            val it_2: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_1: Node? = this.nodeAt(it_2.nextIf(mask, 0))
             val typeArguments_1: NodeList? = this.nodeListAt(it_2.nextIf(mask, 1))
             val arguments_1: NodeList? = this.nodeListAt(it_2.nextIf(mask, 2))
@@ -863,19 +863,19 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newSpreadElement(this.singleChild(childIndices)), null)
         }
         229 -> {
-            val it_3: childIterator = newChildIter(childIndices)
+            val it_3: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val head: Node? = this.nodeAt(it_3.nextIf(mask, 0))
             val templateSpans: NodeList? = this.nodeListAt(it_3.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newTemplateExpression(head, templateSpans), null)
         }
         240 -> {
-            val it_4: childIterator = newChildIter(childIndices)
+            val it_4: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_2: Node? = this.nodeAt(it_4.nextIf(mask, 0))
             val literal: Node? = this.nodeAt(it_4.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newTemplateSpan(expression_2, literal), null)
         }
         216 -> {
-            val it_5: childIterator = newChildIter(childIndices)
+            val it_5: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tag: Node? = this.nodeAt(it_5.nextIf(mask, 0))
             val questionDotToken_1: Node? = this.nodeAt(it_5.nextIf(mask, 1))
             val typeArguments_2: NodeList? = this.nodeListAt(it_5.nextIf(mask, 2))
@@ -905,7 +905,7 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newSpreadAssignment(this.singleChild(childIndices)), null)
         }
         303 -> {
-            val it_6: childIterator = newChildIter(childIndices)
+            val it_6: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers: ModifierList? = this.modifierListAt(it_6.nextIf(mask, 0))
             val name: Node? = this.nodeAt(it_6.nextIf(mask, 1))
             val postfixToken: Node? = this.nodeAt(it_6.nextIf(mask, 2))
@@ -914,7 +914,7 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newPropertyAssignment(modifiers, name, postfixToken, typeNode, initializer), null)
         }
         304 -> {
-            val it_7: childIterator = newChildIter(childIndices)
+            val it_7: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_1: ModifierList? = this.modifierListAt(it_7.nextIf(mask, 0))
             val name_1: Node? = this.nodeAt(it_7.nextIf(mask, 1))
             val postfixToken_1: Node? = this.nodeAt(it_7.nextIf(mask, 2))
@@ -936,7 +936,7 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newAwaitExpression(this.singleChild(childIndices)), null)
         }
         217 -> {
-            val it_8: childIterator = newChildIter(childIndices)
+            val it_8: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val typeNode_2: Node? = this.nodeAt(it_8.nextIf(mask, 0))
             val expression_3: Node? = this.nodeAt(it_8.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newTypeAssertion(typeNode_2, expression_3), null)
@@ -951,7 +951,7 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newIntersectionTypeNode(this.singleNodeListChild(childIndices)), null)
         }
         195 -> {
-            val it_9: childIterator = newChildIter(childIndices)
+            val it_9: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val checkType: Node? = this.nodeAt(it_9.nextIf(mask, 0))
             val extendsType: Node? = this.nodeAt(it_9.nextIf(mask, 1))
             val trueType: Node? = this.nodeAt(it_9.nextIf(mask, 2))
@@ -980,19 +980,19 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newArrayTypeNode(this.singleChild(childIndices)), null)
         }
         200 -> {
-            val it_10: childIterator = newChildIter(childIndices)
+            val it_10: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val objectType: Node? = this.nodeAt(it_10.nextIf(mask, 0))
             val indexType: Node? = this.nodeAt(it_10.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newIndexedAccessTypeNode(objectType, indexType), null)
         }
         184 -> {
-            val it_11: childIterator = newChildIter(childIndices)
+            val it_11: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val typeName: Node? = this.nodeAt(it_11.nextIf(mask, 0))
             val typeArguments_3: NodeList? = this.nodeListAt(it_11.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newTypeReferenceNode(typeName, typeArguments_3), null)
         }
         234 -> {
-            val it_12: childIterator = newChildIter(childIndices)
+            val it_12: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_4: Node? = this.nodeAt(it_12.nextIf(mask, 0))
             val typeArguments_4: NodeList? = this.nodeListAt(it_12.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newExpressionWithTypeArguments(expression_4, typeArguments_4), null)
@@ -1004,14 +1004,14 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newThisTypeNode(), null)
         }
         183 -> {
-            val it_13: childIterator = newChildIter(childIndices)
+            val it_13: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val assertsModifier: Node? = this.nodeAt(it_13.nextIf(mask, 0))
             val parameterName: Node? = this.nodeAt(it_13.nextIf(mask, 1))
             val typeNode_3: Node? = this.nodeAt(it_13.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newTypePredicateNode(assertsModifier, parameterName, typeNode_3), null)
         }
         302 -> {
-            val it_14: childIterator = newChildIter(childIndices)
+            val it_14: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val name_2: Node? = this.nodeAt(it_14.nextIf(mask, 0))
             val value_1: Node? = this.nodeAt(it_14.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newImportAttribute(name_2, value_1), null)
@@ -1029,13 +1029,13 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newImportAttributes(token, list_2, multiLine_2), null)
         }
         187 -> {
-            val it_15: childIterator = newChildIter(childIndices)
+            val it_15: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val exprName: Node? = this.nodeAt(it_15.nextIf(mask, 0))
             val typeArguments_5: NodeList? = this.nodeListAt(it_15.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newTypeQueryNode(exprName, typeArguments_5), null)
         }
         201 -> {
-            val it_16: childIterator = newChildIter(childIndices)
+            val it_16: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val readonlyToken: Node? = this.nodeAt(it_16.nextIf(mask, 0))
             val typeParameter: Node? = this.nodeAt(it_16.nextIf(mask, 1))
             val nameType: Node? = this.nodeAt(it_16.nextIf(mask, 2))
@@ -1055,14 +1055,14 @@ private fun astDecoder?.createChildrenNode_goPart3(kind: Kind, data: UInt, child
 }
 
 // goport: switch-split part 4 of 6 of github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createChildrenNode
-private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+private fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val mask: Int = goUint8((data and NodeDataChildMask).toInt())
     when (kind.value) {
         190 -> {
             return Tuple2<Node?, GoError?>(this!!.factory.newTupleTypeNode(this.singleNodeListChild(childIndices)), null)
         }
         203 -> {
-            val it_1: childIterator = newChildIter(childIndices)
+            val it_1: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val dotDotDotToken: Node? = this.nodeAt(it_1.nextIf(mask, 0))
             val name: Node? = this.nodeAt(it_1.nextIf(mask, 1))
             val questionToken: Node? = this.nodeAt(it_1.nextIf(mask, 2))
@@ -1079,14 +1079,14 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newParenthesizedTypeNode(this.singleChild(childIndices)), null)
         }
         185 -> {
-            val it_2: childIterator = newChildIter(childIndices)
+            val it_2: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val typeParameters: NodeList? = this.nodeListAt(it_2.nextIf(mask, 0))
             val parameters: NodeList? = this.nodeListAt(it_2.nextIf(mask, 1))
             val typeNode_1: Node? = this.nodeAt(it_2.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newFunctionTypeNode(typeParameters, parameters, typeNode_1), null)
         }
         186 -> {
-            val it_3: childIterator = newChildIter(childIndices)
+            val it_3: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers: ModifierList? = this.modifierListAt(it_3.nextIf(mask, 0))
             val typeParameters_1: NodeList? = this.nodeListAt(it_3.nextIf(mask, 1))
             val parameters_1: NodeList? = this.nodeListAt(it_3.nextIf(mask, 2))
@@ -1094,13 +1094,13 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newConstructorTypeNode(modifiers, typeParameters_1, parameters_1, typeNode_2), null)
         }
         204 -> {
-            val it_4: childIterator = newChildIter(childIndices)
+            val it_4: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val head: Node? = this.nodeAt(it_4.nextIf(mask, 0))
             val templateSpans: NodeList? = this.nodeListAt(it_4.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newTemplateLiteralTypeNode(head, templateSpans), null)
         }
         205 -> {
-            val it_5: childIterator = newChildIter(childIndices)
+            val it_5: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val typeNode_3: Node? = this.nodeAt(it_5.nextIf(mask, 0))
             val literal: Node? = this.nodeAt(it_5.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newTemplateLiteralTypeSpan(typeNode_3, literal), null)
@@ -1115,7 +1115,7 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newPartiallyEmittedExpression(this.singleChild(childIndices)), null)
         }
         285 -> {
-            val it_6: childIterator = newChildIter(childIndices)
+            val it_6: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val openingElement: Node? = this.nodeAt(it_6.nextIf(mask, 0))
             val children: NodeList? = this.nodeListAt(it_6.nextIf(mask, 1))
             val closingElement: Node? = this.nodeAt(it_6.nextIf(mask, 2))
@@ -1125,27 +1125,27 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newJsxAttributes(this.singleNodeListChild(childIndices)), null)
         }
         296 -> {
-            val it_7: childIterator = newChildIter(childIndices)
+            val it_7: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val namespace: Node? = this.nodeAt(it_7.nextIf(mask, 0))
             val name_1: Node? = this.nodeAt(it_7.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJsxNamespacedName(namespace, name_1), null)
         }
         287 -> {
-            val it_8: childIterator = newChildIter(childIndices)
+            val it_8: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName: Node? = this.nodeAt(it_8.nextIf(mask, 0))
             val typeArguments: NodeList? = this.nodeListAt(it_8.nextIf(mask, 1))
             val attributes: Node? = this.nodeAt(it_8.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJsxOpeningElement(tagName, typeArguments, attributes), null)
         }
         286 -> {
-            val it_9: childIterator = newChildIter(childIndices)
+            val it_9: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_1: Node? = this.nodeAt(it_9.nextIf(mask, 0))
             val typeArguments_1: NodeList? = this.nodeListAt(it_9.nextIf(mask, 1))
             val attributes_1: Node? = this.nodeAt(it_9.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJsxSelfClosingElement(tagName_1, typeArguments_1, attributes_1), null)
         }
         289 -> {
-            val it_10: childIterator = newChildIter(childIndices)
+            val it_10: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val openingFragment: Node? = this.nodeAt(it_10.nextIf(mask, 0))
             val children_1: NodeList? = this.nodeListAt(it_10.nextIf(mask, 1))
             val closingFragment: Node? = this.nodeAt(it_10.nextIf(mask, 2))
@@ -1158,7 +1158,7 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newJsxClosingFragment(), null)
         }
         292 -> {
-            val it_11: childIterator = newChildIter(childIndices)
+            val it_11: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val name_2: Node? = this.nodeAt(it_11.nextIf(mask, 0))
             val initializer: Node? = this.nodeAt(it_11.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJsxAttribute(name_2, initializer), null)
@@ -1170,7 +1170,7 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newJsxClosingElement(this.singleChild(childIndices)), null)
         }
         295 -> {
-            val it_12: childIterator = newChildIter(childIndices)
+            val it_12: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val dotDotDotToken_1: Node? = this.nodeAt(it_12.nextIf(mask, 0))
             val expression: Node? = this.nodeAt(it_12.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJsxExpression(dotDotDotToken_1, expression), null)
@@ -1186,7 +1186,7 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newSyntaxList(nodes), null)
         }
         315 -> {
-            val it_13: childIterator = newChildIter(childIndices)
+            val it_13: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val comment: NodeList? = this.nodeListAt(it_13.nextIf(mask, 0))
             val tags: NodeList? = this.nodeListAt(it_13.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDoc(comment, tags), null)
@@ -1210,20 +1210,20 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocOptionalType(this.singleChild(childIndices)), null)
         }
         336 -> {
-            val it_14: childIterator = newChildIter(childIndices)
+            val it_14: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_2: Node? = this.nodeAt(it_14.nextIf(mask, 0))
             val typeExpression: Node? = this.nodeAt(it_14.nextIf(mask, 1))
             val comment_1: NodeList? = this.nodeListAt(it_14.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocTypeTag(tagName_2, typeExpression, comment_1), null)
         }
         322 -> {
-            val it_15: childIterator = newChildIter(childIndices)
+            val it_15: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_3: Node? = this.nodeAt(it_15.nextIf(mask, 0))
             val comment_2: NodeList? = this.nodeListAt(it_15.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocUnknownTag(tagName_3, comment_2), null)
         }
         337 -> {
-            val it_16: childIterator = newChildIter(childIndices)
+            val it_16: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_4: Node? = this.nodeAt(it_16.nextIf(mask, 0))
             val constraint: Node? = this.nodeAt(it_16.nextIf(mask, 1))
             val typeParameters_2: NodeList? = this.nodeListAt(it_16.nextIf(mask, 2))
@@ -1231,44 +1231,44 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocTemplateTag(tagName_4, constraint, typeParameters_2, comment_3), null)
         }
         334 -> {
-            val it_17: childIterator = newChildIter(childIndices)
+            val it_17: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_5: Node? = this.nodeAt(it_17.nextIf(mask, 0))
             val typeExpression_1: Node? = this.nodeAt(it_17.nextIf(mask, 1))
             val comment_4: NodeList? = this.nodeListAt(it_17.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocReturnTag(tagName_5, typeExpression_1, comment_4), null)
         }
         326 -> {
-            val it_18: childIterator = newChildIter(childIndices)
+            val it_18: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_6: Node? = this.nodeAt(it_18.nextIf(mask, 0))
             val comment_5: NodeList? = this.nodeListAt(it_18.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocPublicTag(tagName_6, comment_5), null)
         }
         327 -> {
-            val it_19: childIterator = newChildIter(childIndices)
+            val it_19: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_7: Node? = this.nodeAt(it_19.nextIf(mask, 0))
             val comment_6: NodeList? = this.nodeListAt(it_19.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocPrivateTag(tagName_7, comment_6), null)
         }
         328 -> {
-            val it_20: childIterator = newChildIter(childIndices)
+            val it_20: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_8: Node? = this.nodeAt(it_20.nextIf(mask, 0))
             val comment_7: NodeList? = this.nodeListAt(it_20.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocProtectedTag(tagName_8, comment_7), null)
         }
         329 -> {
-            val it_21: childIterator = newChildIter(childIndices)
+            val it_21: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_9: Node? = this.nodeAt(it_21.nextIf(mask, 0))
             val comment_8: NodeList? = this.nodeListAt(it_21.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocReadonlyTag(tagName_9, comment_8), null)
         }
         330 -> {
-            val it_22: childIterator = newChildIter(childIndices)
+            val it_22: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_10: Node? = this.nodeAt(it_22.nextIf(mask, 0))
             val comment_9: NodeList? = this.nodeListAt(it_22.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocOverrideTag(tagName_10, comment_9), null)
         }
         325 -> {
-            val it_23: childIterator = newChildIter(childIndices)
+            val it_23: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_11: Node? = this.nodeAt(it_23.nextIf(mask, 0))
             val comment_10: NodeList? = this.nodeListAt(it_23.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocDeprecatedTag(tagName_11, comment_10), null)
@@ -1281,53 +1281,53 @@ private fun astDecoder?.createChildrenNode_goPart4(kind: Kind, data: UInt, child
 }
 
 // goport: switch-split part 5 of 6 of github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.createChildrenNode
-private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
+private fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, childIndices: GoSlice<Int>, commonData: Int): Tuple2<Node?, GoError?> {
     val mask: Int = goUint8((data and NodeDataChildMask).toInt())
     when (kind.value) {
         339 -> {
-            val it_1: childIterator = newChildIter(childIndices)
+            val it_1: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName: Node? = this.nodeAt(it_1.nextIf(mask, 0))
             val nameExpression: Node? = this.nodeAt(it_1.nextIf(mask, 1))
             val comment: NodeList? = this.nodeListAt(it_1.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocSeeTag(tagName, nameExpression, comment), null)
         }
         324 -> {
-            val it_2: childIterator = newChildIter(childIndices)
+            val it_2: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_1: Node? = this.nodeAt(it_2.nextIf(mask, 0))
             val className: Node? = this.nodeAt(it_2.nextIf(mask, 1))
             val comment_1: NodeList? = this.nodeListAt(it_2.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocImplementsTag(tagName_1, className, comment_1), null)
         }
         323 -> {
-            val it_3: childIterator = newChildIter(childIndices)
+            val it_3: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_2: Node? = this.nodeAt(it_3.nextIf(mask, 0))
             val className_1: Node? = this.nodeAt(it_3.nextIf(mask, 1))
             val comment_2: NodeList? = this.nodeListAt(it_3.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocAugmentsTag(tagName_2, className_1, comment_2), null)
         }
         342 -> {
-            val it_4: childIterator = newChildIter(childIndices)
+            val it_4: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_3: Node? = this.nodeAt(it_4.nextIf(mask, 0))
             val typeExpression: Node? = this.nodeAt(it_4.nextIf(mask, 1))
             val comment_3: NodeList? = this.nodeListAt(it_4.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocSatisfiesTag(tagName_3, typeExpression, comment_3), null)
         }
         341 -> {
-            val it_5: childIterator = newChildIter(childIndices)
+            val it_5: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_4: Node? = this.nodeAt(it_5.nextIf(mask, 0))
             val typeExpression_1: Node? = this.nodeAt(it_5.nextIf(mask, 1))
             val comment_4: NodeList? = this.nodeListAt(it_5.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocThrowsTag(tagName_4, typeExpression_1, comment_4), null)
         }
         335 -> {
-            val it_6: childIterator = newChildIter(childIndices)
+            val it_6: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_5: Node? = this.nodeAt(it_6.nextIf(mask, 0))
             val typeExpression_2: Node? = this.nodeAt(it_6.nextIf(mask, 1))
             val comment_5: NodeList? = this.nodeListAt(it_6.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocThisTag(tagName_5, typeExpression_2, comment_5), null)
         }
         343 -> {
-            val it_7: childIterator = newChildIter(childIndices)
+            val it_7: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_6: Node? = this.nodeAt(it_7.nextIf(mask, 0))
             val importClause: Node? = this.nodeAt(it_7.nextIf(mask, 1))
             val moduleSpecifier: Node? = this.nodeAt(it_7.nextIf(mask, 2))
@@ -1336,7 +1336,7 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocImportTag(tagName_6, importClause, moduleSpecifier, attributes, comment_6), null)
         }
         331 -> {
-            val it_8: childIterator = newChildIter(childIndices)
+            val it_8: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_7: Node? = this.nodeAt(it_8.nextIf(mask, 0))
             val typeExpression_3: Node? = this.nodeAt(it_8.nextIf(mask, 1))
             val name: Node? = this.nodeAt(it_8.nextIf(mask, 2))
@@ -1344,14 +1344,14 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocCallbackTag(tagName_7, typeExpression_3, name, comment_7), null)
         }
         332 -> {
-            val it_9: childIterator = newChildIter(childIndices)
+            val it_9: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_8: Node? = this.nodeAt(it_9.nextIf(mask, 0))
             val typeExpression_4: Node? = this.nodeAt(it_9.nextIf(mask, 1))
             val comment_8: NodeList? = this.nodeListAt(it_9.nextIf(mask, 2))
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocOverloadTag(tagName_8, typeExpression_4, comment_8), null)
         }
         338 -> {
-            val it_10: childIterator = newChildIter(childIndices)
+            val it_10: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_9: Node? = this.nodeAt(it_10.nextIf(mask, 0))
             val typeExpression_5: Node? = this.nodeAt(it_10.nextIf(mask, 1))
             val name_1: Node? = this.nodeAt(it_10.nextIf(mask, 2))
@@ -1359,7 +1359,7 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newJSDocTypedefTag(tagName_9, typeExpression_5, name_1, comment_9), null)
         }
         318 -> {
-            val it_11: childIterator = newChildIter(childIndices)
+            val it_11: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val typeParameters: NodeList? = this.nodeListAt(it_11.nextIf(mask, 0))
             val parameters: NodeList? = this.nodeListAt(it_11.nextIf(mask, 1))
             val typeNode: Node? = this.nodeAt(it_11.nextIf(mask, 2))
@@ -1373,7 +1373,7 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
             if (commonData and 1 != 0) {
                 keyword = Kind(145)
             }
-            val it_12: childIterator = newChildIter(childIndices)
+            val it_12: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers: ModifierList? = this.modifierListAt(it_12.nextIf(mask, 0))
             val name_2: Node? = this.nodeAt(it_12.nextIf(mask, 1))
             val body: Node? = this.nodeAt(it_12.nextIf(mask, 2))
@@ -1381,7 +1381,7 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
         }
         272 -> {
             val isTypeOnly: Boolean = commonData and 1 != 0
-            val it_13: childIterator = newChildIter(childIndices)
+            val it_13: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_1: ModifierList? = this.modifierListAt(it_13.nextIf(mask, 0))
             val name_3: Node? = this.nodeAt(it_13.nextIf(mask, 1))
             val moduleReference: Node? = this.nodeAt(it_13.nextIf(mask, 2))
@@ -1389,7 +1389,7 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
         }
         279 -> {
             val isTypeOnly_1: Boolean = commonData and 1 != 0
-            val it_14: childIterator = newChildIter(childIndices)
+            val it_14: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_2: ModifierList? = this.modifierListAt(it_14.nextIf(mask, 0))
             val exportClause: Node? = this.nodeAt(it_14.nextIf(mask, 1))
             val moduleSpecifier_1: Node? = this.nodeAt(it_14.nextIf(mask, 2))
@@ -1398,7 +1398,7 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
         }
         206 -> {
             val isTypeOf: Boolean = commonData and 1 != 0
-            val it_15: childIterator = newChildIter(childIndices)
+            val it_15: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val argument: Node? = this.nodeAt(it_15.nextIf(mask, 0))
             val attributes_2: Node? = this.nodeAt(it_15.nextIf(mask, 1))
             val qualifier: Node? = this.nodeAt(it_15.nextIf(mask, 2))
@@ -1415,20 +1415,20 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
                     phaseModifier = Kind(166)
                 }
             }
-            val it_16: childIterator = newChildIter(childIndices)
+            val it_16: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val name_4: Node? = this.nodeAt(it_16.nextIf(mask, 0))
             val namedBindings: Node? = this.nodeAt(it_16.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newImportClause(phaseModifier, name_4, namedBindings), null)
         }
         277 -> {
             val isTypeOnly_2: Boolean = commonData and 1 != 0
-            val it_17: childIterator = newChildIter(childIndices)
+            val it_17: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val propertyName: Node? = this.nodeAt(it_17.nextIf(mask, 0))
             val name_5: Node? = this.nodeAt(it_17.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newImportSpecifier(isTypeOnly_2, propertyName, name_5), null)
         }
         169 -> {
-            val it_18: childIterator = newChildIter(childIndices)
+            val it_18: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val modifiers_3: ModifierList? = this.modifierListAt(it_18.nextIf(mask, 0))
             val name_6: Node? = this.nodeAt(it_18.nextIf(mask, 1))
             val constraint: Node? = this.nodeAt(it_18.nextIf(mask, 2))
@@ -1437,7 +1437,7 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
             return Tuple2<Node?, GoError?>(this!!.factory.newTypeParameterDeclaration(modifiers_3, name_6, constraint, expression, defaultType), null)
         }
         349 -> {
-            val it_19: childIterator = newChildIter(childIndices)
+            val it_19: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val expression_1: Node? = this.nodeAt(it_19.nextIf(mask, 0))
             val thisArg: Node? = this.nodeAt(it_19.nextIf(mask, 1))
             return Tuple2<Node?, GoError?>(this!!.factory.newSyntheticReferenceExpression(expression_1, thisArg), null)
@@ -1456,7 +1456,7 @@ private fun astDecoder?.createChildrenNode_goPart5(kind: Kind, data: UInt, child
         333, 340 -> {
             val isBracketed: Boolean = commonData and 1 != 0
             val isNameFirst: Boolean = commonData and 2 != 0
-            val it_20: childIterator = newChildIter(childIndices)
+            val it_20: com.xemantic.typescript.tsgo.api.encoder.childIterator = newChildIter(childIndices)
             val tagName_10: Node? = this.nodeAt(it_20.nextIf(mask, 0))
             val name_7: Node? = this.nodeAt(it_20.nextIf(mask, 1))
             val typeExpression_6: Node? = this.nodeAt(it_20.nextIf(mask, 2))

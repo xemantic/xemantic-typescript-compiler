@@ -37,6 +37,10 @@ class Set<T>(
         m = o.m
     }
 
+    fun goEquals(o: Set<T>): Boolean = m == o.m
+
+    fun goHash(): Int = 31 * m.hashCode()
+
     companion object {
         fun <T> elem(goElem_T: GoElem<T>): GoElem<Set<T>> = GoElem({ Set<T>(goElem_T = goElem_T) }, { it.goCopy() })
     }

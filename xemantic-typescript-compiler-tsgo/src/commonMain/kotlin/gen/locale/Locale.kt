@@ -43,12 +43,12 @@ typealias Locale = Tag
 
 // go: github.com/microsoft/typescript-go/internal/locale.WithLocale e860ac1e
 fun withLocale(ctx: Context?, locale: Locale): Context? {
-    return com.xemantic.typescript.tsgo.go.context.withValue(ctx, contextKey(0), locale.goCopy())
+    return com.xemantic.typescript.tsgo.go.context.withValue(ctx, com.xemantic.typescript.tsgo.locale.contextKey(0), locale.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/locale.FromContext a785e440
 fun fromContext(ctx: Context?): Locale {
-    val x1 = ctx!!.value(contextKey(0))
+    val x1 = ctx!!.value(com.xemantic.typescript.tsgo.locale.contextKey(0))
     val t0 = if (x1 is Locale) Tuple2(x1 as Locale, true) else Tuple2(Locale(), false)
     val locale: Locale = t0.first
     return locale.goCopy()

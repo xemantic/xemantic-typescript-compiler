@@ -363,9 +363,7 @@ import com.xemantic.typescript.tsgo.ast.asVoidExpression
 import com.xemantic.typescript.tsgo.ast.asWhileStatement
 import com.xemantic.typescript.tsgo.ast.asWithStatement
 import com.xemantic.typescript.tsgo.ast.asYieldExpression
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.modifiers
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.text
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.getNodeDataType e6eb8afb
@@ -1258,28 +1256,28 @@ fun getNodeCommonData(node: Node?): UInt {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordNodeStrings 77c39fd7
-fun recordNodeStrings(node: Node?, strs: stringTable?): UInt {
+fun recordNodeStrings(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?): UInt {
     when (node!!.kind.value) {
         79 -> {
-            return strs.add(node.asIdentifier()!!.text, node!!.kind, node.pos(), node.end())
+            return strs.add(node.asIdentifier()!!.text, node!!.kind, node!!.pos(), node!!.end())
         }
         80 -> {
-            return strs.add(node.asPrivateIdentifier()!!.text, node!!.kind, node.pos(), node.end())
+            return strs.add(node.asPrivateIdentifier()!!.text, node!!.kind, node!!.pos(), node!!.end())
         }
         11 -> {
-            return strs.add(node.asJsxText()!!.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
+            return strs.add(node.asJsxText()!!.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
         }
         316 -> {
-            return strs.add(node.asJSDocText()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node.pos(), node.end())
+            return strs.add(node.asJSDocText()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         319 -> {
-            return strs.add(node.asJSDocLink()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node.pos(), node.end())
+            return strs.add(node.asJSDocLink()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         321 -> {
-            return strs.add(node.asJSDocLinkPlain()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node.pos(), node.end())
+            return strs.add(node.asJSDocLinkPlain()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         320 -> {
-            return strs.add(node.asJSDocLinkCode()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node.pos(), node.end())
+            return strs.add(node.asJSDocLinkCode()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         else -> {
             goPanic(com.xemantic.typescript.tsgo.go.fmt.sprintf("Unexpected node kind %v", node!!.kind))
@@ -1289,7 +1287,7 @@ fun recordNodeStrings(node: Node?, strs: stringTable?): UInt {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData 531453ef
-fun recordExtendedData(node: Node?, strs: stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?): UInt {
+fun recordExtendedData(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?): UInt {
     val offset: UInt = extendedData!!.value.len.toUInt()
     when (node!!.kind.value) {
         10 -> {

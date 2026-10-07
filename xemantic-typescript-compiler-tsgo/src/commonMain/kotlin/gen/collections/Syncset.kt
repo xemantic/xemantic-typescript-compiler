@@ -38,6 +38,10 @@ class SyncSet<T>(
         m = o.m.goCopy()
     }
 
+    fun goEquals(o: SyncSet<T>): Boolean = m.goEquals(o.m)
+
+    fun goHash(): Int = 31 * m.goHash()
+
     companion object {
         fun <T> elem(goElem_T: GoElem<T>): GoElem<SyncSet<T>> = GoElem({ SyncSet<T>(goElem_T = goElem_T) }, { it.goCopy() })
     }
@@ -106,7 +110,7 @@ fun <T> SyncSet<T>?.toSlice(): GoSlice<T> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncSet.Keys 89585e97
-fun <T> SyncSet<T>?.keys(): Seq<T> {
+fun <T> SyncSet<T>?.keys(): Seq<T>? {
     return fun(yield: ((T) -> Boolean)?) {
         this!!.m.range(fun(key: T, value_1: Unit): Boolean {
             if (!yield!!(key)) {

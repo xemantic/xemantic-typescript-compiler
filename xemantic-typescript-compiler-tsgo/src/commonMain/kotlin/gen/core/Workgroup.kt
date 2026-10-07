@@ -38,9 +38,9 @@ interface WorkGroup {
 // go: github.com/microsoft/typescript-go/internal/core.NewWorkGroup 98054b23
 fun newWorkGroup(singleThreaded: Boolean): WorkGroup? {
     if (singleThreaded) {
-        return singleThreadedWorkGroup()
+        return com.xemantic.typescript.tsgo.core.singleThreadedWorkGroup()
     }
-    return parallelWorkGroup()
+    return com.xemantic.typescript.tsgo.core.parallelWorkGroup()
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.parallelWorkGroup aed7bed5
@@ -135,7 +135,7 @@ class singleThreadedWorkGroup(
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.singleThreadedWorkGroup.pop 789e2916
-fun singleThreadedWorkGroup?.pop(): (() -> Unit)? {
+fun com.xemantic.typescript.tsgo.core.singleThreadedWorkGroup?.pop(): (() -> Unit)? {
     return withDefers({ null }) { df0 ->
         this!!.fnsMu.lock()
         val dr1 = this!!.fnsMu

@@ -47,11 +47,9 @@ import com.xemantic.typescript.tsgo.ast.asJSDocSatisfiesTag
 import com.xemantic.typescript.tsgo.ast.asSatisfiesExpression
 import com.xemantic.typescript.tsgo.ast.body
 import com.xemantic.typescript.tsgo.ast.eagerJSDoc
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.jsDoc
 import com.xemantic.typescript.tsgo.ast.name
 import com.xemantic.typescript.tsgo.ast.newCommentRange
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.statements
 import com.xemantic.typescript.tsgo.ast.tagName
 import com.xemantic.typescript.tsgo.ast.type
@@ -1162,7 +1160,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
             this.errorAt(com.xemantic.typescript.tsgo.diagnostics.unterminated_regular_expression_literal, this!!.scannerState.tokenStart, p - this!!.scannerState.tokenStart, GoElem.ref<Any?>().nilSlice)
         } else {
             p++
-            var regExpFlags: regularExpressionFlags = regularExpressionFlags(0)
+            var regExpFlags: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(0)
             l4@ while (p < this!!.end) {
                 val t1 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(this!!.text, p)
                 val ch_3: Int = t1.first
@@ -1172,7 +1170,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
                 }
                 if (shouldReportErrors) {
                     val t2 = charCodeToRegExpFlag.probe(ch_3)
-                    val flag: regularExpressionFlags = goProbeValue<regularExpressionFlags>(t2) { regularExpressionFlags(0) }
+                    val flag: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = goProbeValue<com.xemantic.typescript.tsgo.scanner.regularExpressionFlags>(t2) { com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(0) }
                     val ok: Boolean = t2 !== GoMapAbsent
                     if (!ok) {
                         this.errorAt(com.xemantic.typescript.tsgo.diagnostics.unknown_regular_expression_flag, p, size_1, GoElem.ref<Any?>().nilSlice)
@@ -1181,7 +1179,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
                     } else if (regExpFlags.value or flag.value and 96 == 96) {
                         this.errorAt(com.xemantic.typescript.tsgo.diagnostics.the_Unicode_u_flag_and_the_Unicode_Sets_v_flag_cannot_be_set_simultaneously, p, size_1, GoElem.ref<Any?>().nilSlice)
                     } else {
-                        regExpFlags = regularExpressionFlags(regExpFlags.value or flag.value)
+                        regExpFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(regExpFlags.value or flag.value)
                         this.checkRegularExpressionFlagAvailability(flag, p, size_1)
                     }
                 }
@@ -1193,7 +1191,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
                 val saveTokenPos: Int = this!!.scannerState.tokenStart
                 val saveTokenFlags: TokenFlags = this!!.scannerState.tokenFlags
                 this!!.end = endOfRegExpBody
-                val parser: regExpParser? = regExpParser(scanner = this, end = endOfRegExpBody, regExpFlags = regExpFlags, anyUnicodeMode = regExpFlags.value and 96 != 0, unicodeSetsMode = regExpFlags.value and 64 != 0, annexB = true, namedCaptureGroups = namedCaptureGroups, groupSpecifiers = GoMap.make<String, Boolean>(GoElem.BOOL))
+                val parser: com.xemantic.typescript.tsgo.scanner.regExpParser? = com.xemantic.typescript.tsgo.scanner.regExpParser(scanner = this, end = endOfRegExpBody, regExpFlags = regExpFlags, anyUnicodeMode = regExpFlags.value and 96 != 0, unicodeSetsMode = regExpFlags.value and 64 != 0, annexB = true, namedCaptureGroups = namedCaptureGroups, groupSpecifiers = GoMap.make<String, Boolean>(GoElem.BOOL))
                 parser.run()
                 this!!.end = saveEnd
                 this!!.scannerState.pos = p
@@ -2653,29 +2651,29 @@ fun getRangeOfTokenAtPosition(sourceFile: SourceFile?, pos: Int): TextRange {
 // go: github.com/microsoft/typescript-go/internal/scanner.GetTokenPosOfNode c2fdc6dc
 fun getTokenPosOfNode(node: Node?, sourceFile: SourceFile?, includeJSDoc: Boolean): Int {
     if (com.xemantic.typescript.tsgo.ast.nodeIsMissing(node)) {
-        return node.pos()
+        return node!!.pos()
     }
     if (com.xemantic.typescript.tsgo.ast.isJSDocNode(node) || node!!.kind.value == 11) {
-        return skipTriviaEx(sourceFile!!.text(), node.pos(), SkipTriviaOptions(stopAtComments = true))
+        return skipTriviaEx(sourceFile!!.text(), node!!.pos(), SkipTriviaOptions(stopAtComments = true))
     }
     if (includeJSDoc && node.jsDoc(sourceFile).len > 0) {
         return getTokenPosOfNode(node.jsDoc(sourceFile)[0], sourceFile, false)
     }
-    return skipTriviaEx(sourceFile!!.text(), node.pos(), SkipTriviaOptions(inJSDoc = node!!.flags.value and 4194304u != 0u))
+    return skipTriviaEx(sourceFile!!.text(), node!!.pos(), SkipTriviaOptions(inJSDoc = node!!.flags.value and 4194304u != 0u))
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.getErrorRangeForArrowFunction 90f472cc
 fun getErrorRangeForArrowFunction(sourceFile: SourceFile?, node: Node?): TextRange {
-    val pos: Int = skipTrivia(sourceFile!!.text(), node.pos())
+    val pos: Int = skipTrivia(sourceFile!!.text(), node!!.pos())
     val body: Node? = node.body()
     if (body != null && body!!.kind.value == 242) {
-        val startLine: Int = getECMALineOfPosition(sourceFile, body.pos())
-        val endLine: Int = getECMALineOfPosition(sourceFile, body.end())
+        val startLine: Int = getECMALineOfPosition(sourceFile, body!!.pos())
+        val endLine: Int = getECMALineOfPosition(sourceFile, body!!.end())
         if (startLine < endLine) {
             return com.xemantic.typescript.tsgo.core.newTextRange(pos, getECMAEndLinePosition(sourceFile, startLine) + 1)
         }
     }
-    return com.xemantic.typescript.tsgo.core.newTextRange(pos, node.end())
+    return com.xemantic.typescript.tsgo.core.newTextRange(pos, node!!.end())
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.findOriginatingJSDocSatisfiesTag 3411ad91
@@ -2753,25 +2751,25 @@ fun getErrorRangeForNode(sourceFile: SourceFile?, node: Node?): TextRange {
                 return getErrorRangeForArrowFunction(sourceFile, node)
             }
             297, 298 -> {
-                val start: Int = skipTrivia(sourceFile!!.text(), node.pos())
-                var end: Int = node.end()
+                val start: Int = skipTrivia(sourceFile!!.text(), node!!.pos())
+                var end: Int = node!!.end()
                 val statements: GoSlice<Node?> = node.statements()
                 if (statements.len != 0) {
-                    end = statements[0].pos()
+                    end = statements[0]!!.pos()
                 }
                 return com.xemantic.typescript.tsgo.core.newTextRange(start, end)
             }
             254, 230 -> {
-                val pos_1: Int = skipTrivia(sourceFile!!.text(), node.pos())
+                val pos_1: Int = skipTrivia(sourceFile!!.text(), node!!.pos())
                 return getRangeOfTokenAtPosition(sourceFile, pos_1)
             }
             239 -> {
                 val jsDocSatisfiesTag: Node? = findOriginatingJSDocSatisfiesTag(sourceFile, node)
                 if (jsDocSatisfiesTag != null) {
-                    val pos_2: Int = skipTrivia(sourceFile!!.text(), jsDocSatisfiesTag.tagName().pos())
+                    val pos_2: Int = skipTrivia(sourceFile!!.text(), jsDocSatisfiesTag.tagName()!!.pos())
                     return getRangeOfTokenAtPosition(sourceFile, pos_2)
                 }
-                val pos_3: Int = skipTrivia(sourceFile!!.text(), node.asSatisfiesExpression()!!.expression.end())
+                val pos_3: Int = skipTrivia(sourceFile!!.text(), node.asSatisfiesExpression()!!.expression!!.end())
                 return getRangeOfTokenAtPosition(sourceFile, pos_3)
             }
             177 -> {
@@ -2779,7 +2777,7 @@ fun getErrorRangeForNode(sourceFile: SourceFile?, node: Node?): TextRange {
                     errorNode = node
                     return@sw0
                 }
-                val scanner: Scanner? = getScannerForSourceFile(sourceFile, node.pos())
+                val scanner: Scanner? = getScannerForSourceFile(sourceFile, node!!.pos())
                 val start_1: Int = scanner.tokenStart()
                 l1@ while (scanner.token().value != 136 && scanner.token().value != 10 && scanner.token().value != 1) {
                     scanner.scan()
@@ -2789,13 +2787,13 @@ fun getErrorRangeForNode(sourceFile: SourceFile?, node: Node?): TextRange {
         }
     }
     if (errorNode == null) {
-        return getRangeOfTokenAtPosition(sourceFile, node.pos())
+        return getRangeOfTokenAtPosition(sourceFile, node!!.pos())
     }
-    var pos_4: Int = errorNode.pos()
+    var pos_4: Int = errorNode!!.pos()
     if (!com.xemantic.typescript.tsgo.ast.nodeIsMissing(errorNode) && !com.xemantic.typescript.tsgo.ast.isJsxText(errorNode)) {
         pos_4 = skipTrivia(sourceFile!!.text(), pos_4)
     }
-    return com.xemantic.typescript.tsgo.core.newTextRange(pos_4, errorNode.end())
+    return com.xemantic.typescript.tsgo.core.newTextRange(pos_4, errorNode!!.end())
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.ComputeLineOfPosition 764b1ee0
@@ -2937,17 +2935,17 @@ fun computePositionOfLineAndUTF16Character(lineStarts: GoSlice<TextPos>, line_0:
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.GetLeadingCommentRanges be8a468f
-fun getLeadingCommentRanges(f: NodeFactory?, text: String, pos: Int): Seq<CommentRange> {
+fun getLeadingCommentRanges(f: NodeFactory?, text: String, pos: Int): Seq<CommentRange>? {
     return iterateCommentRanges(f, text, pos, false)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.GetTrailingCommentRanges 954192d0
-fun getTrailingCommentRanges(f: NodeFactory?, text: String, pos: Int): Seq<CommentRange> {
+fun getTrailingCommentRanges(f: NodeFactory?, text: String, pos: Int): Seq<CommentRange>? {
     return iterateCommentRanges(f, text, pos, true)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.iterateCommentRanges a91df26b
-fun iterateCommentRanges(f: NodeFactory?, text: String, pos_0: Int, trailing: Boolean): Seq<CommentRange> {
+fun iterateCommentRanges(f: NodeFactory?, text: String, pos_0: Int, trailing: Boolean): Seq<CommentRange>? {
     var pos: Int = pos_0
     return fun(yield: ((CommentRange) -> Boolean)?) {
         var pendingPos: Int = 0

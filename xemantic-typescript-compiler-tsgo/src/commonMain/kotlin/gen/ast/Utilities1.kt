@@ -2456,11 +2456,11 @@ val ModuleInstanceStateConstEnumOnly: ModuleInstanceState = ModuleInstanceState(
 
 // go: github.com/microsoft/typescript-go/internal/ast.GetModuleInstanceState 387d5350
 fun getModuleInstanceState(node: Node?): ModuleInstanceState {
-    return getModuleInstanceState(node, GoElem.ref<Node?>().nilSlice, GoMap.nil<NodeId, ModuleInstanceState>(ModuleInstanceState.ELEM))
+    return getModuleInstanceStateImpl(node, GoElem.ref<Node?>().nilSlice, GoMap.nil<NodeId, ModuleInstanceState>(ModuleInstanceState.ELEM))
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.getModuleInstanceState 453ec688
-fun getModuleInstanceState(node: Node?, ancestors: GoSlice<Node?>, visited: GoMap<NodeId, ModuleInstanceState>): ModuleInstanceState {
+fun getModuleInstanceStateImpl(node: Node?, ancestors: GoSlice<Node?>, visited: GoMap<NodeId, ModuleInstanceState>): ModuleInstanceState {
     val module: ModuleDeclaration? = node.asModuleDeclaration()
     if (module!!.bodyBase.body != null) {
         return getModuleInstanceStateCached(module!!.bodyBase.body, pushAncestor(ancestors, node), visited)
@@ -2552,7 +2552,7 @@ fun getModuleInstanceStateWorker(node: Node?, ancestors_0: GoSlice<Node?>, visit
             return state_1
         }
         268 -> {
-            return getModuleInstanceState(node, ancestors, visited)
+            return getModuleInstanceStateImpl(node, ancestors, visited)
         }
     }
     return ModuleInstanceStateInstantiated
@@ -2859,7 +2859,7 @@ fun getNodeAtPosition(file: SourceFile?, position: Int, includeJSDoc: Boolean): 
 
 // go: github.com/microsoft/typescript-go/internal/ast.nodeContainsPosition d9f250e3
 fun nodeContainsPosition(node: Node?, position: Int): Boolean {
-    return node!!.kind.value >= 167 && node.pos() <= position && (position < node.end() || position == node.end() && node!!.kind.value == 1)
+    return node!!.kind.value >= 167 && node!!.pos() <= position && (position < node!!.end() || position == node!!.end() && node!!.kind.value == 1)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.findImportOrRequire 986b09db
@@ -3466,7 +3466,7 @@ fun hasResolutionModeOverride(node: Node?): Boolean {
         }
     }
     if (attributes != null) {
-        val t0 = attributes!!.getResolutionModeOverride()
+        val t0 = attributes.getResolutionModeOverride()
         val ok: Boolean = t0.second
         return ok
     }

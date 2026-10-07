@@ -37,6 +37,10 @@ class Stack<T>(
         data = o.data
     }
 
+    fun goEquals(o: Stack<T>): Boolean = data == o.data
+
+    fun goHash(): Int = 31 * data.hashCode()
+
     companion object {
         fun <T> elem(goElem_T: GoElem<T>): GoElem<Stack<T>> = GoElem({ Stack<T>(goElem_T = goElem_T) }, { it.goCopy() })
     }

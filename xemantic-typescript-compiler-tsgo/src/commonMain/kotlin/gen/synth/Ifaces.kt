@@ -25,7 +25,18 @@ package com.xemantic.typescript.tsgo.synth
 
 import com.xemantic.typescript.tsgo.runtime.*
 
+interface Iface_End_22b3828e {
+    fun end(): Int
+}
+
 interface Iface_KindString_f376415e {
     fun kindString(): String
 }
+
+interface Iface_Grow_81b904b4 {
+    fun grow(p0: Int)
+}
+
+/** [x] typed as nullable (selects a nil-safe extension over a member). */
+fun <T : Any> goNullable(x: T): T? = x
 

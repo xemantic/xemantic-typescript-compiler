@@ -28,7 +28,7 @@ import com.xemantic.typescript.tsgo.runtime.*
 // go: github.com/microsoft/typescript-go/internal/ast.PositionMap 7b4b259f
 class PositionMap(
     @kotlin.jvm.JvmField var asciiOnly: Boolean = false,
-    @kotlin.jvm.JvmField var entries: GoSlice<positionMapEntry> = positionMapEntry.ELEM.nilSlice,
+    @kotlin.jvm.JvmField var entries: GoSlice<com.xemantic.typescript.tsgo.ast.positionMapEntry> = com.xemantic.typescript.tsgo.ast.positionMapEntry.ELEM.nilSlice,
 ) {
 
     fun goCopy(): PositionMap = PositionMap(asciiOnly = asciiOnly, entries = entries)
@@ -84,7 +84,7 @@ fun computePositionMap(text: String): PositionMap? {
             utf16Size = 2
         }
         delta += (size - utf16Size)
-        pm!!.entries = pm!!.entries.append1(positionMapEntry(utf8Pos = i + size, delta = delta))
+        pm!!.entries = pm!!.entries.append1(com.xemantic.typescript.tsgo.ast.positionMapEntry(utf8Pos = i + size, delta = delta))
         i += size
     }
     pm!!.asciiOnly = pm!!.entries.len == 0

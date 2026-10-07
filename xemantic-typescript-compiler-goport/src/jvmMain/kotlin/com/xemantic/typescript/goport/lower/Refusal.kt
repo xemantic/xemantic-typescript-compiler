@@ -48,7 +48,12 @@ class ShimIndex(
     private val classMembers: Map<String, Map<String, Set<String>>>,
     /** Classes whose primary constructor needs arguments (no zero value). */
     private val needsArgs: Map<String, Set<String>>,
+    /** Top-level generic functions whose leading parameters are `GoElem<…>` dictionaries: name → count. */
+    private val elemDicts: Map<String, Map<String, Int>> = emptyMap(),
 ) {
+
+    /** How many leading `GoElem` dictionary parameters shim function [name] takes (0: none). */
+    fun elemDictCount(kotlinPackage: String, name: String): Int = elemDicts[kotlinPackage]?.get(name) ?: 0
 
     fun hasTop(kotlinPackage: String, name: String): Boolean = topLevel[kotlinPackage]?.contains(name) ?: false
 
@@ -70,6 +75,7 @@ class ShimIndex(
             val mem = HashMap<String, MutableSet<String>>()
             val cls = HashMap<String, MutableMap<String, MutableSet<String>>>()
             val args = HashMap<String, MutableSet<String>>()
+            val dicts = HashMap<String, MutableMap<String, Int>>()
             for (root in roots) {
                 if (!root.isDirectory) continue
                 root.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.forEach { f ->
@@ -86,6 +92,14 @@ class ShimIndex(
                         val name = m.groupValues[4]
                         if (indent.isEmpty() && receiver.isEmpty()) {
                             top.getValue(pkg) += name
+                            if (kind == "fun") {
+                                // `fun <T> collect(elem: GoElem<T>, seq: Seq<T>)`: the caller passes the element kinds.
+                                val ps = m.groupValues[5].substringAfter('(', "")
+                                val n = Regex("""^(?:\s*\w+\s*:\s*(?:[\w.]*\.)?GoElem<[^,]*>\s*,?)+""").find(ps)?.value?.let { lead ->
+                                    Regex("""GoElem<""").findAll(lead).count()
+                                } ?: 0
+                                if (n > 0) dicts.getOrPut(pkg) { HashMap() }[name] = n
+                            }
                             if (kind == "class") {
                                 current = name
                                 cls.getOrPut(pkg) { HashMap() }.getOrPut(name) { HashSet() }
@@ -107,7 +121,7 @@ class ShimIndex(
                     }
                 }
             }
-            return ShimIndex(top, mem, cls, args)
+            return ShimIndex(top, mem, cls, args, dicts)
         }
     }
 }

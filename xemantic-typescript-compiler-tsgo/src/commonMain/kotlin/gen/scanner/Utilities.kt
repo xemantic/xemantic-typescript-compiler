@@ -32,8 +32,6 @@ import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeList
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.asStringLiteral
-import com.xemantic.typescript.tsgo.ast.end
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.text
 
 // go: github.com/microsoft/typescript-go/internal/scanner.tokenIsIdentifierOrKeyword b09ca2af
@@ -56,11 +54,11 @@ fun getTextOfNodeFromSourceText(sourceText: String, node: Node?, includeTrivia: 
     if (com.xemantic.typescript.tsgo.ast.nodeIsMissing(node)) {
         return ""
     }
-    var pos: Int = node.pos()
+    var pos: Int = node!!.pos()
     if (!includeTrivia) {
         pos = skipTrivia(sourceText, pos)
     }
-    val text: String = sourceText.substring(pos, node.end())
+    val text: String = sourceText.substring(pos, node!!.end())
     if (node!!.flags.value and 268435456u != 0u) {
         if (com.xemantic.typescript.tsgo.ast.isStringLiteral(node)) {
             if (node.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value and 65536 != 0) {
@@ -103,7 +101,7 @@ fun getTextOfJSDocComment(comment: NodeList?): String {
 
 // go: github.com/microsoft/typescript-go/internal/scanner.DeclarationNameToString 232b64bb
 fun declarationNameToString(name: Node?): String {
-    if (name == null || name.pos() == name.end()) {
+    if (name == null || name!!.pos() == name!!.end()) {
         return "(Missing)"
     }
     return getTextOfNode(name)

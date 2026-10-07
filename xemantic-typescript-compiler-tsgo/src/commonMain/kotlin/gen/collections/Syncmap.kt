@@ -43,6 +43,10 @@ class SyncMap<K, V>(
         m = o.m.goCopy()
     }
 
+    fun goEquals(o: SyncMap<K, V>): Boolean = blank0.goEquals(o.blank0) && blank1.goEquals(o.blank1) && m == o.m
+
+    fun goHash(): Int = 31 * blank0.goHash() + 31 * blank1.goHash() + 31 * m.hashCode()
+
     companion object {
         fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<SyncMap<K, V>> = GoElem({ SyncMap<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
     }
@@ -89,7 +93,7 @@ fun <K, V> SyncMap<K, V>?.toMap(): GoMap<K, V> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.SyncMap.Keys ef89b807
-fun <K, V> SyncMap<K, V>?.keys(): Seq<K> {
+fun <K, V> SyncMap<K, V>?.keys(): Seq<K>? {
     TODO("goport: refused constraint-as-type: github.com/microsoft/typescript-go/internal/collections.SyncMap.Keys")
 }
 

@@ -24,6 +24,7 @@
 package com.xemantic.typescript.tsgo.ast
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 import com.xemantic.typescript.tsgo.synth.Iface_KindString_f376415e
 
 // go: github.com/microsoft/typescript-go/internal/ast.FlowFlags bb5236c2
@@ -136,7 +137,7 @@ class FlowSwitchClauseData(
     @kotlin.jvm.JvmField var switchStatement: Node? = null,
     @kotlin.jvm.JvmField var clauseStart: Int = 0,
     @kotlin.jvm.JvmField var clauseEnd: Int = 0,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): FlowSwitchClauseData = FlowSwitchClauseData(nodeBase = nodeBase.goCopy(), switchStatement = switchStatement, clauseStart = clauseStart, clauseEnd = clauseEnd)
 
@@ -163,6 +164,8 @@ class FlowSwitchClauseData(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -181,13 +184,15 @@ class FlowSwitchClauseData(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -217,7 +222,7 @@ class FlowReduceLabelData(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var target: FlowNode? = null,
     @kotlin.jvm.JvmField var antecedents: FlowList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): FlowReduceLabelData = FlowReduceLabelData(nodeBase = nodeBase.goCopy(), target = target, antecedents = antecedents)
 
@@ -243,6 +248,8 @@ class FlowReduceLabelData(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -261,13 +268,15 @@ class FlowReduceLabelData(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 

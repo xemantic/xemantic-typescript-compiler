@@ -66,7 +66,7 @@ inline fun <T> filter(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FilterSeq 2d468fa3
-fun <T> filterSeq(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): Seq<T> {
+fun <T> filterSeq(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): Seq<T>? {
     return fun(yield: ((T) -> Boolean)?) {
         val s0 = slice
         l0@ for (i1 in 0 until s0.len) {
@@ -160,7 +160,7 @@ inline fun <T, U> mapNonNil(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoS
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
         val mapped: U = f(value_1)
-        if (mapped != goElem_U.zeroValue()) {
+        if (mapped != goElem_U.zeroValue() as U) {
             result = result.append1(mapped)
         }
     }
@@ -297,7 +297,7 @@ inline fun <T> find(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean))
             return value_1
         }
     }
-    return goElem_T.zeroValue()
+    return goElem_T.zeroValue() as T
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FindLast 1389b36e
@@ -310,7 +310,7 @@ inline fun <T> findLast(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boole
         }
         i--
     }
-    return goElem_T.zeroValue()
+    return goElem_T.zeroValue() as T
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FindIndex d639397d
@@ -344,7 +344,7 @@ fun <T> firstOrNil(goElem_T: GoElem<T>, slice: GoSlice<T>): T {
     if (slice.len != 0) {
         return slice[0]
     }
-    return goElem_T.zeroValue()
+    return goElem_T.zeroValue() as T
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.LastOrNil 9b6168eb
@@ -352,7 +352,7 @@ fun <T> lastOrNil(goElem_T: GoElem<T>, slice: GoSlice<T>): T {
     if (slice.len != 0) {
         return slice[slice.len - 1]
     }
-    return goElem_T.zeroValue()
+    return goElem_T.zeroValue() as T
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.ElementOrNil 43aa8311
@@ -360,11 +360,11 @@ fun <T> elementOrNil(goElem_T: GoElem<T>, slice: GoSlice<T>, index: Int): T {
     if (index < slice.len) {
         return slice[index]
     }
-    return goElem_T.zeroValue()
+    return goElem_T.zeroValue() as T
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FirstOrNilSeq 12af5032
-fun <T> firstOrNilSeq(goElem_T: GoElem<T>, seq: Seq<T>): T {
+fun <T> firstOrNilSeq(goElem_T: GoElem<T>, seq: Seq<T>?): T {
     TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/core.FirstOrNilSeq")
 }
 
@@ -374,11 +374,11 @@ inline fun <T, U> firstNonNil(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: G
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
         val mapped: U = f(value_1)
-        if (mapped != goElem_U.zeroValue()) {
+        if (mapped != goElem_U.zeroValue() as U) {
             return mapped
         }
     }
-    return goElem_U.zeroValue()
+    return goElem_U.zeroValue() as U
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FirstNonZero 659bc99c
@@ -511,14 +511,14 @@ fun <T> ifElse(goElem_T: GoElem<T>, b: Boolean, whenTrue: T, whenFalse: T): T {
 
 // go: github.com/microsoft/typescript-go/internal/core.OrElse 515d9743
 fun <T> orElse(goElem_T: GoElem<T>, value_1: T, defaultValue: T): T {
-    if (value_1 != goElem_T.zeroValue()) {
+    if (value_1 != goElem_T.zeroValue() as T) {
         return value_1
     }
     return defaultValue
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Coalesce 48649c79
-fun <U> coalesce(goElem_U: GoElem<U>, a: U, b: U): U {
+fun <U> coalesce(goElem_U: GoElem<U>, a: U?, b: U?): U? {
     if (a == null) {
         return b
     } else {
@@ -537,7 +537,7 @@ fun computeECMALineStarts(text: String): ECMALineStarts {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.ComputeECMALineStartsSeq 884c51f4
-fun computeECMALineStartsSeq(text: String): Seq<TextPos> {
+fun computeECMALineStartsSeq(text: String): Seq<TextPos>? {
     return fun(yield: ((TextPos) -> Boolean)?) {
         val textLen: TextPos = TextPos(text.length)
         var pos: TextPos = TextPos(0)
@@ -680,12 +680,12 @@ fun getScriptKindFromFileName(fileName: String): ScriptKind {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.GetSpellingSuggestion 8e02e9fd
-fun <T> getSpellingSuggestion(goElem_T: GoElem<T>, name: String, candidates: Seq<T>, getName: ((T) -> String)?, compare: ((T, T) -> Int)?): T {
+fun <T> getSpellingSuggestion(goElem_T: GoElem<T>, name: String, candidates: Seq<T>?, getName: ((T) -> String)?, compare: ((T, T) -> Int)?): T {
     return withDefers({ goElem_T.zeroValue() }) { df0 ->
         val runeName: GoSlice<Int> = goStringToRunes(name)
         val maximumLengthDifference: Int = maxOf(2, goFloat64ToInt(runeName.len.toDouble() * 0.34))
         var bestDistance: Double = com.xemantic.typescript.tsgo.go.math.floor(runeName.len.toDouble() * 0.4) + 0.9
-        val buffers: levenshteinBuffers? = levenshteinBuffersPool.get() as levenshteinBuffers
+        val buffers: com.xemantic.typescript.tsgo.core.levenshteinBuffers? = levenshteinBuffersPool.get() as com.xemantic.typescript.tsgo.core.levenshteinBuffers
         val da1 = buffers
         val dr2 = levenshteinBuffersPool
         df0.defer { dr2.put(da1) }
@@ -724,7 +724,7 @@ fun <T> getSpellingSuggestion(goElem_T: GoElem<T>, name: String, candidates: Seq
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.GetSpellingSuggestionForStrings 81f4203d
-fun getSpellingSuggestionForStrings(name: String, candidates: Seq<String>): String {
+fun getSpellingSuggestionForStrings(name: String, candidates: Seq<String>?): String {
     return getSpellingSuggestion<String>(GoElem.STRING, name, candidates, fun(p0: String): String = identity<String>(GoElem.STRING, p0), fun(p0: String, p1: String): Int = com.xemantic.typescript.tsgo.go.strings.compare(p0, p1))
 }
 
@@ -747,7 +747,7 @@ class levenshteinBuffers(
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.levenshteinWithMax 6a1b53cf
-fun levenshteinWithMax(buffers: levenshteinBuffers?, s1: GoSlice<Int>, s2: GoSlice<Int>, maxValue: Double): Double {
+fun levenshteinWithMax(buffers: com.xemantic.typescript.tsgo.core.levenshteinBuffers?, s1: GoSlice<Int>, s2: GoSlice<Int>, maxValue: Double): Double {
     val bufferSize: Int = s2.len + 1
     buffers!!.previous = com.xemantic.typescript.tsgo.go.slices.grow<Double>(buffers!!.previous.slice(0, 0), bufferSize).slice(0, bufferSize)
     buffers!!.current = com.xemantic.typescript.tsgo.go.slices.grow<Double>(buffers!!.current.slice(0, 0), bufferSize).slice(0, bufferSize)
@@ -816,10 +816,10 @@ fun <T> identity(goElem_T: GoElem<T>, t: T): T {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.CheckEachDefined 3ad3ce69
-fun <S> checkEachDefined(goElem_S: GoElem<S>, s: GoSlice<S>, msg: String): GoSlice<S> {
+fun <S> checkEachDefined(goElem_S: GoElem<S>, s: GoSlice<S?>, msg: String): GoSlice<S?> {
     val s0 = s
     l0@ for (i1 in 0 until s0.len) {
-        val value_1: S = s0[i1]
+        val value_1: S? = s0[i1]
         if (value_1 == null) {
             goPanic(msg)
         }
@@ -844,20 +844,20 @@ fun shouldRewriteModuleSpecifier(specifier: String, compilerOptions: CompilerOpt
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.SingleElementSlice ea5ec7c9
-fun <T> singleElementSlice(goElem_T: GoElem<T>, element: T): GoSlice<T> {
+fun <T> singleElementSlice(goElem_T: GoElem<T>, element: T?): GoSlice<T?> {
     if (element == null) {
-        return GoElem.ref<T>().nilSlice
+        return GoElem.ref<T?>().nilSlice
     }
-    return GoSlice.of(GoElem.ref<T>(), element)
+    return GoSlice.of(GoElem.ref<T?>(), element)
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.ConcatenateSeq 188d8ba0
-fun <T> concatenateSeq(goElem_T: GoElem<T>, seqs: GoSlice<Seq<T>>): Seq<T> {
+fun <T> concatenateSeq(goElem_T: GoElem<T>, seqs: GoSlice<Seq<T>?>): Seq<T>? {
     TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/core.ConcatenateSeq")
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Enumerate ff0ae2f3
-fun <T> enumerate(goElem_T: GoElem<T>, seq: Seq<T>): Seq2<Int, T> {
+fun <T> enumerate(goElem_T: GoElem<T>, seq: Seq<T>?): Seq2<Int, T>? {
     TODO("goport: refused range-func-return: github.com/microsoft/typescript-go/internal/core.Enumerate")
 }
 
@@ -1000,6 +1000,6 @@ fun compareBooleans(a: Boolean, b: Boolean): Int {
 
 // go: github.com/microsoft/typescript-go/internal/core.levenshteinBuffersPool 2b4798f8
 @kotlin.jvm.JvmField val levenshteinBuffersPool: Pool = Pool(new = fun(): Any? {
-    return levenshteinBuffers()
+    return com.xemantic.typescript.tsgo.core.levenshteinBuffers()
 })
 

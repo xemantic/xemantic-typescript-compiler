@@ -39,6 +39,10 @@ class MultiMap<K, V>(
         m = o.m
     }
 
+    fun goEquals(o: MultiMap<K, V>): Boolean = m == o.m
+
+    fun goHash(): Int = 31 * m.hashCode()
+
     companion object {
         fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<MultiMap<K, V>> = GoElem({ MultiMap<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
     }
@@ -109,12 +113,12 @@ fun <K, V> MultiMap<K, V>?.len(): Int {
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.MultiMap.Keys d13a8c04
-fun <K, V> MultiMap<K, V>?.keys(): Seq<K> {
+fun <K, V> MultiMap<K, V>?.keys(): Seq<K>? {
     return com.xemantic.typescript.tsgo.go.maps.keys<K, GoSlice<V>>(this!!.m)
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.MultiMap.Values ec6096e8
-fun <K, V> MultiMap<K, V>?.values(): Seq<GoSlice<V>> {
+fun <K, V> MultiMap<K, V>?.values(): Seq<GoSlice<V>>? {
     return com.xemantic.typescript.tsgo.go.maps.values<K, GoSlice<V>>(this!!.m)
 }
 

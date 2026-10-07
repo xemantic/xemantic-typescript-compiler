@@ -24,6 +24,7 @@
 package com.xemantic.typescript.tsgo.core
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.sync.Locker
 import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.go.reflect.Type
@@ -31,7 +32,7 @@ import com.xemantic.typescript.tsgo.collections.size
 
 // go: github.com/microsoft/typescript-go/internal/core.CompilerOptions ddfb9868
 class CompilerOptions(
-    @kotlin.jvm.JvmField var blank0: noCopy = noCopy(),
+    @kotlin.jvm.JvmField var blank0: com.xemantic.typescript.tsgo.core.noCopy = com.xemantic.typescript.tsgo.core.noCopy(),
     @get:kotlin.jvm.JvmName("goGet_allowJs") @set:kotlin.jvm.JvmName("goSet_allowJs") var allowJs: Tristate = Tristate(0),
     @get:kotlin.jvm.JvmName("goGet_allowArbitraryExtensions") @set:kotlin.jvm.JvmName("goSet_allowArbitraryExtensions") var allowArbitraryExtensions: Tristate = Tristate(0),
     @get:kotlin.jvm.JvmName("goGet_allowImportingTsExtensions") @set:kotlin.jvm.JvmName("goSet_allowImportingTsExtensions") var allowImportingTsExtensions: Tristate = Tristate(0),
@@ -307,7 +308,7 @@ class CompilerOptions(
 
 // go: github.com/microsoft/typescript-go/internal/core.noCopy 4dcbe9a8
 class noCopy(
-) {
+) : Locker {
 
     fun goCopy(): noCopy = noCopy()
 
@@ -319,11 +320,11 @@ class noCopy(
     fun goHash(): Int = 0
 
     // go: github.com/microsoft/typescript-go/internal/core.noCopy.Lock 3ecf285f
-    fun lock() {
+    override fun lock() {
     }
 
     // go: github.com/microsoft/typescript-go/internal/core.noCopy.Unlock b590bacc
-    fun unlock() {
+    override fun unlock() {
     }
 
     companion object {
@@ -568,7 +569,7 @@ val ModuleDetectionKindForce: ModuleDetectionKind = ModuleDetectionKind(3)
 
 // go: github.com/microsoft/typescript-go/internal/core.ModuleKind be89d3a9
 @kotlin.jvm.JvmInline
-value class ModuleKind(val value: Int) : Stringer, Comparable<ModuleKind> {
+value class ModuleKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ModuleKind> {
 
     override fun compareTo(other: ModuleKind): Int = value.compareTo(other.value)
 
@@ -662,7 +663,7 @@ val ResolutionModeESM: ModuleKind = ModuleKind(99)
 
 // go: github.com/microsoft/typescript-go/internal/core.ModuleResolutionKind 0fa5effb
 @kotlin.jvm.JvmInline
-value class ModuleResolutionKind(val value: Int) : Stringer, Comparable<ModuleResolutionKind> {
+value class ModuleResolutionKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ModuleResolutionKind> {
 
     override fun compareTo(other: ModuleResolutionKind): Int = value.compareTo(other.value)
 
@@ -768,7 +769,7 @@ fun getNewLineKind(s: String): NewLineKind {
 
 // go: github.com/microsoft/typescript-go/internal/core.ScriptTarget bca37d21
 @kotlin.jvm.JvmInline
-value class ScriptTarget(val value: Int) : Stringer, Comparable<ScriptTarget> {
+value class ScriptTarget(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ScriptTarget> {
 
     override fun compareTo(other: ScriptTarget): Int = value.compareTo(other.value)
 
@@ -848,7 +849,7 @@ val ScriptTargetLatestStandard: ScriptTarget = ScriptTarget(12)
 
 // go: github.com/microsoft/typescript-go/internal/core.JsxEmit 2d5c6eca
 @kotlin.jvm.JvmInline
-value class JsxEmit(val value: Int) : Stringer, Comparable<JsxEmit> {
+value class JsxEmit(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<JsxEmit> {
 
     override fun compareTo(other: JsxEmit): Int = value.compareTo(other.value)
 

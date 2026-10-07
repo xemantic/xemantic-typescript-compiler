@@ -49,7 +49,6 @@ import com.xemantic.typescript.tsgo.ast.asSourceFile
 import com.xemantic.typescript.tsgo.ast.asTypeParameterDeclaration
 import com.xemantic.typescript.tsgo.ast.body
 import com.xemantic.typescript.tsgo.ast.bodyData
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.expression
 import com.xemantic.typescript.tsgo.ast.forEachChild
 import com.xemantic.typescript.tsgo.ast.localSymbol
@@ -57,7 +56,6 @@ import com.xemantic.typescript.tsgo.ast.locals
 import com.xemantic.typescript.tsgo.ast.moduleSpecifier
 import com.xemantic.typescript.tsgo.ast.name
 import com.xemantic.typescript.tsgo.ast.parameters
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.symbol
 import com.xemantic.typescript.tsgo.ast.text
 import com.xemantic.typescript.tsgo.ast.type
@@ -393,7 +391,7 @@ fun NameResolver?.resolve(location_0: Node?, name: String, meaning: SymbolFlags,
 fun NameResolver?.useOuterVariableScopeInParameter(result: Symbol?, location: Node?, lastLocation: Node?): Boolean {
     if (com.xemantic.typescript.tsgo.ast.isParameterDeclaration(lastLocation)) {
         val body: Node? = location.body()
-        if (body != null && result!!.valueDeclaration != null && result!!.valueDeclaration.pos() >= body.pos() && result!!.valueDeclaration.end() <= body.end()) {
+        if (body != null && result!!.valueDeclaration != null && result!!.valueDeclaration!!.pos() >= body!!.pos() && result!!.valueDeclaration!!.end() <= body!!.end()) {
             val functionLocation: Node? = location
             var declarationRequiresScopeChange: Tristate = Tristate(0)
             if (this!!.getRequiresScopeChangeCache != null) {

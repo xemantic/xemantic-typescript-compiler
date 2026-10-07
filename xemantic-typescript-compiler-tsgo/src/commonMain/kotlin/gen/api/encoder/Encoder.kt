@@ -56,12 +56,9 @@ import com.xemantic.typescript.tsgo.ast.asStringLiteral
 import com.xemantic.typescript.tsgo.ast.asTemplateHead
 import com.xemantic.typescript.tsgo.ast.asTemplateMiddle
 import com.xemantic.typescript.tsgo.ast.asTemplateTail
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.getPositionMap
-import com.xemantic.typescript.tsgo.ast.imports
 import com.xemantic.typescript.tsgo.ast.jsDoc
 import com.xemantic.typescript.tsgo.ast.parseOptions
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.utf8ToUTF16
 import com.xemantic.typescript.tsgo.ast.visitEachChild
 import com.xemantic.typescript.tsgo.ast.visitSlice
@@ -298,7 +295,7 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
     var prevIndex: UInt = 0u
     val extendedData: GoBox<GoSlice<Int>> = GoBox(GoElem.INT.nilSlice)
     val structuredData: GoBox<GoSlice<Int>> = GoBox(GoElem.INT.nilSlice)
-    var strs: stringTable? = null
+    var strs: com.xemantic.typescript.tsgo.api.encoder.stringTable? = null
     var positionMap: PositionMap? = null
     if (rootNode!!.kind.value == 307) {
         strs = newStringTable(sourceFile!!.text(), sourceFile!!.textCount)
@@ -325,13 +322,13 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
     var sfExtendedDataOffset: Int = 0
     if (rootNode!!.kind.value == 307) {
         val sf: SourceFile? = rootNode.asSourceFile()
-        var total: Int = sf.imports().len + sf!!.moduleAugmentations.len
+        var total: Int = sf!!.imports().len + sf!!.moduleAugmentations.len
         if (sf!!.externalModuleIndicator != null && sf!!.externalModuleIndicator !== rootNode) {
             total++
         }
         if (total > 0) {
             nodeIndexMap = GoMap.make<Node?, UInt>(GoElem.UINT, total)
-            val s0 = sf.imports()
+            val s0 = sf!!.imports()
             l0@ for (i1 in 0 until s0.len) {
                 val imp: Node? = s0[i1]
                 nodeIndexMap[imp.asNode()] = 0u
@@ -366,7 +363,7 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
             nodes[(prevIndex * 28u + 12u + 2u).toInt()] = b2
             nodes[(prevIndex * 28u + 12u + 3u).toInt()] = b3
         }
-        nodes = appendUint32s(nodes, GoSlice.of(GoElem.UINT, SyntaxKindNodeList, utf16!!(nodeList.pos()), utf16!!(nodeList.end()), 0u, parentIndex, nodeList!!.nodes.len.toUInt(), 0u))
+        nodes = appendUint32s(nodes, GoSlice.of(GoElem.UINT, SyntaxKindNodeList, utf16!!(nodeList!!.pos()), utf16!!(nodeList!!.end()), 0u, parentIndex, nodeList!!.nodes.len.toUInt(), 0u))
         val saveParentIndex: UInt = parentIndex
         val currentIndex: UInt = nodeCount
         prevIndex = 0u
@@ -398,7 +395,7 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
             nodes[(prevIndex * 28u + 12u + 2u).toInt()] = b2_1
             nodes[(prevIndex * 28u + 12u + 3u).toInt()] = b3_1
         }
-        nodes = appendUint32s(nodes, GoSlice.of(GoElem.UINT, node!!.kind.value.toUInt(), utf16!!(node.pos()), utf16!!(node.end()), 0u, parentIndex, getNodeData(node, strs, positionMap, extendedData, structuredData), node!!.flags.value))
+        nodes = appendUint32s(nodes, GoSlice.of(GoElem.UINT, node!!.kind.value.toUInt(), utf16!!(node!!.pos()), utf16!!(node!!.end()), 0u, parentIndex, getNodeData(node, strs, positionMap, extendedData, structuredData), node!!.flags.value))
         if (!nodeIndexMap.isNil) {
             val t12 = nodeIndexMap.probe(node)
             val ok: Boolean = t12 !== GoMapAbsent
@@ -427,7 +424,7 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
     parentIndex = parentIndex + 1u
     nodeTable = nodeTable.append1(rootNode)
     sfExtendedDataOffset = extendedData.value.len
-    nodes = appendUint32s(nodes, GoSlice.of(GoElem.UINT, rootNode!!.kind.value.toUInt(), utf16!!(rootNode.pos()), utf16!!(rootNode.end()), 0u, 0u, getNodeData(rootNode, strs, positionMap, extendedData, structuredData), rootNode!!.flags.value))
+    nodes = appendUint32s(nodes, GoSlice.of(GoElem.UINT, rootNode!!.kind.value.toUInt(), utf16!!(rootNode!!.pos()), utf16!!(rootNode!!.end()), 0u, 0u, getNodeData(rootNode, strs, positionMap, extendedData, structuredData), rootNode!!.flags.value))
     visitor_2.visitEachChild(rootNode)
     if (sourceFile != null) {
         val s15 = rootNode.jsDoc(sourceFile)
@@ -442,7 +439,7 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
         hash = sourceFile!!.hash.goCopy()
         parseOpts = encodeParseOptions(sourceFile.parseOptions().externalModuleIndicatorOptions.goCopy())
         val sf_1: SourceFile? = rootNode.asSourceFile()
-        val importsOffset: UInt = encodeNodeIndexArray(sf_1.imports(), nodeIndexMap, structuredData)
+        val importsOffset: UInt = encodeNodeIndexArray(sf_1!!.imports(), nodeIndexMap, structuredData)
         val moduleAugmentationsOffset: UInt = encodeModuleAugmentations(sf_1!!.moduleAugmentations, nodeIndexMap, structuredData)
         val ambientModuleNamesOffset: UInt = encodeStringArray(sf_1!!.ambientModuleNames, structuredData)
         com.xemantic.typescript.tsgo.go.encoding.binary.littleEndian.putUint32(extendedData.value.slice(sfExtendedDataOffset + 32), importsOffset)
@@ -484,7 +481,7 @@ fun appendUint32s(buf_0: GoSlice<Int>, values: GoSlice<UInt>): GoSlice<Int> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.getNodeData ce0e0608
-fun getNodeData(node: Node?, strs: stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?): UInt {
+fun getNodeData(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?): UInt {
     val t: UInt = getNodeDataType(node)
     when (t) {
         NodeDataTypeChildren -> {
@@ -506,7 +503,7 @@ fun getNodeData(node: Node?, strs: stringTable?, positionMap: PositionMap?, exte
 // goport: refused int-overflow: github.com/microsoft/typescript-go/internal/api/encoder.noStructuredData (constant)
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_SourceFile ab0aff46
-fun recordExtendedData_SourceFile(node: Node?, strs: stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_SourceFile(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
     val sf: SourceFile? = node.asSourceFile()
     val textIndex: UInt = strs.add(sf!!.text(), sf!!.nodeBase.nodeDefault.node.kind, sf!!.nodeBase.nodeDefault.node.pos(), sf!!.nodeBase.nodeDefault.node.end())
     val fileNameIndex: UInt = strs.add(sf!!.fileName(), Kind(0), 0, 0)
@@ -518,26 +515,26 @@ fun recordExtendedData_SourceFile(node: Node?, strs: stringTable?, positionMap: 
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_TemplateHead aa914d2a
-fun recordExtendedData_TemplateHead(node: Node?, strs: stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_TemplateHead(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
     val n: TemplateHead? = node.asTemplateHead()
-    val textIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
-    val rawTextIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.rawText, node!!.kind, node.pos(), node.end())
+    val textIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
+    val rawTextIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.rawText, node!!.kind, node!!.pos(), node!!.end())
     extendedData!!.value = appendUint32s(extendedData!!.value, GoSlice.of(GoElem.UINT, textIndex, rawTextIndex, n!!.templateLiteralLikeNodeBase.templateFlags.value.toUInt()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_TemplateMiddle 39240e33
-fun recordExtendedData_TemplateMiddle(node: Node?, strs: stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_TemplateMiddle(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
     val n: TemplateMiddle? = node.asTemplateMiddle()
-    val textIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
-    val rawTextIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.rawText, node!!.kind, node.pos(), node.end())
+    val textIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
+    val rawTextIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.rawText, node!!.kind, node!!.pos(), node!!.end())
     extendedData!!.value = appendUint32s(extendedData!!.value, GoSlice.of(GoElem.UINT, textIndex, rawTextIndex, n!!.templateLiteralLikeNodeBase.templateFlags.value.toUInt()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_TemplateTail b231c2f8
-fun recordExtendedData_TemplateTail(node: Node?, strs: stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_TemplateTail(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
     val n: TemplateTail? = node.asTemplateTail()
-    val textIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
-    val rawTextIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.rawText, node!!.kind, node.pos(), node.end())
+    val textIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
+    val rawTextIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.rawText, node!!.kind, node!!.pos(), node!!.end())
     extendedData!!.value = appendUint32s(extendedData!!.value, GoSlice.of(GoElem.UINT, textIndex, rawTextIndex, n!!.templateLiteralLikeNodeBase.templateFlags.value.toUInt()))
 }
 
@@ -674,37 +671,37 @@ fun getNodeCommonData_SyntheticExpression(unused0: Node?): UInt {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_StringLiteral 3717a7a9
-fun recordExtendedData_StringLiteral(node: Node?, strs: stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_StringLiteral(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
     val n: StringLiteral? = node.asStringLiteral()
-    val textIndex: UInt = strs.add(n!!.literalExpressionBase.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
+    val textIndex: UInt = strs.add(n!!.literalExpressionBase.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
     extendedData!!.value = appendUint32s(extendedData!!.value, GoSlice.of(GoElem.UINT, textIndex, n!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value.toUInt()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_NumericLiteral 27619b55
-fun recordExtendedData_NumericLiteral(node: Node?, strs: stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_NumericLiteral(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
     val n: NumericLiteral? = node.asNumericLiteral()
-    val textIndex: UInt = strs.add(n!!.literalExpressionBase.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
+    val textIndex: UInt = strs.add(n!!.literalExpressionBase.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
     extendedData!!.value = appendUint32s(extendedData!!.value, GoSlice.of(GoElem.UINT, textIndex, n!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value.toUInt()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_BigIntLiteral 6e6c9629
-fun recordExtendedData_BigIntLiteral(node: Node?, strs: stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_BigIntLiteral(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
     val n: BigIntLiteral? = node.asBigIntLiteral()
-    val textIndex: UInt = strs.add(n!!.literalExpressionBase.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
+    val textIndex: UInt = strs.add(n!!.literalExpressionBase.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
     extendedData!!.value = appendUint32s(extendedData!!.value, GoSlice.of(GoElem.UINT, textIndex, n!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value.toUInt()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_RegularExpressionLiteral bb33ef4f
-fun recordExtendedData_RegularExpressionLiteral(node: Node?, strs: stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_RegularExpressionLiteral(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
     val n: RegularExpressionLiteral? = node.asRegularExpressionLiteral()
-    val textIndex: UInt = strs.add(n!!.literalExpressionBase.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
+    val textIndex: UInt = strs.add(n!!.literalExpressionBase.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
     extendedData!!.value = appendUint32s(extendedData!!.value, GoSlice.of(GoElem.UINT, textIndex, n!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value.toUInt()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_NoSubstitutionTemplateLiteral 998c7f9a
-fun recordExtendedData_NoSubstitutionTemplateLiteral(node: Node?, strs: stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
+fun recordExtendedData_NoSubstitutionTemplateLiteral(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, unused0: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, unused1: GoPtr<GoSlice<Int>>?) {
     val n: NoSubstitutionTemplateLiteral? = node.asNoSubstitutionTemplateLiteral()
-    val textIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text, node!!.kind, node.pos(), node.end())
+    val textIndex: UInt = strs.add(n!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
     extendedData!!.value = appendUint32s(extendedData!!.value, GoSlice.of(GoElem.UINT, textIndex, n!!.templateLiteralLikeNodeBase.templateFlags.value.toUInt()))
 }
 

@@ -48,13 +48,13 @@ class stringTable(
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.newStringTable 8e6084fd
-fun newStringTable(fileText: String, stringCount: Int): stringTable? {
+fun newStringTable(fileText: String, stringCount: Int): com.xemantic.typescript.tsgo.api.encoder.stringTable? {
     val builder: Builder? = Builder()
-    return stringTable(fileText = fileText, otherStrings = builder, offsets = GoSlice.make(GoElem.UINT, 0, stringCount * 2))
+    return com.xemantic.typescript.tsgo.api.encoder.stringTable(fileText = fileText, otherStrings = builder, offsets = GoSlice.make(GoElem.UINT, 0, stringCount * 2))
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.stringTable.add f78a9d27
-fun stringTable?.add(text: String, kind: Kind, pos: Int, end_0: Int): UInt {
+fun com.xemantic.typescript.tsgo.api.encoder.stringTable?.add(text: String, kind: Kind, pos: Int, end_0: Int): UInt {
     var end: Int = end_0
     val index: UInt = this!!.offsets.len.toUInt()
     if (kind.value == 307) {
@@ -82,7 +82,7 @@ fun stringTable?.add(text: String, kind: Kind, pos: Int, end_0: Int): UInt {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.stringTable.encode 634a8fdc
-fun stringTable?.encode(): GoSlice<Int> {
+fun com.xemantic.typescript.tsgo.api.encoder.stringTable?.encode(): GoSlice<Int> {
     var result: GoSlice<Int> = GoSlice.make(GoElem.INT, 0, this.encodedLength())
     result = appendUint32s(result, this!!.offsets)
     result = goAppendString(result, this!!.fileText)
@@ -91,12 +91,12 @@ fun stringTable?.encode(): GoSlice<Int> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.stringTable.stringLength 113bf2ce
-fun stringTable?.stringLength(): Int {
+fun com.xemantic.typescript.tsgo.api.encoder.stringTable?.stringLength(): Int {
     return this!!.fileText.length + this!!.otherStrings!!.len()
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.stringTable.encodedLength 632adaeb
-fun stringTable?.encodedLength(): Int {
+fun com.xemantic.typescript.tsgo.api.encoder.stringTable?.encodedLength(): Int {
     return this!!.offsets.len * 4 + this!!.fileText.length + this!!.otherStrings!!.len()
 }
 

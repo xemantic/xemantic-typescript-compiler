@@ -38,6 +38,7 @@ import com.xemantic.typescript.goport.ir.reqObj
 import com.xemantic.typescript.goport.ir.str
 import com.xemantic.typescript.goport.ir.t
 import com.xemantic.typescript.goport.lower.TypeMapper.Rep
+import com.xemantic.typescript.goport.naming.Naming
 import com.xemantic.typescript.goport.types.ArrayType
 import com.xemantic.typescript.goport.types.BasicType
 import com.xemantic.typescript.goport.types.InterfaceType
@@ -149,6 +150,13 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             else -> return emptyList()
         }
         val o = ident.int("obj")?.let { pc.obj(it) } ?: return emptyList()
+        if (o.str("k") == "func" && o.str("pkg") != null && o.str("pkg") !in prog.ported) {
+            // A shim taking leading `GoElem` dictionaries (ShimIndex.elemDictCount): one per type parameter, in order.
+            val n = prog.shims.elemDictCount(naming(o.str("pkg")!!), Naming.escape(Naming.lowerCamel(o.str("name")!!)).trim('`'))
+            if (n == 0) return emptyList()
+            val targs = ident.obj("inst")?.ints("targs") ?: fnExpr.obj("inst")?.ints("targs") ?: refuse("generic-call-without-targs")
+            return targs.take(n).map { tm.elem(it) }
+        }
         if (o.str("k") != "func" || o.str("pkg") !in prog.ported) return emptyList()
         val generic = o.int("t")?.let { types.unalias(it) as? SignatureType } ?: return emptyList()
         if (generic.tparams.isEmpty()) return emptyList()
@@ -290,6 +298,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val sel = e.reqObj("fun")
         val mo = pc.obj(sel.reqObj("sel").int("obj")!!)
         val name = prog.methodName(mo.str("key") ?: "", mo.str("name")!!)
+        importExtension(mo, name)
         val sig = sigOf(e)
         val a = inlineArgs(e, mo.str("key"), args(e, sig, false), shift = 1)
         val recvT = sig.params[0].t
@@ -387,7 +396,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val x = e.list("args").single()
         val tu = types.under(to)
         val fu = types.under(ty(x))
-        if (tu is InterfaceType) return lower(x)
+        if (tu is InterfaceType) return tm.boxOf(ty(x))?.let { Ex.primary("$it(${lower(x).code})") } ?: lower(x)
         if (tu is BasicType && fu is BasicType) return wrap(convertBasic(raw(x), fu, tu), to)
         if (tu is BasicType && tm.rep(tu) == Rep.STRING) {
             // string([]byte), string([]rune)
@@ -561,7 +570,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             "new" -> {
                 val t = ty(args[0])
                 when {
-                    tm.isStructValue(t) -> Ex.primary(tm.zero(t))
+                    tm.isStructValue(t) || types.under(t) is ArrayType -> Ex.primary(tm.zero(t))
                     // `new(T)` is a `*T`, which for a type parameter IS a `T` (design § 3: a pointer to a
                     // struct is the reference); its zero is the element kind's zero.
                     tm.opaqueTP(t) -> Ex.primary(tm.zero(t))

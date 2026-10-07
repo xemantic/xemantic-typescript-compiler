@@ -44,6 +44,10 @@ class BreadthFirstSearchResult<N>(
         path = o.path
     }
 
+    fun goEquals(o: BreadthFirstSearchResult<N>): Boolean = stopped == o.stopped && path == o.path
+
+    fun goHash(): Int = 31 * stopped.hashCode() + 31 * path.hashCode()
+
     companion object {
         fun <N> elem(goElem_N: GoElem<N>): GoElem<BreadthFirstSearchResult<N>> = GoElem({ BreadthFirstSearchResult<N>(goElem_N = goElem_N) }, { it.goCopy() })
     }
@@ -53,7 +57,7 @@ class BreadthFirstSearchResult<N>(
 class breadthFirstSearchJob<N>(
     @kotlin.jvm.JvmField val goElem_N: GoElem<N>,
     @kotlin.jvm.JvmField var node: N = goElem_N.zeroValue(),
-    @kotlin.jvm.JvmField var parent: breadthFirstSearchJob<N>? = null,
+    @kotlin.jvm.JvmField var parent: com.xemantic.typescript.tsgo.core.breadthFirstSearchJob<N>? = null,
 ) {
 
     fun goCopy(): breadthFirstSearchJob<N> = breadthFirstSearchJob(goElem_N = goElem_N, node = node, parent = parent)
@@ -62,6 +66,10 @@ class breadthFirstSearchJob<N>(
         node = o.node
         parent = o.parent
     }
+
+    fun goEquals(o: breadthFirstSearchJob<N>): Boolean = node == o.node && parent === o.parent
+
+    fun goHash(): Int = 31 * node.hashCode() + 31 * parent.hashCode()
 
     companion object {
         fun <N> elem(goElem_N: GoElem<N>): GoElem<breadthFirstSearchJob<N>> = GoElem({ breadthFirstSearchJob<N>(goElem_N = goElem_N) }, { it.goCopy() })
@@ -72,7 +80,7 @@ class breadthFirstSearchJob<N>(
 class BreadthFirstSearchLevel<K, N>(
     @kotlin.jvm.JvmField val goElem_K: GoElem<K>,
     @kotlin.jvm.JvmField val goElem_N: GoElem<N>,
-    @kotlin.jvm.JvmField var jobs: OrderedMap<K, breadthFirstSearchJob<N>?>? = null,
+    @kotlin.jvm.JvmField var jobs: OrderedMap<K, com.xemantic.typescript.tsgo.core.breadthFirstSearchJob<N>?>? = null,
 ) {
 
     fun goCopy(): BreadthFirstSearchLevel<K, N> = BreadthFirstSearchLevel(goElem_K = goElem_K, goElem_N = goElem_N, jobs = jobs)
@@ -119,6 +127,10 @@ class BreadthFirstSearchOptions<K, N>(
         visited = o.visited
         preprocessLevel = o.preprocessLevel
     }
+
+    fun goEquals(o: BreadthFirstSearchOptions<K, N>): Boolean = visited === o.visited && preprocessLevel == o.preprocessLevel
+
+    fun goHash(): Int = 31 * visited.hashCode() + 31 * preprocessLevel.hashCode()
 
     companion object {
         fun <K, N> elem(goElem_K: GoElem<K>, goElem_N: GoElem<N>): GoElem<BreadthFirstSearchOptions<K, N>> = GoElem({ BreadthFirstSearchOptions<K, N>(goElem_K = goElem_K, goElem_N = goElem_N) }, { it.goCopy() })

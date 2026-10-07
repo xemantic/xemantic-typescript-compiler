@@ -38,6 +38,10 @@ class OrderedSet<T>(
         m = o.m.goCopy()
     }
 
+    fun goEquals(o: OrderedSet<T>): Boolean = m.goEquals(o.m)
+
+    fun goHash(): Int = 31 * m.goHash()
+
     companion object {
         fun <T> elem(goElem_T: GoElem<T>): GoElem<OrderedSet<T>> = GoElem({ OrderedSet<T>(goElem_T = goElem_T) }, { it.goCopy() })
     }
@@ -66,7 +70,7 @@ fun <T> OrderedSet<T>?.delete(value_1: T): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedSet.Values 18355af3
-fun <T> OrderedSet<T>?.values(): Seq<T> {
+fun <T> OrderedSet<T>?.values(): Seq<T>? {
     return this!!.m.keys()
 }
 

@@ -105,6 +105,7 @@ open class ExprLowering(val fn: FnCtx) {
      */
     fun flow(e: Node): Ex {
         val v = lower(e)
+        e.obj("impl")?.let { im -> if (im.str("k") == "iface") im.int("from")?.let { tm.boxOf(it) }?.let { return Ex.primary("$it(${v.code})") } }
         if (e.bool("copy") && tm.hasGoCopy(ty(e))) return Ex.primary("${v.at(PRIMARY)}.goCopy()")
         return v
     }
@@ -208,7 +209,7 @@ open class ExprLowering(val fn: FnCtx) {
         val ref = funcRef(o)
         val targs = e.obj("inst")?.ints("targs")?.takeIf { it.isNotEmpty() }?.joinToString(", ", "<", ">") { tm.kt(it) } ?: ""
         val shim = o.str("pkg") !in prog.ported
-        val dict = if (shim) emptyList() else (this as? CallLowering)?.dictArgs(e) ?: emptyList()
+        val dict = (this as? CallLowering)?.dictArgs(e) ?: emptyList()
         return Ex.primary(wrapperFun(sig) { args0 ->
             val args = dict + args0
             if (shim && sig.variadic) {
@@ -324,7 +325,7 @@ open class ExprLowering(val fn: FnCtx) {
         }
         return when {
             u is BasicType -> Ex("${raw(x).at(EQ + 1)} $k ${raw(y).at(EQ + 1)}", EQ)
-            u is PointerType && types.under(u.elem) is StructType && types.under(ty(y)) is PointerType ->
+            u is PointerType && (types.under(u.elem) is StructType || types.under(u.elem) is ArrayType) && types.under(ty(y)) is PointerType ->
                 Ex("${lower(x).at(EQ + 1)} ${if (neg) "!==" else "==="} ${lower(y).at(EQ + 1)}", EQ)
             u is StructType || u is ArrayType -> {
                 val gen = u is ArrayType || ((types.unalias(xt) as? NamedType)?.let { n ->
@@ -369,9 +370,10 @@ open class ExprLowering(val fn: FnCtx) {
     /** `&x`. A pointer to a struct is the struct reference itself (design § 3). */
     fun addressOf(x: Node): Ex {
         val xt = ty(x)
-        val structLike = tm.isStructValue(xt) || tm.opaqueTP(xt)
+        val structLike = tm.isStructValue(xt) || tm.opaqueTP(xt) || types.under(xt) is ArrayType
         return when (x.k) {
-            "CompositeLit" -> lower(x)
+            // `&[]T{}` / `&map[K]V{}`: a pointer to a non-struct value is a box.
+            "CompositeLit" -> if (structLike) lower(x) else Ex.primary("GoBox(${lower(x).code})")
             "ParenExpr" -> addressOf(x.reqObj("x"))
             "Ident" -> {
                 val id = x.int("obj") ?: refuse("addr-ident")
@@ -406,8 +408,10 @@ open class ExprLowering(val fn: FnCtx) {
         val pt = types.under(ty(p)) as? PointerType ?: refuse("deref-non-pointer")
         val v = lower(p)
         return when {
-            types.under(pt.elem) is StructType -> nn(v)
-            tm.opaqueTP(pt.elem) -> v
+            types.under(pt.elem) is StructType || types.under(pt.elem) is ArrayType -> nn(v)
+            // `*p` for an opaque T: the "pointer" IS the T value (it may itself be a nil pointer when T
+            // is one — `*new(T)`), so no assertion; the cast only narrows the Kotlin type `T?` to `T`.
+            tm.opaqueTP(pt.elem) -> Ex("${v.at(AS)} as ${tm.kt(pt.elem)}", AS)
             else -> Ex.primary("${nn(v).code}.value")
         }
     }
@@ -517,12 +521,21 @@ open class ExprLowering(val fn: FnCtx) {
             r = nn(r)
         } else if (isPtr && !nilSafe) {
             r = nn(r)
+        } else if (isPtr && nilSafe && !e.bool("ptrRecv")) {
+            // a VALUE-receiver extension (non-null receiver) through a pointer: Go dereferences
+            r = nn(r)
         } else if (isPtr && nilSafe) {
             // extension on T?: no assertion
         } else if (types.isPointer(recvT).not() && e.bool("recvCopy") && key in prog.receiverMutators) {
             r = Ex.primary("${r.at(PRIMARY)}.goCopy()")
         }
         return Triple(r, name, nilSafe)
+    }
+
+    /** An extension method used from another package must be imported (`fc.importFun`). */
+    fun importExtension(mo: Node, name: String) {
+        val mpkg = mo.str("pkg") ?: return
+        if (mo.str("key") in prog.extensionMethods && mpkg != pc.pkg.path) fn.fc.importFun(naming(mpkg), name)
     }
 
     fun methodValue(e: Node): Ex {
@@ -537,6 +550,7 @@ open class ExprLowering(val fn: FnCtx) {
         val sel = e.reqObj("sel")
         val mo = pc.obj(sel.int("obj") ?: refuse("method-without-object"))
         val name = prog.methodName(mo.str("key") ?: "", mo.str("name")!!)
+        importExtension(mo, name)
         return Ex.primary(wrapperFun(sig) { a ->
             val recvT = sig.params[0].t
             val r = if (tm.nullable(recvT) && mo.str("key") !in prog.extensionMethods) "${a[0]}!!" else a[0]
@@ -625,11 +639,13 @@ open class ExprLowering(val fn: FnCtx) {
     fun typeAssert(e: Node): Ex {
         val x = lower(e.reqObj("x"))
         val t = ty(e)
+        if (tm.boxOf(t) != null) return Ex.primary("(${x.at(AS)} as ${castTarget(t)}).value")
         return Ex("${x.at(AS)} as ${castTarget(t)}", AS)
     }
 
     /** The Kotlin type to cast to for Go type [t] (non-null for a pointer: a nil pointer cannot be in an interface). */
     fun castTarget(t: Int): String {
+        tm.boxOf(t)?.let { return it }
         val k = tm.kt(t)
         return if (types.under(t) is PointerType && k.endsWith("?")) k.dropLast(1) else k
     }
@@ -677,7 +693,8 @@ open class ExprLowering(val fn: FnCtx) {
         val elts = e.list("elts")
         return when (u) {
             is StructType -> {
-                if (u.fields.isEmpty()) return Ex.primary("Unit")
+                // `struct{}` is Unit; a NAMED empty struct (`type star struct{}`) is its class (it implements interfaces).
+                if (u.fields.isEmpty() && types.unalias(t) is StructType) return Ex.primary("Unit")
                 if (tm.isValueClass(t)) refuse("struct-value-class")
                 if (types.unalias(t) is StructType) {
                     val args = elts.map { el ->

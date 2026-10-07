@@ -30,7 +30,7 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 class PseudoBigInt(
     @kotlin.jvm.JvmField var negative: Boolean = false,
     @kotlin.jvm.JvmField var base10Value: String = "",
-) : Stringer {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element {
 
     fun goCopy(): PseudoBigInt = PseudoBigInt(negative = negative, base10Value = base10Value)
 
@@ -42,6 +42,10 @@ class PseudoBigInt(
     fun goEquals(o: PseudoBigInt): Boolean = negative == o.negative && base10Value == o.base10Value
 
     fun goHash(): Int = 31 * negative.hashCode() + 31 * base10Value.hashCode()
+
+    override fun equals(other: Any?): Boolean = other is PseudoBigInt && goEquals(other as PseudoBigInt)
+
+    override fun hashCode(): Int = goHash()
 
     // go: github.com/microsoft/typescript-go/internal/jsnum.PseudoBigInt.String 7ee1bcba
     override fun string(): String {

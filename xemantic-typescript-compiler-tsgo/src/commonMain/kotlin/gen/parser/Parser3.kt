@@ -76,7 +76,6 @@ import com.xemantic.typescript.tsgo.ast.body
 import com.xemantic.typescript.tsgo.ast.children
 import com.xemantic.typescript.tsgo.ast.code
 import com.xemantic.typescript.tsgo.ast.elements
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.expression
 import com.xemantic.typescript.tsgo.ast.forEachChild
 import com.xemantic.typescript.tsgo.ast.functionLikeData
@@ -246,7 +245,6 @@ import com.xemantic.typescript.tsgo.ast.newWithStatement
 import com.xemantic.typescript.tsgo.ast.newYieldExpression
 import com.xemantic.typescript.tsgo.ast.nodeCount
 import com.xemantic.typescript.tsgo.ast.parseOptions
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.questionToken
 import com.xemantic.typescript.tsgo.ast.relatedInformation
 import com.xemantic.typescript.tsgo.ast.setDiagnostics

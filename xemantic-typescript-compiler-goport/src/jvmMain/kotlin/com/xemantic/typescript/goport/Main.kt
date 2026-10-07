@@ -184,6 +184,11 @@ fun main(argv: Array<String>) {
         }
     }
     // Synthetic interfaces for anonymous Go interfaces.
+    if (prog.synth.needNullable) {
+        // A nullable view of a non-null reference: Kotlin does not smart-cast a call result, so a call on it
+        // resolves to the nil-safe EXTENSION rather than the member of the same name.
+        prog.synth.bodies["goNullable"] = "/** [x] typed as nullable (selects a nil-safe extension over a member). */\nfun <T : Any> goNullable(x: T): T? = x\n"
+    }
     if (prog.synth.bodies.isNotEmpty()) {
         val dir = File(args.out, "synth")
         dir.mkdirs()

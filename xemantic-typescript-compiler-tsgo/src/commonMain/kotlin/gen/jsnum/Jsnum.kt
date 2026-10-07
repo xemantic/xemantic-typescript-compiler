@@ -35,7 +35,7 @@ val MinSafeInteger: Number = Number(-9.007199254740991E15)
 
 // go: github.com/microsoft/typescript-go/internal/jsnum.Number 85a1467d
 @kotlin.jvm.JvmInline
-value class Number(val value: Double) : Stringer, Comparable<Number> {
+value class Number(val value: Double) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Number> {
 
     override fun compareTo(other: Number): Int = value.compareTo(other.value)
 

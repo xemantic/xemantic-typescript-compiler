@@ -197,11 +197,11 @@ class referenceResolver(
 
 // go: github.com/microsoft/typescript-go/internal/binder.NewReferenceResolver be27428d
 fun newReferenceResolver(options: CompilerOptions?, hooks: ReferenceResolverHooks): ReferenceResolver? {
-    return referenceResolver(options = options, hooks = hooks.goCopy())
+    return com.xemantic.typescript.tsgo.binder.referenceResolver(options = options, hooks = hooks.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.referenceResolver.getResolvedSymbol 276b1306
-fun referenceResolver?.getResolvedSymbol(node: Node?): Symbol? {
+fun com.xemantic.typescript.tsgo.binder.referenceResolver?.getResolvedSymbol(node: Node?): Symbol? {
     if (node != null) {
         if (this!!.hooks.getResolvedSymbol != null) {
             return this!!.hooks.getResolvedSymbol!!(node)
@@ -211,7 +211,7 @@ fun referenceResolver?.getResolvedSymbol(node: Node?): Symbol? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.referenceResolver.getMergedSymbol b1dd183a
-fun referenceResolver?.getMergedSymbol(symbol: Symbol?): Symbol? {
+fun com.xemantic.typescript.tsgo.binder.referenceResolver?.getMergedSymbol(symbol: Symbol?): Symbol? {
     if (symbol != null) {
         if (this!!.hooks.getMergedSymbol != null) {
             return this!!.hooks.getMergedSymbol!!(symbol)
@@ -222,7 +222,7 @@ fun referenceResolver?.getMergedSymbol(symbol: Symbol?): Symbol? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.referenceResolver.getParentOfSymbol 499cb423
-fun referenceResolver?.getParentOfSymbol(symbol: Symbol?): Symbol? {
+fun com.xemantic.typescript.tsgo.binder.referenceResolver?.getParentOfSymbol(symbol: Symbol?): Symbol? {
     if (symbol != null) {
         if (this!!.hooks.getParentOfSymbol != null) {
             return this!!.hooks.getParentOfSymbol!!(symbol)
@@ -233,7 +233,7 @@ fun referenceResolver?.getParentOfSymbol(symbol: Symbol?): Symbol? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.referenceResolver.getSymbolOfDeclaration 62883878
-fun referenceResolver?.getSymbolOfDeclaration(declaration: Node?): Symbol? {
+fun com.xemantic.typescript.tsgo.binder.referenceResolver?.getSymbolOfDeclaration(declaration: Node?): Symbol? {
     if (declaration != null) {
         if (this!!.hooks.getSymbolOfDeclaration != null) {
             return this!!.hooks.getSymbolOfDeclaration!!(declaration)
@@ -244,7 +244,7 @@ fun referenceResolver?.getSymbolOfDeclaration(declaration: Node?): Symbol? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.referenceResolver.getReferencedValueSymbol cfe39933
-fun referenceResolver?.getReferencedValueSymbol(reference: Node?, startInDeclarationContainer: Boolean): Symbol? {
+fun com.xemantic.typescript.tsgo.binder.referenceResolver?.getReferencedValueSymbol(reference: Node?, startInDeclarationContainer: Boolean): Symbol? {
     val resolvedSymbol: Symbol? = this.getResolvedSymbol(reference)
     if (resolvedSymbol != null) {
         return resolvedSymbol
@@ -263,7 +263,7 @@ fun referenceResolver?.getReferencedValueSymbol(reference: Node?, startInDeclara
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.referenceResolver.isTypeOnlyAliasDeclaration 7fa9a3ff
-fun referenceResolver?.isTypeOnlyAliasDeclaration(symbol: Symbol?): Boolean {
+fun com.xemantic.typescript.tsgo.binder.referenceResolver?.isTypeOnlyAliasDeclaration(symbol: Symbol?): Boolean {
     if (symbol != null) {
         if (this!!.hooks.getTypeOnlyAliasDeclaration != null) {
             return this!!.hooks.getTypeOnlyAliasDeclaration!!(symbol, SymbolFlags(111551u)) != null
@@ -293,12 +293,12 @@ fun referenceResolver?.isTypeOnlyAliasDeclaration(symbol: Symbol?): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.referenceResolver.getDeclarationOfAliasSymbol 63b7f12f
-fun referenceResolver?.getDeclarationOfAliasSymbol(symbol: Symbol?): Node? {
+fun com.xemantic.typescript.tsgo.binder.referenceResolver?.getDeclarationOfAliasSymbol(symbol: Symbol?): Node? {
     return com.xemantic.typescript.tsgo.core.findLast<Node?>(GoElem.ref<Node?>(), symbol!!.declarations, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isAliasSymbolDeclaration(p0))
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.referenceResolver.getExportSymbolOfValueSymbolIfExported a4ac5086
-fun referenceResolver?.getExportSymbolOfValueSymbolIfExported(symbol_0: Symbol?): Symbol? {
+fun com.xemantic.typescript.tsgo.binder.referenceResolver?.getExportSymbolOfValueSymbolIfExported(symbol_0: Symbol?): Symbol? {
     var symbol: Symbol? = symbol_0
     if (symbol != null) {
         if (this!!.hooks.getExportSymbolOfValueSymbolIfExported != null) {

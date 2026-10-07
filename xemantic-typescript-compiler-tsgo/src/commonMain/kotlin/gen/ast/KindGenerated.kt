@@ -28,7 +28,7 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 
 // go: github.com/microsoft/typescript-go/internal/ast.Kind cc8648df
 @kotlin.jvm.JvmInline
-value class Kind(val value: Int) : Stringer, Comparable<Kind> {
+value class Kind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Kind> {
 
     override fun compareTo(other: Kind): Int = value.compareTo(other.value)
 

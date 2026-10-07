@@ -26,6 +26,7 @@ package com.xemantic.typescript.tsgo.collections
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Decoder
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Encoder
+import com.xemantic.typescript.tsgo.go.sync.Locker
 import com.xemantic.typescript.tsgo.go.iter.Seq
 import com.xemantic.typescript.tsgo.go.iter.Seq2
 import com.xemantic.typescript.tsgo.go.reflect.Value
@@ -34,7 +35,7 @@ import com.xemantic.typescript.tsgo.go.reflect.Value
 class OrderedMap<K, V>(
     @kotlin.jvm.JvmField val goElem_K: GoElem<K>,
     @kotlin.jvm.JvmField val goElem_V: GoElem<V>,
-    @kotlin.jvm.JvmField var blank0: noCopy = noCopy(),
+    @kotlin.jvm.JvmField var blank0: com.xemantic.typescript.tsgo.collections.noCopy = com.xemantic.typescript.tsgo.collections.noCopy(),
     @kotlin.jvm.JvmField var keys: GoSlice<K> = goElem_K.nilSlice,
     @kotlin.jvm.JvmField var mp: GoMap<K, V> = GoMap.nil<K, V>(goElem_V),
 ) {
@@ -47,6 +48,10 @@ class OrderedMap<K, V>(
         mp = o.mp
     }
 
+    fun goEquals(o: OrderedMap<K, V>): Boolean = blank0 == o.blank0 && keys == o.keys && mp == o.mp
+
+    fun goHash(): Int = 31 * blank0.hashCode() + 31 * keys.hashCode() + 31 * mp.hashCode()
+
     companion object {
         fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<OrderedMap<K, V>> = GoElem({ OrderedMap<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
     }
@@ -54,7 +59,7 @@ class OrderedMap<K, V>(
 
 // go: github.com/microsoft/typescript-go/internal/collections.noCopy 4dcbe9a8
 class noCopy(
-) {
+) : Locker {
 
     fun goCopy(): noCopy = noCopy()
 
@@ -66,11 +71,11 @@ class noCopy(
     fun goHash(): Int = 0
 
     // go: github.com/microsoft/typescript-go/internal/collections.noCopy.Lock 3ecf285f
-    fun lock() {
+    override fun lock() {
     }
 
     // go: github.com/microsoft/typescript-go/internal/collections.noCopy.Unlock b590bacc
-    fun unlock() {
+    override fun unlock() {
     }
 
     companion object {
@@ -103,6 +108,10 @@ class MapEntry<K, V>(
         key = o.key
         value = o.value
     }
+
+    fun goEquals(o: MapEntry<K, V>): Boolean = key == o.key && value == o.value
+
+    fun goHash(): Int = 31 * key.hashCode() + 31 * value.hashCode()
 
     companion object {
         fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<MapEntry<K, V>> = GoElem({ MapEntry<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
@@ -194,7 +203,7 @@ fun <K, V> OrderedMap<K, V>?.delete(key: K): Tuple2<V, Boolean> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.Keys 449d7ed0
-fun <K, V> OrderedMap<K, V>?.keys(): Seq<K> {
+fun <K, V> OrderedMap<K, V>?.keys(): Seq<K>? {
     return fun(yield: ((K) -> Boolean)?) {
         if (this == null) {
             return
@@ -210,7 +219,7 @@ fun <K, V> OrderedMap<K, V>?.keys(): Seq<K> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.Values 80fc9371
-fun <K, V> OrderedMap<K, V>?.values(): Seq<V> {
+fun <K, V> OrderedMap<K, V>?.values(): Seq<V>? {
     return fun(yield: ((V) -> Boolean)?) {
         if (this == null) {
             return
@@ -226,7 +235,7 @@ fun <K, V> OrderedMap<K, V>?.values(): Seq<V> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.Entries a70ddbd0
-fun <K, V> OrderedMap<K, V>?.entries(): Seq2<K, V> {
+fun <K, V> OrderedMap<K, V>?.entries(): Seq2<K, V>? {
     return fun(yield: ((K, V) -> Boolean)?) {
         if (this == null) {
             return

@@ -29,7 +29,7 @@ import com.xemantic.typescript.tsgo.runtime.*
 class LinkStore<K, V>(
     @kotlin.jvm.JvmField val goElem_K: GoElem<K>,
     @kotlin.jvm.JvmField val goElem_V: GoElem<V>,
-    @kotlin.jvm.JvmField var entries: GoMap<K, V> = GoMap.nil<K, V>(GoElem.ref<V>()),
+    @kotlin.jvm.JvmField var entries: GoMap<K, V?> = GoMap.nil<K, V?>(GoElem.ref<V?>()),
     @kotlin.jvm.JvmField var arena: Arena<V> = Arena<V>(goElem_T = goElem_V),
 ) {
 
@@ -40,19 +40,23 @@ class LinkStore<K, V>(
         arena = o.arena.goCopy()
     }
 
+    fun goEquals(o: LinkStore<K, V>): Boolean = entries == o.entries && arena.goEquals(o.arena)
+
+    fun goHash(): Int = 31 * entries.hashCode() + 31 * arena.goHash()
+
     companion object {
         fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<LinkStore<K, V>> = GoElem({ LinkStore<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.LinkStore.Get cd5a7b8c
-fun <K, V> LinkStore<K, V>?.get(key: K): V {
-    var value_1: V = this!!.entries[key]
+fun <K, V> LinkStore<K, V>?.get(key: K): V? {
+    var value_1: V? = this!!.entries[key]
     if (value_1 != null) {
         return value_1
     }
     if (this!!.entries.isNil) {
-        this!!.entries = GoMap.make<K, V>(GoElem.ref<V>())
+        this!!.entries = GoMap.make<K, V?>(GoElem.ref<V?>())
     }
     value_1 = this!!.arena.new()
     this!!.entries[key] = value_1
@@ -67,7 +71,7 @@ fun <K, V> LinkStore<K, V>?.has(key: K): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.LinkStore.TryGet a5de5e26
-fun <K, V> LinkStore<K, V>?.tryGet(key: K): V {
+fun <K, V> LinkStore<K, V>?.tryGet(key: K): V? {
     return this!!.entries[key]
 }
 

@@ -25,6 +25,7 @@ package com.xemantic.typescript.tsgo.ast
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.core.Arena
+import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 import com.xemantic.typescript.tsgo.synth.Iface_KindString_f376415e
 import com.xemantic.typescript.tsgo.go.sync.atomic.Uint32
 import com.xemantic.typescript.tsgo.core.new
@@ -52,7 +53,7 @@ class FunctionExpression(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var returnFlowNode: FlowNode? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): FunctionExpression = FunctionExpression(primaryExpressionBase = primaryExpressionBase.goCopy(), declarationBase = declarationBase.goCopy(), modifiersBase = modifiersBase.goCopy(), functionLikeWithBodyBase = functionLikeWithBodyBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), compositeBase = compositeBase.goCopy(), name = name, returnFlowNode = returnFlowNode)
 
@@ -107,6 +108,8 @@ class FunctionExpression(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
@@ -121,11 +124,13 @@ class FunctionExpression(
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -166,7 +171,7 @@ class AsExpression(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): AsExpression = AsExpression(expressionBase = expressionBase.goCopy(), expression = expression, type = type)
 
@@ -213,6 +218,8 @@ class AsExpression(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -229,11 +236,13 @@ class AsExpression(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -268,7 +277,7 @@ class SatisfiesExpression(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SatisfiesExpression = SatisfiesExpression(expressionBase = expressionBase.goCopy(), expression = expression, type = type)
 
@@ -315,6 +324,8 @@ class SatisfiesExpression(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -331,11 +342,13 @@ class SatisfiesExpression(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -374,7 +387,7 @@ class ConditionalExpression(
     @kotlin.jvm.JvmField var whenTrue: Node? = null,
     @kotlin.jvm.JvmField var colonToken: Node? = null,
     @kotlin.jvm.JvmField var whenFalse: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ConditionalExpression = ConditionalExpression(expressionBase = expressionBase.goCopy(), compositeBase = compositeBase.goCopy(), condition = condition, questionToken = questionToken, whenTrue = whenTrue, colonToken = colonToken, whenFalse = whenFalse)
 
@@ -420,6 +433,8 @@ class ConditionalExpression(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -436,13 +451,15 @@ class ConditionalExpression(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -483,7 +500,7 @@ class PropertyAccessExpression(
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var questionDotToken: Node? = null,
     @kotlin.jvm.JvmField var name: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PropertyAccessExpression = PropertyAccessExpression(memberExpressionBase = memberExpressionBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, questionDotToken = questionDotToken, name = name)
 
@@ -542,6 +559,8 @@ class PropertyAccessExpression(
 
     override fun declarationData(): DeclarationBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
@@ -556,11 +575,13 @@ class PropertyAccessExpression(
 
     override fun modifiers(): ModifierList? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
 
+    override fun pos(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -601,7 +622,7 @@ class ElementAccessExpression(
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var questionDotToken: Node? = null,
     @kotlin.jvm.JvmField var argumentExpression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ElementAccessExpression = ElementAccessExpression(memberExpressionBase = memberExpressionBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, questionDotToken = questionDotToken, argumentExpression = argumentExpression)
 
@@ -651,6 +672,8 @@ class ElementAccessExpression(
 
     override fun declarationData(): DeclarationBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
@@ -667,11 +690,13 @@ class ElementAccessExpression(
 
     override fun name(): Node? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -713,7 +738,7 @@ class CallExpression(
     @kotlin.jvm.JvmField var questionDotToken: Node? = null,
     @kotlin.jvm.JvmField var typeArguments: NodeList? = null,
     @kotlin.jvm.JvmField var arguments: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): CallExpression = CallExpression(leftHandSideExpressionBase = leftHandSideExpressionBase.goCopy(), declarationBase = declarationBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, questionDotToken = questionDotToken, typeArguments = typeArguments, arguments = arguments)
 
@@ -764,6 +789,8 @@ class CallExpression(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -780,11 +807,13 @@ class CallExpression(
 
     override fun name(): Node? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -825,7 +854,7 @@ class NewExpression(
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var typeArguments: NodeList? = null,
     @kotlin.jvm.JvmField var arguments: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NewExpression = NewExpression(primaryExpressionBase = primaryExpressionBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, typeArguments = typeArguments, arguments = arguments)
 
@@ -874,6 +903,8 @@ class NewExpression(
 
     override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -890,11 +921,13 @@ class NewExpression(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -932,7 +965,7 @@ class MetaProperty(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @get:kotlin.jvm.JvmName("goGet_keywordToken") @set:kotlin.jvm.JvmName("goSet_keywordToken") var keywordToken: Kind = Kind(0),
     @kotlin.jvm.JvmField var name: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): MetaProperty = MetaProperty(primaryExpressionBase = primaryExpressionBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), compositeBase = compositeBase.goCopy(), keywordToken = keywordToken, name = name)
 
@@ -981,6 +1014,8 @@ class MetaProperty(
 
     override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
@@ -995,13 +1030,15 @@ class MetaProperty(
 
     override fun modifiers(): ModifierList? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1035,7 +1072,7 @@ fun isMetaProperty(node: Node?): Boolean {
 class NonNullExpression(
     @kotlin.jvm.JvmField var leftHandSideExpressionBase: LeftHandSideExpressionBase = LeftHandSideExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NonNullExpression = NonNullExpression(leftHandSideExpressionBase = leftHandSideExpressionBase.goCopy(), expression = expression)
 
@@ -1076,6 +1113,8 @@ class NonNullExpression(
 
     override fun declarationData(): DeclarationBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -1092,13 +1131,15 @@ class NonNullExpression(
 
     override fun name(): Node? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1133,7 +1174,7 @@ fun isNonNullExpression(node: Node?): Boolean {
 class SpreadElement(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SpreadElement = SpreadElement(expressionBase = expressionBase.goCopy(), expression = expression)
 
@@ -1174,6 +1215,8 @@ class SpreadElement(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -1190,13 +1233,15 @@ class SpreadElement(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1231,7 +1276,7 @@ class TemplateExpression(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var head: Node? = null,
     @kotlin.jvm.JvmField var templateSpans: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TemplateExpression = TemplateExpression(primaryExpressionBase = primaryExpressionBase.goCopy(), compositeBase = compositeBase.goCopy(), head = head, templateSpans = templateSpans)
 
@@ -1274,6 +1319,8 @@ class TemplateExpression(
 
     override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -1290,13 +1337,15 @@ class TemplateExpression(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1331,7 +1380,7 @@ class TemplateSpan(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var literal: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TemplateSpan = TemplateSpan(nodeBase = nodeBase.goCopy(), expression = expression, literal = literal)
 
@@ -1373,6 +1422,8 @@ class TemplateSpan(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -1389,13 +1440,15 @@ class TemplateSpan(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1433,7 +1486,7 @@ class TaggedTemplateExpression(
     @kotlin.jvm.JvmField var questionDotToken: Node? = null,
     @kotlin.jvm.JvmField var typeArguments: NodeList? = null,
     @kotlin.jvm.JvmField var template: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TaggedTemplateExpression = TaggedTemplateExpression(memberExpressionBase = memberExpressionBase.goCopy(), compositeBase = compositeBase.goCopy(), tag = tag, questionDotToken = questionDotToken, typeArguments = typeArguments, template = template)
 
@@ -1478,6 +1531,8 @@ class TaggedTemplateExpression(
 
     override fun declarationData(): DeclarationBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -1494,13 +1549,15 @@ class TaggedTemplateExpression(
 
     override fun name(): Node? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1538,7 +1595,7 @@ fun isTaggedTemplateExpression(node: Node?): Boolean {
 class ParenthesizedExpression(
     @kotlin.jvm.JvmField var primaryExpressionBase: PrimaryExpressionBase = PrimaryExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ParenthesizedExpression = ParenthesizedExpression(primaryExpressionBase = primaryExpressionBase.goCopy(), expression = expression)
 
@@ -1579,6 +1636,8 @@ class ParenthesizedExpression(
 
     override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -1595,13 +1654,15 @@ class ParenthesizedExpression(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1636,7 +1697,7 @@ class ArrayLiteralExpression(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var elements: NodeList? = null,
     @kotlin.jvm.JvmField var multiLine: Boolean = false,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ArrayLiteralExpression = ArrayLiteralExpression(primaryExpressionBase = primaryExpressionBase.goCopy(), compositeBase = compositeBase.goCopy(), elements = elements, multiLine = multiLine)
 
@@ -1684,6 +1745,8 @@ class ArrayLiteralExpression(
 
     override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -1700,11 +1763,13 @@ class ArrayLiteralExpression(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1741,7 +1806,7 @@ class ObjectLiteralExpression(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var properties: NodeList? = null,
     @kotlin.jvm.JvmField var multiLine: Boolean = false,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ObjectLiteralExpression = ObjectLiteralExpression(primaryExpressionBase = primaryExpressionBase.goCopy(), declarationBase = declarationBase.goCopy(), compositeBase = compositeBase.goCopy(), properties = properties, multiLine = multiLine)
 
@@ -1790,6 +1855,8 @@ class ObjectLiteralExpression(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -1806,11 +1873,13 @@ class ObjectLiteralExpression(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1846,7 +1915,7 @@ class SpreadAssignment(
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var objectLiteralElementBase: ObjectLiteralElementBase = ObjectLiteralElementBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SpreadAssignment = SpreadAssignment(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), objectLiteralElementBase = objectLiteralElementBase, expression = expression)
 
@@ -1889,6 +1958,8 @@ class SpreadAssignment(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -1905,13 +1976,15 @@ class SpreadAssignment(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -1948,7 +2021,7 @@ class PropertyAssignment(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var initializer: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PropertyAssignment = PropertyAssignment(nodeBase = nodeBase.goCopy(), namedMemberBase = namedMemberBase.goCopy(), objectLiteralElementBase = objectLiteralElementBase, compositeBase = compositeBase.goCopy(), type = type, initializer = initializer)
 
@@ -1998,6 +2071,8 @@ class PropertyAssignment(
 
     override fun declarationData(): DeclarationBase? = this.namedMemberBase.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -2012,13 +2087,15 @@ class PropertyAssignment(
 
     override fun modifiers(): ModifierList? = this.namedMemberBase.modifiers()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.namedMemberBase.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2060,7 +2137,7 @@ class ShorthandPropertyAssignment(
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var equalsToken: Node? = null,
     @kotlin.jvm.JvmField var objectAssignmentInitializer: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ShorthandPropertyAssignment = ShorthandPropertyAssignment(nodeBase = nodeBase.goCopy(), namedMemberBase = namedMemberBase.goCopy(), objectLiteralElementBase = objectLiteralElementBase, compositeBase = compositeBase.goCopy(), type = type, equalsToken = equalsToken, objectAssignmentInitializer = objectAssignmentInitializer)
 
@@ -2111,6 +2188,8 @@ class ShorthandPropertyAssignment(
 
     override fun declarationData(): DeclarationBase? = this.namedMemberBase.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -2125,13 +2204,15 @@ class ShorthandPropertyAssignment(
 
     override fun modifiers(): ModifierList? = this.namedMemberBase.modifiers()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.namedMemberBase.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2169,7 +2250,7 @@ fun isShorthandPropertyAssignment(node: Node?): Boolean {
 class DeleteExpression(
     @kotlin.jvm.JvmField var unaryExpressionBase: UnaryExpressionBase = UnaryExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): DeleteExpression = DeleteExpression(unaryExpressionBase = unaryExpressionBase.goCopy(), expression = expression)
 
@@ -2210,6 +2291,8 @@ class DeleteExpression(
 
     override fun declarationData(): DeclarationBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -2226,13 +2309,15 @@ class DeleteExpression(
 
     override fun name(): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2265,7 +2350,7 @@ fun isDeleteExpression(node: Node?): Boolean {
 class TypeOfExpression(
     @kotlin.jvm.JvmField var unaryExpressionBase: UnaryExpressionBase = UnaryExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypeOfExpression = TypeOfExpression(unaryExpressionBase = unaryExpressionBase.goCopy(), expression = expression)
 
@@ -2306,6 +2391,8 @@ class TypeOfExpression(
 
     override fun declarationData(): DeclarationBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -2322,13 +2409,15 @@ class TypeOfExpression(
 
     override fun name(): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2361,7 +2450,7 @@ fun isTypeOfExpression(node: Node?): Boolean {
 class VoidExpression(
     @kotlin.jvm.JvmField var unaryExpressionBase: UnaryExpressionBase = UnaryExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): VoidExpression = VoidExpression(unaryExpressionBase = unaryExpressionBase.goCopy(), expression = expression)
 
@@ -2402,6 +2491,8 @@ class VoidExpression(
 
     override fun declarationData(): DeclarationBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -2418,13 +2509,15 @@ class VoidExpression(
 
     override fun name(): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2457,7 +2550,7 @@ fun isVoidExpression(node: Node?): Boolean {
 class AwaitExpression(
     @kotlin.jvm.JvmField var unaryExpressionBase: UnaryExpressionBase = UnaryExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): AwaitExpression = AwaitExpression(unaryExpressionBase = unaryExpressionBase.goCopy(), expression = expression)
 
@@ -2498,6 +2591,8 @@ class AwaitExpression(
 
     override fun declarationData(): DeclarationBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -2514,13 +2609,15 @@ class AwaitExpression(
 
     override fun name(): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2554,7 +2651,7 @@ class TypeAssertion(
     @kotlin.jvm.JvmField var unaryExpressionBase: UnaryExpressionBase = UnaryExpressionBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypeAssertion = TypeAssertion(unaryExpressionBase = unaryExpressionBase.goCopy(), type = type, expression = expression)
 
@@ -2601,6 +2698,8 @@ class TypeAssertion(
 
     override fun declarationData(): DeclarationBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -2617,11 +2716,13 @@ class TypeAssertion(
 
     override fun name(): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun setModifiers(p0: ModifierList?) = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2654,7 +2755,7 @@ fun isTypeAssertion(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.KeywordTypeNode 8a24d93c
 class KeywordTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): KeywordTypeNode = KeywordTypeNode(typeNodeBase = typeNodeBase.goCopy())
 
@@ -2681,6 +2782,8 @@ class KeywordTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -2699,13 +2802,15 @@ class KeywordTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2736,7 +2841,7 @@ fun isKeywordTypeNode(node: Node?): Boolean {
 class UnionTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var unionOrIntersectionTypeNodeBase: UnionOrIntersectionTypeNodeBase = UnionOrIntersectionTypeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): UnionTypeNode = UnionTypeNode(typeNodeBase = typeNodeBase.goCopy(), unionOrIntersectionTypeNodeBase = unionOrIntersectionTypeNodeBase.goCopy())
 
@@ -2774,6 +2879,8 @@ class UnionTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -2790,13 +2897,15 @@ class UnionTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2829,7 +2938,7 @@ fun isUnionTypeNode(node: Node?): Boolean {
 class IntersectionTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var unionOrIntersectionTypeNodeBase: UnionOrIntersectionTypeNodeBase = UnionOrIntersectionTypeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): IntersectionTypeNode = IntersectionTypeNode(typeNodeBase = typeNodeBase.goCopy(), unionOrIntersectionTypeNodeBase = unionOrIntersectionTypeNodeBase.goCopy())
 
@@ -2867,6 +2976,8 @@ class IntersectionTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -2883,13 +2994,15 @@ class IntersectionTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2926,7 +3039,7 @@ class ConditionalTypeNode(
     @kotlin.jvm.JvmField var extendsType: Node? = null,
     @kotlin.jvm.JvmField var trueType: Node? = null,
     @kotlin.jvm.JvmField var falseType: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ConditionalTypeNode = ConditionalTypeNode(typeNodeBase = typeNodeBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), checkType = checkType, extendsType = extendsType, trueType = trueType, falseType = falseType)
 
@@ -2964,6 +3077,8 @@ class ConditionalTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -2980,13 +3095,15 @@ class ConditionalTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3023,7 +3140,7 @@ class TypeOperatorNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @get:kotlin.jvm.JvmName("goGet_operator") @set:kotlin.jvm.JvmName("goSet_operator") var operator: Kind = Kind(0),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypeOperatorNode = TypeOperatorNode(typeNodeBase = typeNodeBase.goCopy(), operator = operator, type = type)
 
@@ -3062,6 +3179,8 @@ class TypeOperatorNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -3078,13 +3197,15 @@ class TypeOperatorNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3118,7 +3239,7 @@ fun isTypeOperatorNode(node: Node?): Boolean {
 class InferTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var typeParameter: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): InferTypeNode = InferTypeNode(typeNodeBase = typeNodeBase.goCopy(), typeParameter = typeParameter)
 
@@ -3156,6 +3277,8 @@ class InferTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -3172,13 +3295,15 @@ class InferTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3211,7 +3336,7 @@ fun isInferTypeNode(node: Node?): Boolean {
 class ArrayTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var elementType: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ArrayTypeNode = ArrayTypeNode(typeNodeBase = typeNodeBase.goCopy(), elementType = elementType)
 
@@ -3249,6 +3374,8 @@ class ArrayTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -3265,13 +3392,15 @@ class ArrayTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3305,7 +3434,7 @@ class IndexedAccessTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var objectType: Node? = null,
     @kotlin.jvm.JvmField var indexType: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): IndexedAccessTypeNode = IndexedAccessTypeNode(typeNodeBase = typeNodeBase.goCopy(), objectType = objectType, indexType = indexType)
 
@@ -3344,6 +3473,8 @@ class IndexedAccessTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -3360,13 +3491,15 @@ class IndexedAccessTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3400,7 +3533,7 @@ fun isIndexedAccessTypeNode(node: Node?): Boolean {
 class TypeReferenceNode(
     @kotlin.jvm.JvmField var nodeWithTypeArgumentsBase: NodeWithTypeArgumentsBase = NodeWithTypeArgumentsBase(),
     @kotlin.jvm.JvmField var typeName: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypeReferenceNode = TypeReferenceNode(nodeWithTypeArgumentsBase = nodeWithTypeArgumentsBase.goCopy(), typeName = typeName)
 
@@ -3438,6 +3571,8 @@ class TypeReferenceNode(
 
     override fun declarationData(): DeclarationBase? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -3454,13 +3589,15 @@ class TypeReferenceNode(
 
     override fun name(): Node? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeWithTypeArgumentsBase.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3496,7 +3633,7 @@ class ExpressionWithTypeArguments(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var typeArguments: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ExpressionWithTypeArguments = ExpressionWithTypeArguments(memberExpressionBase = memberExpressionBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, typeArguments = typeArguments)
 
@@ -3539,6 +3676,8 @@ class ExpressionWithTypeArguments(
 
     override fun declarationData(): DeclarationBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -3555,13 +3694,15 @@ class ExpressionWithTypeArguments(
 
     override fun name(): Node? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3595,7 +3736,7 @@ fun isExpressionWithTypeArguments(node: Node?): Boolean {
 class LiteralTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var literal: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): LiteralTypeNode = LiteralTypeNode(typeNodeBase = typeNodeBase.goCopy(), literal = literal)
 
@@ -3633,6 +3774,8 @@ class LiteralTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -3649,13 +3792,15 @@ class LiteralTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3687,7 +3832,7 @@ fun isLiteralTypeNode(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.ThisTypeNode d191d4cc
 class ThisTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ThisTypeNode = ThisTypeNode(typeNodeBase = typeNodeBase.goCopy())
 
@@ -3714,6 +3859,8 @@ class ThisTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -3732,13 +3879,15 @@ class ThisTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3766,7 +3915,7 @@ class TypePredicateNode(
     @kotlin.jvm.JvmField var assertsModifier: Node? = null,
     @kotlin.jvm.JvmField var parameterName: Node? = null,
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypePredicateNode = TypePredicateNode(typeNodeBase = typeNodeBase.goCopy(), assertsModifier = assertsModifier, parameterName = parameterName, type = type)
 
@@ -3806,6 +3955,8 @@ class TypePredicateNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -3822,13 +3973,15 @@ class TypePredicateNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3865,7 +4018,7 @@ class ImportAttribute(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var value: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ImportAttribute = ImportAttribute(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), name = name, value = value)
 
@@ -3913,6 +4066,8 @@ class ImportAttribute(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -3927,13 +4082,15 @@ class ImportAttribute(
 
     override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -3970,7 +4127,7 @@ class ImportAttributes(
     @get:kotlin.jvm.JvmName("goGet_token") @set:kotlin.jvm.JvmName("goSet_token") var token: Kind = Kind(0),
     @kotlin.jvm.JvmField var attributes: NodeList? = null,
     @kotlin.jvm.JvmField var multiLine: Boolean = false,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ImportAttributes = ImportAttributes(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), token = token, attributes = attributes, multiLine = multiLine)
 
@@ -4014,6 +4171,8 @@ class ImportAttributes(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -4030,13 +4189,15 @@ class ImportAttributes(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4071,7 +4232,7 @@ fun isImportAttributes(node: Node?): Boolean {
 class TypeQueryNode(
     @kotlin.jvm.JvmField var nodeWithTypeArgumentsBase: NodeWithTypeArgumentsBase = NodeWithTypeArgumentsBase(),
     @kotlin.jvm.JvmField var exprName: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypeQueryNode = TypeQueryNode(nodeWithTypeArgumentsBase = nodeWithTypeArgumentsBase.goCopy(), exprName = exprName)
 
@@ -4109,6 +4270,8 @@ class TypeQueryNode(
 
     override fun declarationData(): DeclarationBase? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4125,13 +4288,15 @@ class TypeQueryNode(
 
     override fun name(): Node? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeWithTypeArgumentsBase.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4172,7 +4337,7 @@ class MappedTypeNode(
     @kotlin.jvm.JvmField var questionToken: Node? = null,
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var members: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): MappedTypeNode = MappedTypeNode(typeNodeBase = typeNodeBase.goCopy(), declarationBase = declarationBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), readonlyToken = readonlyToken, typeParameter = typeParameter, nameType = nameType, questionToken = questionToken, type = type, members = members)
 
@@ -4213,6 +4378,8 @@ class MappedTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4229,13 +4396,15 @@ class MappedTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4274,7 +4443,7 @@ class TypeLiteralNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var members: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypeLiteralNode = TypeLiteralNode(typeNodeBase = typeNodeBase.goCopy(), declarationBase = declarationBase.goCopy(), members = members)
 
@@ -4313,6 +4482,8 @@ class TypeLiteralNode(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4329,13 +4500,15 @@ class TypeLiteralNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4368,7 +4541,7 @@ fun isTypeLiteralNode(node: Node?): Boolean {
 class TupleTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var elements: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TupleTypeNode = TupleTypeNode(typeNodeBase = typeNodeBase.goCopy(), elements = elements)
 
@@ -4406,6 +4579,8 @@ class TupleTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4422,13 +4597,15 @@ class TupleTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4465,7 +4642,7 @@ class NamedTupleMember(
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var questionToken: Node? = null,
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NamedTupleMember = NamedTupleMember(typeNodeBase = typeNodeBase.goCopy(), declarationBase = declarationBase.goCopy(), dotDotDotToken = dotDotDotToken, name = name, questionToken = questionToken, type = type)
 
@@ -4512,6 +4689,8 @@ class NamedTupleMember(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4526,13 +4705,15 @@ class NamedTupleMember(
 
     override fun modifiers(): ModifierList? = this.typeNodeBase.nodeBase.nodeDefault.modifiers()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4568,7 +4749,7 @@ fun isNamedTupleMember(node: Node?): Boolean {
 class OptionalTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): OptionalTypeNode = OptionalTypeNode(typeNodeBase = typeNodeBase.goCopy(), type = type)
 
@@ -4606,6 +4787,8 @@ class OptionalTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4622,13 +4805,15 @@ class OptionalTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4661,7 +4846,7 @@ fun isOptionalTypeNode(node: Node?): Boolean {
 class RestTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): RestTypeNode = RestTypeNode(typeNodeBase = typeNodeBase.goCopy(), type = type)
 
@@ -4699,6 +4884,8 @@ class RestTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4715,13 +4902,15 @@ class RestTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4754,7 +4943,7 @@ fun isRestTypeNode(node: Node?): Boolean {
 class ParenthesizedTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ParenthesizedTypeNode = ParenthesizedTypeNode(typeNodeBase = typeNodeBase.goCopy(), type = type)
 
@@ -4792,6 +4981,8 @@ class ParenthesizedTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4808,13 +4999,15 @@ class ParenthesizedTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4847,7 +5040,7 @@ fun isParenthesizedTypeNode(node: Node?): Boolean {
 class FunctionTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var functionOrConstructorTypeNodeBase: FunctionOrConstructorTypeNodeBase = FunctionOrConstructorTypeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): FunctionTypeNode = FunctionTypeNode(typeNodeBase = typeNodeBase.goCopy(), functionOrConstructorTypeNodeBase = functionOrConstructorTypeNodeBase.goCopy())
 
@@ -4881,6 +5074,8 @@ class FunctionTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.functionOrConstructorTypeNodeBase.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4897,13 +5092,15 @@ class FunctionTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.functionOrConstructorTypeNodeBase.modifiersBase.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -4938,7 +5135,7 @@ fun isFunctionTypeNode(node: Node?): Boolean {
 class ConstructorTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var functionOrConstructorTypeNodeBase: FunctionOrConstructorTypeNodeBase = FunctionOrConstructorTypeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ConstructorTypeNode = ConstructorTypeNode(typeNodeBase = typeNodeBase.goCopy(), functionOrConstructorTypeNodeBase = functionOrConstructorTypeNodeBase.goCopy())
 
@@ -4972,6 +5169,8 @@ class ConstructorTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.functionOrConstructorTypeNodeBase.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -4988,13 +5187,15 @@ class ConstructorTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.functionOrConstructorTypeNodeBase.modifiersBase.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -5030,7 +5231,7 @@ fun isConstructorTypeNode(node: Node?): Boolean {
 class TemplateHead(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var templateLiteralLikeNodeBase: TemplateLiteralLikeNodeBase = TemplateLiteralLikeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TemplateHead = TemplateHead(nodeBase = nodeBase.goCopy(), templateLiteralLikeNodeBase = templateLiteralLikeNodeBase.goCopy())
 
@@ -5064,6 +5265,8 @@ class TemplateHead(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -5082,13 +5285,15 @@ class TemplateHead(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.templateLiteralLikeNodeBase.templateLiteralLikeData()
 
@@ -5118,7 +5323,7 @@ fun isTemplateHead(node: Node?): Boolean {
 class TemplateMiddle(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var templateLiteralLikeNodeBase: TemplateLiteralLikeNodeBase = TemplateLiteralLikeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TemplateMiddle = TemplateMiddle(nodeBase = nodeBase.goCopy(), templateLiteralLikeNodeBase = templateLiteralLikeNodeBase.goCopy())
 
@@ -5152,6 +5357,8 @@ class TemplateMiddle(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -5170,13 +5377,15 @@ class TemplateMiddle(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.templateLiteralLikeNodeBase.templateLiteralLikeData()
 
@@ -5206,7 +5415,7 @@ fun isTemplateMiddle(node: Node?): Boolean {
 class TemplateTail(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var templateLiteralLikeNodeBase: TemplateLiteralLikeNodeBase = TemplateLiteralLikeNodeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TemplateTail = TemplateTail(nodeBase = nodeBase.goCopy(), templateLiteralLikeNodeBase = templateLiteralLikeNodeBase.goCopy())
 
@@ -5240,6 +5449,8 @@ class TemplateTail(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -5258,13 +5469,15 @@ class TemplateTail(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.templateLiteralLikeNodeBase.templateLiteralLikeData()
 
@@ -5295,7 +5508,7 @@ class TemplateLiteralTypeNode(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var head: Node? = null,
     @kotlin.jvm.JvmField var templateSpans: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TemplateLiteralTypeNode = TemplateLiteralTypeNode(typeNodeBase = typeNodeBase.goCopy(), head = head, templateSpans = templateSpans)
 
@@ -5334,6 +5547,8 @@ class TemplateLiteralTypeNode(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -5350,13 +5565,15 @@ class TemplateLiteralTypeNode(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -5391,7 +5608,7 @@ class TemplateLiteralTypeSpan(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var literal: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TemplateLiteralTypeSpan = TemplateLiteralTypeSpan(typeNodeBase = typeNodeBase.goCopy(), type = type, literal = literal)
 
@@ -5430,6 +5647,8 @@ class TemplateLiteralTypeSpan(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -5446,13 +5665,15 @@ class TemplateLiteralTypeSpan(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -5488,7 +5709,7 @@ class SyntheticExpression(
     @kotlin.jvm.JvmField var type: Any? = null,
     @kotlin.jvm.JvmField var isSpread: Boolean = false,
     @kotlin.jvm.JvmField var tupleNameSource: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SyntheticExpression = SyntheticExpression(expressionBase = expressionBase.goCopy(), type = type, isSpread = isSpread, tupleNameSource = tupleNameSource)
 
@@ -5528,6 +5749,8 @@ class SyntheticExpression(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -5544,13 +5767,15 @@ class SyntheticExpression(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -5585,7 +5810,7 @@ fun isSyntheticExpression(node: Node?): Boolean {
 class PartiallyEmittedExpression(
     @kotlin.jvm.JvmField var leftHandSideExpressionBase: LeftHandSideExpressionBase = LeftHandSideExpressionBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PartiallyEmittedExpression = PartiallyEmittedExpression(leftHandSideExpressionBase = leftHandSideExpressionBase.goCopy(), expression = expression)
 
@@ -5626,6 +5851,8 @@ class PartiallyEmittedExpression(
 
     override fun declarationData(): DeclarationBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -5642,13 +5869,15 @@ class PartiallyEmittedExpression(
 
     override fun name(): Node? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -5684,7 +5913,7 @@ class JsxElement(
     @kotlin.jvm.JvmField var openingElement: Node? = null,
     @kotlin.jvm.JvmField var children: NodeList? = null,
     @kotlin.jvm.JvmField var closingElement: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxElement = JsxElement(primaryExpressionBase = primaryExpressionBase.goCopy(), compositeBase = compositeBase.goCopy(), openingElement = openingElement, children = children, closingElement = closingElement)
 
@@ -5728,6 +5957,8 @@ class JsxElement(
 
     override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -5744,13 +5975,15 @@ class JsxElement(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -5787,7 +6020,7 @@ class JsxAttributes(
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var properties: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxAttributes = JsxAttributes(primaryExpressionBase = primaryExpressionBase.goCopy(), declarationBase = declarationBase.goCopy(), compositeBase = compositeBase.goCopy(), properties = properties)
 
@@ -5830,6 +6063,8 @@ class JsxAttributes(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -5846,13 +6081,15 @@ class JsxAttributes(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -5887,7 +6124,7 @@ class JsxNamespacedName(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var namespace: Node? = null,
     @kotlin.jvm.JvmField var name: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxNamespacedName = JsxNamespacedName(expressionBase = expressionBase.goCopy(), compositeBase = compositeBase.goCopy(), namespace = namespace, name = name)
 
@@ -5935,6 +6172,8 @@ class JsxNamespacedName(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -5949,13 +6188,15 @@ class JsxNamespacedName(
 
     override fun modifiers(): ModifierList? = this.expressionBase.nodeBase.nodeDefault.modifiers()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -5992,7 +6233,7 @@ class JsxOpeningElement(
     @kotlin.jvm.JvmField var tagName: Node? = null,
     @kotlin.jvm.JvmField var typeArguments: NodeList? = null,
     @kotlin.jvm.JvmField var attributes: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxOpeningElement = JsxOpeningElement(expressionBase = expressionBase.goCopy(), compositeBase = compositeBase.goCopy(), tagName = tagName, typeArguments = typeArguments, attributes = attributes)
 
@@ -6036,6 +6277,8 @@ class JsxOpeningElement(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -6052,13 +6295,15 @@ class JsxOpeningElement(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6096,7 +6341,7 @@ class JsxSelfClosingElement(
     @kotlin.jvm.JvmField var tagName: Node? = null,
     @kotlin.jvm.JvmField var typeArguments: NodeList? = null,
     @kotlin.jvm.JvmField var attributes: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxSelfClosingElement = JsxSelfClosingElement(primaryExpressionBase = primaryExpressionBase.goCopy(), compositeBase = compositeBase.goCopy(), tagName = tagName, typeArguments = typeArguments, attributes = attributes)
 
@@ -6140,6 +6385,8 @@ class JsxSelfClosingElement(
 
     override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -6156,13 +6403,15 @@ class JsxSelfClosingElement(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6200,7 +6449,7 @@ class JsxFragment(
     @kotlin.jvm.JvmField var openingFragment: Node? = null,
     @kotlin.jvm.JvmField var children: NodeList? = null,
     @kotlin.jvm.JvmField var closingFragment: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxFragment = JsxFragment(primaryExpressionBase = primaryExpressionBase.goCopy(), compositeBase = compositeBase.goCopy(), openingFragment = openingFragment, children = children, closingFragment = closingFragment)
 
@@ -6244,6 +6493,8 @@ class JsxFragment(
 
     override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -6260,13 +6511,15 @@ class JsxFragment(
 
     override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6300,7 +6553,7 @@ fun isJsxFragment(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JsxOpeningFragment d5f91d30
 class JsxOpeningFragment(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxOpeningFragment = JsxOpeningFragment(expressionBase = expressionBase.goCopy())
 
@@ -6330,6 +6583,8 @@ class JsxOpeningFragment(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -6348,13 +6603,15 @@ class JsxOpeningFragment(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6379,7 +6636,7 @@ fun isJsxOpeningFragment(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JsxClosingFragment 776850e8
 class JsxClosingFragment(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxClosingFragment = JsxClosingFragment(expressionBase = expressionBase.goCopy())
 
@@ -6409,6 +6666,8 @@ class JsxClosingFragment(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -6427,13 +6686,15 @@ class JsxClosingFragment(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6462,7 +6723,7 @@ class JsxAttribute(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var initializer: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxAttribute = JsxAttribute(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), compositeBase = compositeBase.goCopy(), name = name, initializer = initializer)
 
@@ -6511,6 +6772,8 @@ class JsxAttribute(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -6525,13 +6788,15 @@ class JsxAttribute(
 
     override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6566,7 +6831,7 @@ class JsxSpreadAttribute(
     @kotlin.jvm.JvmField var objectLiteralElementBase: ObjectLiteralElementBase = ObjectLiteralElementBase(),
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxSpreadAttribute = JsxSpreadAttribute(objectLiteralElementBase = objectLiteralElementBase, nodeBase = nodeBase.goCopy(), expression = expression)
 
@@ -6608,6 +6873,8 @@ class JsxSpreadAttribute(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -6624,13 +6891,15 @@ class JsxSpreadAttribute(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6663,7 +6932,7 @@ fun isJsxSpreadAttribute(node: Node?): Boolean {
 class JsxClosingElement(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var tagName: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxClosingElement = JsxClosingElement(nodeBase = nodeBase.goCopy(), tagName = tagName)
 
@@ -6704,6 +6973,8 @@ class JsxClosingElement(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -6720,13 +6991,15 @@ class JsxClosingElement(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6760,7 +7033,7 @@ class JsxExpression(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
     @kotlin.jvm.JvmField var dotDotDotToken: Node? = null,
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxExpression = JsxExpression(expressionBase = expressionBase.goCopy(), dotDotDotToken = dotDotDotToken, expression = expression)
 
@@ -6802,6 +7075,8 @@ class JsxExpression(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -6818,13 +7093,15 @@ class JsxExpression(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6859,7 +7136,7 @@ class JsxText(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
     @kotlin.jvm.JvmField var literalLikeNodeBase: LiteralLikeNodeBase = LiteralLikeNodeBase(),
     @kotlin.jvm.JvmField var containsOnlyTriviaWhiteSpaces: Boolean = false,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JsxText = JsxText(expressionBase = expressionBase.goCopy(), literalLikeNodeBase = literalLikeNodeBase.goCopy(), containsOnlyTriviaWhiteSpaces = containsOnlyTriviaWhiteSpaces)
 
@@ -6891,6 +7168,8 @@ class JsxText(
 
     override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
@@ -6909,13 +7188,15 @@ class JsxText(
 
     override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -6944,7 +7225,7 @@ fun isJsxText(node: Node?): Boolean {
 class SyntaxList(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var children: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SyntaxList = SyntaxList(nodeBase = nodeBase.goCopy(), children = children)
 
@@ -6981,6 +7262,8 @@ class SyntaxList(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -6997,13 +7280,15 @@ class SyntaxList(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7037,7 +7322,7 @@ class JSDoc(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var comment: NodeList? = null,
     @kotlin.jvm.JvmField var tags: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDoc = JSDoc(nodeBase = nodeBase.goCopy(), comment = comment, tags = tags)
 
@@ -7076,6 +7361,8 @@ class JSDoc(
 
     override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -7092,13 +7379,15 @@ class JSDoc(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7132,7 +7421,7 @@ fun isJSDoc(node: Node?): Boolean {
 class JSDocTypeExpression(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocTypeExpression = JSDocTypeExpression(typeNodeBase = typeNodeBase.goCopy(), type = type)
 
@@ -7170,6 +7459,8 @@ class JSDocTypeExpression(
 
     override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -7186,13 +7477,15 @@ class JSDocTypeExpression(
 
     override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7225,7 +7518,7 @@ fun isJSDocTypeExpression(node: Node?): Boolean {
 class JSDocNonNullableType(
     @kotlin.jvm.JvmField var jsDocTypeBase: JSDocTypeBase = JSDocTypeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocNonNullableType = JSDocNonNullableType(jsDocTypeBase = jsDocTypeBase.goCopy(), type = type)
 
@@ -7263,6 +7556,8 @@ class JSDocNonNullableType(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -7279,13 +7574,15 @@ class JSDocNonNullableType(
 
     override fun name(): Node? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7318,7 +7615,7 @@ fun isJSDocNonNullableType(node: Node?): Boolean {
 class JSDocNullableType(
     @kotlin.jvm.JvmField var jsDocTypeBase: JSDocTypeBase = JSDocTypeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocNullableType = JSDocNullableType(jsDocTypeBase = jsDocTypeBase.goCopy(), type = type)
 
@@ -7356,6 +7653,8 @@ class JSDocNullableType(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -7372,13 +7671,15 @@ class JSDocNullableType(
 
     override fun name(): Node? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7410,7 +7711,7 @@ fun isJSDocNullableType(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocAllType cffe9981
 class JSDocAllType(
     @kotlin.jvm.JvmField var jsDocTypeBase: JSDocTypeBase = JSDocTypeBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocAllType = JSDocAllType(jsDocTypeBase = jsDocTypeBase.goCopy())
 
@@ -7437,6 +7738,8 @@ class JSDocAllType(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -7455,13 +7758,15 @@ class JSDocAllType(
 
     override fun name(): Node? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7487,7 +7792,7 @@ fun isJSDocAllType(node: Node?): Boolean {
 class JSDocVariadicType(
     @kotlin.jvm.JvmField var jsDocTypeBase: JSDocTypeBase = JSDocTypeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocVariadicType = JSDocVariadicType(jsDocTypeBase = jsDocTypeBase.goCopy(), type = type)
 
@@ -7525,6 +7830,8 @@ class JSDocVariadicType(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -7541,13 +7848,15 @@ class JSDocVariadicType(
 
     override fun name(): Node? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7580,7 +7889,7 @@ fun isJSDocVariadicType(node: Node?): Boolean {
 class JSDocOptionalType(
     @kotlin.jvm.JvmField var jsDocTypeBase: JSDocTypeBase = JSDocTypeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocOptionalType = JSDocOptionalType(jsDocTypeBase = jsDocTypeBase.goCopy(), type = type)
 
@@ -7618,6 +7927,8 @@ class JSDocOptionalType(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
@@ -7634,13 +7945,15 @@ class JSDocOptionalType(
 
     override fun name(): Node? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7673,7 +7986,7 @@ fun isJSDocOptionalType(node: Node?): Boolean {
 class JSDocTypeTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var typeExpression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocTypeTag = JSDocTypeTag(jsDocTagBase = jsDocTagBase.goCopy(), typeExpression = typeExpression)
 
@@ -7711,6 +8024,8 @@ class JSDocTypeTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -7727,13 +8042,15 @@ class JSDocTypeTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7767,7 +8084,7 @@ fun isJSDocTypeTag(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocUnknownTag 081d9593
 class JSDocUnknownTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocUnknownTag = JSDocUnknownTag(jsDocTagBase = jsDocTagBase.goCopy())
 
@@ -7804,6 +8121,8 @@ class JSDocUnknownTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -7820,13 +8139,15 @@ class JSDocUnknownTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7861,7 +8182,7 @@ class JSDocTemplateTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var constraint: Node? = null,
     @kotlin.jvm.JvmField var typeParameters: NodeList? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocTemplateTag = JSDocTemplateTag(jsDocTagBase = jsDocTagBase.goCopy(), constraint = constraint, typeParameters = typeParameters)
 
@@ -7900,6 +8221,8 @@ class JSDocTemplateTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -7916,13 +8239,15 @@ class JSDocTemplateTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -7958,7 +8283,7 @@ fun isJSDocTemplateTag(node: Node?): Boolean {
 class JSDocReturnTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var typeExpression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocReturnTag = JSDocReturnTag(jsDocTagBase = jsDocTagBase.goCopy(), typeExpression = typeExpression)
 
@@ -7996,6 +8321,8 @@ class JSDocReturnTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8012,13 +8339,15 @@ class JSDocReturnTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8052,7 +8381,7 @@ fun isJSDocReturnTag(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocPublicTag 3f9702a8
 class JSDocPublicTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocPublicTag = JSDocPublicTag(jsDocTagBase = jsDocTagBase.goCopy())
 
@@ -8089,6 +8418,8 @@ class JSDocPublicTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8105,13 +8436,15 @@ class JSDocPublicTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8144,7 +8477,7 @@ fun isJSDocPublicTag(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocPrivateTag 90af8cc2
 class JSDocPrivateTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocPrivateTag = JSDocPrivateTag(jsDocTagBase = jsDocTagBase.goCopy())
 
@@ -8181,6 +8514,8 @@ class JSDocPrivateTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8197,13 +8532,15 @@ class JSDocPrivateTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8236,7 +8573,7 @@ fun isJSDocPrivateTag(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocProtectedTag 0d21f2d4
 class JSDocProtectedTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocProtectedTag = JSDocProtectedTag(jsDocTagBase = jsDocTagBase.goCopy())
 
@@ -8273,6 +8610,8 @@ class JSDocProtectedTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8289,13 +8628,15 @@ class JSDocProtectedTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8328,7 +8669,7 @@ fun isJSDocProtectedTag(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocReadonlyTag eb8b6f5d
 class JSDocReadonlyTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocReadonlyTag = JSDocReadonlyTag(jsDocTagBase = jsDocTagBase.goCopy())
 
@@ -8365,6 +8706,8 @@ class JSDocReadonlyTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8381,13 +8724,15 @@ class JSDocReadonlyTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8420,7 +8765,7 @@ fun isJSDocReadonlyTag(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocOverrideTag 5a8eba7e
 class JSDocOverrideTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocOverrideTag = JSDocOverrideTag(jsDocTagBase = jsDocTagBase.goCopy())
 
@@ -8457,6 +8802,8 @@ class JSDocOverrideTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8473,13 +8820,15 @@ class JSDocOverrideTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8512,7 +8861,7 @@ fun isJSDocOverrideTag(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocDeprecatedTag fb47bce0
 class JSDocDeprecatedTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocDeprecatedTag = JSDocDeprecatedTag(jsDocTagBase = jsDocTagBase.goCopy())
 
@@ -8549,6 +8898,8 @@ class JSDocDeprecatedTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8565,13 +8916,15 @@ class JSDocDeprecatedTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8605,7 +8958,7 @@ fun isJSDocDeprecatedTag(node: Node?): Boolean {
 class JSDocSeeTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var nameExpression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocSeeTag = JSDocSeeTag(jsDocTagBase = jsDocTagBase.goCopy(), nameExpression = nameExpression)
 
@@ -8643,6 +8996,8 @@ class JSDocSeeTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8659,13 +9014,15 @@ class JSDocSeeTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8700,7 +9057,7 @@ fun isJSDocSeeTag(node: Node?): Boolean {
 class JSDocImplementsTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var className: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocImplementsTag = JSDocImplementsTag(jsDocTagBase = jsDocTagBase.goCopy(), className = className)
 
@@ -8738,6 +9095,8 @@ class JSDocImplementsTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8754,13 +9113,15 @@ class JSDocImplementsTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8795,7 +9156,7 @@ fun isJSDocImplementsTag(node: Node?): Boolean {
 class JSDocAugmentsTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var className: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocAugmentsTag = JSDocAugmentsTag(jsDocTagBase = jsDocTagBase.goCopy(), className = className)
 
@@ -8833,6 +9194,8 @@ class JSDocAugmentsTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8849,13 +9212,15 @@ class JSDocAugmentsTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8890,7 +9255,7 @@ fun isJSDocAugmentsTag(node: Node?): Boolean {
 class JSDocSatisfiesTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var typeExpression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocSatisfiesTag = JSDocSatisfiesTag(jsDocTagBase = jsDocTagBase.goCopy(), typeExpression = typeExpression)
 
@@ -8928,6 +9293,8 @@ class JSDocSatisfiesTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -8944,13 +9311,15 @@ class JSDocSatisfiesTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -8985,7 +9354,7 @@ fun isJSDocSatisfiesTag(node: Node?): Boolean {
 class JSDocThrowsTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var typeExpression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocThrowsTag = JSDocThrowsTag(jsDocTagBase = jsDocTagBase.goCopy(), typeExpression = typeExpression)
 
@@ -9023,6 +9392,8 @@ class JSDocThrowsTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -9039,13 +9410,15 @@ class JSDocThrowsTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -9080,7 +9453,7 @@ fun isJSDocThrowsTag(node: Node?): Boolean {
 class JSDocThisTag(
     @kotlin.jvm.JvmField var jsDocTagBase: JSDocTagBase = JSDocTagBase(),
     @kotlin.jvm.JvmField var typeExpression: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocThisTag = JSDocThisTag(jsDocTagBase = jsDocTagBase.goCopy(), typeExpression = typeExpression)
 
@@ -9118,6 +9491,8 @@ class JSDocThisTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -9134,13 +9509,15 @@ class JSDocThisTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -9177,7 +9554,7 @@ class JSDocImportTag(
     @kotlin.jvm.JvmField var importClause: Node? = null,
     @kotlin.jvm.JvmField var moduleSpecifier: Node? = null,
     @kotlin.jvm.JvmField var attributes: Node? = null,
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocImportTag = JSDocImportTag(jsDocTagBase = jsDocTagBase.goCopy(), importClause = importClause, moduleSpecifier = moduleSpecifier, attributes = attributes)
 
@@ -9217,6 +9594,8 @@ class JSDocImportTag(
 
     override fun declarationData(): DeclarationBase? = this.jsDocTagBase.nodeBase.nodeDefault.declarationData()
 
+    override fun end(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.jsDocTagBase.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.flowNodeData()
@@ -9233,13 +9612,15 @@ class JSDocImportTag(
 
     override fun name(): Node? = this.jsDocTagBase.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.jsDocTagBase.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.jsDocTagBase.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.jsDocTagBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.jsDocTagBase.nodeBase.nodeDefault.templateLiteralLikeData()
 

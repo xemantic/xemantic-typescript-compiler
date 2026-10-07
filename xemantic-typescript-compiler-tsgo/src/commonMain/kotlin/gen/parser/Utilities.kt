@@ -30,8 +30,6 @@ import com.xemantic.typescript.tsgo.core.LanguageVariant
 import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeFactory
 import com.xemantic.typescript.tsgo.core.ScriptKind
-import com.xemantic.typescript.tsgo.ast.end
-import com.xemantic.typescript.tsgo.ast.pos
 
 // go: github.com/microsoft/typescript-go/internal/parser.getLanguageVariant bd36ac84
 fun getLanguageVariant(scriptKind: ScriptKind): LanguageVariant {
@@ -58,19 +56,19 @@ fun getJSDocCommentRanges(f: NodeFactory?, commentRanges_0: GoSlice<CommentRange
     var commentRanges: GoSlice<CommentRange> = commentRanges_0
     when (node!!.kind.value) {
         170, 169, 219, 220, 218, 261, 282 -> {
-            com.xemantic.typescript.tsgo.scanner.getTrailingCommentRanges(f, text, node.pos())!!(fun(y1: CommentRange): Boolean {
+            com.xemantic.typescript.tsgo.scanner.getTrailingCommentRanges(f, text, node!!.pos())!!(fun(y1: CommentRange): Boolean {
                             val commentRange: CommentRange = y1
                             commentRanges = commentRanges.append1(commentRange.goCopy())
                             return true
             })
-            com.xemantic.typescript.tsgo.scanner.getLeadingCommentRanges(f, text, node.pos())!!(fun(y2: CommentRange): Boolean {
+            com.xemantic.typescript.tsgo.scanner.getLeadingCommentRanges(f, text, node!!.pos())!!(fun(y2: CommentRange): Boolean {
                             val commentRange_1: CommentRange = y2
                             commentRanges = commentRanges.append1(commentRange_1.goCopy())
                             return true
             })
         }
         else -> {
-            com.xemantic.typescript.tsgo.scanner.getLeadingCommentRanges(f, text, node.pos())!!(fun(y3: CommentRange): Boolean {
+            com.xemantic.typescript.tsgo.scanner.getLeadingCommentRanges(f, text, node!!.pos())!!(fun(y3: CommentRange): Boolean {
                             val commentRange_2: CommentRange = y3
                             commentRanges = commentRanges.append1(commentRange_2.goCopy())
                             return true
@@ -80,7 +78,7 @@ fun getJSDocCommentRanges(f: NodeFactory?, commentRanges_0: GoSlice<CommentRange
     return com.xemantic.typescript.tsgo.go.slices.deleteFunc<CommentRange>(commentRanges, fun(comment: CommentRange): Boolean {
         val commentStart: Int = comment.textRange.pos()
         val commentLen: Int = comment.textRange.end() - commentStart
-        return comment.textRange.end() > node.end() || commentLen < 4 || text[commentStart + 1].code != 42 || text[commentStart + 2].code != 42 || text[commentStart + 3].code == 47
+        return comment.textRange.end() > node!!.end() || commentLen < 4 || text[commentStart + 1].code != 42 || text[commentStart + 2].code != 42 || text[commentStart + 3].code == 47
     })
 }
 

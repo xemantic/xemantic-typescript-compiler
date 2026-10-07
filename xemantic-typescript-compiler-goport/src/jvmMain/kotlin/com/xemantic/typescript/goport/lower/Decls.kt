@@ -182,6 +182,9 @@ class PackageEmitter(
         var classTparams = ""
         val tpElems = HashMap<Int, String>()
         val recvField = d.obj("recv")?.list("list")?.firstOrNull()
+        // An extension's receiver is `T?` (Go calls a pointer method on nil) unless it is a VALUE
+        // receiver of a non-nullable type (a named slice/map: `func (g group) String()`).
+        var recvNullableExt = extension
         if (recvField != null) {
             val named = recvNamed(recvField)
             val origin = named.origin?.let { types.unalias(it) as NamedType } ?: named
@@ -197,7 +200,9 @@ class PackageEmitter(
                 val tm0 = TypeMapper(fc, tpNames)
                 classTparams = tm0.typeParamDecl(recvTparams)
                 val kept = recvTparams.filter { !tm0.isSubstituted(it) }
-                recvTypeText = tm0.namedRef(origin) + (if (kept.isEmpty()) "" else kept.joinToString(", ", "<", ">") { tm0.tpName(types.unalias(it) as TypeParamType) }) + "?."
+                val ptrRecv = recvField.reqObj("type").str("star") == "pointerType"
+                recvNullableExt = ptrRecv || tm0.nullable(origin.id)
+                recvTypeText = tm0.namedRef(origin) + (if (kept.isEmpty()) "" else kept.joinToString(", ", "<", ">") { tm0.tpName(types.unalias(it) as TypeParamType) }) + if (recvNullableExt) "?." else "."
             }
         }
         // A generic function takes the element kind of each type parameter (Go zeroes a `T`;
@@ -235,7 +240,7 @@ class PackageEmitter(
                 // A receiver the body assigns (`k -= 99` on a value receiver) is a local copy.
                 if (!pc.obj(r).bool("mut")) fn.recvObj = r
             }
-            fn.recvNullable = extension
+            fn.recvNullable = recvNullableExt
             val decl = funDict.map { "goElem_${(types.unalias(it) as TypeParamType).name}: GoElem<${tm.kt(it)}>" } + low.paramDecls(params, sig)
             val tparams = if (recvField == null) tm.typeParamDecl(sig.tparams) else classTparams
             val result = tm.returns(sig.results.map { it.t })
@@ -274,7 +279,7 @@ class PackageEmitter(
                 if (recvField != null) recvField.list("names").firstOrNull()?.int("obj")?.let { r ->
                     if (!pc.obj(r).bool("mut")) f.recvObj = r
                 }
-                f.recvNullable = extension
+                f.recvNullable = recvNullableExt
                 l.paramDecls(params, sig)
                 l
             }
@@ -453,7 +458,8 @@ class PackageEmitter(
                     val tpNames = tparamNames(named)
                     val tma = TypeMapper(fc, tpNames)
                     val target = if (qname in prog.structAliases) s.reqObj("type").int("t")!! else named.underlying
-                    "${traceLine(qname, s.str("hash"))}\ntypealias ${prog.typeName(qname, named.name)}${tma.typeParamDecl(named.tparams).replace(Regex(" : [^,>]+"), "")} = ${tma.kt(target)}\n"
+                    "${traceLine(qname, s.str("hash"))}\ntypealias ${prog.typeName(qname, named.name)}${tma.typeParamDecl(named.tparams).replace(Regex(" : [^,>]+"), "")} = ${tma.kt(target)}\n" +
+                        (if (named.key in prog.boxedNamed) boxClass(named, tma) else "")
                 }
                 TypeMapper.NamedKind.ERROR -> ""
             }
@@ -468,6 +474,31 @@ class PackageEmitter(
         }
     }
 
+    /**
+     * `<Name>_Box`: a named slice/map/func type ([Program.boxedNamed]) as an interface value — the
+     * typealias cannot implement interfaces, so the box does, delegating to the extension methods.
+     */
+    private fun boxClass(named: NamedType, tm: TypeMapper): String {
+        val name = prog.typeName(named.key, named.name)
+        val mset = (types.msetT(named)).associateBy { prog.methodName(it.fn, it.name) }
+        val (supers, overrideNames) = supertypes(named, tm, mset.keys)
+        val w = CodeWriter()
+        w.line("// goport: interface box of $name (docs/goport-lowering.md § 3)")
+        w.line("class ${name}_Box(@kotlin.jvm.JvmField val value: ${tm.kt(named.id)})${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
+        w.indent {
+            for ((mn, e) in mset) {
+                if (mn !in overrideNames) continue
+                val sig = types.unalias(e.sig) as SignatureType
+                val ps = sig.params.mapIndexed { i, p -> "p$i: ${tm.kt(p.t)}" }
+                w.line("override fun $mn(${ps.joinToString(", ")})${tm.returns(sig.results.map { it.t })} = value.$mn(${sig.params.indices.joinToString(", ") { "p$it" }})")
+            }
+            w.line("override fun equals(other: Any?): Boolean = other is ${name}_Box && other.value === value")
+            w.line("override fun hashCode(): Int = value.hashCode()")
+        }
+        w.line("}")
+        return w.toString()
+    }
+
     private fun tparamNames(named: NamedType): Map<Int, String> =
         named.tparams.associateWith { Naming.escape((types.unalias(it) as TypeParamType).name) }
 
@@ -475,8 +506,22 @@ class PackageEmitter(
     private fun supertypes(named: NamedType, tm: TypeMapper, methods: Set<String>): Pair<List<String>, Set<String>> {
         val out = LinkedHashSet<String>()
         val overrideNames = HashSet<String>()
-        if (named.isGenericOrigin) return out.toList() to overrideNames
+        if (named.isGenericOrigin) {
+            for (b in prog.genericImplements[named.key] ?: emptyList()) {
+                val mnames = b.methods.map { id ->
+                    val nm = id.substringBefore('|')
+                    prog.methodName(nm.substringBeforeLast('.', "") + ".T." + nm.substringAfterLast('.'), nm.substringAfterLast('.'))
+                }
+                if (!mnames.all { m -> m in methods }) continue
+                out += tm.fc.typeRef(Naming.kotlinPackage(b.pkg), prog.typeName(b.key, b.name))
+                overrideNames += mnames
+            }
+            return out.toList() to overrideNames
+        }
+        val valueClass = tm.namedKind(named) == TypeMapper.NamedKind.VALUE
         for (im in named.node.list("implements")) {
+            // A value class cannot carry a pointer-receiver method (`(*Tristate).UnmarshalJSON`).
+            if (valueClass && im.str("via") == "pointer") continue
             val ifId = im.reqInt("iface")
             val it = types.unalias(ifId)
             try {
@@ -493,7 +538,7 @@ class PackageEmitter(
                     it is InterfaceType -> tm.synthIface(it) to it
                     else -> continue
                 }
-                val mnames = (iface.allMethods.ifEmpty { iface.methods }).map { m -> prog.methodName("", m.name) }
+                val mnames = (iface.allMethods.ifEmpty { iface.methods }).map { m -> prog.methodName(m.fn ?: "", m.name) }
                 // A method the type lacks (unexported interface method of another package) cannot be implemented.
                 if (!mnames.all { m -> m in methods }) continue
                 out += ref
@@ -553,7 +598,8 @@ class PackageEmitter(
             w.block("fun goSet(o: $self)") {
                 st.fields.forEachIndexed { i, f -> w.line("${fieldNames[i]} = ${copyField("o." + fieldNames[i], f.t, tm)}") }
             }
-            if (named.comparable) {
+            // A generic struct is comparable per instantiation (`Expected[string]` in a comparable struct).
+            if (named.comparable || named.isGenericOrigin) {
                 w.line()
                 val eqs = st.fields.mapIndexed { i, f -> fieldEq(fieldNames[i], f.t, tm) }
                 w.line("fun goEquals(o: $self): Boolean = ${if (eqs.isEmpty()) "true" else eqs.joinToString(" && ")}")
@@ -578,7 +624,18 @@ class PackageEmitter(
             for (mn in overrideNames.sorted()) {
                 if (mn in declaredNames) continue
                 val e = mset[mn] ?: continue
-                if (e.path.size < 2) continue
+                if (e.path.size < 2) {
+                    // A NIL-SAFE method (an extension on `T?`, callable on a nil pointer) an interface
+                    // requires: the member delegates to the extension through a nullable receiver.
+                    if (e.fn !in prog.extensionMethods) continue
+                    val sig = types.unalias(e.sig) as SignatureType
+                    val ps = sig.params.mapIndexed { i, p -> "p$i: ${tm.kt(p.t)}" }
+                    w.line()
+                    w.line("override fun $mn(${ps.joinToString(", ")})${tm.returns(sig.results.map { it.t })} = " +
+                        "com.xemantic.typescript.tsgo.synth.goNullable(this).$mn(${sig.params.indices.joinToString(", ") { "p$it" }})")
+                    prog.synth.needNullable = true
+                    continue
+                }
                 w.line()
                 w.raw(promotedDelegate(named, e, mn, tm))
             }
@@ -679,14 +736,25 @@ class PackageEmitter(
                 else -> refuse("iface-embeds", types[e].key)
             }
         }
+        // Structural supers (Program.structuralIfaceSupers): Go assigns this interface to any with a subset method set.
+        val structural = prog.structuralIfaceSupers(named.key)
+        val inherited = HashSet<String>()
+        for (b in structural) inherited += b.methods
+        for (e in it.embedded) {
+            val ei = types.under(e) as? InterfaceType ?: continue
+            for (m in ei.allMethods.ifEmpty { ei.methods }) inherited += prog.methodIdentity(types, pc.pkg.path, m.name, m.sig)
+        }
+        val allSupers = supers + structural.map { b -> fc.typeRef(Naming.kotlinPackage(b.pkg), prog.typeName(b.key, b.name)) }.filter { it !in supers }
         val w = CodeWriter()
         w.line(traceLine(qname, s.str("hash")))
-        w.line("interface $name${tm.typeParamDecl(named.tparams)}${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
+        w.line("interface $name${tm.typeParamDecl(named.tparams)}${if (allSupers.isEmpty()) "" else " : " + allSupers.joinToString(", ")} {")
         w.indent {
             for (m in it.methods) {
                 val sig = types.unalias(m.sig) as SignatureType
                 val ps = sig.params.mapIndexed { i, p -> "p$i: ${tm.kt(p.t)}" }
-                w.line("fun ${prog.methodName("$qname.${m.name}", m.name)}(${ps.joinToString(", ")})${tm.returns(sig.results.map { r -> r.t })}")
+                val ident = prog.methodIdentity(types, pc.pkg.path, m.name, m.sig)
+                val ov = if (ident in inherited) "override " else ""
+                w.line("${ov}fun ${prog.methodName("$qname.${m.name}", m.name)}(${ps.joinToString(", ")})${tm.returns(sig.results.map { r -> r.t })}")
             }
         }
         w.line("}")

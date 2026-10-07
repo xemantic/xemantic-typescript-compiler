@@ -80,7 +80,6 @@ import com.xemantic.typescript.tsgo.ast.className
 import com.xemantic.typescript.tsgo.ast.commentList
 import com.xemantic.typescript.tsgo.ast.deepCloneReparse
 import com.xemantic.typescript.tsgo.ast.deepCloneReparseModifiers
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.expression
 import com.xemantic.typescript.tsgo.ast.functionLikeData
 import com.xemantic.typescript.tsgo.ast.initializer
@@ -112,7 +111,6 @@ import com.xemantic.typescript.tsgo.ast.newTypeLiteralNode
 import com.xemantic.typescript.tsgo.ast.newTypeParameterDeclaration
 import com.xemantic.typescript.tsgo.ast.parameterList
 import com.xemantic.typescript.tsgo.ast.parameters
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.setExpression
 import com.xemantic.typescript.tsgo.ast.setInitializer
 import com.xemantic.typescript.tsgo.ast.setModifiers
@@ -446,10 +444,10 @@ fun Parser?.gatherTypeParameters(j: Node?, typedefOrCallback: Boolean): NodeList
             continue@l0
         }
         if (firstTemplate) {
-            pos = tag.pos()
+            pos = tag!!.pos()
             firstTemplate = false
         }
-        endPos = tag.end()
+        endPos = tag!!.end()
         val constraint: Node? = tag.asJSDocTemplateTag()!!.constraint
         var firstTypeParameter: Boolean = true
         val s2 = tag.typeParameters()
@@ -879,7 +877,7 @@ fun Parser?.makeNewCast(t: Node?, e: Node?, isAssertion: Boolean): Node? {
     } else {
         assert = this!!.factory.newSatisfiesExpression(e, t)
     }
-    this.finishNodeWithEnd(assert, e.pos(), e.end())
+    this.finishNodeWithEnd(assert, e!!.pos(), e!!.end())
     return assert
 }
 

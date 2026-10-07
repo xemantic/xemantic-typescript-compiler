@@ -140,9 +140,14 @@ class LoweringRulesTest {
 
     @Test
     fun `the census of copying single-bound string slices in gen does not grow`() {
-        val n = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f -> suffixCopy.findAll(f.readText()).count() }
-        // 48 as first generated; 34 after the window rule, 33 after window parameters (2026-10-07). Lower it as rules land.
-        assert(n <= 33)
+        fun census(dirs: List<String>?) = gen.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) }
+            .sumOf { f -> suffixCopy.findAll(f.readText()).count() }
+        // The (TSGO.1) spike's 14 packages: 48 as first generated; 34 after the window rule, 33 after window parameters (2026-10-07).
+        val spike = listOf("api", "ast", "binder", "collections", "core", "debug", "diagnostics", "jsnum", "json", "locale", "parser", "scanner", "stringutil", "tspath")
+        assert(census(spike) <= 33)
+        // The whole (TSGO.2) closure (checker, compiler, printer, transformers, …): 108 at first generation (2026-10-07).
+        assert(census(null) <= 108)
     }
 
     @Test

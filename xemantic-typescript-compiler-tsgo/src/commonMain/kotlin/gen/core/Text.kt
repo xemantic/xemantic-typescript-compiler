@@ -24,6 +24,7 @@
 package com.xemantic.typescript.tsgo.core
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 
 // go: github.com/microsoft/typescript-go/internal/core.TextPos 9ba11907
 @kotlin.jvm.JvmInline
@@ -40,7 +41,7 @@ value class TextPos(val value: Int) : Comparable<TextPos> {
 class TextRange(
     @get:kotlin.jvm.JvmName("goGet_pos") @set:kotlin.jvm.JvmName("goSet_pos") var pos: TextPos = TextPos(0),
     @get:kotlin.jvm.JvmName("goGet_end") @set:kotlin.jvm.JvmName("goSet_end") var end: TextPos = TextPos(0),
-) {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): TextRange = TextRange(pos = pos, end = end)
 
@@ -54,12 +55,12 @@ class TextRange(
     fun goHash(): Int = 31 * pos.hashCode() + 31 * end.hashCode()
 
     // go: github.com/microsoft/typescript-go/internal/core.TextRange.Pos c42639c6
-    fun pos(): Int {
+    override fun pos(): Int {
         return this.pos.value
     }
 
     // go: github.com/microsoft/typescript-go/internal/core.TextRange.End 94568806
-    fun end(): Int {
+    override fun end(): Int {
         return this.end.value
     }
 

@@ -38,10 +38,10 @@ value class key(val value: Int) : Comparable<key> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.requestIDKey 2dc95a74
-val requestIDKey: key = key(0)
+val requestIDKey: com.xemantic.typescript.tsgo.core.key = com.xemantic.typescript.tsgo.core.key(0)
 
 // go: github.com/microsoft/typescript-go/internal/core.checkerLifetimeKey 52bd7e7c
-val checkerLifetimeKey: key = key(1)
+val checkerLifetimeKey: com.xemantic.typescript.tsgo.core.key = com.xemantic.typescript.tsgo.core.key(1)
 
 // go: github.com/microsoft/typescript-go/internal/core.WithRequestID 04784f65
 fun withRequestID(ctx: Context?, id: String): Context? {

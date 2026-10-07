@@ -30,7 +30,6 @@ import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.core.Tristate
 import com.xemantic.typescript.tsgo.ast.asModuleDeclaration
 import com.xemantic.typescript.tsgo.ast.body
-import com.xemantic.typescript.tsgo.ast.imports
 import com.xemantic.typescript.tsgo.ast.statements
 import com.xemantic.typescript.tsgo.ast.text
 
@@ -43,7 +42,7 @@ fun collectExternalModuleReferences(file: SourceFile?) {
     }
     if (file!!.nodeBase.nodeDefault.node.flags.value and 524288u != 0u || com.xemantic.typescript.tsgo.ast.isInJSFile(file!!.nodeBase.nodeDefault.asNode())) {
         com.xemantic.typescript.tsgo.ast.forEachDynamicImportOrRequireCall(file, true, true, fun(node_1: Node?, moduleSpecifier: Node?): Boolean {
-            com.xemantic.typescript.tsgo.ast.setImportsOfSourceFile(file, file.imports().append1(moduleSpecifier))
+            com.xemantic.typescript.tsgo.ast.setImportsOfSourceFile(file, file!!.imports().append1(moduleSpecifier))
             return false
         })
     }
@@ -56,7 +55,7 @@ fun collectModuleReferences(file: SourceFile?, node: Node?, inAmbientModule: Boo
         if (moduleNameExpr != null && com.xemantic.typescript.tsgo.ast.isStringLiteral(moduleNameExpr)) {
             val moduleName: String = moduleNameExpr.text()
             if (moduleName != "" && (!inAmbientModule || !com.xemantic.typescript.tsgo.tspath.isExternalModuleNameRelative(moduleName))) {
-                com.xemantic.typescript.tsgo.ast.setImportsOfSourceFile(file, file.imports().append1(moduleNameExpr))
+                com.xemantic.typescript.tsgo.ast.setImportsOfSourceFile(file, file!!.imports().append1(moduleNameExpr))
                 if (file!!.usesUriStyleNodeCoreModules.value != 2 && !file!!.isDeclarationFile) {
                     if (com.xemantic.typescript.tsgo.go.strings.hasPrefix(moduleName, "node:") && !com.xemantic.typescript.tsgo.core.exclusivelyPrefixedNodeCoreModules[moduleName]) {
                         file!!.usesUriStyleNodeCoreModules = Tristate(2)

@@ -47,7 +47,7 @@ fun toLowerJS(str: String): String {
             builder.writeString(encodeJSStringRune(r))
         } else {
             val t2 = specialCasingMappings.probe(r)
-            val mapping: specialCasingMapping = goProbeValue<specialCasingMapping>(t2) { specialCasingMapping() }.goCopy()
+            val mapping: com.xemantic.typescript.tsgo.stringutil.specialCasingMapping = goProbeValue<com.xemantic.typescript.tsgo.stringutil.specialCasingMapping>(t2) { com.xemantic.typescript.tsgo.stringutil.specialCasingMapping() }.goCopy()
             val ok_1: Boolean = t2 !== GoMapAbsent
             if (ok_1) {
                 if (mapping.condition.value == 1 && isFinalSigmaContext(casedBefore, str, i)) {
@@ -85,7 +85,7 @@ fun toUpperJS(str: String): String {
             builder.writeString(str.substring(i, i + size))
         } else {
             val t2 = specialCasingMappings.probe(r)
-            val mapping: specialCasingMapping = goProbeValue<specialCasingMapping>(t2) { specialCasingMapping() }.goCopy()
+            val mapping: com.xemantic.typescript.tsgo.stringutil.specialCasingMapping = goProbeValue<com.xemantic.typescript.tsgo.stringutil.specialCasingMapping>(t2) { com.xemantic.typescript.tsgo.stringutil.specialCasingMapping() }.goCopy()
             val ok_1: Boolean = t2 !== GoMapAbsent
             if (ok_1) {
                 builder.writeString(mapping.upper)

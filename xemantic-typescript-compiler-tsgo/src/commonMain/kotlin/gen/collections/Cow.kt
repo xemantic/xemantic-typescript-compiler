@@ -40,6 +40,10 @@ class CopyOnWriteMap<K, V>(
         owned = o.owned
     }
 
+    fun goEquals(o: CopyOnWriteMap<K, V>): Boolean = m == o.m && owned == o.owned
+
+    fun goHash(): Int = 31 * m.hashCode() + 31 * owned.hashCode()
+
     companion object {
         fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<CopyOnWriteMap<K, V>> = GoElem({ CopyOnWriteMap<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
     }
@@ -99,6 +103,10 @@ class CopyOnWriteSet<K>(
     fun goSet(o: CopyOnWriteSet<K>) {
         m = o.m.goCopy()
     }
+
+    fun goEquals(o: CopyOnWriteSet<K>): Boolean = m.goEquals(o.m)
+
+    fun goHash(): Int = 31 * m.goHash()
 
     companion object {
         fun <K> elem(goElem_K: GoElem<K>): GoElem<CopyOnWriteSet<K>> = GoElem({ CopyOnWriteSet<K>(goElem_K = goElem_K) }, { it.goCopy() })

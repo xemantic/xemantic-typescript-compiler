@@ -76,7 +76,6 @@ import com.xemantic.typescript.tsgo.ast.body
 import com.xemantic.typescript.tsgo.ast.children
 import com.xemantic.typescript.tsgo.ast.code
 import com.xemantic.typescript.tsgo.ast.elements
-import com.xemantic.typescript.tsgo.ast.end
 import com.xemantic.typescript.tsgo.ast.expression
 import com.xemantic.typescript.tsgo.ast.forEachChild
 import com.xemantic.typescript.tsgo.ast.functionLikeData
@@ -246,7 +245,6 @@ import com.xemantic.typescript.tsgo.ast.newWithStatement
 import com.xemantic.typescript.tsgo.ast.newYieldExpression
 import com.xemantic.typescript.tsgo.ast.nodeCount
 import com.xemantic.typescript.tsgo.ast.parseOptions
-import com.xemantic.typescript.tsgo.ast.pos
 import com.xemantic.typescript.tsgo.ast.questionToken
 import com.xemantic.typescript.tsgo.ast.relatedInformation
 import com.xemantic.typescript.tsgo.ast.setDiagnostics
@@ -360,7 +358,7 @@ fun Parser?.parseParameter(): Node? {
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseParameterEx 21a91bdc
 fun Parser?.parseParameterEx(inOuterAwaitContext: Boolean, allowAmbiguity: Boolean): Node? {
     val pos: Int = this.nodePos()
-    val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+    val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
     val saveContextFlags: NodeFlags = this!!.contextFlags
     this.setContextFlags(NodeFlags(8192u), inOuterAwaitContext)
     val modifiers: ModifierList? = this.parseModifiersEx(true, false, false)
@@ -443,7 +441,7 @@ fun Parser?.parseTypeMemberSemicolon() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseAccessorDeclaration 427ee025
-fun Parser?.parseAccessorDeclaration(pos: Int, jsdoc: jsdocScannerInfo, modifiers: ModifierList?, kind: Kind, flags: ParseFlags): Node? {
+fun Parser?.parseAccessorDeclaration(pos: Int, jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo, modifiers: ModifierList?, kind: Kind, flags: ParseFlags): Node? {
     val name: Node? = this.parsePropertyName()
     val typeParameters: NodeList? = this.parseTypeParameters()
     val parameters: NodeList? = this.parseParameters(ParseFlagsNone)
@@ -554,7 +552,7 @@ fun Parser?.nextIsUnambiguouslyIndexSignature(): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseIndexSignatureDeclaration f75569df
-fun Parser?.parseIndexSignatureDeclaration(pos: Int, jsdoc: jsdocScannerInfo, modifiers: ModifierList?): Node? {
+fun Parser?.parseIndexSignatureDeclaration(pos: Int, jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo, modifiers: ModifierList?): Node? {
     val parameters: NodeList? = this.parseBracketedList(PCParameters, fun(p0: Parser?): Node? = p0.parseParameter(), Kind(22), Kind(23))
     val typeNode: Node? = this.parseTypeAnnotation()
     this.parseTypeMemberSemicolon()
@@ -564,7 +562,7 @@ fun Parser?.parseIndexSignatureDeclaration(pos: Int, jsdoc: jsdocScannerInfo, mo
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parsePropertyOrMethodSignature c3aacde9
-fun Parser?.parsePropertyOrMethodSignature(pos: Int, jsdoc: jsdocScannerInfo, modifiers: ModifierList?): Node? {
+fun Parser?.parsePropertyOrMethodSignature(pos: Int, jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo, modifiers: ModifierList?): Node? {
     val name: Node? = this.parsePropertyName()
     val questionToken: Node? = this.parseOptionalToken(Kind(57))
     var result: Node? = null
@@ -613,7 +611,7 @@ fun Parser?.parseTupleType(): Node? {
 fun Parser?.parseTupleElementNameOrTupleElementType(): Node? {
     if (this.lookAhead(fun(p0: Parser?): Boolean = p0.scanStartOfNamedTupleElement())) {
         val pos: Int = this.nodePos()
-        val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+        val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
         val dotDotDotToken: Node? = this.parseOptionalToken(Kind(25))
         val name: Node? = this.parseIdentifierName()
         val questionToken: Node? = this.parseOptionalToken(Kind(57))
@@ -646,7 +644,7 @@ fun Parser?.parseTupleElementType(): Node? {
         return this.finishNode(this!!.factory.newRestTypeNode(this.parseType()), pos)
     }
     val typeNode: Node? = this.parseType()
-    if (com.xemantic.typescript.tsgo.ast.isJSDocNullableType(typeNode) && typeNode.pos() == typeNode.type().pos()) {
+    if (com.xemantic.typescript.tsgo.ast.isJSDocNullableType(typeNode) && typeNode!!.pos() == typeNode.type()!!.pos()) {
         val node: Node? = this!!.factory.newOptionalTypeNode(typeNode.type())
         node!!.flags = typeNode!!.flags
         node!!.loc = typeNode!!.loc.goCopy()
@@ -776,7 +774,7 @@ fun Parser?.isStartOfFunctionTypeOrConstructorType(): Boolean {
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseFunctionOrConstructorType ee666652
 fun Parser?.parseFunctionOrConstructorType(): Node? {
     val pos: Int = this.nodePos()
-    val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+    val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
     val modifiers: ModifierList? = this.parseModifiersForConstructorType()
     val isConstructorType: Boolean = this.parseOptional(Kind(104))
     com.xemantic.typescript.tsgo.debug.assert(modifiers == null || isConstructorType, GoSlice.of(GoElem.ref<Any?>(), "Per isStartOfFunctionOrConstructorType, a function type cannot have modifiers."))
@@ -1106,7 +1104,7 @@ fun Parser?.parseAssignmentExpressionOrHigherWorker(allowReturnTypeInArrowFuncti
         return arrowExpression
     }
     val pos: Int = this.nodePos()
-    val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+    val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
     val expr: Node? = this.parseBinaryExpressionOrHigher(OperatorPrecedence(0))
     if (expr!!.kind.value == 79 && this!!.token.value == 38) {
         return this.parseSimpleArrowFunctionExpression(pos, expr, allowReturnTypeInArrowFunction, jsdoc, null)
@@ -1261,7 +1259,7 @@ fun Parser?.tryParseParenthesizedArrowFunctionExpression(allowReturnTypeInArrowF
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseParenthesizedArrowFunctionExpression 45225e4e
 fun Parser?.parseParenthesizedArrowFunctionExpression(allowAmbiguity: Boolean, allowReturnTypeInArrowFunction: Boolean): Node? {
     val pos: Int = this.nodePos()
-    val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+    val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
     val modifiers: ModifierList? = this.parseModifiersForArrowFunction()
     val isAsync: Boolean = modifierListHasAsync(modifiers)
     val signatureFlags: ParseFlags = com.xemantic.typescript.tsgo.core.ifElse<ParseFlags>(ParseFlags.ELEM, isAsync, ParseFlagsAwait, ParseFlagsNone)
@@ -1382,7 +1380,7 @@ fun Parser?.parsePossibleParenthesizedArrowFunctionExpression(allowReturnTypeInA
 fun Parser?.tryParseAsyncSimpleArrowFunctionExpression(allowReturnTypeInArrowFunction: Boolean): Node? {
     if (this!!.token.value == 133 && this.lookAhead(fun(p0: Parser?): Boolean = p0.nextIsUnParenthesizedAsyncArrowFunction())) {
         val pos: Int = this.nodePos()
-        val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+        val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
         val asyncModifier: ModifierList? = this.parseModifiersForArrowFunction()
         val expr: Node? = this.parseBinaryExpressionOrHigher(OperatorPrecedence(0))
         return this.parseSimpleArrowFunctionExpression(pos, expr, allowReturnTypeInArrowFunction, jsdoc, asyncModifier)
@@ -1406,9 +1404,9 @@ fun Parser?.nextIsUnParenthesizedAsyncArrowFunction(): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseSimpleArrowFunctionExpression 99d28e00
-fun Parser?.parseSimpleArrowFunctionExpression(pos: Int, identifier: Node?, allowReturnTypeInArrowFunction: Boolean, jsdoc: jsdocScannerInfo, asyncModifier: ModifierList?): Node? {
+fun Parser?.parseSimpleArrowFunctionExpression(pos: Int, identifier: Node?, allowReturnTypeInArrowFunction: Boolean, jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo, asyncModifier: ModifierList?): Node? {
     com.xemantic.typescript.tsgo.debug.assert(this!!.token.value == 38, GoSlice.of(GoElem.ref<Any?>(), "parseSimpleArrowFunctionExpression should only have been called if we had a =>"))
-    val parameter: Node? = this.finishNode(this!!.factory.newParameterDeclaration(null, null, identifier, null, null, null), identifier.pos())
+    val parameter: Node? = this.finishNode(this!!.factory.newParameterDeclaration(null, null, identifier, null, null, null), identifier!!.pos())
     val parameters: NodeList? = this.newNodeList(parameter!!.loc.goCopy(), GoSlice.of(GoElem.ref<Node?>(), parameter))
     val equalsGreaterThanToken: Node? = this.parseExpectedToken(Kind(38))
     val body: Node? = this.parseArrowFunctionExpressionBody(asyncModifier != null, allowReturnTypeInArrowFunction)
@@ -1491,12 +1489,12 @@ fun Parser?.parseBinaryExpressionRest(precedence: OperatorPrecedence, leftOperan
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.makeSatisfiesExpression 9e5dd4f4
 fun Parser?.makeSatisfiesExpression(expression: Node?, typeNode: Node?): Node? {
-    return this.checkJSSyntax(this.finishNode(this!!.factory.newSatisfiesExpression(expression, typeNode), expression.pos()))
+    return this.checkJSSyntax(this.finishNode(this!!.factory.newSatisfiesExpression(expression, typeNode), expression!!.pos()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.makeAsExpression 96e3509e
 fun Parser?.makeAsExpression(left: Node?, right: Node?): Node? {
-    return this.checkJSSyntax(this.finishNode(this!!.factory.newAsExpression(left, right), left.pos()))
+    return this.checkJSSyntax(this.finishNode(this!!.factory.newAsExpression(left, right), left!!.pos()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.makeBinaryExpression b663c7b0
@@ -1517,8 +1515,8 @@ fun Parser?.parseUnaryExpressionOrHigher(): Node? {
     val unaryOperator: Kind = this!!.token
     val simpleUnaryExpression: Node? = this.parseSimpleUnaryExpression()
     if (this!!.token.value == 42) {
-        val pos_1: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, simpleUnaryExpression.pos())
-        val end: Int = simpleUnaryExpression.end()
+        val pos_1: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, simpleUnaryExpression!!.pos())
+        val end: Int = simpleUnaryExpression!!.end()
         if (simpleUnaryExpression!!.kind.value == 217) {
             this.parseErrorAt(pos_1, end, com.xemantic.typescript.tsgo.diagnostics.a_type_assertion_expression_is_not_allowed_in_the_left_hand_side_of_an_exponentiation_expression_Consider_enclosing_the_expression_in_parentheses, GoElem.ref<Any?>().nilSlice)
         } else {
@@ -1572,10 +1570,10 @@ fun Parser?.parseJsxElementOrSelfClosingElementOrFragment(inExpressionContext: B
             var closingElement: Node? = null
             val lastChild: Node? = com.xemantic.typescript.tsgo.core.lastOrNil<Node?>(GoElem.ref<Node?>(), children!!.nodes)
             if (lastChild != null && lastChild!!.kind.value == 285 && !com.xemantic.typescript.tsgo.ast.tagNamesAreEquivalent(lastChild.asJsxElement()!!.openingElement.tagName(), lastChild.asJsxElement()!!.closingElement.tagName()) && com.xemantic.typescript.tsgo.ast.tagNamesAreEquivalent(opening.tagName(), lastChild.asJsxElement()!!.closingElement.tagName())) {
-                val end: Int = lastChild.children().end()
+                val end: Int = lastChild.children()!!.end()
                 val missingIdentifier: Node? = this.finishNodeWithEnd(this.newIdentifier(""), end, end)
                 val newClosingElement: Node? = this.finishNodeWithEnd(this!!.factory.newJsxClosingElement(missingIdentifier), end, end)
-                val newLast: Node? = this.finishNodeWithEnd(this!!.factory.newJsxElement(lastChild.asJsxElement()!!.openingElement, lastChild.children(), newClosingElement), lastChild.asJsxElement()!!.openingElement.pos(), end)
+                val newLast: Node? = this.finishNodeWithEnd(this!!.factory.newJsxElement(lastChild.asJsxElement()!!.openingElement, lastChild.children(), newClosingElement), lastChild.asJsxElement()!!.openingElement!!.pos(), end)
                 if (lastChild.asJsxElement()!!.openingElement != null) {
                     lastChild.asJsxElement()!!.openingElement!!.parent = newLast
                 }
@@ -1587,7 +1585,7 @@ fun Parser?.parseJsxElementOrSelfClosingElementOrFragment(inExpressionContext: B
                     }
                 }
                 newClosingElement!!.parent = newLast
-                children = this.newNodeList(com.xemantic.typescript.tsgo.core.newTextRange(children.pos(), newLast.end()), children!!.nodes.slice(0, children!!.nodes.len - 1).append1(newLast))
+                children = this.newNodeList(com.xemantic.typescript.tsgo.core.newTextRange(children!!.pos(), newLast!!.end()), children!!.nodes.slice(0, children!!.nodes.len - 1).append1(newLast))
                 closingElement = lastChild.asJsxElement()!!.closingElement
             } else {
                 closingElement = this.parseJsxClosingElement(opening, inExpressionContext)
@@ -1615,12 +1613,12 @@ fun Parser?.parseJsxElementOrSelfClosingElementOrFragment(inExpressionContext: B
     if (!mustBeUnary && inExpressionContext && this!!.token.value == 29) {
         var topBadPos: Int = topInvalidNodePosition
         if (topBadPos < 0) {
-            topBadPos = result.pos()
+            topBadPos = result!!.pos()
         }
         val invalidElement: Node? = this.parseJsxElementOrSelfClosingElementOrFragment(true, topBadPos, null, false)
         val operatorToken: Node? = this!!.factory.newToken(Kind(27))
-        operatorToken!!.loc = com.xemantic.typescript.tsgo.core.newTextRange(invalidElement.pos(), invalidElement.pos())
-        this.parseErrorAt(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, topBadPos), invalidElement.end(), com.xemantic.typescript.tsgo.diagnostics.jsx_expressions_must_have_one_parent_element, GoElem.ref<Any?>().nilSlice)
+        operatorToken!!.loc = com.xemantic.typescript.tsgo.core.newTextRange(invalidElement!!.pos(), invalidElement!!.pos())
+        this.parseErrorAt(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, topBadPos), invalidElement!!.end(), com.xemantic.typescript.tsgo.diagnostics.jsx_expressions_must_have_one_parent_element, GoElem.ref<Any?>().nilSlice)
         result = this.finishNode(this!!.factory.newBinaryExpression(null, result, null, operatorToken, invalidElement), pos)
     }
     return result
@@ -1655,8 +1653,8 @@ fun Parser?.parseJsxChild(openingTag: Node?, token: Kind): Node? {
                 this.parseErrorAtRange(openingTag!!.loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.jsx_fragment_has_no_corresponding_closing_tag, GoElem.ref<Any?>().nilSlice)
             } else {
                 val tag: Node? = openingTag.tagName()
-                val start: Int = minOf(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, tag.pos()), tag.end())
-                this.parseErrorAt(start, tag.end(), com.xemantic.typescript.tsgo.diagnostics.jsx_element_0_has_no_corresponding_closing_tag, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(this!!.sourceText, openingTag.tagName(), false)))
+                val start: Int = minOf(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, tag!!.pos()), tag!!.end())
+                this.parseErrorAt(start, tag!!.end(), com.xemantic.typescript.tsgo.diagnostics.jsx_element_0_has_no_corresponding_closing_tag, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(this!!.sourceText, openingTag.tagName(), false)))
             }
             return null
         }
@@ -2132,7 +2130,7 @@ fun Parser?.parsePropertyAccessExpressionRest(pos: Int, expression: Node?, quest
     if (com.xemantic.typescript.tsgo.ast.isExpressionWithTypeArguments(expression)) {
         val typeArguments: NodeList? = expression.typeArgumentList()
         if (typeArguments != null) {
-            val loc: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(typeArguments.pos() - 1, com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, typeArguments.end()) + 1)
+            val loc: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(typeArguments!!.pos() - 1, com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, typeArguments!!.end()) + 1)
             this.parseErrorAtRange(loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.an_instantiation_expression_cannot_be_followed_by_a_property_access, GoElem.ref<Any?>().nilSlice)
         }
     }
@@ -2360,7 +2358,7 @@ fun Parser?.parsePrimaryExpression(): Node? {
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseParenthesizedExpression ebf92139
 fun Parser?.parseParenthesizedExpression(): Node? {
     val pos: Int = this.nodePos()
-    val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+    val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
     this.parseExpected(Kind(20))
     val expression: Node? = this.parseExpressionAllowIn()
     this.parseExpected(Kind(21))
@@ -2394,7 +2392,7 @@ fun Parser?.parseObjectLiteralExpression(): Node? {
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseObjectLiteralElement 7bad9060
 fun Parser?.parseObjectLiteralElement(): Node? {
     val pos: Int = this.nodePos()
-    val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+    val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
     if (this.parseOptional(Kind(25))) {
         val expression: Node? = this.parseAssignmentExpressionOrHigher()
         val result: Node? = this.finishNode(this!!.factory.newSpreadAssignment(expression), pos)
@@ -2442,7 +2440,7 @@ fun Parser?.parseFunctionExpression(): Node? {
     val saveContexFlags: NodeFlags = this!!.contextFlags
     this.setContextFlags(NodeFlags(4096u), false)
     val pos: Int = this.nodePos()
-    val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+    val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
     val modifiers: ModifierList? = this.parseModifiers()
     this.parseExpected(Kind(99))
     val asteriskToken: Node? = this.parseOptionalToken(Kind(41))
@@ -2487,7 +2485,7 @@ fun Parser?.parseOptionalBindingIdentifier(): Node? {
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseDecoratedExpression 1ccce3b7
 fun Parser?.parseDecoratedExpression(): Node? {
     val pos: Int = this.nodePos()
-    val jsdoc: jsdocScannerInfo = this.jsdocScannerInfo()
+    val jsdoc: com.xemantic.typescript.tsgo.parser.jsdocScannerInfo = this.jsdocScannerInfo()
     val modifiers: ModifierList? = this.parseModifiersEx(true, false, false)
     if (this!!.token.value == 85) {
         return this.parseClassDeclarationOrExpression(pos, jsdoc, modifiers, Kind(232))

@@ -42,40 +42,40 @@ value class regularExpressionFlags(val value: Int) : Comparable<regularExpressio
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsNone 10ab91ec
-val regularExpressionFlagsNone: regularExpressionFlags = regularExpressionFlags(0)
+val regularExpressionFlagsNone: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(0)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsHasIndices 215af001
-val regularExpressionFlagsHasIndices: regularExpressionFlags = regularExpressionFlags(1)
+val regularExpressionFlagsHasIndices: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(1)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsGlobal 494e0065
-val regularExpressionFlagsGlobal: regularExpressionFlags = regularExpressionFlags(2)
+val regularExpressionFlagsGlobal: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(2)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsIgnoreCase 45cc92f4
-val regularExpressionFlagsIgnoreCase: regularExpressionFlags = regularExpressionFlags(4)
+val regularExpressionFlagsIgnoreCase: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(4)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsMultiline b4f460d1
-val regularExpressionFlagsMultiline: regularExpressionFlags = regularExpressionFlags(8)
+val regularExpressionFlagsMultiline: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(8)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsDotAll ddedaffd
-val regularExpressionFlagsDotAll: regularExpressionFlags = regularExpressionFlags(16)
+val regularExpressionFlagsDotAll: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(16)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsUnicode 5ed2ba28
-val regularExpressionFlagsUnicode: regularExpressionFlags = regularExpressionFlags(32)
+val regularExpressionFlagsUnicode: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(32)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsUnicodeSets 49b5f164
-val regularExpressionFlagsUnicodeSets: regularExpressionFlags = regularExpressionFlags(64)
+val regularExpressionFlagsUnicodeSets: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(64)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsSticky ecfbf417
-val regularExpressionFlagsSticky: regularExpressionFlags = regularExpressionFlags(128)
+val regularExpressionFlagsSticky: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(128)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsAnyUnicodeMode dbe3f9e2
-val regularExpressionFlagsAnyUnicodeMode: regularExpressionFlags = regularExpressionFlags(96)
+val regularExpressionFlagsAnyUnicodeMode: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(96)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlagsModifiers 4e7b9f31
-val regularExpressionFlagsModifiers: regularExpressionFlags = regularExpressionFlags(28)
+val regularExpressionFlagsModifiers: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(28)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.checkRegularExpressionFlagAvailability df28d9b9
-fun Scanner?.checkRegularExpressionFlagAvailability(flag: regularExpressionFlags, pos: Int, size: Int) {
+fun Scanner?.checkRegularExpressionFlagAvailability(flag: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags, pos: Int, size: Int) {
     val t0 = regExpFlagToFirstAvailableLanguageVersion.probe(flag)
     val availableFrom: ScriptTarget = goProbeValue<ScriptTarget>(t0) { ScriptTarget(0) }
     val ok: Boolean = t0 !== GoMapAbsent
@@ -96,16 +96,16 @@ value class classSetExpressionType(val value: Int) : Comparable<classSetExpressi
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.classSetExpressionTypeUnknown e67d2815
-val classSetExpressionTypeUnknown: classSetExpressionType = classSetExpressionType(0)
+val classSetExpressionTypeUnknown: com.xemantic.typescript.tsgo.scanner.classSetExpressionType = com.xemantic.typescript.tsgo.scanner.classSetExpressionType(0)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.classSetExpressionTypeClassUnion eb3093e7
-val classSetExpressionTypeClassUnion: classSetExpressionType = classSetExpressionType(1)
+val classSetExpressionTypeClassUnion: com.xemantic.typescript.tsgo.scanner.classSetExpressionType = com.xemantic.typescript.tsgo.scanner.classSetExpressionType(1)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.classSetExpressionTypeClassIntersection fb9033c2
-val classSetExpressionTypeClassIntersection: classSetExpressionType = classSetExpressionType(2)
+val classSetExpressionTypeClassIntersection: com.xemantic.typescript.tsgo.scanner.classSetExpressionType = com.xemantic.typescript.tsgo.scanner.classSetExpressionType(2)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.classSetExpressionTypeClassSubtraction 9d039876
-val classSetExpressionTypeClassSubtraction: classSetExpressionType = classSetExpressionType(3)
+val classSetExpressionTypeClassSubtraction: com.xemantic.typescript.tsgo.scanner.classSetExpressionType = com.xemantic.typescript.tsgo.scanner.classSetExpressionType(3)
 
 // go: github.com/microsoft/typescript-go/internal/scanner.groupNameReference 197df626
 class groupNameReference(
@@ -159,7 +159,7 @@ class decimalEscapeValue(
 class regExpParser(
     @kotlin.jvm.JvmField var scanner: Scanner? = null,
     @kotlin.jvm.JvmField var end: Int = 0,
-    @get:kotlin.jvm.JvmName("goGet_regExpFlags") @set:kotlin.jvm.JvmName("goSet_regExpFlags") var regExpFlags: regularExpressionFlags = regularExpressionFlags(0),
+    @get:kotlin.jvm.JvmName("goGet_regExpFlags") @set:kotlin.jvm.JvmName("goSet_regExpFlags") var regExpFlags: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(0),
     @kotlin.jvm.JvmField var anyUnicodeMode: Boolean = false,
     @kotlin.jvm.JvmField var unicodeSetsMode: Boolean = false,
     @kotlin.jvm.JvmField var annexB: Boolean = false,
@@ -168,8 +168,8 @@ class regExpParser(
     @kotlin.jvm.JvmField var mayContainStrings: Boolean = false,
     @kotlin.jvm.JvmField var numberOfCapturingGroups: Int = 0,
     @kotlin.jvm.JvmField var groupSpecifiers: GoMap<String, Boolean> = GoMap.nil<String, Boolean>(GoElem.BOOL),
-    @kotlin.jvm.JvmField var groupNameReferences: GoSlice<groupNameReference> = groupNameReference.ELEM.nilSlice,
-    @kotlin.jvm.JvmField var decimalEscapes: GoSlice<decimalEscapeValue> = decimalEscapeValue.ELEM.nilSlice,
+    @kotlin.jvm.JvmField var groupNameReferences: GoSlice<com.xemantic.typescript.tsgo.scanner.groupNameReference> = com.xemantic.typescript.tsgo.scanner.groupNameReference.ELEM.nilSlice,
+    @kotlin.jvm.JvmField var decimalEscapes: GoSlice<com.xemantic.typescript.tsgo.scanner.decimalEscapeValue> = com.xemantic.typescript.tsgo.scanner.decimalEscapeValue.ELEM.nilSlice,
     @kotlin.jvm.JvmField var namedCapturingGroups: GoSlice<GoMap<String, Boolean>> = GoElem.map<String, Boolean>(GoElem.BOOL).nilSlice,
     @kotlin.jvm.JvmField var pendingLowSurrogate: Int = 0,
 ) {
@@ -200,37 +200,37 @@ class regExpParser(
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.pos c6ad8dc3
-fun regExpParser?.pos(): Int {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.pos(): Int {
     return this!!.scanner!!.scannerState.pos
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.setPos 6919d876
-fun regExpParser?.setPos(v: Int) {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.setPos(v: Int) {
     this!!.scanner!!.scannerState.pos = v
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.incPos 8124a349
-fun regExpParser?.incPos(n: Int) {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.incPos(n: Int) {
     this!!.scanner!!.scannerState.pos += n
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.char 5f161db0
-fun regExpParser?.char(): Int {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.char(): Int {
     return this!!.scanner.char()
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.charAt d16cb275
-fun regExpParser?.charAt(pos: Int): Int {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.charAt(pos: Int): Int {
     return this!!.scanner.charAt(pos - this.pos())
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.error dbe334b8
-fun regExpParser?.error(msg: Message?, pos: Int, length: Int, args: GoSlice<Any?>) {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.error(msg: Message?, pos: Int, length: Int, args: GoSlice<Any?>) {
     this!!.scanner.errorAt(msg, pos, length, args)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.text 4aae977e
-fun regExpParser?.text(): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.text(): String {
     return this!!.scanner!!.text
 }
 
@@ -256,7 +256,7 @@ fun compareDecimalStrings(a_0: String, b_1: String): Int {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanDisjunction 9f448781
-fun regExpParser?.scanDisjunction(isInGroup: Boolean) {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanDisjunction(isInGroup: Boolean) {
     l0@ while (true) {
         this!!.namedCapturingGroups = this!!.namedCapturingGroups.append1(GoMap.make<String, Boolean>(GoElem.BOOL))
         this.scanAlternative(isInGroup)
@@ -269,7 +269,7 @@ fun regExpParser?.scanDisjunction(isInGroup: Boolean) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanAlternative ca6bbd26
-fun regExpParser?.scanAlternative(isInGroup: Boolean) {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanAlternative(isInGroup: Boolean) {
     var isPreviousTermQuantifiable: Boolean = false
     l0@ while (this.pos() < this!!.end) {
         val start: Int = this.pos()
@@ -322,7 +322,7 @@ fun regExpParser?.scanAlternative(isInGroup: Boolean) {
                         }
                         else -> {
                             val flagsStart: Int = this.pos()
-                            val setFlags: regularExpressionFlags = this.scanPatternModifiers(regularExpressionFlagsNone)
+                            val setFlags: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = this.scanPatternModifiers(regularExpressionFlagsNone)
                             if (this.char() == 45) {
                                 this.incPos(1)
                                 this.scanPatternModifiers(setFlags)
@@ -446,8 +446,8 @@ fun regExpParser?.scanAlternative(isInGroup: Boolean) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanPatternModifiers a0aa4b7a
-fun regExpParser?.scanPatternModifiers(currFlags_0: regularExpressionFlags): regularExpressionFlags {
-    var currFlags: regularExpressionFlags = currFlags_0
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanPatternModifiers(currFlags_0: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags): com.xemantic.typescript.tsgo.scanner.regularExpressionFlags {
+    var currFlags: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = currFlags_0
     l0@ while (this.pos() < this!!.end) {
         val t1 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(this.text(), this.pos())
         val ch: Int = t1.first
@@ -456,7 +456,7 @@ fun regExpParser?.scanPatternModifiers(currFlags_0: regularExpressionFlags): reg
             break@l0
         }
         val t2 = charCodeToRegExpFlag.probe(ch)
-        val flag: regularExpressionFlags = goProbeValue<regularExpressionFlags>(t2) { regularExpressionFlags(0) }
+        val flag: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = goProbeValue<com.xemantic.typescript.tsgo.scanner.regularExpressionFlags>(t2) { com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(0) }
         val ok: Boolean = t2 !== GoMapAbsent
         if (!ok) {
             this.error(com.xemantic.typescript.tsgo.diagnostics.unknown_regular_expression_flag, this.pos(), size, GoElem.ref<Any?>().nilSlice)
@@ -465,7 +465,7 @@ fun regExpParser?.scanPatternModifiers(currFlags_0: regularExpressionFlags): reg
         } else if (flag.value and 28 == 0) {
             this.error(com.xemantic.typescript.tsgo.diagnostics.this_regular_expression_flag_cannot_be_toggled_within_a_subpattern, this.pos(), size, GoElem.ref<Any?>().nilSlice)
         } else {
-            currFlags = regularExpressionFlags(currFlags.value or flag.value)
+            currFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(currFlags.value or flag.value)
             this!!.scanner.checkRegularExpressionFlagAvailability(flag, this.pos(), size)
         }
         this.incPos(size)
@@ -474,7 +474,7 @@ fun regExpParser?.scanPatternModifiers(currFlags_0: regularExpressionFlags): reg
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanAtomEscape fbcda34b
-fun regExpParser?.scanAtomEscape() {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanAtomEscape() {
     com.xemantic.typescript.tsgo.debug.assert(this.pos() > 0 && this.text()[this.pos() - 1].code == 92, GoElem.ref<Any?>().nilSlice)
     when (this.char()) {
         107 -> {
@@ -506,12 +506,12 @@ fun regExpParser?.scanAtomEscape() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanDecimalEscape 3953f23c
-fun regExpParser?.scanDecimalEscape(): Boolean {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanDecimalEscape(): Boolean {
     TODO("goport: refused int-overflow: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanDecimalEscape")
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanCharacterEscape 21619599
-fun regExpParser?.scanCharacterEscape(atomEscape: Boolean): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanCharacterEscape(atomEscape: Boolean): String {
     com.xemantic.typescript.tsgo.debug.assert(this.pos() > 0 && this.text()[this.pos() - 1].code == 92, GoElem.ref<Any?>().nilSlice)
     var ch: Int = this.char()
     when (ch) {
@@ -557,14 +557,14 @@ fun regExpParser?.scanCharacterEscape(atomEscape: Boolean): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanGroupName 0adac641
-fun regExpParser?.scanGroupName(isReference: Boolean) {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanGroupName(isReference: Boolean) {
     com.xemantic.typescript.tsgo.debug.assert(this.pos() > 0 && this.text()[this.pos() - 1].code == 60, GoElem.ref<Any?>().nilSlice)
     this!!.scanner!!.scannerState.tokenStart = this.pos()
     this!!.scanner.scanIdentifier(0)
     if (this.pos() == this!!.scanner!!.scannerState.tokenStart) {
         this.error(com.xemantic.typescript.tsgo.diagnostics.expected_a_capturing_group_name, this.pos(), 0, GoElem.ref<Any?>().nilSlice)
     } else if (isReference) {
-        this!!.groupNameReferences = this!!.groupNameReferences.append1(groupNameReference(pos = this!!.scanner!!.scannerState.tokenStart, end = this.pos(), name = this!!.scanner!!.scannerState.tokenValue))
+        this!!.groupNameReferences = this!!.groupNameReferences.append1(com.xemantic.typescript.tsgo.scanner.groupNameReference(pos = this!!.scanner!!.scannerState.tokenStart, end = this.pos(), name = this!!.scanner!!.scannerState.tokenValue))
     } else if (this.namedCapturingGroupsContains(this!!.scanner!!.scannerState.tokenValue)) {
         this.error(com.xemantic.typescript.tsgo.diagnostics.named_capturing_groups_with_the_same_name_must_be_mutually_exclusive_to_each_other, this!!.scanner!!.scannerState.tokenStart, this.pos() - this!!.scanner!!.scannerState.tokenStart, GoElem.ref<Any?>().nilSlice)
     } else {
@@ -576,7 +576,7 @@ fun regExpParser?.scanGroupName(isReference: Boolean) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.namedCapturingGroupsContains 18cc8f91
-fun regExpParser?.namedCapturingGroupsContains(name: String): Boolean {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.namedCapturingGroupsContains(name: String): Boolean {
     val s0 = this!!.namedCapturingGroups
     l0@ for (i1 in 0 until s0.len) {
         val group: GoMap<String, Boolean> = s0[i1]
@@ -588,12 +588,12 @@ fun regExpParser?.namedCapturingGroupsContains(name: String): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.isClassContentExit f92ba956
-fun regExpParser?.isClassContentExit(ch: Int): Boolean {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.isClassContentExit(ch: Int): Boolean {
     return ch == 93 || this.pos() >= this!!.end
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanClassRanges bca5c758
-fun regExpParser?.scanClassRanges() {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanClassRanges() {
     com.xemantic.typescript.tsgo.debug.assert(this.pos() > 0 && this.text()[this.pos() - 1].code == 91, GoElem.ref<Any?>().nilSlice)
     this!!.pendingLowSurrogate = 0
     if (this.char() == 94) {
@@ -638,7 +638,7 @@ fun regExpParser?.scanClassRanges() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanClassSetExpression ae6c788c
-fun regExpParser?.scanClassSetExpression() {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanClassSetExpression() {
     com.xemantic.typescript.tsgo.debug.assert(this.pos() > 0 && this.text()[this.pos() - 1].code == 91, GoElem.ref<Any?>().nilSlice)
     var isCharacterComplement: Boolean = false
     if (this.char() == 94) {
@@ -778,7 +778,7 @@ fun regExpParser?.scanClassSetExpression() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanClassSetSubExpression dcd5911a
-fun regExpParser?.scanClassSetSubExpression(expressionType: classSetExpressionType) {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanClassSetSubExpression(expressionType: com.xemantic.typescript.tsgo.scanner.classSetExpressionType) {
     var expressionMayContainStrings: Boolean = this!!.mayContainStrings
     l0@ while (this.pos() < this!!.end) {
         var ch: Int = this.char()
@@ -837,7 +837,7 @@ fun regExpParser?.scanClassSetSubExpression(expressionType: classSetExpressionTy
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanClassSetOperand 2c4d5b26
-fun regExpParser?.scanClassSetOperand(): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanClassSetOperand(): String {
     this!!.mayContainStrings = false
     when (this.char()) {
         91 -> {
@@ -873,7 +873,7 @@ fun regExpParser?.scanClassSetOperand(): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanClassStringDisjunctionContents 493ebc65
-fun regExpParser?.scanClassStringDisjunctionContents() {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanClassStringDisjunctionContents() {
     com.xemantic.typescript.tsgo.debug.assert(this.pos() > 0 && this.text()[this.pos() - 1].code == 123, GoElem.ref<Any?>().nilSlice)
     var characterCount: Int = 0
     l0@ while (this.pos() < this!!.end) {
@@ -901,7 +901,7 @@ fun regExpParser?.scanClassStringDisjunctionContents() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanClassSetCharacter 542f05cf
-fun regExpParser?.scanClassSetCharacter(): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanClassSetCharacter(): String {
     val ch: Int = this.char()
     if (ch == 92) {
         this.incPos(1)
@@ -939,7 +939,7 @@ fun regExpParser?.scanClassSetCharacter(): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanClassAtom 3d3a8f49
-fun regExpParser?.scanClassAtom(): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanClassAtom(): String {
     if (this.char() == 92) {
         this.incPos(1)
         val ch: Int = this.char()
@@ -966,7 +966,7 @@ fun regExpParser?.scanClassAtom(): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanCharacterClassEscape 320d9d3d
-fun regExpParser?.scanCharacterClassEscape(): Boolean {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanCharacterClassEscape(): Boolean {
     com.xemantic.typescript.tsgo.debug.assert(this.pos() > 0 && this.text()[this.pos() - 1].code == 92, GoElem.ref<Any?>().nilSlice)
     var isCharacterComplement: Boolean = false
     val start: Int = this.pos() - 1
@@ -1108,12 +1108,12 @@ fun regExpParser?.scanCharacterClassEscape(): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.getSpellingSuggestionForUnicodePropertyName 0352b36c
-fun regExpParser?.getSpellingSuggestionForUnicodePropertyName(name: String): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.getSpellingSuggestionForUnicodePropertyName(name: String): String {
     return com.xemantic.typescript.tsgo.core.getSpellingSuggestionForStrings(name, com.xemantic.typescript.tsgo.go.maps.keys<String, String>(nonBinaryUnicodeProperties))
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.getSpellingSuggestionForUnicodePropertyValue 1dddf9fe
-fun regExpParser?.getSpellingSuggestionForUnicodePropertyValue(propertyName: String, value_1: String): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.getSpellingSuggestionForUnicodePropertyValue(propertyName: String, value_1: String): String {
     val values: com.xemantic.typescript.tsgo.collections.Set<String>? = valuesOfNonBinaryUnicodeProperties[propertyName]
     if (values == null) {
         return ""
@@ -1122,12 +1122,12 @@ fun regExpParser?.getSpellingSuggestionForUnicodePropertyValue(propertyName: Str
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.getSpellingSuggestionForUnicodePropertyNameOrValue fa8eef48
-fun regExpParser?.getSpellingSuggestionForUnicodePropertyNameOrValue(name: String): String {
-    return com.xemantic.typescript.tsgo.core.getSpellingSuggestionForStrings(name, com.xemantic.typescript.tsgo.core.concatenateSeq<String>(GoElem.STRING, GoSlice.of(GoElem.ref<Seq<String>>(), com.xemantic.typescript.tsgo.go.maps.keys<String, Unit>(valuesOfNonBinaryUnicodeProperties["General_Category"].keys()), com.xemantic.typescript.tsgo.go.maps.keys<String, Unit>(binaryUnicodeProperties.keys()), com.xemantic.typescript.tsgo.go.maps.keys<String, Unit>(binaryUnicodePropertiesOfStrings.keys()))))
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.getSpellingSuggestionForUnicodePropertyNameOrValue(name: String): String {
+    return com.xemantic.typescript.tsgo.core.getSpellingSuggestionForStrings(name, com.xemantic.typescript.tsgo.core.concatenateSeq<String>(GoElem.STRING, GoSlice.of(GoElem.ref<Seq<String>?>(), com.xemantic.typescript.tsgo.go.maps.keys<String, Unit>(valuesOfNonBinaryUnicodeProperties["General_Category"].keys()), com.xemantic.typescript.tsgo.go.maps.keys<String, Unit>(binaryUnicodeProperties.keys()), com.xemantic.typescript.tsgo.go.maps.keys<String, Unit>(binaryUnicodePropertiesOfStrings.keys()))))
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanWordCharacters a157444b
-fun regExpParser?.scanWordCharacters(): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanWordCharacters(): String {
     val start: Int = this.pos()
     l0@ while (this.pos() < this!!.end) {
         val ch: Int = this.char()
@@ -1140,7 +1140,7 @@ fun regExpParser?.scanWordCharacters(): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanSourceCharacter b32e635f
-fun regExpParser?.scanSourceCharacter(): String {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanSourceCharacter(): String {
     if (this.pos() >= this!!.end) {
         return ""
     }
@@ -1185,7 +1185,7 @@ fun regExpParser?.scanSourceCharacter(): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanExpectedChar ea628c8d
-fun regExpParser?.scanExpectedChar(ch: Int) {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanExpectedChar(ch: Int) {
     if (this.char() == ch) {
         this.incPos(1)
     } else {
@@ -1194,7 +1194,7 @@ fun regExpParser?.scanExpectedChar(ch: Int) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.scanDigits 6ce06c81
-fun regExpParser?.scanDigits() {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.scanDigits() {
     val start: Int = this.pos()
     l0@ while (this.pos() < this!!.end && com.xemantic.typescript.tsgo.stringutil.isDigit(this.char())) {
         this.incPos(1)
@@ -1203,12 +1203,12 @@ fun regExpParser?.scanDigits() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.run 1ca090b7
-fun regExpParser?.run() {
+fun com.xemantic.typescript.tsgo.scanner.regExpParser?.run() {
     this!!.anyUnicodeModeOrNonAnnexB = this!!.anyUnicodeMode || !this!!.annexB
     this.scanDisjunction(false)
     val s0 = this!!.groupNameReferences
     l0@ for (i1 in 0 until s0.len) {
-        val reference: groupNameReference = s0[i1].goCopy()
+        val reference: com.xemantic.typescript.tsgo.scanner.groupNameReference = s0[i1].goCopy()
         if (!this!!.groupSpecifiers[reference.name]) {
             this.error(com.xemantic.typescript.tsgo.diagnostics.there_is_no_capturing_group_named_0_in_this_regular_expression, reference.pos, reference.end - reference.pos, GoSlice.of(GoElem.ref<Any?>(), reference.name))
             if (this!!.groupSpecifiers.len > 0) {
@@ -1221,7 +1221,7 @@ fun regExpParser?.run() {
     }
     val s2 = this!!.decimalEscapes
     l1@ for (i3 in 0 until s2.len) {
-        val escape: decimalEscapeValue = s2[i3].goCopy()
+        val escape: com.xemantic.typescript.tsgo.scanner.decimalEscapeValue = s2[i3].goCopy()
         if (escape.value > this!!.numberOfCapturingGroups) {
             if (this!!.numberOfCapturingGroups > 0) {
                 this.error(com.xemantic.typescript.tsgo.diagnostics.this_backreference_refers_to_a_group_that_does_not_exist_There_are_only_0_capturing_groups_in_this_regular_expression, escape.pos, escape.end - escape.pos, GoSlice.of(GoElem.ref<Any?>(), this!!.numberOfCapturingGroups))
@@ -1233,8 +1233,8 @@ fun regExpParser?.run() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.charCodeToRegExpFlag f3d410de
-@kotlin.jvm.JvmField val charCodeToRegExpFlag: GoMap<Int, regularExpressionFlags> = GoMap.make<Int, regularExpressionFlags>(regularExpressionFlags.ELEM).also { it[100] = regularExpressionFlagsHasIndices; it[103] = regularExpressionFlagsGlobal; it[105] = regularExpressionFlagsIgnoreCase; it[109] = regularExpressionFlagsMultiline; it[115] = regularExpressionFlagsDotAll; it[117] = regularExpressionFlagsUnicode; it[118] = regularExpressionFlagsUnicodeSets; it[121] = regularExpressionFlagsSticky }
+@kotlin.jvm.JvmField val charCodeToRegExpFlag: GoMap<Int, com.xemantic.typescript.tsgo.scanner.regularExpressionFlags> = GoMap.make<Int, com.xemantic.typescript.tsgo.scanner.regularExpressionFlags>(com.xemantic.typescript.tsgo.scanner.regularExpressionFlags.ELEM).also { it[100] = regularExpressionFlagsHasIndices; it[103] = regularExpressionFlagsGlobal; it[105] = regularExpressionFlagsIgnoreCase; it[109] = regularExpressionFlagsMultiline; it[115] = regularExpressionFlagsDotAll; it[117] = regularExpressionFlagsUnicode; it[118] = regularExpressionFlagsUnicodeSets; it[121] = regularExpressionFlagsSticky }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpFlagToFirstAvailableLanguageVersion c8d54ece
-@kotlin.jvm.JvmField val regExpFlagToFirstAvailableLanguageVersion: GoMap<regularExpressionFlags, ScriptTarget> = GoMap.make<regularExpressionFlags, ScriptTarget>(ScriptTarget.ELEM).also { it[regularExpressionFlagsHasIndices] = ScriptTarget(9); it[regularExpressionFlagsDotAll] = ScriptTarget(5); it[regularExpressionFlagsUnicodeSets] = ScriptTarget(11) }
+@kotlin.jvm.JvmField val regExpFlagToFirstAvailableLanguageVersion: GoMap<com.xemantic.typescript.tsgo.scanner.regularExpressionFlags, ScriptTarget> = GoMap.make<com.xemantic.typescript.tsgo.scanner.regularExpressionFlags, ScriptTarget>(ScriptTarget.ELEM).also { it[regularExpressionFlagsHasIndices] = ScriptTarget(9); it[regularExpressionFlagsDotAll] = ScriptTarget(5); it[regularExpressionFlagsUnicodeSets] = ScriptTarget(11) }
 

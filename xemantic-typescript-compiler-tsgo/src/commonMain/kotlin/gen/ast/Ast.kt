@@ -25,6 +25,7 @@ package com.xemantic.typescript.tsgo.ast
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.sync.atomic.Bool
+import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 import com.xemantic.typescript.tsgo.synth.Iface_KindString_f376415e
 import com.xemantic.typescript.tsgo.core.LanguageVariant
 import com.xemantic.typescript.tsgo.core.ModuleKind
@@ -35,6 +36,8 @@ import com.xemantic.typescript.tsgo.core.Pattern
 import com.xemantic.typescript.tsgo.go.sync.RWMutex
 import com.xemantic.typescript.tsgo.core.ScriptKind
 import com.xemantic.typescript.tsgo.go.iter.Seq
+import com.xemantic.typescript.tsgo.sourcemap.Source
+import com.xemantic.typescript.tsgo.modulespecifiers.SourceFileForSpecifierGeneration
 import com.xemantic.typescript.tsgo.core.TextPos
 import com.xemantic.typescript.tsgo.core.TextRange
 import com.xemantic.typescript.tsgo.core.Tristate
@@ -117,7 +120,7 @@ fun newNodeFactory(hooks: NodeFactoryHooks): NodeFactory? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.newNode bae5dcb6
-fun newNode(kind: Kind, data: nodeData?, hooks: NodeFactoryHooks): Node? {
+fun newNode(kind: Kind, data: com.xemantic.typescript.tsgo.ast.nodeData?, hooks: NodeFactoryHooks): Node? {
     val n: Node? = data!!.asNode()
     n!!.loc = com.xemantic.typescript.tsgo.core.undefinedTextRange()
     n!!.kind = kind
@@ -129,7 +132,7 @@ fun newNode(kind: Kind, data: nodeData?, hooks: NodeFactoryHooks): Node? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.newNode 49fa3a81
-fun NodeFactory?.newNode(kind: Kind, data: nodeData?): Node? {
+fun NodeFactory?.newNode(kind: Kind, data: com.xemantic.typescript.tsgo.ast.nodeData?): Node? {
     this!!.nodeCount = this!!.nodeCount + 1
     return newNode(kind, data, this!!.hooks.goCopy())
 }
@@ -169,13 +172,23 @@ fun cloneNode(updated: Node?, original: Node?, hooks: NodeFactoryHooks): Node? {
 class NodeList(
     @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
     @kotlin.jvm.JvmField var nodes: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
-) {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): NodeList = NodeList(loc = loc.goCopy(), nodes = nodes)
 
     fun goSet(o: NodeList) {
         loc = o.loc.goCopy()
         nodes = o.nodes
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/ast.NodeList.Pos 99830028
+    override fun pos(): Int {
+        return this.loc.pos()
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/ast.NodeList.End 787f2bf8
+    override fun end(): Int {
+        return this.loc.end()
     }
 
     companion object {
@@ -191,23 +204,13 @@ fun NodeFactory?.newNodeList(nodes: GoSlice<Node?>): NodeList? {
     return list
 }
 
-// go: github.com/microsoft/typescript-go/internal/ast.NodeList.Pos 99830028
-fun NodeList?.pos(): Int {
-    return this!!.loc.pos()
-}
-
-// go: github.com/microsoft/typescript-go/internal/ast.NodeList.End 787f2bf8
-fun NodeList?.end(): Int {
-    return this!!.loc.end()
-}
-
 // go: github.com/microsoft/typescript-go/internal/ast.NodeList.HasTrailingComma 9410e874
 fun NodeList?.hasTrailingComma(): Boolean {
     if (this!!.nodes.len == 0) {
         return false
     }
     val last: Node? = this!!.nodes[this!!.nodes.len - 1]
-    return last.end() < this.end()
+    return last!!.end() < this!!.end()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeList.Clone e647d373
@@ -221,7 +224,7 @@ fun NodeList?.clone(f: NodeFactoryCoercible?): NodeList? {
 class ModifierList(
     @kotlin.jvm.JvmField var nodeList: NodeList = NodeList(),
     @get:kotlin.jvm.JvmName("goGet_modifierFlags") @set:kotlin.jvm.JvmName("goSet_modifierFlags") var modifierFlags: ModifierFlags = ModifierFlags(0u),
-) {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): ModifierList = ModifierList(nodeList = nodeList.goCopy(), modifierFlags = modifierFlags)
 
@@ -229,6 +232,10 @@ class ModifierList(
         nodeList = o.nodeList.goCopy()
         modifierFlags = o.modifierFlags
     }
+
+    override fun end(): Int = this.nodeList.end()
+
+    override fun pos(): Int = this.nodeList.pos()
 
     companion object {
         val ELEM: GoElem<ModifierList> = GoElem({ ModifierList() }, { it.goCopy() })
@@ -260,8 +267,8 @@ class Node(
     @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
     @kotlin.jvm.JvmField var id: Uint64 = Uint64(),
     @kotlin.jvm.JvmField var parent: Node? = null,
-    @kotlin.jvm.JvmField var data: nodeData? = null,
-) : Iface_KindString_f376415e {
+    @kotlin.jvm.JvmField var data: com.xemantic.typescript.tsgo.ast.nodeData? = null,
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc.goCopy(), id = id.goCopy(), parent = parent, data = data)
 
@@ -278,6 +285,16 @@ class Node(
 
     fun goHash(): Int = 31 * kind.hashCode() + 31 * flags.hashCode() + 31 * loc.goHash() + 31 * id.hashCode() + 31 * parent.hashCode() + 31 * data.hashCode()
 
+    // go: github.com/microsoft/typescript-go/internal/ast.Node.Pos 2bfa0f3f
+    override fun pos(): Int {
+        return this.loc.pos()
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/ast.Node.End 2dfa8c26
+    override fun end(): Int {
+        return this.loc.end()
+    }
+
     // go: github.com/microsoft/typescript-go/internal/ast.Node.KindString 9a197761
     override fun kindString(): String {
         return this.kind.string()
@@ -293,18 +310,8 @@ fun Node?.asNode(): Node? {
     return this
 }
 
-// go: github.com/microsoft/typescript-go/internal/ast.Node.Pos 2bfa0f3f
-fun Node?.pos(): Int {
-    return this!!.loc.pos()
-}
-
-// go: github.com/microsoft/typescript-go/internal/ast.Node.End 2dfa8c26
-fun Node?.end(): Int {
-    return this!!.loc.end()
-}
-
 // go: github.com/microsoft/typescript-go/internal/ast.Node.IterChildren c463f69d
-fun Node?.iterChildren(): Seq<Node?> {
+fun Node?.iterChildren(): Seq<Node?>? {
     return fun(yield: ((Node?) -> Boolean)?) {
         this.forEachChild(fun(child: Node?): Boolean {
             return !yield!!(child)
@@ -1728,13 +1735,13 @@ interface nodeData {
     fun computeSubtreeFacts(): SubtreeFacts
     fun propagateSubtreeFacts(): SubtreeFacts
     fun setModifiers(p0: ModifierList?)
-    fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts
+    fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault f6cfb78c
 class NodeDefault(
     @kotlin.jvm.JvmField var node: Node = Node(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NodeDefault = NodeDefault(node = node.goCopy())
 
@@ -1831,7 +1838,7 @@ class NodeDefault(
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault.subtreeFactsWorker b70a9ac3
-    override fun subtreeFactsWorker(self: nodeData?): SubtreeFacts {
+    override fun subtreeFactsWorker(self: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts {
         return self!!.computeSubtreeFacts()
     }
 
@@ -1845,7 +1852,11 @@ class NodeDefault(
         return SubtreeFacts(this.node.data!!.subtreeFacts().value and 4261412863u)
     }
 
+    override fun end(): Int = this.node.end()
+
     override fun kindString(): String = this.node.kindString()
+
+    override fun pos(): Int = this.node.pos()
 
     companion object {
         val ELEM: GoElem<NodeDefault> = GoElem({ NodeDefault() }, { it.goCopy() })
@@ -1855,7 +1866,7 @@ class NodeDefault(
 // go: github.com/microsoft/typescript-go/internal/ast.NodeBase 5f5f4a35
 class NodeBase(
     @kotlin.jvm.JvmField var nodeDefault: NodeDefault = NodeDefault(),
-) : nodeData, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NodeBase = NodeBase(nodeDefault = nodeDefault.goCopy())
 
@@ -1879,6 +1890,8 @@ class NodeBase(
 
     override fun declarationData(): DeclarationBase? = this.nodeDefault.declarationData()
 
+    override fun end(): Int = this.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeDefault.flowNodeData()
@@ -1897,13 +1910,15 @@ class NodeBase(
 
     override fun name(): Node? = this.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeDefault.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeDefault.templateLiteralLikeData()
 
@@ -2298,7 +2313,7 @@ fun Node?.eagerJSDoc(file_0: SourceFile?): GoSlice<Node?> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.CompositeBase.subtreeFactsWorker e9f12360
-fun CompositeBase?.subtreeFactsWorker(self: nodeData?): SubtreeFacts {
+fun CompositeBase?.subtreeFactsWorker(self: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts {
     var facts: SubtreeFacts = SubtreeFacts(this!!.facts.load())
     if (facts.value and 33554432u == 0u) {
         facts = SubtreeFacts(facts.value or (self!!.computeSubtreeFacts().value or 33554432u))
@@ -2527,7 +2542,7 @@ class SourceFileMetaData(
 // go: github.com/microsoft/typescript-go/internal/ast.SourceFileDataKey dd27b9fd
 class SourceFileDataKey<T>(
     @kotlin.jvm.JvmField val goElem_T: GoElem<T>,
-    @get:kotlin.jvm.JvmName("goGet_key") @set:kotlin.jvm.JvmName("goSet_key") var key: sourceFileDataKey = sourceFileDataKey(0uL),
+    @get:kotlin.jvm.JvmName("goGet_key") @set:kotlin.jvm.JvmName("goSet_key") var key: com.xemantic.typescript.tsgo.ast.sourceFileDataKey = com.xemantic.typescript.tsgo.ast.sourceFileDataKey(0uL),
     @kotlin.jvm.JvmField var blank1: GoArray<T> = GoArray(0, goElem_T),
 ) {
 
@@ -2537,6 +2552,10 @@ class SourceFileDataKey<T>(
         key = o.key
         blank1 = o.blank1.goCopy()
     }
+
+    fun goEquals(o: SourceFileDataKey<T>): Boolean = key == o.key && blank1.goEquals(o.blank1)
+
+    fun goHash(): Int = 31 * key.hashCode() + 31 * blank1.goHash()
 
     companion object {
         fun <T> elem(goElem_T: GoElem<T>): GoElem<SourceFileDataKey<T>> = GoElem({ SourceFileDataKey<T>(goElem_T = goElem_T) }, { it.goCopy() })
@@ -2568,6 +2587,10 @@ class sourceFileDataCell<T>(
         value = o.value
     }
 
+    fun goEquals(o: sourceFileDataCell<T>): Boolean = once == o.once && value == o.value
+
+    fun goHash(): Int = 31 * once.hashCode() + 31 * value.hashCode()
+
     companion object {
         fun <T> elem(goElem_T: GoElem<T>): GoElem<sourceFileDataCell<T>> = GoElem({ sourceFileDataCell<T>(goElem_T = goElem_T) }, { it.goCopy() })
     }
@@ -2575,12 +2598,12 @@ class sourceFileDataCell<T>(
 
 // go: github.com/microsoft/typescript-go/internal/ast.NewSourceFileDataKey 1ed5ee7b
 fun <T> newSourceFileDataKey(goElem_T: GoElem<T>): SourceFileDataKey<T>? {
-    return SourceFileDataKey<T>(goElem_T = goElem_T, key = sourceFileDataKey(sourceFileDataKeyCounter.add(1uL)))
+    return SourceFileDataKey<T>(goElem_T = goElem_T, key = com.xemantic.typescript.tsgo.ast.sourceFileDataKey(sourceFileDataKeyCounter.add(1uL)))
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.GetOrComputeSourceFileData a70b32dc
 fun <T> getOrComputeSourceFileData(goElem_T: GoElem<T>, file: SourceFile?, key: SourceFileDataKey<T>?, compute: ((SourceFile?) -> T)?): T {
-    val cell: sourceFileDataCell<T>? = getSourceFileDataCell<T>(goElem_T, file, key)
+    val cell: com.xemantic.typescript.tsgo.ast.sourceFileDataCell<T>? = getSourceFileDataCell<T>(goElem_T, file, key)
     cell!!.once.`do`(fun() {
         cell!!.value = compute!!(file)
     })
@@ -2588,7 +2611,7 @@ fun <T> getOrComputeSourceFileData(goElem_T: GoElem<T>, file: SourceFile?, key: 
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.getSourceFileDataCell 6906e620
-fun <T> getSourceFileDataCell(goElem_T: GoElem<T>, file: SourceFile?, key: SourceFileDataKey<T>?): sourceFileDataCell<T>? {
+fun <T> getSourceFileDataCell(goElem_T: GoElem<T>, file: SourceFile?, key: SourceFileDataKey<T>?): com.xemantic.typescript.tsgo.ast.sourceFileDataCell<T>? {
     return withDefers({ null }) { df0 ->
         if (key == null || key!!.key.value == 0uL) {
             goPanic("invalid SourceFileDataKey; use NewSourceFileDataKey")
@@ -2597,15 +2620,15 @@ fun <T> getSourceFileDataCell(goElem_T: GoElem<T>, file: SourceFile?, key: Sourc
         val dr1 = file!!.dataMu
         df0.defer { dr1.unlock() }
         if (file!!.data.isNil) {
-            file!!.data = GoMap.make<sourceFileDataKey, Any?>(GoElem.ref<Any?>())
+            file!!.data = GoMap.make<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?>(GoElem.ref<Any?>())
         }
         val t2 = file!!.data.probe(key!!.key)
         val cell: Any? = goProbeValue<Any?>(t2) { null }
         val ok: Boolean = t2 !== GoMapAbsent
         if (ok) {
-            return cell as sourceFileDataCell<T>
+            return cell as com.xemantic.typescript.tsgo.ast.sourceFileDataCell<T>
         }
-        val cell_1: sourceFileDataCell<T>? = sourceFileDataCell<T>(goElem_T = goElem_T)
+        val cell_1: com.xemantic.typescript.tsgo.ast.sourceFileDataCell<T>? = com.xemantic.typescript.tsgo.ast.sourceFileDataCell<T>(goElem_T = goElem_T)
         file!!.data[key!!.key] = cell_1
         return cell_1
     }
@@ -2677,7 +2700,7 @@ class SourceFile(
     @kotlin.jvm.JvmField var statements: NodeList? = null,
     @kotlin.jvm.JvmField var endOfFileToken: Node? = null,
     @kotlin.jvm.JvmField var dataMu: Mutex = Mutex(),
-    @kotlin.jvm.JvmField var data: GoMap<sourceFileDataKey, Any?> = GoMap.nil<sourceFileDataKey, Any?>(GoElem.ref<Any?>()),
+    @kotlin.jvm.JvmField var data: GoMap<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?> = GoMap.nil<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?>(GoElem.ref<Any?>()),
     @kotlin.jvm.JvmField var diagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
     @kotlin.jvm.JvmField var jsDiagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
     @kotlin.jvm.JvmField var jsdocDiagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
@@ -2726,7 +2749,7 @@ class SourceFile(
     @kotlin.jvm.JvmField var nameTable: GoMap<String, Int> = GoMap.nil<String, Int>(GoElem.INT),
     @kotlin.jvm.JvmField var positionMapOnce: Once = Once(),
     @kotlin.jvm.JvmField var positionMap: PositionMap? = null,
-) : HasFileName, SourceFileLike, nodeData, Iface_KindString_f376415e {
+) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SourceFile = SourceFile(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), fileName = fileName, parseOptions = parseOptions.goCopy(), text = text, statements = statements, endOfFileToken = endOfFileToken, dataMu = dataMu.goCopy(), data = data, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, languageVariant = languageVariant, scriptKind = scriptKind, isDeclarationFile = isDeclarationFile, containsNonASCII = containsNonASCII, usesUriStyleNodeCoreModules = usesUriStyleNodeCoreModules, identifiers = identifiers, identifierCount = identifierCount, imports = imports, moduleAugmentations = moduleAugmentations, ambientModuleNames = ambientModuleNames, commentDirectives = commentDirectives, jsdocCache = jsdocCache, jsdocMu = jsdocMu.goCopy(), hasLazyJSDoc = hasLazyJSDoc, reparsedClones = reparsedClones, pragmas = pragmas, referencedFiles = referencedFiles, typeReferenceDirectives = typeReferenceDirectives, libReferenceDirectives = libReferenceDirectives, checkJsDirective = checkJsDirective, nodeCount = nodeCount, textCount = textCount, commonJSModuleIndicator = commonJSModuleIndicator, externalModuleIndicator = externalModuleIndicator, isBound = isBound.goCopy(), bindOnce = bindOnce.goCopy(), bindDiagnostics = bindDiagnostics, bindSuggestionDiagnostics = bindSuggestionDiagnostics, endFlowNode = endFlowNode, symbolCount = symbolCount, classifiableNames = classifiableNames.goCopy(), patternAmbientModules = patternAmbientModules, globalExports = globalExports, ecmaLineMapMu = ecmaLineMapMu.goCopy(), ecmaLineMap = ecmaLineMap, hash = hash.goCopy(), tokenCacheMu = tokenCacheMu.goCopy(), tokenCache = tokenCache, tokenFactory = tokenFactory, declarationMapMu = declarationMapMu.goCopy(), declarationMap = declarationMap, nameTableOnce = nameTableOnce.goCopy(), nameTable = nameTable, positionMapOnce = positionMapOnce.goCopy(), positionMap = positionMap)
 
@@ -2807,6 +2830,11 @@ class SourceFile(
         return this.parseOptions.path
     }
 
+    // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.Imports 134e49d2
+    override fun imports(): GoSlice<Node?> {
+        return this.imports
+    }
+
     // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.ForEachChild 5cd709a2
     override fun forEachChild(v: Visitor): Boolean {
         return visitNodeList(v, this.statements) || visit(v!!, this.endOfFileToken)
@@ -2815,6 +2843,11 @@ class SourceFile(
     // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.VisitEachChild 3ebefbcf
     override fun visitEachChild(v: NodeVisitor?): Node? {
         return v!!.factory.updateSourceFile(this, v.visitTopLevelStatements(this.statements), v.visitToken(this.endOfFileToken))
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.IsJS b7577558
+    override fun isJS(): Boolean {
+        return isSourceFileJS(this)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.Clone d13cfed4
@@ -2858,6 +2891,8 @@ class SourceFile(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
+    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+
     override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
@@ -2874,13 +2909,15 @@ class SourceFile(
 
     override fun name(): Node? = this.nodeBase.nodeDefault.name()
 
+    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+
     override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
 
     override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
 
@@ -2907,11 +2944,6 @@ fun NodeFactory?.newSourceFile(opts: SourceFileParseOptions, text: String, state
 // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.ParseOptions 9dc97cda
 fun SourceFile?.parseOptions(): SourceFileParseOptions {
     return this!!.parseOptions.goCopy()
-}
-
-// go: github.com/microsoft/typescript-go/internal/ast.SourceFile.Imports 134e49d2
-fun SourceFile?.imports(): GoSlice<Node?> {
-    return this!!.imports
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.Diagnostics 774fb21e
@@ -2997,11 +3029,6 @@ fun SourceFile?.setBindDiagnostics(diags: GoSlice<Diagnostic?>) {
     this!!.bindDiagnostics = diags
 }
 
-// go: github.com/microsoft/typescript-go/internal/ast.SourceFile.IsJS b7577558
-fun SourceFile?.isJS(): Boolean {
-    return isSourceFileJS(this)
-}
-
 // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.copyFrom e910e6aa
 fun SourceFile?.copyFrom(other: SourceFile?) {
     this!!.languageVariant = other!!.languageVariant
@@ -3046,7 +3073,7 @@ fun SourceFile?.getNameTable(): GoMap<String, Int> {
                 if (ok) {
                     nameTable[text] = -1
                 } else {
-                    nameTable[text] = node.pos()
+                    nameTable[text] = node!!.pos()
                 }
             }
             node.forEachChild(walk)
@@ -3334,7 +3361,7 @@ class CommentRange(
     @kotlin.jvm.JvmField var textRange: TextRange = TextRange(),
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: Kind = Kind(0),
     @kotlin.jvm.JvmField var hasTrailingNewLine: Boolean = false,
-) {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): CommentRange = CommentRange(textRange = textRange.goCopy(), kind = kind, hasTrailingNewLine = hasTrailingNewLine)
 
@@ -3347,6 +3374,10 @@ class CommentRange(
     fun goEquals(o: CommentRange): Boolean = textRange.goEquals(o.textRange) && kind == o.kind && hasTrailingNewLine == o.hasTrailingNewLine
 
     fun goHash(): Int = 31 * textRange.goHash() + 31 * kind.hashCode() + 31 * hasTrailingNewLine.hashCode()
+
+    override fun end(): Int = this.textRange.end()
+
+    override fun pos(): Int = this.textRange.pos()
 
     companion object {
         val ELEM: GoElem<CommentRange> = GoElem({ CommentRange() }, { it.goCopy() })
@@ -3364,7 +3395,7 @@ class FileReference(
     @kotlin.jvm.JvmField var fileName: String = "",
     @get:kotlin.jvm.JvmName("goGet_resolutionMode") @set:kotlin.jvm.JvmName("goSet_resolutionMode") var resolutionMode: ModuleKind = ModuleKind(0),
     @kotlin.jvm.JvmField var preserve: Boolean = false,
-) {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): FileReference = FileReference(textRange = textRange.goCopy(), fileName = fileName, resolutionMode = resolutionMode, preserve = preserve)
 
@@ -3379,6 +3410,10 @@ class FileReference(
 
     fun goHash(): Int = 31 * textRange.goHash() + 31 * fileName.hashCode() + 31 * resolutionMode.hashCode() + 31 * preserve.hashCode()
 
+    override fun end(): Int = this.textRange.end()
+
+    override fun pos(): Int = this.textRange.pos()
+
     companion object {
         val ELEM: GoElem<FileReference> = GoElem({ FileReference() }, { it.goCopy() })
     }
@@ -3389,7 +3424,7 @@ class PragmaArgument(
     @kotlin.jvm.JvmField var textRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var name: String = "",
     @kotlin.jvm.JvmField var value: String = "",
-) {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): PragmaArgument = PragmaArgument(textRange = textRange.goCopy(), name = name, value = value)
 
@@ -3403,6 +3438,10 @@ class PragmaArgument(
 
     fun goHash(): Int = 31 * textRange.goHash() + 31 * name.hashCode() + 31 * value.hashCode()
 
+    override fun end(): Int = this.textRange.end()
+
+    override fun pos(): Int = this.textRange.pos()
+
     companion object {
         val ELEM: GoElem<PragmaArgument> = GoElem({ PragmaArgument() }, { it.goCopy() })
     }
@@ -3413,7 +3452,7 @@ class Pragma(
     @kotlin.jvm.JvmField var commentRange: CommentRange = CommentRange(),
     @kotlin.jvm.JvmField var name: String = "",
     @kotlin.jvm.JvmField var args: GoMap<String, PragmaArgument> = GoMap.nil<String, PragmaArgument>(PragmaArgument.ELEM),
-) {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
     fun goCopy(): Pragma = Pragma(commentRange = commentRange.goCopy(), name = name, args = args)
 
@@ -3422,6 +3461,10 @@ class Pragma(
         name = o.name
         args = o.args
     }
+
+    override fun end(): Int = this.commentRange.textRange.end()
+
+    override fun pos(): Int = this.commentRange.textRange.pos()
 
     companion object {
         val ELEM: GoElem<Pragma> = GoElem({ Pragma() }, { it.goCopy() })

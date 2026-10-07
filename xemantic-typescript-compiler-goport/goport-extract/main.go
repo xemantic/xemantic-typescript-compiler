@@ -35,6 +35,14 @@ const tsgoModule = "github.com/microsoft/typescript-go"
 var defaultClosure = []string{
 	"ast", "diagnostics", "parser", "stringutil", "scanner", "api/encoder", "core",
 	"tspath", "collections", "jsnum", "json", "debug", "locale", "binder",
+	// (TSGO.2): everything internal/compiler needs to build a Program and run
+	// the checker (`go list -deps ./internal/compiler`), plus the bundled lib files.
+	"astnav", "checker", "compiler", "evaluator", "glob", "module", "modulespecifiers",
+	"nodebuilder", "outputpaths", "packagejson", "printer", "pseudochecker", "semver",
+	"sourcemap", "symlinks", "tracing", "transformers", "transformers/declarations",
+	"transformers/estransforms", "transformers/inliners", "transformers/jsxtransforms",
+	"transformers/moduletransforms", "transformers/tstransforms", "tsoptions", "vfs",
+	"vfs/cachedvfs", "vfs/vfsmatch", "bundled",
 }
 
 func readFile(name string) ([]byte, error) { return os.ReadFile(name) }

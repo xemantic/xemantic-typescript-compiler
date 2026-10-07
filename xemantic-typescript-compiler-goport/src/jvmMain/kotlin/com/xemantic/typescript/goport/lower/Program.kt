@@ -98,8 +98,90 @@ class Program(
     /** Named struct types used as map KEYS by value: they get a structural equals/hashCode. */
     val structKeys = HashSet<String>()
 
+    /** A named, non-generic method-set interface declared in the run: its method identities (name + signature key). */
+    class IfaceInfo(val key: String, val pkg: String, val name: String, val methods: Set<String>, val embeds: Set<String>)
+
+    /** Whether named interface [a] embeds [b], directly or transitively. */
+    private fun embedsTransitively(a: IfaceInfo, b: String, seen: HashSet<String> = HashSet()): Boolean {
+        if (!seen.add(a.key)) return false
+        if (b in a.embeds) return true
+        return a.embeds.any { e -> namedIfaceByKey[e]?.let { embedsTransitively(it, b, seen) } ?: false }
+    }
+
+    val namedIfaces = ArrayList<IfaceInfo>()
+    val namedIfaceByKey = HashMap<String, IfaceInfo>()
+
+    /**
+     * Go assigns an interface value to any interface whose method set is a SUBSET of its own
+     * (structurally, without a conversion the IR could record). The Kotlin interface therefore
+     * extends every named interface of the run with a smaller method set (equal sets: the one
+     * with the smaller key is the super, so no cycle). docs/goport-lowering.md § 3.
+     */
+    fun structuralIfaceSupers(key: String): List<IfaceInfo> {
+        val a = namedIfaceByKey[key] ?: return emptyList()
+        return namedIfaces.filter { b ->
+            b.key != a.key && a.methods.containsAll(b.methods) && !embedsTransitively(b, a.key) &&
+                (b.methods.size < a.methods.size || b.key < a.key || embedsTransitively(a, b.key))
+        }
+    }
+
+    /** Generic origin types: method identity → Go method name, from the pointer method set (see [genericImplements]). */
+    private val genericMsets = HashMap<String, Map<String, String>>()
+
+    /**
+     * Interfaces a GENERIC named type satisfies for every instantiation (the IR skips generic types,
+     * `implementsSkipped`): those of [namedIfaces] whose methods all appear in the type's method set
+     * with an identical signature key — a signature mentioning a type parameter never matches.
+     */
+    val genericImplements = HashMap<String, List<IfaceInfo>>()
+
+    /**
+     * Named slice/map/func types that implement interfaces (`type group []*Glob` with `String()`):
+     * a typealias cannot implement one, so a value converted to an interface is wrapped in a
+     * generated `<Name>_Box` class (docs/goport-lowering.md § 3).
+     */
+    val boxedNamed = HashSet<String>()
+
+    /**
+     * Automatic case-collision renames (docs/goport-lowering.md § 3): Go's exported `Foo` and
+     * unexported `foo` on one receiver type (or at one package's top level) map to one Kotlin name.
+     * The UNEXPORTED name gets the suffix `Impl`, package-wide (`"<pkg>\u0000<goName>"`), so every
+     * method and interface method of that unexported name in the package agrees — unexported names
+     * are package-scoped in Go, so no other package can name it. `renames.txt` still wins.
+     */
+    val autoMethodRenames = HashSet<String>()
+    val autoFunRenames = HashSet<String>()
+
     init {
         for (p in packages) index(p)
+        for ((key, ms) in genericMsets) {
+            val found = namedIfaces.filter { b -> ms.keys.containsAll(b.methods) }
+            if (found.isEmpty()) continue
+            genericImplements[key] = found
+            ifaceMethodNames.getOrPut(key) { HashSet() } += found.flatMap { b -> b.methods.map { ms.getValue(it) } }
+        }
+        for ((_, ms) in methodsByType) {
+            val byKotlin = ms.groupBy { Naming.lowerCamel(it.second.str("name")!!) }
+            for ((_, group) in byKotlin) {
+                if (group.size < 2) continue
+                for ((pk, d) in group) {
+                    val n = d.str("name")!!
+                    if (n.isNotEmpty() && n[0].isLowerCase()) autoMethodRenames += pk.path + "\u0000" + n
+                }
+            }
+        }
+        for (p in packages) {
+            val names = ArrayList<String>()
+            for (f in p.files) for (d in f.list("decls")) {
+                if (d.k != "FuncDecl" || d.obj("recv") != null) continue
+                val n = d.str("name") ?: continue
+                if (n != "_" && n != "init") names += n
+            }
+            val byKotlin = names.distinct().groupBy { Naming.lowerCamel(it) }
+            for ((_, group) in byKotlin) if (group.size > 1) {
+                for (n in group) if (n[0].isLowerCase()) autoFunRenames += p.path + "\u0000" + n
+            }
+        }
         extensionMethods += nilSafeMethods
         for ((typeKey, ms) in methodsByType) if (typeKey in aliasTypes) ms.forEach { extensionMethods += it.second.str("qname")!! }
         // Go calls a pointer-receiver method on a nil pointer and only panics where the body
@@ -114,13 +196,53 @@ class Program(
                 if (ptr && d.str("name") !in required) extensionMethods += d.str("qname")!!
             }
         }
+        // A method declared on an ALIAS receiver (`func (n *ImportAttributesNode) …`, `= Node`) has the
+        // qname of the alias but the object key of the aliased type: call sites look up by key.
+        for ((_, ms) in methodsByType) for ((p, d) in ms) {
+            if (d.str("qname") !in extensionMethods) continue
+            d.int("obj")?.let { p.obj(it).str("key") }?.let { extensionMethods += it }
+        }
+    }
+
+    /**
+     * A method's identity for structural interface satisfaction: its name (package-qualified when
+     * unexported) and its signature WITHOUT parameter names or receiver — type keys only.
+     */
+    fun methodIdentity(tt: TypeTable, pkg: String, name: String, sig: Int): String {
+        val s = tt.unalias(sig) as com.xemantic.typescript.goport.types.SignatureType
+        return (if (name[0].isUpperCase()) name else "$pkg.$name") + "|" + s.params.joinToString(",") { tt[it.t].key } +
+            (if (s.variadic) "..." else "") + "|" + s.results.joinToString(",") { tt[it.t].key }
     }
 
     private fun index(p: IrPackage) {
         val tt = TypeTable(p)
         for (i in 0 until tt.size) {
+            val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+            if (n.pkg != p.path || !n.isGenericOrigin || n.localAt != null) continue
+            if (tt.under(n.id) is com.xemantic.typescript.goport.types.InterfaceType) continue
+            val ms = tt.msetPtr(n).ifEmpty { tt.msetT(n) }
+            genericMsets[n.key] = ms.associate { m -> methodIdentity(tt, p.path, m.name, m.sig) to m.name }
+        }
+        for (i in 0 until tt.size) {
             val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType
+            if (n != null && n.pkg == p.path && n.origin == null && n.tparams.isEmpty() && n.localAt == null) {
+                val it = tt.under(n.id) as? com.xemantic.typescript.goport.types.InterfaceType
+                if (it != null && it.isMethodSet) {
+                    val ms = it.allMethods.ifEmpty { it.methods }
+                    if (ms.isNotEmpty()) {
+                        val ids = ms.map { m -> methodIdentity(tt, p.path, m.name, m.sig) }.toSet()
+                        val embeds = it.embedded.mapNotNull { e -> (tt.unalias(e) as? com.xemantic.typescript.goport.types.NamedType)?.key }.toSet()
+                        val info = IfaceInfo(n.key, p.path, n.name, ids, embeds)
+                        namedIfaces += info
+                        namedIfaceByKey[n.key] = info
+                    }
+                }
+            }
             if (n != null && n.pkg == p.path && n.origin == null) {
+                val u = tt.under(n.id)
+                if (n.node.list("implements").isNotEmpty() && n.localAt == null &&
+                    (u is com.xemantic.typescript.goport.types.SliceType || u is com.xemantic.typescript.goport.types.MapType || u is com.xemantic.typescript.goport.types.SignatureType)
+                ) boxedNamed += n.key
                 for (im in n.node.list("implements")) {
                     val iface = tt.under(im.int("iface")!!) as? com.xemantic.typescript.goport.types.InterfaceType ?: continue
                     ifaceMethodNames.getOrPut(n.key) { HashSet() } += iface.allMethods.ifEmpty { iface.methods }.map { it.name }
@@ -383,6 +505,7 @@ class Program(
     fun funName(qname: String, goName: String): String {
         renames.lookup(qname)?.let { return it }
         if (goName == "init") return "init" + (qname.substringAfter('#', "").toIntOrNull()?.let { "_${it - 1}" } ?: "")
+        if (qname.substringBeforeLast('.') + "\u0000" + goName in autoFunRenames) return goName + "Impl"
         return Naming.escape(Naming.lowerCamel(goName))
     }
     fun varName(qname: String, goName: String): String = renames.lookup(qname) ?: Naming.escape(Naming.lowerCamel(goName))
@@ -391,6 +514,7 @@ class Program(
 
     fun methodName(key: String, goName: String): String {
         renames.lookup(key)?.let { return it }
+        if (key.substringBeforeLast('.').substringBeforeLast('.') + "\u0000" + goName in autoMethodRenames) return goName + "Impl"
         val n = Naming.lowerCamel(goName)
         return Naming.escape(n)
     }
@@ -486,6 +610,9 @@ class Program(
  * `gen/synth`, and implemented by every type the IR's `implements` lists for it.
  */
 class SynthRegistry {
+    /** Whether a generated class delegates a member to a nil-safe extension (`goNullable`, see Decls). */
+    var needNullable = false
+
     /** Kotlin name by canonical signature text. */
     val names = LinkedHashMap<String, String>()
     val bodies = LinkedHashMap<String, String>()

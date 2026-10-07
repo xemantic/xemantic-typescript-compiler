@@ -402,7 +402,7 @@ class hasFileNameImpl(
 
 // go: github.com/microsoft/typescript-go/internal/ast.NewHasFileName b01ac08f
 fun newHasFileName(fileName: String, path: Path): HasFileName? {
-    return hasFileNameImpl(fileName = fileName, path = path)
+    return com.xemantic.typescript.tsgo.ast.hasFileNameImpl(fileName = fileName, path = path)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.GetSemanticJsxChildren cc36c98a
@@ -975,7 +975,7 @@ fun getAllAccessorDeclarationsForDeclaration(accessor: Node?, declarationsOfSymb
     }
     var firstAccessor: Node? = null
     var secondAccessor: Node? = null
-    if (otherAccessor != null && (otherAccessor.pos() < accessor.pos())) {
+    if (otherAccessor != null && (otherAccessor!!.pos() < accessor!!.pos())) {
         firstAccessor = otherAccessor
         secondAccessor = accessor
     } else {

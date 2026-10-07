@@ -39,6 +39,7 @@ import com.xemantic.typescript.goport.ir.reqObj
 import com.xemantic.typescript.goport.ir.str
 import com.xemantic.typescript.goport.ir.t
 import com.xemantic.typescript.goport.lower.TypeMapper.Rep
+import com.xemantic.typescript.goport.types.ArrayType
 import com.xemantic.typescript.goport.types.MapType
 import com.xemantic.typescript.goport.types.PointerType
 import com.xemantic.typescript.goport.types.SignatureType
@@ -299,7 +300,8 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                     val v = fn.fresh("x")
                     w.line("val $v = ${x.code}")
                     val check = "$v is ${isCheck(target)}"
-                    w.line("val $t = if ($check) Tuple2($v as ${castTarget(target)}, true) else Tuple2(${tm.zero(target)}, false)")
+                    val cast = if (tm.boxOf(target) != null) "($v as ${castTarget(target)}).value" else "$v as ${castTarget(target)}"
+                    w.line("val $t = if ($check) Tuple2($cast, true) else Tuple2(${tm.zero(target)}, false)")
                 }
                 "ParenExpr" -> return multi(lhs, r.reqObj("x"), define)
                 else -> refuse("commaok", r.k)
@@ -362,6 +364,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                 val p = l.reqObj("x")
                 val pt = types.under(ty(p)) as PointerType
                 if (types.under(pt.elem) is StructType) w.line("${nn(lower(p)).code}.goSet(${value.code})")
+                else if (types.under(pt.elem) is ArrayType) w.line("goCopy(${nn(lower(p)).at(Ex.PRIMARY)}.slice(), ${value.at(Ex.PRIMARY)}.slice())")
                 else w.line("${lower(l).code} = ${value.code}")
             }
             else -> refuse("assign-target", l.k)
@@ -716,6 +719,8 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                     w.indent { body(d) }
                     w.line("}")
                 }
+                // Kotlin requires a `when` over a Boolean subject to be exhaustive (`switch true {…}`).
+                if (default == null && tag != null && tm.repOf(ty(tag)) == Rep.BOOL && !tagVc) w.line("else -> {}")
             }
             w.line("}")
             if (t.switchBroken) {
@@ -822,7 +827,8 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         if (!usesObj(c["body"], id)) return
         val n = fn.declare(id)
         val t = pc.obj(id).int("t")!!
-        if (single != null) w.line("val $n: ${tm.kt(t)} = $xv as ${castTarget(single)}")
+        if (single != null && tm.boxOf(single) != null) w.line("val $n: ${tm.kt(t)} = ($xv as ${castTarget(single)}).value")
+        else if (single != null) w.line("val $n: ${tm.kt(t)} = $xv as ${castTarget(single)}")
         else w.line("val $n: ${tm.kt(t)} = $xv")
     }
 
