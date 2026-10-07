@@ -25,6 +25,43 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.2-a) — the ported CHECKER: the 42-package `internal/compiler` closure lowers and compiles, and its diagnostics equal tsgo's on 6,318 / 6,318 conformance configurations (2026-10-07)
+
+**What landed** (one lowering agent; commits 643546ddb, b92728e60, 934160a6d, 8961a3c0e, ddea91894,
+fce87c55b, 19c39e2bd). The extractor and porter now cover every package `go list -deps ./internal/compiler`
+names, plus `bundled`: 181,376 Go lines with no IR holes. `gen/` is 306 files / ~223k Kotlin lines (22 MB).
+**146,556 / 146,763 Go lines (99.9%) lower mechanically.** There are **4 overrides**, all generics over a
+basic-type-set type parameter: `ast.getCombinedFlags`, `checker.hashWrite32/64`, `tsoptions.floatOrInt32ToFlag`.
+Four declarations are refused, and none of them is on the compiler's path: parallel BFS, `LimitedSemaphore`,
+`ThrottleGroup` and an encoder sentinel. `reflect`/json is CODEGEN, not overrides: the porter emits
+`GoReflectStruct`/`GoJsonStruct` from struct tags and `GoBasicValue` for value classes. `go:embed` becomes
+byte-string constants. A cold `compileKotlinJvm` of `-tsgo` takes ~1 min, with the Kotlin daemon peaking at ~6.1 GB RSS.
+
+**Receipts (re-run by the orchestrator, not quoted from the agent):**
+- `TSGO_DIAG=1 TSGO_ORACLE=bound` `-tsgo` + `-goport` jvmTest: **103 tests, 0 failures**.
+- Bound AST oracle: **7,774 / 7,774** byte-identical.
+- `DiagParityTest` wrote 6,318 configurations in 52 s, and `scripts/tsgo-diag-compare.py build/goport/diag-kotlin`
+  graded them **6,318 equal**. "Equal" covers file, offsets, code, category, flattened text, related information and phase.
+- `CheckerSmokeTest` reports `const x: number = "s"` as TS2322.
+
+The path ran 5,972 → 6,220 → 6,291 → 6,318. Every step was a lowering RULE, never a per-case patch:
+- `&s[0] == &t[0]` compares slots, not elements (`core.Same`, ~250 configurations);
+- value equality for struct-alias map keys and for `comparable` type arguments;
+- a typed nil in a type switch;
+- method/function name shadowing;
+- json for pointer fields.
+
+**Trap recorded in CLAUDE.md by the agent:** a generated struct class also stands for Go's POINTER, so
+widening value equality to every comparable struct made `map[*Node]` lookups structural and SIGKILLed the test JVM.
+
+**Open in (TSGO.2):**
+1. `DiagParityTest` only WRITES the outputs, and grading is a separate script. Make the comparison fail the test,
+   because a measurement that cannot fail is not a gate.
+2. Port tsgo's harness functions (`makeUnitsFromTest`, `SetOptionsFromTestConfig`) so the driver reads raw case
+   text, then run the ~11k `diagnose` pins against `-tsgo` (`XTSC_ENGINE=tsgo`).
+3. The other three baseline layers beyond the conformance submodule.
+4. Perf: `GoSlice.addr` allocates per `core.Same`, and there is no per-file lib cache.
+
 ### Round (TSGO.1-a) — the tsgo port spike, day 1: extractor, runtime, oracle, porter, binder — 7,774/7,774 BOUND encoded ASTs byte-identical to the tsgo binary; speed is the one open gate criterion (2026-10-07)
 
 Orchestrated as parallel subagents against a written contract (`docs/goport-design.md`), Gradle box-serialized through one `flock`.
@@ -281,45 +318,6 @@ chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged; library gri
 `r306` vs `r305`): type-fest 170 -> 141, the rest unchanged, NO added position (tally 238 -> 209); warning gate with probe:
 probe only. Still held back: bare `infer` + empty mapped (re-measure on top of this round before the next attempt).
 
-### Round (P18.305) — (CHK.233) CLOSED: lazy tuple members — a tuple's element symbols and number index are built on first read, and the three readers that forced the table at every level (`tupleSlotIsOptional`, `length`, `MemberResolver`) answer without it; type-fest 15.0 -> 10.5 s / RSS 3.12 -> 1.52 GB, the slow fixture 6.3 -> 3.2 s and no longer OOM at `-Xmx512m`; diagnostics byte-identical everywhere (2026-10-05)
-
-One implementation subagent. **Where the brief / queue were wrong**: `symbolTypes` was only part of the retention — the heap
-histogram on `if-not-any-or-never.ts` showed 2.07 M `LinkedHashMap$Entry` + 2.04 M `Integer`, i.e. the `LinkedHashSet<Int>`
-id sets (`optionalTupleMemberIds`, `restTupleMemberIds`, `mappedReadonlyMemberIds`), plus ~136 MB of `symbolTypes` arrays,
-with no `Symbol` objects — the tuples were collected and only the global entries survived; making the table lazy ALONE did
-nothing (6.3 -> 6.36 s) because three readers forced it at every level — `tupleSlotIsOptional` (from `flattenTupleSpreads`
-on every spread), `getPropertyOfType(Acc, "length")` (the commonest accumulator guard) and
-`MemberResolver.resolveStructuredTypeMembers` via `getIndexedAccessType` for `Acc[number]` (with only the first fixed, a
-`Count<…900>` still built 1,902 tables and 907,952 element symbols); part (b) had no library effect — `TPromise` /
-`KyResponse` never reported TS2589 in our output, only `Wide` did. **Mechanisms**: `Type.Object.lazyMembers` builds the
-element symbols on the first read of `members` / `properties` (the thunk cleared before it runs — at most once);
-`lazyNumberIndex` builds `numberIndexInfo` separately so `Acc[number]` computes only the element union; `tupleLengthSymbol`
-is still minted at construction (one per tuple, linear) and the deferred table reuses it; `tupleOptionalSlots: BooleanArray`
-keeps the optional flags; `tupleSlotIsOptional` reads them (and replaces two inline copies), `getPropertyOfType` answers
-`length` from the stored symbol, `MemberResolver` returns early for a deferred tuple (resolved by construction;
-`LibTypeCensus` accounting unchanged); (b) `intersectionBodyIsDeferredPositionOnly` applies the type-literal cycle-break to an
-intersection body (every constituent a type literal or a reference to a DIFFERENT type, at least one literal, none the alias
-itself — the self-constituent exclusion has no discriminating pin, `{a:T} & I<T>` is silent before and after against
-tsgo's TS2456). New `TupleMemberCensus.kt` (counters `tables`, `elementSymbols`). `Checker.kt` +53, `Type.kt` +26,
-`MemberResolver.kt` +10. **Measured** (one run per cell, same rows before and after): `if-not-any-or-never.ts` 6.34 s /
-1.77 GB -> 3.19 s / 0.57 GB at `-Xmx5g`, 6.73 / 1.17 -> 3.13 / 0.49 at `-Xmx1g`, OOM -> 3.10 / 0.41 at `-Xmx512m`; type-fest
-15.0 / 3.12 -> 10.5 / 1.52 (5g), 14.0 / 1.33 -> 10.5 / 0.86 (1g), OOM -> 10.4 / 0.71 (512m); compiler profile 29.6 / 1.52 ->
-28.6 / 1.49 (5g), 28.9 / 0.92 -> 28.6 / 0.96 (1g); the id-set entries are gone from the histogram. Residue: type-fest 10.5 s
-against (P18.303)'s 9.4 s is the real 1,000-level tail work (4 of the 8 aliases run because we eagerly evaluate an
-object-literal argument's member — tsgo never resolves it); an element read still forces the whole table (`C900[899]` mints
-900 — linear, one-off); the cycle-break answers `errorType`, so members reached through a recursive member go silent (`Wide`
-4:7, `tp.then` 17:7 — a real deferred alias reference would fix both). **Matrix** (`m1`-`m3`): all cells unchanged and = tsgo
-except `Wide<0>` (false TS2589 gone; 4:7 still missing as for a plain type-literal body) and pre-existing divergences identical
-before / after. **Incident**: a latin-1 Python rewrite truncated `Checker.kt` to 0 bytes mid-round; restored from the patch;
-verified by the orchestrator — `git diff --numstat` shows no binary row and the non-ASCII line count moved 10,809 -> 10,814,
-exactly the 7 added / 2 moved comment lines. **Pins**: `LazyTupleMembersTest` 7 (count pins: element symbols minted < 2,000
-where the eager binary mints ~405,000 / ~90,000); ablation a1 3 / a2 3 / a3 3 / a4 1 / a5 1 / a6 1 / a7 1 RED. **Gates**: full suite
-22,894 / 0 / 44 (+7); corpus screen 8725 / 0 and `--include ''` the same 41 (byte-identical diffs); `cost_gate.py` 0 (counters
-identical to the before binary); `huge_methods.py --fail-over 0` 0; at-risk sweep 168 classes / 3,055 tests; grid 8 x added=0
-removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to
-`TupleMemberCensus`, `MemberResolver`); library grid OURS-ONLY row lists byte-identical on all eight (orchestrator's `r305`;
-tally 238); warning gate with probe: probe only.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -408,7 +406,9 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   byte-identical, mechanical 99.0%, 1 override, parse ~1.28x `-core` warm, 0 huge methods, warning-clean.**
 - [ ] **(TSGO.2) binder + checker through the porter (after a GO on (TSGO.1)).** ~64k Go. Oracle:
   diagnostics differential against tsgo over all four baseline layers, and the ~2,800
-  hand-written pins run against BOTH engines.
+  hand-written pins run against BOTH engines. **IN PROGRESS — (TSGO.2-a): the checker closure compiles and the
+  conformance differential is 6,318 / 6,318 equal. Next: make `DiagParityTest` fail on a mismatch, port the harness
+  functions, run the pins against `-tsgo`, and cover the remaining baseline layers.**
 - [ ] **(TSGO.3) program, module resolution, transformers, printer; expose `internal/api` through
   the `Project` API (the type oracle).**
 - [ ] **(TSGO.4) re-base externals, KIR and the LSP onto `-tsgo`; decide `-core`'s retirement on

@@ -1,5 +1,9 @@
 # Status
 
+**(TSGO.2) ported checker (2026-10-07):** the 42-package `internal/compiler` closure (181k Go lines, 99.9% mechanical,
+4 overrides) compiles in `-tsgo`; diagnostics differential against tsgo **6,318 / 6,318** conformance configurations
+equal; bound AST oracle still 7,774 / 7,774; `-tsgo`+`-goport` jvmTest 103 / 0.
+
 **(TSGO.1) tsgo-to-Kotlin port spike (2026-10-07):** encoded-AST byte equality vs the tsgo binary
 **7,774 / 7,774** (bound, real hash); mechanically lowered **99.0%** of 44,395 Go lines; overrides **1**; methods over
 8,000 bytecodes **0**; warning-clean; parse speed **~1.28x** `-core` warm. **GATE: GO** — (TSGO.2) binder+checker next. Modules `-goport` (porter) and `-tsgo` (runtime + generated port).
