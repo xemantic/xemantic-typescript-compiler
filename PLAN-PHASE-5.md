@@ -405,7 +405,8 @@ stay as a record and as the fallback if the gate says no-go.
 
 - [ ] **(TSGO.0) OWNER DECISIONS before the spike — `docs/tsgo-port-plan.md` § 6.** D1 Go 1.26
   toolchain downloaded to gitignored `tools/go-1.26/` (dev-time only, for `goport-extract`); D2
-  licence of `-tsgo` (recommended Apache-2.0, keeping Microsoft's notices); D3 freeze `-core`
+  licence of `-tsgo` (recommended AGPL-3.0-only + output exception like the rest of the repo,
+  keeping Microsoft's copyright, the Apache `LICENSE`/`NOTICE` and per-file modification headers); D3 freeze `-core`
   parity rounds while the spike runs. **BLOCKED-PENDING-USER** for D1–D2; nothing is installed or published until answered.
 - [ ] **(TSGO.1) SPIKE: scanner + parser + AST + API encoder through the porter, gated on
   encoded-AST byte equality against `tools/tsgo-7.0.2/lib/tsc --api` `getSourceFile`.** ~57k Go

@@ -95,6 +95,34 @@ Ordered by how silently they fail:
    `go`/`WaitGroup` lives in `compiler`, `core`, `lsp`, `project`, `fswatch`. Lower to the
    existing `runInDeepStackWorkers` / coroutine machinery by override, not by rule.
 
+### 2.3 Naming and idioms — rules, never hand edits
+
+The generated Kotlin follows this project's conventions, not Go's, and gets there **only through
+the porter**, so every re-run on a tsgo upgrade applies them identically and the upgrade stays a
+reviewable diff. Restructuring the output by hand or by LLM afterwards would break that.
+
+- **A rename table**, checked in under `-goport` as config. Two layers:
+  - systematic rules: an exported Go name becomes Kotlin camelCase (`GetTypeOfSymbol` →
+    `getTypeOfSymbol`); Go package prefixes become Kotlin packages; `Kind*` constants become
+    enum entries (`ast.KindIdentifier` → `NodeKind.Identifier`);
+  - explicit overrides for names this project already uses differently, so the port reads like
+    `-core` where the concepts coincide.
+
+  A rename that collides with another declaration in the same scope refuses the build, like a
+  stale override.
+- **Idiom rules** in the lowering, each with a pin:
+  - a multiple return becomes a small result class or `Pair`;
+  - a `(T, bool)` "found" return becomes `T?` where `go/types` proves `T` has no meaningful zero;
+  - a sentinel error becomes `null` or a sealed result, never an exception;
+  - a Go method on a pointer receiver becomes a member; free functions over one type stay
+    top-level;
+  - `iota` enums become `enum class`, or `value class` bit sets where Go ORs them (flags).
+- **Traceability survives renaming.** Every generated declaration carries a one-line comment
+  naming its Go qualified name and source hash, which is what an override keys on and what a
+  reviewer diffs against. Overrides are keyed by the **Go** name, so renaming never makes one
+  stale.
+- **Overrides follow the conventions directly**; they are written against the renamed API.
+
 Generated code targets `commonMain` from day one (no `java.*`), because that is a property of the
 lowering and expensive to retrofit. JVM is the only target exercised during the spike.
 
@@ -169,11 +197,23 @@ analysis (CLAUDE.md: 4–29x per primitive), so it needs its own measurement.
   downloaded into `tools/go-1.26/`, gitignored, exactly like `tools/tsgo-7.0.2`. Not needed to
   build or use xtsc. Nothing is installed until this is approved.
 - **D2 — licence of `-tsgo`.** tsgo is Apache-2.0; the repo is AGPL-3.0-only with the output
-  exception. Apache-2.0 code may be incorporated into an AGPLv3 work, so either works legally;
-  either way every generated file keeps Microsoft's copyright line and the Apache notice, and the
-  module ships tsgo's `LICENSE`/`NOTICE`. Option A: `-tsgo` stays **Apache-2.0** (simplest
-  provenance; leaves room to collaborate upstream). Option B: AGPL like the
-  rest. Recommendation: A.
+  exception. Apache-2.0 code may be incorporated into an AGPLv3 work, so `-tsgo` can carry the
+  same licence as the rest of the repo. **Recommendation: AGPL-3.0-only with the output
+  exception, like every other module** — one licence for the whole project, and embedders
+  already inherit AGPL through `-core`. The idiomatic naming of § 2.3 does **not** change the
+  obligations: a translation is a derivative work however its identifiers are spelled, so in
+  every case:
+  - every generated and override file carries a header naming Microsoft's copyright, stating
+    that it is derived from `typescript-go` at the pinned tag and modified, and naming the
+    AGPL as the licence of the modified work;
+  - the module ships tsgo's `LICENSE` (Apache-2.0) and `NOTICE.txt` unchanged, next to the
+    repo's own `LICENSE`/`LICENSE-EXCEPTION`;
+  - the header is emitted by the porter, so no file can lose it by hand.
+
+  The cost against Apache-2.0: changes cannot flow back upstream as-is. Upstream reports are
+  issues anyway (owner directive 2026-09-21), so nothing planned depends on that. Option A
+  (`-tsgo` stays Apache-2.0) remains available if that changes. Not legal advice; the owner
+  decides.
 - **D3 — `-core` freeze.** Recommendation: from (TSGO.1) on, `-core` takes only fixes that the
   products need now; no new (CHK.\*)/(INV.\*) parity rounds unless the gate fails.
 
