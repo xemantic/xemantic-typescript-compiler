@@ -23,30 +23,34 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
-}
+package com.xemantic.typescript.tsgo.go.math.bits
 
-rootProject.name = "xemantic-typescript-compiler"
+/** `bits.Len64(x)`. */
+fun len64(x: ULong): Int = 64 - x.countLeadingZeroBits()
 
-include(
-    "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
-    "xemantic-typescript-compiler-cli",
-    "xemantic-typescript-compiler-daemon",
-    "xemantic-typescript-compiler-client",
-    "xemantic-typescript-compiler-project",
-    // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
-    "xemantic-typescript-compiler-kir",
-    // PHASE 18 (owner directive 2026-09-01): the Kotlin externals generator
-    // and the LSP server, both pre-approved additions.
-    "xemantic-typescript-compiler-externals",
-    "xemantic-typescript-compiler-lsp",
-    // (TSGO.1) spike (owner decision 2026-10-06): tsgo ported to Kotlin —
-    // the hand-written Go runtime and shims, plus the generated port.
-    // docs/tsgo-port-plan.md, docs/goport-design.md.
-    "xemantic-typescript-compiler-tsgo",
-    // (TSGO.1): the porter that lowers tsgo's Go IR into `-tsgo`'s generated
-    // Kotlin (a dev tool, JVM only, not published). docs/goport-design.md.
-    "xemantic-typescript-compiler-goport"
-)
+/** `bits.Len32(x)`. */
+fun len32(x: UInt): Int = 32 - x.countLeadingZeroBits()
+
+/** `bits.Len(x)` (Go `uint` is 64-bit). */
+fun len(x: ULong): Int = len64(x)
+
+/** `bits.LeadingZeros64(x)`. */
+fun leadingZeros64(x: ULong): Int = x.countLeadingZeroBits()
+
+/** `bits.TrailingZeros64(x)`. */
+fun trailingZeros64(x: ULong): Int = x.countTrailingZeroBits()
+
+/** `bits.TrailingZeros32(x)`. */
+fun trailingZeros32(x: UInt): Int = x.countTrailingZeroBits()
+
+/** `bits.OnesCount64(x)`. */
+fun onesCount64(x: ULong): Int = x.countOneBits()
+
+/** `bits.OnesCount32(x)`. */
+fun onesCount32(x: UInt): Int = x.countOneBits()
+
+/** `bits.RotateLeft64(x, k)`. */
+fun rotateLeft64(x: ULong, k: Int): ULong = x.rotateLeft(k)
+
+/** `bits.RotateLeft32(x, k)`. */
+fun rotateLeft32(x: UInt, k: Int): UInt = x.rotateLeft(k)

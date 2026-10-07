@@ -23,30 +23,35 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
+package com.xemantic.typescript.tsgo.go.unicode.utf16
+
+import com.xemantic.typescript.tsgo.runtime.Tuple2
+
+private const val REPLACEMENT_CHAR = 0xFFFD
+private const val MAX_RUNE = 0x10FFFF
+private const val SURR1 = 0xD800
+private const val SURR2 = 0xDC00
+private const val SURR3 = 0xE000
+private const val SURR_SELF = 0x10000
+
+/** `utf16.IsSurrogate(r)`. */
+fun isSurrogate(r: Int): Boolean = r in SURR1 until SURR3
+
+/** `utf16.DecodeRune(r1, r2)`. */
+fun decodeRune(r1: Int, r2: Int): Int =
+    if (r1 in SURR1 until SURR2 && r2 in SURR2 until SURR3) ((r1 - SURR1) shl 10 or (r2 - SURR2)) + SURR_SELF
+    else REPLACEMENT_CHAR
+
+/** `utf16.EncodeRune(r)` → (r1, r2). */
+fun encodeRune(r: Int): Tuple2<Int, Int> {
+    if (r < SURR_SELF || r > MAX_RUNE) return Tuple2(REPLACEMENT_CHAR, REPLACEMENT_CHAR)
+    val v = r - SURR_SELF
+    return Tuple2(SURR1 + ((v shr 10) and 0x3FF), SURR2 + (v and 0x3FF))
 }
 
-rootProject.name = "xemantic-typescript-compiler"
-
-include(
-    "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
-    "xemantic-typescript-compiler-cli",
-    "xemantic-typescript-compiler-daemon",
-    "xemantic-typescript-compiler-client",
-    "xemantic-typescript-compiler-project",
-    // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
-    "xemantic-typescript-compiler-kir",
-    // PHASE 18 (owner directive 2026-09-01): the Kotlin externals generator
-    // and the LSP server, both pre-approved additions.
-    "xemantic-typescript-compiler-externals",
-    "xemantic-typescript-compiler-lsp",
-    // (TSGO.1) spike (owner decision 2026-10-06): tsgo ported to Kotlin —
-    // the hand-written Go runtime and shims, plus the generated port.
-    // docs/tsgo-port-plan.md, docs/goport-design.md.
-    "xemantic-typescript-compiler-tsgo",
-    // (TSGO.1): the porter that lowers tsgo's Go IR into `-tsgo`'s generated
-    // Kotlin (a dev tool, JVM only, not published). docs/goport-design.md.
-    "xemantic-typescript-compiler-goport"
-)
+/** `utf16.RuneLen(r)`. */
+fun runeLen(r: Int): Int = when {
+    r in 0 until SURR1 || r in SURR3 until SURR_SELF -> 1
+    r in SURR_SELF..MAX_RUNE -> 2
+    else -> -1
+}

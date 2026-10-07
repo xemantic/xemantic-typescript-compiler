@@ -23,30 +23,26 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
+package com.xemantic.typescript.tsgo.go.golang_org.x.sync.errgroup
+
+import com.xemantic.typescript.tsgo.go.context.Context
+import com.xemantic.typescript.tsgo.runtime.GoError
+import com.xemantic.typescript.tsgo.runtime.Tuple2
+
+/** `errgroup.Group`, SINGLE-THREADED: `Go` runs the function immediately; `Wait` returns the first error. */
+class Group {
+    private var err: GoError? = null
+
+    fun go(f: () -> GoError?) {
+        val e = f()
+        if (e != null && err == null) err = e
+    }
+
+    @kotlin.jvm.JvmName("goWait")
+    fun wait(): GoError? = err
+
+    fun goCopy(): Group = Group().also { it.err = err }
 }
 
-rootProject.name = "xemantic-typescript-compiler"
-
-include(
-    "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
-    "xemantic-typescript-compiler-cli",
-    "xemantic-typescript-compiler-daemon",
-    "xemantic-typescript-compiler-client",
-    "xemantic-typescript-compiler-project",
-    // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
-    "xemantic-typescript-compiler-kir",
-    // PHASE 18 (owner directive 2026-09-01): the Kotlin externals generator
-    // and the LSP server, both pre-approved additions.
-    "xemantic-typescript-compiler-externals",
-    "xemantic-typescript-compiler-lsp",
-    // (TSGO.1) spike (owner decision 2026-10-06): tsgo ported to Kotlin —
-    // the hand-written Go runtime and shims, plus the generated port.
-    // docs/tsgo-port-plan.md, docs/goport-design.md.
-    "xemantic-typescript-compiler-tsgo",
-    // (TSGO.1): the porter that lowers tsgo's Go IR into `-tsgo`'s generated
-    // Kotlin (a dev tool, JVM only, not published). docs/goport-design.md.
-    "xemantic-typescript-compiler-goport"
-)
+/** `errgroup.WithContext(ctx)`: the derived context is [ctx] itself (no cancellation). */
+fun withContext(ctx: Context): Tuple2<Group?, Context> = Tuple2(Group(), ctx)

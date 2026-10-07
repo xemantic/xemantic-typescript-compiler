@@ -23,30 +23,11 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
-}
+package com.xemantic.typescript.tsgo.go.os
 
-rootProject.name = "xemantic-typescript-compiler"
-
-include(
-    "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
-    "xemantic-typescript-compiler-cli",
-    "xemantic-typescript-compiler-daemon",
-    "xemantic-typescript-compiler-client",
-    "xemantic-typescript-compiler-project",
-    // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
-    "xemantic-typescript-compiler-kir",
-    // PHASE 18 (owner directive 2026-09-01): the Kotlin externals generator
-    // and the LSP server, both pre-approved additions.
-    "xemantic-typescript-compiler-externals",
-    "xemantic-typescript-compiler-lsp",
-    // (TSGO.1) spike (owner decision 2026-10-06): tsgo ported to Kotlin —
-    // the hand-written Go runtime and shims, plus the generated port.
-    // docs/tsgo-port-plan.md, docs/goport-design.md.
-    "xemantic-typescript-compiler-tsgo",
-    // (TSGO.1): the porter that lowers tsgo's Go IR into `-tsgo`'s generated
-    // Kotlin (a dev tool, JVM only, not published). docs/goport-design.md.
-    "xemantic-typescript-compiler-goport"
-)
+/**
+ * `os.Getenv(key)`. The port reads no process environment (commonMain has no portable API for
+ * it, and tsgo's only use in the spike closure is a debug toggle): always "".
+ */
+@Suppress("UNUSED_PARAMETER")
+fun getenv(key: String): String = ""

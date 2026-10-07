@@ -23,30 +23,22 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
+package com.xemantic.typescript.tsgo
+
+/** One oracle row: fields split on \u0001, \u0002 = Go nil. */
+internal fun fields(row: String): List<String?> = row.split('\u0001').map { if (it == "\u0002") null else it }
+
+/** A hex bit pattern as a Double. */
+internal fun bitsToDouble(hex: String): Double = Double.fromBits(hex.toULong(16).toLong())
+
+/** A Double as Go's `%x` of its bits. */
+internal fun doubleBits(d: Double): String = d.toRawBits().toULong().toString(16)
+
+/** Equal bit patterns, or both NaN (NaN payloads are not portable across Kotlin targets). */
+internal fun sameDouble(a: Double, expectedHex: String): Boolean {
+    val e = bitsToDouble(expectedHex)
+    return if (e.isNaN()) a.isNaN() else doubleBits(a) == expectedHex
 }
 
-rootProject.name = "xemantic-typescript-compiler"
-
-include(
-    "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
-    "xemantic-typescript-compiler-cli",
-    "xemantic-typescript-compiler-daemon",
-    "xemantic-typescript-compiler-client",
-    "xemantic-typescript-compiler-project",
-    // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
-    "xemantic-typescript-compiler-kir",
-    // PHASE 18 (owner directive 2026-09-01): the Kotlin externals generator
-    // and the LSP server, both pre-approved additions.
-    "xemantic-typescript-compiler-externals",
-    "xemantic-typescript-compiler-lsp",
-    // (TSGO.1) spike (owner decision 2026-10-06): tsgo ported to Kotlin —
-    // the hand-written Go runtime and shims, plus the generated port.
-    // docs/tsgo-port-plan.md, docs/goport-design.md.
-    "xemantic-typescript-compiler-tsgo",
-    // (TSGO.1): the porter that lowers tsgo's Go IR into `-tsgo`'s generated
-    // Kotlin (a dev tool, JVM only, not published). docs/goport-design.md.
-    "xemantic-typescript-compiler-goport"
-)
+/** A Go byte string from byte values (written this way because a `\uXXXX` in a fixture is not reliable). */
+internal fun bs(vararg bytes: Int): String = bytes.map { (it and 0xFF).toChar() }.toCharArray().concatToString()
