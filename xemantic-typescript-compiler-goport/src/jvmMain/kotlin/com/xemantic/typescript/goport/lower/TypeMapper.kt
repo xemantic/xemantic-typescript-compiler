@@ -219,6 +219,48 @@ class TypeMapper(
         return fc.typeRef(Naming.kotlinPackage(t.pkg!!), pc.prog.typeName(t.key, t.name) + "_Box")
     }
 
+    /**
+     * A `GoTypeInfo` expression describing Go type [id] to the codegen `reflect` (runtime GoReflect.kt):
+     * kind, name, Kotlin class, element/key types, struct fields (via the struct's `GO_STRUCT`), zero.
+     */
+    fun reflectTypeInfo(id: Int): String {
+        val t = types.unalias(id)
+        val zero = try { "{ ${zero(id)} }" } catch (_: Refusal) { "{ null }" }
+        fun info(kind: Int, name: String = "", cls: String? = null, elem: String? = null, key: String? = null, struct: String? = null) =
+            "GoTypeInfo($kind, \"$name\"" + (cls?.let { ", cls = $it" } ?: "") + (elem?.let { ", elem = $it" } ?: "") +
+                (key?.let { ", key = $it" } ?: "") + (struct?.let { ", structInfo = { $it }" } ?: "") + ", zero = $zero)"
+        return when (t) {
+            is BasicType -> info(basicKindNumber(kindOf(t)), kindOf(t).lowercase())
+            is NamedType -> {
+                val origin = t.origin?.let { types.unalias(it) as NamedType } ?: t
+                val qn = "${origin.pkg?.substringAfterLast('/') ?: ""}.${origin.name}"
+                when (val u = types.under(t.id)) {
+                    is BasicType -> info(basicKindNumber(kindOf(u)), qn, if (namedKind(t) == NamedKind.VALUE) namedRef(t) + "::class" else null)
+                    is StructType -> info(25, qn, namedRef(t) + "::class",
+                        struct = if (isPortedNamed(t) && origin.key in pc.prog.reflectStructs && namedKind(t) == NamedKind.STRUCT) namedRef(t) + ".GO_STRUCT" else null)
+                    is InterfaceType -> info(20, qn)
+                    else -> reflectTypeInfo(t.underlying)
+                }
+            }
+            is PointerType -> info(22, elem = reflectTypeInfo(t.elem))
+            is SliceType -> info(23, elem = reflectTypeInfo(t.elem))
+            is ArrayType -> info(17, elem = reflectTypeInfo(t.elem))
+            is MapType -> info(21, elem = reflectTypeInfo(t.elem), key = reflectTypeInfo(t.keyType))
+            is SignatureType -> info(19)
+            is InterfaceType -> info(20)
+            is StructType -> info(25)
+            is ChanType -> info(18)
+            else -> info(0)
+        }
+    }
+
+    private fun basicKindNumber(k: String): Int = when (k) {
+        "Bool" -> 1; "Int" -> 2; "Int8" -> 3; "Int16" -> 4; "Int32" -> 5; "Int64" -> 6; "Uint" -> 7; "Uint8" -> 8
+        "Uint16" -> 9; "Uint32" -> 10; "Uint64" -> 11; "Uintptr" -> 12; "Float32" -> 13; "Float64" -> 14; "String" -> 24
+        "UnsafePointer" -> 26
+        else -> 0
+    }
+
     fun tpName(t: TypeParamType): String = tpNames[t.id] ?: Naming.escape(t.name)
 
     /**

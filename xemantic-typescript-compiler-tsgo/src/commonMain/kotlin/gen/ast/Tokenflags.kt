@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/ast.TokenFlags 82663d44
 @kotlin.jvm.JvmInline
-value class TokenFlags(val value: Int) : Comparable<TokenFlags> {
+value class TokenFlags(val value: Int) : Comparable<TokenFlags>, GoBasicValue {
 
     override fun compareTo(other: TokenFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TokenFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<TokenFlags> = GoElem({ TokenFlags(0) })

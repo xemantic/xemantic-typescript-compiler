@@ -30,9 +30,13 @@ import com.xemantic.typescript.tsgo.go.unicode.RangeTable
 
 // go: github.com/microsoft/typescript-go/internal/stringutil.specialCasingCondition 62955e87
 @kotlin.jvm.JvmInline
-value class specialCasingCondition(val value: Int) : Comparable<specialCasingCondition> {
+value class specialCasingCondition(val value: Int) : Comparable<specialCasingCondition>, GoBasicValue {
 
     override fun compareTo(other: specialCasingCondition): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = specialCasingCondition(raw as Int)
 
     companion object {
         val ELEM: GoElem<specialCasingCondition> = GoElem({ specialCasingCondition(0) })

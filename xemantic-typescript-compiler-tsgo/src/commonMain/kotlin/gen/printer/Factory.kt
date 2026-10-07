@@ -705,9 +705,13 @@ fun NodeFactory?.newDisposeResourcesHelper(envBinding: Node?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/printer.PrivateIdentifierKind 7e756973
 @kotlin.jvm.JvmInline
-value class PrivateIdentifierKind(val value: String) : Comparable<PrivateIdentifierKind> {
+value class PrivateIdentifierKind(val value: String) : Comparable<PrivateIdentifierKind>, GoBasicValue {
 
     override fun compareTo(other: PrivateIdentifierKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = PrivateIdentifierKind(raw as String)
 
     companion object {
         val ELEM: GoElem<PrivateIdentifierKind> = GoElem({ PrivateIdentifierKind("") })

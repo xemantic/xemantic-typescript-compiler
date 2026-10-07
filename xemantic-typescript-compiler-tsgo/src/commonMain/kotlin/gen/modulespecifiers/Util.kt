@@ -331,9 +331,13 @@ class NodeModulePathParts(
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.nodeModulesPathParseState b05bf61b
 @kotlin.jvm.JvmInline
-value class nodeModulesPathParseState(val value: Int) : Comparable<nodeModulesPathParseState> {
+value class nodeModulesPathParseState(val value: Int) : Comparable<nodeModulesPathParseState>, GoBasicValue {
 
     override fun compareTo(other: nodeModulesPathParseState): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = nodeModulesPathParseState(raw as Int)
 
     companion object {
         val ELEM: GoElem<nodeModulesPathParseState> = GoElem({ nodeModulesPathParseState(0) })

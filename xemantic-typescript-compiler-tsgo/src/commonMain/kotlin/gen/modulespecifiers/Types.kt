@@ -51,9 +51,13 @@ interface CheckerShape {
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.ResultKind bc43538d
 @kotlin.jvm.JvmInline
-value class ResultKind(val value: Int) : Comparable<ResultKind> {
+value class ResultKind(val value: Int) : Comparable<ResultKind>, GoBasicValue {
 
     override fun compareTo(other: ResultKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ResultKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<ResultKind> = GoElem({ ResultKind(0) })
@@ -122,9 +126,13 @@ interface ModuleSpecifierGenerationHost : OutputPathsHost {
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.ImportModuleSpecifierPreference 1a27bccf
 @kotlin.jvm.JvmInline
-value class ImportModuleSpecifierPreference(val value: String) : Comparable<ImportModuleSpecifierPreference> {
+value class ImportModuleSpecifierPreference(val value: String) : Comparable<ImportModuleSpecifierPreference>, GoBasicValue {
 
     override fun compareTo(other: ImportModuleSpecifierPreference): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ImportModuleSpecifierPreference(raw as String)
 
     companion object {
         val ELEM: GoElem<ImportModuleSpecifierPreference> = GoElem({ ImportModuleSpecifierPreference("") })
@@ -148,9 +156,13 @@ val ImportModuleSpecifierPreferenceNonRelative: ImportModuleSpecifierPreference 
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.ImportModuleSpecifierEndingPreference b6494fa3
 @kotlin.jvm.JvmInline
-value class ImportModuleSpecifierEndingPreference(val value: String) : Comparable<ImportModuleSpecifierEndingPreference> {
+value class ImportModuleSpecifierEndingPreference(val value: String) : Comparable<ImportModuleSpecifierEndingPreference>, GoBasicValue {
 
     override fun compareTo(other: ImportModuleSpecifierEndingPreference): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ImportModuleSpecifierEndingPreference(raw as String)
 
     companion object {
         val ELEM: GoElem<ImportModuleSpecifierEndingPreference> = GoElem({ ImportModuleSpecifierEndingPreference("") })
@@ -214,9 +226,13 @@ class ModuleSpecifierOptions(
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.RelativePreferenceKind f4433e29
 @kotlin.jvm.JvmInline
-value class RelativePreferenceKind(val value: Int) : Comparable<RelativePreferenceKind> {
+value class RelativePreferenceKind(val value: Int) : Comparable<RelativePreferenceKind>, GoBasicValue {
 
     override fun compareTo(other: RelativePreferenceKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = RelativePreferenceKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<RelativePreferenceKind> = GoElem({ RelativePreferenceKind(0) })
@@ -237,9 +253,13 @@ val RelativePreferenceExternalNonRelative: RelativePreferenceKind = RelativePref
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.ModuleSpecifierEnding c6272ea2
 @kotlin.jvm.JvmInline
-value class ModuleSpecifierEnding(val value: Int) : Comparable<ModuleSpecifierEnding> {
+value class ModuleSpecifierEnding(val value: Int) : Comparable<ModuleSpecifierEnding>, GoBasicValue {
 
     override fun compareTo(other: ModuleSpecifierEnding): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ModuleSpecifierEnding(raw as Int)
 
     companion object {
         val ELEM: GoElem<ModuleSpecifierEnding> = GoElem({ ModuleSpecifierEnding(0) })
@@ -260,9 +280,13 @@ val ModuleSpecifierEndingTsExtension: ModuleSpecifierEnding = ModuleSpecifierEnd
 
 // go: github.com/microsoft/typescript-go/internal/modulespecifiers.MatchingMode 02446b03
 @kotlin.jvm.JvmInline
-value class MatchingMode(val value: Int) : Comparable<MatchingMode> {
+value class MatchingMode(val value: Int) : Comparable<MatchingMode>, GoBasicValue {
 
     override fun compareTo(other: MatchingMode): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = MatchingMode(raw as Int)
 
     companion object {
         val ELEM: GoElem<MatchingMode> = GoElem({ MatchingMode(0) })

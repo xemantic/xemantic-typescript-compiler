@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/ast.OperatorPrecedence 6c9c33d2
 @kotlin.jvm.JvmInline
-value class OperatorPrecedence(val value: Int) : Comparable<OperatorPrecedence> {
+value class OperatorPrecedence(val value: Int) : Comparable<OperatorPrecedence>, GoBasicValue {
 
     override fun compareTo(other: OperatorPrecedence): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = OperatorPrecedence(raw as Int)
 
     companion object {
         val ELEM: GoElem<OperatorPrecedence> = GoElem({ OperatorPrecedence(0) })
@@ -153,9 +157,13 @@ fun getExpressionPrecedence(expression: Node?): OperatorPrecedence {
 
 // go: github.com/microsoft/typescript-go/internal/ast.OperatorPrecedenceFlags 170f7c89
 @kotlin.jvm.JvmInline
-value class OperatorPrecedenceFlags(val value: Int) : Comparable<OperatorPrecedenceFlags> {
+value class OperatorPrecedenceFlags(val value: Int) : Comparable<OperatorPrecedenceFlags>, GoBasicValue {
 
     override fun compareTo(other: OperatorPrecedenceFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = OperatorPrecedenceFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<OperatorPrecedenceFlags> = GoElem({ OperatorPrecedenceFlags(0) })
@@ -325,9 +333,13 @@ fun getLeftmostExpression(node_0: Node?, stopAtCallExpressions: Boolean): Node? 
 
 // go: github.com/microsoft/typescript-go/internal/ast.TypePrecedence e7bcd804
 @kotlin.jvm.JvmInline
-value class TypePrecedence(val value: Int) : Comparable<TypePrecedence> {
+value class TypePrecedence(val value: Int) : Comparable<TypePrecedence>, GoBasicValue {
 
     override fun compareTo(other: TypePrecedence): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypePrecedence(raw as Int)
 
     companion object {
         val ELEM: GoElem<TypePrecedence> = GoElem({ TypePrecedence(0) })

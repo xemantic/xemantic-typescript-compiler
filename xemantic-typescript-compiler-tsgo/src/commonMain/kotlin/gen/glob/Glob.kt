@@ -225,9 +225,13 @@ class slash(
 
 // go: github.com/microsoft/typescript-go/internal/glob.literal 804d054a
 @kotlin.jvm.JvmInline
-value class literal(val value: String) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<literal> {
+value class literal(val value: String) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<literal>, GoBasicValue {
 
     override fun compareTo(other: literal): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = literal(raw as String)
 
     // go: github.com/microsoft/typescript-go/internal/glob.literal.String 6b537880
     override fun string(): String {

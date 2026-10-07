@@ -2185,9 +2185,13 @@ fun reverseAccessKind(a: AccessKind): AccessKind {
 
 // go: github.com/microsoft/typescript-go/internal/ast.AccessKind cea11ce6
 @kotlin.jvm.JvmInline
-value class AccessKind(val value: Int) : Comparable<AccessKind> {
+value class AccessKind(val value: Int) : Comparable<AccessKind>, GoBasicValue {
 
     override fun compareTo(other: AccessKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = AccessKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<AccessKind> = GoElem({ AccessKind(0) })
@@ -2475,9 +2479,13 @@ class PatternAmbientModule(
 
 // go: github.com/microsoft/typescript-go/internal/ast.CommentDirectiveKind df022af0
 @kotlin.jvm.JvmInline
-value class CommentDirectiveKind(val value: Int) : Comparable<CommentDirectiveKind> {
+value class CommentDirectiveKind(val value: Int) : Comparable<CommentDirectiveKind>, GoBasicValue {
 
     override fun compareTo(other: CommentDirectiveKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = CommentDirectiveKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<CommentDirectiveKind> = GoElem({ CommentDirectiveKind(0) })
@@ -2564,9 +2572,13 @@ class SourceFileDataKey<T>(
 
 // go: github.com/microsoft/typescript-go/internal/ast.sourceFileDataKey 6f4e627d
 @kotlin.jvm.JvmInline
-value class sourceFileDataKey(val value: ULong) : Comparable<sourceFileDataKey> {
+value class sourceFileDataKey(val value: ULong) : Comparable<sourceFileDataKey>, GoBasicValue {
 
     override fun compareTo(other: sourceFileDataKey): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = sourceFileDataKey(raw as ULong)
 
     companion object {
         val ELEM: GoElem<sourceFileDataKey> = GoElem({ sourceFileDataKey(0uL) })

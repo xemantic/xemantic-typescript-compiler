@@ -34,7 +34,7 @@ class BuildOptions(
     @kotlin.jvm.JvmField var builders: GoPtr<Int>? = null,
     @get:kotlin.jvm.JvmName("goGet_stopBuildOnErrors") @set:kotlin.jvm.JvmName("goSet_stopBuildOnErrors") var stopBuildOnErrors: Tristate = Tristate(0),
     @get:kotlin.jvm.JvmName("goGet_clean") @set:kotlin.jvm.JvmName("goSet_clean") var clean: Tristate = Tristate(0),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): BuildOptions = BuildOptions(blank0 = blank0, dry = dry, force = force, verbose = verbose, builders = builders, stopBuildOnErrors = stopBuildOnErrors, clean = clean)
 
@@ -52,7 +52,33 @@ class BuildOptions(
 
     fun goHash(): Int = 31 * blank0.hashCode() + 31 * dry.hashCode() + 31 * force.hashCode() + 31 * verbose.hashCode() + 31 * builders.hashCode() + 31 * stopBuildOnErrors.hashCode() + 31 * clean.hashCode()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { blank0 }, { blank0 = it as com.xemantic.typescript.tsgo.core.noCopy })
+        1 -> Tristate_Ptr({ dry }, { dry = it })
+        2 -> Tristate_Ptr({ force }, { force = it })
+        3 -> Tristate_Ptr({ verbose }, { verbose = it })
+        4 -> GoFieldPtr(this, 4, { builders }, { builders = it as GoPtr<Int>? })
+        5 -> Tristate_Ptr({ stopBuildOnErrors }, { stopBuildOnErrors = it })
+        6 -> Tristate_Ptr({ clean }, { clean = it })
+        else -> goPanicIndex(i, 7)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("core.BuildOptions", listOf(
+                GoFieldInfo("_", "", false, false, GoTypeInfo(25, "core.noCopy", cls = com.xemantic.typescript.tsgo.core.noCopy::class, structInfo = { com.xemantic.typescript.tsgo.core.noCopy.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.core.noCopy() })),
+                GoFieldInfo("Dry", "json:\"dry,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Force", "json:\"force,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Verbose", "json:\"verbose,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Builders", "json:\"builders,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(2, "int", zero = { 0 }), zero = { null })),
+                GoFieldInfo("StopBuildOnErrors", "json:\"stopBuildOnErrors,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Clean", "json:\"clean,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+            ))
+        }
         val ELEM: GoElem<BuildOptions> = GoElem({ BuildOptions() }, { it.goCopy() })
     }
 }

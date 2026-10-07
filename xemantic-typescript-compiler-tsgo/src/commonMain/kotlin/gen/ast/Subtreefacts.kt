@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/ast.SubtreeFacts 6498a6b3
 @kotlin.jvm.JvmInline
-value class SubtreeFacts(val value: UInt) : Comparable<SubtreeFacts> {
+value class SubtreeFacts(val value: UInt) : Comparable<SubtreeFacts>, GoBasicValue {
 
     override fun compareTo(other: SubtreeFacts): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SubtreeFacts(raw as UInt)
 
     companion object {
         val ELEM: GoElem<SubtreeFacts> = GoElem({ SubtreeFacts(0u) })

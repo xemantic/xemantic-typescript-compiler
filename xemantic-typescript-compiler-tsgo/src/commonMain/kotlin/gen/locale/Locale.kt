@@ -29,9 +29,13 @@ import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
 
 // go: github.com/microsoft/typescript-go/internal/locale.contextKey 65e826d5
 @kotlin.jvm.JvmInline
-value class contextKey(val value: Int) : Comparable<contextKey> {
+value class contextKey(val value: Int) : Comparable<contextKey>, GoBasicValue {
 
     override fun compareTo(other: contextKey): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = contextKey(raw as Int)
 
     companion object {
         val ELEM: GoElem<contextKey> = GoElem({ contextKey(0) })

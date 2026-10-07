@@ -150,9 +150,13 @@ import com.xemantic.typescript.tsgo.transformers.visitor
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.asyncContextFlags 16f1660d
 @kotlin.jvm.JvmInline
-value class asyncContextFlags(val value: Int) : Comparable<asyncContextFlags> {
+value class asyncContextFlags(val value: Int) : Comparable<asyncContextFlags>, GoBasicValue {
 
     override fun compareTo(other: asyncContextFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = asyncContextFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<asyncContextFlags> = GoElem({ asyncContextFlags(0) })

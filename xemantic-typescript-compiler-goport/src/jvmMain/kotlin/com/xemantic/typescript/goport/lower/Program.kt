@@ -29,6 +29,7 @@ import com.xemantic.typescript.goport.ir.IrPackage
 import com.xemantic.typescript.goport.ir.Node
 import com.xemantic.typescript.goport.ir.bool
 import com.xemantic.typescript.goport.ir.int
+import com.xemantic.typescript.goport.ir.ints
 import com.xemantic.typescript.goport.ir.k
 import com.xemantic.typescript.goport.ir.list
 import com.xemantic.typescript.goport.ir.obj
@@ -83,6 +84,19 @@ class Program(
     /** A struct whose fields do not fit a JVM constructor's 255 argument slots (Decls.structClass). */
     fun bigStruct(st: com.xemantic.typescript.goport.types.StructType): Boolean = st.fields.size > 120
 
+    /**
+     * Pointer-receiver methods of named basic types (`func (t *Tristate) UnmarshalJSON`): extensions
+     * on `GoPtr<V>?` (qnames and object keys); the type gets a `<V>_Ptr` box implementing the
+     * interfaces those methods satisfy (Decls.valuePtrBox).
+     */
+    val valuePtrMethods = HashSet<String>()
+
+    /** Value classes that got a `<V>_Ptr` box (filled while emitting; see [hasValuePtrBox]). */
+    val valuePtrBoxes = HashSet<String>()
+
+    /** Whether value class [key] has pointer methods (so a `<V>_Ptr` box is emitted for it). */
+    fun hasValuePtrBox(key: String): Boolean = methodsByType[key]?.any { it.second.str("qname") in valuePtrMethods } == true
+
     /** Pointer-receiver methods whose body never reads the receiver (qnames and object keys). */
     val recvUnusedMethods = HashSet<String>()
 
@@ -115,6 +129,9 @@ class Program(
     }
 
     val namedIfaces = ArrayList<IfaceInfo>()
+
+    /** Exported method-set interfaces of NON-ported packages that have a shim (`json.UnmarshalerFrom`): candidates for generic types. */
+    val externalIfaces = LinkedHashMap<String, IfaceInfo>()
     val namedIfaceByKey = HashMap<String, IfaceInfo>()
 
     /**
@@ -149,6 +166,14 @@ class Program(
     val boxedNamed = HashSet<String>()
 
     /**
+     * Reflection by codegen (docs/goport-lowering.md § 3): named struct types that reach `reflect`
+     * (a `reflect.ValueOf`/`TypeFor` operand) or `json` (a field with a `json:` tag), closed over
+     * their embedded structs. Each becomes a `GoReflectStruct` (and a `GoJsonStruct`).
+     */
+    val reflectStructs = HashSet<String>()
+    private val reflectEmbeds = HashMap<String, MutableSet<String>>()
+
+    /**
      * `//go:embed <file>` string variables, per package path: (Kotlin function name, pattern relative
      * to the package directory). Main writes the file contents as generated Kotlin (`EmbedData*.kt`).
      */
@@ -176,8 +201,11 @@ class Program(
 
     init {
         for (p in packages) index(p)
+        // Close the reflect/json structs over their embedded structs (json flattens them).
+        val work = ArrayDeque(reflectStructs)
+        while (work.isNotEmpty()) for (e in reflectEmbeds[work.removeFirst()] ?: emptySet()) if (reflectStructs.add(e)) work += e
         for ((key, ms) in genericMsets) {
-            val found = namedIfaces.filter { b -> ms.keys.containsAll(b.methods) }
+            val found = (namedIfaces + externalIfaces.values).filter { b -> ms.keys.containsAll(b.methods) }
             if (found.isEmpty()) continue
             genericImplements[key] = found
             ifaceMethodNames.getOrPut(key) { HashSet() } += found.flatMap { b -> b.methods.map { ms.getValue(it) } }
@@ -205,6 +233,7 @@ class Program(
             }
         }
         extensionMethods += nilSafeMethods
+        extensionMethods += valuePtrMethods
         for ((typeKey, ms) in methodsByType) if (typeKey in aliasTypes) ms.forEach { extensionMethods += it.second.str("qname")!! }
         // Go calls a pointer-receiver method on a nil pointer and only panics where the body
         // dereferences it (`f.UpdateX(node, …)` with a nil factory returns `node` unchanged). An
@@ -232,8 +261,19 @@ class Program(
      */
     fun methodIdentity(tt: TypeTable, pkg: String, name: String, sig: Int): String {
         val s = tt.unalias(sig) as com.xemantic.typescript.goport.types.SignatureType
-        return (if (name[0].isUpperCase()) name else "$pkg.$name") + "|" + s.params.joinToString(",") { tt[it.t].key } +
-            (if (s.variadic) "..." else "") + "|" + s.results.joinToString(",") { tt[it.t].key }
+        return (if (name[0].isUpperCase()) name else "$pkg.$name") + "|" + s.params.joinToString(",") { canonKey(tt, it.t) } +
+            (if (s.variadic) "..." else "") + "|" + s.results.joinToString(",") { canonKey(tt, it.t) }
+    }
+
+    /** A type key with every alias resolved (the IR's keys spell `*alias:…json.Encoder`). */
+    fun canonKey(tt: TypeTable, id: Int): String = when (val t = tt.unalias(id)) {
+        is com.xemantic.typescript.goport.types.PointerType -> "*" + canonKey(tt, t.elem)
+        is com.xemantic.typescript.goport.types.SliceType -> "[]" + canonKey(tt, t.elem)
+        is com.xemantic.typescript.goport.types.ArrayType -> "[${t.len}]" + canonKey(tt, t.elem)
+        is com.xemantic.typescript.goport.types.MapType -> "map[" + canonKey(tt, t.keyType) + "]" + canonKey(tt, t.elem)
+        is com.xemantic.typescript.goport.types.SignatureType ->
+            "func(" + t.params.joinToString(",") { canonKey(tt, it.t) } + (if (t.variadic) "..." else "") + ")(" + t.results.joinToString(",") { canonKey(tt, it.t) } + ")"
+        else -> t.key
     }
 
     private fun referencesObj(body: Node, id: Int): Boolean {
@@ -247,6 +287,35 @@ class Program(
 
     private fun index(p: IrPackage) {
         val tt = TypeTable(p)
+        fun structKeyOf(id: Int): String? {
+            var t = tt.unalias(id)
+            if (t is com.xemantic.typescript.goport.types.PointerType) t = tt.unalias(t.elem)
+            val n = t as? com.xemantic.typescript.goport.types.NamedType ?: return null
+            val o = n.origin?.let { tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType } ?: n
+            return if (o.pkg == p.path || o.pkg in byPath) (if (tt.under(o.id) is com.xemantic.typescript.goport.types.StructType) o.key else null) else null
+        }
+        for (i in 0 until tt.size) {
+            val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+            if (n.pkg != p.path || n.origin != null || n.localAt != null) continue
+            val st = tt.under(n.id) as? com.xemantic.typescript.goport.types.StructType ?: continue
+            if (st.fields.any { "json:" in it.tag } && n.tparams.isEmpty()) reflectStructs += n.key
+            // Embedded structs (json flattens them) and struct-VALUE fields (reflect.DeepEqual / IsZero walk them).
+            for (f in st.fields) if (f.embedded || tt.unalias(f.t) !is com.xemantic.typescript.goport.types.PointerType) {
+                structKeyOf(f.t)?.let { k -> if ((tt.unalias(f.t) as? com.xemantic.typescript.goport.types.NamedType)?.let { it.tparams.isEmpty() && it.origin == null } != false) reflectEmbeds.getOrPut(n.key) { HashSet() } += k }
+            }
+        }
+        for (f in p.files) walk(f.list("decls")) { n ->
+            if (n.str("k") == "CallExpr" && n.str("call") == "func") {
+                val fe = n.obj("fun")
+                val sel = if (fe?.str("k") == "SelectorExpr") fe.obj("sel") else fe
+                val key = sel?.int("obj")?.let { p.obj(it).str("key") }
+                when (key) {
+                    "reflect.ValueOf", "reflect.TypeOf" -> n.list("args").firstOrNull()?.int("t")?.let { structKeyOf(it) }?.let { reflectStructs += it }
+                    "reflect.TypeFor" -> sel.obj("inst")?.ints("targs")?.forEach { a -> structKeyOf(a)?.let { reflectStructs += it } }
+                }
+            }
+            true
+        }
         for (f in p.files) for (d in f.list("decls")) {
             if (d.k != "FuncDecl") continue
             val q = d.str("qname") ?: continue
@@ -284,6 +353,15 @@ class Program(
         }
         for (i in 0 until tt.size) {
             val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType
+            if (n != null && n.pkg != null && n.pkg !in byPath && n.origin == null && n.tparams.isEmpty() && n.key !in externalIfaces &&
+                shims.hasTop(Naming.kotlinPackage(n.pkg), n.name)
+            ) {
+                val it = tt.under(n.id) as? com.xemantic.typescript.goport.types.InterfaceType
+                val ms = it?.allMethods?.ifEmpty { it.methods } ?: emptyList()
+                if (it != null && it.isMethodSet && ms.isNotEmpty() && ms.all { m -> m.name[0].isUpperCase() }) {
+                    externalIfaces[n.key] = IfaceInfo(n.key, n.pkg, n.name, ms.map { m -> methodIdentity(tt, n.pkg, m.name, m.sig) }.toSet(), emptySet())
+                }
+            }
             if (n != null && n.pkg == p.path && n.origin == null && n.tparams.isEmpty() && n.localAt == null) {
                 val it = tt.under(n.id) as? com.xemantic.typescript.goport.types.InterfaceType
                 if (it != null && it.isMethodSet) {
@@ -331,6 +409,13 @@ class Program(
                     val rf = recv.list("list").first()
                     val recvObj = rf.list("names").firstOrNull()?.int("obj")
                     val ptr = rf.obj("type")?.str("star") == "pointerType"
+                    if (ptr) rf.obj("type")?.obj("x")?.int("t")?.let { t ->
+                        // A pointer method of a named BASIC type (a value class): an extension on GoPtr<V>.
+                        if (tt.under(t) is com.xemantic.typescript.goport.types.BasicType) {
+                            valuePtrMethods += q
+                            d.int("obj")?.let { p.obj(it).str("key") }?.let { valuePtrMethods += it }
+                        }
+                    }
                     // A pointer method that never reads its receiver: `(*Expected[T])(nil).ExpectedJSONType()`
                     // may call it on any instance (ExprLowering.methodTarget).
                     if (ptr && d.obj("body") != null && (recvObj == null || !referencesObj(d.obj("body")!!, recvObj))) {

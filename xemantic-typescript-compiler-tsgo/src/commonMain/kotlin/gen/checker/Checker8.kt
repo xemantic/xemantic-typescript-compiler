@@ -3441,9 +3441,13 @@ fun Checker?.mapTypeEx(t: Type?, f: ((Type?) -> Type?)?, noReductions: Boolean):
 
 // go: github.com/microsoft/typescript-go/internal/checker.UnionReduction 48b93c72
 @kotlin.jvm.JvmInline
-value class UnionReduction(val value: Int) : Comparable<UnionReduction> {
+value class UnionReduction(val value: Int) : Comparable<UnionReduction>, GoBasicValue {
 
     override fun compareTo(other: UnionReduction): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = UnionReduction(raw as Int)
 
     companion object {
         val ELEM: GoElem<UnionReduction> = GoElem({ UnionReduction(0) })

@@ -2197,9 +2197,13 @@ fun getAutomaticTypeDirectiveNames(options: CompilerOptions?, host: ResolutionHo
 
 // go: github.com/microsoft/typescript-go/internal/module.Ending 52b95bd8
 @kotlin.jvm.JvmInline
-value class Ending(val value: Int) : Comparable<Ending> {
+value class Ending(val value: Int) : Comparable<Ending>, GoBasicValue {
 
     override fun compareTo(other: Ending): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Ending(raw as Int)
 
     companion object {
         val ELEM: GoElem<Ending> = GoElem({ Ending(0) })

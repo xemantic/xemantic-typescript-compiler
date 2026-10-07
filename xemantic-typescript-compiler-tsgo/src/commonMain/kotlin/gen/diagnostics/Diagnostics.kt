@@ -32,9 +32,13 @@ import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.Category 9ed85a7d
 @kotlin.jvm.JvmInline
-value class Category(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Category> {
+value class Category(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Category>, GoBasicValue {
 
     override fun compareTo(other: Category): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Category(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/diagnostics.Category.Name 566d8301
     fun name(): String {
@@ -83,9 +87,13 @@ val CategoryMessage: Category = Category(3)
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.Key 8116d708
 @kotlin.jvm.JvmInline
-value class Key(val value: String) : Comparable<Key> {
+value class Key(val value: String) : Comparable<Key>, GoBasicValue {
 
     override fun compareTo(other: Key): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Key(raw as String)
 
     companion object {
         val ELEM: GoElem<Key> = GoElem({ Key("") })

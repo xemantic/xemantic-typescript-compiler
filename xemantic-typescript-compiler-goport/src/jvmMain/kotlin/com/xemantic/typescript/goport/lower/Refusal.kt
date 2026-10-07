@@ -76,6 +76,7 @@ class ShimIndex(
             val cls = HashMap<String, MutableMap<String, MutableSet<String>>>()
             val args = HashMap<String, MutableSet<String>>()
             val dicts = HashMap<String, MutableMap<String, Int>>()
+            val aliases = ArrayList<Triple<String, String, String>>() // (package, alias name, target fqn)
             for (root in roots) {
                 if (!root.isDirectory) continue
                 root.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.forEach { f ->
@@ -92,6 +93,10 @@ class ShimIndex(
                         val name = m.groupValues[4]
                         if (indent.isEmpty() && receiver.isEmpty()) {
                             top.getValue(pkg) += name
+                            if (kind == "typealias") {
+                                val target = m.groupValues[5].substringAfter('=', "").trim().substringBefore('<').removeSuffix("?")
+                                if ('.' in target) aliases += Triple(pkg, name, target)
+                            }
                             if (kind == "fun") {
                                 // `fun <T> collect(elem: GoElem<T>, seq: Seq<T>)`: the caller passes the element kinds.
                                 val ps = m.groupValues[5].substringAfter('(', "")
@@ -120,6 +125,14 @@ class ShimIndex(
                         }
                     }
                 }
+            }
+            // A typealias to another shim package's class (`encoding/json/jsontext.Decoder` = the
+            // go-json-experiment one) answers that class's members.
+            for ((pkg, name, target) in aliases) {
+                val tp = target.substringBeforeLast('.')
+                val tn = target.substringAfterLast('.')
+                mem[tp]?.let { mem.getOrPut(pkg) { HashSet() } += it }
+                cls[tp]?.get(tn)?.let { cls.getOrPut(pkg) { HashMap() }.getOrPut(name) { HashSet() } += it }
             }
             return ShimIndex(top, mem, cls, args, dicts)
         }

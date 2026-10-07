@@ -34,6 +34,7 @@ import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeFactory
 import com.xemantic.typescript.tsgo.ast.ObjectLiteralExpression
 import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.core.ParsedOptions
 import com.xemantic.typescript.tsgo.tspath.Path
 import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.ast.PropertyAssignment
@@ -70,6 +71,7 @@ import com.xemantic.typescript.tsgo.collections.entries
 import com.xemantic.typescript.tsgo.collections.get
 import com.xemantic.typescript.tsgo.collections.getOrZero
 import com.xemantic.typescript.tsgo.collections.has
+import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.size
 import com.xemantic.typescript.tsgo.collections.values
@@ -419,7 +421,37 @@ fun convertConfigFileToObject(sourceFile: SourceFile?, jsonConversionNotifier: c
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.isCompilerOptionsValue 06fd51bf
 fun isCompilerOptionsValue(option: CommandLineOption?, value_1: Any?): Boolean {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.isCompilerOptionsValue")
+    if (option != null) {
+        if (value_1 == null) {
+            return !option.disallowNullOrUndefined()
+        }
+        if (option!!.kind.value == "list") {
+            return com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 23uL
+        }
+        if (option!!.kind.value == "listOrElement") {
+            if (com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 23uL) {
+                return true
+            } else {
+                return isCompilerOptionsValue(option.elements(), value_1)
+            }
+        }
+        if (option!!.kind.value == "string") {
+            return com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 24uL
+        }
+        if (option!!.kind.value == "boolean") {
+            return com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 1uL
+        }
+        if (option!!.kind.value == "number") {
+            return com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 14uL
+        }
+        if (option!!.kind.value == "object") {
+            return com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1) == orderedMapType
+        }
+        if (option!!.kind.value == "enum" && com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 24uL) {
+            return true
+        }
+    }
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.validateJsonOptionValue b1685c53
@@ -511,12 +543,102 @@ fun normalizeNonListOptionValue(option: CommandLineOption?, basePath: String, va
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.convertJsonOption 89a3df67
 fun convertJsonOption(opt: CommandLineOption?, value_1: Any?, basePath: String, propertyAssignment: PropertyAssignment?, valueExpression: Node?, sourceFile: SourceFile?): Tuple2<Any?, GoSlice<Diagnostic?>> {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.convertJsonOption")
+    if (opt!!.isCommandLineOnly) {
+        var nodeValue: Node? = null
+        if (propertyAssignment != null) {
+            nodeValue = propertyAssignment!!.name()
+        }
+        if (sourceFile == null && nodeValue == null) {
+            return Tuple2<Any?, GoSlice<Diagnostic?>>(null, GoSlice.of(GoElem.ref<Diagnostic?>(), com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.option_0_can_only_be_specified_on_command_line, GoSlice.of(GoElem.ref<Any?>(), opt!!.name))))
+        } else {
+            return Tuple2<Any?, GoSlice<Diagnostic?>>(null, GoSlice.of(GoElem.ref<Diagnostic?>(), createDiagnosticForNodeInSourceFileOrCompilerDiagnostic(sourceFile, nodeValue, com.xemantic.typescript.tsgo.diagnostics.option_0_can_only_be_specified_on_command_line, GoSlice.of(GoElem.ref<Any?>(), opt!!.name))))
+        }
+    }
+    if (isCompilerOptionsValue(opt, value_1)) {
+        when (opt!!.kind.value) {
+            "list" -> {
+                val t0 = convertJsonOptionOfListType(opt, value_1, basePath, propertyAssignment, valueExpression, sourceFile)
+                return Tuple2<Any?, GoSlice<Diagnostic?>>(t0.first, t0.second)
+            }
+            "listOrElement" -> {
+                if (com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 23uL) {
+                    val t1 = convertJsonOptionOfListType(opt, value_1, basePath, propertyAssignment, valueExpression, sourceFile)
+                    return Tuple2<Any?, GoSlice<Diagnostic?>>(t1.first, t1.second)
+                } else {
+                    return convertJsonOption(opt.elements(), value_1, basePath, propertyAssignment, valueExpression, sourceFile)
+                }
+            }
+            "enum" -> {
+                if (value_1 == null) {
+                    return Tuple2<Any?, GoSlice<Diagnostic?>>(null, GoElem.ref<Diagnostic?>().nilSlice)
+                }
+                return convertJsonOptionOfEnumType(opt, value_1 as String, valueExpression, sourceFile)
+            }
+        }
+        val t2 = validateJsonOptionValue(opt, value_1, valueExpression, sourceFile)
+        val validatedValue: Any? = t2.first
+        val errors: GoSlice<Diagnostic?> = t2.second
+        if (errors.len > 0 || validatedValue == null) {
+            return Tuple2<Any?, GoSlice<Diagnostic?>>(validatedValue, errors)
+        } else {
+            return Tuple2<Any?, GoSlice<Diagnostic?>>(normalizeNonListOptionValue(opt, basePath, validatedValue), errors)
+        }
+    } else {
+        return Tuple2<Any?, GoSlice<Diagnostic?>>(null, GoSlice.of(GoElem.ref<Diagnostic?>(), createDiagnosticForNodeInSourceFileOrCompilerDiagnostic(sourceFile, valueExpression, com.xemantic.typescript.tsgo.diagnostics.compiler_option_0_requires_a_value_of_type_1, GoSlice.of(GoElem.ref<Any?>(), opt!!.name, getCompilerOptionValueTypeString(opt)))))
+    }
+    goUnreachable()
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.getExtendsConfigPathOrArray f01a4457
 fun getExtendsConfigPathOrArray(value_1: CompilerOptionsValue, host: ParseConfigHost?, basePath: String, configFileName: String, propertyAssignment: PropertyAssignment?, valueExpression: Node?, sourceFile: SourceFile?): Tuple2<GoSlice<String>, GoSlice<Diagnostic?>> {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.getExtendsConfigPathOrArray")
+    var extendedConfigPathArray: GoSlice<String> = GoElem.STRING.nilSlice
+    var newBase: String = basePath
+    if (configFileName != "") {
+        newBase = directoryOfCombinedPath(configFileName, basePath)
+    }
+    if (value_1 == null) {
+        val t0 = convertJsonOption(extendsOptionDeclaration, value_1, basePath, propertyAssignment, valueExpression, sourceFile)
+        val errors: GoSlice<Diagnostic?> = t0.second
+        return Tuple2<GoSlice<String>, GoSlice<Diagnostic?>>(extendedConfigPathArray, errors)
+    }
+    if (com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 24uL) {
+        val t1 = getExtendsConfigPath(value_1 as String, host, newBase, valueExpression, sourceFile)
+        val val_: String = t1.first
+        val err: GoSlice<Diagnostic?> = t1.second
+        if (val_ != "") {
+            extendedConfigPathArray = extendedConfigPathArray.append1(val_)
+        }
+        return Tuple2<GoSlice<String>, GoSlice<Diagnostic?>>(extendedConfigPathArray, err)
+    }
+    var errors_1: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+    if (com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 23uL) {
+        val s2 = value_1 as GoSlice<Any?>
+        l0@ for (i3 in 0 until s2.len) {
+            val index: Int = i3
+            val fileName: Any? = s2[i3]
+            var expression: Node? = null
+            if (valueExpression != null) {
+                expression = valueExpression.elements()[index]
+            }
+            if (com.xemantic.typescript.tsgo.go.reflect.typeOf(fileName)!!.kind().value == 24uL) {
+                val t4 = getExtendsConfigPath(fileName as String, host, newBase, expression, sourceFile)
+                val val__1: String = t4.first
+                val err_1: GoSlice<Diagnostic?> = t4.second
+                if (val__1 != "") {
+                    extendedConfigPathArray = extendedConfigPathArray.append1(val__1)
+                }
+                errors_1 = errors_1.appendSlice(err_1)
+            } else {
+                val t5 = convertJsonOption(extendsOptionDeclaration.elements(), value_1, basePath, propertyAssignment, expression, sourceFile)
+                val err_2: GoSlice<Diagnostic?> = t5.second
+                errors_1 = errors_1.appendSlice(err_2)
+            }
+        }
+    } else {
+        val t6 = convertJsonOption(extendsOptionDeclaration, value_1, basePath, propertyAssignment, valueExpression, sourceFile)
+        errors_1 = t6.second
+    }
+    return Tuple2<GoSlice<String>, GoSlice<Diagnostic?>>(extendedConfigPathArray, errors_1)
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.getExtendsConfigPath 29760bc6
@@ -1020,7 +1142,157 @@ fun parseExtendedConfig(fileName: String, path: Path, resolutionStack: GoSlice<P
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.parseConfig b340ab87
 fun parseConfig(json: OrderedMap<String, Any?>?, sourceFile: TsConfigSourceFile?, host: ParseConfigHost?, basePath_0: String, configFileName: String, resolutionStack_1: GoSlice<Path>, extendedConfigCache: ExtendedConfigCache?): Tuple2<com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig?, GoSlice<Diagnostic?>> {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.parseConfig")
+    var basePath: String = basePath_0
+    var resolutionStack: GoSlice<Path> = resolutionStack_1
+    basePath = com.xemantic.typescript.tsgo.tspath.normalizeSlashes(basePath)
+    val resolvedPath: Path = com.xemantic.typescript.tsgo.tspath.toPath(configFileName, basePath, host!!.fs()!!.useCaseSensitiveFileNames())
+    var errors: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+    if (com.xemantic.typescript.tsgo.go.slices.contains<Path>(resolutionStack, resolvedPath)) {
+        var result: com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig? = null
+        errors = errors.append1(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.circularity_detected_while_resolving_configuration_Colon_0, GoElem.ref<Any?>().nilSlice))
+        if (json.size() == 0) {
+            result = com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig(raw = json)
+        } else {
+            val t2 = convertToObject(sourceFile!!.sourceFile)
+            val rawResult: Any? = t2.first
+            val err: GoSlice<Diagnostic?> = t2.second
+            errors = errors.appendSlice(err)
+            result = com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig(raw = rawResult)
+        }
+        return Tuple2<com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig?, GoSlice<Diagnostic?>>(result, errors)
+    }
+    var ownConfig: com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig? = null
+    var err_1: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+    if (json != null) {
+        val t3 = parseOwnConfigOfJson(json, host, basePath, configFileName)
+        ownConfig = t3.first
+        err_1 = t3.second
+    } else {
+        val t4 = parseOwnConfigOfJsonSourceFile(tsconfigToSourceFile(sourceFile), host, basePath, configFileName)
+        ownConfig = t4.first
+        err_1 = t4.second
+    }
+    errors = errors.appendSlice(err_1)
+    if (ownConfig!!.options != null && ownConfig!!.options!!.paths != null) {
+        ownConfig!!.options!!.pathsBasePath = basePath
+    }
+    val applyExtendedConfig: ((com.xemantic.typescript.tsgo.tsoptions.extendsResult?, String) -> Unit)? = fun(result_1: com.xemantic.typescript.tsgo.tsoptions.extendsResult?, extendedConfigPath: String) {
+        val t5 = getExtendedConfig(sourceFile, extendedConfigPath, host, resolutionStack, extendedConfigCache, result_1)
+        val extendedConfig: com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig? = t5.first
+        val extendedErrors: GoSlice<Diagnostic?> = t5.second
+        errors = errors.appendSlice(extendedErrors)
+        if (extendedConfig != null && extendedConfig!!.options != null) {
+            val extendsRaw: Any? = extendedConfig!!.raw
+            var relativeDifference: String = ""
+            val setPropertyValue: ((String) -> Unit)? = fun(propertyName: String) {
+                val x7 = ownConfig!!.raw
+                val t6 = if (x7 is OrderedMap<*, *>) Tuple2(x7 as OrderedMap<String, Any?>, true) else Tuple2(null, false)
+                val rawMap: OrderedMap<String, Any?>? = t6.first
+                val ok: Boolean = t6.second
+                if (ok && rawMap.has(propertyName)) {
+                    return
+                }
+                if (propertyName == "include" || propertyName == "exclude" || propertyName == "files") {
+                    val x9 = extendsRaw
+                    val t8 = if (x9 is OrderedMap<*, *>) Tuple2(x9 as OrderedMap<String, Any?>, true) else Tuple2(null, false)
+                    val rawMap_1: OrderedMap<String, Any?>? = t8.first
+                    val ok_1: Boolean = t8.second
+                    if (ok_1 && rawMap_1.has(propertyName)) {
+                        val x11 = rawMap_1.getOrZero(propertyName)
+                        val t10 = if (x11 is GoSlice<*>) Tuple2(x11 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
+                        val slice: GoSlice<Any?> = t10.first
+                        if (!slice.isNil) {
+                            val value_1: GoSlice<Any?> = com.xemantic.typescript.tsgo.core.map<Any?, Any?>(GoElem.ref<Any?>(), GoElem.ref<Any?>(), slice, fun(path: Any?): Any? {
+                                val x13 = path
+                                val t12 = if (x13 is String) Tuple2(x13 as String, true) else Tuple2("", false)
+                                val pathStr: String = t12.first
+                                val isString: Boolean = t12.second
+                                if (!isString) {
+                                    return path
+                                }
+                                if (startsWithConfigDirTemplate(path) || com.xemantic.typescript.tsgo.tspath.isRootedDiskPath(pathStr)) {
+                                    return pathStr
+                                } else {
+                                    if (relativeDifference == "") {
+                                        val t: ComparePathsOptions = ComparePathsOptions(useCaseSensitiveFileNames = host!!.fs()!!.useCaseSensitiveFileNames(), currentDirectory = basePath)
+                                        relativeDifference = com.xemantic.typescript.tsgo.tspath.convertToRelativePath(com.xemantic.typescript.tsgo.tspath.getDirectoryPath(extendedConfigPath), t.goCopy())
+                                    }
+                                    return com.xemantic.typescript.tsgo.tspath.combinePaths(relativeDifference, GoSlice.of(GoElem.STRING, pathStr))
+                                }
+                                goUnreachable()
+                            })
+                            if (propertyName == "include") {
+                                result_1!!.include = value_1
+                            } else if (propertyName == "exclude") {
+                                result_1!!.exclude = value_1
+                            } else if (propertyName == "files") {
+                                result_1!!.files = value_1
+                            }
+                        }
+                    }
+                }
+            }
+            setPropertyValue!!("include")
+            setPropertyValue!!("exclude")
+            setPropertyValue!!("files")
+            val x15 = extendsRaw
+            val t14 = if (x15 is OrderedMap<*, *>) Tuple2(x15 as OrderedMap<String, Any?>, true) else Tuple2(null, false)
+            val extendedRawMap: OrderedMap<String, Any?>? = t14.first
+            val ok_2: Boolean = t14.second
+            if (ok_2 && extendedRawMap.has("compileOnSave")) {
+                val x17 = extendedRawMap.getOrZero("compileOnSave")
+                val t16 = if (x17 is Boolean) Tuple2(x17 as Boolean, true) else Tuple2(false, false)
+                val compileOnSave: Boolean = t16.first
+                val ok_3: Boolean = t16.second
+                if (ok_3) {
+                    result_1!!.compileOnSave = compileOnSave
+                }
+            }
+            mergeCompilerOptions(result_1!!.options, extendedConfig!!.options, extendsRaw)
+        }
+    }
+    if (ownConfig!!.extendedConfigPath != null) {
+        resolutionStack = resolutionStack.append1(resolvedPath)
+        val result_2: com.xemantic.typescript.tsgo.tsoptions.extendsResult? = com.xemantic.typescript.tsgo.tsoptions.extendsResult(options = CompilerOptions())
+        if (com.xemantic.typescript.tsgo.go.reflect.typeOf(ownConfig!!.extendedConfigPath)!!.kind().value == 24uL) {
+            applyExtendedConfig!!(result_2, ownConfig!!.extendedConfigPath as String)
+        } else {
+            val x20 = ownConfig!!.extendedConfigPath
+            val t19 = if (x20 is GoSlice<*>) Tuple2(x20 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+            val configPath: GoSlice<String> = t19.first
+            val ok_4: Boolean = t19.second
+            if (ok_4) {
+                val s21 = configPath
+                l0@ for (i22 in 0 until s21.len) {
+                    val extendedConfigPath_1: String = s21[i22]
+                    applyExtendedConfig!!(result_2, extendedConfigPath_1)
+                }
+            }
+        }
+        if (!result_2!!.include.isNil) {
+            (ownConfig!!.raw as OrderedMap<String, Any?>).set("include", result_2!!.include)
+        }
+        if (!result_2!!.exclude.isNil) {
+            (ownConfig!!.raw as OrderedMap<String, Any?>).set("exclude", result_2!!.exclude)
+        }
+        if (!result_2!!.files.isNil) {
+            (ownConfig!!.raw as OrderedMap<String, Any?>).set("files", result_2!!.files)
+        }
+        if (result_2!!.compileOnSave && !(ownConfig!!.raw as OrderedMap<String, Any?>).has("compileOnSave")) {
+            (ownConfig!!.raw as OrderedMap<String, Any?>).set("compileOnSave", result_2!!.compileOnSave)
+        }
+        if (sourceFile != null) {
+            val m23 = result_2!!.extendedSourceFiles.keys()
+            l1@ for (k24 in m23.keysSnapshot()) {
+                val e25 = m23.probe(k24)
+                if (e25 === GoMapAbsent) continue
+                val extendedSourceFile: String = k24
+                sourceFile!!.extendedSourceFiles = com.xemantic.typescript.tsgo.core.insertSorted<String>(GoElem.STRING, sourceFile!!.extendedSourceFiles, extendedSourceFile, fun(p0: String, p1: String): Int = com.xemantic.typescript.tsgo.go.cmp.compare(p0, p1))
+            }
+        }
+        ownConfig!!.options = mergeCompilerOptions(result_2!!.options, ownConfig!!.options, ownConfig!!.raw)
+    }
+    return Tuple2<com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig?, GoSlice<Diagnostic?>>(ownConfig, errors)
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.defaultIncludeSpec f73fff1c
@@ -1046,7 +1318,199 @@ class propOfRaw(
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.parseJsonConfigFileContentWorker d70c155f
 fun parseJsonConfigFileContentWorker(json: OrderedMap<String, Any?>?, sourceFile: TsConfigSourceFile?, host: ParseConfigHost?, basePath: String, existingOptions: CompilerOptions?, existingOptionsRaw: OrderedMap<String, Any?>?, configFileName: String, resolutionStack: GoSlice<Path>, extraFileExtensions: GoSlice<FileExtensionInfo>, extendedConfigCache: ExtendedConfigCache?): ParsedCommandLine? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.parseJsonConfigFileContentWorker")
+    com.xemantic.typescript.tsgo.debug.assert((json == null && sourceFile != null) || (json != null && sourceFile == null), GoElem.ref<Any?>().nilSlice)
+    var basePathForFileNames: String = ""
+    if (configFileName != "") {
+        basePathForFileNames = com.xemantic.typescript.tsgo.tspath.normalizePath(directoryOfCombinedPath(configFileName, basePath))
+    } else {
+        basePathForFileNames = com.xemantic.typescript.tsgo.tspath.normalizePath(basePath)
+    }
+    var errors: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+    val t0 = parseConfig(json, sourceFile, host, basePath, configFileName, resolutionStack, extendedConfigCache)
+    val parsedConfig: com.xemantic.typescript.tsgo.tsoptions.parsedTsconfig? = t0.first
+    errors = t0.second
+    mergeCompilerOptions(parsedConfig!!.options, existingOptions, existingOptionsRaw)
+    handleOptionConfigDirTemplateSubstitution(parsedConfig!!.options, basePathForFileNames)
+    val rawConfig: OrderedMap<String, Any?>? = parseJsonToStringKey(parsedConfig!!.raw)
+    if (configFileName != "" && parsedConfig!!.options != null) {
+        parsedConfig!!.options!!.configFilePath = com.xemantic.typescript.tsgo.tspath.normalizeSlashes(configFileName)
+    }
+    val getPropFromRaw: ((String, ((Any?) -> Boolean)?, String) -> com.xemantic.typescript.tsgo.tsoptions.propOfRaw)? = fun(prop: String, validateElement: ((Any?) -> Boolean)?, elementTypeName: String): com.xemantic.typescript.tsgo.tsoptions.propOfRaw {
+        val t1 = rawConfig.get(prop)
+        val value_1: Any? = t1.first
+        val exists: Boolean = t1.second
+        if (exists && value_1 != null) {
+            if (com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 23uL) {
+                val result: Any? = rawConfig.getOrZero(prop)
+                val x3 = result
+                val t2 = if (x3 is GoSlice<*>) Tuple2(x3 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
+                val ok: Boolean = t2.second
+                if (ok) {
+                    if (sourceFile == null && !com.xemantic.typescript.tsgo.core.every<Any?>(GoElem.ref<Any?>(), result as GoSlice<Any?>, validateElement!!)) {
+                        errors = errors.append1(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.compiler_option_0_requires_a_value_of_type_1, GoSlice.of(GoElem.ref<Any?>(), prop, elementTypeName)))
+                    }
+                }
+                return com.xemantic.typescript.tsgo.tsoptions.propOfRaw(sliceValue = result as GoSlice<Any?>)
+            } else if (sourceFile == null) {
+                errors = errors.append1(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.compiler_option_0_requires_a_value_of_type_1, GoSlice.of(GoElem.ref<Any?>(), prop, "Array")))
+                return com.xemantic.typescript.tsgo.tsoptions.propOfRaw(sliceValue = GoElem.ref<Any?>().nilSlice, wrongValue = "not-array")
+            }
+        }
+        return com.xemantic.typescript.tsgo.tsoptions.propOfRaw(sliceValue = GoElem.ref<Any?>().nilSlice, wrongValue = "no-prop")
+    }
+    val referencesOfRaw: com.xemantic.typescript.tsgo.tsoptions.propOfRaw = getPropFromRaw!!("references", fun(element: Any?): Boolean {
+        return com.xemantic.typescript.tsgo.go.reflect.typeOf(element) == orderedMapType
+    }, "object")
+    val fileSpecs: com.xemantic.typescript.tsgo.tsoptions.propOfRaw = getPropFromRaw!!("files", fun(element_1: Any?): Boolean {
+        return com.xemantic.typescript.tsgo.go.reflect.typeOf(element_1)!!.kind().value == 24uL
+    }, "string")
+    if (!fileSpecs.sliceValue.isNil || fileSpecs.wrongValue == "") {
+        var hasZeroOrNoReferences: Boolean = false
+        if (referencesOfRaw.wrongValue == "no-prop" || referencesOfRaw.wrongValue == "not-array" || referencesOfRaw.sliceValue.len == 0) {
+            hasZeroOrNoReferences = true
+        }
+        val hasExtends: Any? = rawConfig.getOrZero("extends")
+        if (!fileSpecs.sliceValue.isNil && fileSpecs.sliceValue.len == 0 && hasZeroOrNoReferences && hasExtends == null) {
+            if (sourceFile != null) {
+                var fileName: String = ""
+                if (configFileName != "") {
+                    fileName = configFileName
+                } else {
+                    fileName = "tsconfig.json"
+                }
+                val diagnosticMessage: Message? = com.xemantic.typescript.tsgo.diagnostics.the_files_list_in_config_file_0_is_empty
+                val nodeValue: Node? = forEachTsConfigPropArray<Node>(Node.ELEM, sourceFile!!.sourceFile, "files", fun(property: PropertyAssignment?): Node? {
+                    return property!!.initializer
+                })
+                errors = errors.append1(createDiagnosticForNodeInSourceFile(sourceFile!!.sourceFile, nodeValue, diagnosticMessage, GoSlice.of(GoElem.ref<Any?>(), fileName)))
+            } else {
+                errors = errors.append1(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.the_files_list_in_config_file_0_is_empty, GoSlice.of(GoElem.ref<Any?>(), configFileName)))
+            }
+        }
+    }
+    var includeSpecs: com.xemantic.typescript.tsgo.tsoptions.propOfRaw = getPropFromRaw!!("include", fun(element_2: Any?): Boolean {
+        return com.xemantic.typescript.tsgo.go.reflect.typeOf(element_2)!!.kind().value == 24uL
+    }, "string")
+    var excludeSpecs: com.xemantic.typescript.tsgo.tsoptions.propOfRaw = getPropFromRaw!!("exclude", fun(element_3: Any?): Boolean {
+        return com.xemantic.typescript.tsgo.go.reflect.typeOf(element_3)!!.kind().value == 24uL
+    }, "string")
+    var isDefaultIncludeSpec: Boolean = false
+    if (excludeSpecs.wrongValue == "no-prop" && parsedConfig!!.options != null) {
+        val outDir: String = parsedConfig!!.options!!.outDir
+        val declarationDir: String = parsedConfig!!.options!!.declarationDir
+        if (outDir != "" || declarationDir != "") {
+            var values: GoSlice<Any?> = GoElem.ref<Any?>().nilSlice
+            if (outDir != "") {
+                values = values.append1(outDir)
+            }
+            if (declarationDir != "") {
+                values = values.append1(declarationDir)
+            }
+            excludeSpecs = com.xemantic.typescript.tsgo.tsoptions.propOfRaw(sliceValue = values)
+        }
+    }
+    if (fileSpecs.sliceValue.isNil && includeSpecs.sliceValue.isNil) {
+        includeSpecs = com.xemantic.typescript.tsgo.tsoptions.propOfRaw(sliceValue = GoSlice.of(GoElem.ref<Any?>(), "**/*"))
+        isDefaultIncludeSpec = true
+    }
+    var validatedIncludeSpecs: GoSlice<String> = GoElem.STRING.nilSlice
+    var validatedIncludeSpecsBeforeSubstitution: GoSlice<String> = GoElem.STRING.nilSlice
+    var validatedExcludeSpecs: GoSlice<String> = GoElem.STRING.nilSlice
+    var validatedFilesSpec: GoSlice<String> = GoElem.STRING.nilSlice
+    var validatedFilesSpecBeforeSubstitution: GoSlice<String> = GoElem.STRING.nilSlice
+    if (!includeSpecs.sliceValue.isNil) {
+        var err: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+        val t4 = validateSpecs(includeSpecs.sliceValue, true, tsconfigToSourceFile(sourceFile), "include")
+        validatedIncludeSpecsBeforeSubstitution = t4.first
+        err = t4.second
+        errors = errors.appendSlice(err)
+        validatedIncludeSpecs = getSubstitutedStringArrayWithConfigDirTemplate(validatedIncludeSpecsBeforeSubstitution, basePathForFileNames)
+        if (validatedIncludeSpecs.isNil) {
+            validatedIncludeSpecs = validatedIncludeSpecsBeforeSubstitution
+        }
+    }
+    if (!excludeSpecs.sliceValue.isNil) {
+        var err_1: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+        val t5 = validateSpecs(excludeSpecs.sliceValue, false, tsconfigToSourceFile(sourceFile), "exclude")
+        validatedExcludeSpecs = t5.first
+        err_1 = t5.second
+        errors = errors.appendSlice(err_1)
+        val validatedExcludeSpecsWithSubstitution: GoSlice<String> = getSubstitutedStringArrayWithConfigDirTemplate(validatedExcludeSpecs, basePathForFileNames)
+        if (!validatedExcludeSpecsWithSubstitution.isNil) {
+            validatedExcludeSpecs = validatedExcludeSpecsWithSubstitution
+        }
+    }
+    if (!fileSpecs.sliceValue.isNil) {
+        val fileSpecs_1: GoSlice<Any?> = com.xemantic.typescript.tsgo.core.filter<Any?>(GoElem.ref<Any?>(), fileSpecs.sliceValue, fun(spec: Any?): Boolean {
+            return com.xemantic.typescript.tsgo.go.reflect.typeOf(spec)!!.kind().value == 24uL
+        })
+        val s6 = fileSpecs_1
+        l0@ for (i7 in 0 until s6.len) {
+            val spec_1: Any? = s6[i7]
+            val x9 = spec_1
+            val t8 = if (x9 is String) Tuple2(x9 as String, true) else Tuple2("", false)
+            val spec_2: String = t8.first
+            val ok_1: Boolean = t8.second
+            if (ok_1) {
+                validatedFilesSpecBeforeSubstitution = validatedFilesSpecBeforeSubstitution.append1(spec_2)
+            }
+        }
+        validatedFilesSpec = getSubstitutedStringArrayWithConfigDirTemplate(validatedFilesSpecBeforeSubstitution, basePathForFileNames)
+        if (validatedFilesSpec.isNil) {
+            validatedFilesSpec = validatedFilesSpecBeforeSubstitution
+        }
+    }
+    val configFileSpecs: com.xemantic.typescript.tsgo.tsoptions.configFileSpecs = com.xemantic.typescript.tsgo.tsoptions.configFileSpecs(filesSpecs = fileSpecs.sliceValue, includeSpecs = includeSpecs.sliceValue, excludeSpecs = excludeSpecs.sliceValue, validatedFilesSpec = validatedFilesSpec, validatedIncludeSpecs = validatedIncludeSpecs, validatedExcludeSpecs = validatedExcludeSpecs, validatedFilesSpecBeforeSubstitution = validatedFilesSpecBeforeSubstitution, validatedIncludeSpecsBeforeSubstitution = validatedIncludeSpecsBeforeSubstitution, isDefaultIncludeSpec = isDefaultIncludeSpec)
+    if (sourceFile != null) {
+        sourceFile!!.configFileSpecs = configFileSpecs
+    }
+    val getFileNames: ((String) -> Tuple2<GoSlice<String>, Int>)? = fun(basePath_1: String): Tuple2<GoSlice<String>, Int> {
+        val parsedConfigOptions: CompilerOptions? = parsedConfig!!.options
+        val t10 = getFileNamesFromConfigSpecs(configFileSpecs.goCopy(), basePath_1, parsedConfigOptions, host!!.fs(), extraFileExtensions)
+        val fileNames: GoSlice<String> = t10.first
+        val literalFileNamesLen: Int = t10.second
+        if (shouldReportNoInputFiles(fileNames, canJsonReportNoInputFiles(rawConfig), resolutionStack)) {
+            var includeSpecs_1: Any? = configFileSpecs.includeSpecs
+            var excludeSpecs_1: Any? = configFileSpecs.excludeSpecs
+            if (includeSpecs_1 == null) {
+                includeSpecs_1 = GoSlice.make(GoElem.STRING, 0)
+            }
+            if (excludeSpecs_1 == null) {
+                excludeSpecs_1 = GoSlice.make(GoElem.STRING, 0)
+            }
+            errors = errors.append1(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.no_inputs_were_found_in_config_file_0_Specified_include_paths_were_1_and_exclude_paths_were_2, GoSlice.of(GoElem.ref<Any?>(), configFileName, run { val ta11 = com.xemantic.typescript.tsgo.core.stringifyJson(includeSpecs_1, "", ""); com.xemantic.typescript.tsgo.core.must<String>(GoElem.STRING, ta11.first, ta11.second) }, run { val ta12 = com.xemantic.typescript.tsgo.core.stringifyJson(excludeSpecs_1, "", ""); com.xemantic.typescript.tsgo.core.must<String>(GoElem.STRING, ta12.first, ta12.second) })))
+        }
+        return Tuple2<GoSlice<String>, Int>(fileNames, literalFileNamesLen)
+    }
+    val getProjectReferences: ((String) -> GoSlice<ProjectReference?>)? = fun(basePath_2: String): GoSlice<ProjectReference?> {
+        var projectReferences: GoSlice<ProjectReference?> = GoElem.ref<ProjectReference?>().nilSlice
+        val newReferencesOfRaw: com.xemantic.typescript.tsgo.tsoptions.propOfRaw = getPropFromRaw!!("references", fun(element_4: Any?): Boolean {
+            return com.xemantic.typescript.tsgo.go.reflect.typeOf(element_4) == orderedMapType
+        }, "object")
+        if (!newReferencesOfRaw.sliceValue.isNil) {
+            projectReferences = GoSlice.make(GoElem.ref<ProjectReference?>(), 0)
+            val s13 = newReferencesOfRaw.sliceValue
+            l1@ for (i14 in 0 until s13.len) {
+                val reference: Any? = s13[i14]
+                val s15 = parseProjectReference(reference)
+                l2@ for (i16 in 0 until s15.len) {
+                    val ref: ProjectReference? = s15[i16]
+                    if (ref!!.path == "") {
+                        if (sourceFile == null) {
+                            errors = errors.append1(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.compiler_option_0_requires_a_value_of_type_1, GoSlice.of(GoElem.ref<Any?>(), "reference.path", "string")))
+                        }
+                    } else {
+                        projectReferences = projectReferences.append1(ProjectReference(path = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(ref!!.path, basePath_2), originalPath = ref!!.path, circular = ref!!.circular))
+                    }
+                }
+            }
+        }
+        return projectReferences
+    }
+    val t17 = getFileNames!!(basePathForFileNames)
+    val fileNames_1: GoSlice<String> = t17.first
+    val literalFileNamesLen_1: Int = t17.second
+    return ParsedCommandLine(parsedConfig = ParsedOptions(compilerOptions = parsedConfig!!.options, typeAcquisition = parsedConfig!!.typeAcquisition, fileNames = fileNames_1, projectReferences = getProjectReferences!!(basePathForFileNames)), configFile = sourceFile, raw = parsedConfig!!.raw, errors = errors, extraFileExtensions = extraFileExtensions, comparePathsOptions = ComparePathsOptions(useCaseSensitiveFileNames = host!!.fs()!!.useCaseSensitiveFileNames(), currentDirectory = basePathForFileNames), literalFileNamesLen = literalFileNamesLen_1)
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.canJsonReportNoInputFiles 7ee0e116
@@ -1063,7 +1527,30 @@ fun shouldReportNoInputFiles(fileNames: GoSlice<String>, canJsonReportNoInputFil
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.validateSpecs d206c846
 fun validateSpecs(specs: Any?, disallowTrailingRecursion: Boolean, jsonSourceFile: SourceFile?, specKey: String): Tuple2<GoSlice<String>, GoSlice<Diagnostic?>> {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.validateSpecs")
+    val createDiagnostic: ((Message?, String) -> Diagnostic?)? = fun(message: Message?, spec: String): Diagnostic? {
+        val element: StringLiteral? = getTsConfigPropArrayElementValue(jsonSourceFile, specKey, spec)
+        var node: Node? = null
+        if (element != null) {
+            node = element!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+        }
+        return createDiagnosticForNodeInSourceFileOrCompilerDiagnostic(jsonSourceFile, node, message, GoSlice.of(GoElem.ref<Any?>(), spec))
+    }
+    var errors: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+    var finalSpecs: GoSlice<String> = GoElem.STRING.nilSlice
+    val s0 = specs as GoSlice<Any?>
+    l0@ for (i1 in 0 until s0.len) {
+        val spec_1: Any? = s0[i1]
+        if (com.xemantic.typescript.tsgo.go.reflect.typeOf(spec_1)!!.kind().value != 24uL) {
+            continue@l0
+        }
+        val diag: Message? = specToDiagnostic(spec_1 as String, disallowTrailingRecursion)
+        if (diag != null) {
+            errors = errors.append1(createDiagnostic!!(diag, spec_1 as String))
+        } else {
+            finalSpecs = finalSpecs.append1(spec_1 as String)
+        }
+    }
+    return Tuple2<GoSlice<String>, GoSlice<Diagnostic?>>(finalSpecs, errors)
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.specToDiagnostic a3208ccb
@@ -1468,7 +1955,7 @@ fun getParsedCommandLineOfConfigFilePath(configFileName: String, path: Path, opt
 @kotlin.jvm.JvmField val extendsOptionDeclaration: CommandLineOption? = CommandLineOption(name = "extends", kind = CommandLineOptionTypeListOrElement, category = com.xemantic.typescript.tsgo.diagnostics.file_Management, elementOptions = commandLineOptionsToMap(GoSlice.of(GoElem.ref<CommandLineOption?>(), CommandLineOption(name = "extends", kind = CommandLineOptionTypeString))))
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.orderedMapType 551fb660
-val orderedMapType: Type? get() = TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.orderedMapType")
+@kotlin.jvm.JvmField val orderedMapType: Type? = com.xemantic.typescript.tsgo.go.reflect.typeFor(GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, Any?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<Any?>()) }), zero = { null }))
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.CommandLineCompilerOptionsMap c3ba5e09
 @kotlin.jvm.JvmField val commandLineCompilerOptionsMap: CommandLineOptionNameMap = commandLineOptionsToMap(optionsDeclarations)

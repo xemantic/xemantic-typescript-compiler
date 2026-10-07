@@ -38,9 +38,13 @@ import com.xemantic.typescript.tsgo.collections.has
 
 // go: github.com/microsoft/typescript-go/internal/printer.tempFlags e7534f27
 @kotlin.jvm.JvmInline
-value class tempFlags(val value: Int) : Comparable<tempFlags> {
+value class tempFlags(val value: Int) : Comparable<tempFlags>, GoBasicValue {
 
     override fun compareTo(other: tempFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = tempFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<tempFlags> = GoElem({ tempFlags(0) })

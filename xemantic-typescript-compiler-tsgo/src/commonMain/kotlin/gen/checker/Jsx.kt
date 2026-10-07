@@ -62,9 +62,13 @@ import com.xemantic.typescript.tsgo.core.getJSXTransformEnabled
 
 // go: github.com/microsoft/typescript-go/internal/checker.JsxFlags 6beb053f
 @kotlin.jvm.JvmInline
-value class JsxFlags(val value: UInt) : Comparable<JsxFlags> {
+value class JsxFlags(val value: UInt) : Comparable<JsxFlags>, GoBasicValue {
 
     override fun compareTo(other: JsxFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = JsxFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<JsxFlags> = GoElem({ JsxFlags(0u) })
@@ -85,9 +89,13 @@ val JsxFlagsIntrinsicElement: JsxFlags = JsxFlags(3u)
 
 // go: github.com/microsoft/typescript-go/internal/checker.JsxReferenceKind 3eedc6ab
 @kotlin.jvm.JvmInline
-value class JsxReferenceKind(val value: Int) : Comparable<JsxReferenceKind> {
+value class JsxReferenceKind(val value: Int) : Comparable<JsxReferenceKind>, GoBasicValue {
 
     override fun compareTo(other: JsxReferenceKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = JsxReferenceKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<JsxReferenceKind> = GoElem({ JsxReferenceKind(0) })

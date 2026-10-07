@@ -188,7 +188,7 @@ open class ExprLowering(val fn: FnCtx) {
         else Naming.escape(Naming.lowerCamel(o.str("name")!!))
         if (pkg == pc.pkg.path && name !in fn.classMembers) return Ex.primary(name)
         val kp = naming(pkg)
-        if (pkg !in prog.ported && !prog.shims.hasTop(kp, name)) refuse("shim-missing", "$pkg.${o.str("name")}")
+        if (pkg !in prog.ported && !prog.shims.hasTop(kp, name.trim('`'))) refuse("shim-missing", "$pkg.${o.str("name")}")
         return Ex.primary("$kp.$name")
     }
 

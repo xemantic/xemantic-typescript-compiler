@@ -58,9 +58,13 @@ import com.xemantic.typescript.tsgo.diagnostics.elidedInCompatibilityPyramid
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureCheckMode 947fb20d
 @kotlin.jvm.JvmInline
-value class SignatureCheckMode(val value: UInt) : Comparable<SignatureCheckMode> {
+value class SignatureCheckMode(val value: UInt) : Comparable<SignatureCheckMode>, GoBasicValue {
 
     override fun compareTo(other: SignatureCheckMode): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SignatureCheckMode(raw as UInt)
 
     companion object {
         val ELEM: GoElem<SignatureCheckMode> = GoElem({ SignatureCheckMode(0u) })
@@ -90,9 +94,13 @@ val SignatureCheckModeCallback: SignatureCheckMode = SignatureCheckMode(3u)
 
 // go: github.com/microsoft/typescript-go/internal/checker.MinArgumentCountFlags 95f26139
 @kotlin.jvm.JvmInline
-value class MinArgumentCountFlags(val value: UInt) : Comparable<MinArgumentCountFlags> {
+value class MinArgumentCountFlags(val value: UInt) : Comparable<MinArgumentCountFlags>, GoBasicValue {
 
     override fun compareTo(other: MinArgumentCountFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = MinArgumentCountFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<MinArgumentCountFlags> = GoElem({ MinArgumentCountFlags(0u) })
@@ -110,9 +118,13 @@ val MinArgumentCountFlagsVoidIsNonOptional: MinArgumentCountFlags = MinArgumentC
 
 // go: github.com/microsoft/typescript-go/internal/checker.IntersectionState 8f687083
 @kotlin.jvm.JvmInline
-value class IntersectionState(val value: UInt) : Comparable<IntersectionState> {
+value class IntersectionState(val value: UInt) : Comparable<IntersectionState>, GoBasicValue {
 
     override fun compareTo(other: IntersectionState): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = IntersectionState(raw as UInt)
 
     companion object {
         val ELEM: GoElem<IntersectionState> = GoElem({ IntersectionState(0u) })
@@ -130,9 +142,13 @@ val IntersectionStateTarget: IntersectionState = IntersectionState(2u)
 
 // go: github.com/microsoft/typescript-go/internal/checker.RecursionFlags 1c357f47
 @kotlin.jvm.JvmInline
-value class RecursionFlags(val value: UInt) : Comparable<RecursionFlags> {
+value class RecursionFlags(val value: UInt) : Comparable<RecursionFlags>, GoBasicValue {
 
     override fun compareTo(other: RecursionFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = RecursionFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<RecursionFlags> = GoElem({ RecursionFlags(0u) })
@@ -153,9 +169,13 @@ val RecursionFlagsBoth: RecursionFlags = RecursionFlags(3u)
 
 // go: github.com/microsoft/typescript-go/internal/checker.ExpandingFlags b9a45ece
 @kotlin.jvm.JvmInline
-value class ExpandingFlags(val value: Int) : Comparable<ExpandingFlags> {
+value class ExpandingFlags(val value: Int) : Comparable<ExpandingFlags>, GoBasicValue {
 
     override fun compareTo(other: ExpandingFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ExpandingFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<ExpandingFlags> = GoElem({ ExpandingFlags(0) })
@@ -176,9 +196,13 @@ val ExpandingFlagsBoth: ExpandingFlags = ExpandingFlags(3)
 
 // go: github.com/microsoft/typescript-go/internal/checker.RelationComparisonResult dc159a52
 @kotlin.jvm.JvmInline
-value class RelationComparisonResult(val value: UInt) : Comparable<RelationComparisonResult> {
+value class RelationComparisonResult(val value: UInt) : Comparable<RelationComparisonResult>, GoBasicValue {
 
     override fun compareTo(other: RelationComparisonResult): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = RelationComparisonResult(raw as UInt)
 
     companion object {
         val ELEM: GoElem<RelationComparisonResult> = GoElem({ RelationComparisonResult(0u) })

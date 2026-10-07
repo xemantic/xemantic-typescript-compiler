@@ -291,9 +291,13 @@ import com.xemantic.typescript.tsgo.tsoptions.compilerOptions
 
 // go: github.com/microsoft/typescript-go/internal/checker.PredicateSemantics b7d06a60
 @kotlin.jvm.JvmInline
-value class PredicateSemantics(val value: UInt) : Comparable<PredicateSemantics> {
+value class PredicateSemantics(val value: UInt) : Comparable<PredicateSemantics>, GoBasicValue {
 
     override fun compareTo(other: PredicateSemantics): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = PredicateSemantics(raw as UInt)
 
     companion object {
         val ELEM: GoElem<PredicateSemantics> = GoElem({ PredicateSemantics(0u) })

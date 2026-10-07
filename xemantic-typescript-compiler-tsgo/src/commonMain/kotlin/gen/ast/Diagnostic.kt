@@ -44,9 +44,13 @@ import com.xemantic.typescript.tsgo.diagnostics.reportsUnnecessary
 
 // go: github.com/microsoft/typescript-go/internal/ast.RepopulateDiagnosticKind 824f8b27
 @kotlin.jvm.JvmInline
-value class RepopulateDiagnosticKind(val value: Int) : Comparable<RepopulateDiagnosticKind> {
+value class RepopulateDiagnosticKind(val value: Int) : Comparable<RepopulateDiagnosticKind>, GoBasicValue {
 
     override fun compareTo(other: RepopulateDiagnosticKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = RepopulateDiagnosticKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<RepopulateDiagnosticKind> = GoElem({ RepopulateDiagnosticKind(0) })

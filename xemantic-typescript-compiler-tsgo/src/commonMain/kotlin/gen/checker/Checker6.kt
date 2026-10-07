@@ -2238,9 +2238,13 @@ fun Checker?.getTypeOfPrototypeProperty(prototype: Symbol?): Type? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.thisAssignmentDeclarationKind c1869b6f
 @kotlin.jvm.JvmInline
-value class thisAssignmentDeclarationKind(val value: Int) : Comparable<thisAssignmentDeclarationKind> {
+value class thisAssignmentDeclarationKind(val value: Int) : Comparable<thisAssignmentDeclarationKind>, GoBasicValue {
 
     override fun compareTo(other: thisAssignmentDeclarationKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = thisAssignmentDeclarationKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<thisAssignmentDeclarationKind> = GoElem({ thisAssignmentDeclarationKind(0) })

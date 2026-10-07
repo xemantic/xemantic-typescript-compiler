@@ -30,9 +30,13 @@ import com.xemantic.typescript.tsgo.core.Tristate
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.CommandLineOptionKind cac4255e
 @kotlin.jvm.JvmInline
-value class CommandLineOptionKind(val value: String) : Comparable<CommandLineOptionKind> {
+value class CommandLineOptionKind(val value: String) : Comparable<CommandLineOptionKind>, GoBasicValue {
 
     override fun compareTo(other: CommandLineOptionKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = CommandLineOptionKind(raw as String)
 
     companion object {
         val ELEM: GoElem<CommandLineOptionKind> = GoElem({ CommandLineOptionKind("") })
@@ -128,9 +132,13 @@ class CommandLineOption(
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.extraValidation 6465c03a
 @kotlin.jvm.JvmInline
-value class extraValidation(val value: String) : Comparable<extraValidation> {
+value class extraValidation(val value: String) : Comparable<extraValidation>, GoBasicValue {
 
     override fun compareTo(other: extraValidation): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = extraValidation(raw as String)
 
     companion object {
         val ELEM: GoElem<extraValidation> = GoElem({ extraValidation("") })

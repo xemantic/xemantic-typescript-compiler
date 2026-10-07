@@ -28,9 +28,13 @@ import com.xemantic.typescript.tsgo.go.strings.Builder
 
 // go: github.com/microsoft/typescript-go/internal/tspath.Path 9a983251
 @kotlin.jvm.JvmInline
-value class Path(val value: String) : Comparable<Path> {
+value class Path(val value: String) : Comparable<Path>, GoBasicValue {
 
     override fun compareTo(other: Path): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Path(raw as String)
 
     // go: github.com/microsoft/typescript-go/internal/tspath.Path.GetDirectoryPath 6f0f978c
     fun getDirectoryPath(): Path {
@@ -830,7 +834,7 @@ fun isExternalModuleNameRelative(moduleName: String): Boolean {
 class ComparePathsOptions(
     @kotlin.jvm.JvmField var useCaseSensitiveFileNames: Boolean = false,
     @kotlin.jvm.JvmField var currentDirectory: String = "",
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): ComparePathsOptions = ComparePathsOptions(useCaseSensitiveFileNames = useCaseSensitiveFileNames, currentDirectory = currentDirectory)
 
@@ -853,7 +857,23 @@ class ComparePathsOptions(
         return com.xemantic.typescript.tsgo.stringutil.getStringEqualityComparer(!this.useCaseSensitiveFileNames)
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { useCaseSensitiveFileNames }, { useCaseSensitiveFileNames = it as Boolean })
+        1 -> GoFieldPtr(this, 1, { currentDirectory }, { currentDirectory = it as String })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tspath.ComparePathsOptions", listOf(
+                GoFieldInfo("UseCaseSensitiveFileNames", "", true, false, GoTypeInfo(1, "bool", zero = { false })),
+                GoFieldInfo("CurrentDirectory", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+            ))
+        }
         val ELEM: GoElem<ComparePathsOptions> = GoElem({ ComparePathsOptions() }, { it.goCopy() })
     }
 }

@@ -25,6 +25,7 @@ package com.xemantic.typescript.tsgo.packagejson
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.Options
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.Unmarshaler
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.Expected ac934105
 class Expected<T>(
@@ -33,7 +34,7 @@ class Expected<T>(
     @kotlin.jvm.JvmField var `null`: Boolean = false,
     @kotlin.jvm.JvmField var valid: Boolean = false,
     @kotlin.jvm.JvmField var value: T = goElem_T.zeroValue(),
-) : TypeValidatedField {
+) : TypeValidatedField, Unmarshaler {
 
     fun goCopy(): Expected<T> = Expected(goElem_T = goElem_T, actualJSONType = actualJSONType, `null` = `null`, valid = valid, value = value)
 
@@ -48,6 +49,35 @@ class Expected<T>(
 
     fun goHash(): Int = 31 * actualJSONType.hashCode() + 31 * `null`.hashCode() + 31 * valid.hashCode() + 31 * value.hashCode()
 
+    // go: github.com/microsoft/typescript-go/internal/packagejson.Expected.UnmarshalJSON d40dd571
+    override fun unmarshalJSON(data: GoSlice<Int>): GoError? {
+        if (goBytesToString(data) == "null") {
+            this.goSet(Expected<T>(goElem_T = goElem_T, `null` = true, actualJSONType = "null"))
+            return null
+        }
+        if (com.xemantic.typescript.tsgo.json.unmarshal(data, this.value, GoElem.ref<Options?>().nilSlice) == null) {
+            this.valid = true
+        }
+        when (data[0]) {
+            34 -> {
+                this.actualJSONType = "string"
+            }
+            116, 102 -> {
+                this.actualJSONType = "boolean"
+            }
+            91 -> {
+                this.actualJSONType = "array"
+            }
+            123 -> {
+                this.actualJSONType = "object"
+            }
+            else -> {
+                this.actualJSONType = "number"
+            }
+        }
+        return null
+    }
+
     // go: github.com/microsoft/typescript-go/internal/packagejson.Expected.IsPresent f527fc53
     override fun isPresent(): Boolean {
         return this.actualJSONType != ""
@@ -60,7 +90,27 @@ class Expected<T>(
 
     // go: github.com/microsoft/typescript-go/internal/packagejson.Expected.ExpectedJSONType 176e6b9e
     override fun expectedJSONType(): String {
-        TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/packagejson.Expected.ExpectedJSONType")
+        when (com.xemantic.typescript.tsgo.go.reflect.typeForElem(goElem_T)!!.kind().value) {
+            24uL -> {
+                return "string"
+            }
+            1uL -> {
+                return "boolean"
+            }
+            23uL, 17uL -> {
+                return "array"
+            }
+            21uL -> {
+                return "object"
+            }
+            2uL, 3uL, 4uL, 5uL, 6uL, 7uL, 8uL, 9uL, 10uL, 11uL -> {
+                return "number"
+            }
+            else -> {
+                return "unknown"
+            }
+        }
+        goUnreachable()
     }
 
     // go: github.com/microsoft/typescript-go/internal/packagejson.Expected.ActualJSONType 19f36aa6
@@ -71,35 +121,6 @@ class Expected<T>(
     companion object {
         fun <T> elem(goElem_T: GoElem<T>): GoElem<Expected<T>> = GoElem({ Expected<T>(goElem_T = goElem_T) }, { it.goCopy() })
     }
-}
-
-// go: github.com/microsoft/typescript-go/internal/packagejson.Expected.UnmarshalJSON d40dd571
-fun <T> Expected<T>?.unmarshalJSON(data: GoSlice<Int>): GoError? {
-    if (goBytesToString(data) == "null") {
-        this!!.goSet(Expected<T>(goElem_T = this!!.goElem_T, `null` = true, actualJSONType = "null"))
-        return null
-    }
-    if (com.xemantic.typescript.tsgo.json.unmarshal(data, this!!.value, GoElem.ref<Options?>().nilSlice) == null) {
-        this!!.valid = true
-    }
-    when (data[0]) {
-        34 -> {
-            this!!.actualJSONType = "string"
-        }
-        116, 102 -> {
-            this!!.actualJSONType = "boolean"
-        }
-        91 -> {
-            this!!.actualJSONType = "array"
-        }
-        123 -> {
-            this!!.actualJSONType = "object"
-        }
-        else -> {
-            this!!.actualJSONType = "number"
-        }
-    }
-    return null
 }
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.Expected.GetValue 613845e1

@@ -68,9 +68,13 @@ import com.xemantic.typescript.tsgo.ast.typeParameterList
 
 // go: github.com/microsoft/typescript-go/internal/printer.getLiteralTextFlags fd241e90
 @kotlin.jvm.JvmInline
-value class getLiteralTextFlags(val value: Int) : Comparable<getLiteralTextFlags> {
+value class getLiteralTextFlags(val value: Int) : Comparable<getLiteralTextFlags>, GoBasicValue {
 
     override fun compareTo(other: getLiteralTextFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = getLiteralTextFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<getLiteralTextFlags> = GoElem({ getLiteralTextFlags(0) })
@@ -94,9 +98,13 @@ val getLiteralTextFlagsAllowNumericSeparator: com.xemantic.typescript.tsgo.print
 
 // go: github.com/microsoft/typescript-go/internal/printer.QuoteChar 14e60fd0
 @kotlin.jvm.JvmInline
-value class QuoteChar(val value: Int) : Comparable<QuoteChar> {
+value class QuoteChar(val value: Int) : Comparable<QuoteChar>, GoBasicValue {
 
     override fun compareTo(other: QuoteChar): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = QuoteChar(raw as Int)
 
     companion object {
         val ELEM: GoElem<QuoteChar> = GoElem({ QuoteChar(0) })

@@ -32,9 +32,13 @@ import com.xemantic.typescript.tsgo.collections.keys
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regularExpressionFlags fa0afa8b
 @kotlin.jvm.JvmInline
-value class regularExpressionFlags(val value: Int) : Comparable<regularExpressionFlags> {
+value class regularExpressionFlags(val value: Int) : Comparable<regularExpressionFlags>, GoBasicValue {
 
     override fun compareTo(other: regularExpressionFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = regularExpressionFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<regularExpressionFlags> = GoElem({ regularExpressionFlags(0) })
@@ -86,9 +90,13 @@ fun Scanner?.checkRegularExpressionFlagAvailability(flag: com.xemantic.typescrip
 
 // go: github.com/microsoft/typescript-go/internal/scanner.classSetExpressionType 327130fe
 @kotlin.jvm.JvmInline
-value class classSetExpressionType(val value: Int) : Comparable<classSetExpressionType> {
+value class classSetExpressionType(val value: Int) : Comparable<classSetExpressionType>, GoBasicValue {
 
     override fun compareTo(other: classSetExpressionType): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = classSetExpressionType(raw as Int)
 
     companion object {
         val ELEM: GoElem<classSetExpressionType> = GoElem({ classSetExpressionType(0) })

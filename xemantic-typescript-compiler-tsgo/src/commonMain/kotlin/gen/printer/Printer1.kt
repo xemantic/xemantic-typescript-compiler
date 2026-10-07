@@ -729,9 +729,13 @@ fun Printer?.getTextOfNode(node: Node?, includeTrivia: Boolean): String {
 
 // go: github.com/microsoft/typescript-go/internal/printer.WriteKind c17d0f3a
 @kotlin.jvm.JvmInline
-value class WriteKind(val value: Int) : Comparable<WriteKind> {
+value class WriteKind(val value: Int) : Comparable<WriteKind>, GoBasicValue {
 
     override fun compareTo(other: WriteKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = WriteKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<WriteKind> = GoElem({ WriteKind(0) })
@@ -1815,9 +1819,13 @@ fun Printer?.emitModifierList(parentNode: Node?, modifiers: ModifierList?, allow
 
 // go: github.com/microsoft/typescript-go/internal/printer.Mode_Printer_emitModifierList 
 @kotlin.jvm.JvmInline
-value class Mode_Printer_emitModifierList(val value: Int) : Comparable<Mode_Printer_emitModifierList> {
+value class Mode_Printer_emitModifierList(val value: Int) : Comparable<Mode_Printer_emitModifierList>, GoBasicValue {
 
     override fun compareTo(other: Mode_Printer_emitModifierList): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Mode_Printer_emitModifierList(raw as Int)
 
     companion object {
         val ELEM: GoElem<Mode_Printer_emitModifierList> = GoElem({ Mode_Printer_emitModifierList(0) })

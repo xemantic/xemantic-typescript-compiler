@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/parser.ParseFlags ec2c138c
 @kotlin.jvm.JvmInline
-value class ParseFlags(val value: UInt) : Comparable<ParseFlags> {
+value class ParseFlags(val value: UInt) : Comparable<ParseFlags>, GoBasicValue {
 
     override fun compareTo(other: ParseFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ParseFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<ParseFlags> = GoElem({ ParseFlags(0u) })

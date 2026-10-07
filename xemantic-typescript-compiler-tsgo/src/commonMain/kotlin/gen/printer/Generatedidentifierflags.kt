@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/printer.GeneratedIdentifierFlags eccc0436
 @kotlin.jvm.JvmInline
-value class GeneratedIdentifierFlags(val value: Int) : Comparable<GeneratedIdentifierFlags> {
+value class GeneratedIdentifierFlags(val value: Int) : Comparable<GeneratedIdentifierFlags>, GoBasicValue {
 
     override fun compareTo(other: GeneratedIdentifierFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = GeneratedIdentifierFlags(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/printer.GeneratedIdentifierFlags.Kind 2e36ea2e
     fun kind(): GeneratedIdentifierFlags {

@@ -33,9 +33,13 @@ import com.xemantic.typescript.tsgo.collections.has
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.Usage 56c72bc2
 @kotlin.jvm.JvmInline
-value class Usage(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Usage> {
+value class Usage(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Usage>, GoBasicValue {
 
     override fun compareTo(other: Usage): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Usage(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.Usage.String 4a85f21d
     override fun string(): String {
@@ -164,9 +168,13 @@ class component(
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.componentKind d2451211
 @kotlin.jvm.JvmInline
-value class componentKind(val value: Int) : Comparable<componentKind> {
+value class componentKind(val value: Int) : Comparable<componentKind>, GoBasicValue {
 
     override fun compareTo(other: componentKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = componentKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<componentKind> = GoElem({ componentKind(0) })
@@ -206,9 +214,13 @@ class segment(
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.segmentKind 138b5917
 @kotlin.jvm.JvmInline
-value class segmentKind(val value: Int) : Comparable<segmentKind> {
+value class segmentKind(val value: Int) : Comparable<segmentKind>, GoBasicValue {
 
     override fun compareTo(other: segmentKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = segmentKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<segmentKind> = GoElem({ segmentKind(0) })

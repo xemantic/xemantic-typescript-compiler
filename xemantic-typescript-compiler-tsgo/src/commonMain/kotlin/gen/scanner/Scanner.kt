@@ -56,9 +56,13 @@ import com.xemantic.typescript.tsgo.ast.type
 
 // go: github.com/microsoft/typescript-go/internal/scanner.EscapeSequenceScanningFlags 189b74d9
 @kotlin.jvm.JvmInline
-value class EscapeSequenceScanningFlags(val value: Int) : Comparable<EscapeSequenceScanningFlags> {
+value class EscapeSequenceScanningFlags(val value: Int) : Comparable<EscapeSequenceScanningFlags>, GoBasicValue {
 
     override fun compareTo(other: EscapeSequenceScanningFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = EscapeSequenceScanningFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<EscapeSequenceScanningFlags> = GoElem({ EscapeSequenceScanningFlags(0) })

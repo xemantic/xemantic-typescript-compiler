@@ -28,9 +28,13 @@ import com.xemantic.typescript.tsgo.go.context.Context
 
 // go: github.com/microsoft/typescript-go/internal/core.key 457238a8
 @kotlin.jvm.JvmInline
-value class key(val value: Int) : Comparable<key> {
+value class key(val value: Int) : Comparable<key>, GoBasicValue {
 
     override fun compareTo(other: key): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = key(raw as Int)
 
     companion object {
         val ELEM: GoElem<key> = GoElem({ key(0) })
@@ -62,9 +66,13 @@ fun getRequestID(ctx: Context?): String {
 
 // go: github.com/microsoft/typescript-go/internal/core.CheckerLifetime 6a750823
 @kotlin.jvm.JvmInline
-value class CheckerLifetime(val value: Int) : Comparable<CheckerLifetime> {
+value class CheckerLifetime(val value: Int) : Comparable<CheckerLifetime>, GoBasicValue {
 
     override fun compareTo(other: CheckerLifetime): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = CheckerLifetime(raw as Int)
 
     companion object {
         val ELEM: GoElem<CheckerLifetime> = GoElem({ CheckerLifetime(0) })

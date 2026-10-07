@@ -421,7 +421,18 @@ class tracedTypeAdapter(
 
     // go: github.com/microsoft/typescript-go/internal/checker.tracedTypeAdapter.Display 62ab02ae
     override fun display(): String {
-        TODO("goport: refused builtin: github.com/microsoft/typescript-go/internal/checker.tracedTypeAdapter.Display")
+        return withDefers({ "" }) { df0 ->
+            if (this.checker == null) {
+                return ""
+            }
+            if (this.t!!.objectFlags.value and 16u != 0u || this.t!!.flags.value and 406862848u != 0u) {
+                df0.defer(fun() {
+                    df0.recover()
+                })
+                return this.checker.typeToString(this.t)
+            }
+            return ""
+        }
     }
 
     companion object {

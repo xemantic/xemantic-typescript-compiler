@@ -236,9 +236,13 @@ import com.xemantic.typescript.tsgo.transformers.visitor
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.lexicalEntryKind cb5c9ef2
 @kotlin.jvm.JvmInline
-value class lexicalEntryKind(val value: Int) : Comparable<lexicalEntryKind> {
+value class lexicalEntryKind(val value: Int) : Comparable<lexicalEntryKind>, GoBasicValue {
 
     override fun compareTo(other: lexicalEntryKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = lexicalEntryKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<lexicalEntryKind> = GoElem({ lexicalEntryKind(0) })

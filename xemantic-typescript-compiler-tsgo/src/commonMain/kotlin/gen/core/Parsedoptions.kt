@@ -32,7 +32,7 @@ class ParsedOptions(
     @kotlin.jvm.JvmField var typeAcquisition: TypeAcquisition? = null,
     @kotlin.jvm.JvmField var fileNames: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var projectReferences: GoSlice<ProjectReference?> = GoElem.ref<ProjectReference?>().nilSlice,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): ParsedOptions = ParsedOptions(compilerOptions = compilerOptions, watchOptions = watchOptions, typeAcquisition = typeAcquisition, fileNames = fileNames, projectReferences = projectReferences)
 
@@ -44,7 +44,29 @@ class ParsedOptions(
         projectReferences = o.projectReferences
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { compilerOptions }, { compilerOptions = it as CompilerOptions? })
+        1 -> GoFieldPtr(this, 1, { watchOptions }, { watchOptions = it as WatchOptions? })
+        2 -> GoFieldPtr(this, 2, { typeAcquisition }, { typeAcquisition = it as TypeAcquisition? })
+        3 -> GoFieldPtr(this, 3, { fileNames }, { fileNames = it as GoSlice<String> })
+        4 -> GoFieldPtr(this, 4, { projectReferences }, { projectReferences = it as GoSlice<ProjectReference?> })
+        else -> goPanicIndex(i, 5)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("core.ParsedOptions", listOf(
+                GoFieldInfo("CompilerOptions", "json:\"compilerOptions\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.CompilerOptions", cls = CompilerOptions::class, structInfo = { CompilerOptions.GO_STRUCT }, zero = { CompilerOptions() }), zero = { null })),
+                GoFieldInfo("WatchOptions", "json:\"watchOptions\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.WatchOptions", cls = WatchOptions::class, structInfo = { WatchOptions.GO_STRUCT }, zero = { WatchOptions() }), zero = { null })),
+                GoFieldInfo("TypeAcquisition", "json:\"typeAcquisition\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.TypeAcquisition", cls = TypeAcquisition::class, structInfo = { TypeAcquisition.GO_STRUCT }, zero = { TypeAcquisition() }), zero = { null })),
+                GoFieldInfo("FileNames", "json:\"fileNames\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("ProjectReferences", "json:\"projectReferences\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.ProjectReference", cls = ProjectReference::class, zero = { ProjectReference() }), zero = { null }), zero = { GoElem.ref<ProjectReference?>().nilSlice })),
+            ))
+        }
         val ELEM: GoElem<ParsedOptions> = GoElem({ ParsedOptions() }, { it.goCopy() })
     }
 }

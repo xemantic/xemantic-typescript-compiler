@@ -28,9 +28,13 @@ import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 
 // go: github.com/microsoft/typescript-go/internal/core.TextPos 9ba11907
 @kotlin.jvm.JvmInline
-value class TextPos(val value: Int) : Comparable<TextPos> {
+value class TextPos(val value: Int) : Comparable<TextPos>, GoBasicValue {
 
     override fun compareTo(other: TextPos): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TextPos(raw as Int)
 
     companion object {
         val ELEM: GoElem<TextPos> = GoElem({ TextPos(0) })

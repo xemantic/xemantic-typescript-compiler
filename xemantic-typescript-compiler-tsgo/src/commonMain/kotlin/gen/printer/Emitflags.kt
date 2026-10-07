@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitFlags 87bef90f
 @kotlin.jvm.JvmInline
-value class EmitFlags(val value: UInt) : Comparable<EmitFlags> {
+value class EmitFlags(val value: UInt) : Comparable<EmitFlags>, GoBasicValue {
 
     override fun compareTo(other: EmitFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = EmitFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<EmitFlags> = GoElem({ EmitFlags(0u) })

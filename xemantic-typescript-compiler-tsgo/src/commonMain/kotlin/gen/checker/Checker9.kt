@@ -383,9 +383,13 @@ fun Checker?.intersectTypes(type1: Type?, type2: Type?): Type? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.IntersectionFlags 3fdf050b
 @kotlin.jvm.JvmInline
-value class IntersectionFlags(val value: UInt) : Comparable<IntersectionFlags> {
+value class IntersectionFlags(val value: UInt) : Comparable<IntersectionFlags>, GoBasicValue {
 
     override fun compareTo(other: IntersectionFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = IntersectionFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<IntersectionFlags> = GoElem({ IntersectionFlags(0u) })

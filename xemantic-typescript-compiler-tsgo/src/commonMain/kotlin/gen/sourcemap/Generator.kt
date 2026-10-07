@@ -33,9 +33,13 @@ import com.xemantic.typescript.tsgo.go.io.WriteCloser
 
 // go: github.com/microsoft/typescript-go/internal/sourcemap.SourceIndex bcdc04b2
 @kotlin.jvm.JvmInline
-value class SourceIndex(val value: Int) : Comparable<SourceIndex> {
+value class SourceIndex(val value: Int) : Comparable<SourceIndex>, GoBasicValue {
 
     override fun compareTo(other: SourceIndex): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SourceIndex(raw as Int)
 
     companion object {
         val ELEM: GoElem<SourceIndex> = GoElem({ SourceIndex(0) })
@@ -44,9 +48,13 @@ value class SourceIndex(val value: Int) : Comparable<SourceIndex> {
 
 // go: github.com/microsoft/typescript-go/internal/sourcemap.NameIndex 21e4a1aa
 @kotlin.jvm.JvmInline
-value class NameIndex(val value: Int) : Comparable<NameIndex> {
+value class NameIndex(val value: Int) : Comparable<NameIndex>, GoBasicValue {
 
     override fun compareTo(other: NameIndex): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = NameIndex(raw as Int)
 
     companion object {
         val ELEM: GoElem<NameIndex> = GoElem({ NameIndex(0) })
@@ -147,7 +155,7 @@ class RawSourceMap(
     @kotlin.jvm.JvmField var names: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var mappings: String = "",
     @kotlin.jvm.JvmField var sourcesContent: GoSlice<GoPtr<String>?> = GoElem.ref<GoPtr<String>?>().nilSlice,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): RawSourceMap = RawSourceMap(version = version, file = file, sourceRoot = sourceRoot, sources = sources, names = names, mappings = mappings, sourcesContent = sourcesContent)
 
@@ -161,7 +169,33 @@ class RawSourceMap(
         sourcesContent = o.sourcesContent
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { version }, { version = it as Int })
+        1 -> GoFieldPtr(this, 1, { file }, { file = it as String })
+        2 -> GoFieldPtr(this, 2, { sourceRoot }, { sourceRoot = it as String })
+        3 -> GoFieldPtr(this, 3, { sources }, { sources = it as GoSlice<String> })
+        4 -> GoFieldPtr(this, 4, { names }, { names = it as GoSlice<String> })
+        5 -> GoFieldPtr(this, 5, { mappings }, { mappings = it as String })
+        6 -> GoFieldPtr(this, 6, { sourcesContent }, { sourcesContent = it as GoSlice<GoPtr<String>?> })
+        else -> goPanicIndex(i, 7)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("sourcemap.RawSourceMap", listOf(
+                GoFieldInfo("Version", "json:\"version\"", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("File", "json:\"file\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("SourceRoot", "json:\"sourceRoot\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Sources", "json:\"sources\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Names", "json:\"names\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Mappings", "json:\"mappings\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("SourcesContent", "json:\"sourcesContent,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { null }), zero = { GoElem.ref<GoPtr<String>?>().nilSlice })),
+            ))
+        }
         val ELEM: GoElem<RawSourceMap> = GoElem({ RawSourceMap() }, { it.goCopy() })
     }
 }

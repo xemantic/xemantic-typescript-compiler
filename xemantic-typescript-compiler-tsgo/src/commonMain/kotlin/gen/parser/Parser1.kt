@@ -303,9 +303,13 @@ import com.xemantic.typescript.tsgo.scanner.tokenValue
 
 // go: github.com/microsoft/typescript-go/internal/parser.ParsingContext 845a7f1c
 @kotlin.jvm.JvmInline
-value class ParsingContext(val value: Int) : Comparable<ParsingContext> {
+value class ParsingContext(val value: Int) : Comparable<ParsingContext>, GoBasicValue {
 
     override fun compareTo(other: ParsingContext): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ParsingContext(raw as Int)
 
     companion object {
         val ELEM: GoElem<ParsingContext> = GoElem({ ParsingContext(0) })
@@ -395,9 +399,13 @@ val PCCount: ParsingContext = ParsingContext(26)
 
 // go: github.com/microsoft/typescript-go/internal/parser.ParsingContexts c574d14c
 @kotlin.jvm.JvmInline
-value class ParsingContexts(val value: Int) : Comparable<ParsingContexts> {
+value class ParsingContexts(val value: Int) : Comparable<ParsingContexts>, GoBasicValue {
 
     override fun compareTo(other: ParsingContexts): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ParsingContexts(raw as Int)
 
     companion object {
         val ELEM: GoElem<ParsingContexts> = GoElem({ ParsingContexts(0) })
@@ -424,9 +432,13 @@ class JSDocInfo(
 
 // go: github.com/microsoft/typescript-go/internal/parser.jsdocScannerInfo 58afd955
 @kotlin.jvm.JvmInline
-value class jsdocScannerInfo(val value: Int) : Comparable<jsdocScannerInfo> {
+value class jsdocScannerInfo(val value: Int) : Comparable<jsdocScannerInfo>, GoBasicValue {
 
     override fun compareTo(other: jsdocScannerInfo): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = jsdocScannerInfo(raw as Int)
 
     companion object {
         val ELEM: GoElem<jsdocScannerInfo> = GoElem({ jsdocScannerInfo(0) })

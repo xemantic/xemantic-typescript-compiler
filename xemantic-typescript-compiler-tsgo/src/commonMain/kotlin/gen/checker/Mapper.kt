@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypeMapperKind 93afd420
 @kotlin.jvm.JvmInline
-value class TypeMapperKind(val value: Int) : Comparable<TypeMapperKind> {
+value class TypeMapperKind(val value: Int) : Comparable<TypeMapperKind>, GoBasicValue {
 
     override fun compareTo(other: TypeMapperKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypeMapperKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<TypeMapperKind> = GoElem({ TypeMapperKind(0) })

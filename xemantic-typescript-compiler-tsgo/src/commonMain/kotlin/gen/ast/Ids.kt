@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeId 3c623795
 @kotlin.jvm.JvmInline
-value class NodeId(val value: ULong) : Comparable<NodeId> {
+value class NodeId(val value: ULong) : Comparable<NodeId>, GoBasicValue {
 
     override fun compareTo(other: NodeId): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = NodeId(raw as ULong)
 
     companion object {
         val ELEM: GoElem<NodeId> = GoElem({ NodeId(0uL) })
@@ -38,9 +42,13 @@ value class NodeId(val value: ULong) : Comparable<NodeId> {
 
 // go: github.com/microsoft/typescript-go/internal/ast.SymbolId cfa0e0e4
 @kotlin.jvm.JvmInline
-value class SymbolId(val value: ULong) : Comparable<SymbolId> {
+value class SymbolId(val value: ULong) : Comparable<SymbolId>, GoBasicValue {
 
     override fun compareTo(other: SymbolId): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SymbolId(raw as ULong)
 
     companion object {
         val ELEM: GoElem<SymbolId> = GoElem({ SymbolId(0uL) })

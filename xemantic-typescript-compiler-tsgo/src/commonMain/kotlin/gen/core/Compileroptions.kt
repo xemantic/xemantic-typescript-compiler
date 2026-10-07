@@ -28,11 +28,12 @@ import com.xemantic.typescript.tsgo.go.sync.Locker
 import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.go.reflect.Type
+import com.xemantic.typescript.tsgo.go.reflect.Value
 import com.xemantic.typescript.tsgo.collections.size
 
 // go: github.com/microsoft/typescript-go/internal/core.CompilerOptions ddfb9868
 class CompilerOptions(
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     @kotlin.jvm.JvmField var blank0: com.xemantic.typescript.tsgo.core.noCopy = com.xemantic.typescript.tsgo.core.noCopy()
     @get:kotlin.jvm.JvmName("goGet_allowJs") @set:kotlin.jvm.JvmName("goSet_allowJs") var allowJs: Tristate = Tristate(0)
     @get:kotlin.jvm.JvmName("goGet_allowArbitraryExtensions") @set:kotlin.jvm.JvmName("goSet_allowArbitraryExtensions") var allowArbitraryExtensions: Tristate = Tristate(0)
@@ -435,14 +436,288 @@ class CompilerOptions(
         checkers = o.checkers
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { blank0 }, { blank0 = it as com.xemantic.typescript.tsgo.core.noCopy })
+        1 -> Tristate_Ptr({ allowJs }, { allowJs = it })
+        2 -> Tristate_Ptr({ allowArbitraryExtensions }, { allowArbitraryExtensions = it })
+        3 -> Tristate_Ptr({ allowImportingTsExtensions }, { allowImportingTsExtensions = it })
+        4 -> Tristate_Ptr({ allowNonTsExtensions }, { allowNonTsExtensions = it })
+        5 -> Tristate_Ptr({ allowUmdGlobalAccess }, { allowUmdGlobalAccess = it })
+        6 -> Tristate_Ptr({ allowUnreachableCode }, { allowUnreachableCode = it })
+        7 -> Tristate_Ptr({ allowUnusedLabels }, { allowUnusedLabels = it })
+        8 -> Tristate_Ptr({ assumeChangesOnlyAffectDirectDependencies }, { assumeChangesOnlyAffectDirectDependencies = it })
+        9 -> Tristate_Ptr({ checkJs }, { checkJs = it })
+        10 -> GoFieldPtr(this, 10, { customConditions }, { customConditions = it as GoSlice<String> })
+        11 -> Tristate_Ptr({ composite }, { composite = it })
+        12 -> Tristate_Ptr({ emitDeclarationOnly }, { emitDeclarationOnly = it })
+        13 -> Tristate_Ptr({ emitBOM }, { emitBOM = it })
+        14 -> Tristate_Ptr({ emitDecoratorMetadata }, { emitDecoratorMetadata = it })
+        15 -> Tristate_Ptr({ declaration }, { declaration = it })
+        16 -> GoFieldPtr(this, 16, { declarationDir }, { declarationDir = it as String })
+        17 -> Tristate_Ptr({ declarationMap }, { declarationMap = it })
+        18 -> Tristate_Ptr({ deduplicatePackages }, { deduplicatePackages = it })
+        19 -> Tristate_Ptr({ disableSizeLimit }, { disableSizeLimit = it })
+        20 -> Tristate_Ptr({ disableSourceOfProjectReferenceRedirect }, { disableSourceOfProjectReferenceRedirect = it })
+        21 -> Tristate_Ptr({ disableSolutionSearching }, { disableSolutionSearching = it })
+        22 -> Tristate_Ptr({ disableReferencedProjectLoad }, { disableReferencedProjectLoad = it })
+        23 -> Tristate_Ptr({ erasableSyntaxOnly }, { erasableSyntaxOnly = it })
+        24 -> Tristate_Ptr({ exactOptionalPropertyTypes }, { exactOptionalPropertyTypes = it })
+        25 -> Tristate_Ptr({ experimentalDecorators }, { experimentalDecorators = it })
+        26 -> Tristate_Ptr({ forceConsistentCasingInFileNames }, { forceConsistentCasingInFileNames = it })
+        27 -> Tristate_Ptr({ isolatedModules }, { isolatedModules = it })
+        28 -> Tristate_Ptr({ isolatedDeclarations }, { isolatedDeclarations = it })
+        29 -> Tristate_Ptr({ ignoreConfig }, { ignoreConfig = it })
+        30 -> GoFieldPtr(this, 30, { ignoreDeprecations }, { ignoreDeprecations = it as String })
+        31 -> Tristate_Ptr({ importHelpers }, { importHelpers = it })
+        32 -> Tristate_Ptr({ inlineSourceMap }, { inlineSourceMap = it })
+        33 -> Tristate_Ptr({ inlineSources }, { inlineSources = it })
+        34 -> Tristate_Ptr({ init }, { init = it })
+        35 -> Tristate_Ptr({ incremental }, { incremental = it })
+        36 -> GoFieldPtr(this, 36, { jsx.value }, { jsx = JsxEmit(it as Int) })
+        37 -> GoFieldPtr(this, 37, { jsxFactory }, { jsxFactory = it as String })
+        38 -> GoFieldPtr(this, 38, { jsxFragmentFactory }, { jsxFragmentFactory = it as String })
+        39 -> GoFieldPtr(this, 39, { jsxImportSource }, { jsxImportSource = it as String })
+        40 -> GoFieldPtr(this, 40, { lib }, { lib = it as GoSlice<String> })
+        41 -> Tristate_Ptr({ libReplacement }, { libReplacement = it })
+        42 -> GoFieldPtr(this, 42, { locale }, { locale = it as String })
+        43 -> GoFieldPtr(this, 43, { mapRoot }, { mapRoot = it as String })
+        44 -> GoFieldPtr(this, 44, { module.value }, { module = ModuleKind(it as Int) })
+        45 -> GoFieldPtr(this, 45, { moduleResolution.value }, { moduleResolution = ModuleResolutionKind(it as Int) })
+        46 -> GoFieldPtr(this, 46, { moduleSuffixes }, { moduleSuffixes = it as GoSlice<String> })
+        47 -> GoFieldPtr(this, 47, { moduleDetection.value }, { moduleDetection = ModuleDetectionKind(it as Int) })
+        48 -> GoFieldPtr(this, 48, { newLine.value }, { newLine = NewLineKind(it as Int) })
+        49 -> Tristate_Ptr({ noEmit }, { noEmit = it })
+        50 -> Tristate_Ptr({ noCheck }, { noCheck = it })
+        51 -> Tristate_Ptr({ noErrorTruncation }, { noErrorTruncation = it })
+        52 -> Tristate_Ptr({ noFallthroughCasesInSwitch }, { noFallthroughCasesInSwitch = it })
+        53 -> Tristate_Ptr({ noImplicitAny }, { noImplicitAny = it })
+        54 -> Tristate_Ptr({ noImplicitThis }, { noImplicitThis = it })
+        55 -> Tristate_Ptr({ noImplicitReturns }, { noImplicitReturns = it })
+        56 -> Tristate_Ptr({ noEmitHelpers }, { noEmitHelpers = it })
+        57 -> Tristate_Ptr({ noLib }, { noLib = it })
+        58 -> Tristate_Ptr({ noPropertyAccessFromIndexSignature }, { noPropertyAccessFromIndexSignature = it })
+        59 -> Tristate_Ptr({ noUncheckedIndexedAccess }, { noUncheckedIndexedAccess = it })
+        60 -> Tristate_Ptr({ noEmitOnError }, { noEmitOnError = it })
+        61 -> Tristate_Ptr({ noUnusedLocals }, { noUnusedLocals = it })
+        62 -> Tristate_Ptr({ noUnusedParameters }, { noUnusedParameters = it })
+        63 -> Tristate_Ptr({ noResolve }, { noResolve = it })
+        64 -> Tristate_Ptr({ noImplicitOverride }, { noImplicitOverride = it })
+        65 -> Tristate_Ptr({ noUncheckedSideEffectImports }, { noUncheckedSideEffectImports = it })
+        66 -> GoFieldPtr(this, 66, { outDir }, { outDir = it as String })
+        67 -> GoFieldPtr(this, 67, { paths }, { paths = it as OrderedMap<String, GoSlice<String>>? })
+        68 -> Tristate_Ptr({ preserveConstEnums }, { preserveConstEnums = it })
+        69 -> Tristate_Ptr({ preserveSymlinks }, { preserveSymlinks = it })
+        70 -> GoFieldPtr(this, 70, { project }, { project = it as String })
+        71 -> Tristate_Ptr({ resolveJsonModule }, { resolveJsonModule = it })
+        72 -> Tristate_Ptr({ resolvePackageJsonExports }, { resolvePackageJsonExports = it })
+        73 -> Tristate_Ptr({ resolvePackageJsonImports }, { resolvePackageJsonImports = it })
+        74 -> Tristate_Ptr({ removeComments }, { removeComments = it })
+        75 -> Tristate_Ptr({ rewriteRelativeImportExtensions }, { rewriteRelativeImportExtensions = it })
+        76 -> GoFieldPtr(this, 76, { reactNamespace }, { reactNamespace = it as String })
+        77 -> GoFieldPtr(this, 77, { rootDir }, { rootDir = it as String })
+        78 -> GoFieldPtr(this, 78, { rootDirs }, { rootDirs = it as GoSlice<String> })
+        79 -> Tristate_Ptr({ skipLibCheck }, { skipLibCheck = it })
+        80 -> Tristate_Ptr({ stableTypeOrdering }, { stableTypeOrdering = it })
+        81 -> Tristate_Ptr({ strict }, { strict = it })
+        82 -> Tristate_Ptr({ strictBindCallApply }, { strictBindCallApply = it })
+        83 -> Tristate_Ptr({ strictBuiltinIteratorReturn }, { strictBuiltinIteratorReturn = it })
+        84 -> Tristate_Ptr({ strictFunctionTypes }, { strictFunctionTypes = it })
+        85 -> Tristate_Ptr({ strictNullChecks }, { strictNullChecks = it })
+        86 -> Tristate_Ptr({ strictPropertyInitialization }, { strictPropertyInitialization = it })
+        87 -> Tristate_Ptr({ stripInternal }, { stripInternal = it })
+        88 -> Tristate_Ptr({ skipDefaultLibCheck }, { skipDefaultLibCheck = it })
+        89 -> Tristate_Ptr({ sourceMap }, { sourceMap = it })
+        90 -> GoFieldPtr(this, 90, { sourceRoot }, { sourceRoot = it as String })
+        91 -> Tristate_Ptr({ suppressOutputPathCheck }, { suppressOutputPathCheck = it })
+        92 -> GoFieldPtr(this, 92, { target.value }, { target = ScriptTarget(it as Int) })
+        93 -> Tristate_Ptr({ traceResolution }, { traceResolution = it })
+        94 -> GoFieldPtr(this, 94, { tsBuildInfoFile }, { tsBuildInfoFile = it as String })
+        95 -> GoFieldPtr(this, 95, { typeRoots }, { typeRoots = it as GoSlice<String> })
+        96 -> GoFieldPtr(this, 96, { types }, { types = it as GoSlice<String> })
+        97 -> Tristate_Ptr({ useDefineForClassFields }, { useDefineForClassFields = it })
+        98 -> Tristate_Ptr({ useUnknownInCatchVariables }, { useUnknownInCatchVariables = it })
+        99 -> Tristate_Ptr({ verbatimModuleSyntax }, { verbatimModuleSyntax = it })
+        100 -> GoFieldPtr(this, 100, { maxNodeModuleJsDepth }, { maxNodeModuleJsDepth = it as GoPtr<Int>? })
+        101 -> Tristate_Ptr({ allowSyntheticDefaultImports }, { allowSyntheticDefaultImports = it })
+        102 -> Tristate_Ptr({ alwaysStrict }, { alwaysStrict = it })
+        103 -> GoFieldPtr(this, 103, { baseUrl }, { baseUrl = it as String })
+        104 -> Tristate_Ptr({ downlevelIteration }, { downlevelIteration = it })
+        105 -> Tristate_Ptr({ esModuleInterop }, { esModuleInterop = it })
+        106 -> GoFieldPtr(this, 106, { outFile }, { outFile = it as String })
+        107 -> GoFieldPtr(this, 107, { configFilePath }, { configFilePath = it as String })
+        108 -> Tristate_Ptr({ noDtsResolution }, { noDtsResolution = it })
+        109 -> GoFieldPtr(this, 109, { pathsBasePath }, { pathsBasePath = it as String })
+        110 -> Tristate_Ptr({ diagnostics }, { diagnostics = it })
+        111 -> Tristate_Ptr({ extendedDiagnostics }, { extendedDiagnostics = it })
+        112 -> GoFieldPtr(this, 112, { generateCpuProfile }, { generateCpuProfile = it as String })
+        113 -> GoFieldPtr(this, 113, { generateTrace }, { generateTrace = it as String })
+        114 -> Tristate_Ptr({ listEmittedFiles }, { listEmittedFiles = it })
+        115 -> Tristate_Ptr({ listFiles }, { listFiles = it })
+        116 -> Tristate_Ptr({ explainFiles }, { explainFiles = it })
+        117 -> Tristate_Ptr({ listFilesOnly }, { listFilesOnly = it })
+        118 -> Tristate_Ptr({ noEmitForJsFiles }, { noEmitForJsFiles = it })
+        119 -> Tristate_Ptr({ preserveWatchOutput }, { preserveWatchOutput = it })
+        120 -> Tristate_Ptr({ pretty }, { pretty = it })
+        121 -> Tristate_Ptr({ version }, { version = it })
+        122 -> Tristate_Ptr({ watch }, { watch = it })
+        123 -> Tristate_Ptr({ showConfig }, { showConfig = it })
+        124 -> Tristate_Ptr({ build }, { build = it })
+        125 -> Tristate_Ptr({ help }, { help = it })
+        126 -> Tristate_Ptr({ all }, { all = it })
+        127 -> GoFieldPtr(this, 127, { pprofDir }, { pprofDir = it as String })
+        128 -> Tristate_Ptr({ singleThreaded }, { singleThreaded = it })
+        129 -> Tristate_Ptr({ quiet }, { quiet = it })
+        130 -> GoFieldPtr(this, 130, { checkers }, { checkers = it as GoPtr<Int>? })
+        else -> goPanicIndex(i, 131)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("core.CompilerOptions", listOf(
+                GoFieldInfo("_", "", false, false, GoTypeInfo(25, "core.noCopy", cls = com.xemantic.typescript.tsgo.core.noCopy::class, structInfo = { com.xemantic.typescript.tsgo.core.noCopy.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.core.noCopy() })),
+                GoFieldInfo("AllowJs", "json:\"allowJs,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("AllowArbitraryExtensions", "json:\"allowArbitraryExtensions,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("AllowImportingTsExtensions", "json:\"allowImportingTsExtensions,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("AllowNonTsExtensions", "json:\"allowNonTsExtensions,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("AllowUmdGlobalAccess", "json:\"allowUmdGlobalAccess,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("AllowUnreachableCode", "json:\"allowUnreachableCode,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("AllowUnusedLabels", "json:\"allowUnusedLabels,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("AssumeChangesOnlyAffectDirectDependencies", "json:\"assumeChangesOnlyAffectDirectDependencies,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("CheckJs", "json:\"checkJs,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("CustomConditions", "json:\"customConditions,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Composite", "json:\"composite,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("EmitDeclarationOnly", "json:\"emitDeclarationOnly,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("EmitBOM", "json:\"emitBOM,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("EmitDecoratorMetadata", "json:\"emitDecoratorMetadata,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Declaration", "json:\"declaration,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("DeclarationDir", "json:\"declarationDir,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("DeclarationMap", "json:\"declarationMap,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("DeduplicatePackages", "json:\"deduplicatePackages,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("DisableSizeLimit", "json:\"disableSizeLimit,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("DisableSourceOfProjectReferenceRedirect", "json:\"disableSourceOfProjectReferenceRedirect,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("DisableSolutionSearching", "json:\"disableSolutionSearching,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("DisableReferencedProjectLoad", "json:\"disableReferencedProjectLoad,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ErasableSyntaxOnly", "json:\"erasableSyntaxOnly,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ExactOptionalPropertyTypes", "json:\"exactOptionalPropertyTypes,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ExperimentalDecorators", "json:\"experimentalDecorators,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ForceConsistentCasingInFileNames", "json:\"forceConsistentCasingInFileNames,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("IsolatedModules", "json:\"isolatedModules,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("IsolatedDeclarations", "json:\"isolatedDeclarations,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("IgnoreConfig", "json:\"ignoreConfig,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("IgnoreDeprecations", "json:\"ignoreDeprecations,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("ImportHelpers", "json:\"importHelpers,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("InlineSourceMap", "json:\"inlineSourceMap,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("InlineSources", "json:\"inlineSources,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Init", "json:\"init,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Incremental", "json:\"incremental,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Jsx", "json:\"jsx,omitzero\"", true, false, GoTypeInfo(5, "core.JsxEmit", cls = JsxEmit::class, zero = { JsxEmit(0) })),
+                GoFieldInfo("JsxFactory", "json:\"jsxFactory,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("JsxFragmentFactory", "json:\"jsxFragmentFactory,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("JsxImportSource", "json:\"jsxImportSource,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Lib", "json:\"lib,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("LibReplacement", "json:\"libReplacement,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Locale", "json:\"locale,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("MapRoot", "json:\"mapRoot,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Module", "json:\"module,omitzero\"", true, false, GoTypeInfo(5, "core.ModuleKind", cls = ModuleKind::class, zero = { ModuleKind(0) })),
+                GoFieldInfo("ModuleResolution", "json:\"moduleResolution,omitzero\"", true, false, GoTypeInfo(5, "core.ModuleResolutionKind", cls = ModuleResolutionKind::class, zero = { ModuleResolutionKind(0) })),
+                GoFieldInfo("ModuleSuffixes", "json:\"moduleSuffixes,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("ModuleDetection", "json:\"moduleDetection,omitzero\"", true, false, GoTypeInfo(5, "core.ModuleDetectionKind", cls = ModuleDetectionKind::class, zero = { ModuleDetectionKind(0) })),
+                GoFieldInfo("NewLine", "json:\"newLine,omitzero\"", true, false, GoTypeInfo(5, "core.NewLineKind", cls = NewLineKind::class, zero = { NewLineKind(0) })),
+                GoFieldInfo("NoEmit", "json:\"noEmit,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoCheck", "json:\"noCheck,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoErrorTruncation", "json:\"noErrorTruncation,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoFallthroughCasesInSwitch", "json:\"noFallthroughCasesInSwitch,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoImplicitAny", "json:\"noImplicitAny,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoImplicitThis", "json:\"noImplicitThis,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoImplicitReturns", "json:\"noImplicitReturns,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoEmitHelpers", "json:\"noEmitHelpers,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoLib", "json:\"noLib,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoPropertyAccessFromIndexSignature", "json:\"noPropertyAccessFromIndexSignature,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoUncheckedIndexedAccess", "json:\"noUncheckedIndexedAccess,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoEmitOnError", "json:\"noEmitOnError,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoUnusedLocals", "json:\"noUnusedLocals,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoUnusedParameters", "json:\"noUnusedParameters,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoResolve", "json:\"noResolve,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoImplicitOverride", "json:\"noImplicitOverride,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoUncheckedSideEffectImports", "json:\"noUncheckedSideEffectImports,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("OutDir", "json:\"outDir,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Paths", "json:\"paths,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, GoSlice<String>>(goElem_K = GoElem.STRING, goElem_V = GoElem.slice(GoElem.STRING)) }), zero = { null })),
+                GoFieldInfo("PreserveConstEnums", "json:\"preserveConstEnums,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("PreserveSymlinks", "json:\"preserveSymlinks,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Project", "json:\"project,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("ResolveJsonModule", "json:\"resolveJsonModule,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ResolvePackageJsonExports", "json:\"resolvePackageJsonExports,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ResolvePackageJsonImports", "json:\"resolvePackageJsonImports,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("RemoveComments", "json:\"removeComments,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("RewriteRelativeImportExtensions", "json:\"rewriteRelativeImportExtensions,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ReactNamespace", "json:\"reactNamespace,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("RootDir", "json:\"rootDir,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("RootDirs", "json:\"rootDirs,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("SkipLibCheck", "json:\"skipLibCheck,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("StableTypeOrdering", "json:\"stableTypeOrdering,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Strict", "json:\"strict,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("StrictBindCallApply", "json:\"strictBindCallApply,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("StrictBuiltinIteratorReturn", "json:\"strictBuiltinIteratorReturn,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("StrictFunctionTypes", "json:\"strictFunctionTypes,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("StrictNullChecks", "json:\"strictNullChecks,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("StrictPropertyInitialization", "json:\"strictPropertyInitialization,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("StripInternal", "json:\"stripInternal,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("SkipDefaultLibCheck", "json:\"skipDefaultLibCheck,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("SourceMap", "json:\"sourceMap,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("SourceRoot", "json:\"sourceRoot,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("SuppressOutputPathCheck", "json:\"suppressOutputPathCheck,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Target", "json:\"target,omitzero\"", true, false, GoTypeInfo(5, "core.ScriptTarget", cls = ScriptTarget::class, zero = { ScriptTarget(0) })),
+                GoFieldInfo("TraceResolution", "json:\"traceResolution,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("TsBuildInfoFile", "json:\"tsBuildInfoFile,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("TypeRoots", "json:\"typeRoots,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Types", "json:\"types,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("UseDefineForClassFields", "json:\"useDefineForClassFields,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("UseUnknownInCatchVariables", "json:\"useUnknownInCatchVariables,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("VerbatimModuleSyntax", "json:\"verbatimModuleSyntax,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("MaxNodeModuleJsDepth", "json:\"maxNodeModuleJsDepth,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(2, "int", zero = { 0 }), zero = { null })),
+                GoFieldInfo("AllowSyntheticDefaultImports", "json:\"allowSyntheticDefaultImports,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("AlwaysStrict", "json:\"alwaysStrict,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("BaseUrl", "json:\"baseUrl,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("DownlevelIteration", "json:\"downlevelIteration,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ESModuleInterop", "json:\"esModuleInterop,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("OutFile", "json:\"outFile,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("ConfigFilePath", "json:\"configFilePath,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("NoDtsResolution", "json:\"noDtsResolution,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("PathsBasePath", "json:\"pathsBasePath,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Diagnostics", "json:\"diagnostics,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ExtendedDiagnostics", "json:\"extendedDiagnostics,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("GenerateCpuProfile", "json:\"generateCpuProfile,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("GenerateTrace", "json:\"generateTrace,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("ListEmittedFiles", "json:\"listEmittedFiles,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ListFiles", "json:\"listFiles,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ExplainFiles", "json:\"explainFiles,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ListFilesOnly", "json:\"listFilesOnly,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("NoEmitForJsFiles", "json:\"noEmitForJsFiles,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("PreserveWatchOutput", "json:\"preserveWatchOutput,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Pretty", "json:\"pretty,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Version", "json:\"version,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Watch", "json:\"watch,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ShowConfig", "json:\"showConfig,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Build", "json:\"build,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Help", "json:\"help,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("All", "json:\"all,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("PprofDir", "json:\"pprofDir,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("SingleThreaded", "json:\"singleThreaded,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Quiet", "json:\"quiet,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Checkers", "json:\"checkers,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(2, "int", zero = { 0 }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<CompilerOptions> = GoElem({ CompilerOptions() }, { it.goCopy() })
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.noCopy 4dcbe9a8
 class noCopy(
-) : Locker {
+) : Locker, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): noCopy = noCopy()
 
@@ -461,14 +736,35 @@ class noCopy(
     override fun unlock() {
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        else -> goPanicIndex(i, 0)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("core.noCopy", listOf(
+            ))
+        }
         val ELEM: GoElem<noCopy> = GoElem({ noCopy() }, { it.goCopy() })
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.CompilerOptions.Clone c1c6f682
 fun CompilerOptions?.clone(): CompilerOptions? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/core.CompilerOptions.Clone")
+    val target: CompilerOptions? = CompilerOptions()
+    val sourceValue: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(this).elem()
+    val targetValue: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(target).elem()
+    l0@ for (i1 in 0 until sourceValue.numField()) {
+        val i: Int = i1
+        if (optionsType!!.field(i).isExported()) {
+            targetValue.field(i).set(sourceValue.field(i))
+        }
+    }
+    return target
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.CompilerOptions.GetEmitScriptTarget c67bf0bc
@@ -680,9 +976,13 @@ fun CompilerOptions?.getPathsBasePath(currentDirectory: String): String {
 
 // go: github.com/microsoft/typescript-go/internal/core.ModuleDetectionKind 846d3c09
 @kotlin.jvm.JvmInline
-value class ModuleDetectionKind(val value: Int) : Comparable<ModuleDetectionKind> {
+value class ModuleDetectionKind(val value: Int) : Comparable<ModuleDetectionKind>, GoBasicValue {
 
     override fun compareTo(other: ModuleDetectionKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ModuleDetectionKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<ModuleDetectionKind> = GoElem({ ModuleDetectionKind(0) })
@@ -703,9 +1003,13 @@ val ModuleDetectionKindForce: ModuleDetectionKind = ModuleDetectionKind(3)
 
 // go: github.com/microsoft/typescript-go/internal/core.ModuleKind be89d3a9
 @kotlin.jvm.JvmInline
-value class ModuleKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ModuleKind> {
+value class ModuleKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ModuleKind>, GoBasicValue {
 
     override fun compareTo(other: ModuleKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ModuleKind(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/core.ModuleKind.IsNonNodeESM 182dad24
     fun isNonNodeESM(): Boolean {
@@ -797,9 +1101,13 @@ val ResolutionModeESM: ModuleKind = ModuleKind(99)
 
 // go: github.com/microsoft/typescript-go/internal/core.ModuleResolutionKind 0fa5effb
 @kotlin.jvm.JvmInline
-value class ModuleResolutionKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ModuleResolutionKind> {
+value class ModuleResolutionKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ModuleResolutionKind>, GoBasicValue {
 
     override fun compareTo(other: ModuleResolutionKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ModuleResolutionKind(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/core.ModuleResolutionKind.String c7e709de
     override fun string(): String {
@@ -854,9 +1162,13 @@ val ModuleResolutionKindBundler: ModuleResolutionKind = ModuleResolutionKind(100
 
 // go: github.com/microsoft/typescript-go/internal/core.NewLineKind e3443c77
 @kotlin.jvm.JvmInline
-value class NewLineKind(val value: Int) : Comparable<NewLineKind> {
+value class NewLineKind(val value: Int) : Comparable<NewLineKind>, GoBasicValue {
 
     override fun compareTo(other: NewLineKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = NewLineKind(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/core.NewLineKind.GetNewLineCharacter c8311b62
     fun getNewLineCharacter(): String {
@@ -903,9 +1215,13 @@ fun getNewLineKind(s: String): NewLineKind {
 
 // go: github.com/microsoft/typescript-go/internal/core.ScriptTarget bca37d21
 @kotlin.jvm.JvmInline
-value class ScriptTarget(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ScriptTarget> {
+value class ScriptTarget(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<ScriptTarget>, GoBasicValue {
 
     override fun compareTo(other: ScriptTarget): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ScriptTarget(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/core.ScriptTarget.String f267713d
     override fun string(): String {
@@ -983,9 +1299,13 @@ val ScriptTargetLatestStandard: ScriptTarget = ScriptTarget(12)
 
 // go: github.com/microsoft/typescript-go/internal/core.JsxEmit 2d5c6eca
 @kotlin.jvm.JvmInline
-value class JsxEmit(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<JsxEmit> {
+value class JsxEmit(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<JsxEmit>, GoBasicValue {
 
     override fun compareTo(other: JsxEmit): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = JsxEmit(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/core.JsxEmit.String ead6951a
     override fun string(): String {
@@ -1042,7 +1362,7 @@ val JsxEmitReactJSXDev: JsxEmit = JsxEmit(5)
 @kotlin.jvm.JvmField val emptyCompilerOptions: CompilerOptions? = CompilerOptions()
 
 // go: github.com/microsoft/typescript-go/internal/core.optionsType 25fc7a26
-val optionsType: Type? get() = TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/core.optionsType")
+@kotlin.jvm.JvmField val optionsType: Type? = com.xemantic.typescript.tsgo.go.reflect.typeFor(GoTypeInfo(25, "core.CompilerOptions", cls = CompilerOptions::class, structInfo = { CompilerOptions.GO_STRUCT }, zero = { CompilerOptions() }))
 
 // go: github.com/microsoft/typescript-go/internal/core.ModuleKindToModuleResolutionKind 47fa11f4
 @kotlin.jvm.JvmField val moduleKindToModuleResolutionKind: GoMap<ModuleKind, ModuleResolutionKind> = GoMap.make<ModuleKind, ModuleResolutionKind>(ModuleResolutionKind.ELEM).also { it[ModuleKindNode16] = ModuleResolutionKindNode16; it[ModuleKindNodeNext] = ModuleResolutionKindNodeNext }

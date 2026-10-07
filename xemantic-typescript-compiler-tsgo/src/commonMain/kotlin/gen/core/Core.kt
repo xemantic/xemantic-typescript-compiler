@@ -604,9 +604,13 @@ fun positionToLineAndByteOffset(position: Int, lineStarts: GoSlice<TextPos>): Tu
 
 // go: github.com/microsoft/typescript-go/internal/core.UTF16Offset 90db5c6b
 @kotlin.jvm.JvmInline
-value class UTF16Offset(val value: Int) : Comparable<UTF16Offset> {
+value class UTF16Offset(val value: Int) : Comparable<UTF16Offset>, GoBasicValue {
 
     override fun compareTo(other: UTF16Offset): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = UTF16Offset(raw as Int)
 
     companion object {
         val ELEM: GoElem<UTF16Offset> = GoElem({ UTF16Offset(0) })

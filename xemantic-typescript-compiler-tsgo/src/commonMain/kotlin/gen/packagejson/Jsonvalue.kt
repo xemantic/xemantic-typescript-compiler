@@ -32,9 +32,13 @@ import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.JSONValueType ed9c1aa8
 @kotlin.jvm.JvmInline
-value class JSONValueType(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<JSONValueType> {
+value class JSONValueType(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<JSONValueType>, GoBasicValue {
 
     override fun compareTo(other: JSONValueType): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = JSONValueType(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/packagejson.JSONValueType.String 3306dbcb
     override fun string(): String {
@@ -94,7 +98,7 @@ val JSONValueTypeObject: JSONValueType = JSONValueType(6)
 class JSONValue(
     @get:kotlin.jvm.JvmName("goGet_type") @set:kotlin.jvm.JvmName("goSet_type") var type: JSONValueType = JSONValueType(0),
     @kotlin.jvm.JvmField var value: Any? = null,
-) : UnmarshalerFrom {
+) : UnmarshalerFrom, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): JSONValue = JSONValue(type = type, value = value)
 
@@ -136,7 +140,23 @@ class JSONValue(
         return unmarshalJSONValueV2<JSONValue>(JSONValue.ELEM, this, dec)
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { type.value }, { type = JSONValueType(it as Int) })
+        1 -> GoFieldPtr(this, 1, { value }, { value = it as Any? })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("packagejson.JSONValue", listOf(
+                GoFieldInfo("Type", "", true, false, GoTypeInfo(3, "packagejson.JSONValueType", cls = JSONValueType::class, zero = { JSONValueType(0) })),
+                GoFieldInfo("Value", "", true, false, GoTypeInfo(20, "", zero = { null })),
+            ))
+        }
         val ELEM: GoElem<JSONValue> = GoElem({ JSONValue() }, { it.goCopy() })
     }
 }
@@ -206,7 +226,72 @@ fun <T> unmarshalJSONValue(goElem_T: GoElem<T>, v: JSONValue?, data: GoSlice<Int
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.unmarshalJSONValueV2 2e0de45c
 fun <T> unmarshalJSONValueV2(goElem_T: GoElem<T>, v: JSONValue?, dec: Decoder?): GoError? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/packagejson.unmarshalJSONValueV2")
+    when (dec!!.peekKind().value) {
+        110 -> {
+            val t0 = dec!!.readToken()
+            val err: GoError? = t0.second
+            if (err != null) {
+                return err
+            }
+            v!!.value = null
+            v!!.type = JSONValueTypeNull
+            return null
+        }
+        34 -> {
+            v!!.type = JSONValueTypeString
+            val err_1: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, run { val o1 = v!!; GoFieldPtr(o1, 1, { o1.value }, { o1.value = it }) }, GoElem.ref<Options?>().nilSlice)
+            if (err_1 != null) {
+                return err_1
+            }
+        }
+        91 -> {
+            val t2 = dec!!.readToken()
+            val err_2: GoError? = t2.second
+            if (err_2 != null) {
+                return err_2
+            }
+            var elements: GoSlice<T> = goElem_T.nilSlice
+            l1@ while (dec!!.peekKind().value != com.xemantic.typescript.tsgo.json.endArray.kind().value) {
+                val element: T = goElem_T.zeroValue()
+                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, element, GoElem.ref<Options?>().nilSlice)
+                if (err_3 != null) {
+                    return err_3
+                }
+                elements = elements.append1(element)
+            }
+            val t3 = dec!!.readToken()
+            val err_4: GoError? = t3.second
+            if (err_4 != null) {
+                return err_4
+            }
+            v!!.type = JSONValueTypeArray
+            v!!.value = elements
+        }
+        123 -> {
+            val object_: OrderedMap<String, T> = OrderedMap<String, T>(goElem_K = GoElem.STRING, goElem_V = goElem_T)
+            val err_5: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, object_, GoElem.ref<Options?>().nilSlice)
+            if (err_5 != null) {
+                return err_5
+            }
+            v!!.type = JSONValueTypeObject
+            v!!.value = object_
+        }
+        116, 102 -> {
+            v!!.type = JSONValueTypeBoolean
+            val err_6: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, run { val o4 = v!!; GoFieldPtr(o4, 1, { o4.value }, { o4.value = it }) }, GoElem.ref<Options?>().nilSlice)
+            if (err_6 != null) {
+                return err_6
+            }
+        }
+        else -> {
+            v!!.type = JSONValueTypeNumber
+            val err_7: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, run { val o5 = v!!; GoFieldPtr(o5, 1, { o5.value }, { o5.value = it }) }, GoElem.ref<Options?>().nilSlice)
+            if (err_7 != null) {
+                return err_7
+            }
+        }
+    }
+    return null
 }
 
 

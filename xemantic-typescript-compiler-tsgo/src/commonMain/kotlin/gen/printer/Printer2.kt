@@ -2780,9 +2780,13 @@ fun Printer?.emitDetachedComments(textRange: TextRange): Tuple2<com.xemantic.typ
 
 // go: github.com/microsoft/typescript-go/internal/printer.commentSeparator 14db9e62
 @kotlin.jvm.JvmInline
-value class commentSeparator(val value: UInt) : Comparable<commentSeparator> {
+value class commentSeparator(val value: UInt) : Comparable<commentSeparator>, GoBasicValue {
 
     override fun compareTo(other: commentSeparator): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = commentSeparator(raw as UInt)
 
     companion object {
         val ELEM: GoElem<commentSeparator> = GoElem({ commentSeparator(0u) })
@@ -3172,9 +3176,13 @@ fun Printer?.exitTokenNode(node: Node?, previousState: com.xemantic.typescript.t
 
 // go: github.com/microsoft/typescript-go/internal/printer.tokenEmitFlags f0795874
 @kotlin.jvm.JvmInline
-value class tokenEmitFlags(val value: UInt) : Comparable<tokenEmitFlags> {
+value class tokenEmitFlags(val value: UInt) : Comparable<tokenEmitFlags>, GoBasicValue {
 
     override fun compareTo(other: tokenEmitFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = tokenEmitFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<tokenEmitFlags> = GoElem({ tokenEmitFlags(0u) })
@@ -3212,9 +3220,13 @@ fun Printer?.exitToken(token: Kind, pos: Int, contextNode: Node?, previousState:
 
 // go: github.com/microsoft/typescript-go/internal/printer.ListFormat 54acf5f2
 @kotlin.jvm.JvmInline
-value class ListFormat(val value: Int) : Comparable<ListFormat> {
+value class ListFormat(val value: Int) : Comparable<ListFormat>, GoBasicValue {
 
     override fun compareTo(other: ListFormat): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ListFormat(raw as Int)
 
     companion object {
         val ELEM: GoElem<ListFormat> = GoElem({ ListFormat(0) })

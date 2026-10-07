@@ -34,9 +34,13 @@ import com.xemantic.typescript.tsgo.collections.len
 
 // go: github.com/microsoft/typescript-go/internal/compiler.processingDiagnosticKind bb346ba4
 @kotlin.jvm.JvmInline
-value class processingDiagnosticKind(val value: Int) : Comparable<processingDiagnosticKind> {
+value class processingDiagnosticKind(val value: Int) : Comparable<processingDiagnosticKind>, GoBasicValue {
 
     override fun compareTo(other: processingDiagnosticKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = processingDiagnosticKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<processingDiagnosticKind> = GoElem({ processingDiagnosticKind(0) })

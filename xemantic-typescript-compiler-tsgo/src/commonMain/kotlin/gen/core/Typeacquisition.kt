@@ -31,7 +31,7 @@ class TypeAcquisition(
     @kotlin.jvm.JvmField var include: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var exclude: GoSlice<String> = GoElem.STRING.nilSlice,
     @get:kotlin.jvm.JvmName("goGet_disableFilenameBasedTypeAcquisition") @set:kotlin.jvm.JvmName("goSet_disableFilenameBasedTypeAcquisition") var disableFilenameBasedTypeAcquisition: Tristate = Tristate(0),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): TypeAcquisition = TypeAcquisition(enable = enable, include = include, exclude = exclude, disableFilenameBasedTypeAcquisition = disableFilenameBasedTypeAcquisition)
 
@@ -42,7 +42,27 @@ class TypeAcquisition(
         disableFilenameBasedTypeAcquisition = o.disableFilenameBasedTypeAcquisition
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> Tristate_Ptr({ enable }, { enable = it })
+        1 -> GoFieldPtr(this, 1, { include }, { include = it as GoSlice<String> })
+        2 -> GoFieldPtr(this, 2, { exclude }, { exclude = it as GoSlice<String> })
+        3 -> Tristate_Ptr({ disableFilenameBasedTypeAcquisition }, { disableFilenameBasedTypeAcquisition = it })
+        else -> goPanicIndex(i, 4)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("core.TypeAcquisition", listOf(
+                GoFieldInfo("Enable", "json:\"enable,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("Include", "json:\"include,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Exclude", "json:\"exclude,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("DisableFilenameBasedTypeAcquisition", "json:\"disableFilenameBasedTypeAcquisition,omitzero\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+            ))
+        }
         val ELEM: GoElem<TypeAcquisition> = GoElem({ TypeAcquisition() }, { it.goCopy() })
     }
 }

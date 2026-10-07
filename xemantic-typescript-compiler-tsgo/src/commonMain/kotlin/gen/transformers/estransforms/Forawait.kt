@@ -152,9 +152,13 @@ import com.xemantic.typescript.tsgo.transformers.visitor
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.forAwaitHierarchyFacts 74a78594
 @kotlin.jvm.JvmInline
-value class forAwaitHierarchyFacts(val value: Int) : Comparable<forAwaitHierarchyFacts> {
+value class forAwaitHierarchyFacts(val value: Int) : Comparable<forAwaitHierarchyFacts>, GoBasicValue {
 
     override fun compareTo(other: forAwaitHierarchyFacts): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = forAwaitHierarchyFacts(raw as Int)
 
     companion object {
         val ELEM: GoElem<forAwaitHierarchyFacts> = GoElem({ forAwaitHierarchyFacts(0) })

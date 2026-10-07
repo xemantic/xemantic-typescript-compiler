@@ -162,9 +162,13 @@ fun isEmptyObjectLiteral(expression: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.AssignmentKind c2962977
 @kotlin.jvm.JvmInline
-value class AssignmentKind(val value: Int) : Comparable<AssignmentKind> {
+value class AssignmentKind(val value: Int) : Comparable<AssignmentKind>, GoBasicValue {
 
     override fun compareTo(other: AssignmentKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = AssignmentKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<AssignmentKind> = GoElem({ AssignmentKind(0) })

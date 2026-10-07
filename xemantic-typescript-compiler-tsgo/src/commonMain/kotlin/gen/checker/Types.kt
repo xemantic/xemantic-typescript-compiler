@@ -39,9 +39,13 @@ import com.xemantic.typescript.tsgo.core.Tristate
 
 // go: github.com/microsoft/typescript-go/internal/checker.ParseFlags ec2c138c
 @kotlin.jvm.JvmInline
-value class ParseFlags(val value: UInt) : Comparable<ParseFlags> {
+value class ParseFlags(val value: UInt) : Comparable<ParseFlags>, GoBasicValue {
 
     override fun compareTo(other: ParseFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ParseFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<ParseFlags> = GoElem({ ParseFlags(0u) })
@@ -68,9 +72,13 @@ val ParseFlagsJSDoc: ParseFlags = ParseFlags(32u)
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureKind 58ced086
 @kotlin.jvm.JvmInline
-value class SignatureKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<SignatureKind> {
+value class SignatureKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<SignatureKind>, GoBasicValue {
 
     override fun compareTo(other: SignatureKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SignatureKind(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/checker.SignatureKind.String 4cf085bc
     override fun string(): String {
@@ -94,9 +102,13 @@ val SignatureKindConstruct: SignatureKind = SignatureKind(1)
 
 // go: github.com/microsoft/typescript-go/internal/checker.ContextFlags da9d50fa
 @kotlin.jvm.JvmInline
-value class ContextFlags(val value: UInt) : Comparable<ContextFlags> {
+value class ContextFlags(val value: UInt) : Comparable<ContextFlags>, GoBasicValue {
 
     override fun compareTo(other: ContextFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ContextFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<ContextFlags> = GoElem({ ContextFlags(0u) })
@@ -120,9 +132,13 @@ val ContextFlagsSkipBindingPatterns: ContextFlags = ContextFlags(8u)
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypeFormatFlags 499d6add
 @kotlin.jvm.JvmInline
-value class TypeFormatFlags(val value: UInt) : Comparable<TypeFormatFlags> {
+value class TypeFormatFlags(val value: UInt) : Comparable<TypeFormatFlags>, GoBasicValue {
 
     override fun compareTo(other: TypeFormatFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypeFormatFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<TypeFormatFlags> = GoElem({ TypeFormatFlags(0u) })
@@ -209,9 +225,13 @@ val TypeFormatFlagsNodeBuilderFlagsMask: TypeFormatFlags = TypeFormatFlags(19220
 
 // go: github.com/microsoft/typescript-go/internal/checker.SymbolFormatFlags 635b3626
 @kotlin.jvm.JvmInline
-value class SymbolFormatFlags(val value: UInt) : Comparable<SymbolFormatFlags> {
+value class SymbolFormatFlags(val value: UInt) : Comparable<SymbolFormatFlags>, GoBasicValue {
 
     override fun compareTo(other: SymbolFormatFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SymbolFormatFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<SymbolFormatFlags> = GoElem({ SymbolFormatFlags(0u) })
@@ -241,9 +261,13 @@ val SymbolFormatFlagsDoNotIncludeSymbolChain: SymbolFormatFlags = SymbolFormatFl
 
 // go: github.com/microsoft/typescript-go/internal/checker.ExternalEmitHelpers 3352877b
 @kotlin.jvm.JvmInline
-value class ExternalEmitHelpers(val value: UInt) : Comparable<ExternalEmitHelpers> {
+value class ExternalEmitHelpers(val value: UInt) : Comparable<ExternalEmitHelpers>, GoBasicValue {
 
     override fun compareTo(other: ExternalEmitHelpers): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ExternalEmitHelpers(raw as UInt)
 
     companion object {
         val ELEM: GoElem<ExternalEmitHelpers> = GoElem({ ExternalEmitHelpers(0u) })
@@ -333,9 +357,13 @@ const val externalHelpersModuleNameText: String = "tslib"
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypeId da6bd27c
 @kotlin.jvm.JvmInline
-value class TypeId(val value: UInt) : Comparable<TypeId> {
+value class TypeId(val value: UInt) : Comparable<TypeId>, GoBasicValue {
 
     override fun compareTo(other: TypeId): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypeId(raw as UInt)
 
     companion object {
         val ELEM: GoElem<TypeId> = GoElem({ TypeId(0u) })
@@ -344,9 +372,13 @@ value class TypeId(val value: UInt) : Comparable<TypeId> {
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureId 53044432
 @kotlin.jvm.JvmInline
-value class SignatureId(val value: UInt) : Comparable<SignatureId> {
+value class SignatureId(val value: UInt) : Comparable<SignatureId>, GoBasicValue {
 
     override fun compareTo(other: SignatureId): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SignatureId(raw as UInt)
 
     companion object {
         val ELEM: GoElem<SignatureId> = GoElem({ SignatureId(0u) })
@@ -611,9 +643,13 @@ class DeclaredTypeLinks(
 
 // go: github.com/microsoft/typescript-go/internal/checker.ExhaustiveState 2ed24226
 @kotlin.jvm.JvmInline
-value class ExhaustiveState(val value: Int) : Comparable<ExhaustiveState> {
+value class ExhaustiveState(val value: Int) : Comparable<ExhaustiveState>, GoBasicValue {
 
     override fun compareTo(other: ExhaustiveState): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ExhaustiveState(raw as Int)
 
     companion object {
         val ELEM: GoElem<ExhaustiveState> = GoElem({ ExhaustiveState(0) })
@@ -682,9 +718,13 @@ class ArrayLiteralLinks(
 
 // go: github.com/microsoft/typescript-go/internal/checker.MembersOrExportsResolutionKind c502aeb8
 @kotlin.jvm.JvmInline
-value class MembersOrExportsResolutionKind(val value: Int) : Comparable<MembersOrExportsResolutionKind> {
+value class MembersOrExportsResolutionKind(val value: Int) : Comparable<MembersOrExportsResolutionKind>, GoBasicValue {
 
     override fun compareTo(other: MembersOrExportsResolutionKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = MembersOrExportsResolutionKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<MembersOrExportsResolutionKind> = GoElem({ MembersOrExportsResolutionKind(0) })
@@ -740,9 +780,13 @@ class VarianceLinks(
 
 // go: github.com/microsoft/typescript-go/internal/checker.VarianceFlags dafbe2eb
 @kotlin.jvm.JvmInline
-value class VarianceFlags(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<VarianceFlags> {
+value class VarianceFlags(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<VarianceFlags>, GoBasicValue {
 
     override fun compareTo(other: VarianceFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = VarianceFlags(raw as UInt)
 
     // go: github.com/microsoft/typescript-go/internal/checker.VarianceFlags.String f6154e05
     override fun string(): String {
@@ -880,9 +924,13 @@ class ContainingSymbolLinks(
 
 // go: github.com/microsoft/typescript-go/internal/checker.AccessFlags 110552a5
 @kotlin.jvm.JvmInline
-value class AccessFlags(val value: UInt) : Comparable<AccessFlags> {
+value class AccessFlags(val value: UInt) : Comparable<AccessFlags>, GoBasicValue {
 
     override fun compareTo(other: AccessFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = AccessFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<AccessFlags> = GoElem({ AccessFlags(0u) })
@@ -924,9 +972,13 @@ val AccessFlagsPersistent: AccessFlags = AccessFlags(1u)
 
 // go: github.com/microsoft/typescript-go/internal/checker.NodeCheckFlags cb5b03d8
 @kotlin.jvm.JvmInline
-value class NodeCheckFlags(val value: UInt) : Comparable<NodeCheckFlags> {
+value class NodeCheckFlags(val value: UInt) : Comparable<NodeCheckFlags>, GoBasicValue {
 
     override fun compareTo(other: NodeCheckFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = NodeCheckFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<NodeCheckFlags> = GoElem({ NodeCheckFlags(0u) })
@@ -1127,9 +1179,13 @@ class SignatureLinks(
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypeFlags 06d2339b
 @kotlin.jvm.JvmInline
-value class TypeFlags(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<TypeFlags> {
+value class TypeFlags(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<TypeFlags>, GoBasicValue {
 
     override fun compareTo(other: TypeFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypeFlags(raw as UInt)
 
     // go: github.com/microsoft/typescript-go/internal/checker.TypeFlags.String 8b5910c7
     override fun string(): String {
@@ -1378,9 +1434,13 @@ fun formatTypeFlags(flags: TypeFlags): GoSlice<String> {
 
 // go: github.com/microsoft/typescript-go/internal/checker.ObjectFlags 985cc568
 @kotlin.jvm.JvmInline
-value class ObjectFlags(val value: UInt) : Comparable<ObjectFlags> {
+value class ObjectFlags(val value: UInt) : Comparable<ObjectFlags>, GoBasicValue {
 
     override fun compareTo(other: ObjectFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ObjectFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<ObjectFlags> = GoElem({ ObjectFlags(0u) })
@@ -2332,9 +2392,13 @@ fun InterfaceType?.typeParameters(): GoSlice<Type?> {
 
 // go: github.com/microsoft/typescript-go/internal/checker.ElementFlags ac082d2e
 @kotlin.jvm.JvmInline
-value class ElementFlags(val value: UInt) : Comparable<ElementFlags> {
+value class ElementFlags(val value: UInt) : Comparable<ElementFlags>, GoBasicValue {
 
     override fun compareTo(other: ElementFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ElementFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<ElementFlags> = GoElem({ ElementFlags(0u) })
@@ -2786,9 +2850,13 @@ fun TypeParameter?.isThisType(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.IndexFlags b9b0cc34
 @kotlin.jvm.JvmInline
-value class IndexFlags(val value: UInt) : Comparable<IndexFlags> {
+value class IndexFlags(val value: UInt) : Comparable<IndexFlags>, GoBasicValue {
 
     override fun compareTo(other: IndexFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = IndexFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<IndexFlags> = GoElem({ IndexFlags(0u) })
@@ -3129,9 +3197,13 @@ fun ConditionalType?.extendsType(): Type? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureFlags df0cc8e8
 @kotlin.jvm.JvmInline
-value class SignatureFlags(val value: UInt) : Comparable<SignatureFlags> {
+value class SignatureFlags(val value: UInt) : Comparable<SignatureFlags>, GoBasicValue {
 
     override fun compareTo(other: SignatureFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SignatureFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<SignatureFlags> = GoElem({ SignatureFlags(0u) })
@@ -3281,9 +3353,13 @@ class CompositeSignature(
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypePredicateKind 21952322
 @kotlin.jvm.JvmInline
-value class TypePredicateKind(val value: Int) : Comparable<TypePredicateKind> {
+value class TypePredicateKind(val value: Int) : Comparable<TypePredicateKind>, GoBasicValue {
 
     override fun compareTo(other: TypePredicateKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypePredicateKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<TypePredicateKind> = GoElem({ TypePredicateKind(0) })
@@ -3396,9 +3472,13 @@ fun IndexInfo?.declaration(): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Ternary b37df4e6
 @kotlin.jvm.JvmInline
-value class Ternary(val value: Int) : Comparable<Ternary> {
+value class Ternary(val value: Int) : Comparable<Ternary>, GoBasicValue {
 
     override fun compareTo(other: Ternary): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Ternary(raw as Int)
 
     companion object {
         val ELEM: GoElem<Ternary> = GoElem({ Ternary(0) })

@@ -131,9 +131,13 @@ fun parseJSDocForNode(sourceFile: SourceFile?, node: Node?): GoSlice<Node?> {
 
 // go: github.com/microsoft/typescript-go/internal/parser.jsdocState 390d1787
 @kotlin.jvm.JvmInline
-value class jsdocState(val value: Int) : Comparable<jsdocState> {
+value class jsdocState(val value: Int) : Comparable<jsdocState>, GoBasicValue {
 
     override fun compareTo(other: jsdocState): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = jsdocState(raw as Int)
 
     companion object {
         val ELEM: GoElem<jsdocState> = GoElem({ jsdocState(0) })
@@ -154,9 +158,13 @@ val jsdocStateSavingBackticks: com.xemantic.typescript.tsgo.parser.jsdocState = 
 
 // go: github.com/microsoft/typescript-go/internal/parser.propertyLikeParse c9afe9ed
 @kotlin.jvm.JvmInline
-value class propertyLikeParse(val value: Int) : Comparable<propertyLikeParse> {
+value class propertyLikeParse(val value: Int) : Comparable<propertyLikeParse>, GoBasicValue {
 
     override fun compareTo(other: propertyLikeParse): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = propertyLikeParse(raw as Int)
 
     companion object {
         val ELEM: GoElem<propertyLikeParse> = GoElem({ propertyLikeParse(0) })

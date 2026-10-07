@@ -27,8 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Decoder
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Encoder
 import com.xemantic.typescript.tsgo.go.sync.Locker
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.MarshalerTo
+import com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.Options
 import com.xemantic.typescript.tsgo.go.iter.Seq
 import com.xemantic.typescript.tsgo.go.iter.Seq2
+import com.xemantic.typescript.tsgo.go.encoding.TextMarshaler
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Token
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
 import com.xemantic.typescript.tsgo.go.reflect.Value
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap 7373826d
@@ -38,7 +43,7 @@ class OrderedMap<K, V>(
     @kotlin.jvm.JvmField var blank0: com.xemantic.typescript.tsgo.collections.noCopy = com.xemantic.typescript.tsgo.collections.noCopy(),
     @kotlin.jvm.JvmField var keys: GoSlice<K> = goElem_K.nilSlice,
     @kotlin.jvm.JvmField var mp: GoMap<K, V> = GoMap.nil<K, V>(goElem_V),
-) {
+) : MarshalerTo, UnmarshalerFrom {
 
     fun goCopy(): OrderedMap<K, V> = OrderedMap(goElem_K = goElem_K, goElem_V = goElem_V, blank0 = blank0, keys = keys, mp = mp)
 
@@ -51,6 +56,68 @@ class OrderedMap<K, V>(
     fun goEquals(o: OrderedMap<K, V>): Boolean = blank0 == o.blank0 && keys == o.keys && mp == o.mp
 
     fun goHash(): Int = 31 * blank0.hashCode() + 31 * keys.hashCode() + 31 * mp.hashCode()
+
+    // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.MarshalJSONTo fcbd99fd
+    override fun marshalJSONTo(enc: Encoder?): GoError? {
+        val err: GoError? = enc!!.writeToken(com.xemantic.typescript.tsgo.json.beginObject.goCopy())
+        if (err != null) {
+            return err
+        }
+        val s0 = this.keys
+        l0@ for (i1 in 0 until s0.len) {
+            val k: K = s0[i1]
+            val t2 = resolveKeyName(com.xemantic.typescript.tsgo.go.reflect.valueOf(k))
+            val keyString: String = t2.first
+            val err_1: GoError? = t2.second
+            if (err_1 != null) {
+                return err_1
+            }
+            val err_2: GoError? = com.xemantic.typescript.tsgo.json.marshalEncode(enc, keyString, GoElem.ref<Options?>().nilSlice)
+            if (err_2 != null) {
+                return err_2
+            }
+            val err_3: GoError? = com.xemantic.typescript.tsgo.json.marshalEncode(enc, this.mp[k], GoElem.ref<Options?>().nilSlice)
+            if (err_3 != null) {
+                return err_3
+            }
+        }
+        return enc!!.writeToken(com.xemantic.typescript.tsgo.json.endObject.goCopy())
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.UnmarshalJSONFrom 9cafc8db
+    override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
+        val t0 = dec!!.readToken()
+        val token: Token = t0.first
+        val err: GoError? = t0.second
+        if (err != null) {
+            return err
+        }
+        if (token.kind().value == 110) {
+            return null
+        }
+        if (token.kind().value != 123) {
+            return com.xemantic.typescript.tsgo.go.errors.new("cannot unmarshal non-object JSON value into Map")
+        }
+        l0@ while (dec!!.peekKind().value != 125) {
+            val key: K = goElem_K.zeroValue()
+            val value_1: V = goElem_V.zeroValue()
+            val err_1: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, key, GoElem.ref<Options?>().nilSlice)
+            if (err_1 != null) {
+                return err_1
+            }
+            val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, value_1, GoElem.ref<Options?>().nilSlice)
+            if (err_2 != null) {
+                return err_2
+            }
+            this.set(key, value_1)
+        }
+        val t1 = dec!!.readToken()
+        val err_3: GoError? = t1.second
+        if (err_3 != null) {
+            return err_3
+        }
+        return null
+    }
 
     companion object {
         fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<OrderedMap<K, V>> = GoElem({ OrderedMap<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
@@ -280,19 +347,32 @@ fun <K, V> OrderedMap<K, V>?.cloneImpl(): OrderedMap<K, V> {
     return OrderedMap<K, V>(goElem_K = this!!.goElem_K, goElem_V = this!!.goElem_V, keys = com.xemantic.typescript.tsgo.go.slices.clone<K>(this!!.keys), mp = com.xemantic.typescript.tsgo.go.maps.clone<K, V>(this!!.mp))
 }
 
-// go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.MarshalJSONTo fcbd99fd
-fun <K, V> OrderedMap<K, V>?.marshalJSONTo(enc: Encoder?): GoError? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/collections.OrderedMap.MarshalJSONTo")
-}
-
 // go: github.com/microsoft/typescript-go/internal/collections.resolveKeyName 1f1e2b72
 fun resolveKeyName(k: Value): Tuple2<String, GoError?> {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/collections.resolveKeyName")
-}
-
-// go: github.com/microsoft/typescript-go/internal/collections.OrderedMap.UnmarshalJSONFrom 9cafc8db
-fun <K, V> OrderedMap<K, V>?.unmarshalJSONFrom(dec: Decoder?): GoError? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/collections.OrderedMap.UnmarshalJSONFrom")
+    if (k.kind().value == 24uL) {
+        return Tuple2<String, GoError?>(k.string(), null)
+    }
+    val t0 = run { val rv1 = k.`interface`(); if (rv1 is TextMarshaler) Tuple2(rv1 as TextMarshaler?, true) else Tuple2(null, false) }
+    val tm: TextMarshaler? = t0.first
+    val ok: Boolean = t0.second
+    if (ok) {
+        if (k.kind().value == 22uL && k.isNil()) {
+            return Tuple2<String, GoError?>("", null)
+        }
+        val t2 = tm!!.marshalText()
+        val buf: GoSlice<Int> = t2.first
+        val err: GoError? = t2.second
+        return Tuple2<String, GoError?>(goBytesToString(buf), err)
+    }
+    when (k.kind().value) {
+        2uL, 3uL, 4uL, 5uL, 6uL -> {
+            return Tuple2<String, GoError?>(com.xemantic.typescript.tsgo.go.strconv.formatInt(k.int(), 10), null)
+        }
+        7uL, 8uL, 9uL, 10uL, 11uL, 12uL -> {
+            return Tuple2<String, GoError?>(com.xemantic.typescript.tsgo.go.strconv.formatUint(k.uint(), 10), null)
+        }
+    }
+    goPanic("unexpected map key type")
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.DiffOrderedMaps c09d1ff9

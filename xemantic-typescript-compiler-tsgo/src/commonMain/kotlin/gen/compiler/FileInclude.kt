@@ -46,9 +46,13 @@ import com.xemantic.typescript.tsgo.tsoptions.getMatchedIncludeSpec
 
 // go: github.com/microsoft/typescript-go/internal/compiler.fileIncludeKind 6e1f1cdd
 @kotlin.jvm.JvmInline
-value class fileIncludeKind(val value: Int) : Comparable<fileIncludeKind> {
+value class fileIncludeKind(val value: Int) : Comparable<fileIncludeKind>, GoBasicValue {
 
     override fun compareTo(other: fileIncludeKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = fileIncludeKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<fileIncludeKind> = GoElem({ fileIncludeKind(0) })

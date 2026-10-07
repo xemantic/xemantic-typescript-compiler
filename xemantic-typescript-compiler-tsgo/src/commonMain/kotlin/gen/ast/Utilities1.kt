@@ -735,9 +735,13 @@ fun isPrologueDirective(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.OuterExpressionKinds 6cc30312
 @kotlin.jvm.JvmInline
-value class OuterExpressionKinds(val value: Int) : Comparable<OuterExpressionKinds> {
+value class OuterExpressionKinds(val value: Int) : Comparable<OuterExpressionKinds>, GoBasicValue {
 
     override fun compareTo(other: OuterExpressionKinds): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = OuterExpressionKinds(raw as Int)
 
     companion object {
         val ELEM: GoElem<OuterExpressionKinds> = GoElem({ OuterExpressionKinds(0) })
@@ -938,9 +942,13 @@ fun findAncestorKind(node_0: Node?, kind: Kind): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/ast.FindAncestorResult 67d16ad2
 @kotlin.jvm.JvmInline
-value class FindAncestorResult(val value: Int) : Comparable<FindAncestorResult> {
+value class FindAncestorResult(val value: Int) : Comparable<FindAncestorResult>, GoBasicValue {
 
     override fun compareTo(other: FindAncestorResult): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = FindAncestorResult(raw as Int)
 
     companion object {
         val ELEM: GoElem<FindAncestorResult> = GoElem({ FindAncestorResult(0) })
@@ -1566,9 +1574,13 @@ fun getAssignedName(node: Node?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/ast.JSDeclarationKind 3505f0f2
 @kotlin.jvm.JvmInline
-value class JSDeclarationKind(val value: Int) : Comparable<JSDeclarationKind> {
+value class JSDeclarationKind(val value: Int) : Comparable<JSDeclarationKind>, GoBasicValue {
 
     override fun compareTo(other: JSDeclarationKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = JSDeclarationKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<JSDeclarationKind> = GoElem({ JSDeclarationKind(0) })
@@ -2322,9 +2334,13 @@ fun isBlockScope(node: Node?, parentNode: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.SemanticMeaning 716d15a5
 @kotlin.jvm.JvmInline
-value class SemanticMeaning(val value: Int) : Comparable<SemanticMeaning> {
+value class SemanticMeaning(val value: Int) : Comparable<SemanticMeaning>, GoBasicValue {
 
     override fun compareTo(other: SemanticMeaning): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SemanticMeaning(raw as Int)
 
     companion object {
         val ELEM: GoElem<SemanticMeaning> = GoElem({ SemanticMeaning(0) })
@@ -2433,9 +2449,13 @@ fun popAncestor(ancestors: GoSlice<Node?>, node: Node?): Tuple2<GoSlice<Node?>, 
 
 // go: github.com/microsoft/typescript-go/internal/ast.ModuleInstanceState 399c314d
 @kotlin.jvm.JvmInline
-value class ModuleInstanceState(val value: Int) : Comparable<ModuleInstanceState> {
+value class ModuleInstanceState(val value: Int) : Comparable<ModuleInstanceState>, GoBasicValue {
 
     override fun compareTo(other: ModuleInstanceState): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ModuleInstanceState(raw as Int)
 
     companion object {
         val ELEM: GoElem<ModuleInstanceState> = GoElem({ ModuleInstanceState(0) })

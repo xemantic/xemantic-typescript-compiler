@@ -35,7 +35,7 @@ class WatchOptions(
     @get:kotlin.jvm.JvmName("goGet_syncWatchDir") @set:kotlin.jvm.JvmName("goSet_syncWatchDir") var syncWatchDir: Tristate = Tristate(0),
     @kotlin.jvm.JvmField var excludeDir: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var excludeFiles: GoSlice<String> = GoElem.STRING.nilSlice,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): WatchOptions = WatchOptions(interval = interval, fileKind = fileKind, directoryKind = directoryKind, fallbackPolling = fallbackPolling, syncWatchDir = syncWatchDir, excludeDir = excludeDir, excludeFiles = excludeFiles)
 
@@ -49,16 +49,46 @@ class WatchOptions(
         excludeFiles = o.excludeFiles
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { interval }, { interval = it as GoPtr<Int>? })
+        1 -> GoFieldPtr(this, 1, { fileKind.value }, { fileKind = WatchFileKind(it as Int) })
+        2 -> GoFieldPtr(this, 2, { directoryKind.value }, { directoryKind = WatchDirectoryKind(it as Int) })
+        3 -> GoFieldPtr(this, 3, { fallbackPolling.value }, { fallbackPolling = PollingKind(it as Int) })
+        4 -> Tristate_Ptr({ syncWatchDir }, { syncWatchDir = it })
+        5 -> GoFieldPtr(this, 5, { excludeDir }, { excludeDir = it as GoSlice<String> })
+        6 -> GoFieldPtr(this, 6, { excludeFiles }, { excludeFiles = it as GoSlice<String> })
+        else -> goPanicIndex(i, 7)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("core.WatchOptions", listOf(
+                GoFieldInfo("Interval", "json:\"watchInterval\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(2, "int", zero = { 0 }), zero = { null })),
+                GoFieldInfo("FileKind", "json:\"watchFile\"", true, false, GoTypeInfo(5, "core.WatchFileKind", cls = WatchFileKind::class, zero = { WatchFileKind(0) })),
+                GoFieldInfo("DirectoryKind", "json:\"watchDirectory\"", true, false, GoTypeInfo(5, "core.WatchDirectoryKind", cls = WatchDirectoryKind::class, zero = { WatchDirectoryKind(0) })),
+                GoFieldInfo("FallbackPolling", "json:\"fallbackPolling\"", true, false, GoTypeInfo(5, "core.PollingKind", cls = PollingKind::class, zero = { PollingKind(0) })),
+                GoFieldInfo("SyncWatchDir", "json:\"synchronousWatchDirectory\"", true, false, GoTypeInfo(8, "core.Tristate", cls = Tristate::class, zero = { Tristate(0) })),
+                GoFieldInfo("ExcludeDir", "json:\"excludeDirectories\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("ExcludeFiles", "json:\"excludeFiles\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+            ))
+        }
         val ELEM: GoElem<WatchOptions> = GoElem({ WatchOptions() }, { it.goCopy() })
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.WatchFileKind 5671fb51
 @kotlin.jvm.JvmInline
-value class WatchFileKind(val value: Int) : Comparable<WatchFileKind> {
+value class WatchFileKind(val value: Int) : Comparable<WatchFileKind>, GoBasicValue {
 
     override fun compareTo(other: WatchFileKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = WatchFileKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<WatchFileKind> = GoElem({ WatchFileKind(0) })
@@ -88,9 +118,13 @@ val WatchFileKindUseFsEventsOnParentDirectory: WatchFileKind = WatchFileKind(6)
 
 // go: github.com/microsoft/typescript-go/internal/core.WatchDirectoryKind aca9bd03
 @kotlin.jvm.JvmInline
-value class WatchDirectoryKind(val value: Int) : Comparable<WatchDirectoryKind> {
+value class WatchDirectoryKind(val value: Int) : Comparable<WatchDirectoryKind>, GoBasicValue {
 
     override fun compareTo(other: WatchDirectoryKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = WatchDirectoryKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<WatchDirectoryKind> = GoElem({ WatchDirectoryKind(0) })
@@ -114,9 +148,13 @@ val WatchDirectoryKindFixedChunkSizePolling: WatchDirectoryKind = WatchDirectory
 
 // go: github.com/microsoft/typescript-go/internal/core.PollingKind 36a1f69d
 @kotlin.jvm.JvmInline
-value class PollingKind(val value: Int) : Comparable<PollingKind> {
+value class PollingKind(val value: Int) : Comparable<PollingKind>, GoBasicValue {
 
     override fun compareTo(other: PollingKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = PollingKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<PollingKind> = GoElem({ PollingKind(0) })

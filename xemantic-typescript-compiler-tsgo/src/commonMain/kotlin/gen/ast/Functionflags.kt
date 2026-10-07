@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/ast.FunctionFlags e25f6575
 @kotlin.jvm.JvmInline
-value class FunctionFlags(val value: UInt) : Comparable<FunctionFlags> {
+value class FunctionFlags(val value: UInt) : Comparable<FunctionFlags>, GoBasicValue {
 
     override fun compareTo(other: FunctionFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = FunctionFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<FunctionFlags> = GoElem({ FunctionFlags(0u) })

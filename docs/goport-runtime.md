@@ -310,3 +310,28 @@ Lowering rules that come with the shims:
 element kind); `gzip.NewReader`, `Reader.Read/Close` (only a non-English `--locale` reads the gzipped
 diagnostic bundles); xxh3's seeded variants. `reflect` is owned by the lowering (`runtime/GoReflect.kt`,
 `go/reflect/`), not by this page. None of the stubs is reached by a default (English) check.
+
+## 12. `reflect` by codegen (`runtime/GoReflect.kt`, `go/reflect/`) — owned by the lowering
+
+Go's `reflect` reads a value's dynamic type; Kotlin's erased generics and value classes cannot, so
+the PORTER emits the static facts and these two files answer Go's reflect API from them (decision:
+one descriptor mechanism for `reflect` AND `json` instead of overrides of the 19 reflecting
+declarations — ~250 lines of runtime + ~150 of porter, and every reflecting function stays mechanical).
+
+| generated | runtime type | used by |
+|---|---|---|
+| every named struct reaching `reflect` (a `reflect.ValueOf`/`TypeOf`/`TypeFor` operand) or `json` (a field with a `json:` tag), closed over embedded and struct-value fields | `GoReflectStruct`: `goStructInfo()` (companion `GO_STRUCT`: name, fields with Go name, raw tag, exported, embedded, `GoTypeInfo`) and `goFieldPtr(i)`; also `GoJsonStruct.goJsonFields()` = `reflect.goJsonFieldsOf(this)` (tags, `-`, `omitempty`/`omitzero`, embedded flattening) | `reflect.Value.Field/NumField`, `DeepEqual`, `IsZero`; the json shim |
+| every value class over a basic type | `GoBasicValue` (`goRaw`, `goWithRaw(raw)`) | `Value.Int/Uint/String/Kind` of a boxed enum, `reflect.TypeOf` |
+| `reflect.TypeFor[T]()` with a static T | `reflect.typeFor(GoTypeInfo(…))` — kind, name, Kotlin class, element/key, struct fields, zero | `== reflect.TypeOf(x)` (by class), `Kind()`, `Field(i)` |
+| `reflect.TypeFor[T]()` with a type parameter T | `reflect.typeForElem(goElem_T)` — read off T's zero value | `packagejson.Expected.ExpectedJSONType` (`Kind()` only) |
+| `reflect.TypeAssert[I](v)` | `run { val x = v.interface(); if (x is I) … }` | `collections.resolveKeyName` |
+| a pointer method of a value class (`(*Tristate).UnmarshalJSON`) | an extension on `GoPtr<V>?`, and a `<V>_Ptr` box implementing the interfaces those methods satisfy | struct fields of type V hand out a `<V>_Ptr` as their `goFieldPtr`: json calls `UnmarshalJSON` on it |
+
+**Field pointers of value-class fields are RAW** (`goFieldPtr(i).value` is the underlying `Int`, not
+the boxed `ScriptTarget`) so the json shim decodes a JSON number into them; `reflect.Value.Field`
+wraps the raw value back (`goWithRaw`) and unwraps on `Set`. `reflect.TypeOf` of an `any` holding a
+generated struct answers a POINTER to it (tsgo stores structs in interfaces by pointer throughout).
+Approximations: `TypeOf` of a slice/map in an `any` has no element type (tsgo only asks `Kind()`);
+a struct that never reaches reflect has no fields to `reflect` (`Field` panics naming the porter rule).
+Pins: `jvmTest/ReflectByCodegenTest` (tsgo's json form of `CompilerOptions` decodes; `Clone` and
+`DeepEqual` through reflect; `TypeFor` fields and tags).

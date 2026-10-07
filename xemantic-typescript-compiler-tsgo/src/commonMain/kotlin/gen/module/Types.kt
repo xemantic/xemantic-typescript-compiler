@@ -70,9 +70,13 @@ interface ResolvedProjectReference {
 
 // go: github.com/microsoft/typescript-go/internal/module.NodeResolutionFeatures 68d7278d
 @kotlin.jvm.JvmInline
-value class NodeResolutionFeatures(val value: Int) : Comparable<NodeResolutionFeatures> {
+value class NodeResolutionFeatures(val value: Int) : Comparable<NodeResolutionFeatures>, GoBasicValue {
 
     override fun compareTo(other: NodeResolutionFeatures): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = NodeResolutionFeatures(raw as Int)
 
     companion object {
         val ELEM: GoElem<NodeResolutionFeatures> = GoElem({ NodeResolutionFeatures(0) })
@@ -220,9 +224,13 @@ fun ResolvedTypeReferenceDirective?.isResolved(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/module.extensions 7a1558fa
 @kotlin.jvm.JvmInline
-value class extensions(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<extensions> {
+value class extensions(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<extensions>, GoBasicValue {
 
     override fun compareTo(other: extensions): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = extensions(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/module.extensions.String ed85dc3f
     override fun string(): String {

@@ -212,7 +212,7 @@ class PackageEmitter(
                 val kept = recvTparams.filter { !tm0.isSubstituted(it) }
                 val ptrRecv = recvField.reqObj("type").str("star") == "pointerType"
                 recvNullableExt = ptrRecv || tm0.nullable(origin.id)
-                recvTypeText = tm0.namedRef(origin) + (if (kept.isEmpty()) "" else kept.joinToString(", ", "<", ">") { tm0.tpName(types.unalias(it) as TypeParamType) }) + if (recvNullableExt) "?." else "."
+                recvTypeText = if (qname in prog.valuePtrMethods) "GoPtr<${tm0.namedRef(origin)}>?." else tm0.namedRef(origin) + (if (kept.isEmpty()) "" else kept.joinToString(", ", "<", ">") { tm0.tpName(types.unalias(it) as TypeParamType) }) + if (recvNullableExt) "?." else "."
             }
         }
         // A generic function takes the element kind of each type parameter (Go zeroes a `T`;
@@ -588,7 +588,12 @@ class PackageEmitter(
         val mset = methodSetNames(named)
         val declaredNames = declared.map { prog.methodName(it.str("qname")!!, it.str("name")!!) }
         checkCollisions(qname, pc.methodsOf(qname).map { prog.methodName(it.str("qname")!!, it.str("name")!!) }, "method")
-        val (supers, overrideNames) = supertypes(named, tm, mset.keys)
+        val (supers0, overrideNames) = supertypes(named, tm, mset.keys)
+        // Reflection by codegen (Program.reflectStructs): GoReflectStruct + GoJsonStruct members.
+        val reflect = qname in prog.reflectStructs && named.tparams.isEmpty()
+        val jsonIface = "com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct"
+        val json = reflect && prog.shims.hasTop("com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json", "GoJsonStruct")
+        val supers = supers0 + (if (reflect) listOf("GoReflectStruct") else emptyList()) + (if (json) listOf(jsonIface) else emptyList())
         val w = CodeWriter()
         w.line(traceLine(qname, s.str("hash")))
         // A struct with more fields than a JVM constructor takes arguments (255 slots: `checker.Checker`)
@@ -663,8 +668,43 @@ class PackageEmitter(
                 w.line()
                 w.raw(promotedDelegate(named, e, mn, tm))
             }
+            if (reflect) {
+                w.line()
+                w.line("override fun goStructInfo(): GoStructInfo = GO_STRUCT")
+                w.line()
+                w.block("override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i)") {
+                    st.fields.forEachIndexed { i, f ->
+                        val n = fieldNames[i]
+                        val kt = tm.kt(f.t)
+                        val v = if (tm.isStructValue(f.t) && !tm.isEmptyStruct(f.t) && tm.hasGoCopy(f.t)) "(it as $kt).goCopy()" else "it as $kt"
+                        // A value-class field is handed out RAW (its underlying Kotlin value): json decodes
+                        // a number into it; reflect wraps it back (go/reflect Value.field).
+                        val box = (types.unalias(f.t) as? NamedType)?.takeIf { prog.hasValuePtrBox(it.key) }
+                        if (box != null) w.line("$i -> ${tm.namedRef(box)}_Ptr({ $n }, { $n = it })")
+                        else if (tm.isValueClass(f.t)) w.line("$i -> GoFieldPtr(this, $i, { $n.value }, { $n = $kt(it as ${tm.kt(types.under(f.t).id)}) })")
+                        else w.line("$i -> GoFieldPtr(this, $i, { $n }, { $n = $v })")
+                    }
+                    w.line("else -> goPanicIndex(i, ${st.fields.size})")
+                }
+                if (json) {
+                    w.line()
+                    w.line("override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)")
+                }
+            }
             w.line()
             w.block("companion object") {
+                if (reflect) {
+                    w.block("val GO_STRUCT: GoStructInfo by lazy") {
+                        w.line("GoStructInfo(\"${pc.pkg.path.substringAfterLast('/')}.${named.name}\", listOf(")
+                        w.indent {
+                            st.fields.forEach { f ->
+                                val tag = f.tag.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$")
+                                w.line("GoFieldInfo(\"${f.name}\", \"$tag\", ${f.exported}, ${f.embedded}, ${tm.reflectTypeInfo(f.t)}),")
+                            }
+                        }
+                        w.line("))")
+                    }
+                }
                 if (named.tparams.isEmpty()) w.line("val ELEM: GoElem<$self> = GoElem({ $self() }, { it.goCopy() })")
                 else {
                     val ps = dict.joinToString(", ") { "goElem_$it: GoElem<${Naming.escape(it)}>" }
@@ -797,7 +837,9 @@ class PackageEmitter(
         val mset = methodSetNames(named)
         val (supers0, overrideNames) = supertypes(named, tm, mset.keys)
         val ordered = (types.under(u) as? BasicType)?.let { b -> tm.rep(b) != TypeMapper.Rep.BOOL } ?: false
-        val supers = supers0 + if (ordered) listOf("Comparable<$self>") else emptyList()
+        // reflect.Value.Int() & co. read a boxed value class through GoBasicValue (runtime GoReflect.kt).
+        val basicRaw = (types.under(u) as? BasicType)?.let { b -> tm.rep(b) != TypeMapper.Rep.UNSAFE } ?: false
+        val supers = supers0 + (if (ordered) listOf("Comparable<$self>") else emptyList()) + (if (basicRaw) listOf("GoBasicValue") else emptyList())
         val w = CodeWriter()
         w.line(traceLine(qname, s.str("hash")))
         w.line("@kotlin.jvm.JvmInline")
@@ -807,21 +849,75 @@ class PackageEmitter(
                 w.line()
                 w.line("override fun compareTo(other: $self): Int = value.compareTo(other.value)")
             }
+            if (basicRaw) {
+                w.line()
+                w.line("override val goRaw: Any get() = value")
+                w.line()
+                w.line("override fun goWithRaw(raw: Any): GoBasicValue = $self(raw as ${tm.kt(u)})")
+            }
             val scope = ClassScope(tpNames, (mset.keys + "value").toSet(), overrideNames)
             for (m in declared) {
                 w.line()
-                val ptr = m.reqObj("recv").list("list").first().reqObj("type").str("star") == "pointerType"
-                if (ptr) {
-                    report.refused(pc.pkg, m.str("qname")!!, m.reqInt("lines"), Refusal("pointer-method-on-value-type"), stub = false)
-                    w.line("// goport: refused pointer-method-on-value-type: ${m.str("qname")}")
-                    continue
-                }
                 w.raw(funcDecl(m, fc, extension = false, member = scope))
             }
             w.line()
             w.block("companion object") {
                 if (named.tparams.isEmpty()) w.line("val ELEM: GoElem<$self> = GoElem({ $self(${tm.zero(u)}) })")
                 else w.line("fun ${tm.typeParamDecl(named.tparams)} elem(): GoElem<$self> = GoElem({ $self(${tm.zero(u)}) })")
+            }
+        }
+        w.line("}")
+        valuePtrBox(named, tm)?.let { w.line(); w.raw(it) }
+        return w.toString()
+    }
+
+    /**
+     * `<V>_Ptr`: a pointer to a value-class location that implements the interfaces V satisfies only
+     * through pointer methods (`*Tristate` is a json `Unmarshaler`); each delegates to the method's
+     * extension on `GoPtr<V>?`. Struct fields of type V hand it out as their `goFieldPtr`.
+     */
+    private fun valuePtrBox(named: NamedType, tm: TypeMapper): String? {
+        val name = prog.typeName(named.key, named.name)
+        val ptrNames = pc.methodsOf(named.key).filter { it.str("qname") in prog.valuePtrMethods }.associateBy { prog.methodName(it.str("qname")!!, it.str("name")!!) }
+        if (ptrNames.isEmpty()) return null
+        val supers = ArrayList<String>()
+        val overrides = LinkedHashSet<String>()
+        for (im in named.node.list("implements")) {
+            if (im.str("via") != "pointer") continue
+            val it = types.unalias(im.reqInt("iface")) as? NamedType ?: continue
+            if (it.pkg == null || it.tparams.isNotEmpty()) continue
+            if (it.pkg !in prog.ported && !prog.shims.hasTop(Naming.kotlinPackage(it.pkg), it.name)) continue
+            val iface = types.under(it.id) as InterfaceType
+            val mnames = iface.allMethods.ifEmpty { iface.methods }.map { m -> prog.methodName(m.fn ?: "", m.name) }
+            // Only interfaces met entirely by the pointer methods (value methods would need the value too).
+            if (!mnames.all { m -> m in ptrNames }) continue
+            supers += try { tm.namedRef(it) } catch (_: Refusal) { continue }
+            overrides += mnames
+        }
+        if (supers.isEmpty()) return null
+        prog.valuePtrBoxes += named.key
+        prog.synth.needNullable = true
+        val w = CodeWriter()
+        w.line("// goport: pointer box of $name (docs/goport-lowering.md § 3)")
+        val raw = tm.kt(types.under(named.id).id)
+        w.line("class ${name}_Ptr(private val get: () -> $name, private val set: ($name) -> Unit) : GoPtr<Any?>, ${supers.joinToString(", ")} {")
+        w.indent {
+            w.line("/** The location as json and reflect see it: the RAW underlying value. */")
+            w.line("override var value: Any?")
+            w.line("    get() = get().value")
+            w.line("    set(v) = set($name(v as $raw))")
+            w.line()
+            w.line("private val goTyped: GoPtr<$name> = object : GoPtr<$name> {")
+            w.line("    override var value: $name")
+            w.line("        get() = get()")
+            w.line("        set(v) = set(v)")
+            w.line("}")
+            for (mn in overrides) {
+                val d = ptrNames.getValue(mn)
+                val sig = types.unalias(pc.obj(d.reqInt("obj")).reqInt("t")) as SignatureType
+                val ps = sig.params.mapIndexed { i, p -> "p$i: ${tm.kt(p.t)}" }
+                w.line("override fun $mn(${ps.joinToString(", ")})${tm.returns(sig.results.map { it.t })} = " +
+                    "com.xemantic.typescript.tsgo.synth.goNullable(goTyped).$mn(${sig.params.indices.joinToString(", ") { "p$it" }})")
             }
         }
         w.line("}")

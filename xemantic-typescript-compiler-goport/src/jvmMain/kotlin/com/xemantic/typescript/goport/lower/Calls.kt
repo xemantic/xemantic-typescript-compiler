@@ -222,6 +222,15 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         return withTuplePrelude(Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + inlineArgs(e, o.str("key"), args(e, sig, shim && sig.variadic, shim))).joinToString(", ")})"))
     }
 
+    /** The single type argument of a generic call (`reflect.TypeFor[T]()`, explicit or inferred). */
+    private fun explicitTarg(e: Node): Int? {
+        var f = e.reqObj("fun")
+        f.obj("inst")?.ints("targs")?.singleOrNull()?.let { return it }
+        if (f.k == "IndexExpr" || f.k == "IndexListExpr") f = f.reqObj("x")
+        val ident = if (f.k == "SelectorExpr") f.reqObj("sel") else f
+        return (ident.obj("inst") ?: f.obj("inst"))?.ints("targs")?.singleOrNull()
+    }
+
     /** Lowering rules for specific shim calls (docs/goport-runtime.md § 9). */
     private fun special(o: Node, e: Node): Ex? {
         val key = o.str("key") ?: return null
@@ -238,6 +247,17 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         fun suffixArg(a: Node): Pair<Node, Node>? =
             if (a.k == "SliceExpr" && a.str("sk") == "string" && a.obj("high") == null && a.obj("low") != null) a.reqObj("x") to a.reqObj("low") else null
         when (key) {
+            // Reflection by codegen (docs/goport-lowering.md § 3): the static type is described here.
+            "reflect.TypeFor" -> {
+                val targ = explicitTarg(e) ?: refuse("reflect-typefor")
+                return if (tm.opaqueTP(targ)) Ex.primary("com.xemantic.typescript.tsgo.go.reflect.typeForElem(${tm.elem(targ)})")
+                else Ex.primary("com.xemantic.typescript.tsgo.go.reflect.typeFor(${tm.reflectTypeInfo(targ)})")
+            }
+            "reflect.TypeAssert" -> {
+                val targ = explicitTarg(e) ?: refuse("reflect-typeassert")
+                val v = fn.fresh("rv")
+                return Ex.primary("run { val $v = ${raw(args[0]).at(PRIMARY)}.`interface`(); if ($v is ${isCheck(targ)}) Tuple2($v as ${castTarget(targ)}, true) else Tuple2(${tm.zero(targ)}, false) }")
+            }
             "unicode/utf8.DecodeRuneInString" -> suffixArg(args[0])?.let { (s, lo) ->
                 return Ex.primary("com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(${raw(s).code}, ${intIndex(lo).code})")
             }
@@ -608,6 +628,11 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
                 }
             }
             "panic" -> Ex.primary("goPanic(${flow(args[0]).code})")
+            // `recover()` inside a deferred func literal: the defer frame of the enclosing function.
+            "recover" -> {
+                val df = fn.frames.reversed().drop(1).firstNotNullOfOrNull { it.deferFrame } ?: refuse("recover-outside-defer")
+                Ex.primary("$df.recover()")
+            }
             "min", "max" -> {
                 val f = if (name == "min") "minOf" else "maxOf"
                 val rep = tm.repOf(ty(e))

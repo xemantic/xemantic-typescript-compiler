@@ -29,9 +29,13 @@ import com.xemantic.typescript.tsgo.synth.Iface_KindString_f376415e
 
 // go: github.com/microsoft/typescript-go/internal/ast.FlowFlags bb5236c2
 @kotlin.jvm.JvmInline
-value class FlowFlags(val value: UInt) : Comparable<FlowFlags> {
+value class FlowFlags(val value: UInt) : Comparable<FlowFlags>, GoBasicValue {
 
     override fun compareTo(other: FlowFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = FlowFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<FlowFlags> = GoElem({ FlowFlags(0u) })

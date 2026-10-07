@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/ast.CheckFlags bc5b0aaf
 @kotlin.jvm.JvmInline
-value class CheckFlags(val value: UInt) : Comparable<CheckFlags> {
+value class CheckFlags(val value: UInt) : Comparable<CheckFlags>, GoBasicValue {
 
     override fun compareTo(other: CheckFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = CheckFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<CheckFlags> = GoElem({ CheckFlags(0u) })

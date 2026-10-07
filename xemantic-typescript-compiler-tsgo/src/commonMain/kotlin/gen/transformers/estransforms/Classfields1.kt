@@ -243,9 +243,13 @@ import com.xemantic.typescript.tsgo.transformers.visitor
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFacts 7439e6e0
 @kotlin.jvm.JvmInline
-value class classFacts(val value: Int) : Comparable<classFacts> {
+value class classFacts(val value: Int) : Comparable<classFacts>, GoBasicValue {
 
     override fun compareTo(other: classFacts): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = classFacts(raw as Int)
 
     companion object {
         val ELEM: GoElem<classFacts> = GoElem({ classFacts(0) })

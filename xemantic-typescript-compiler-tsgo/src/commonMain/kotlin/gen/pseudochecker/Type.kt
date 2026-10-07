@@ -29,9 +29,13 @@ import com.xemantic.typescript.tsgo.ast.TypeParameterDeclaration
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoTypeKind 5e011767
 @kotlin.jvm.JvmInline
-value class PseudoTypeKind(val value: Int) : Comparable<PseudoTypeKind> {
+value class PseudoTypeKind(val value: Int) : Comparable<PseudoTypeKind>, GoBasicValue {
 
     override fun compareTo(other: PseudoTypeKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = PseudoTypeKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<PseudoTypeKind> = GoElem({ PseudoTypeKind(0) })
@@ -504,9 +508,13 @@ fun PseudoObjectElement?.signature(): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoObjectElementKind 0fa05fdb
 @kotlin.jvm.JvmInline
-value class PseudoObjectElementKind(val value: Int) : Comparable<PseudoObjectElementKind> {
+value class PseudoObjectElementKind(val value: Int) : Comparable<PseudoObjectElementKind>, GoBasicValue {
 
     override fun compareTo(other: PseudoObjectElementKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = PseudoObjectElementKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<PseudoObjectElementKind> = GoElem({ PseudoObjectElementKind(0) })

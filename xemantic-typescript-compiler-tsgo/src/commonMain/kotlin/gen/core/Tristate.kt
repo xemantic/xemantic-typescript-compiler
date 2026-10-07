@@ -26,12 +26,17 @@ package com.xemantic.typescript.tsgo.core
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.Marshaler
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.Unmarshaler
 
 // go: github.com/microsoft/typescript-go/internal/core.Tristate 7bb9787e
 @kotlin.jvm.JvmInline
-value class Tristate(val value: Int) : Marshaler, Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Tristate> {
+value class Tristate(val value: Int) : Marshaler, Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Tristate>, GoBasicValue {
 
     override fun compareTo(other: Tristate): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Tristate(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/core.Tristate.IsTrue 9056bb54
     fun isTrue(): Boolean {
@@ -66,8 +71,6 @@ value class Tristate(val value: Int) : Marshaler, Stringer, com.xemantic.typescr
         return this
     }
 
-    // goport: refused pointer-method-on-value-type: github.com/microsoft/typescript-go/internal/core.Tristate.UnmarshalJSON
-
     // go: github.com/microsoft/typescript-go/internal/core.Tristate.MarshalJSON 014a9a2a
     override fun marshalJSON(): Tuple2<GoSlice<Int>, GoError?> {
         when (this.value) {
@@ -98,6 +101,21 @@ value class Tristate(val value: Int) : Marshaler, Stringer, com.xemantic.typescr
     }
 }
 
+// goport: pointer box of Tristate (docs/goport-lowering.md § 3)
+class Tristate_Ptr(private val get: () -> Tristate, private val set: (Tristate) -> Unit) : GoPtr<Any?>, Unmarshaler {
+    /** The location as json and reflect see it: the RAW underlying value. */
+    override var value: Any?
+        get() = get().value
+        set(v) = set(Tristate(v as Int))
+
+    private val goTyped: GoPtr<Tristate> = object : GoPtr<Tristate> {
+        override var value: Tristate
+            get() = get()
+            set(v) = set(v)
+    }
+    override fun unmarshalJSON(p0: GoSlice<Int>): GoError? = com.xemantic.typescript.tsgo.synth.goNullable(goTyped).unmarshalJSON(p0)
+}
+
 // go: github.com/microsoft/typescript-go/internal/core.TSUnknown 5ba34309
 val TSUnknown: Tristate = Tristate(0)
 
@@ -106,6 +124,22 @@ val TSFalse: Tristate = Tristate(1)
 
 // go: github.com/microsoft/typescript-go/internal/core.TSTrue 3db88e8a
 val TSTrue: Tristate = Tristate(2)
+
+// go: github.com/microsoft/typescript-go/internal/core.Tristate.UnmarshalJSON 36b2be36
+fun GoPtr<Tristate>?.unmarshalJSON(data: GoSlice<Int>): GoError? {
+    when (goBytesToString(data)) {
+        "true" -> {
+            this!!.value = TSTrue
+        }
+        "false" -> {
+            this!!.value = TSFalse
+        }
+        else -> {
+            this!!.value = TSUnknown
+        }
+    }
+    return null
+}
 
 // go: github.com/microsoft/typescript-go/internal/core.BoolToTristate 6442c2c0
 fun boolToTristate(b: Boolean): Tristate {

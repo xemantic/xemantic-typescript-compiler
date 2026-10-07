@@ -28,9 +28,13 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 
 // go: github.com/microsoft/typescript-go/internal/ast.Kind cc8648df
 @kotlin.jvm.JvmInline
-value class Kind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Kind> {
+value class Kind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Kind>, GoBasicValue {
 
     override fun compareTo(other: Kind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Kind(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/ast.Kind.String 715800eb
     override fun string(): String {

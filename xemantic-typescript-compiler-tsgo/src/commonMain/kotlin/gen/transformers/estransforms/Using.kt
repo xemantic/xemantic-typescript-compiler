@@ -156,9 +156,13 @@ fun newUsingDeclarationTransformer(opts: TransformOptions?): Transformer? {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingKind 2ca9ed38
 @kotlin.jvm.JvmInline
-value class usingKind(val value: ULong) : Comparable<usingKind> {
+value class usingKind(val value: ULong) : Comparable<usingKind>, GoBasicValue {
 
     override fun compareTo(other: usingKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = usingKind(raw as ULong)
 
     companion object {
         val ELEM: GoElem<usingKind> = GoElem({ usingKind(0uL) })

@@ -83,7 +83,7 @@ class SignatureType(
 ) : GoType(id, key)
 
 class StructField(
-    val name: String, val t: Int, val embedded: Boolean, val exported: Boolean, val pkg: String?,
+    val name: String, val t: Int, val embedded: Boolean, val exported: Boolean, val pkg: String?, val tag: String = "",
 )
 
 class StructType(id: Int, key: String, val fields: List<StructField>) : GoType(id, key)
@@ -146,7 +146,7 @@ class TypeTable(val pkg: IrPackage) {
                 n.ints("tparams"), n.ints("recvTparams"),
             )
             "struct" -> StructType(id, key, n.list("fields").map {
-                StructField(it.str("name")!!, it.reqInt("t"), it.bool("embedded"), it.bool("exported"), it.str("pkg"))
+                StructField(it.str("name")!!, it.reqInt("t"), it.bool("embedded"), it.bool("exported"), it.str("pkg"), it.str("tag") ?: "")
             })
             "interface" -> InterfaceType(
                 id, key,

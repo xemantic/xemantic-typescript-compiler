@@ -114,9 +114,13 @@ class EmitContext(
 
 // go: github.com/microsoft/typescript-go/internal/printer.environmentFlags ac3a922a
 @kotlin.jvm.JvmInline
-value class environmentFlags(val value: Int) : Comparable<environmentFlags> {
+value class environmentFlags(val value: Int) : Comparable<environmentFlags>, GoBasicValue {
 
     override fun compareTo(other: environmentFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = environmentFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<environmentFlags> = GoElem({ environmentFlags(0) })
@@ -497,9 +501,13 @@ class AutoGenerateOptions(
 
 // go: github.com/microsoft/typescript-go/internal/printer.AutoGenerateId 9f2be36e
 @kotlin.jvm.JvmInline
-value class AutoGenerateId(val value: UInt) : Comparable<AutoGenerateId> {
+value class AutoGenerateId(val value: UInt) : Comparable<AutoGenerateId>, GoBasicValue {
 
     override fun compareTo(other: AutoGenerateId): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = AutoGenerateId(raw as UInt)
 
     companion object {
         val ELEM: GoElem<AutoGenerateId> = GoElem({ AutoGenerateId(0u) })
@@ -598,9 +606,13 @@ fun EmitContext?.parseNode(node_0: Node?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/printer.emitNodeFlags 1bbf6b65
 @kotlin.jvm.JvmInline
-value class emitNodeFlags(val value: UInt) : Comparable<emitNodeFlags> {
+value class emitNodeFlags(val value: UInt) : Comparable<emitNodeFlags>, GoBasicValue {
 
     override fun compareTo(other: emitNodeFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = emitNodeFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<emitNodeFlags> = GoElem({ emitNodeFlags(0u) })

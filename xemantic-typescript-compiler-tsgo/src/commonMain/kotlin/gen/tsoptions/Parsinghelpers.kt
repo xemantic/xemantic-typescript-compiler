@@ -38,13 +38,16 @@ import com.xemantic.typescript.tsgo.core.PollingKind
 import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.core.ScriptTarget
 import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.go.reflect.Type
 import com.xemantic.typescript.tsgo.core.TypeAcquisition
+import com.xemantic.typescript.tsgo.go.reflect.Value
 import com.xemantic.typescript.tsgo.core.WatchDirectoryKind
 import com.xemantic.typescript.tsgo.core.WatchFileKind
 import com.xemantic.typescript.tsgo.core.WatchOptions
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.entries
 import com.xemantic.typescript.tsgo.collections.get
+import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.size
 
@@ -933,7 +936,58 @@ fun parseBuildOptions(key_0: String, value_1: Any?, allOptions: BuildOptions?): 
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.mergeCompilerOptions e63986e9
 fun mergeCompilerOptions(targetOptions: CompilerOptions?, sourceOptions: CompilerOptions?, rawSource: Any?): CompilerOptions? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.mergeCompilerOptions")
+    if (sourceOptions == null) {
+        return targetOptions
+    }
+    val explicitNullFields: com.xemantic.typescript.tsgo.collections.Set<String> = com.xemantic.typescript.tsgo.collections.Set<String>(goElem_T = GoElem.STRING)
+    if (rawSource != null) {
+        val x1 = rawSource
+        val t0 = if (x1 is OrderedMap<*, *>) Tuple2(x1 as OrderedMap<String, Any?>, true) else Tuple2(null, false)
+        val rawMap: OrderedMap<String, Any?>? = t0.first
+        val ok: Boolean = t0.second
+        if (ok && rawMap != null) {
+            val t2 = rawMap.get("compilerOptions")
+            val compilerOptionsRaw: Any? = t2.first
+            val exists: Boolean = t2.second
+            if (exists) {
+                val x4 = compilerOptionsRaw
+                val t3 = if (x4 is OrderedMap<*, *>) Tuple2(x4 as OrderedMap<String, Any?>, true) else Tuple2(null, false)
+                val compilerOptionsMap: OrderedMap<String, Any?>? = t3.first
+                val ok_1: Boolean = t3.second
+                if (ok_1) {
+                    compilerOptionsMap.entries()!!(fun(y5: String, y6: Any?): Boolean {
+                                            val key: String = y5
+                                            val value_1: Any? = y6
+                                            if (value_1 == null) {
+                                                explicitNullFields.add(key)
+                                            }
+                                            return true
+                    })
+                }
+            }
+        }
+    }
+    val targetValue: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(targetOptions).elem()
+    val sourceValue: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(sourceOptions).elem()
+    val targetType: Type? = targetValue.type()
+    l1@ for (i7 in 0 until targetValue.numField()) {
+        val i: Int = i7
+        val targetField: Value = targetValue.field(i)
+        val sourceField: Value = sourceValue.field(i)
+        val jsonTag: String = targetType!!.field(i).tag.get("json")
+        if (jsonTag != "") {
+            val t8 = com.xemantic.typescript.tsgo.go.strings.cut(jsonTag, ",")
+            val jsonFieldName: String = t8.first
+            if (jsonFieldName != "" && explicitNullFields.has(jsonFieldName)) {
+                targetField.setZero()
+                continue@l1
+            }
+        }
+        if (!sourceField.isZero()) {
+            targetField.set(sourceField)
+        }
+    }
+    return targetOptions
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.convertToOptionsWithAbsolutePaths 747e6b1c

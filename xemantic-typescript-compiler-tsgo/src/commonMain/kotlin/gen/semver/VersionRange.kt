@@ -71,9 +71,13 @@ class versionComparator(
 
 // go: github.com/microsoft/typescript-go/internal/semver.comparatorOperator c399bc7c
 @kotlin.jvm.JvmInline
-value class comparatorOperator(val value: String) : Comparable<comparatorOperator> {
+value class comparatorOperator(val value: String) : Comparable<comparatorOperator>, GoBasicValue {
 
     override fun compareTo(other: comparatorOperator): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = comparatorOperator(raw as String)
 
     companion object {
         val ELEM: GoElem<comparatorOperator> = GoElem({ comparatorOperator("") })

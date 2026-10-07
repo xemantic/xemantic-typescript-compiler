@@ -834,9 +834,13 @@ fun Checker?.isReferenced(symbol: Symbol?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.UnusedKind f6ce6678
 @kotlin.jvm.JvmInline
-value class UnusedKind(val value: Int) : Comparable<UnusedKind> {
+value class UnusedKind(val value: Int) : Comparable<UnusedKind>, GoBasicValue {
 
     override fun compareTo(other: UnusedKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = UnusedKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<UnusedKind> = GoElem({ UnusedKind(0) })

@@ -32,7 +32,7 @@ class HeaderFields(
     @kotlin.jvm.JvmField var name: Expected<String> = Expected<String>(goElem_T = GoElem.STRING),
     @kotlin.jvm.JvmField var version: Expected<String> = Expected<String>(goElem_T = GoElem.STRING),
     @kotlin.jvm.JvmField var type: Expected<String> = Expected<String>(goElem_T = GoElem.STRING),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): HeaderFields = HeaderFields(name = name.goCopy(), version = version.goCopy(), type = type.goCopy())
 
@@ -46,7 +46,25 @@ class HeaderFields(
 
     fun goHash(): Int = 31 * name.goHash() + 31 * version.goHash() + 31 * type.goHash()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { name }, { name = (it as Expected<String>).goCopy() })
+        1 -> GoFieldPtr(this, 1, { version }, { version = (it as Expected<String>).goCopy() })
+        2 -> GoFieldPtr(this, 2, { type }, { type = (it as Expected<String>).goCopy() })
+        else -> goPanicIndex(i, 3)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("packagejson.HeaderFields", listOf(
+                GoFieldInfo("Name", "json:\"name\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<String>(goElem_T = GoElem.STRING) })),
+                GoFieldInfo("Version", "json:\"version\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<String>(goElem_T = GoElem.STRING) })),
+                GoFieldInfo("Type", "json:\"type\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<String>(goElem_T = GoElem.STRING) })),
+            ))
+        }
         val ELEM: GoElem<HeaderFields> = GoElem({ HeaderFields() }, { it.goCopy() })
     }
 }
@@ -60,7 +78,7 @@ class PathFields(
     @kotlin.jvm.JvmField var typesVersions: JSONValue = JSONValue(),
     @kotlin.jvm.JvmField var imports: ExportsOrImports = ExportsOrImports(),
     @kotlin.jvm.JvmField var exports: ExportsOrImports = ExportsOrImports(),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): PathFields = PathFields(tsConfig = tsConfig.goCopy(), main = main.goCopy(), types = types.goCopy(), typings = typings.goCopy(), typesVersions = typesVersions.goCopy(), imports = imports.goCopy(), exports = exports.goCopy())
 
@@ -78,7 +96,33 @@ class PathFields(
 
     fun goHash(): Int = 31 * tsConfig.goHash() + 31 * main.goHash() + 31 * types.goHash() + 31 * typings.goHash() + 31 * typesVersions.goHash() + 31 * imports.goHash() + 31 * exports.goHash()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { tsConfig }, { tsConfig = (it as Expected<String>).goCopy() })
+        1 -> GoFieldPtr(this, 1, { main }, { main = (it as Expected<String>).goCopy() })
+        2 -> GoFieldPtr(this, 2, { types }, { types = (it as Expected<String>).goCopy() })
+        3 -> GoFieldPtr(this, 3, { typings }, { typings = (it as Expected<String>).goCopy() })
+        4 -> GoFieldPtr(this, 4, { typesVersions }, { typesVersions = (it as JSONValue).goCopy() })
+        5 -> GoFieldPtr(this, 5, { imports }, { imports = (it as ExportsOrImports).goCopy() })
+        6 -> GoFieldPtr(this, 6, { exports }, { exports = (it as ExportsOrImports).goCopy() })
+        else -> goPanicIndex(i, 7)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("packagejson.PathFields", listOf(
+                GoFieldInfo("TSConfig", "json:\"tsconfig\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<String>(goElem_T = GoElem.STRING) })),
+                GoFieldInfo("Main", "json:\"main\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<String>(goElem_T = GoElem.STRING) })),
+                GoFieldInfo("Types", "json:\"types\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<String>(goElem_T = GoElem.STRING) })),
+                GoFieldInfo("Typings", "json:\"typings\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<String>(goElem_T = GoElem.STRING) })),
+                GoFieldInfo("TypesVersions", "json:\"typesVersions\"", true, false, GoTypeInfo(25, "packagejson.JSONValue", cls = JSONValue::class, structInfo = { JSONValue.GO_STRUCT }, zero = { JSONValue() })),
+                GoFieldInfo("Imports", "json:\"imports\"", true, false, GoTypeInfo(25, "packagejson.ExportsOrImports", cls = ExportsOrImports::class, structInfo = { ExportsOrImports.GO_STRUCT }, zero = { ExportsOrImports() })),
+                GoFieldInfo("Exports", "json:\"exports\"", true, false, GoTypeInfo(25, "packagejson.ExportsOrImports", cls = ExportsOrImports::class, structInfo = { ExportsOrImports.GO_STRUCT }, zero = { ExportsOrImports() })),
+            ))
+        }
         val ELEM: GoElem<PathFields> = GoElem({ PathFields() }, { it.goCopy() })
     }
 }
@@ -89,7 +133,7 @@ class DependencyFields(
     @kotlin.jvm.JvmField var devDependencies: Expected<GoMap<String, String>> = Expected<GoMap<String, String>>(goElem_T = GoElem.map<String, String>(GoElem.STRING)),
     @kotlin.jvm.JvmField var peerDependencies: Expected<GoMap<String, String>> = Expected<GoMap<String, String>>(goElem_T = GoElem.map<String, String>(GoElem.STRING)),
     @kotlin.jvm.JvmField var optionalDependencies: Expected<GoMap<String, String>> = Expected<GoMap<String, String>>(goElem_T = GoElem.map<String, String>(GoElem.STRING)),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): DependencyFields = DependencyFields(dependencies = dependencies.goCopy(), devDependencies = devDependencies.goCopy(), peerDependencies = peerDependencies.goCopy(), optionalDependencies = optionalDependencies.goCopy())
 
@@ -100,7 +144,27 @@ class DependencyFields(
         optionalDependencies = o.optionalDependencies.goCopy()
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { dependencies }, { dependencies = (it as Expected<GoMap<String, String>>).goCopy() })
+        1 -> GoFieldPtr(this, 1, { devDependencies }, { devDependencies = (it as Expected<GoMap<String, String>>).goCopy() })
+        2 -> GoFieldPtr(this, 2, { peerDependencies }, { peerDependencies = (it as Expected<GoMap<String, String>>).goCopy() })
+        3 -> GoFieldPtr(this, 3, { optionalDependencies }, { optionalDependencies = (it as Expected<GoMap<String, String>>).goCopy() })
+        else -> goPanicIndex(i, 4)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("packagejson.DependencyFields", listOf(
+                GoFieldInfo("Dependencies", "json:\"dependencies\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<GoMap<String, String>>(goElem_T = GoElem.map<String, String>(GoElem.STRING)) })),
+                GoFieldInfo("DevDependencies", "json:\"devDependencies\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<GoMap<String, String>>(goElem_T = GoElem.map<String, String>(GoElem.STRING)) })),
+                GoFieldInfo("PeerDependencies", "json:\"peerDependencies\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<GoMap<String, String>>(goElem_T = GoElem.map<String, String>(GoElem.STRING)) })),
+                GoFieldInfo("OptionalDependencies", "json:\"optionalDependencies\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = Expected::class, zero = { Expected<GoMap<String, String>>(goElem_T = GoElem.map<String, String>(GoElem.STRING)) })),
+            ))
+        }
         val ELEM: GoElem<DependencyFields> = GoElem({ DependencyFields() }, { it.goCopy() })
     }
 }

@@ -201,6 +201,14 @@ reference); literal tables over 150 elements are filled by hoisted private helpe
   `MinInt` reaching an `int` are `Int.MAX_VALUE`/`MIN_VALUE`; `unsafe.String(&b[i], n)` is
   `goBytesToString(b.slice(i, i + n))`; `(*T)(nil)` conversions are the zero; extension methods used
   via method expressions are imported; anonymous-struct value-class fields use JvmName accessors.
+- **Reflection by codegen** (`Program.reflectStructs`, `TypeMapper.reflectTypeInfo`, docs/goport-runtime.md
+  § 12): structs reaching `reflect`/`json` become `GoReflectStruct` + `GoJsonStruct`; value classes are
+  `GoBasicValue`s; `reflect.TypeFor`/`TypeAssert` are lowered with the static type; value-class pointer
+  methods are extensions on `GoPtr<V>?` with a `<V>_Ptr` box. Every `reflect` user in the closure is mechanical.
+- **Interface members for generic types and shim interfaces** (`Program.externalIfaces`): a generic type
+  satisfying a shim interface (`OrderedMap` → json `MarshalerTo`/`UnmarshalerFrom`) declares it, so its
+  methods are members the json shim can call. Method identities compare alias-free type keys (`canonKey`).
+- `recover()` in a deferred func literal → the enclosing function's `GoDeferFrame.recover()`.
 - Debugging: `GOPORT_TRACE=<reason>` prints the porter stack of every refusal with that reason.
 
 Extractor fixes: an indexed func-typed FIELD call (`m.targets[i]()`) is `call: "dynamic"`; the

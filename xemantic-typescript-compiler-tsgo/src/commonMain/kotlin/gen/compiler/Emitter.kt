@@ -67,9 +67,13 @@ import com.xemantic.typescript.tsgo.transformers.transformSourceFile
 
 // go: github.com/microsoft/typescript-go/internal/compiler.EmitOnly 0c69bbca
 @kotlin.jvm.JvmInline
-value class EmitOnly(val value: Int) : Comparable<EmitOnly> {
+value class EmitOnly(val value: Int) : Comparable<EmitOnly>, GoBasicValue {
 
     override fun compareTo(other: EmitOnly): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = EmitOnly(raw as Int)
 
     companion object {
         val ELEM: GoElem<EmitOnly> = GoElem({ EmitOnly(0) })

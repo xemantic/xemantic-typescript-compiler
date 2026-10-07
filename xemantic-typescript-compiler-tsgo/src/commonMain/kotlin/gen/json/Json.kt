@@ -127,17 +127,17 @@ fun newDecoder(r: Reader?): com.xemantic.typescript.tsgo.go.github_com.go_json_e
 @kotlin.jvm.JvmField val allowInvalid: GoSlice<Options?> = com.xemantic.typescript.tsgo.go.slices.clip<Options?>(GoSlice.of(GoElem.ref<Options?>(), com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.allowInvalidUTF8(true)))
 
 // go: github.com/microsoft/typescript-go/internal/json.BeginObject bfd8eb1f
-@kotlin.jvm.JvmField val beginObject: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.beginObject
+@kotlin.jvm.JvmField val beginObject: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.beginObject.goCopy()
 
 // go: github.com/microsoft/typescript-go/internal/json.EndObject a8d1cf37
-@kotlin.jvm.JvmField val endObject: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endObject
+@kotlin.jvm.JvmField val endObject: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endObject.goCopy()
 
 // go: github.com/microsoft/typescript-go/internal/json.Null 5b323ada
-val `null`: Token get() = TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/json.Null")
+@kotlin.jvm.JvmField val `null`: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.`null`.goCopy()
 
 // go: github.com/microsoft/typescript-go/internal/json.BeginArray f971517a
-@kotlin.jvm.JvmField val beginArray: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.beginArray
+@kotlin.jvm.JvmField val beginArray: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.beginArray.goCopy()
 
 // go: github.com/microsoft/typescript-go/internal/json.EndArray 71a8ffd5
-@kotlin.jvm.JvmField val endArray: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endArray
+@kotlin.jvm.JvmField val endArray: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endArray.goCopy()
 

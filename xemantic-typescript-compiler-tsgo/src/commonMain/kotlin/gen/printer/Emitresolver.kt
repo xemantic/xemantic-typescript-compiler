@@ -39,9 +39,13 @@ import com.xemantic.typescript.tsgo.nodebuilder.SymbolTracker
 
 // go: github.com/microsoft/typescript-go/internal/printer.SymbolAccessibility 2cbfbbca
 @kotlin.jvm.JvmInline
-value class SymbolAccessibility(val value: Int) : Comparable<SymbolAccessibility> {
+value class SymbolAccessibility(val value: Int) : Comparable<SymbolAccessibility>, GoBasicValue {
 
     override fun compareTo(other: SymbolAccessibility): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = SymbolAccessibility(raw as Int)
 
     companion object {
         val ELEM: GoElem<SymbolAccessibility> = GoElem({ SymbolAccessibility(0) })
@@ -86,9 +90,13 @@ class SymbolAccessibilityResult(
 
 // go: github.com/microsoft/typescript-go/internal/printer.TypeReferenceSerializationKind f3a0f93e
 @kotlin.jvm.JvmInline
-value class TypeReferenceSerializationKind(val value: Int) : Comparable<TypeReferenceSerializationKind> {
+value class TypeReferenceSerializationKind(val value: Int) : Comparable<TypeReferenceSerializationKind>, GoBasicValue {
 
     override fun compareTo(other: TypeReferenceSerializationKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypeReferenceSerializationKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<TypeReferenceSerializationKind> = GoElem({ TypeReferenceSerializationKind(0) })

@@ -31,7 +31,9 @@ import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.core.ModuleResolutionKind
 import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.core.ProjectReference
+import com.xemantic.typescript.tsgo.go.reflect.StructField
 import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.go.reflect.Type
 import com.xemantic.typescript.tsgo.go.reflect.Value
 import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.entries
@@ -88,7 +90,7 @@ class TSConfig(
     @kotlin.jvm.JvmField var include: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var exclude: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var compileOnSave: GoPtr<Boolean>? = null,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): TSConfig = TSConfig(compilerOptions = compilerOptions, references = references, files = files, include = include, exclude = exclude, compileOnSave = compileOnSave)
 
@@ -101,7 +103,31 @@ class TSConfig(
         compileOnSave = o.compileOnSave
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { compilerOptions }, { compilerOptions = it as OrderedMap<String, Any?>? })
+        1 -> GoFieldPtr(this, 1, { references }, { references = it as GoSlice<Any?> })
+        2 -> GoFieldPtr(this, 2, { files }, { files = it as GoSlice<String> })
+        3 -> GoFieldPtr(this, 3, { include }, { include = it as GoSlice<String> })
+        4 -> GoFieldPtr(this, 4, { exclude }, { exclude = it as GoSlice<String> })
+        5 -> GoFieldPtr(this, 5, { compileOnSave }, { compileOnSave = it as GoPtr<Boolean>? })
+        else -> goPanicIndex(i, 6)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tsoptions.TSConfig", listOf(
+                GoFieldInfo("CompilerOptions", "json:\"compilerOptions\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, Any?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<Any?>()) }), zero = { null })),
+                GoFieldInfo("References", "json:\"references,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(20, "", zero = { null }), zero = { GoElem.ref<Any?>().nilSlice })),
+                GoFieldInfo("Files", "json:\"files,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Include", "json:\"include,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Exclude", "json:\"exclude,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("CompileOnSave", "json:\"compileOnSave,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(1, "bool", zero = { false }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<TSConfig> = GoElem({ TSConfig() }, { it.goCopy() })
     }
 }
@@ -194,17 +220,181 @@ fun getNameOfCompilerOptionValue(value_1: Any?, enumMap: OrderedMap<String, Any?
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.serializeCompilerOptions 1cf45779
 fun serializeCompilerOptions(options: CompilerOptions?, configFilePath: String, comparePathsOptions: ComparePathsOptions): OrderedMap<String, Any?>? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.serializeCompilerOptions")
+    val result: OrderedMap<String, Any?>? = com.xemantic.typescript.tsgo.collections.newOrderedMapWithSizeHint<String, Any?>(GoElem.STRING, GoElem.ref<Any?>(), 32)
+    val configDir: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(configFilePath)
+    val optionsValue: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(options).elem()
+    val optionsTypeInfo: Type? = com.xemantic.typescript.tsgo.go.reflect.typeFor(GoTypeInfo(25, "core.CompilerOptions", cls = CompilerOptions::class, structInfo = { CompilerOptions.GO_STRUCT }, zero = { CompilerOptions() }))
+    l0@ for (i0 in 0 until optionsValue.numField()) {
+        val i: Int = i0
+        val field_1: StructField = optionsTypeInfo!!.field(i)
+        if (!field_1.isExported()) {
+            continue@l0
+        }
+        val optionDecl: CommandLineOption? = commandLineCompilerOptionsMap.get(field_1.name)
+        if (optionDecl == null) {
+            continue@l0
+        }
+        if (optionDecl!!.category === com.xemantic.typescript.tsgo.diagnostics.command_line_Options || optionDecl!!.category === com.xemantic.typescript.tsgo.diagnostics.output_Formatting) {
+            continue@l0
+        }
+        val fieldValue: Value = optionsValue.field(i)
+        if (fieldValue.isZero()) {
+            continue@l0
+        }
+        val name: String = optionDecl!!.name
+        val value_1: Any? = fieldValue.`interface`()
+        val enumMap: OrderedMap<String, Any?>? = optionDecl.enumMap()
+        if (enumMap != null) {
+            val serialized: String = serializeEnumValue(value_1, enumMap)
+            if (serialized != "") {
+                result.set(name, serialized)
+            }
+            continue@l0
+        }
+        when (optionDecl!!.kind.value) {
+            "listOrElement" -> {
+                com.xemantic.typescript.tsgo.debug.assert(false, GoSlice.of(GoElem.ref<Any?>(), "listOrElement option should not reach serialization"))
+            }
+            "list" -> {
+                val elem: CommandLineOption? = optionDecl.elements()
+                if (elem != null && elem!!.isFilePath) {
+                    val x2 = value_1
+                    val t1 = if (x2 is GoSlice<*>) Tuple2(x2 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+                    val strs: GoSlice<String> = t1.first
+                    val ok: Boolean = t1.second
+                    if (ok) {
+                        val relPaths: GoSlice<String> = GoSlice.make(GoElem.STRING, strs.len)
+                        val s3 = strs
+                        l2@ for (i4 in 0 until s3.len) {
+                            val j: Int = i4
+                            val s: String = s3[i4]
+                            val absPath: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(s, configDir)
+                            relPaths[j] = com.xemantic.typescript.tsgo.tspath.getRelativePathFromFile(configFilePath, absPath, comparePathsOptions.goCopy())
+                        }
+                        result.set(name, relPaths)
+                        continue@l0
+                    }
+                }
+                if (elem != null && elem.enumMap() != null) {
+                    val elemMap: OrderedMap<String, Any?>? = elem.enumMap()
+                    val x6 = value_1
+                    val t5 = if (x6 is GoSlice<*>) Tuple2(x6 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+                    val strs_1: GoSlice<String> = t5.first
+                    val ok_1: Boolean = t5.second
+                    if (ok_1) {
+                        var serialized_1: GoSlice<String> = GoSlice.make(GoElem.STRING, 0, strs_1.len)
+                        val s7 = strs_1
+                        l3@ for (i8 in 0 until s7.len) {
+                            val s_1: String = s7[i8]
+                            val found: String = getNameOfCompilerOptionValue(s_1, elemMap)
+                            if (found != "") {
+                                serialized_1 = serialized_1.append1(found)
+                            } else {
+                                serialized_1 = serialized_1.append1(s_1)
+                            }
+                        }
+                        result.set(name, serialized_1)
+                        continue@l0
+                    }
+                }
+                result.set(name, value_1)
+            }
+            "string" -> {
+                if (optionDecl!!.isFilePath) {
+                    val x10 = value_1
+                    val t9 = if (x10 is String) Tuple2(x10 as String, true) else Tuple2("", false)
+                    val s_2: String = t9.first
+                    val ok_2: Boolean = t9.second
+                    if (ok_2 && s_2 != "") {
+                        val absPath_1: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(s_2, configDir)
+                        result.set(name, com.xemantic.typescript.tsgo.tspath.getRelativePathFromFile(configFilePath, absPath_1, comparePathsOptions.goCopy()))
+                        continue@l0
+                    }
+                }
+                result.set(name, value_1)
+            }
+            "boolean" -> {
+                val x12 = value_1
+                val t11 = if (x12 is Tristate) Tuple2(x12 as Tristate, true) else Tuple2(Tristate(0), false)
+                val t: Tristate = t11.first
+                val ok_3: Boolean = t11.second
+                if (ok_3) {
+                    if (t.isTrue()) {
+                        result.set(name, true)
+                    } else if (t.isFalse()) {
+                        result.set(name, false)
+                    }
+                } else {
+                    result.set(name, value_1)
+                }
+            }
+            "number" -> {
+                result.set(name, value_1)
+            }
+            else -> {
+                result.set(name, value_1)
+            }
+        }
+    }
+    return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.serializeEnumValue 8cfbe637
 fun serializeEnumValue(value_1: Any?, enumMap: OrderedMap<String, Any?>?): String {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.serializeEnumValue")
+    val rv: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(value_1)
+    if (rv.canInt()) {
+        val intVal: Long = rv.int()
+        var rfDone0 = false
+        var rfRet1: String? = null
+        enumMap.entries()!!(fun(y2: String, y3: Any?): Boolean {
+                    val k: String = y2
+                    val v: Any? = y3
+                    val ev: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(v)
+                    if (ev.canInt() && ev.int() == intVal) {
+                        rfRet1 = k
+                        rfDone0 = true
+                        return false
+                    }
+                    return true
+        })
+        if (rfDone0) return rfRet1 as String
+    }
+    return getNameOfCompilerOptionValue(value_1, enumMap)
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.addImpliedOptions 41772d4c
 fun addImpliedOptions(optionMap: OrderedMap<String, Any?>?, options: CompilerOptions?, unused0: String, unused1: ComparePathsOptions) {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.addImpliedOptions")
+    val provided: GoMap<String, Boolean> = GoMap.make<String, Boolean>(GoElem.BOOL, optionMap.size())
+    optionMap.keys()!!(fun(y2: String): Boolean {
+            val k: String = y2
+            provided[k] = true
+            return true
+    })
+    val defaultOpts: CompilerOptions? = CompilerOptions()
+    val s4 = impliedOptions
+    l1@ for (i5 in 0 until s4.len) {
+        val entry: com.xemantic.typescript.tsgo.tsoptions.impliedOption = s4[i5].goCopy()
+        val optionDecl: CommandLineOption? = commandLineCompilerOptionsMap.get(entry.name)
+        if (optionDecl == null) {
+            continue@l1
+        }
+        if (provided[optionDecl!!.name]) {
+            continue@l1
+        }
+        if (!anyDependencyProvided(entry.dependencies, provided)) {
+            continue@l1
+        }
+        val implied: Any? = entry.compute!!(options)
+        val defaultVal: Any? = entry.compute!!(defaultOpts)
+        if (com.xemantic.typescript.tsgo.go.reflect.deepEqual(implied, defaultVal)) {
+            continue@l1
+        }
+        val serialized: Any? = serializeImpliedOptionValue(optionDecl, implied)
+        if (serialized == null) {
+            continue@l1
+        }
+        optionMap.set(optionDecl!!.name, serialized)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.anyDependencyProvided cfe3592f

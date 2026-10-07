@@ -45,7 +45,7 @@ class ParsedBuildCommandLine(
     @kotlin.jvm.JvmField var resolvedProjectPathsOnce: Once = Once(),
     @kotlin.jvm.JvmField var locale: Locale = Locale(),
     @kotlin.jvm.JvmField var localeOnce: Once = Once(),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): ParsedBuildCommandLine = ParsedBuildCommandLine(buildOptions = buildOptions, compilerOptions = compilerOptions, watchOptions = watchOptions, projects = projects, errors = errors, raw = raw, comparePathsOptions = comparePathsOptions.goCopy(), resolvedProjectPaths = resolvedProjectPaths, resolvedProjectPathsOnce = resolvedProjectPathsOnce.goCopy(), locale = locale.goCopy(), localeOnce = localeOnce.goCopy())
 
@@ -63,7 +63,41 @@ class ParsedBuildCommandLine(
         localeOnce = o.localeOnce.goCopy()
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { buildOptions }, { buildOptions = it as BuildOptions? })
+        1 -> GoFieldPtr(this, 1, { compilerOptions }, { compilerOptions = it as CompilerOptions? })
+        2 -> GoFieldPtr(this, 2, { watchOptions }, { watchOptions = it as WatchOptions? })
+        3 -> GoFieldPtr(this, 3, { projects }, { projects = it as GoSlice<String> })
+        4 -> GoFieldPtr(this, 4, { errors }, { errors = it as GoSlice<Diagnostic?> })
+        5 -> GoFieldPtr(this, 5, { raw }, { raw = it as Any? })
+        6 -> GoFieldPtr(this, 6, { comparePathsOptions }, { comparePathsOptions = (it as ComparePathsOptions).goCopy() })
+        7 -> GoFieldPtr(this, 7, { resolvedProjectPaths }, { resolvedProjectPaths = it as GoSlice<String> })
+        8 -> GoFieldPtr(this, 8, { resolvedProjectPathsOnce }, { resolvedProjectPathsOnce = (it as Once).goCopy() })
+        9 -> GoFieldPtr(this, 9, { locale }, { locale = (it as Locale).goCopy() })
+        10 -> GoFieldPtr(this, 10, { localeOnce }, { localeOnce = (it as Once).goCopy() })
+        else -> goPanicIndex(i, 11)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tsoptions.ParsedBuildCommandLine", listOf(
+                GoFieldInfo("BuildOptions", "json:\"buildOptions\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.BuildOptions", cls = BuildOptions::class, structInfo = { BuildOptions.GO_STRUCT }, zero = { BuildOptions() }), zero = { null })),
+                GoFieldInfo("CompilerOptions", "json:\"compilerOptions\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.CompilerOptions", cls = CompilerOptions::class, structInfo = { CompilerOptions.GO_STRUCT }, zero = { CompilerOptions() }), zero = { null })),
+                GoFieldInfo("WatchOptions", "json:\"watchOptions\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.WatchOptions", cls = WatchOptions::class, structInfo = { WatchOptions.GO_STRUCT }, zero = { WatchOptions() }), zero = { null })),
+                GoFieldInfo("Projects", "json:\"projects\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Errors", "json:\"errors\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "ast.Diagnostic", cls = Diagnostic::class, zero = { Diagnostic() }), zero = { null }), zero = { GoElem.ref<Diagnostic?>().nilSlice })),
+                GoFieldInfo("Raw", "json:\"raw\"", true, false, GoTypeInfo(20, "", zero = { null })),
+                GoFieldInfo("comparePathsOptions", "", false, false, GoTypeInfo(25, "tspath.ComparePathsOptions", cls = ComparePathsOptions::class, structInfo = { ComparePathsOptions.GO_STRUCT }, zero = { ComparePathsOptions() })),
+                GoFieldInfo("resolvedProjectPaths", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("resolvedProjectPathsOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+                GoFieldInfo("locale", "", false, false, GoTypeInfo(25, "locale.Locale", cls = Locale::class, zero = { Locale() })),
+                GoFieldInfo("localeOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+            ))
+        }
         val ELEM: GoElem<ParsedBuildCommandLine> = GoElem({ ParsedBuildCommandLine() }, { it.goCopy() })
     }
 }

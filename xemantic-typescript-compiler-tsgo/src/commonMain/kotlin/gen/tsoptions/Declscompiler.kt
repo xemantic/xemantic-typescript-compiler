@@ -26,18 +26,52 @@ package com.xemantic.typescript.tsgo.tsoptions
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.core.CompilerOptions
 import com.xemantic.typescript.tsgo.core.ScriptTarget
+import com.xemantic.typescript.tsgo.go.reflect.StructField
 import com.xemantic.typescript.tsgo.core.Tristate
 import com.xemantic.typescript.tsgo.go.reflect.Type
 import com.xemantic.typescript.tsgo.go.reflect.Value
+import com.xemantic.typescript.tsgo.core.getAllowJS
+import com.xemantic.typescript.tsgo.core.getStrictOptionValue
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.optionsHaveChanges 348d3e9c
 fun optionsHaveChanges(oldOptions: CompilerOptions?, newOptions: CompilerOptions?, declFilter: ((CommandLineOption?) -> Boolean)?): Boolean {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.optionsHaveChanges")
+    if (oldOptions === newOptions) {
+        return false
+    }
+    if (oldOptions == null || newOptions == null) {
+        return true
+    }
+    val oldOptionsValue: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(oldOptions).elem()
+    return forEachCompilerOptionValue(newOptions, declFilter!!, fun(option: CommandLineOption?, value_1: Value, i: Int): Boolean {
+        val newValue: Any? = value_1.`interface`()
+        val oldValue: Any? = oldOptionsValue.field(i).`interface`()
+        if (option!!.strictFlag) {
+            return oldOptions.getStrictOptionValue(oldValue as Tristate) != newOptions.getStrictOptionValue(newValue as Tristate)
+        }
+        if (option!!.allowJsFlag) {
+            return oldOptions.getAllowJS() != newOptions.getAllowJS()
+        }
+        return !com.xemantic.typescript.tsgo.go.reflect.deepEqual(newValue, oldValue)
+    })
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.ForEachCompilerOptionValue be4dd049
-fun forEachCompilerOptionValue(options: CompilerOptions?, declFilter: ((CommandLineOption?) -> Boolean), fn: ((CommandLineOption?, Value, Int) -> Boolean)): Boolean {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.ForEachCompilerOptionValue")
+inline fun forEachCompilerOptionValue(options: CompilerOptions?, declFilter: ((CommandLineOption?) -> Boolean), fn: ((CommandLineOption?, Value, Int) -> Boolean)): Boolean {
+    val optionsValue: Value = com.xemantic.typescript.tsgo.go.reflect.valueOf(options).elem()
+    l0@ for (i0 in 0 until optionsValue.numField()) {
+        val i: Int = i0
+        val field_1: StructField = optionsType!!.field(i)
+        if (!field_1.isExported()) {
+            continue@l0
+        }
+        val optionDeclaration: CommandLineOption? = commandLineCompilerOptionsMap.get(field_1.name)
+        if (optionDeclaration != null && declFilter(optionDeclaration)) {
+            if (fn(optionDeclaration, optionsValue.field(i), i)) {
+                return true
+            }
+        }
+    }
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.CompilerOptionsAffectSemanticDiagnostics 87c2d558
@@ -71,5 +105,5 @@ fun compilerOptionsAffectEmit(oldOptions: CompilerOptions?, newOptions: Compiler
 @kotlin.jvm.JvmField val optionsDeclarations: GoSlice<CommandLineOption?> = com.xemantic.typescript.tsgo.go.slices.concat<CommandLineOption?>(commonOptionsWithBuild, optionsForCompiler)
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.optionsType 622c0adb
-val optionsType: Type? get() = TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/tsoptions.optionsType")
+@kotlin.jvm.JvmField val optionsType: Type? = com.xemantic.typescript.tsgo.go.reflect.typeFor(GoTypeInfo(25, "core.CompilerOptions", cls = CompilerOptions::class, structInfo = { CompilerOptions.GO_STRUCT }, zero = { CompilerOptions() }))
 

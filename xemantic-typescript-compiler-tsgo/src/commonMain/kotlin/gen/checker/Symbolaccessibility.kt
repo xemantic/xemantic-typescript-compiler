@@ -424,9 +424,13 @@ class accessibleSymbolChainContext(
 
 // go: github.com/microsoft/typescript-go/internal/checker.symbolTableID e4d8f17a
 @kotlin.jvm.JvmInline
-value class symbolTableID(val value: ULong) : Comparable<symbolTableID> {
+value class symbolTableID(val value: ULong) : Comparable<symbolTableID>, GoBasicValue {
 
     override fun compareTo(other: symbolTableID): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = symbolTableID(raw as ULong)
 
     companion object {
         val ELEM: GoElem<symbolTableID> = GoElem({ symbolTableID(0uL) })

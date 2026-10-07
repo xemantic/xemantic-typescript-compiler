@@ -152,9 +152,13 @@ import com.xemantic.typescript.tsgo.core.newSlice1
 
 // go: github.com/microsoft/typescript-go/internal/binder.ContainerFlags 2fbc434e
 @kotlin.jvm.JvmInline
-value class ContainerFlags(val value: Int) : Comparable<ContainerFlags> {
+value class ContainerFlags(val value: Int) : Comparable<ContainerFlags>, GoBasicValue {
 
     override fun compareTo(other: ContainerFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ContainerFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<ContainerFlags> = GoElem({ ContainerFlags(0) })

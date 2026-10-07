@@ -47,9 +47,13 @@ interface SymbolTracker {
 
 // go: github.com/microsoft/typescript-go/internal/nodebuilder.Flags de79cc4f
 @kotlin.jvm.JvmInline
-value class Flags(val value: UInt) : Comparable<Flags> {
+value class Flags(val value: UInt) : Comparable<Flags>, GoBasicValue {
 
     override fun compareTo(other: Flags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Flags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<Flags> = GoElem({ Flags(0u) })
@@ -157,9 +161,13 @@ val FlagsInInitialEntityName: Flags = Flags(16777216u)
 
 // go: github.com/microsoft/typescript-go/internal/nodebuilder.InternalFlags ea17b009
 @kotlin.jvm.JvmInline
-value class InternalFlags(val value: Int) : Comparable<InternalFlags> {
+value class InternalFlags(val value: Int) : Comparable<InternalFlags>, GoBasicValue {
 
     override fun compareTo(other: InternalFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = InternalFlags(raw as Int)
 
     companion object {
         val ELEM: GoElem<InternalFlags> = GoElem({ InternalFlags(0) })

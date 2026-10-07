@@ -74,7 +74,13 @@ kotlin {
 // The (TSGO.1) gate is selected by environment variables (OracleParityTest, TsgoPinTest); make them
 // test inputs, or a run with TSGO_ORACLE=bound after a plain run is UP-TO-DATE and measures nothing.
 tasks.withType<Test>().configureEach {
-    for (v in listOf("TSGO_ORACLE", "TSGO_ORACLE_LIMIT", "TSGO_ORACLE_SOURCE", "TSGO_ORACLE_REAL_HASH", "TSGO_ORACLE_DIAGS")) {
+    for (v in listOf(
+        "TSGO_ORACLE", "TSGO_ORACLE_LIMIT", "TSGO_ORACLE_SOURCE", "TSGO_ORACLE_REAL_HASH", "TSGO_ORACLE_DIAGS",
+        "TSGO_DIAG", "TSGO_DIAG_LIMIT", "TSGO_DIAG_FILTER",
+    )) {
         inputs.property(v, providers.environmentVariable(v).orElse(""))
     }
+    // The (TSGO.2) diagnostics differential (DiagParityTest) builds a Program per configuration; the
+    // bundled libs alone are ~100 MB of AST. Opt-in larger heap, so a plain run keeps Gradle's default.
+    providers.environmentVariable("TSGO_TEST_HEAP").orNull?.let { maxHeapSize = it }
 }

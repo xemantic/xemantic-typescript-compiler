@@ -67,9 +67,13 @@ import com.xemantic.typescript.tsgo.printer.setOriginal
 
 // go: github.com/microsoft/typescript-go/internal/transformers.FlattenLevel ccbbed42
 @kotlin.jvm.JvmInline
-value class FlattenLevel(val value: Int) : Comparable<FlattenLevel> {
+value class FlattenLevel(val value: Int) : Comparable<FlattenLevel>, GoBasicValue {
 
     override fun compareTo(other: FlattenLevel): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = FlattenLevel(raw as Int)
 
     companion object {
         val ELEM: GoElem<FlattenLevel> = GoElem({ FlattenLevel(0) })

@@ -291,9 +291,13 @@ import com.xemantic.typescript.tsgo.tsoptions.compilerOptions
 
 // go: github.com/microsoft/typescript-go/internal/checker.CheckMode fd000c0f
 @kotlin.jvm.JvmInline
-value class CheckMode(val value: UInt) : Comparable<CheckMode> {
+value class CheckMode(val value: UInt) : Comparable<CheckMode>, GoBasicValue {
 
     override fun compareTo(other: CheckMode): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = CheckMode(raw as UInt)
 
     companion object {
         val ELEM: GoElem<CheckMode> = GoElem({ CheckMode(0u) })
@@ -332,9 +336,13 @@ typealias TypeSystemEntity = Any?
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypeSystemPropertyName f3e85104
 @kotlin.jvm.JvmInline
-value class TypeSystemPropertyName(val value: Int) : Comparable<TypeSystemPropertyName> {
+value class TypeSystemPropertyName(val value: Int) : Comparable<TypeSystemPropertyName>, GoBasicValue {
 
     override fun compareTo(other: TypeSystemPropertyName): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypeSystemPropertyName(raw as Int)
 
     companion object {
         val ELEM: GoElem<TypeSystemPropertyName> = GoElem({ TypeSystemPropertyName(0) })
@@ -443,9 +451,13 @@ class InferenceContextInfo(
 
 // go: github.com/microsoft/typescript-go/internal/checker.WideningKind 094df99b
 @kotlin.jvm.JvmInline
-value class WideningKind(val value: Int) : Comparable<WideningKind> {
+value class WideningKind(val value: Int) : Comparable<WideningKind>, GoBasicValue {
 
     override fun compareTo(other: WideningKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = WideningKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<WideningKind> = GoElem({ WideningKind(0) })
@@ -518,9 +530,13 @@ class EnumRelationKey(
 
 // go: github.com/microsoft/typescript-go/internal/checker.CachedTypeKind 18b3fe6c
 @kotlin.jvm.JvmInline
-value class CachedTypeKind(val value: Int) : Comparable<CachedTypeKind> {
+value class CachedTypeKind(val value: Int) : Comparable<CachedTypeKind>, GoBasicValue {
 
     override fun compareTo(other: CachedTypeKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = CachedTypeKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<CachedTypeKind> = GoElem({ CachedTypeKind(0) })
@@ -993,9 +1009,13 @@ class FlowLoopInfo(
 
 // go: github.com/microsoft/typescript-go/internal/checker.InferenceFlags de898638
 @kotlin.jvm.JvmInline
-value class InferenceFlags(val value: UInt) : Comparable<InferenceFlags> {
+value class InferenceFlags(val value: UInt) : Comparable<InferenceFlags>, GoBasicValue {
 
     override fun compareTo(other: InferenceFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = InferenceFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<InferenceFlags> = GoElem({ InferenceFlags(0u) })
@@ -1082,9 +1102,13 @@ class InferenceInfo(
 
 // go: github.com/microsoft/typescript-go/internal/checker.InferencePriority 8b346ca7
 @kotlin.jvm.JvmInline
-value class InferencePriority(val value: Int) : Comparable<InferencePriority> {
+value class InferencePriority(val value: Int) : Comparable<InferencePriority>, GoBasicValue {
 
     override fun compareTo(other: InferencePriority): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = InferencePriority(raw as Int)
 
     companion object {
         val ELEM: GoElem<InferencePriority> = GoElem({ InferencePriority(0) })
@@ -1160,9 +1184,13 @@ class IntraExpressionInferenceSite(
 
 // go: github.com/microsoft/typescript-go/internal/checker.DeclarationMeaning eec636ed
 @kotlin.jvm.JvmInline
-value class DeclarationMeaning(val value: UInt) : Comparable<DeclarationMeaning> {
+value class DeclarationMeaning(val value: UInt) : Comparable<DeclarationMeaning>, GoBasicValue {
 
     override fun compareTo(other: DeclarationMeaning): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = DeclarationMeaning(raw as UInt)
 
     companion object {
         val ELEM: GoElem<DeclarationMeaning> = GoElem({ DeclarationMeaning(0u) })
@@ -1192,9 +1220,13 @@ val DeclarationMeaningPropertyAssignmentOrMethod: DeclarationMeaning = Declarati
 
 // go: github.com/microsoft/typescript-go/internal/checker.DeclarationSpaces 77a7d4d4
 @kotlin.jvm.JvmInline
-value class DeclarationSpaces(val value: Int) : Comparable<DeclarationSpaces> {
+value class DeclarationSpaces(val value: Int) : Comparable<DeclarationSpaces>, GoBasicValue {
 
     override fun compareTo(other: DeclarationSpaces): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = DeclarationSpaces(raw as Int)
 
     companion object {
         val ELEM: GoElem<DeclarationSpaces> = GoElem({ DeclarationSpaces(0) })
@@ -1215,9 +1247,13 @@ val DeclarationSpacesExportNamespace: DeclarationSpaces = DeclarationSpaces(4)
 
 // go: github.com/microsoft/typescript-go/internal/checker.IntrinsicTypeKind 0fd48759
 @kotlin.jvm.JvmInline
-value class IntrinsicTypeKind(val value: Int) : Comparable<IntrinsicTypeKind> {
+value class IntrinsicTypeKind(val value: Int) : Comparable<IntrinsicTypeKind>, GoBasicValue {
 
     override fun compareTo(other: IntrinsicTypeKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = IntrinsicTypeKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<IntrinsicTypeKind> = GoElem({ IntrinsicTypeKind(0) })
@@ -1244,9 +1280,13 @@ val IntrinsicTypeKindNoInfer: IntrinsicTypeKind = IntrinsicTypeKind(5)
 
 // go: github.com/microsoft/typescript-go/internal/checker.MappedTypeModifiers fea5af96
 @kotlin.jvm.JvmInline
-value class MappedTypeModifiers(val value: UInt) : Comparable<MappedTypeModifiers> {
+value class MappedTypeModifiers(val value: UInt) : Comparable<MappedTypeModifiers>, GoBasicValue {
 
     override fun compareTo(other: MappedTypeModifiers): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = MappedTypeModifiers(raw as UInt)
 
     companion object {
         val ELEM: GoElem<MappedTypeModifiers> = GoElem({ MappedTypeModifiers(0u) })
@@ -1267,9 +1307,13 @@ val MappedTypeModifiersExcludeOptional: MappedTypeModifiers = MappedTypeModifier
 
 // go: github.com/microsoft/typescript-go/internal/checker.MappedTypeNameTypeKind 96601e6e
 @kotlin.jvm.JvmInline
-value class MappedTypeNameTypeKind(val value: Int) : Comparable<MappedTypeNameTypeKind> {
+value class MappedTypeNameTypeKind(val value: Int) : Comparable<MappedTypeNameTypeKind>, GoBasicValue {
 
     override fun compareTo(other: MappedTypeNameTypeKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = MappedTypeNameTypeKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<MappedTypeNameTypeKind> = GoElem({ MappedTypeNameTypeKind(0) })
@@ -1287,9 +1331,13 @@ val MappedTypeNameTypeKindRemapping: MappedTypeNameTypeKind = MappedTypeNameType
 
 // go: github.com/microsoft/typescript-go/internal/checker.ReferenceHint 250632d5
 @kotlin.jvm.JvmInline
-value class ReferenceHint(val value: Int) : Comparable<ReferenceHint> {
+value class ReferenceHint(val value: Int) : Comparable<ReferenceHint>, GoBasicValue {
 
     override fun compareTo(other: ReferenceHint): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ReferenceHint(raw as Int)
 
     companion object {
         val ELEM: GoElem<ReferenceHint> = GoElem({ ReferenceHint(0) })
@@ -1322,9 +1370,13 @@ val ReferenceHintDecorator: ReferenceHint = ReferenceHint(7)
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypeFacts 8ae68cc8
 @kotlin.jvm.JvmInline
-value class TypeFacts(val value: UInt) : Comparable<TypeFacts> {
+value class TypeFacts(val value: UInt) : Comparable<TypeFacts>, GoBasicValue {
 
     override fun compareTo(other: TypeFacts): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = TypeFacts(raw as UInt)
 
     companion object {
         val ELEM: GoElem<TypeFacts> = GoElem({ TypeFacts(0u) })
@@ -1561,9 +1613,13 @@ val TypeFactsAndFactsMask: TypeFacts = TypeFacts(134209471u)
 
 // go: github.com/microsoft/typescript-go/internal/checker.IterationUse 89a56be9
 @kotlin.jvm.JvmInline
-value class IterationUse(val value: UInt) : Comparable<IterationUse> {
+value class IterationUse(val value: UInt) : Comparable<IterationUse>, GoBasicValue {
 
     override fun compareTo(other: IterationUse): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = IterationUse(raw as UInt)
 
     companion object {
         val ELEM: GoElem<IterationUse> = GoElem({ IterationUse(0u) })
@@ -1650,9 +1706,13 @@ class IterationTypes(
 
 // go: github.com/microsoft/typescript-go/internal/checker.IterationTypeKind cac3b7f8
 @kotlin.jvm.JvmInline
-value class IterationTypeKind(val value: Int) : Comparable<IterationTypeKind> {
+value class IterationTypeKind(val value: Int) : Comparable<IterationTypeKind>, GoBasicValue {
 
     override fun compareTo(other: IterationTypeKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = IterationTypeKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<IterationTypeKind> = GoElem({ IterationTypeKind(0) })

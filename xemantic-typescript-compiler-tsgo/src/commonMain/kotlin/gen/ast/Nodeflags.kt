@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFlags 5197d1ac
 @kotlin.jvm.JvmInline
-value class NodeFlags(val value: UInt) : Comparable<NodeFlags> {
+value class NodeFlags(val value: UInt) : Comparable<NodeFlags>, GoBasicValue {
 
     override fun compareTo(other: NodeFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = NodeFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<NodeFlags> = GoElem({ NodeFlags(0u) })

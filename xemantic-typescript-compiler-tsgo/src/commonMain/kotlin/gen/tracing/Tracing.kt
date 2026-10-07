@@ -83,7 +83,7 @@ class TraceRecord(
     @kotlin.jvm.JvmField var tracePath: String = "",
     @kotlin.jvm.JvmField var typesPath: String = "",
     @kotlin.jvm.JvmField var checkerID: Int = 0,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): TraceRecord = TraceRecord(configFilePath = configFilePath, tracePath = tracePath, typesPath = typesPath, checkerID = checkerID)
 
@@ -98,7 +98,27 @@ class TraceRecord(
 
     fun goHash(): Int = 31 * configFilePath.hashCode() + 31 * tracePath.hashCode() + 31 * typesPath.hashCode() + 31 * checkerID.hashCode()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { configFilePath }, { configFilePath = it as String })
+        1 -> GoFieldPtr(this, 1, { tracePath }, { tracePath = it as String })
+        2 -> GoFieldPtr(this, 2, { typesPath }, { typesPath = it as String })
+        3 -> GoFieldPtr(this, 3, { checkerID }, { checkerID = it as Int })
+        else -> goPanicIndex(i, 4)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tracing.TraceRecord", listOf(
+                GoFieldInfo("ConfigFilePath", "json:\"configFilePath,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("TracePath", "json:\"tracePath,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("TypesPath", "json:\"typesPath,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("CheckerID", "json:\"checkerId\"", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+            ))
+        }
         val ELEM: GoElem<TraceRecord> = GoElem({ TraceRecord() }, { it.goCopy() })
     }
 }
@@ -114,7 +134,7 @@ class traceEvent(
     @kotlin.jvm.JvmField var s: String = "",
     @kotlin.jvm.JvmField var dur: GoPtr<Double>? = null,
     @kotlin.jvm.JvmField var args: GoMap<String, Any?> = GoMap.nil<String, Any?>(GoElem.ref<Any?>()),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): traceEvent = traceEvent(pid = pid, tid = tid, ph = ph, cat = cat, ts = ts, name = name, s = s, dur = dur, args = args)
 
@@ -130,7 +150,37 @@ class traceEvent(
         args = o.args
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { pid }, { pid = it as Int })
+        1 -> GoFieldPtr(this, 1, { tid }, { tid = it as Int })
+        2 -> GoFieldPtr(this, 2, { ph }, { ph = it as String })
+        3 -> GoFieldPtr(this, 3, { cat }, { cat = it as String })
+        4 -> GoFieldPtr(this, 4, { ts }, { ts = it as Double })
+        5 -> GoFieldPtr(this, 5, { name }, { name = it as String })
+        6 -> GoFieldPtr(this, 6, { s }, { s = it as String })
+        7 -> GoFieldPtr(this, 7, { dur }, { dur = it as GoPtr<Double>? })
+        8 -> GoFieldPtr(this, 8, { args }, { args = it as GoMap<String, Any?> })
+        else -> goPanicIndex(i, 9)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tracing.traceEvent", listOf(
+                GoFieldInfo("PID", "json:\"pid\"", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("TID", "json:\"tid\"", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("PH", "json:\"ph\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Cat", "json:\"cat\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("TS", "json:\"ts\"", true, false, GoTypeInfo(14, "float64", zero = { 0.0 })),
+                GoFieldInfo("Name", "json:\"name,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("S", "json:\"s,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Dur", "json:\"dur,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(14, "float64", zero = { 0.0 }), zero = { null })),
+                GoFieldInfo("Args", "json:\"args,omitzero\"", true, false, GoTypeInfo(21, "", elem = GoTypeInfo(20, "", zero = { null }), key = GoTypeInfo(24, "string", zero = { "" }), zero = { GoMap.nil<String, Any?>(GoElem.ref<Any?>()) })),
+            ))
+        }
         val ELEM: GoElem<traceEvent> = GoElem({ traceEvent() }, { it.goCopy() })
     }
 }
@@ -204,9 +254,13 @@ class Tracing(
 
 // go: github.com/microsoft/typescript-go/internal/tracing.Phase 01d867df
 @kotlin.jvm.JvmInline
-value class Phase(val value: String) : Comparable<Phase> {
+value class Phase(val value: String) : Comparable<Phase>, GoBasicValue {
 
     override fun compareTo(other: Phase): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = Phase(raw as String)
 
     companion object {
         val ELEM: GoElem<Phase> = GoElem({ Phase("") })
@@ -413,9 +467,13 @@ fun Tracing?.writeThreadNameEventLocked(tid: Int, name: String) {
 
 // go: github.com/microsoft/typescript-go/internal/tracing.traceThreadKind cd398ca0
 @kotlin.jvm.JvmInline
-value class traceThreadKind(val value: String) : Comparable<traceThreadKind> {
+value class traceThreadKind(val value: String) : Comparable<traceThreadKind>, GoBasicValue {
 
     override fun compareTo(other: traceThreadKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = traceThreadKind(raw as String)
 
     companion object {
         val ELEM: GoElem<traceThreadKind> = GoElem({ traceThreadKind("") })
@@ -670,7 +728,7 @@ class TypeDescriptor(
     @kotlin.jvm.JvmField var firstDeclaration: Location? = null,
     @kotlin.jvm.JvmField var flags: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var display: String = "",
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): TypeDescriptor = TypeDescriptor(id = id, intrinsicName = intrinsicName, symbolName = symbolName, recursionID = recursionID, isTuple = isTuple, unionTypes = unionTypes, intersectionTypes = intersectionTypes, aliasTypeArguments = aliasTypeArguments, keyofType = keyofType, indexedAccessObjectType = indexedAccessObjectType, indexedAccessIndexType = indexedAccessIndexType, conditionalCheckType = conditionalCheckType, conditionalExtendsType = conditionalExtendsType, conditionalTrueType = conditionalTrueType, conditionalFalseType = conditionalFalseType, substitutionBaseType = substitutionBaseType, constraintType = constraintType, instantiatedType = instantiatedType, typeArguments = typeArguments, referenceLocation = referenceLocation, reverseMappedSourceType = reverseMappedSourceType, reverseMappedMappedType = reverseMappedMappedType, reverseMappedConstraintType = reverseMappedConstraintType, evolvingArrayElementType = evolvingArrayElementType, evolvingArrayFinalType = evolvingArrayFinalType, destructuringPattern = destructuringPattern, firstDeclaration = firstDeclaration, flags = flags, display = display)
 
@@ -706,7 +764,77 @@ class TypeDescriptor(
         display = o.display
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { id }, { id = it as UInt })
+        1 -> GoFieldPtr(this, 1, { intrinsicName }, { intrinsicName = it as String })
+        2 -> GoFieldPtr(this, 2, { symbolName }, { symbolName = it as String })
+        3 -> GoFieldPtr(this, 3, { recursionID }, { recursionID = it as GoPtr<Int>? })
+        4 -> GoFieldPtr(this, 4, { isTuple }, { isTuple = it as Boolean })
+        5 -> GoFieldPtr(this, 5, { unionTypes }, { unionTypes = it as GoSlice<UInt> })
+        6 -> GoFieldPtr(this, 6, { intersectionTypes }, { intersectionTypes = it as GoSlice<UInt> })
+        7 -> GoFieldPtr(this, 7, { aliasTypeArguments }, { aliasTypeArguments = it as GoSlice<UInt> })
+        8 -> GoFieldPtr(this, 8, { keyofType }, { keyofType = it as GoPtr<UInt>? })
+        9 -> GoFieldPtr(this, 9, { indexedAccessObjectType }, { indexedAccessObjectType = it as GoPtr<UInt>? })
+        10 -> GoFieldPtr(this, 10, { indexedAccessIndexType }, { indexedAccessIndexType = it as GoPtr<UInt>? })
+        11 -> GoFieldPtr(this, 11, { conditionalCheckType }, { conditionalCheckType = it as GoPtr<UInt>? })
+        12 -> GoFieldPtr(this, 12, { conditionalExtendsType }, { conditionalExtendsType = it as GoPtr<UInt>? })
+        13 -> GoFieldPtr(this, 13, { conditionalTrueType }, { conditionalTrueType = it as GoPtr<Int>? })
+        14 -> GoFieldPtr(this, 14, { conditionalFalseType }, { conditionalFalseType = it as GoPtr<Int>? })
+        15 -> GoFieldPtr(this, 15, { substitutionBaseType }, { substitutionBaseType = it as GoPtr<UInt>? })
+        16 -> GoFieldPtr(this, 16, { constraintType }, { constraintType = it as GoPtr<UInt>? })
+        17 -> GoFieldPtr(this, 17, { instantiatedType }, { instantiatedType = it as GoPtr<UInt>? })
+        18 -> GoFieldPtr(this, 18, { typeArguments }, { typeArguments = it as GoSlice<UInt> })
+        19 -> GoFieldPtr(this, 19, { referenceLocation }, { referenceLocation = it as Location? })
+        20 -> GoFieldPtr(this, 20, { reverseMappedSourceType }, { reverseMappedSourceType = it as GoPtr<UInt>? })
+        21 -> GoFieldPtr(this, 21, { reverseMappedMappedType }, { reverseMappedMappedType = it as GoPtr<UInt>? })
+        22 -> GoFieldPtr(this, 22, { reverseMappedConstraintType }, { reverseMappedConstraintType = it as GoPtr<UInt>? })
+        23 -> GoFieldPtr(this, 23, { evolvingArrayElementType }, { evolvingArrayElementType = it as GoPtr<UInt>? })
+        24 -> GoFieldPtr(this, 24, { evolvingArrayFinalType }, { evolvingArrayFinalType = it as GoPtr<UInt>? })
+        25 -> GoFieldPtr(this, 25, { destructuringPattern }, { destructuringPattern = it as Location? })
+        26 -> GoFieldPtr(this, 26, { firstDeclaration }, { firstDeclaration = it as Location? })
+        27 -> GoFieldPtr(this, 27, { flags }, { flags = it as GoSlice<String> })
+        28 -> GoFieldPtr(this, 28, { display }, { display = it as String })
+        else -> goPanicIndex(i, 29)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tracing.TypeDescriptor", listOf(
+                GoFieldInfo("ID", "json:\"id\"", true, false, GoTypeInfo(10, "uint32", zero = { 0u })),
+                GoFieldInfo("IntrinsicName", "json:\"intrinsicName,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("SymbolName", "json:\"symbolName,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("RecursionID", "json:\"recursionId,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(2, "int", zero = { 0 }), zero = { null })),
+                GoFieldInfo("IsTuple", "json:\"isTuple,omitzero\"", true, false, GoTypeInfo(1, "bool", zero = { false })),
+                GoFieldInfo("UnionTypes", "json:\"unionTypes,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { GoElem.UINT.nilSlice })),
+                GoFieldInfo("IntersectionTypes", "json:\"intersectionTypes,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { GoElem.UINT.nilSlice })),
+                GoFieldInfo("AliasTypeArguments", "json:\"aliasTypeArguments,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { GoElem.UINT.nilSlice })),
+                GoFieldInfo("KeyofType", "json:\"keyofType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("IndexedAccessObjectType", "json:\"indexedAccessObjectType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("IndexedAccessIndexType", "json:\"indexedAccessIndexType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("ConditionalCheckType", "json:\"conditionalCheckType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("ConditionalExtendsType", "json:\"conditionalExtendsType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("ConditionalTrueType", "json:\"conditionalTrueType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(5, "int32", zero = { 0 }), zero = { null })),
+                GoFieldInfo("ConditionalFalseType", "json:\"conditionalFalseType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(5, "int32", zero = { 0 }), zero = { null })),
+                GoFieldInfo("SubstitutionBaseType", "json:\"substitutionBaseType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("ConstraintType", "json:\"constraintType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("InstantiatedType", "json:\"instantiatedType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("TypeArguments", "json:\"typeArguments,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { GoElem.UINT.nilSlice })),
+                GoFieldInfo("ReferenceLocation", "json:\"referenceLocation,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "tracing.Location", cls = Location::class, structInfo = { Location.GO_STRUCT }, zero = { Location() }), zero = { null })),
+                GoFieldInfo("ReverseMappedSourceType", "json:\"reverseMappedSourceType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("ReverseMappedMappedType", "json:\"reverseMappedMappedType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("ReverseMappedConstraintType", "json:\"reverseMappedConstraintType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("EvolvingArrayElementType", "json:\"evolvingArrayElementType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("EvolvingArrayFinalType", "json:\"evolvingArrayFinalType,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { null })),
+                GoFieldInfo("DestructuringPattern", "json:\"destructuringPattern,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "tracing.Location", cls = Location::class, structInfo = { Location.GO_STRUCT }, zero = { Location() }), zero = { null })),
+                GoFieldInfo("FirstDeclaration", "json:\"firstDeclaration,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "tracing.Location", cls = Location::class, structInfo = { Location.GO_STRUCT }, zero = { Location() }), zero = { null })),
+                GoFieldInfo("Flags", "json:\"flags\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("Display", "json:\"display,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+            ))
+        }
         val ELEM: GoElem<TypeDescriptor> = GoElem({ TypeDescriptor() }, { it.goCopy() })
     }
 }
@@ -716,7 +844,7 @@ class Location(
     @kotlin.jvm.JvmField var path: String = "",
     @kotlin.jvm.JvmField var start: LineAndChar? = null,
     @kotlin.jvm.JvmField var end: LineAndChar? = null,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): Location = Location(path = path, start = start, end = end)
 
@@ -730,7 +858,25 @@ class Location(
 
     fun goHash(): Int = 31 * path.hashCode() + 31 * start.hashCode() + 31 * end.hashCode()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { path }, { path = it as String })
+        1 -> GoFieldPtr(this, 1, { start }, { start = it as LineAndChar? })
+        2 -> GoFieldPtr(this, 2, { end }, { end = it as LineAndChar? })
+        else -> goPanicIndex(i, 3)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tracing.Location", listOf(
+                GoFieldInfo("Path", "json:\"path\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Start", "json:\"start,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "tracing.LineAndChar", cls = LineAndChar::class, structInfo = { LineAndChar.GO_STRUCT }, zero = { LineAndChar() }), zero = { null })),
+                GoFieldInfo("End", "json:\"end,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "tracing.LineAndChar", cls = LineAndChar::class, structInfo = { LineAndChar.GO_STRUCT }, zero = { LineAndChar() }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<Location> = GoElem({ Location() }, { it.goCopy() })
     }
 }
@@ -739,7 +885,7 @@ class Location(
 class LineAndChar(
     @kotlin.jvm.JvmField var line: Int = 0,
     @kotlin.jvm.JvmField var character: Int = 0,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): LineAndChar = LineAndChar(line = line, character = character)
 
@@ -752,7 +898,23 @@ class LineAndChar(
 
     fun goHash(): Int = 31 * line.hashCode() + 31 * character.hashCode()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { line }, { line = it as Int })
+        1 -> GoFieldPtr(this, 1, { character }, { character = it as Int })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tracing.LineAndChar", listOf(
+                GoFieldInfo("Line", "json:\"line\"", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("Character", "json:\"character\"", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+            ))
+        }
         val ELEM: GoElem<LineAndChar> = GoElem({ LineAndChar() }, { it.goCopy() })
     }
 }

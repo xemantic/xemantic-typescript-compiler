@@ -27,9 +27,13 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/ast.ModifierFlags 5761566c
 @kotlin.jvm.JvmInline
-value class ModifierFlags(val value: UInt) : Comparable<ModifierFlags> {
+value class ModifierFlags(val value: UInt) : Comparable<ModifierFlags>, GoBasicValue {
 
     override fun compareTo(other: ModifierFlags): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = ModifierFlags(raw as UInt)
 
     companion object {
         val ELEM: GoElem<ModifierFlags> = GoElem({ ModifierFlags(0u) })

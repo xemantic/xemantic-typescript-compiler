@@ -2506,9 +2506,13 @@ fun NodeBuilderImpl?.trackComputedName(accessExpression: Node?, enclosingDeclara
 
 // go: github.com/microsoft/typescript-go/internal/checker.propertyNameNodeKind fa7dbf4d
 @kotlin.jvm.JvmInline
-value class propertyNameNodeKind(val value: Int) : Comparable<propertyNameNodeKind> {
+value class propertyNameNodeKind(val value: Int) : Comparable<propertyNameNodeKind>, GoBasicValue {
 
     override fun compareTo(other: propertyNameNodeKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = propertyNameNodeKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<propertyNameNodeKind> = GoElem({ propertyNameNodeKind(0) })

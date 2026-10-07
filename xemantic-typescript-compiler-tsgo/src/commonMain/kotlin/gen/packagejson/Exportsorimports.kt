@@ -32,9 +32,13 @@ import com.xemantic.typescript.tsgo.collections.size
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.objectKind af5f381a
 @kotlin.jvm.JvmInline
-value class objectKind(val value: Int) : Comparable<objectKind> {
+value class objectKind(val value: Int) : Comparable<objectKind>, GoBasicValue {
 
     override fun compareTo(other: objectKind): Int = value.compareTo(other.value)
+
+    override val goRaw: Any get() = value
+
+    override fun goWithRaw(raw: Any): GoBasicValue = objectKind(raw as Int)
 
     companion object {
         val ELEM: GoElem<objectKind> = GoElem({ objectKind(0) })
@@ -60,7 +64,7 @@ val objectKindInvalid: com.xemantic.typescript.tsgo.packagejson.objectKind = com
 class ExportsOrImports(
     @kotlin.jvm.JvmField var jsonValue: JSONValue = JSONValue(),
     @get:kotlin.jvm.JvmName("goGet_objectKind") @set:kotlin.jvm.JvmName("goSet_objectKind") var objectKind: com.xemantic.typescript.tsgo.packagejson.objectKind = com.xemantic.typescript.tsgo.packagejson.objectKind(0),
-) : UnmarshalerFrom {
+) : UnmarshalerFrom, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): ExportsOrImports = ExportsOrImports(jsonValue = jsonValue.goCopy(), objectKind = objectKind)
 
@@ -112,7 +116,23 @@ class ExportsOrImports(
         return this.objectKind.value == 2
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { jsonValue }, { jsonValue = (it as JSONValue).goCopy() })
+        1 -> GoFieldPtr(this, 1, { objectKind.value }, { objectKind = com.xemantic.typescript.tsgo.packagejson.objectKind(it as Int) })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("packagejson.ExportsOrImports", listOf(
+                GoFieldInfo("JSONValue", "", true, true, GoTypeInfo(25, "packagejson.JSONValue", cls = JSONValue::class, structInfo = { JSONValue.GO_STRUCT }, zero = { JSONValue() })),
+                GoFieldInfo("objectKind", "", false, false, GoTypeInfo(3, "packagejson.objectKind", cls = com.xemantic.typescript.tsgo.packagejson.objectKind::class, zero = { com.xemantic.typescript.tsgo.packagejson.objectKind(0) })),
+            ))
+        }
         val ELEM: GoElem<ExportsOrImports> = GoElem({ ExportsOrImports() }, { it.goCopy() })
     }
 }

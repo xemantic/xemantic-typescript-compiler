@@ -75,7 +75,7 @@ class ParsedCommandLine(
     @kotlin.jvm.JvmField var fileNamesByPathOnce: Once = Once(),
     @kotlin.jvm.JvmField var locale: Locale = Locale(),
     @kotlin.jvm.JvmField var localeOnce: Once = Once(),
-) : ResolvedProjectReference, OutputPathsHost {
+) : ResolvedProjectReference, OutputPathsHost, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): ParsedCommandLine = ParsedCommandLine(parsedConfig = parsedConfig, configFile = configFile, errors = errors, raw = raw, compileOnSave = compileOnSave, comparePathsOptions = comparePathsOptions.goCopy(), wildcardDirectoriesOnce = wildcardDirectoriesOnce.goCopy(), wildcardDirectories = wildcardDirectories, includeGlobsOnce = includeGlobsOnce.goCopy(), includeGlobs = includeGlobs, extraFileExtensions = extraFileExtensions, sourceAndOutputMapsOnce = sourceAndOutputMapsOnce.goCopy(), sourceToProjectReference = sourceToProjectReference, outputDtsToProjectReference = outputDtsToProjectReference, commonSourceDirectory = commonSourceDirectory, commonSourceDirectoryOnce = commonSourceDirectoryOnce.goCopy(), resolvedProjectReferencePaths = resolvedProjectReferencePaths, resolvedProjectReferencePathsOnce = resolvedProjectReferencePathsOnce.goCopy(), literalFileNamesLen = literalFileNamesLen, fileNamesByPath = fileNamesByPath, fileNamesByPathOnce = fileNamesByPathOnce.goCopy(), locale = locale.goCopy(), localeOnce = localeOnce.goCopy())
 
@@ -132,7 +132,65 @@ class ParsedCommandLine(
 
     override fun configName(): String = com.xemantic.typescript.tsgo.synth.goNullable(this).configName()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { parsedConfig }, { parsedConfig = it as ParsedOptions? })
+        1 -> GoFieldPtr(this, 1, { configFile }, { configFile = it as TsConfigSourceFile? })
+        2 -> GoFieldPtr(this, 2, { errors }, { errors = it as GoSlice<Diagnostic?> })
+        3 -> GoFieldPtr(this, 3, { raw }, { raw = it as Any? })
+        4 -> GoFieldPtr(this, 4, { compileOnSave }, { compileOnSave = it as GoPtr<Boolean>? })
+        5 -> GoFieldPtr(this, 5, { comparePathsOptions }, { comparePathsOptions = (it as ComparePathsOptions).goCopy() })
+        6 -> GoFieldPtr(this, 6, { wildcardDirectoriesOnce }, { wildcardDirectoriesOnce = (it as Once).goCopy() })
+        7 -> GoFieldPtr(this, 7, { wildcardDirectories }, { wildcardDirectories = it as GoMap<String, Boolean> })
+        8 -> GoFieldPtr(this, 8, { includeGlobsOnce }, { includeGlobsOnce = (it as Once).goCopy() })
+        9 -> GoFieldPtr(this, 9, { includeGlobs }, { includeGlobs = it as GoSlice<Glob?> })
+        10 -> GoFieldPtr(this, 10, { extraFileExtensions }, { extraFileExtensions = it as GoSlice<FileExtensionInfo> })
+        11 -> GoFieldPtr(this, 11, { sourceAndOutputMapsOnce }, { sourceAndOutputMapsOnce = (it as Once).goCopy() })
+        12 -> GoFieldPtr(this, 12, { sourceToProjectReference }, { sourceToProjectReference = it as GoMap<Path, SourceOutputAndProjectReference?> })
+        13 -> GoFieldPtr(this, 13, { outputDtsToProjectReference }, { outputDtsToProjectReference = it as GoMap<Path, SourceOutputAndProjectReference?> })
+        14 -> GoFieldPtr(this, 14, { commonSourceDirectory }, { commonSourceDirectory = it as String })
+        15 -> GoFieldPtr(this, 15, { commonSourceDirectoryOnce }, { commonSourceDirectoryOnce = (it as Once).goCopy() })
+        16 -> GoFieldPtr(this, 16, { resolvedProjectReferencePaths }, { resolvedProjectReferencePaths = it as GoSlice<String> })
+        17 -> GoFieldPtr(this, 17, { resolvedProjectReferencePathsOnce }, { resolvedProjectReferencePathsOnce = (it as Once).goCopy() })
+        18 -> GoFieldPtr(this, 18, { literalFileNamesLen }, { literalFileNamesLen = it as Int })
+        19 -> GoFieldPtr(this, 19, { fileNamesByPath }, { fileNamesByPath = it as GoMap<Path, String> })
+        20 -> GoFieldPtr(this, 20, { fileNamesByPathOnce }, { fileNamesByPathOnce = (it as Once).goCopy() })
+        21 -> GoFieldPtr(this, 21, { locale }, { locale = (it as Locale).goCopy() })
+        22 -> GoFieldPtr(this, 22, { localeOnce }, { localeOnce = (it as Once).goCopy() })
+        else -> goPanicIndex(i, 23)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tsoptions.ParsedCommandLine", listOf(
+                GoFieldInfo("ParsedConfig", "json:\"parsedConfig\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.ParsedOptions", cls = ParsedOptions::class, structInfo = { ParsedOptions.GO_STRUCT }, zero = { ParsedOptions() }), zero = { null })),
+                GoFieldInfo("ConfigFile", "json:\"configFile\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "tsoptions.TsConfigSourceFile", cls = TsConfigSourceFile::class, zero = { TsConfigSourceFile() }), zero = { null })),
+                GoFieldInfo("Errors", "json:\"errors\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "ast.Diagnostic", cls = Diagnostic::class, zero = { Diagnostic() }), zero = { null }), zero = { GoElem.ref<Diagnostic?>().nilSlice })),
+                GoFieldInfo("Raw", "json:\"raw\"", true, false, GoTypeInfo(20, "", zero = { null })),
+                GoFieldInfo("CompileOnSave", "json:\"compileOnSave\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(1, "bool", zero = { false }), zero = { null })),
+                GoFieldInfo("comparePathsOptions", "", false, false, GoTypeInfo(25, "tspath.ComparePathsOptions", cls = ComparePathsOptions::class, structInfo = { ComparePathsOptions.GO_STRUCT }, zero = { ComparePathsOptions() })),
+                GoFieldInfo("wildcardDirectoriesOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+                GoFieldInfo("wildcardDirectories", "", false, false, GoTypeInfo(21, "", elem = GoTypeInfo(1, "bool", zero = { false }), key = GoTypeInfo(24, "string", zero = { "" }), zero = { GoMap.nil<String, Boolean>(GoElem.BOOL) })),
+                GoFieldInfo("includeGlobsOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+                GoFieldInfo("includeGlobs", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "glob.Glob", cls = Glob::class, zero = { Glob() }), zero = { null }), zero = { GoElem.ref<Glob?>().nilSlice })),
+                GoFieldInfo("extraFileExtensions", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(25, "tsoptions.FileExtensionInfo", cls = FileExtensionInfo::class, zero = { FileExtensionInfo() }), zero = { FileExtensionInfo.ELEM.nilSlice })),
+                GoFieldInfo("sourceAndOutputMapsOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+                GoFieldInfo("sourceToProjectReference", "", false, false, GoTypeInfo(21, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "tsoptions.SourceOutputAndProjectReference", cls = SourceOutputAndProjectReference::class, zero = { SourceOutputAndProjectReference() }), zero = { null }), key = GoTypeInfo(24, "tspath.Path", cls = Path::class, zero = { Path("") }), zero = { GoMap.nil<Path, SourceOutputAndProjectReference?>(GoElem.ref<SourceOutputAndProjectReference?>()) })),
+                GoFieldInfo("outputDtsToProjectReference", "", false, false, GoTypeInfo(21, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "tsoptions.SourceOutputAndProjectReference", cls = SourceOutputAndProjectReference::class, zero = { SourceOutputAndProjectReference() }), zero = { null }), key = GoTypeInfo(24, "tspath.Path", cls = Path::class, zero = { Path("") }), zero = { GoMap.nil<Path, SourceOutputAndProjectReference?>(GoElem.ref<SourceOutputAndProjectReference?>()) })),
+                GoFieldInfo("commonSourceDirectory", "", false, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("commonSourceDirectoryOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+                GoFieldInfo("resolvedProjectReferencePaths", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("resolvedProjectReferencePathsOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+                GoFieldInfo("literalFileNamesLen", "", false, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("fileNamesByPath", "", false, false, GoTypeInfo(21, "", elem = GoTypeInfo(24, "string", zero = { "" }), key = GoTypeInfo(24, "tspath.Path", cls = Path::class, zero = { Path("") }), zero = { GoMap.nil<Path, String>(GoElem.STRING) })),
+                GoFieldInfo("fileNamesByPathOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+                GoFieldInfo("locale", "", false, false, GoTypeInfo(25, "locale.Locale", cls = Locale::class, zero = { Locale() })),
+                GoFieldInfo("localeOnce", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+            ))
+        }
         val ELEM: GoElem<ParsedCommandLine> = GoElem({ ParsedCommandLine() }, { it.goCopy() })
     }
 }
