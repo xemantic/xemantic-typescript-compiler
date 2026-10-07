@@ -9,10 +9,21 @@ Single-thread performance and the (INC.\*) latency arc are CLOSED. The block is
 self-contained — it points at `CLAUDE.md` for the protocol and `PLAN-PHASE-5.md`
 for the queue.
 
+**Since 2026-10-07 the queue head is the tsgo-to-Kotlin port spike, (TSGO.1)** — its owner
+decisions (TSGO.0) are taken (latest Go at `tools/go/`, AGPL for `-tsgo`, `-core` frozen), so a
+session started with this block begins the port. Read `docs/tsgo-port-plan.md` first.
+
 ---
 
 ```
 Work the QUEUE in PLAN-PHASE-5.md, honouring the WORK ORDER note at its top.
+Its HEAD is the tsgo-to-Kotlin port: (TSGO.1), the scanner/parser/AST/encoder
+spike through a mechanical + LLM porter, gated on encoded-AST byte equality
+against `tools/tsgo-7.0.2/lib/tsc --api`. Read docs/tsgo-port-plan.md before
+anything else. (TSGO.0) is DECIDED (2026-10-07): Go 1.27.1 is at `tools/go/`
+(run `GOTOOLCHAIN=local tools/go/bin/go`), `-tsgo` is AGPL-3.0-only + output
+exception, and `-core` is FROZEN — do NOT start a (CHK.*)/(INV.*)/(LIBS.*)
+parity or extraction round; `-core` takes only fixes a product needs now.
 The live mission (owner directive 2026-09-01, CLAUDE.md § "AI agent mission") is
 PHASE 18: TYPESCRIPT FOR THE JVM AND KOTLIN — no Node and no Go in the
 toolchain, a whole-program checker embeddable in Kotlin applications (the

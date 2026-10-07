@@ -191,12 +191,16 @@ the `-core` lane continues. **If go:** (TSGO.2).
 Kotlin/Native is deferred to after (TSGO.2): tsgo allocates freely and Native has no escape
 analysis (CLAUDE.md: 4–29x per primitive), so it needs its own measurement.
 
-## 6. Decisions for the owner
+## 6. Owner decisions — DECIDED 2026-10-07
 
-- **D1 — Go toolchain at dev time.** `goport-extract` needs Go 1.26 (tsgo's `go.mod`). Proposed:
-  downloaded into `tools/go-1.26/`, gitignored, exactly like `tools/tsgo-7.0.2`. Not needed to
-  build or use xtsc. Nothing is installed until this is approved.
-- **D2 — licence of `-tsgo`.** tsgo is Apache-2.0; the repo is AGPL-3.0-only with the output
+- **D1 — Go toolchain at dev time. APPROVED 2026-10-07: the latest stable Go.** `goport-extract`
+  needs Go >= 1.26 (tsgo's `go.mod`). Installed: **go1.27.1** (linux-amd64, sha256 verified against
+  go.dev) at `tools/go/` — gitignored under `/tools/`, like `tools/tsgo-7.0.2`. Run it as
+  `GOTOOLCHAIN=local tools/go/bin/go` so a `toolchain` line never triggers a second download.
+  Not needed to build or use xtsc. Verified: `go list ./internal/{ast,scanner,parser}` in
+  `typescript-go-repo` resolves (two module downloads into `~/go/pkg/mod`).
+- **D2 — licence of `-tsgo`. APPROVED 2026-10-07: AGPL-3.0-only with the output exception**, with
+  the three obligations below. tsgo is Apache-2.0; the repo is AGPL-3.0-only with the output
   exception. Apache-2.0 code may be incorporated into an AGPLv3 work, so `-tsgo` can carry the
   same licence as the rest of the repo. **Recommendation: AGPL-3.0-only with the output
   exception, like every other module** — one licence for the whole project, and embedders
@@ -214,8 +218,9 @@ analysis (CLAUDE.md: 4–29x per primitive), so it needs its own measurement.
   issues anyway (owner directive 2026-09-21), so nothing planned depends on that. Option A
   (`-tsgo` stays Apache-2.0) remains available if that changes. Not legal advice; the owner
   decides.
-- **D3 — `-core` freeze.** Recommendation: from (TSGO.1) on, `-core` takes only fixes that the
-  products need now; no new (CHK.\*)/(INV.\*) parity rounds unless the gate fails.
+- **D3 — `-core` freeze. DECIDED 2026-10-07: `-core` is FROZEN.** It takes only fixes the
+  products need now; no new (CHK.\*)/(INV.\*)/(LIBS.\*) parity or extraction rounds unless the
+  (TSGO.1) gate says no-go. (P18.313) was the last parity round.
 
 ## 7. Facts this plan rests on (re-check before relying on them)
 
@@ -224,4 +229,4 @@ analysis (CLAUDE.md: 4–29x per primitive), so it needs its own measurement.
   (`internal/api/session.go:1045`) returns `encoder.EncodeSourceFile` bytes, base64 in JSON mode.
 - `ast.Node` is `{Kind, Flags, Loc, id, Parent, data nodeData}` with hundreds of `nodeData`
   implementations (`internal/ast/ast.go:179`) — a plain-class hierarchy in Kotlin, never `data`.
-- No Go toolchain is installed on the dev box as of 2026-10-06.
+- Go 1.27.1 is installed at `tools/go/` on the dev box as of 2026-10-07 (gitignored; re-download on a fresh box per D1).
