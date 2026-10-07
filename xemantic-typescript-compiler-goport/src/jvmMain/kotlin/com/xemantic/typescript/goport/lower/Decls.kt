@@ -296,11 +296,51 @@ class PackageEmitter(
                 report.inlined(qname)
                 sigText.replaceFirst("fun ", "inline fun ")
             } else sigText
-            "${traceLine(qname, d.str("hash"))}\n$sigOut {\n$bodyWriter}\n" + fn.helpers.joinToString("") { "\n$it" }
+            val win = if (recvField == null && member == null && !probeMode) prog.windowFuncs[qname]?.let { idx ->
+                windowOverload(d, fc, qname, tm, sig, ft, params, idx, name, declList, resultText)
+            } ?: "" else ""
+            "${traceLine(qname, d.str("hash"))}\n$sigOut {\n$bodyWriter}\n" + fn.helpers.joinToString("") { "\n$it" } + win
         } catch (r: Refusal) {
             report.refused(pc.pkg, qname, lines, r, stub = true)
             "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: refused ${r.reason}: $qname\")\n}\n"
         }
+    }
+
+    /**
+     * The window overload `<name>Win` of a function in [Program.windowFuncs]: the string parameter
+     * [idx] is three parameters `(base, offset, length)` read as a view, so a caller passing
+     * `s[lo:hi]` copies nothing. When the body cannot be lowered that way (a refusal, a hoisted
+     * helper) the overload delegates to the copying function — callers are decided before the
+     * body is lowered, so the overload must always exist.
+     */
+    private fun windowOverload(
+        d: Node, fc: FileCtx, qname: String, tm: TypeMapper, sig: SignatureType, ft: Node, params: List<Node>,
+        idx: Int, name: String, declList: List<String>, resultText: String,
+    ): String {
+        val wname = prog.windowName(qname, d.str("name")!!)
+        val f = FnCtx(fc, qname, tm)
+        f.root = d.obj("body")
+        f.windowParamIdx = idx
+        val l = Lowering(f)
+        val bw = CodeWriter(1)
+        f.w = bw
+        val decl = l.paramDecls(params, sig)
+        val trace = "// goport: window overload of $qname (parameter $idx)\n"
+        try {
+            f.frames.addLast(Frame(sig.results.map { it.t }, l.namedResultObjs(ft)))
+            l.copyInParams(params)
+            l.declareNamedResults()
+            l.withDefersIfNeeded(d.reqObj("body"), sig.results.map { it.t }) { l.body(d.reqObj("body").list("list")) }
+            if (f.helpers.isEmpty()) return "\n${trace}fun $wname(${decl.joinToString(", ")})$resultText {\n$bw}\n"
+        } catch (_: Refusal) {
+        }
+        // Delegation: the same arguments, the window copied back into a string.
+        val names = declList.map { it.substringBefore(':').trim() }
+        val args = names.mapIndexed { i, n -> if (i == idx) "${n}_b.substring(${n}_o, ${n}_o + ${n}_n)" else n }
+        val wdecl = declList.flatMapIndexed { i, p ->
+            if (i == idx) { val n = names[i]; listOf("${n}_b: String", "${n}_o: Int", "${n}_n: Int") } else listOf(p)
+        }
+        return "\n${trace}fun $wname(${wdecl.joinToString(", ")})$resultText = $name(${args.joinToString(", ")})\n"
     }
 
     /**

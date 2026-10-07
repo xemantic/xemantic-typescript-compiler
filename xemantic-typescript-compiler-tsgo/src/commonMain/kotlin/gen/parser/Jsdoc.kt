@@ -258,7 +258,7 @@ fun Parser?.parseJSDocComment(parent: Node?, start: Int, end_0: Int, fullStart: 
     if (end == -1) {
         end = this!!.sourceText.length
     }
-    if (!isJSDocLikeText(this!!.sourceText.substring(start))) {
+    if (!isJSDocLikeTextWin(this!!.sourceText, start, goStrView(this!!.sourceText, start, this!!.sourceText.length))) {
         return null
     }
     val saveSourceText: String = this!!.sourceText

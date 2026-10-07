@@ -186,6 +186,18 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   progress table) — the `Function1` dispatch was not the cost of `scanASCIIWhile`'s 15.5%; the
   per-character loop is. Pin: `LoweringRulesTest`.
 
+- **Window parameters** (`Program.computeWindowFuncs`, `Decls.windowOverload`, `Calls.funcCall`).
+  A top-level, non-generic, non-variadic function whose ONE string parameter is used only as a
+  view (`len`, index, a sub-slice feeding a fused call or `==` — the view-local test, shared as
+  `CallLowering.viewUseViolations`), never reassigned or address-taken, and to which some call in
+  the run passes a string slice, gets an overload `<name>Win(…, p_b: String, p_o: Int, p_n: Int, …)`
+  whose body reads `p` as a view. A call passing `s[lo:hi]` with a side-effect-free base (a name or
+  field chain — it is evaluated twice) calls the overload with `goStrView` checking Go's bounds; the
+  copying function stays for every other caller. If the overload's body cannot be lowered as a
+  view (refusal, hoisted helper), it is a delegation that copies — callers are decided before the
+  body is lowered, so the overload always exists. First run: 1 function (`parser.isJSDocLikeText`,
+  the per-JSDoc-comment suffix copy). Pin: `LoweringRulesTest`.
+
 Pins: `-goport/src/jvmTest/.../LoweringRulesTest.kt` (naming, byte-string literals, constant edges);
 the end-to-end gates are `-tsgo/src/jvmTest/kotlin/OracleParityTest.kt` (corpus, opt-in) and
 `TsgoPinTest.kt` (always on).

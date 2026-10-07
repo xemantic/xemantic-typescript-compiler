@@ -30,7 +30,8 @@ a quiet box before quoting the 1.50x as anything but "at the line".
 | **substring elimination** (window rule, § 2) | 338.5 ms (312.8–352.3, 11.7%) | 236.1 ms (224.5–243.6, 8.1%) | **1.43x** | core 4/4 (1.34–1.47) | `1c9db2fe5` |
 | **single-probe comma-ok map read** | 314.6 ms (306.1–323.1, 5.4%) | 248.8 ms (235.1–257.8, 9.1%) | **1.26x** | core 4/4 (1.23–1.34) | `73acaf4ea` |
 | **inline func-typed parameters** (§ 4 item 3), same-session BEFORE row | 311.6 ms (305.5–322.7, 5.5%) | 245.8 ms (241.0–266.4, 10.3%) | 1.27x | core 4/4 (1.26 / 1.33 / 1.16 / 1.27) | `163b0a743` (before) |
-| **inline func-typed parameters**, AFTER | 308.9 ms (291.5–319.6, 9.1%) | 236.4 ms (232.3–249.3, 7.2%) | 1.31x | core 4/4 (1.38 / 1.24 / 1.31 / 1.23) | this rule |
+| **inline func-typed parameters**, AFTER | 308.9 ms (291.5–319.6, 9.1%) | 236.4 ms (232.3–249.3, 7.2%) | 1.31x | core 4/4 (1.38 / 1.24 / 1.31 / 1.23) | `69898f30c` |
+| **window parameters** (`isJSDocLikeText(sourceText[start:])`) | 305.3 ms (296.5–319.9, 7.7%) | 239.1 ms (221.5–282.8, 25.6%) | 1.28x | core 4/4 (1.36 / 1.20 / 1.13 / 1.34) | this rule |
 
 **Gate status: MET by lowering rules alone** — 1.26x, every paired ratio under 1.5x (load 1.2–1.6,
 3 other JVMs on the box). § 4's items 3 (inline func-typed parameters) and 2 (flattening embedded
@@ -42,9 +43,7 @@ predicate — item 3), `GoSlice.load` 9.1% + `Arena.new` 9.8% ported-frame (item
 `HashMap.getNode`), `scan` 6.0%, `MemberExpressionBase.<init>` 5.3% (item 2's embedded chain),
 `overrideParentInImmediateChildren` 5.3%, `GoMap.get` 3.8% (`getIdentifierToken`),
 `appendRuneBytes` 3.0% + `fromUtf16` 1.2% (the host conversion, item 6). Remaining single-bound
-copies in `gen/` (34) are off the parse path except `parser.parseJSDocComment`'s
-`isJSDocLikeText(sourceText[start:])` — a ported callee, which needs a "window parameter" rule
-(an overload taking `(base, from, to)` for a callee whose string parameter is view-eligible).
+copies in `gen/` (33 after the window-parameter rule) are all off the parse path.
 
 **Inline func-typed parameters — no measurable gain (2026-10-07).** The rule landed (32 functions
 inline, `scanASCIIWhile`'s `Function1` dispatch gone from the bytecode: `javap` of
@@ -60,6 +59,15 @@ JFR's counted-loop bias inflates it, CLAUDE.md), which C2 had already handled wi
 monomorphic per caller. The ratio's variation between the two batches (1.27x / 1.31x) is the
 CORE arm (245.8 vs 236.4 ms), not the port. Next lever there is the representation (a
 `ByteArray` source text, or a 128-entry predicate table per call site), not the call.
+
+**Window parameters — no measurable gain either (2026-10-07).** The last parse-path suffix copy
+(`isJSDocLikeText(p.sourceText[start:])`, one per JSDoc comment) is gone; tsgo-arm-only ABBA against
+the previous rule's classes read 323.1/309.5, 297.5/316.0, 303.2/302.9, 314.1/320.4 ms
+(before/after, after faster 2/4) — noise. Single-bound copies in `gen/`: 34 → 33, none on the parse
+path. **Where the remaining ~1.3x lives** (profile above): the per-character `String.charAt` loop
+in the scanner, `Arena.new`/`GoSlice.load` + the embedded-struct chain (§ 4 item 2, ~25%
+inclusive), and `GoMap.probe`/`get` on fresh token strings — representation work, not call
+lowering.
 
 ## 1. Setup
 

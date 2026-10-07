@@ -110,7 +110,16 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                 } else {
                     val o = pc.obj(id)
                     val name = fn.declare(id)
-                    if (i in fn.nonNullParamIdx) {
+                    if (i == fn.windowParamIdx) {
+                        // A window overload's string parameter: three parameters, read as a view.
+                        val b = fn.fresh("${name}_b")
+                        val vo = fn.fresh("${name}_o")
+                        val vn = fn.fresh("${name}_n")
+                        out += "$b: String"
+                        out += "$vo: Int"
+                        out += "$vn: Int"
+                        fn.views[id] = View(b, vo, vn)
+                    } else if (i in fn.nonNullParamIdx) {
                         fn.nonNullFnParams += id
                         // The UNDERLYING signature: a named func type is a nullable typealias (`Visitor`).
                         out += "$name: ${tm.kt(types.under(pt).id).removeSuffix("?")}"

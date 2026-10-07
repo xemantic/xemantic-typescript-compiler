@@ -123,6 +123,7 @@ fun main(argv: Array<String>) {
     val overrides = loadOverrides(args.overrides)
     val prog = Program(packages, shims, renames)
     prog.computeInlineFuncs(overrides.keys)
+    prog.computeWindowFuncs(overrides.keys)
     val pinned = RenameTable.load(args.refuse).let { t -> t.entries() }
     val report = Report()
 

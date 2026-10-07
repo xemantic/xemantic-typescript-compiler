@@ -78,6 +78,9 @@ class FnCtx(val fc: FileCtx, val qname: String, val tm: TypeMapper) {
     /** Func-typed parameters declared non-null (an inline function's, [Program.inlineFuncs]): called without `!!`. */
     val nonNullFnParams = HashSet<Int>()
 
+    /** The string parameter [Lowering.paramDecls] declares as a window `(base, offset, length)` (-1: none). */
+    var windowParamIdx: Int = -1
+
     /** Indices of the func-typed parameters [Lowering.paramDecls] declares non-null. */
     var nonNullParamIdx: Set<Int> = emptySet()
     private var tmp = 0

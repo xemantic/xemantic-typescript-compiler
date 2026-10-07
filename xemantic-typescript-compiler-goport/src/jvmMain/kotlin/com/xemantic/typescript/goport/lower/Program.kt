@@ -304,6 +304,80 @@ class Program(
         inlineFuncs.keys.removeAll(dropped)
     }
 
+    // ---- window parameters (docs/goport-lowering.md § 3, "Window parameters") ----
+
+    /**
+     * Ported functions that get a WINDOW overload `<name>Win`, by qualified name → the index of
+     * the string parameter it takes as `(base, offset, length)`. Filled by [computeWindowFuncs].
+     */
+    val windowFuncs = HashMap<String, Int>()
+
+    /** The Kotlin name of [qname]'s window overload. */
+    fun windowName(qname: String, goName: String): String = funName(qname, goName).trim('`') + "Win"
+
+    /**
+     * A top-level, non-generic, non-variadic function gets a window overload for its string
+     * parameter `p` when `p` is used ONLY as a view (`len(p)`, `p[k]`, a sub-slice feeding a fused
+     * `strings` call or `==` — [CallLowering.viewUseViolations]), is never reassigned or
+     * address-taken, it is the ONLY such string parameter, and some call site in the run passes a
+     * string slice for it (`isJSDocLikeText(p.sourceText[start:])`: a suffix copy of the source per
+     * JSDoc comment). Such a call then passes the window and copies nothing.
+     */
+    fun computeWindowFuncs(exclude: Set<String>) {
+        windowFuncs.clear()
+        val cand = HashMap<String, Int>()
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (f in p.files) for (d in f.list("decls")) {
+                if (d.k != "FuncDecl" || d.obj("recv") != null) continue
+                val q = d.str("qname") ?: continue
+                val body = d.obj("body") ?: continue
+                if (d.str("name") == "init" || q in exclude || q in inlineFuncs) continue
+                val sig = d.int("obj")?.let { p.obj(it).int("t") }?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.SignatureType ?: continue
+                if (sig.tparams.isNotEmpty() || sig.variadic) continue
+                val strParams = HashMap<Int, Int>()
+                var i = 0
+                for (fld in d.obj("type")?.obj("params")?.list("list") ?: emptyList()) {
+                    val names = fld.list("names")
+                    val tid = fld.obj("type")?.int("t")
+                    val isStr = tid != null && (tt.under(tid) as? com.xemantic.typescript.goport.types.BasicType)?.name == "string"
+                    if (names.isEmpty()) { i++; continue }
+                    for (n in names) {
+                        val id = n.int("obj")
+                        if (isStr && id != null && n.str("name") != "_" && !p.obj(id).bool("mut") && !p.obj(id).bool("addr")) strParams[id] = i
+                        i++
+                    }
+                }
+                if (strParams.isEmpty()) continue
+                val bad = CallLowering.viewUseViolations(body, strParams.keys, emptySet()) { call ->
+                    val fe = call.obj("fun")
+                    val ident = if (fe?.str("k") == "SelectorExpr") fe.obj("sel") else fe
+                    ident?.int("obj")?.let { p.obj(it).str("key") }
+                }
+                val ok = strParams.keys - bad
+                if (ok.size != 1) continue
+                val name = windowName(q, d.str("name")!!)
+                if (name in (topValueNames[p.path] ?: emptySet<String>())) continue
+                cand[q] = strParams[ok.first()]!!
+            }
+        }
+        if (cand.isEmpty()) return
+        // Only where some call passes a string slice for the parameter.
+        for (p in packages) for (f in p.files) walk(f) { n ->
+            if (n.str("k") == "CallExpr" && n.str("call") == "func") {
+                val fe = n.obj("fun")
+                val ident = if (fe?.str("k") == "SelectorExpr") fe.obj("sel") else fe
+                val key = ident?.int("obj")?.let { p.obj(it).str("key") }
+                val idx = key?.let { cand[it] }
+                val a = idx?.let { n.list("args").getOrNull(it) }
+                if (a != null && a.str("k") == "SliceExpr" && a.str("sk") == "string" && !a.bool("slice3") &&
+                    (a.obj("low") != null || a.obj("high") != null) && !n.bool("tupleArg")
+                ) windowFuncs[key] = idx
+            }
+            true
+        }
+    }
+
     // ---- names of package-level declarations (keyed by the Go qualified name / object key) ----
 
     fun funName(qname: String, goName: String): String {

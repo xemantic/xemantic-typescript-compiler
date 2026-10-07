@@ -141,8 +141,8 @@ class LoweringRulesTest {
     @Test
     fun `the census of copying single-bound string slices in gen does not grow`() {
         val n = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f -> suffixCopy.findAll(f.readText()).count() }
-        // 48 as first generated; 34 after the window rule (2026-10-07). Lower it as rules land.
-        assert(n <= 34)
+        // 48 as first generated; 34 after the window rule, 33 after window parameters (2026-10-07). Lower it as rules land.
+        assert(n <= 33)
     }
 
     @Test
@@ -177,5 +177,19 @@ class LoweringRulesTest {
         // SetParseJSDocForNode STORES its parameter; parseList passes it into a closure.
         assert(!genFunction("ast/Ast.kt", "github.com/microsoft/typescript-go/internal/ast.SetParseJSDocForNode").contains("inline fun"))
         assert(!genFunction("parser/Parser1.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.parseList").contains("inline fun"))
+    }
+
+    @Test
+    fun `a string parameter used only as a view gets a window overload and a sliced argument is not copied`() {
+        val parser = "github.com/microsoft/typescript-go/internal/parser"
+        // isJSDocLikeText(p.sourceText[start:]) — a suffix copy of the whole source per JSDoc comment.
+        val jsdoc = genFunction("parser/Jsdoc.kt", "$parser.Parser.parseJSDocComment")
+        assert(jsdoc.contains("isJSDocLikeTextWin(this!!.sourceText, start, goStrView(this!!.sourceText, start, this!!.sourceText.length))"))
+        assert(!jsdoc.contains("isJSDocLikeText(this!!.sourceText.substring("))
+        // The overload reads the window through the view helpers; the copying function stays for other callers.
+        val text = File(gen, "parser/Utilities.kt").readText()
+        assert(text.contains("fun isJSDocLikeTextWin(text_b0: String, text_o1: Int, text_n2: Int): Boolean {"))
+        assert(text.contains("text_n2 >= 4 && goViewByte(text_b0, text_o1, text_n2, 1) == 42"))
+        assert(text.contains("fun isJSDocLikeText(text: String): Boolean {"))
     }
 }

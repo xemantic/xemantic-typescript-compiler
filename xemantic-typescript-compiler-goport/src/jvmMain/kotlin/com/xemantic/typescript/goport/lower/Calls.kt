@@ -173,6 +173,16 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val shim = o.str("pkg") !in prog.ported
         special(o, e)?.let { return it }
         val ref = funcRef(o)
+        // A window overload (docs/goport-lowering.md § 3): pass `s[lo:hi]` as (base, from, length).
+        prog.windowFuncs[o.str("key")]?.let { idx ->
+            val a = e.list("args").getOrNull(idx) ?: return@let
+            val w = windowOf(a) ?: return@let
+            if (!SIMPLE_BASE.matches(w.base)) return@let
+            val codes = args(e, sig, false, false).toMutableList()
+            codes[idx] = "${w.base}, ${w.from}, goStrView(${w.base}, ${w.from}, ${w.to ?: "${w.base}.length"})"
+            val wref = ref.substringBeforeLast('.', "").let { if (it.isEmpty()) "" else "$it." } + prog.windowName(o.str("key")!!, o.str("name")!!)
+            return Ex.primary("$wref(${codes.joinToString(", ")})")
+        }
         return Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + inlineArgs(e, o.str("key"), args(e, sig, shim && sig.variadic, shim))).joinToString(", ")})")
     }
 
@@ -247,43 +257,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             }
             true
         }
-        val bad = HashSet<Int>()
-        if (defs.isNotEmpty()) {
-            // Every reference must sit in an allowed context: parent (with its key) and grandparent.
-            val stack = ArrayList<Pair<Node, String>>()
-            fun allowed(): Boolean {
-                val (p, pk) = stack[stack.size - 1]
-                if (p.k == "CallExpr" && p.str("call") == "builtin" && p.str("builtin") == "len") return true
-                if (p.k == "IndexExpr" && pk == "x" && p.str("ik") == "string") return true
-                if (pk == "x" && isStringSlice(p) && stack.size >= 2) {
-                    val (g, gk) = stack[stack.size - 2]
-                    if (g.k == "BinaryExpr" && gk == "x" && g.str("op") in setOf("==", "!=")) return true
-                    if (g.k == "CallExpr" && gk == "args" && g.list("args").firstOrNull() === p) {
-                        val f = calleeKey(g)?.let { FUSIONS[it] }
-                        if (f != null && f.inOk) return true
-                    }
-                }
-                return false
-            }
-            fun walk(el: kotlinx.serialization.json.JsonElement, key: String) {
-                when (el) {
-                    is kotlinx.serialization.json.JsonObject -> {
-                        if (el.str("k") == "Ident" && el !in defIdents) {
-                            val id = el.int("obj")
-                            if (id != null && id in defs && id !in bad && (stack.isEmpty() || !allowed())) bad += id
-                        }
-                        for ((k2, v) in el) {
-                            stack += el to k2
-                            walk(v, k2)
-                            stack.removeAt(stack.size - 1)
-                        }
-                    }
-                    is kotlinx.serialization.json.JsonArray -> for (v in el) walk(v, key)
-                    else -> {}
-                }
-            }
-            walk(root!!, "")
-        }
+        val bad = if (defs.isEmpty()) emptySet() else viewUseViolations(root!!, defs.keys, defIdents) { calleeKey(it) }
         val r = defs.keys - bad
         fn.viewable = r
         return r
@@ -336,11 +310,61 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
 
     private val SIMPLE_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*")
 
+    /** A base expression safe to evaluate twice (a name or a field chain): no call, no side effect. */
+    private val SIMPLE_BASE = Regex("""[A-Za-z_][A-Za-z0-9_]*(!!)?(\.[A-Za-z_][A-Za-z0-9_]*(!!)?)*""")
+
     /** A `strings` function with window variants `<name>At` (suffix) and, when [inOk], `<name>In`. */
     class Fusion(val pkg: String, val name: String, val inOk: Boolean)
 
     companion object {
         private const val STRINGS = "com.xemantic.typescript.tsgo.go.strings"
+
+        private fun isStringSlice(n: Node) = n.k == "SliceExpr" && n.str("sk") == "string" && !n.bool("slice3") &&
+            (n.obj("low") != null || n.obj("high") != null)
+
+        /**
+         * The ids in [ids] referenced in [root] OUTSIDE a view context (`len(x)`, `x[k]`, or a
+         * sub-slice `x[lo:hi]` that is itself the first argument of a fused `strings` call with a
+         * bounded form, or the left operand of `==`/`!=`). [defIdents] are the defining identifiers
+         * (skipped); [keyOf] answers a `func` call's callee key.
+         */
+        fun viewUseViolations(root: Node, ids: Set<Int>, defIdents: Set<Any>, keyOf: (Node) -> String?): Set<Int> {
+            val bad = HashSet<Int>()
+            val stack = ArrayList<Pair<Node, String>>()
+            fun allowed(): Boolean {
+                val (p, pk) = stack[stack.size - 1]
+                if (p.k == "CallExpr" && p.str("call") == "builtin" && p.str("builtin") == "len") return true
+                if (p.k == "IndexExpr" && pk == "x" && p.str("ik") == "string") return true
+                if (pk == "x" && isStringSlice(p) && stack.size >= 2) {
+                    val (g, gk) = stack[stack.size - 2]
+                    if (g.k == "BinaryExpr" && gk == "x" && g.str("op") in setOf("==", "!=")) return true
+                    if (g.k == "CallExpr" && gk == "args" && g.list("args").firstOrNull() === p) {
+                        val f = (if (g.str("call") == "func") keyOf(g) else null)?.let { FUSIONS[it] }
+                        if (f != null && f.inOk) return true
+                    }
+                }
+                return false
+            }
+            fun walk(el: kotlinx.serialization.json.JsonElement) {
+                when (el) {
+                    is kotlinx.serialization.json.JsonObject -> {
+                        if (el.str("k") == "Ident" && el !in defIdents) {
+                            val id = el.int("obj")
+                            if (id != null && id in ids && id !in bad && (stack.isEmpty() || !allowed())) bad += id
+                        }
+                        for ((k2, v) in el) {
+                            stack += el to k2
+                            walk(v)
+                            stack.removeAt(stack.size - 1)
+                        }
+                    }
+                    is kotlinx.serialization.json.JsonArray -> for (v in el) walk(v)
+                    else -> {}
+                }
+            }
+            walk(root)
+            return bad
+        }
 
         /** The fusable shim calls by callee key (rune-decoding ones have no bounded form). */
         val FUSIONS: Map<String, Fusion> = mapOf(

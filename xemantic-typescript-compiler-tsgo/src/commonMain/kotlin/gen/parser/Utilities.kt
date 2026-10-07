@@ -94,3 +94,8 @@ fun isJSDocLikeText(text: String): Boolean {
     return text.length >= 4 && text[1].code == 42 && text[2].code == 42 && text[3].code != 47
 }
 
+// goport: window overload of github.com/microsoft/typescript-go/internal/parser.isJSDocLikeText (parameter 0)
+fun isJSDocLikeTextWin(text_b0: String, text_o1: Int, text_n2: Int): Boolean {
+    return text_n2 >= 4 && goViewByte(text_b0, text_o1, text_n2, 1) == 42 && goViewByte(text_b0, text_o1, text_n2, 2) == 42 && goViewByte(text_b0, text_o1, text_n2, 3) != 47
+}
+
