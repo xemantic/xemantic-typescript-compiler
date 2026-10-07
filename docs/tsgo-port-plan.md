@@ -143,6 +143,14 @@ side, which is what makes the differential in § 5 possible.
 them generated** (`ast_generated.go`, `kind_*_generated.go`, `diagnostics_generated.go`, encoder
 `*_generated.go`).
 
+**Measured 2026-10-07 (`docs/goport-oracle.md`): the binary binds every file before answering, so
+its bytes carry binder-set node flags** (4,024 of 7,774 corpus files differ from parse-only output,
+only in flag bits 6-9, 17, 18, 27). The binder is small (`internal/binder`, 3,601 Go lines, no
+package outside the closure), so it is **added to the spike closure** rather than masking those
+bits — the gate stays unweakened. Development runs in two stages: first against the in-process
+parse-only bytes (`build/goport/bin/tsgo-oracle encode -parse-only`, tsgo's own parser and encoder),
+then against the binary's bound bytes, which is the gate.
+
 **The oracle needs no Go and already exists.** The shipped `tools/tsgo-7.0.2/lib/tsc --api`
 serves `getSourceFile`, which returns the file's AST as the bytes of
 `encoder.EncodeSourceFile` (base64 under `--async` JSON-RPC). Porting the encoder too means the
