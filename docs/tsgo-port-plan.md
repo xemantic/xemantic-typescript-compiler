@@ -149,7 +149,9 @@ only in flag bits 6-9, 17, 18, 27). The binder is small (`internal/binder`, 3,60
 package outside the closure), so it is **added to the spike closure** rather than masking those
 bits — the gate stays unweakened. Development runs in two stages: first against the in-process
 parse-only bytes (`build/goport/bin/tsgo-oracle encode -parse-only`, tsgo's own parser and encoder),
-then against the binary's bound bytes, which is the gate.
+then against the binary's bound bytes, which is the gate. **Measured 2026-10-07: with `binder` ported (100% mechanical, one rename, one override) the
+bound gate is 7,774 / 7,774 byte-identical with the real xxh3-128, 0 crashes, and
+`huge_methods.py --fail-over 0` is green (switch splitting, `docs/goport-lowering.md` § 3).**
 
 **The oracle needs no Go and already exists.** The shipped `tools/tsgo-7.0.2/lib/tsc --api`
 serves `getSourceFile`, which returns the file's AST as the bytes of

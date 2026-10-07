@@ -79,6 +79,13 @@ class Report {
         stale += "$file: override for $qname was written against $have, the Go source is now $want"
     }
 
+    /** Functions the switch-splitting rule split (qname → parts). */
+    val switchSplits = LinkedHashMap<String, Int>()
+
+    fun switchSplit(qname: String, parts: Int) {
+        switchSplits[qname] = parts
+    }
+
     fun collision(msg: String) {
         collisions += msg
     }
@@ -107,6 +114,9 @@ class Report {
         appendLine()
         appendLine("overrides used: ${overridesUsed.size}")
         overridesUsed.forEach { appendLine("  $it") }
+        appendLine()
+        appendLine("switch-split (JIT.1): ${switchSplits.size}")
+        switchSplits.forEach { (q, n) -> appendLine("  $q -> $n parts") }
         if (collisions.isNotEmpty()) {
             appendLine()
             appendLine("NAME COLLISIONS (${collisions.size}):")

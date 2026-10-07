@@ -177,7 +177,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         w.line("goUnreachable()")
     }
 
-    private fun hasOwnDefer(body: Node): Boolean {
+    fun hasOwnDefer(body: Node): Boolean {
         var found = false
         fun walk(n: Any?) {
             when (n) {
@@ -659,12 +659,14 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             w.line(if (tagCode != null) "when (${tagCode.code}) {" else "when {")
             w.indent {
                 var default: List<Node>? = null
+                val split = fn.splitSwitch === s
                 clauses.forEachIndexed { ci, c ->
                     val bodyStmts = clauseBody(clauses, ci)
                     if (c.bool("default")) {
                         default = bodyStmts
                         return@forEachIndexed
                     }
+                    if (split && ci !in fn.splitKeep) return@forEachIndexed
                     val conds = c.list("list").map { v ->
                         if (tag != null) (if (tagVc) raw(v) else flow(v)).code else lower(v).at(Ex.OR + 1)
                     }

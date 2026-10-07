@@ -148,7 +148,26 @@ value class Number(val value: Double) : Stringer, Comparable<Number> {
 
     // go: github.com/microsoft/typescript-go/internal/jsnum.Number.Exponentiate 40be290b
     fun exponentiate(exponent: Number): Number {
-        TODO("goport: refused pinned:shim-signature-big.Float.SetPrec: github.com/microsoft/typescript-go/internal/jsnum.Number.Exponentiate")
+        when {
+            (this.value == 1.0 || this.value == -1.0) && exponent.isInf() -> {
+                return naN()
+            }
+            this.value == 1.0 && exponent.isNaN() -> {
+                return naN()
+            }
+        }
+        val b: Double = this.value
+        val e: Double = exponent.value
+        if (b >= -9.223372036854776E18 && b <= 9.223372036854776E18 && b == com.xemantic.typescript.tsgo.go.math.trunc(b) && e >= 0.0 && e <= 9.223372036854776E18 && e == com.xemantic.typescript.tsgo.go.math.trunc(e) && !com.xemantic.typescript.tsgo.go.math.isInf(e, 0)) {
+            val magnitude: Double = e * com.xemantic.typescript.tsgo.go.math.log2(com.xemantic.typescript.tsgo.go.math.abs(b))
+            if (magnitude > 53.0 && magnitude <= com.xemantic.typescript.tsgo.go.math.log2(1.7976931348623157E308)) {
+                val ri: com.xemantic.typescript.tsgo.go.math.big.Int? = com.xemantic.typescript.tsgo.go.math.big.Int()!!.exp((com.xemantic.typescript.tsgo.go.math.big.newInt(goFloat64ToInt64(b)))!!, (com.xemantic.typescript.tsgo.go.math.big.newInt(goFloat64ToInt64(e)))!!, null)
+                val t0 = com.xemantic.typescript.tsgo.go.math.big.Float()!!.setPrec(256uL)!!.setInt((ri)!!)!!.float64()
+                val result: Double = t0.first
+                return Number(result)
+            }
+        }
+        return Number(com.xemantic.typescript.tsgo.go.math.pow(b, e))
     }
 
     // go: github.com/microsoft/typescript-go/internal/jsnum.Number.String 1ff0baa1

@@ -116,9 +116,8 @@ all only in node-flag words — bits 6/7/8/9/17/18/27 above.
 
 ## 5. What threatens the gate
 
-- **The binder is part of the gate.** Half the files differ without its seven node flags. The
-  spike must port the flag-setting part of `binder` (container walk + reachability + parse-error
-  propagation), or the gate compares with those bits masked and records that as a stated reduction.
+- **The binder is part of the gate.** Half the files differ without its seven node flags. It is
+  ported whole (2026-10-07) and `OracleParityTest` with `TSGO_ORACLE=bound` matches all 7,774 files.
 - **Absolute paths are inside the bytes** (fileName and path strings). The Kotlin side must use the
   manifest's `fileName` verbatim; moving the checkout invalidates the oracle (re-run it).
 - **xxh3-128** of the decoded text is in the header; the port needs a byte-exact xxh3 shim.

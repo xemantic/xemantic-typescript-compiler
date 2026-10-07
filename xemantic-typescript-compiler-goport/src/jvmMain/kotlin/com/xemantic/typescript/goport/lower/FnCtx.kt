@@ -76,6 +76,10 @@ class FnCtx(val fc: FileCtx, val qname: String, val tm: TypeMapper) {
 
     val frames = ArrayDeque<Frame>()
 
+    /** The switch-splitting rule ([SwitchSplit]): while lowering one PART, the split switch and the clauses it keeps. */
+    var splitSwitch: Node? = null
+    var splitKeep: Set<Int> = emptySet()
+
     /** Top-level private helpers the lowering hoisted out of this declaration (large literal tables). */
     val helpers = ArrayList<String>()
     val frame: Frame get() = frames.last()

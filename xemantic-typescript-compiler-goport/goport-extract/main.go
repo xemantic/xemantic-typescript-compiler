@@ -34,7 +34,7 @@ const tsgoModule = "github.com/microsoft/typescript-go"
 
 var defaultClosure = []string{
 	"ast", "diagnostics", "parser", "stringutil", "scanner", "api/encoder", "core",
-	"tspath", "collections", "jsnum", "json", "debug", "locale",
+	"tspath", "collections", "jsnum", "json", "debug", "locale", "binder",
 }
 
 func readFile(name string) ([]byte, error) { return os.ReadFile(name) }

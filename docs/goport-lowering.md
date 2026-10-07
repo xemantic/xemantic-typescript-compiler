@@ -9,33 +9,47 @@ running record: what each rule does, where it lives, what pins it, and what is s
 cd xemantic-typescript-compiler-goport/goport-extract && GOTOOLCHAIN=local ../../tools/go/bin/go run . --tsgo ../../typescript-go-repo --out ../../build/goport/ir
 flock $XTSC_GRADLE_LOCK ./gradlew :xemantic-typescript-compiler-goport:port          # wipes and rewrites gen/, prints the report
 flock $XTSC_GRADLE_LOCK ./gradlew :xemantic-typescript-compiler-tsgo:compileKotlinJvm
-TSGO_ORACLE=parse-only flock $XTSC_GRADLE_LOCK ./gradlew :xemantic-typescript-compiler-tsgo:jvmTest --tests '*OracleParityTest*' -i
+TSGO_ORACLE=bound flock $XTSC_GRADLE_LOCK ./gradlew :xemantic-typescript-compiler-tsgo:jvmTest --tests '*OracleParityTest*' -i
 ```
+
+`TSGO_ORACLE=bound` is THE gate (parse → `binder.bindSourceFile` → encode, against the binary's
+bytes in `build/goport/oracle/`); `TSGO_ORACLE=parse-only` is the earlier stage (no binder, against
+`build/goport/oracle-parse-only/`). Either mode FAILS on any differing or crashing file;
+`TSGO_ORACLE_REAL_HASH=0` copies the header's xxh3-128 from the oracle instead of computing it
+(debug only). The env vars are Gradle test inputs, so a mode change re-runs the task. The
+always-on half is `TsgoPinTest`: five tiny committed fixtures (`src/jvmTest/resources/tsgo-pins/`,
+every binder-set flag, JSX, JSDoc-in-`.js`, non-ASCII) with expected bytes from
+`tsgo-oracle encode -as /tsgo-pins/X` (the `-as` flag records a stable virtual fileName), plus a
+negative control that unbound bytes differ.
 
 The port task writes `build/goport/port/{report.txt,refused.tsv,lowered.txt}` and exits non-zero on
 a STALE or ORPHAN override or a NAME COLLISION.
 
-## 1. Measured (2026-10-07, first full run)
+## 1. Measured (2026-10-07, binder added to the closure)
 
 | | |
 |---|---|
-| Go lines (top-level decls of the 13-package closure) | 41,205 |
-| lowered mechanically | **40,711 (98.8%)** |
-| stubbed (refused, `TODO` stub with the real signature) | 474 |
+| Go lines (top-level decls of the 14-package closure, incl. `binder`) | 44,395 |
+| lowered mechanically | **43,948 (99.0%)** (`binder` 3,190 / 3,190 = 100%) |
+| stubbed (refused, `TODO` stub with the real signature) | 413 |
 | omitted (refused, no stub) | 19 |
-| overrides | **1** (`diagnostics.placeholderRegexp`) |
-| pinned refusals (`refuse.txt`, gaps outside the porter) | 5 |
-| generated | 107 files, ~74k Kotlin lines; `compileKotlinJvm` warning-clean, ~20 s incremental |
-| **parse-only encoded-AST byte equality** | **7,774 / 7,774** files (conformance 6,573, tsc 78, cronstrue 54, marked 53, type-fest 453, hono 311, rxjs 252), 0 crashes |
+| overrides | **1** (`ast.getCombinedFlags`, 15 lines) |
+| pinned refusals (`refuse.txt`) | 0 |
+| switch-split functions (JIT.1) | 3 (`keyToMessage` 40 parts, `astDecoder.createChildrenNode` 6, `getChildrenPropertyMask` 4) |
+| generated | 117 files; `compileKotlinJvm` warning-clean |
+| **bound encoded-AST byte equality (THE gate), real xxh3-128** | **7,774 / 7,774** files (conformance 6,573, tsc 78, cronstrue 54, marked 53, type-fest 453, hono 311, rxjs 252), 0 crashes |
+| parse-only equality | 7,774 / 7,774 |
 
-Caveats of that equality (each is a follow-up, § 5): it is against tsgo's parser+encoder WITHOUT
-the binder (`build/goport/oracle-parse-only/`, `tsgo-oracle encode -parse-only -like`); the header's
-xxh3-128 is copied from the oracle (the xxh3 shim has no hash function); the run is on a 1 GB-stack
-thread (`binderBinaryExpressionStress` recurses past the default JVM stack, as in Go).
+The run is on a 1 GB-stack thread (`binderBinaryExpressionStress` recurses past the default JVM
+stack, as in Go). The binder needed no new lowering rule: one rename (`binder.bindSourceFile` →
+`bindSourceFileImpl`, colliding with the exported `BindSourceFile`) and one override
+(`ast.getCombinedFlags`, previously an unreached stub: `flags |= …` on a `T ~uint32` type
+parameter — arithmetic Kotlin generics cannot express; it goes when the lowering monomorphizes
+generic functions over basic-core type parameters).
 
-Per package (mechanical share): api/encoder 99.1, ast 99.6, collections 77.9, core 87.1, debug 100,
-diagnostics 100, jsnum 93.6, json 93.0, locale 33.3, parser 100, scanner 99.6, stringutil 100,
-tspath 87.3.
+Per package (mechanical share): api/encoder 100.0, ast 99.9, binder 100.0, collections 77.9,
+core 87.1, debug 100, diagnostics 100, jsnum 100, json 98.6, locale 100, parser 100, scanner 99.6,
+stringutil 100, tspath 95.9.
 
 ## 2. Architecture (who owns what)
 
@@ -109,31 +123,47 @@ reference); literal tables over 150 elements are filled by hoisted private helpe
 → `init`, `init_1`, … called by a generated `goInitPackage()` (the caller runs it:
 `parser.goInitPackage()` installs `ast.SetParseJSDocForNode`).
 
+- **Package-level name collisions**: two top-level Go functions whose lowerCamel names coincide
+  (`BindSourceFile` / `bindSourceFile`) with identical parameter types are Kotlin conflicting
+  overloads; the port REFUSES the run (`NAME COLLISIONS`) until `renames.txt` separates them
+  (`PackageEmitter.checkPackageCollisions`). Different parameter types are legal overloads and pass.
+- **Switch splitting (JIT.1)** (`lower/SwitchSplit.kt`): a function whose largest top-level
+  `switch` spans > 20,000 source bytes becomes a dispatcher plus parts of <= 8,000 source bytes of
+  clauses. Each part is the WHOLE body lowered again with the switch restricted to its clauses
+  (default, pre-switch statements and tail in every part), so a part is the original function for
+  every value it is handed; the dispatcher evaluates the tag once and calls one part. Preconditions:
+  tag = an unreassigned parameter (or a field chain on one, with nothing before the switch), no
+  init, no `fallthrough`, constant cases, no own `defer`, not variadic, no hoisted helpers in a part.
+  An `Int` tag dispatches with a `when` over the constants (clauses grouped in source order, the
+  first-written cases in part 0 — tsgo's tables give no hotness profile); a byte-string tag
+  dispatches by `<` over contiguous ranges of the sorted constants (one constant per clause
+  required; `String.compareTo` is the same on every target). The report lists every split.
+
 Pins: `-goport/src/jvmTest/.../LoweringRulesTest.kt` (naming, byte-string literals, constant edges);
-the end-to-end gate is `-tsgo/src/jvmTest/kotlin/OracleParityTest.kt`.
+the end-to-end gates are `-tsgo/src/jvmTest/kotlin/OracleParityTest.kt` (corpus, opt-in) and
+`TsgoPinTest.kt` (always on).
 
 ## 4. Open refusals (Go lines)
 
 | reason | lines | what removes it |
 |---|---|---|
 | local-type | 130 | `core.BreadthFirstSearchParallelEx` (also goroutines → override) |
-| shim-missing | 90 | `jsontext` streaming, `reflect` (collections/core JSON + options reflection) — override or shim |
+| shim-missing | 90 | `jsontext` streaming, `reflect`, `go-json-experiment/json/jsontext.Null` (collections/core JSON + options reflection) — override or shim |
 | constraint-as-type | 64 | `collections.SyncMap` methods: a type-set interface as a value type (generic `comparable` handling) |
 | unsafe | 48 | `tspath.ToFileNameLowerCase` → override (byte view) |
 | range-func-return | 40 | `return` inside a range-over-func body (needs a non-local exit flag) |
-| pinned:shim-signature-big.Float.SetPrec | 31 | shim `Float.setPrec(UInt)` should take `ULong` (Go `uint`) |
 | int-overflow | 16 | constants beyond 32-bit `int` (the design's `int` = `Int` assumption) |
-| arith-non-basic, new-typeparam, chan, make(chan), pointer-method-on-value-type, shim-zero(language.Tag) | ~60 | individual rules/overrides |
+| receiver-type-refused, pointer-method-on-value-type, make(chan), chan | ~44 | individual rules/overrides |
 
-## 5. Known semantic gaps (not visible in the parse-only gate)
+Cleared 2026-10-07 by the shim round (d5b67557d): the pinned `big.Float.SetPrec` (now `ULong`)
+and `jsontext` Begin/End token refusals, `shim-zero(language.Tag)` (locale 33% → 100%), and the
+`diagnostics.placeholderRegexp` override (the regexp shim reads RE2 syntax).
 
-- Binder flags: the full oracle needs `binder` ported (orchestrator: added to the closure).
-- xxh3-128: shim lacks `HashString128`; the header hash is copied in the test.
+## 5. Known gaps
+
 - `goZeroTP` remains only where no dictionary is in scope (method values of generic functions).
 - Struct copies are conservative (every IR `copy`): no escape analysis yet (perf).
-- `huge_methods.py --classes xemantic-typescript-compiler-tsgo/build/classes/kotlin/jvm/main`:
-  20 methods over the 8,000-bytecode JIT limit at the first census; chunking `<clinit>` (150 vars)
-  and literal fillers (150 elements) took it to **3**, all giant `switch` statements:
-  `diagnostics.keyToMessage` (54,743), `encoder` decoder switch (12,506),
-  `encoder.getChildrenPropertyMask` (11,322 — on the encode hot path). A contiguous-range
-  switch-splitting rule (CLAUDE.md (JIT.1)) is open. `scanner.scan` is 5,289.
+- `huge_methods.py --classes xemantic-typescript-compiler-tsgo/build/classes/kotlin/jvm/main
+  --fail-over 0`: 20 methods over the 8,000-bytecode JIT limit at the first census; chunking
+  `<clinit>` (150 vars) and literal fillers (150 elements) took it to 3 giant switches, and the
+  switch-splitting rule (§ 3) to **0**. `scanner.scan` (5,289) is the largest remaining method.

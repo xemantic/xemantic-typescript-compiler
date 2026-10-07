@@ -121,7 +121,7 @@ class Diagnostic(
 
     // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.String 4eb8240d
     override fun string(): String {
-        return com.xemantic.typescript.tsgo.diagnostics.localize(com.xemantic.typescript.tsgo.locale.default, this.message, this.messageKey, this.messageArgs)
+        return com.xemantic.typescript.tsgo.diagnostics.localize(com.xemantic.typescript.tsgo.locale.default.goCopy(), this.message, this.messageKey, this.messageArgs)
     }
 
     companion object {
@@ -265,7 +265,7 @@ fun Diagnostic?.clone(): Diagnostic? {
 
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic.Localize 8df072e7
 fun Diagnostic?.localize(locale: Locale): String {
-    return com.xemantic.typescript.tsgo.diagnostics.localize(locale, this!!.message, this!!.messageKey, this!!.messageArgs)
+    return com.xemantic.typescript.tsgo.diagnostics.localize(locale.goCopy(), this!!.message, this!!.messageKey, this!!.messageArgs)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NewDiagnosticFromSerialized ad979312

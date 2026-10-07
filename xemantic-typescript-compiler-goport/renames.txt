@@ -12,3 +12,6 @@ github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitModifiers visit
 
 # collections.OrderedMap / OrderedSet: exported Clone (nil-safe) and unexported clone.
 github.com/microsoft/typescript-go/internal/collections.OrderedMap.clone cloneImpl
+
+# binder: exported BindSourceFile (bound-check wrapper) and unexported bindSourceFile (the worker).
+github.com/microsoft/typescript-go/internal/binder.bindSourceFile bindSourceFileImpl

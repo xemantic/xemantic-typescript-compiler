@@ -26,6 +26,7 @@ package com.xemantic.typescript.tsgo.diagnostics
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
 import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
 
@@ -160,7 +161,7 @@ fun Message?.reportsDeprecated(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.Message.Localize 842a49c5
 fun Message?.localize(locale: Locale, args: GoSlice<Any?>): String {
-    return localize(locale, this, Key(""), stringifyArgs(args))
+    return localize(locale.goCopy(), this, Key(""), stringifyArgs(args))
 }
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.Localize d1691fbe
@@ -173,7 +174,7 @@ fun localize(locale: Locale, message_0: Message?, key: Key, args: GoSlice<String
         goPanic("Unknown diagnostic message: " + key.value)
     }
     var text: String = message!!.text
-    val t1 = getLocalizedMessages(locale).lookup(message!!.key)
+    val t1 = getLocalizedMessages(locale.goCopy()).lookup(message!!.key)
     val localized: String = t1.first
     val ok: Boolean = t1.second
     if (ok) {
@@ -187,7 +188,7 @@ fun getLocalizedMessages(loc: Tag): GoMap<Key, String> {
     if (loc == com.xemantic.typescript.tsgo.go.golang_org.x.text.language.und) {
         return GoMap.nil<Key, String>(GoElem.STRING)
     }
-    val t0 = localizedMessagesCache.load(loc)
+    val t0 = localizedMessagesCache.load(loc.goCopy())
     val cached: Any? = t0.first
     val ok: Boolean = t0.second
     if (ok) {
@@ -197,7 +198,7 @@ fun getLocalizedMessages(loc: Tag): GoMap<Key, String> {
         return cached as GoMap<Key, String>
     }
     var messages: GoMap<Key, String> = GoMap.nil<Key, String>(GoElem.STRING)
-    val t1 = matcher!!.match(loc)
+    val t1 = matcher!!.match(loc.goCopy())
     val index: Int = t1.second
     val confidence: Confidence = t1.third
     if (confidence.value >= 1 && index >= 0 && index < localeFuncs.len) {
@@ -206,7 +207,7 @@ fun getLocalizedMessages(loc: Tag): GoMap<Key, String> {
             messages = fn!!()
         }
     }
-    localizedMessagesCache.store(loc, messages)
+    localizedMessagesCache.store(loc.goCopy(), messages)
     return messages
 }
 
@@ -262,8 +263,5 @@ fun newAdHocMessage(message: String): Message? {
 @kotlin.jvm.JvmField val localizedMessagesCache: com.xemantic.typescript.tsgo.go.sync.Map = com.xemantic.typescript.tsgo.go.sync.Map()
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.placeholderRegexp 618396c8
-// OVERRIDE: Go's RE2 reads `{` that does not start a repetition as a literal; java.util.regex
-// (behind the `regexp` shim, docs/goport-runtime.md § 10.7) rejects it. Same pattern, escaped.
-// Remove when the regexp shim translates RE2 syntax.
-@kotlin.jvm.JvmField val placeholderRegexp: com.xemantic.typescript.tsgo.go.regexp.Regexp? = com.xemantic.typescript.tsgo.go.regexp.mustCompile("\\{(\\d+)\\}")
+@kotlin.jvm.JvmField val placeholderRegexp: Regexp? = com.xemantic.typescript.tsgo.go.regexp.mustCompile("{(\\d+)}")
 

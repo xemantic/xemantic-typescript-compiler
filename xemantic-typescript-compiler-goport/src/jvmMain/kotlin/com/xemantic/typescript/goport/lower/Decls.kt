@@ -100,6 +100,24 @@ class PackageEmitter(
 
     private fun traceLine(qname: String, hash: String?) = "// go: $qname ${(hash ?: "").take(8)}"
 
+    /**
+     * Top-level Go functions whose names differ only in the first letter's case (`BindSourceFile` /
+     * `bindSourceFile`) map to one Kotlin name; with identical parameter types Kotlin rejects the
+     * pair as conflicting overloads. Refuse the run until `renames.txt` separates them.
+     */
+    fun checkPackageCollisions() {
+        val names = ArrayList<String>()
+        for (f in pc.pkg.files) for (d in f.list("decls")) {
+            if (d.k != "FuncDecl" || d.obj("recv") != null) continue
+            val n = d.str("name") ?: continue
+            if (n == "_" || n == "init") continue
+            // Kotlin overloads on parameter types: only an identical parameter list conflicts.
+            val sig = types.unalias(pc.obj(d.reqInt("obj")).reqInt("t")) as SignatureType
+            names += prog.funName(d.str("qname")!!, n) + sig.params.joinToString(",", "(", ")") { types.unalias(it.t).id.toString() }
+        }
+        checkCollisions(pc.pkg.path, names, "package function")
+    }
+
     /** The rendered items of one Go file. */
     fun lowerFile(file: Node, fc: FileCtx): List<Item> {
         val items = ArrayList<Item>()
@@ -205,6 +223,9 @@ class PackageEmitter(
         val ft = d.reqObj("type")
         val params = ft.obj("params")?.list("list") ?: emptyList()
         val sigText: String
+        val declList: List<String>
+        val tparamsText: String
+        val resultText: String
         try {
             if (recvField != null) recvField.list("names").firstOrNull()?.int("obj")?.let { r ->
                 // A receiver the body assigns (`k -= 99` on a value receiver) is a local copy.
@@ -217,6 +238,9 @@ class PackageEmitter(
             val ov = member?.overrides?.contains(name) == true
             val jvmName = if (member != null && name in OBJECT_MEMBERS && !ov) "@kotlin.jvm.JvmName(\"go${name.replaceFirstChar { it.uppercase() }}\")\n" else ""
             sigText = "$jvmName${if (ov) "override " else ""}fun ${if (tparams.isEmpty()) "" else "$tparams "}$recvTypeText$name(${decl.joinToString(", ")})$result"
+            declList = decl
+            tparamsText = tparams
+            resultText = result
         } catch (r: Refusal) {
             report.refused(pc.pkg, qname, lines, r, stub = false)
             return "${traceLine(qname, d.str("hash"))}\n// goport: refused ${r.reason}: $qname (no stub: signature)\n"
@@ -234,6 +258,23 @@ class PackageEmitter(
             return "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: refused pinned:$reason: $qname\")\n}\n"
         }
         val body = d.obj("body") ?: return "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: external body: $qname\")\n}\n"
+        // (JIT.1) a huge top-level switch: a dispatcher plus parts, each under the JIT limit.
+        val paramObjs = params.flatMap { f -> f.list("names").mapNotNull { it.int("obj") } }.toSet()
+        val split = if (probeMode) null else SwitchSplit.plan(body, paramObjs, pc, tm, sig.variadic, low.hasOwnDefer(body))
+        if (split != null) {
+            val text = splitFuncDecl(d, split, sigText, declList, tparamsText, resultText, recvTypeText, name, low, sig, ft, params, recvField, extension) {
+                val f = FnCtx(fc, qname, tm)
+                member?.let { f.classMembers = it.memberNames }
+                val l = Lowering(f)
+                if (recvField != null) recvField.list("names").firstOrNull()?.int("obj")?.let { r ->
+                    if (!pc.obj(r).bool("mut")) f.recvObj = r
+                }
+                f.recvNullable = extension
+                l.paramDecls(params, sig)
+                l
+            }
+            if (text != null) return text
+        }
         val bodyWriter = CodeWriter(1)
         fn.w = bodyWriter
         return try {
@@ -248,6 +289,70 @@ class PackageEmitter(
             "${traceLine(qname, d.str("hash"))}\n$sigText {\n$bodyWriter}\n" + fn.helpers.joinToString("") { "\n$it" }
         } catch (r: Refusal) {
             report.refused(pc.pkg, qname, lines, r, stub = true)
+            "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: refused ${r.reason}: $qname\")\n}\n"
+        }
+    }
+
+    /**
+     * [SwitchSplit] applied: the dispatcher (evaluates the tag, calls one part) and the parts, each
+     * the whole body lowered by a fresh [Lowering] from [freshLowering] with the switch restricted.
+     * Answers null (no split) when a part hoists helpers, whose names could collide across parts.
+     */
+    private fun splitFuncDecl(
+        d: Node, split: SwitchSplit, sigText: String, decl: List<String>, tparams: String, result: String,
+        recvTypeText: String, name: String, low: Lowering, sig: SignatureType, ft: Node, params: List<Node>,
+        recvField: Node?, extension: Boolean, freshLowering: () -> Lowering,
+    ): String? {
+        val qname = d.str("qname")!!
+        val body = d.reqObj("body")
+        val partName = { i: Int -> "${name.trim('`')}_goPart$i" }
+        val args = decl.joinToString(", ") { it.substringBefore(':').trim() }
+        val tp = if (tparams.isEmpty()) "" else "$tparams "
+        val parts = StringBuilder()
+        return try {
+            split.parts.forEachIndexed { i, keep ->
+                val l = freshLowering()
+                val f = l.fn
+                val bw = CodeWriter(1)
+                f.w = bw
+                f.splitSwitch = split.sw
+                f.splitKeep = keep
+                f.frames.addLast(Frame(sig.results.map { it.t }, l.namedResultObjs(ft)))
+                recvField?.list("names")?.firstOrNull()?.int("obj")?.let { r ->
+                    if (f.recvObj != r && pc.obj(r).str("name") != "_") l.declareLocal(r, "this")
+                }
+                l.copyInParams(params)
+                l.declareNamedResults()
+                l.withDefersIfNeeded(body, sig.results.map { it.t }) { l.body(body.list("list")) }
+                if (f.helpers.isNotEmpty()) return null
+                parts.append("\n// goport: switch-split part $i of ${split.parts.size} of $qname\n")
+                parts.append("private fun $tp$recvTypeText${partName(i)}(${decl.joinToString(", ")})$result {\n$bw}\n")
+            }
+            val tag = split.sw.reqObj("tag")
+            val dispatch = CodeWriter(1)
+            low.fn.w = dispatch
+            val tagCode = low.raw(tag).code
+            val t = low.fn.fresh("tag")
+            dispatch.line("val $t = $tagCode")
+            dispatch.line("return when${if (split.stringBounds == null) " ($t)" else ""} {")
+            dispatch.indent {
+                val clauses = split.sw.list("clauses")
+                split.parts.forEachIndexed { i, keep ->
+                    val cond = if (split.stringBounds == null) {
+                        keep.sorted().flatMap { ci -> clauses[ci].list("list").map { low.raw(it).code } }.joinToString(", ")
+                    } else if (i < split.stringBounds.size) {
+                        "$t < ${low.raw(clauses[split.parts[i + 1].first()].list("list")[0]).code}"
+                    } else "else"
+                    if (cond != "else") dispatch.line("$cond -> ${partName(i)}($args)")
+                }
+                dispatch.line("else -> ${partName(if (split.stringBounds == null) 0 else split.parts.size - 1)}($args)")
+            }
+            dispatch.line("}")
+            report.lowered(pc.pkg, qname, d.reqInt("lines"))
+            report.switchSplit(qname, split.parts.size)
+            "${traceLine(qname, d.str("hash"))}\n// goport: switch-split into ${split.parts.size} parts (docs/goport-lowering.md § 3)\n$sigText {\n$dispatch}\n$parts"
+        } catch (r: Refusal) {
+            report.refused(pc.pkg, qname, d.reqInt("lines"), r, stub = true)
             "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: refused ${r.reason}: $qname\")\n}\n"
         }
     }

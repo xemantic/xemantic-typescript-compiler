@@ -25,22 +25,27 @@
 
 package com.xemantic.typescript.tsgo
 
-import com.xemantic.typescript.tsgo.ast.ExternalModuleIndicatorOptions
-import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
 import com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.Uint128
-import com.xemantic.typescript.tsgo.tspath.Path
 import java.io.File
 import kotlin.test.Test
 
 /**
- * THE (TSGO.1) GATE MEASUREMENT: the ported parser + encoder against tsgo's own bytes
- * (docs/goport-oracle.md). Opt-in, because it needs the gitignored oracle under
- * `build/goport/` — run with `TSGO_ORACLE=parse-only` (bytes of tsgo's parser+encoder without
- * the binder, `build/goport/oracle-parse-only/`) and optionally `TSGO_ORACLE_LIMIT=n`,
- * `TSGO_ORACLE_SOURCE=tsc`. Writes the per-file verdicts to `build/goport/port/oracle-parity.tsv`.
+ * THE (TSGO.1) GATE: the ported parser + binder + encoder against tsgo's own bytes
+ * (docs/goport-oracle.md). Opt-in, because it needs the gitignored oracle under `build/goport/`:
  *
- * The content hash (header bytes 4-19, xxh3-128) is copied from the oracle: the xxh3 shim has no
- * hash function yet, and copying it isolates what this measures — the AST.
+ * - `TSGO_ORACLE=bound` — THE gate: parse → `binder.bindSourceFile` → encode, exactly as tsgo's
+ *   project system does before `--api getSourceFile` answers (`project.go` `BindSourceFiles`,
+ *   `session.go` `handleGetSourceFile`), against the binary's bytes in `build/goport/oracle/`;
+ * - `TSGO_ORACLE=parse-only` — the first development stage: no binder, against
+ *   `build/goport/oracle-parse-only/` (tsgo's parser+encoder in-process, `tsgo-oracle encode -parse-only`).
+ *
+ * Optional: `TSGO_ORACLE_LIMIT=n`, `TSGO_ORACLE_SOURCE=tsc`. Writes the per-file verdicts to
+ * `build/goport/port/oracle-parity.tsv`. **In either mode the test FAILS when any file differs or
+ * crashes** — a measurement that cannot fail is not a gate.
+ *
+ * The content hash (header bytes 4-19, xxh3-128) is computed with the xxh3 shim's
+ * `HashString128`; `TSGO_ORACLE_REAL_HASH=0` copies it from the oracle instead, which isolates the
+ * AST from the hash.
  */
 class OracleParityTest {
 
@@ -71,30 +76,22 @@ class OracleParityTest {
         return v
     }
 
-    /** One file through the port: parse → encode. */
-    fun encode(e: Entry, oracle: ByteArray): ByteArray {
+    /** One file through the port: parse → (bind) → encode. */
+    fun encode(e: Entry, oracle: ByteArray, bind: Boolean, realHash: Boolean): ByteArray {
         val text = decode(File(e.fileName).readBytes())
-        val opts = SourceFileParseOptions(
-            fileName = e.fileName,
-            path = Path(e.fileName),
-            externalModuleIndicatorOptions = ExternalModuleIndicatorOptions(jsx = e.jsx, force = e.force),
-        )
-        val kind = com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(e.fileName)
-        val sf = com.xemantic.typescript.tsgo.parser.parseSourceFile(opts, text, kind)!!
-        sf.hash = Uint128(hi = le64(oracle, 12), lo = le64(oracle, 4))
+        val sf = TsgoPort.parse(e.fileName, text, e.jsx, e.force)
+        sf.hash = if (realHash) TsgoPort.hash(text) else Uint128(hi = le64(oracle, 12), lo = le64(oracle, 4))
         if (System.getenv("TSGO_ORACLE_DIAGS") != null) {
             for (d in sf.diagnostics.toList()) println("  diag ${e.output}: ${d!!.loc.pos}..${d.loc.end} TS${d.code} ${d.message?.text}")
         }
-        val r = com.xemantic.typescript.tsgo.api.encoder.encodeSourceFile(sf)
-        check(r.third == null) { "encode error: ${r.third!!.error()}" }
-        val out = r.first
-        return ByteArray(out.len) { out[it].toByte() }
+        if (bind) com.xemantic.typescript.tsgo.binder.bindSourceFile(sf)
+        return TsgoPort.encode(sf)
     }
 
     @Test
     fun `ported parser and encoder against tsgo's bytes`() {
         val mode = System.getenv("TSGO_ORACLE") ?: run {
-            println("OracleParityTest: skipped (set TSGO_ORACLE=parse-only to measure)")
+            println("OracleParityTest: skipped (set TSGO_ORACLE=bound or TSGO_ORACLE=parse-only)")
             return
         }
         // Go's goroutine stacks grow; the JVM's do not. tsgo recurses per nesting level
@@ -107,8 +104,11 @@ class OracleParityTest {
     }
 
     private fun measure(mode: String) {
+        require(mode == "bound" || mode == "parse-only") { "TSGO_ORACLE must be 'bound' or 'parse-only', was '$mode'" }
+        val bind = mode == "bound"
+        val realHash = TsgoPort.realHash
         val dir = File(repo, if (mode == "parse-only") "build/goport/oracle-parse-only" else "build/goport/oracle")
-        com.xemantic.typescript.tsgo.parser.goInitPackage()
+        TsgoPort.init()
         val limit = System.getenv("TSGO_ORACLE_LIMIT")?.toInt() ?: Int.MAX_VALUE
         val only = System.getenv("TSGO_ORACLE_SOURCE")?.takeIf { it.isNotBlank() }
         val entries = manifest().filter { only == null || it.source == only }.take(limit)
@@ -122,7 +122,7 @@ class OracleParityTest {
         for (e in entries) {
             val oracle = File(dir, e.output).readBytes()
             val verdict = try {
-                val mine = encode(e, oracle)
+                val mine = encode(e, oracle, bind, realHash)
                 if (mine.contentEquals(oracle)) {
                     same++
                     "same"
@@ -146,7 +146,12 @@ class OracleParityTest {
         File(repo, "build/goport/port").mkdirs()
         File(repo, "build/goport/port/oracle-parity.tsv").writeText(lines.joinToString("\n") + "\n")
         File(repo, "build/goport/port/oracle-crashes.txt").writeText(traces.joinToString("\n\n"))
-        println("OracleParityTest [$mode]: ${entries.size} files, $same byte-identical, $differ differ, $crashed crashed ($ms ms)")
+        val hashNote = if (realHash) "real hash" else "hash copied"
+        println("OracleParityTest [$mode, $hashNote]: ${entries.size} files, $same byte-identical, $differ differ, $crashed crashed ($ms ms)")
         crashes.entries.sortedByDescending { it.value }.take(25).forEach { (k, v) -> println("  $v x $k") }
+        check(entries.isNotEmpty()) { "no oracle entries selected — is build/goport/oracle/manifest.json there?" }
+        check(differ == 0 && crashed == 0) {
+            "[$mode, $hashNote] $differ of ${entries.size} files differ and $crashed crashed — see build/goport/port/oracle-parity.tsv"
+        }
     }
 }

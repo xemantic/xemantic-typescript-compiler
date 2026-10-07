@@ -67,7 +67,11 @@ func usage() {
 
 // encodeFile reproduces compiler/fileloader.go parseSourceFile + compiler/host.go GetSourceFile
 // + project.go BindSourceFiles + api/session.go handleGetSourceFile.
-func encodeFile(fileName string, opts ast.ExternalModuleIndicatorOptions, parseOnly bool) ([]byte, error) {
+//
+// recordAs, when non-empty, is the absolute fileName recorded in the AST instead of the file's own
+// path (and the source of its ScriptKind): committed pin fixtures are encoded under a stable
+// virtual name so their expected bytes do not depend on where the checkout lives.
+func encodeFile(fileName string, opts ast.ExternalModuleIndicatorOptions, parseOnly bool, recordAs string) ([]byte, error) {
 	fs := osvfs.FS()
 	abs, err := filepath.Abs(fileName)
 	if err != nil {
@@ -77,6 +81,9 @@ func encodeFile(fileName string, opts ast.ExternalModuleIndicatorOptions, parseO
 	text, ok := fs.ReadFile(normalized) // same BOM/UTF-16 decoding as the binary
 	if !ok {
 		return nil, fmt.Errorf("cannot read %s", normalized)
+	}
+	if recordAs != "" {
+		normalized = tspath.NormalizePath(recordAs)
 	}
 	scriptKind := core.GetScriptKindFromFileName(normalized)
 	if scriptKind == core.ScriptKindUnknown {
@@ -110,6 +117,7 @@ func cmdEncode(args []string) error {
 	force := fl.Bool("force", false, "ExternalModuleIndicatorOptions.Force")
 	like := fl.String("like", "", "take JSX/Force from this oracle file's header")
 	out := fl.String("o", "", "output file (default stdout)")
+	as := fl.String("as", "", "record this absolute fileName in the AST instead of FILE's path (pin fixtures)")
 	fl.Parse(args)
 	if fl.NArg() != 1 {
 		return fmt.Errorf("encode needs exactly one file")
@@ -124,7 +132,7 @@ func cmdEncode(args []string) error {
 			return err
 		}
 	}
-	data, err := encodeFile(fl.Arg(0), opts, *parseOnly)
+	data, err := encodeFile(fl.Arg(0), opts, *parseOnly, *as)
 	if err != nil {
 		return err
 	}
@@ -193,7 +201,7 @@ func cmdCrosscheck(args []string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", e.Output, err)
 		}
-		got, err := encodeFile(e.FileName, opts, *parseOnly)
+		got, err := encodeFile(e.FileName, opts, *parseOnly, "")
 		ext := extOf(e.FileName)
 		c := byExt[ext]
 		if err == nil && bytes.Equal(got, want) {

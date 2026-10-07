@@ -59,6 +59,22 @@ kotlin {
             }
         }
 
+        // TEST SCOPE ONLY: ParseBenchMain compares the port's parser with -core's (the
+        // (TSGO.1) throughput gate, docs/goport-perf.md). commonMain must never depend on -core.
+        jvmTest {
+            dependencies {
+                implementation(project(":xemantic-typescript-compiler-core"))
+            }
+        }
+
     }
 
+}
+
+// The (TSGO.1) gate is selected by environment variables (OracleParityTest, TsgoPinTest); make them
+// test inputs, or a run with TSGO_ORACLE=bound after a plain run is UP-TO-DATE and measures nothing.
+tasks.withType<Test>().configureEach {
+    for (v in listOf("TSGO_ORACLE", "TSGO_ORACLE_LIMIT", "TSGO_ORACLE_SOURCE", "TSGO_ORACLE_REAL_HASH", "TSGO_ORACLE_DIAGS")) {
+        inputs.property(v, providers.environmentVariable(v).orElse(""))
+    }
 }

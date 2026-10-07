@@ -127,17 +127,17 @@ fun newDecoder(r: Reader?): com.xemantic.typescript.tsgo.go.github_com.go_json_e
 @kotlin.jvm.JvmField val allowInvalid: GoSlice<Options?> = com.xemantic.typescript.tsgo.go.slices.clip<Options?>(GoSlice.of(GoElem.ref<Options?>(), com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.allowInvalidUTF8(true)))
 
 // go: github.com/microsoft/typescript-go/internal/json.BeginObject bfd8eb1f
-val beginObject: Token get() = TODO("goport: refused pinned:shim-stub-jsontext.BeginObject: github.com/microsoft/typescript-go/internal/json.BeginObject")
+@kotlin.jvm.JvmField val beginObject: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.beginObject
 
 // go: github.com/microsoft/typescript-go/internal/json.EndObject a8d1cf37
-val endObject: Token get() = TODO("goport: refused pinned:shim-stub-jsontext.EndObject: github.com/microsoft/typescript-go/internal/json.EndObject")
+@kotlin.jvm.JvmField val endObject: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endObject
 
 // go: github.com/microsoft/typescript-go/internal/json.Null 5b323ada
 val `null`: Token get() = TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/json.Null")
 
 // go: github.com/microsoft/typescript-go/internal/json.BeginArray f971517a
-val beginArray: Token get() = TODO("goport: refused pinned:shim-stub-jsontext.BeginArray: github.com/microsoft/typescript-go/internal/json.BeginArray")
+@kotlin.jvm.JvmField val beginArray: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.beginArray
 
 // go: github.com/microsoft/typescript-go/internal/json.EndArray 71a8ffd5
-val endArray: Token get() = TODO("goport: refused pinned:shim-stub-jsontext.EndArray: github.com/microsoft/typescript-go/internal/json.EndArray")
+@kotlin.jvm.JvmField val endArray: Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endArray
 

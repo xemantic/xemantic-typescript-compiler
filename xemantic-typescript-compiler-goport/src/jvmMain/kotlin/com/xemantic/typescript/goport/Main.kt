@@ -118,7 +118,7 @@ fun main(argv: Array<String>) {
     val files = args.ir.listFiles()!!.filter { it.name.startsWith("internal_") && it.name.endsWith(".json") }.sortedBy { it.name }
     val packages = files.map { IrPackage.load(it) }
     val tsgoMain = args.out.parentFile
-    val shims = ShimIndex.scan(File(tsgoMain, "go"), File(tsgoMain, "runtime"), File(tsgoMain, "runtime-pending"))
+    val shims = ShimIndex.scan(File(tsgoMain, "go"), File(tsgoMain, "runtime"))
     val renames = RenameTable.load(args.renames)
     val overrides = loadOverrides(args.overrides)
     val prog = Program(packages, shims, renames)
@@ -132,6 +132,7 @@ fun main(argv: Array<String>) {
     for (p in packages) {
         val pc = PkgCtx(prog, p)
         val em = PackageEmitter(pc, overrides, report, pinned)
+        em.checkPackageCollisions()
         val dir = File(args.out, p.shortPath)
         dir.mkdirs()
         for (f in p.files) {

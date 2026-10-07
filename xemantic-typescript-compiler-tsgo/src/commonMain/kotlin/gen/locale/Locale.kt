@@ -43,19 +43,27 @@ typealias Locale = Tag
 
 // go: github.com/microsoft/typescript-go/internal/locale.WithLocale e860ac1e
 fun withLocale(ctx: Context?, locale: Locale): Context? {
-    return com.xemantic.typescript.tsgo.go.context.withValue(ctx, contextKey(0), locale)
+    return com.xemantic.typescript.tsgo.go.context.withValue(ctx, contextKey(0), locale.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/locale.FromContext a785e440
 fun fromContext(ctx: Context?): Locale {
-    TODO("goport: refused shim-zero: github.com/microsoft/typescript-go/internal/locale.FromContext")
+    val x1 = ctx!!.value(contextKey(0))
+    val t0 = if (x1 is Locale) Tuple2(x1 as Locale, true) else Tuple2(Locale(), false)
+    val locale: Locale = t0.first
+    return locale.goCopy()
 }
 
 // go: github.com/microsoft/typescript-go/internal/locale.Parse 59bbcf79
 fun parse(localeStr: String): Tuple2<Locale, Boolean> {
-    TODO("goport: refused shim-zero: github.com/microsoft/typescript-go/internal/locale.Parse")
+    var locale: Locale = Locale()
+    var ok: Boolean = false
+    val t0 = com.xemantic.typescript.tsgo.go.golang_org.x.text.language.parse(localeStr)
+    val tag: Tag = t0.first
+    val err: GoError? = t0.second
+    return Tuple2<Locale, Boolean>(tag.goCopy(), err == null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/locale.Default ff89171c
-val default: Locale get() = TODO("goport: refused shim-zero: github.com/microsoft/typescript-go/internal/locale.Default")
+@kotlin.jvm.JvmField val default: Locale = Locale()
 
