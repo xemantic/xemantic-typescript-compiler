@@ -9,18 +9,21 @@ Single-thread performance and the (INC.\*) latency arc are CLOSED. The block is
 self-contained — it points at `CLAUDE.md` for the protocol and `PLAN-PHASE-5.md`
 for the queue.
 
-**Since 2026-10-07 the queue head is the tsgo-to-Kotlin port spike, (TSGO.1)** — its owner
-decisions (TSGO.0) are taken (latest Go at `tools/go/`, AGPL for `-tsgo`, `-core` frozen), so a
-session started with this block begins the port. Read `docs/tsgo-port-plan.md` first.
+**Since 2026-10-07 the queue head is (TSGO.2), the binder+checker port** — the (TSGO.1) spike
+passed its gate the same day (GO: 7,774/7,774 encoded ASTs byte-identical to tsgo, 99.0%
+mechanical, ~1.28x `-core`'s parse speed; `docs/tsgo-port-plan.md` § 4.1 RESULT). Read
+`docs/tsgo-port-plan.md` and the `docs/goport-*.md` family first.
 
 ---
 
 ```
 Work the QUEUE in PLAN-PHASE-5.md, honouring the WORK ORDER note at its top.
-Its HEAD is the tsgo-to-Kotlin port: (TSGO.1), the scanner/parser/AST/encoder
-spike through a mechanical + LLM porter, gated on encoded-AST byte equality
-against `tools/tsgo-7.0.2/lib/tsc --api`. Read docs/tsgo-port-plan.md before
-anything else. (TSGO.0) is DECIDED (2026-10-07): Go 1.27.1 is at `tools/go/`
+Its HEAD is the tsgo-to-Kotlin port: (TSGO.2), binder + checker through the
+porter (`-goport` lowers tsgo's Go IR into `-tsgo`'s generated Kotlin), gated on a
+diagnostics differential against tsgo. (TSGO.1) passed (GO, 2026-10-07). Read
+docs/tsgo-port-plan.md and docs/goport-*.md before anything else; never hand-edit
+`-tsgo/src/commonMain/kotlin/gen/` — every fix is a porter rule or a hash-pinned
+override. (TSGO.0) is DECIDED (2026-10-07): Go 1.27.1 is at `tools/go/`
 (run `GOTOOLCHAIN=local tools/go/bin/go`), `-tsgo` is AGPL-3.0-only + output
 exception, and `-core` is FROZEN — do NOT start a (CHK.*)/(INV.*)/(LIBS.*)
 parity or extraction round; `-core` takes only fixes a product needs now.
