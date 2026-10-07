@@ -311,11 +311,53 @@ fun goJsonFieldsOf(s: GoReflectStruct): List<com.xemantic.typescript.tsgo.go.git
         val type = f.type
         out += com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField(
             name = opts[0].ifEmpty { f.name },
-            ptr = s.goFieldPtr(i),
+            ptr = if (type.kind == GoTypeInfo.KIND_POINTER) JsonPointerField(s.goFieldPtr(i), type) else s.goFieldPtr(i),
             omitEmpty = "omitempty" in opts.drop(1),
             omitZero = "omitzero" in opts.drop(1),
             isZero = { v -> goIsZero(v, type) },
         )
     }
     return out
+}
+
+/**
+ * A POINTER field as json sees it. Go's decoder allocates the pointee of a nil `*T`; the json shim reads
+ * a target's type off its current value, so a nil pointer would decode as `any` (a `Double`, a `GoMap`).
+ * This adapter converts what it is given into the pointee [type] describes: a basic value is boxed
+ * (`*int` → `GoBox`), a JSON object/array becomes a fresh pointee that decodes itself
+ * (`*collections.OrderedMap` → `UnmarshalJSONFrom`).
+ */
+private class JsonPointerField(private val ptr: GoPtr<Any?>, private val type: GoTypeInfo) : GoPtr<Any?> {
+    override var value: Any?
+        get() = ptr.value
+        set(v) {
+            ptr.value = convert(v)
+        }
+
+    private fun convert(v: Any?): Any? {
+        if (v == null) return null
+        val elem = type.elem ?: return v
+        if (elem.kind == GoTypeInfo.KIND_STRUCT) {
+            if (elem.cls != null && elem.cls.isInstance(v)) return v
+            val fresh = elem.zero() ?: return v
+            val json = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshal(v)
+            if (json.second != null) return v
+            val err = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshal(json.first, fresh)
+            return if (err == null) fresh else v
+        }
+        if (v is GoPtr<*>) return v
+        val raw = when (elem.kind) {
+            GoTypeInfo.KIND_INT, 3, 4, 5 -> (v as? Double)?.toInt() ?: v
+            GoTypeInfo.KIND_INT64 -> (v as? Double)?.toLong() ?: v
+            GoTypeInfo.KIND_UINT32 -> (v as? Double)?.toUInt() ?: v
+            GoTypeInfo.KIND_UINT64, 7 -> (v as? Double)?.toULong() ?: v
+            else -> v
+        }
+        // A named basic pointee (a value class) wraps the raw value.
+        val wrapped = (elem.zero() as? GoBasicValue)?.goWithRaw(raw) ?: raw
+        return com.xemantic.typescript.tsgo.runtime.GoBox(wrapped)
+    }
+
+    override fun equals(other: Any?): Boolean = other is JsonPointerField && other.ptr == ptr
+    override fun hashCode(): Int = ptr.hashCode()
 }

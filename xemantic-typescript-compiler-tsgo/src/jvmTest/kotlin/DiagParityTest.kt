@@ -92,7 +92,11 @@ class DiagParityTest {
             f.split('/').dropLast(1).runningReduce { a, b -> "$a/$b" }.map { if (it.length == 2 && it[1] == ':') "$it/" else it.ifEmpty { "/" } }
         }.toSet() + "/"
 
-        private fun canon(p: String) = if (caseSensitive) p else p.lowercase()
+        /** Case-folded, without a trailing separator (except a root): the harness MapFS's canonical path. */
+        private fun canon(p0: String): String {
+            val p = if (p0.length > 1 && p0.endsWith("/") && !(p0.length == 3 && p0[1] == ':')) p0.trimEnd('/').ifEmpty { "/" } else p0
+            return if (caseSensitive) p else p.lowercase()
+        }
         private val byCanon = files.keys.associateBy { canon(it) }
         private val dirsByCanon = dirs.associateBy { canon(it) }
 
@@ -189,11 +193,13 @@ class DiagParityTest {
         val harness = case["harnessOptions"].obj()
         val caseSensitive = harness["UseCaseSensitiveFileNames"] as Boolean
         val files = LinkedHashMap<String, String>()
+        val allFiles = LinkedHashMap<String, String>()
         for (f in case.list("files")) {
             val fo = f.obj()
-            if (fo["role"].str() == "tsconfig") continue
             val path = fo["path"].str()
-            files[path] = String(File(dir, "vfs/" + path.removePrefix("/")).readBytes(), Charsets.ISO_8859_1)
+            val text = String(File(dir, "vfs/" + path.removePrefix("/")).readBytes(), Charsets.ISO_8859_1)
+            allFiles[path] = text
+            if (fo["role"].str() != "tsconfig") files[path] = text
         }
         val symlinks = (case["symlinks"] as? GoMap<*, *>)?.let { m -> m.keysSnapshot().associate { k -> (k as String).let(GoString::toUtf16) to (m.obj()[k]).str() } } ?: emptyMap()
         val currentDirectory = case["currentDirectory"].str()
@@ -209,6 +215,29 @@ class DiagParityTest {
         val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(CaseFS(files.mapKeys { GoString.fromUtf16(it.key) }, symlinks, caseSensitive))
         val host = CachedHost(com.xemantic.typescript.tsgo.compiler.newCompilerHost(GoString.fromUtf16(currentDirectory), fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)!!)
         val config = ParsedCommandLine(parsedConfig = ParsedOptions(compilerOptions = pre, fileNames = GoSlice.of(GoElem.STRING, *roots.map { GoString.fromUtf16(it) }.toTypedArray())))
+        // The embedded tsconfig, parsed as the runner does (testrunner/test_case_parser.go): its ConfigFile and
+        // Errors ride along (its options are already merged into compilerOptions).
+        (case["tsconfig"] as? String)?.let { tsconfigPath ->
+            val cd = GoString.fromUtf16(currentDirectory)
+            val name = GoString.fromUtf16(GoString.toUtf16(tsconfigPath))
+            val parseFs = CaseFS(allFiles.mapKeys { GoString.fromUtf16(it.key) }, emptyMap(), true)
+            val parseHost = object : com.xemantic.typescript.tsgo.tsoptions.ParseConfigHost {
+                override fun fs(): FS = parseFs
+                override fun getCurrentDirectory(): String = cd
+            }
+            val json = com.xemantic.typescript.tsgo.parser.parseSourceFile(
+                SourceFileParseOptions(fileName = name, path = com.xemantic.typescript.tsgo.tspath.toPath(name, cd, true)),
+                allFiles.getValue(GoString.toUtf16(tsconfigPath)), com.xemantic.typescript.tsgo.core.ScriptKind(6),
+            )
+            val parsed = com.xemantic.typescript.tsgo.tsoptions.parseJsonSourceFileConfigFileContent(
+                com.xemantic.typescript.tsgo.tsoptions.TsConfigSourceFile(sourceFile = json), parseHost,
+                com.xemantic.typescript.tsgo.tspath.getDirectoryPath(name), null, null, name,
+                com.xemantic.typescript.tsgo.tspath.Path.ELEM.nilSlice,
+                com.xemantic.typescript.tsgo.tsoptions.FileExtensionInfo.ELEM.nilSlice, null,
+            )!!
+            config.configFile = parsed.configFile
+            config.errors = parsed.errors
+        }
         val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = config, singleThreaded = TSTrue))!!
         val ctx = com.xemantic.typescript.tsgo.go.context.background()
         val phases = ArrayList<Pair<String, GoSlice<Diagnostic?>>>()
