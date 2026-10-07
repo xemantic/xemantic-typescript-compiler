@@ -252,12 +252,12 @@ fun <T> unmarshalJSONValueV2(goElem_T: GoElem<T>, v: JSONValue?, dec: Decoder?):
             }
             var elements: GoSlice<T> = goElem_T.nilSlice
             l1@ while (dec!!.peekKind().value != com.xemantic.typescript.tsgo.json.endArray.kind().value) {
-                val element: T = goElem_T.zeroValue()
+                val element: GoBox<T> = GoBox(goElem_T.zeroValue())
                 val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, element, GoElem.ref<Options?>().nilSlice)
                 if (err_3 != null) {
                     return err_3
                 }
-                elements = elements.append1(element)
+                elements = elements.append1(element.value)
             }
             val t3 = dec!!.readToken()
             val err_4: GoError? = t3.second

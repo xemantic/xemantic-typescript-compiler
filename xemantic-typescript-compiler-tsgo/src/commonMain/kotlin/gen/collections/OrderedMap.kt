@@ -99,8 +99,8 @@ class OrderedMap<K, V>(
             return com.xemantic.typescript.tsgo.go.errors.new("cannot unmarshal non-object JSON value into Map")
         }
         l0@ while (dec!!.peekKind().value != 125) {
-            val key: K = goElem_K.zeroValue()
-            val value_1: V = goElem_V.zeroValue()
+            val key: GoBox<K> = GoBox(goElem_K.zeroValue())
+            val value_1: GoBox<V> = GoBox(goElem_V.zeroValue())
             val err_1: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, key, GoElem.ref<Options?>().nilSlice)
             if (err_1 != null) {
                 return err_1
@@ -109,7 +109,7 @@ class OrderedMap<K, V>(
             if (err_2 != null) {
                 return err_2
             }
-            this.set(key, value_1)
+            this.set(key.value, value_1.value)
         }
         val t1 = dec!!.readToken()
         val err_3: GoError? = t1.second

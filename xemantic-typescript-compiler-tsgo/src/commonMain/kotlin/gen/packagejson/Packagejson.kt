@@ -320,7 +320,7 @@ class Fields(
     @kotlin.jvm.JvmField var headerFields: HeaderFields = HeaderFields(),
     @kotlin.jvm.JvmField var pathFields: PathFields = PathFields(),
     @kotlin.jvm.JvmField var dependencyFields: DependencyFields = DependencyFields(),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): Fields = Fields(headerFields = headerFields.goCopy(), pathFields = pathFields.goCopy(), dependencyFields = dependencyFields.goCopy())
 
@@ -330,7 +330,25 @@ class Fields(
         dependencyFields = o.dependencyFields.goCopy()
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { headerFields }, { headerFields = (it as HeaderFields).goCopy() })
+        1 -> GoFieldPtr(this, 1, { pathFields }, { pathFields = (it as PathFields).goCopy() })
+        2 -> GoFieldPtr(this, 2, { dependencyFields }, { dependencyFields = (it as DependencyFields).goCopy() })
+        else -> goPanicIndex(i, 3)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("packagejson.Fields", listOf(
+                GoFieldInfo("HeaderFields", "", true, true, GoTypeInfo(25, "packagejson.HeaderFields", cls = HeaderFields::class, structInfo = { HeaderFields.GO_STRUCT }, zero = { HeaderFields() })),
+                GoFieldInfo("PathFields", "", true, true, GoTypeInfo(25, "packagejson.PathFields", cls = PathFields::class, structInfo = { PathFields.GO_STRUCT }, zero = { PathFields() })),
+                GoFieldInfo("DependencyFields", "", true, true, GoTypeInfo(25, "packagejson.DependencyFields", cls = DependencyFields::class, structInfo = { DependencyFields.GO_STRUCT }, zero = { DependencyFields() })),
+            ))
+        }
         val ELEM: GoElem<Fields> = GoElem({ Fields() }, { it.goCopy() })
     }
 }

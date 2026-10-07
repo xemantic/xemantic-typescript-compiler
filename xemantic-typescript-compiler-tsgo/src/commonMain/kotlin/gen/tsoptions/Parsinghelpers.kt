@@ -252,7 +252,7 @@ interface optionParser {
 // go: github.com/microsoft/typescript-go/internal/tsoptions.compilerOptionsParser d07275ee
 class compilerOptionsParser(
     @kotlin.jvm.JvmField var compilerOptions: CompilerOptions? = null,
-) : com.xemantic.typescript.tsgo.tsoptions.optionParser {
+) : com.xemantic.typescript.tsgo.tsoptions.optionParser, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): compilerOptionsParser = compilerOptionsParser(compilerOptions = compilerOptions)
 
@@ -279,7 +279,21 @@ class compilerOptionsParser(
         return extraKeyDidYouMeanDiagnostics("compilerOptions")
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { compilerOptions }, { compilerOptions = it as CompilerOptions? })
+        else -> goPanicIndex(i, 1)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tsoptions.compilerOptionsParser", listOf(
+                GoFieldInfo("CompilerOptions", "", true, true, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.CompilerOptions", cls = CompilerOptions::class, structInfo = { CompilerOptions.GO_STRUCT }, zero = { CompilerOptions() }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<compilerOptionsParser> = GoElem({ compilerOptionsParser() }, { it.goCopy() })
     }
 }
@@ -287,7 +301,7 @@ class compilerOptionsParser(
 // go: github.com/microsoft/typescript-go/internal/tsoptions.watchOptionsParser cdd1aa89
 class watchOptionsParser(
     @kotlin.jvm.JvmField var watchOptions: WatchOptions? = null,
-) : com.xemantic.typescript.tsgo.tsoptions.optionParser {
+) : com.xemantic.typescript.tsgo.tsoptions.optionParser, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): watchOptionsParser = watchOptionsParser(watchOptions = watchOptions)
 
@@ -314,7 +328,21 @@ class watchOptionsParser(
         return extraKeyDidYouMeanDiagnostics("watchOptions")
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { watchOptions }, { watchOptions = it as WatchOptions? })
+        else -> goPanicIndex(i, 1)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tsoptions.watchOptionsParser", listOf(
+                GoFieldInfo("WatchOptions", "", true, true, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.WatchOptions", cls = WatchOptions::class, structInfo = { WatchOptions.GO_STRUCT }, zero = { WatchOptions() }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<watchOptionsParser> = GoElem({ watchOptionsParser() }, { it.goCopy() })
     }
 }
@@ -322,7 +350,7 @@ class watchOptionsParser(
 // go: github.com/microsoft/typescript-go/internal/tsoptions.typeAcquisitionParser 70b7d884
 class typeAcquisitionParser(
     @kotlin.jvm.JvmField var typeAcquisition: TypeAcquisition? = null,
-) : com.xemantic.typescript.tsgo.tsoptions.optionParser {
+) : com.xemantic.typescript.tsgo.tsoptions.optionParser, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): typeAcquisitionParser = typeAcquisitionParser(typeAcquisition = typeAcquisition)
 
@@ -349,7 +377,21 @@ class typeAcquisitionParser(
         return extraKeyDidYouMeanDiagnostics("typeAcquisition")
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { typeAcquisition }, { typeAcquisition = it as TypeAcquisition? })
+        else -> goPanicIndex(i, 1)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tsoptions.typeAcquisitionParser", listOf(
+                GoFieldInfo("TypeAcquisition", "", true, true, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.TypeAcquisition", cls = TypeAcquisition::class, structInfo = { TypeAcquisition.GO_STRUCT }, zero = { TypeAcquisition() }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<typeAcquisitionParser> = GoElem({ typeAcquisitionParser() }, { it.goCopy() })
     }
 }
@@ -357,7 +399,7 @@ class typeAcquisitionParser(
 // go: github.com/microsoft/typescript-go/internal/tsoptions.buildOptionsParser 52978efa
 class buildOptionsParser(
     @kotlin.jvm.JvmField var buildOptions: BuildOptions? = null,
-) : com.xemantic.typescript.tsgo.tsoptions.optionParser {
+) : com.xemantic.typescript.tsgo.tsoptions.optionParser, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): buildOptionsParser = buildOptionsParser(buildOptions = buildOptions)
 
@@ -384,7 +426,21 @@ class buildOptionsParser(
         return extraKeyDidYouMeanDiagnostics("buildOptions")
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { buildOptions }, { buildOptions = it as BuildOptions? })
+        else -> goPanicIndex(i, 1)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tsoptions.buildOptionsParser", listOf(
+                GoFieldInfo("BuildOptions", "", true, true, GoTypeInfo(22, "", elem = GoTypeInfo(25, "core.BuildOptions", cls = BuildOptions::class, structInfo = { BuildOptions.GO_STRUCT }, zero = { BuildOptions() }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<buildOptionsParser> = GoElem({ buildOptionsParser() }, { it.goCopy() })
     }
 }

@@ -87,7 +87,7 @@ class CheckerSmokeTest {
     }
 
     /** The ported pipeline's semantic diagnostics of `/src/a.ts` holding [source], as `TSnnnn: message`. */
-    private fun check(source: String): List<String> {
+    private fun check(source: String, chains: Boolean = false): List<String> {
         TsgoPort.init()
         val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(MapFS(mapOf("/src/a.ts" to source)))
         val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost("/src", fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)
@@ -97,7 +97,13 @@ class CheckerSmokeTest {
         val diags = program.getSemanticDiagnostics(com.xemantic.typescript.tsgo.go.context.background(), file)
         return (0 until diags.len).map { i ->
             val d = diags[i]!!
-            "TS${d.code}: ${GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))}"
+            val sb = StringBuilder("TS${d.code}: ${GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))}")
+            fun chain(c: com.xemantic.typescript.tsgo.ast.Diagnostic, level: Int) {
+                sb.append("\n" + "  ".repeat(level) + GoString.toUtf16(c.localize(com.xemantic.typescript.tsgo.locale.Locale())))
+                for (j in 0 until c.messageChain.len) chain(c.messageChain[j]!!, level + 1)
+            }
+            if (chains) for (j in 0 until d.messageChain.len) chain(d.messageChain[j]!!, 1)
+            sb.toString()
         }
     }
 
@@ -109,11 +115,14 @@ class CheckerSmokeTest {
         assert(diags == listOf("TS2322: Type 'string' is not assignable to type 'number'."))
     }
 
+    /** [check] with message chains (SnippetMain). */
+    fun checkForDebug(source: String): List<String> = check(source, chains = true)
+
     /** Debugging aid: `TSGO_SNIPPET=<file.ts>` prints the ported checker's diagnostics for that file. */
     @Test
     fun `snippet`() = onDeepStack {
         val f = System.getenv("TSGO_SNIPPET")?.takeIf { it.isNotEmpty() } ?: return@onDeepStack
-        check(java.io.File(f).readText()).forEach { println("SNIPPET $it") }
+        check(java.io.File(f).readText(), chains = true).forEach { println("SNIPPET $it") }
     }
 
     @Test

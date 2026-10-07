@@ -139,7 +139,7 @@ class FnCtx(val fc: FileCtx, val qname: String, val tm: TypeMapper) {
         while (n in used || n in pc.topValues || n in classMembers || n in RESERVED_LOCAL) n = "${base}_${i++}"
         used += n
         names[id] = n
-        if (o.bool("addr") && !tm.isStructValue(o.int("t")!!) && !tm.opaqueTP(o.int("t")!!)) boxed += id
+        if (o.bool("addr") && !tm.isStructValue(o.int("t")!!)) boxed += id
         return n
     }
 

@@ -46,7 +46,7 @@ class PackageJson(
     @kotlin.jvm.JvmField var versionPaths: VersionPaths = VersionPaths(),
     @kotlin.jvm.JvmField var versionTraces: GoSlice<com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs> = com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs.ELEM.nilSlice,
     @kotlin.jvm.JvmField var once: Once = Once(),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): PackageJson = PackageJson(fields = fields.goCopy(), parseable = parseable, versionPaths = versionPaths.goCopy(), versionTraces = versionTraces, once = once.goCopy())
 
@@ -58,7 +58,29 @@ class PackageJson(
         once = o.once.goCopy()
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { fields }, { fields = (it as Fields).goCopy() })
+        1 -> GoFieldPtr(this, 1, { parseable }, { parseable = it as Boolean })
+        2 -> GoFieldPtr(this, 2, { versionPaths }, { versionPaths = (it as VersionPaths).goCopy() })
+        3 -> GoFieldPtr(this, 3, { versionTraces }, { versionTraces = it as GoSlice<com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs> })
+        4 -> GoFieldPtr(this, 4, { once }, { once = (it as Once).goCopy() })
+        else -> goPanicIndex(i, 5)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("packagejson.PackageJson", listOf(
+                GoFieldInfo("Fields", "", true, true, GoTypeInfo(25, "packagejson.Fields", cls = Fields::class, structInfo = { Fields.GO_STRUCT }, zero = { Fields() })),
+                GoFieldInfo("Parseable", "", true, false, GoTypeInfo(1, "bool", zero = { false })),
+                GoFieldInfo("versionPaths", "", false, false, GoTypeInfo(25, "packagejson.VersionPaths", cls = VersionPaths::class, structInfo = { VersionPaths.GO_STRUCT }, zero = { VersionPaths() })),
+                GoFieldInfo("versionTraces", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(25, "packagejson.diagnosticAndArgs", cls = com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs::class, zero = { com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs() }), zero = { com.xemantic.typescript.tsgo.packagejson.diagnosticAndArgs.ELEM.nilSlice })),
+                GoFieldInfo("once", "", false, false, GoTypeInfo(25, "sync.Once", cls = Once::class, zero = { Once() })),
+            ))
+        }
         val ELEM: GoElem<PackageJson> = GoElem({ PackageJson() }, { it.goCopy() })
     }
 }
@@ -134,7 +156,7 @@ class VersionPaths(
     @kotlin.jvm.JvmField var version: String = "",
     @kotlin.jvm.JvmField var pathsJSON: OrderedMap<String, JSONValue>? = null,
     @kotlin.jvm.JvmField var paths: OrderedMap<String, GoSlice<String>>? = null,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): VersionPaths = VersionPaths(version = version, pathsJSON = pathsJSON, paths = paths)
 
@@ -148,7 +170,25 @@ class VersionPaths(
 
     fun goHash(): Int = 31 * version.hashCode() + 31 * pathsJSON.hashCode() + 31 * paths.hashCode()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { version }, { version = it as String })
+        1 -> GoFieldPtr(this, 1, { pathsJSON }, { pathsJSON = it as OrderedMap<String, JSONValue>? })
+        2 -> GoFieldPtr(this, 2, { paths }, { paths = it as OrderedMap<String, GoSlice<String>>? })
+        else -> goPanicIndex(i, 3)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("packagejson.VersionPaths", listOf(
+                GoFieldInfo("Version", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("pathsJSON", "", false, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, JSONValue>(goElem_K = GoElem.STRING, goElem_V = JSONValue.ELEM) }), zero = { null })),
+                GoFieldInfo("paths", "", false, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, GoSlice<String>>(goElem_K = GoElem.STRING, goElem_V = GoElem.slice(GoElem.STRING)) }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<VersionPaths> = GoElem({ VersionPaths() }, { it.goCopy() })
     }
 }

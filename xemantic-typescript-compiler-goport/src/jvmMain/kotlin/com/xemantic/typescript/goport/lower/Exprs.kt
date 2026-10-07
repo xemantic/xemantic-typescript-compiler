@@ -104,6 +104,13 @@ open class ExprLowering(val fn: FnCtx) {
      * IR's implicit operations — `copy` (Go value semantics) and `impl` (nil / interface).
      */
     fun flow(e: Node): Ex {
+        // `&x.f` of an opaque type parameter T flowing into an interface (`json.Unmarshal(data, &e.Value)`):
+        // T may be instantiated with a non-struct, so the "pointer is the reference" shortcut does not hold
+        // — hand out a real pointer to the location.
+        if (e.obj("impl")?.str("k") == "iface" && e.k == "UnaryExpr" && e.str("op") == "&") {
+            val pt = types.under(ty(e)) as? PointerType
+            if (pt != null && tm.opaqueTP(pt.elem)) return addressOf(e.reqObj("x"), realPointer = true)
+        }
         val v = lower(e)
         e.obj("impl")?.let { im -> if (im.str("k") == "iface") im.int("from")?.let { tm.boxOf(it) }?.let { return Ex.primary("$it(${v.code})") } }
         if (e.bool("copy") && tm.hasGoCopy(ty(e))) return Ex.primary("${v.at(PRIMARY)}.goCopy()")
@@ -315,6 +322,20 @@ open class ExprLowering(val fn: FnCtx) {
                 else -> Ex("${lower(other).at(EQ + 1)} ${if (neg) "!=" else "=="} null", EQ)
             }
         }
+        // `&s1[i] == &s2[j]`: slot identity (core.Same) — a struct element's `&` is its reference, but an
+        // element of an opaque type parameter or a basic type is not; compare the slots themselves.
+        fun slot(n: Node): Node? {
+            val e = if (n.k == "ParenExpr") n.reqObj("x") else n
+            if (e.k != "UnaryExpr" || e.str("op") != "&") return null
+            val ix = e.reqObj("x")
+            return if (ix.k == "IndexExpr" && ix.str("ik") == "slice") ix else null
+        }
+        val sx = slot(x)
+        val sy = slot(y)
+        if (sx != null && sy != null) {
+            fun addr(ix: Node) = "${raw(ix.reqObj("x")).at(PRIMARY)}.addr(${intIndex(ix.reqObj("index")).code})"
+            return Ex("${addr(sx)} ${if (neg) "!=" else "=="} ${addr(sy)}", EQ)
+        }
         val xt = ty(x)
         val u = types.under(xt)
         val k = if (neg) "!=" else "=="
@@ -366,13 +387,13 @@ open class ExprLowering(val fn: FnCtx) {
     }
 
     /** `&x`. A pointer to a struct is the struct reference itself (design § 3). */
-    fun addressOf(x: Node): Ex {
+    fun addressOf(x: Node, realPointer: Boolean = false): Ex {
         val xt = ty(x)
-        val structLike = tm.isStructValue(xt) || tm.opaqueTP(xt) || types.under(xt) is ArrayType
+        val structLike = !realPointer && (tm.isStructValue(xt) || tm.opaqueTP(xt) || types.under(xt) is ArrayType)
         return when (x.k) {
             // `&[]T{}` / `&map[K]V{}`: a pointer to a non-struct value is a box.
             "CompositeLit" -> if (structLike) lower(x) else Ex.primary("GoBox(${lower(x).code})")
-            "ParenExpr" -> addressOf(x.reqObj("x"))
+            "ParenExpr" -> addressOf(x.reqObj("x"), realPointer)
             "Ident" -> {
                 val id = x.int("obj") ?: refuse("addr-ident")
                 val o = pc.obj(id)

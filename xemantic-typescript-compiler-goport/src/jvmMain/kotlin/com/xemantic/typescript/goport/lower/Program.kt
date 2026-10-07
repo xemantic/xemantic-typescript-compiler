@@ -172,6 +172,7 @@ class Program(
      */
     val reflectStructs = HashSet<String>()
     private val reflectEmbeds = HashMap<String, MutableSet<String>>()
+    private val reflectParentEmbeds = HashMap<String, MutableSet<String>>()
 
     /**
      * `//go:embed <file>` string variables, per package path: (Kotlin function name, pattern relative
@@ -202,6 +203,12 @@ class Program(
     init {
         for (p in packages) index(p)
         // Close the reflect/json structs over their embedded structs (json flattens them).
+        // ... and a struct EMBEDDING a json struct is one too (`packagejson.Fields` embeds the tagged
+        // HeaderFields/PathFields/DependencyFields and is what `json.Unmarshal` receives).
+        do {
+            var grew = false
+            for ((parent, embeds) in reflectParentEmbeds) if (parent !in reflectStructs && embeds.any { it in reflectStructs }) grew = reflectStructs.add(parent) || grew
+        } while (grew)
         val work = ArrayDeque(reflectStructs)
         while (work.isNotEmpty()) for (e in reflectEmbeds[work.removeFirst()] ?: emptySet()) if (reflectStructs.add(e)) work += e
         for ((key, ms) in genericMsets) {
@@ -300,6 +307,7 @@ class Program(
             val st = tt.under(n.id) as? com.xemantic.typescript.goport.types.StructType ?: continue
             if (st.fields.any { "json:" in it.tag } && n.tparams.isEmpty()) reflectStructs += n.key
             // Embedded structs (json flattens them) and struct-VALUE fields (reflect.DeepEqual / IsZero walk them).
+            if (n.tparams.isEmpty()) for (f in st.fields) if (f.embedded) structKeyOf(f.t)?.let { reflectParentEmbeds.getOrPut(n.key) { HashSet() } += it }
             for (f in st.fields) if (f.embedded || tt.unalias(f.t) !is com.xemantic.typescript.goport.types.PointerType) {
                 structKeyOf(f.t)?.let { k -> if ((tt.unalias(f.t) as? com.xemantic.typescript.goport.types.NamedType)?.let { it.tparams.isEmpty() && it.origin == null } != false) reflectEmbeds.getOrPut(n.key) { HashSet() } += k }
             }

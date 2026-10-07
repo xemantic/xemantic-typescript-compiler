@@ -245,7 +245,7 @@ inline fun <T> sameMapIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T, Int)
 // go: github.com/microsoft/typescript-go/internal/core.Same da146fdf
 fun <T> same(goElem_T: GoElem<T>, s1: GoSlice<T>, s2: GoSlice<T>): Boolean {
     if (s1.len == s2.len) {
-        return s1.len == 0 || s1[0] == s2[0]
+        return s1.len == 0 || s1.addr(0) == s2.addr(0)
     }
     return false
 }
