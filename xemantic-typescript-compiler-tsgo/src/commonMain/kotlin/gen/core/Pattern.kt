@@ -81,13 +81,13 @@ fun Pattern?.matchedText(candidate: String): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FindBestPatternMatch 733cfbb1
-fun <T> findBestPatternMatch(goElem_T: GoElem<T>, values: GoSlice<T>, getPattern: ((T) -> Pattern)?, candidate: String): T {
+inline fun <T> findBestPatternMatch(goElem_T: GoElem<T>, values: GoSlice<T>, getPattern: ((T) -> Pattern), candidate: String): T {
     var bestPattern: T = goElem_T.zeroValue()
     var longestMatchPrefixLength: Int = -1
     val s0 = values
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        val pattern: Pattern = getPattern!!(value_1)
+        val pattern: Pattern = getPattern(value_1)
         if ((pattern.starIndex == -1 || pattern.starIndex > longestMatchPrefixLength) && pattern.matches(candidate)) {
             bestPattern = value_1
             longestMatchPrefixLength = pattern.starIndex

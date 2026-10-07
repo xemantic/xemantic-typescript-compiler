@@ -50,12 +50,12 @@ fun <K, V> newMultiMapWithSizeHint(goElem_K: GoElem<K>, goElem_V: GoElem<V>, hin
 }
 
 // go: github.com/microsoft/typescript-go/internal/collections.GroupBy 78223151
-fun <K, V> groupBy(goElem_K: GoElem<K>, goElem_V: GoElem<V>, items: GoSlice<V>, groupId: ((V) -> K)?): MultiMap<K, V>? {
+inline fun <K, V> groupBy(goElem_K: GoElem<K>, goElem_V: GoElem<V>, items: GoSlice<V>, groupId: ((V) -> K)): MultiMap<K, V>? {
     val m: MultiMap<K, V>? = MultiMap<K, V>(goElem_K = goElem_K, goElem_V = goElem_V)
     val s0 = items
     l0@ for (i1 in 0 until s0.len) {
         val item: V = s0[i1]
-        m.add(groupId!!(item), item)
+        m.add(groupId(item), item)
     }
     return m
 }

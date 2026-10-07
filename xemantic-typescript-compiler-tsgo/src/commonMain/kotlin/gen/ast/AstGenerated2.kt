@@ -81,7 +81,7 @@ class FunctionExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionExpression.ForEachChild 5c054217
     override fun forEachChild(v: Visitor): Boolean {
-        return visitModifiers(v, this.modifiersBase.modifiers) || visit(v, this.functionLikeWithBodyBase.bodyBase.asteriskToken) || visit(v, this.name) || visitNodeList(v, this.functionLikeWithBodyBase.functionLikeBase.typeParameters) || visitNodeList(v, this.functionLikeWithBodyBase.functionLikeBase.parameters) || visit(v, this.functionLikeWithBodyBase.functionLikeBase.type) || visit(v, this.functionLikeWithBodyBase.functionLikeBase.fullSignature) || visit(v, this.functionLikeWithBodyBase.bodyBase.body)
+        return visitModifiers(v, this.modifiersBase.modifiers) || visit(v!!, this.functionLikeWithBodyBase.bodyBase.asteriskToken) || visit(v!!, this.name) || visitNodeList(v, this.functionLikeWithBodyBase.functionLikeBase.typeParameters) || visitNodeList(v, this.functionLikeWithBodyBase.functionLikeBase.parameters) || visit(v!!, this.functionLikeWithBodyBase.functionLikeBase.type) || visit(v!!, this.functionLikeWithBodyBase.functionLikeBase.fullSignature) || visit(v!!, this.functionLikeWithBodyBase.bodyBase.body)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionExpression.VisitEachChild 50decd26
@@ -192,7 +192,7 @@ class AsExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.AsExpression.ForEachChild c3b2dc5e
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression) || visit(v, this.type)
+        return visit(v!!, this.expression) || visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.AsExpression.VisitEachChild 2d8590c3
@@ -294,7 +294,7 @@ class SatisfiesExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SatisfiesExpression.ForEachChild a7eaa88d
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression) || visit(v, this.type)
+        return visit(v!!, this.expression) || visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SatisfiesExpression.VisitEachChild 3efe5e20
@@ -394,7 +394,7 @@ class ConditionalExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConditionalExpression.ForEachChild f330068f
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.condition) || visit(v, this.questionToken) || visit(v, this.whenTrue) || visit(v, this.colonToken) || visit(v, this.whenFalse)
+        return visit(v!!, this.condition) || visit(v!!, this.questionToken) || visit(v!!, this.whenTrue) || visit(v!!, this.colonToken) || visit(v!!, this.whenFalse)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConditionalExpression.VisitEachChild 6a693a23
@@ -516,7 +516,7 @@ class PropertyAccessExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertyAccessExpression.ForEachChild 022e0b29
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression) || visit(v, this.questionDotToken) || visit(v, this.name)
+        return visit(v!!, this.expression) || visit(v!!, this.questionDotToken) || visit(v!!, this.name)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertyAccessExpression.VisitEachChild a3135bb8
@@ -625,7 +625,7 @@ class ElementAccessExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ElementAccessExpression.ForEachChild d38fa65d
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression) || visit(v, this.questionDotToken) || visit(v, this.argumentExpression)
+        return visit(v!!, this.expression) || visit(v!!, this.questionDotToken) || visit(v!!, this.argumentExpression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ElementAccessExpression.VisitEachChild b929b594
@@ -743,7 +743,7 @@ class CallExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.CallExpression.ForEachChild cf4d2ef2
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression) || visit(v, this.questionDotToken) || visitNodeList(v, this.typeArguments) || visitNodeList(v, this.arguments)
+        return visit(v!!, this.expression) || visit(v!!, this.questionDotToken) || visitNodeList(v, this.typeArguments) || visitNodeList(v, this.arguments)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.CallExpression.VisitEachChild ef05bc57
@@ -853,7 +853,7 @@ class NewExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NewExpression.ForEachChild f1f8260c
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression) || visitNodeList(v, this.typeArguments) || visitNodeList(v, this.arguments)
+        return visit(v!!, this.expression) || visitNodeList(v, this.typeArguments) || visitNodeList(v, this.arguments)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NewExpression.VisitEachChild 5b079116
@@ -955,7 +955,7 @@ class MetaProperty(
 
     // go: github.com/microsoft/typescript-go/internal/ast.MetaProperty.ForEachChild 16442388
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.name)
+        return visit(v!!, this.name)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.MetaProperty.VisitEachChild 69aa68b0
@@ -1055,7 +1055,7 @@ class NonNullExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NonNullExpression.ForEachChild a49c32e5
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NonNullExpression.VisitEachChild bfd456cf
@@ -1153,7 +1153,7 @@ class SpreadElement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SpreadElement.ForEachChild 40bec3f8
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SpreadElement.VisitEachChild 05c7e67c
@@ -1248,7 +1248,7 @@ class TemplateExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TemplateExpression.ForEachChild 654e8c86
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.head) || visitNodeList(v, this.templateSpans)
+        return visit(v!!, this.head) || visitNodeList(v, this.templateSpans)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TemplateExpression.VisitEachChild 776688e5
@@ -1347,7 +1347,7 @@ class TemplateSpan(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TemplateSpan.ForEachChild 7469cd79
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression) || visit(v, this.literal)
+        return visit(v!!, this.expression) || visit(v!!, this.literal)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TemplateSpan.VisitEachChild 9155e1af
@@ -1457,7 +1457,7 @@ class TaggedTemplateExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TaggedTemplateExpression.ForEachChild 0699af91
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.tag) || visit(v, this.questionDotToken) || visitNodeList(v, this.typeArguments) || visit(v, this.template)
+        return visit(v!!, this.tag) || visit(v!!, this.questionDotToken) || visitNodeList(v, this.typeArguments) || visit(v!!, this.template)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TaggedTemplateExpression.VisitEachChild 677e2598
@@ -1553,7 +1553,7 @@ class ParenthesizedExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ParenthesizedExpression.ForEachChild 6ff68ebe
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ParenthesizedExpression.VisitEachChild ea119c3e
@@ -1868,7 +1868,7 @@ class SpreadAssignment(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SpreadAssignment.ForEachChild ae835bb9
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SpreadAssignment.VisitEachChild aca4f1c1
@@ -1972,7 +1972,7 @@ class PropertyAssignment(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertyAssignment.ForEachChild 3ce1461e
     override fun forEachChild(v: Visitor): Boolean {
-        return visitModifiers(v, this.namedMemberBase.modifiersBase.modifiers) || visit(v, this.namedMemberBase.name) || visit(v, this.namedMemberBase.postfixToken) || visit(v, this.type) || visit(v, this.initializer)
+        return visitModifiers(v, this.namedMemberBase.modifiersBase.modifiers) || visit(v!!, this.namedMemberBase.name) || visit(v!!, this.namedMemberBase.postfixToken) || visit(v!!, this.type) || visit(v!!, this.initializer)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertyAssignment.VisitEachChild 783786dd
@@ -2085,7 +2085,7 @@ class ShorthandPropertyAssignment(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ShorthandPropertyAssignment.ForEachChild ee80d453
     override fun forEachChild(v: Visitor): Boolean {
-        return visitModifiers(v, this.namedMemberBase.modifiersBase.modifiers) || visit(v, this.namedMemberBase.name) || visit(v, this.namedMemberBase.postfixToken) || visit(v, this.type) || visit(v, this.equalsToken) || visit(v, this.objectAssignmentInitializer)
+        return visitModifiers(v, this.namedMemberBase.modifiersBase.modifiers) || visit(v!!, this.namedMemberBase.name) || visit(v!!, this.namedMemberBase.postfixToken) || visit(v!!, this.type) || visit(v!!, this.equalsToken) || visit(v!!, this.objectAssignmentInitializer)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ShorthandPropertyAssignment.VisitEachChild b3f52fc8
@@ -2184,7 +2184,7 @@ class DeleteExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.DeleteExpression.ForEachChild f583a227
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.DeleteExpression.VisitEachChild 28484c81
@@ -2280,7 +2280,7 @@ class TypeOfExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeOfExpression.ForEachChild f74f600d
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeOfExpression.VisitEachChild 5764410f
@@ -2376,7 +2376,7 @@ class VoidExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.VoidExpression.ForEachChild c6eb3cc5
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.VoidExpression.VisitEachChild 0b4441e2
@@ -2477,7 +2477,7 @@ class AwaitExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.AwaitExpression.ForEachChild 98a9f28c
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.AwaitExpression.VisitEachChild b4d1650e
@@ -2580,7 +2580,7 @@ class TypeAssertion(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeAssertion.ForEachChild 334a91a1
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type) || visit(v, this.expression)
+        return visit(v!!, this.type) || visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeAssertion.VisitEachChild 46c2b874
@@ -2941,7 +2941,7 @@ class ConditionalTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConditionalTypeNode.ForEachChild 91d8cf0a
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.checkType) || visit(v, this.extendsType) || visit(v, this.trueType) || visit(v, this.falseType)
+        return visit(v!!, this.checkType) || visit(v!!, this.extendsType) || visit(v!!, this.trueType) || visit(v!!, this.falseType)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConditionalTypeNode.VisitEachChild 7a7db191
@@ -3039,7 +3039,7 @@ class TypeOperatorNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeOperatorNode.ForEachChild 9193806b
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeOperatorNode.VisitEachChild c5e3bf43
@@ -3133,7 +3133,7 @@ class InferTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.InferTypeNode.ForEachChild d7b556e4
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.typeParameter)
+        return visit(v!!, this.typeParameter)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.InferTypeNode.VisitEachChild 97d692c6
@@ -3226,7 +3226,7 @@ class ArrayTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ArrayTypeNode.ForEachChild 04164c14
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.elementType)
+        return visit(v!!, this.elementType)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ArrayTypeNode.VisitEachChild ca5480ea
@@ -3321,7 +3321,7 @@ class IndexedAccessTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.IndexedAccessTypeNode.ForEachChild f92a0bd4
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.objectType) || visit(v, this.indexType)
+        return visit(v!!, this.objectType) || visit(v!!, this.indexType)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.IndexedAccessTypeNode.VisitEachChild 6b11d8c9
@@ -3415,7 +3415,7 @@ class TypeReferenceNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeReferenceNode.ForEachChild 17394631
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.typeName) || visitNodeList(v, this.nodeWithTypeArgumentsBase.typeArguments)
+        return visit(v!!, this.typeName) || visitNodeList(v, this.nodeWithTypeArgumentsBase.typeArguments)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeReferenceNode.VisitEachChild b83f2588
@@ -3518,7 +3518,7 @@ class ExpressionWithTypeArguments(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExpressionWithTypeArguments.ForEachChild 8ec9d676
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression) || visitNodeList(v, this.typeArguments)
+        return visit(v!!, this.expression) || visitNodeList(v, this.typeArguments)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExpressionWithTypeArguments.VisitEachChild c6084aab
@@ -3610,7 +3610,7 @@ class LiteralTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.LiteralTypeNode.ForEachChild 543be46c
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.literal)
+        return visit(v!!, this.literal)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.LiteralTypeNode.VisitEachChild 6d1056da
@@ -3783,7 +3783,7 @@ class TypePredicateNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypePredicateNode.ForEachChild 2d632cfe
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.assertsModifier) || visit(v, this.parameterName) || visit(v, this.type)
+        return visit(v!!, this.assertsModifier) || visit(v!!, this.parameterName) || visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypePredicateNode.VisitEachChild c27df3f9
@@ -3882,7 +3882,7 @@ class ImportAttribute(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ImportAttribute.ForEachChild cbc07c6d
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.name) || visit(v, this.value)
+        return visit(v!!, this.name) || visit(v!!, this.value)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ImportAttribute.VisitEachChild 91ae9201
@@ -4086,7 +4086,7 @@ class TypeQueryNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeQueryNode.ForEachChild 6a5991cb
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.exprName) || visitNodeList(v, this.nodeWithTypeArgumentsBase.typeArguments)
+        return visit(v!!, this.exprName) || visitNodeList(v, this.nodeWithTypeArgumentsBase.typeArguments)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeQueryNode.VisitEachChild 2b476bbf
@@ -4190,7 +4190,7 @@ class MappedTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.MappedTypeNode.ForEachChild cdc31546
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.readonlyToken) || visit(v, this.typeParameter) || visit(v, this.nameType) || visit(v, this.questionToken) || visit(v, this.type) || visitNodeList(v, this.members)
+        return visit(v!!, this.readonlyToken) || visit(v!!, this.typeParameter) || visit(v!!, this.nameType) || visit(v!!, this.questionToken) || visit(v!!, this.type) || visitNodeList(v, this.members)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.MappedTypeNode.VisitEachChild 5894816e
@@ -4484,7 +4484,7 @@ class NamedTupleMember(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamedTupleMember.ForEachChild 9be5dd1c
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.dotDotDotToken) || visit(v, this.name) || visit(v, this.questionToken) || visit(v, this.type)
+        return visit(v!!, this.dotDotDotToken) || visit(v!!, this.name) || visit(v!!, this.questionToken) || visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamedTupleMember.VisitEachChild db20c00c
@@ -4583,7 +4583,7 @@ class OptionalTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.OptionalTypeNode.ForEachChild 12b7a1e6
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.OptionalTypeNode.VisitEachChild 64281a23
@@ -4676,7 +4676,7 @@ class RestTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.RestTypeNode.ForEachChild 148a5c0a
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.RestTypeNode.VisitEachChild 91fbf5ff
@@ -4769,7 +4769,7 @@ class ParenthesizedTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ParenthesizedTypeNode.ForEachChild 0f929203
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ParenthesizedTypeNode.VisitEachChild 914a2859
@@ -4858,7 +4858,7 @@ class FunctionTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionTypeNode.ForEachChild 263402e3
     override fun forEachChild(v: Visitor): Boolean {
-        return visitNodeList(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters) || visitNodeList(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.parameters) || visit(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.type)
+        return visitNodeList(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters) || visitNodeList(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.parameters) || visit(v!!, this.functionOrConstructorTypeNodeBase.functionLikeBase.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionTypeNode.VisitEachChild 405dd925
@@ -4949,7 +4949,7 @@ class ConstructorTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConstructorTypeNode.ForEachChild 8bc5990d
     override fun forEachChild(v: Visitor): Boolean {
-        return visitModifiers(v, this.functionOrConstructorTypeNodeBase.modifiersBase.modifiers) || visitNodeList(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters) || visitNodeList(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.parameters) || visit(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.type)
+        return visitModifiers(v, this.functionOrConstructorTypeNodeBase.modifiersBase.modifiers) || visitNodeList(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters) || visitNodeList(v, this.functionOrConstructorTypeNodeBase.functionLikeBase.parameters) || visit(v!!, this.functionOrConstructorTypeNodeBase.functionLikeBase.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConstructorTypeNode.VisitEachChild 8118836b
@@ -5311,7 +5311,7 @@ class TemplateLiteralTypeNode(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TemplateLiteralTypeNode.ForEachChild 012360fd
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.head) || visitNodeList(v, this.templateSpans)
+        return visit(v!!, this.head) || visitNodeList(v, this.templateSpans)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TemplateLiteralTypeNode.VisitEachChild a1f51352
@@ -5407,7 +5407,7 @@ class TemplateLiteralTypeSpan(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TemplateLiteralTypeSpan.ForEachChild b4e883fa
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type) || visit(v, this.literal)
+        return visit(v!!, this.type) || visit(v!!, this.literal)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TemplateLiteralTypeSpan.VisitEachChild 8b031a66
@@ -5505,7 +5505,7 @@ class SyntheticExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SyntheticExpression.ForEachChild a24cf1d7
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.tupleNameSource)
+        return visit(v!!, this.tupleNameSource)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SyntheticExpression.VisitEachChild 953b9e49
@@ -5600,7 +5600,7 @@ class PartiallyEmittedExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PartiallyEmittedExpression.ForEachChild e62c7fb1
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.PartiallyEmittedExpression.VisitEachChild 8c46f356
@@ -5707,7 +5707,7 @@ class JsxElement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxElement.ForEachChild dd1d9e22
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.openingElement) || visitNodeList(v, this.children) || visit(v, this.closingElement)
+        return visit(v!!, this.openingElement) || visitNodeList(v, this.children) || visit(v!!, this.closingElement)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxElement.VisitEachChild 98aae62f
@@ -5909,7 +5909,7 @@ class JsxNamespacedName(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxNamespacedName.ForEachChild e83cdeb4
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.namespace) || visit(v, this.name)
+        return visit(v!!, this.namespace) || visit(v!!, this.name)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxNamespacedName.VisitEachChild 2dc13af7
@@ -6015,7 +6015,7 @@ class JsxOpeningElement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxOpeningElement.ForEachChild 3ce0b6a7
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.tagName) || visitNodeList(v, this.typeArguments) || visit(v, this.attributes)
+        return visit(v!!, this.tagName) || visitNodeList(v, this.typeArguments) || visit(v!!, this.attributes)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxOpeningElement.VisitEachChild 73c5bee3
@@ -6119,7 +6119,7 @@ class JsxSelfClosingElement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxSelfClosingElement.ForEachChild 83ec98d0
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.tagName) || visitNodeList(v, this.typeArguments) || visit(v, this.attributes)
+        return visit(v!!, this.tagName) || visitNodeList(v, this.typeArguments) || visit(v!!, this.attributes)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxSelfClosingElement.VisitEachChild e3e378df
@@ -6223,7 +6223,7 @@ class JsxFragment(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxFragment.ForEachChild 412a8622
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.openingFragment) || visitNodeList(v, this.children) || visit(v, this.closingFragment)
+        return visit(v!!, this.openingFragment) || visitNodeList(v, this.children) || visit(v!!, this.closingFragment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxFragment.VisitEachChild 8d43f2be
@@ -6485,7 +6485,7 @@ class JsxAttribute(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxAttribute.ForEachChild 093f40bc
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.name) || visit(v, this.initializer)
+        return visit(v!!, this.name) || visit(v!!, this.initializer)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxAttribute.VisitEachChild 5bb0d089
@@ -6587,7 +6587,7 @@ class JsxSpreadAttribute(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxSpreadAttribute.ForEachChild d0802ecf
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.expression)
+        return visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxSpreadAttribute.VisitEachChild 9948f516
@@ -6683,7 +6683,7 @@ class JsxClosingElement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxClosingElement.ForEachChild 4f8a8896
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.tagName)
+        return visit(v!!, this.tagName)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxClosingElement.VisitEachChild 6f17de58
@@ -6781,7 +6781,7 @@ class JsxExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxExpression.ForEachChild 4b3684f8
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.dotDotDotToken) || visit(v, this.expression)
+        return visit(v!!, this.dotDotDotToken) || visit(v!!, this.expression)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JsxExpression.VisitEachChild efa680b6
@@ -6955,7 +6955,7 @@ class SyntaxList(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SyntaxList.ForEachChild e306627b
     override fun forEachChild(v: Visitor): Boolean {
-        return visitNodes(v, this.children)
+        return visitNodes(v!!, this.children)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SyntaxList.VisitEachChild 02a23678
@@ -7147,7 +7147,7 @@ class JSDocTypeExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocTypeExpression.ForEachChild ae531347
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocTypeExpression.VisitEachChild 5ae47893
@@ -7240,7 +7240,7 @@ class JSDocNonNullableType(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocNonNullableType.ForEachChild f7a783c6
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocNonNullableType.VisitEachChild 58abbff0
@@ -7333,7 +7333,7 @@ class JSDocNullableType(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocNullableType.ForEachChild 14e2ef3a
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocNullableType.VisitEachChild 9c2325f1
@@ -7502,7 +7502,7 @@ class JSDocVariadicType(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocVariadicType.ForEachChild 0c0fa14c
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocVariadicType.VisitEachChild 7406fe07
@@ -7595,7 +7595,7 @@ class JSDocOptionalType(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocOptionalType.ForEachChild c7766f91
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.type)
+        return visit(v!!, this.type)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocOptionalType.VisitEachChild 84b55f46
@@ -7688,7 +7688,7 @@ class JSDocTypeTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocTypeTag.ForEachChild 98fa3f26
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocTypeTag.VisitEachChild 1bfd17eb
@@ -7781,7 +7781,7 @@ class JSDocUnknownTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocUnknownTag.ForEachChild 387e4e65
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocUnknownTag.VisitEachChild 27f2d486
@@ -7877,7 +7877,7 @@ class JSDocTemplateTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocTemplateTag.ForEachChild 36b127aa
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.constraint) || visitNodeList(v, this.typeParameters) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.constraint) || visitNodeList(v, this.typeParameters) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocTemplateTag.VisitEachChild b4c4506c
@@ -7973,7 +7973,7 @@ class JSDocReturnTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocReturnTag.ForEachChild 152338b4
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocReturnTag.VisitEachChild 023d2b3c
@@ -8066,7 +8066,7 @@ class JSDocPublicTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocPublicTag.ForEachChild f72bdeec
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocPublicTag.VisitEachChild f6ddb4e0
@@ -8158,7 +8158,7 @@ class JSDocPrivateTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocPrivateTag.ForEachChild 9ad315c6
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocPrivateTag.VisitEachChild 8803f914
@@ -8250,7 +8250,7 @@ class JSDocProtectedTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocProtectedTag.ForEachChild 231e430e
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocProtectedTag.VisitEachChild 1a8e5192
@@ -8342,7 +8342,7 @@ class JSDocReadonlyTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocReadonlyTag.ForEachChild c0ef26f0
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocReadonlyTag.VisitEachChild febd30c7
@@ -8434,7 +8434,7 @@ class JSDocOverrideTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocOverrideTag.ForEachChild 08ef1ba4
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocOverrideTag.VisitEachChild 1dda1006
@@ -8526,7 +8526,7 @@ class JSDocDeprecatedTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocDeprecatedTag.ForEachChild 42159e07
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocDeprecatedTag.VisitEachChild 95c7438a
@@ -8620,7 +8620,7 @@ class JSDocSeeTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocSeeTag.ForEachChild 27753a99
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.nameExpression) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.nameExpression) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocSeeTag.VisitEachChild 5afa6419
@@ -8715,7 +8715,7 @@ class JSDocImplementsTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocImplementsTag.ForEachChild 9e1ecf94
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.className) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.className) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocImplementsTag.VisitEachChild 71370e93
@@ -8810,7 +8810,7 @@ class JSDocAugmentsTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocAugmentsTag.ForEachChild 2e2656f2
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.className) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.className) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocAugmentsTag.VisitEachChild ea9f972b
@@ -8905,7 +8905,7 @@ class JSDocSatisfiesTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocSatisfiesTag.ForEachChild 546ea269
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocSatisfiesTag.VisitEachChild 08e97bd5
@@ -9000,7 +9000,7 @@ class JSDocThrowsTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocThrowsTag.ForEachChild 27c7fb84
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocThrowsTag.VisitEachChild 4082c39f
@@ -9095,7 +9095,7 @@ class JSDocThisTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocThisTag.ForEachChild 15124baf
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.typeExpression) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocThisTag.VisitEachChild 9be2b5e3
@@ -9194,7 +9194,7 @@ class JSDocImportTag(
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocImportTag.ForEachChild 810aa643
     override fun forEachChild(v: Visitor): Boolean {
-        return visit(v, this.jsDocTagBase.tagName) || visit(v, this.importClause) || visit(v, this.moduleSpecifier) || visit(v, this.attributes) || visitNodeList(v, this.jsDocTagBase.comment)
+        return visit(v!!, this.jsDocTagBase.tagName) || visit(v!!, this.importClause) || visit(v!!, this.moduleSpecifier) || visit(v!!, this.attributes) || visitNodeList(v, this.jsDocTagBase.comment)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.JSDocImportTag.VisitEachChild ab614340

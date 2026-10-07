@@ -423,14 +423,14 @@ fun Scanner?.charAndSize(): Tuple2<Int, Int> {
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.scanASCIIWhile e705e82f
-fun Scanner?.scanASCIIWhile(pred: ((Int) -> Boolean)?) {
+inline fun Scanner?.scanASCIIWhile(pred: ((Int) -> Boolean)) {
     val text_b0: String = this!!.text
     val text_o1: Int = this!!.scannerState.pos
     val text_n2: Int = goStrView(text_b0, text_o1, this!!.end)
     var i: Int = 0
     l0@ while (i < text_n2) {
         val b: Int = goViewByte(text_b0, text_o1, text_n2, i)
-        if (b >= 128 || !pred!!(b)) {
+        if (b >= 128 || !pred(b)) {
             break@l0
         }
         i++

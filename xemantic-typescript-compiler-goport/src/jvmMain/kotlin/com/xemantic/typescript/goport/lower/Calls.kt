@@ -81,6 +81,23 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         }
     }
 
+    /**
+     * A call to an `inline` ported function ([Program.inlineFuncs]): its func-typed parameters are
+     * non-null, so a func VALUE argument (a variable, a method value) is asserted at the call —
+     * a function literal is passed as is and Kotlin inlines it. [shift] skips a method
+     * expression's receiver argument.
+     */
+    fun inlineArgs(e: Node, key: String?, codes: List<String>, shift: Int = 0): List<String> {
+        val idx = key?.let { prog.inlineFuncs[it] } ?: return codes
+        val argNodes = e.list("args")
+        return codes.mapIndexed { i, code ->
+            val node = argNodes.getOrNull(i)
+            if ((i - shift) in idx && node != null && node.k != "FuncLit" && node.str("m") != "nil" && !code.startsWith("fun(") && !code.startsWith("{")) {
+                if (SIMPLE_NAME.matches(code)) "$code!!" else "${Ex(code, 0).at(PRIMARY)}!!"
+            } else code
+        }
+    }
+
     private fun args0(e: Node, sig: SignatureType, shimVararg: Boolean): List<String> {
         val args = e.list("args")
         if (e.bool("tupleArg")) refuse("tuple-arg")
@@ -156,7 +173,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val shim = o.str("pkg") !in prog.ported
         special(o, e)?.let { return it }
         val ref = funcRef(o)
-        return Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})")
+        return Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + inlineArgs(e, o.str("key"), args(e, sig, shim && sig.variadic, shim))).joinToString(", ")})")
     }
 
     /** Lowering rules for specific shim calls (docs/goport-runtime.md § 9). */
@@ -292,7 +309,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val sig = sigOf(e)
         val mo = pc.obj(sel.reqObj("sel").int("obj")!!)
         val shim = mo.str("pkg") != null && mo.str("pkg") !in prog.ported
-        return Ex.primary("${recv.at(PRIMARY)}.$name(${args(e, sig, shim && sig.variadic, shim).joinToString(", ")})")
+        return Ex.primary("${recv.at(PRIMARY)}.$name(${inlineArgs(e, mo.str("key"), args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})")
     }
 
     fun methodExprCall(e: Node): Ex {
@@ -300,7 +317,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val mo = pc.obj(sel.reqObj("sel").int("obj")!!)
         val name = prog.methodName(mo.str("key") ?: "", mo.str("name")!!)
         val sig = sigOf(e)
-        val a = args(e, sig, false)
+        val a = inlineArgs(e, mo.str("key"), args(e, sig, false), shift = 1)
         val recvT = sig.params[0].t
         val r = if (tm.nullable(recvT) && mo.str("key") !in prog.extensionMethods) "${a[0]}!!" else a[0]
         return Ex.primary("${Ex(r, if (r.endsWith("!!")) PRIMARY else 0).code}.$name(${a.drop(1).joinToString(", ")})")
@@ -312,8 +329,12 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val a = args(e, sig, false).joinToString(", ")
         val callee = raw(f)
         if (f.k == "FuncLit" || (f.k == "ParenExpr" && f.reqObj("x").k == "FuncLit")) return Ex.primary("(${callee.code})($a)")
+        // A non-null func-typed parameter of an inline function ([Program.inlineFuncs]): no `!!`.
+        if (f.k == "Ident" && f.int("obj") in fn.nonNullFnParams) return Ex.primary("${callee.at(PRIMARY)}($a)")
         return Ex.primary("${callee.at(PRIMARY)}!!($a)")
     }
+
+    private val SIMPLE_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*")
 
     /** A `strings` function with window variants `<name>At` (suffix) and, when [inOk], `<name>In`. */
     class Fusion(val pkg: String, val name: String, val inOk: Boolean)

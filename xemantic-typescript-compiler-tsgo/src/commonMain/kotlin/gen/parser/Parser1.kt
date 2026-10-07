@@ -840,9 +840,9 @@ fun Parser?.rewind(state: ParserState) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.lookAhead 370338f6
-fun Parser?.lookAhead(callback: ((Parser?) -> Boolean)?): Boolean {
+inline fun Parser?.lookAhead(callback: ((Parser?) -> Boolean)): Boolean {
     val state: ParserState = this.mark()
-    val result: Boolean = callback!!(this)
+    val result: Boolean = callback(this)
     this.rewind(state.goCopy())
     return result
 }

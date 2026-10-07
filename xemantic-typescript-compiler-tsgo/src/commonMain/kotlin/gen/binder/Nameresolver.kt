@@ -400,7 +400,7 @@ fun NameResolver?.useOuterVariableScopeInParameter(result: Symbol?, location: No
                 declarationRequiresScopeChange = this!!.getRequiresScopeChangeCache!!(functionLocation)
             }
             if (declarationRequiresScopeChange.value == 0) {
-                declarationRequiresScopeChange = com.xemantic.typescript.tsgo.core.ifElse<Tristate>(Tristate.ELEM, com.xemantic.typescript.tsgo.core.some<Node?>(GoElem.ref<Node?>(), functionLocation.parameters(), run { val r0 = this; fun(p0: Node?): Boolean = r0.requiresScopeChange(p0) }), Tristate(2), Tristate(1))
+                declarationRequiresScopeChange = com.xemantic.typescript.tsgo.core.ifElse<Tristate>(Tristate.ELEM, com.xemantic.typescript.tsgo.core.some<Node?>(GoElem.ref<Node?>(), functionLocation.parameters(), (run { val r0 = this; fun(p0: Node?): Boolean = r0.requiresScopeChange(p0) })!!), Tristate(2), Tristate(1))
                 if (this!!.setRequiresScopeChangeCache != null) {
                     this!!.setRequiresScopeChangeCache!!(functionLocation, declarationRequiresScopeChange)
                 }

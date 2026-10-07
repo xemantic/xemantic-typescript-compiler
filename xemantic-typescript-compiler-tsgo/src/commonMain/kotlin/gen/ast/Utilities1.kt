@@ -913,10 +913,10 @@ fun setImportsOfSourceFile(node: SourceFile?, imports: GoSlice<Node?>) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.FindAncestor 9f9b7e50
-fun findAncestor(node_0: Node?, callback: ((Node?) -> Boolean)?): Node? {
+inline fun findAncestor(node_0: Node?, callback: ((Node?) -> Boolean)): Node? {
     var node: Node? = node_0
     l0@ while (node != null) {
-        if (callback!!(node)) {
+        if (callback(node)) {
             return node
         }
         node = node!!.parent
@@ -965,10 +965,10 @@ fun toFindAncestorResult(b: Boolean): FindAncestorResult {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.FindAncestorOrQuit 2978672a
-fun findAncestorOrQuit(node_0: Node?, callback: ((Node?) -> FindAncestorResult)?): Node? {
+inline fun findAncestorOrQuit(node_0: Node?, callback: ((Node?) -> FindAncestorResult)): Node? {
     var node: Node? = node_0
     l0@ while (node != null) {
-        when (callback!!(node).value) {
+        when (callback(node).value) {
             2 -> {
                 return null
             }
@@ -3220,7 +3220,7 @@ fun isParameterPropertyModifier(kind: Kind): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.ForEachChildAndJSDoc c177ad03
 fun forEachChildAndJSDoc(node: Node?, sourceFile: SourceFile?, v: Visitor): Boolean {
-    if (visitNodes(v, node.jsDoc(sourceFile))) {
+    if (visitNodes(v!!, node.jsDoc(sourceFile))) {
         return true
     }
     return node.forEachChild(v)

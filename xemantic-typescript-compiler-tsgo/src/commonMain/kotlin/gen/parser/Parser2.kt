@@ -3113,10 +3113,10 @@ fun Parser?.setContextFlags(flags: NodeFlags, value_1: Boolean) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.doInContext cc5e2e1f
-fun <T> doInContext(goElem_T: GoElem<T>, p: Parser?, flags: NodeFlags, value_1: Boolean, f: ((Parser?) -> T)?): T {
+inline fun <T> doInContext(goElem_T: GoElem<T>, p: Parser?, flags: NodeFlags, value_1: Boolean, f: ((Parser?) -> T)): T {
     val saveContextFlags: NodeFlags = p!!.contextFlags
     p.setContextFlags(flags, value_1)
-    val result: T = f!!(p)
+    val result: T = f(p)
     p!!.contextFlags = saveContextFlags
     return result
 }

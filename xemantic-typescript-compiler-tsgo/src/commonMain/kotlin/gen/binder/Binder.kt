@@ -2037,12 +2037,12 @@ fun Binder?.setContinueTarget(node_0: Node?, target: FlowNode?): FlowNode? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.doWithConditionalBranches a6f55195
-fun Binder?.doWithConditionalBranches(action: ((Binder?, Node?) -> Boolean)?, value_1: Node?, trueTarget: FlowNode?, falseTarget: FlowNode?) {
+inline fun Binder?.doWithConditionalBranches(action: ((Binder?, Node?) -> Boolean), value_1: Node?, trueTarget: FlowNode?, falseTarget: FlowNode?) {
     val savedTrueTarget: FlowNode? = this!!.currentTrueTarget
     val savedFalseTarget: FlowNode? = this!!.currentFalseTarget
     this!!.currentTrueTarget = trueTarget
     this!!.currentFalseTarget = falseTarget
-    action!!(this, value_1)
+    action(this, value_1)
     this!!.currentTrueTarget = savedTrueTarget
     this!!.currentFalseTarget = savedFalseTarget
 }
@@ -2236,13 +2236,13 @@ fun Binder?.bindContinueStatement(node: Node?) {
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.bindBreakOrContinueStatement ceb97ff7
-fun Binder?.bindBreakOrContinueStatement(label: Node?, currentTarget: FlowNode?, getTarget: ((ActiveLabel?) -> FlowNode?)?) {
+inline fun Binder?.bindBreakOrContinueStatement(label: Node?, currentTarget: FlowNode?, getTarget: ((ActiveLabel?) -> FlowNode?)) {
     this.bind(label)
     if (label != null) {
         val activeLabel: ActiveLabel? = this.findActiveLabel(label.text())
         if (activeLabel != null) {
             activeLabel!!.referenced = true
-            this.bindBreakOrContinueFlow(getTarget!!(activeLabel))
+            this.bindBreakOrContinueFlow(getTarget(activeLabel))
         }
     } else {
         this.bindBreakOrContinueFlow(currentTarget)

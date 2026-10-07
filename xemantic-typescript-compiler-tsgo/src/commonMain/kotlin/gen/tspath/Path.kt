@@ -742,7 +742,7 @@ fun getAnyExtensionFromPathWorker(path: String, extensions: GoSlice<String>, str
     val s0 = extensions
     l0@ for (i1 in 0 until s0.len) {
         val extension: String = s0[i1]
-        val result: String = tryGetExtensionFromPath(path, extension, stringEqualityComparer)
+        val result: String = tryGetExtensionFromPath(path, extension, stringEqualityComparer!!)
         if (result != "") {
             return result
         }
@@ -751,14 +751,14 @@ fun getAnyExtensionFromPathWorker(path: String, extensions: GoSlice<String>, str
 }
 
 // go: github.com/microsoft/typescript-go/internal/tspath.tryGetExtensionFromPath 488385a7
-fun tryGetExtensionFromPath(path: String, extension_0: String, stringEqualityComparer: ((String, String) -> Boolean)?): String {
+inline fun tryGetExtensionFromPath(path: String, extension_0: String, stringEqualityComparer: ((String, String) -> Boolean)): String {
     var extension: String = extension_0
     if (!com.xemantic.typescript.tsgo.go.strings.hasPrefix(extension, ".")) {
         extension = "." + extension
     }
     if (path.length >= extension.length && path[path.length - extension.length].code == 46) {
         val pathExtension: String = path.substring(path.length - extension.length)
-        if (stringEqualityComparer!!(pathExtension, extension)) {
+        if (stringEqualityComparer(pathExtension, extension)) {
             return pathExtension
         }
     }

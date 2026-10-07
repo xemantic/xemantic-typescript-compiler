@@ -164,6 +164,28 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   `range` already did). Every generated `GoMap.lookup` call is gone. Pins: `MapProbeTest`,
   `LoweringRulesTest`.
 
+- **Inline func-typed parameters** (`Program.computeInlineFuncs`, `Decls.funcDecl`, `Calls.inlineArgs`,
+  `Calls.dynamicCall`). A func-typed parameter is a `Function1` called through `invoke(Object)` —
+  boxed `Int`, `!!`, and megamorphic when one call site sees several lambdas (`scanASCIIWhile`:
+  six predicates). A ported function is emitted `inline` when its body is at most
+  `INLINE_MAX_LINES` = **15** Go lines (the body is copied into every caller, and the JIT's
+  8,000-bytecode limit counts the copies — `huge_methods.py` is the gate; 15 admits the
+  `core.Map`/`Filter`/`Find` family, `visit`/`visitNodes`, `lookAhead` and `scanASCIIWhile`, and
+  keeps `parseList`-sized bodies out); it is top-level or an EXTENSION method (an interface member
+  cannot be inline); every func-typed parameter is only ever CALLED (never nil-tested, stored,
+  returned, reassigned, address-taken or passed on); the body has no function literal (Kotlin
+  refuses a closure over an inline parameter and local functions in an inline body), no `defer`,
+  no `go`, no range over a function iterator; it does not reference itself; it has no hand
+  override; and no call site in the run passes `nil` for such a parameter. Its func-typed
+  parameters are declared NON-null with the UNDERLYING signature (a named func type is a nullable
+  typealias — `Visitor`), called without `!!`; a caller passing a func VALUE asserts it (`v!!`), a
+  function literal is passed as is (Kotlin inlines anonymous functions, and a `return` in one is
+  local, as in Go). A body that hoists private helpers keeps the non-null parameters but not
+  `inline` (a public inline function cannot reference a private one). First run: **32**
+  functions, every report lists them. Measured effect on the parse bench: within noise (§ perf
+  progress table) — the `Function1` dispatch was not the cost of `scanASCIIWhile`'s 15.5%; the
+  per-character loop is. Pin: `LoweringRulesTest`.
+
 Pins: `-goport/src/jvmTest/.../LoweringRulesTest.kt` (naming, byte-string literals, constant edges);
 the end-to-end gates are `-tsgo/src/jvmTest/kotlin/OracleParityTest.kt` (corpus, opt-in) and
 `TsgoPinTest.kt` (always on).

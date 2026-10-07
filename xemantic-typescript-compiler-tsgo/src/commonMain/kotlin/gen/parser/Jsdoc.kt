@@ -1131,8 +1131,8 @@ fun Parser?.parsePropertyAccessEntityNameExpression(): Node? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseSimpleTag d76afe49
-fun Parser?.parseSimpleTag(start: Int, createTag: ((Node?, NodeList?) -> Node?)?, tagName: Node?, margin: Int, indentText: String): Node? {
-    return this.finishNode(createTag!!(tagName, this.parseTrailingTagComments(start, this.nodePos(), margin, indentText)), start)
+inline fun Parser?.parseSimpleTag(start: Int, createTag: ((Node?, NodeList?) -> Node?), tagName: Node?, margin: Int, indentText: String): Node? {
+    return this.finishNode(createTag(tagName, this.parseTrailingTagComments(start, this.nodePos(), margin, indentText)), start)
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseThisTag ee85f94b

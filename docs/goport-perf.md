@@ -29,6 +29,8 @@ a quiet box before quoting the 1.50x as anything but "at the line".
 | HEAD as generated | 42,163 ms | 313.9 ms | 134x | core 3/3 | `3ce760c6e` |
 | **substring elimination** (window rule, § 2) | 338.5 ms (312.8–352.3, 11.7%) | 236.1 ms (224.5–243.6, 8.1%) | **1.43x** | core 4/4 (1.34–1.47) | `1c9db2fe5` |
 | **single-probe comma-ok map read** | 314.6 ms (306.1–323.1, 5.4%) | 248.8 ms (235.1–257.8, 9.1%) | **1.26x** | core 4/4 (1.23–1.34) | `73acaf4ea` |
+| **inline func-typed parameters** (§ 4 item 3), same-session BEFORE row | 311.6 ms (305.5–322.7, 5.5%) | 245.8 ms (241.0–266.4, 10.3%) | 1.27x | core 4/4 (1.26 / 1.33 / 1.16 / 1.27) | `163b0a743` (before) |
+| **inline func-typed parameters**, AFTER | 308.9 ms (291.5–319.6, 9.1%) | 236.4 ms (232.3–249.3, 7.2%) | 1.31x | core 4/4 (1.38 / 1.24 / 1.31 / 1.23) | this rule |
 
 **Gate status: MET by lowering rules alone** — 1.26x, every paired ratio under 1.5x (load 1.2–1.6,
 3 other JVMs on the box). § 4's items 3 (inline func-typed parameters) and 2 (flattening embedded
@@ -43,6 +45,21 @@ predicate — item 3), `GoSlice.load` 9.1% + `Arena.new` 9.8% ported-frame (item
 copies in `gen/` (34) are off the parse path except `parser.parseJSDocComment`'s
 `isJSDocLikeText(sourceText[start:])` — a ported callee, which needs a "window parameter" rule
 (an overload taking `(base, from, to)` for a callee whose string parameter is view-eligible).
+
+**Inline func-typed parameters — no measurable gain (2026-10-07).** The rule landed (32 functions
+inline, `scanASCIIWhile`'s `Function1` dispatch gone from the bytecode: `javap` of
+`scanIdentifier` names neither `Function1` nor `scanASCIIWhile`), but the tsgo arm moved
+311.6 → 308.9 ms, and a direct before/after ABBA of the tsgo arm alone (4 processes each) read
+before 317.2 / 355.0 / 373.7 / 333.0 vs after 305.4 / 318.6 / 381.1 / 333.4 — after faster 2/4,
+medians 344 vs 326 ms on a box whose load rose 1.4 → 2.2 during the run. Within noise, ≤ ~3%.
+Why: the profile re-attributed, it did not shrink — before, `scanASCIIWhile` 16.1% + `scan`
+7.8% + `scan$lambda` 1.7%; after, `scan` 14.2% + `scanIdentifier` 8.4%, and 8.4% of all samples
+are `String.charAt` called from the inlined identifier loop (`goViewByte` → `s[off + k].code`).
+The cost was the per-character loop over a `String` (Latin-1 coder check + bounds per char;
+JFR's counted-loop bias inflates it, CLAUDE.md), which C2 had already handled with the dispatch
+monomorphic per caller. The ratio's variation between the two batches (1.27x / 1.31x) is the
+CORE arm (245.8 vs 236.4 ms), not the port. Next lever there is the representation (a
+`ByteArray` source text, or a 128-entry predicate table per call site), not the call.
 
 ## 1. Setup
 

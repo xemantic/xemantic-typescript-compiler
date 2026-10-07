@@ -56,6 +56,13 @@ class Report {
         loweredDecls += qname
     }
 
+    /** Functions lowered `inline` (docs/goport-lowering.md § 3). */
+    val inlinedDecls = java.util.TreeSet<String>()
+
+    fun inlined(qname: String) {
+        inlinedDecls += qname
+    }
+
     val refusedSet = HashSet<String>()
 
     fun refused(p: IrPackage, qname: String, lines: Int, r: Refusal, stub: Boolean) {
@@ -103,6 +110,9 @@ class Report {
         val tt = tl + ts + to + tv
         appendLine(String.format("%-16s %8d %8d %8d %8d %8d %6.1f%%", "TOTAL", tl, ts, to, tv, tt, if (tt == 0) 0.0 else 100.0 * tl / tt))
         appendLine("(Go lines of top-level declarations; a struct's lines include its methods.)")
+        appendLine()
+        appendLine("inline functions (${inlinedDecls.size}):")
+        inlinedDecls.forEach { appendLine("  ${it.removePrefix("github.com/microsoft/typescript-go/internal/")}") }
         appendLine()
         appendLine("refusals by reason (declarations / Go lines):")
         for ((r, n) in reasons.entries.sortedByDescending { reasonLines[it.key] }) {

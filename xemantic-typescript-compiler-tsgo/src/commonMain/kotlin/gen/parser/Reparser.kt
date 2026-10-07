@@ -420,7 +420,7 @@ fun Parser?.reparseJSDocTypeLiteral(t_0: Node?): Node? {
 fun Parser?.reparseJSDocComment(node: Node?, tag: Node?) {
     val comment: NodeList? = tag.commentList()
     if (comment != null) {
-        val newComment: NodeList? = this!!.factory.newNodeList(com.xemantic.typescript.tsgo.core.map<Node?, Node?>(GoElem.ref<Node?>(), GoElem.ref<Node?>(), comment!!.nodes, run { val r0 = this!!.factory; fun(p0: Node?): Node? = r0.deepCloneReparse(p0) }))
+        val newComment: NodeList? = this!!.factory.newNodeList(com.xemantic.typescript.tsgo.core.map<Node?, Node?>(GoElem.ref<Node?>(), GoElem.ref<Node?>(), comment!!.nodes, (run { val r0 = this!!.factory; fun(p0: Node?): Node? = r0.deepCloneReparse(p0) })!!))
         newComment!!.loc = comment!!.loc.goCopy()
         val propJSDoc: Node? = this!!.factory.newJSDoc(newComment, null)
         this.finishReparsedNode(propJSDoc, tag)

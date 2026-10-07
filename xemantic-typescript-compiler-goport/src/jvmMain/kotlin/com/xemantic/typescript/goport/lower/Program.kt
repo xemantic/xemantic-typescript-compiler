@@ -38,6 +38,9 @@ import com.xemantic.typescript.goport.naming.RenameTable
 import com.xemantic.typescript.goport.types.TypeTable
 
 /** Java.lang.Object members a generated member must not accidentally declare. */
+/** The largest Go body (lines) lowered `inline` ([Program.computeInlineFuncs]). */
+const val INLINE_MAX_LINES = 15
+
 val OBJECT_MEMBERS = setOf("toString", "hashCode", "equals", "getClass", "wait", "notify", "notifyAll", "finalize", "clone")
 
 /**
@@ -186,6 +189,119 @@ class Program(
                 }
             }
         }
+    }
+
+    // ---- inline functions (docs/goport-lowering.md § 3, "Inline func-typed parameters") ----
+
+    /**
+     * Ported functions lowered as Kotlin `inline`, by qualified name → the indices of their
+     * func-typed parameters (declared NON-null, so the inlined lambda is never a boxed `Function1`).
+     * Filled by [computeInlineFuncs]; empty until then.
+     */
+    val inlineFuncs = HashMap<String, Set<Int>>()
+
+    /**
+     * A function is lowered `inline` when ALL of these hold (each one is a Kotlin restriction or a
+     * soundness condition, not a heuristic):
+     * - it has a body of at most [INLINE_MAX_LINES] Go lines (the body is copied into every caller,
+     *   which the 8,000-bytecode JIT limit counts — `huge_methods.py` is the gate);
+     * - it is a top-level function or a method lowered as an EXTENSION (an interface member cannot
+     *   be `inline`), not `init`, not overridden by hand ([exclude]);
+     * - it has at least one func-typed parameter, and every such parameter is only ever CALLED
+     *   (never compared to nil, stored, returned, reassigned, address-taken or passed on);
+     * - its body has no function literal (a closure capturing an inline parameter is illegal, and
+     *   Kotlin refuses local functions in an inline body), no `defer` (lowered as a lambda), no
+     *   `go`, and no range over a function iterator (also a lambda);
+     * - it does not call itself (an inline function cannot be recursive);
+     * - no call site anywhere in the run passes `nil` for a func-typed parameter (the parameter is
+     *   non-null; Go panics only when it calls nil, which these bodies always do).
+     * A body that hoists private helpers is lowered without `inline` at emit time (a public inline
+     * function cannot reference a private one) but keeps its non-null parameters.
+     */
+    fun computeInlineFuncs(exclude: Set<String>) {
+        inlineFuncs.clear()
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (f in p.files) for (d in f.list("decls")) {
+                if (d.k != "FuncDecl") continue
+                val q = d.str("qname") ?: continue
+                val body = d.obj("body") ?: continue
+                if (d.str("name") == "init" || q in exclude) continue
+                if ((d.int("lines") ?: Int.MAX_VALUE) > INLINE_MAX_LINES) continue
+                if (d.obj("recv") != null && q !in extensionMethods) continue
+                val self = d.int("obj")
+                val fnParams = HashMap<Int, Int>() // obj → index
+                var i = 0
+                var ok = true
+                for (fld in d.obj("type")?.obj("params")?.list("list") ?: emptyList()) {
+                    val names = fld.list("names")
+                    val tid = fld.obj("type")?.int("t")
+                    val isFn = tid != null && tt.under(tid) is com.xemantic.typescript.goport.types.SignatureType
+                    if (names.isEmpty()) { if (isFn) ok = false; i++; continue }
+                    for (n in names) {
+                        if (isFn) {
+                            val id = n.int("obj")
+                            if (id == null || n.str("name") == "_" || p.obj(id).bool("mut") || p.obj(id).bool("addr")) ok = false
+                            else fnParams[id] = i
+                        }
+                        i++
+                    }
+                }
+                if (!ok || fnParams.isEmpty()) continue
+                val stack = ArrayList<Pair<Node, String>>()
+                fun scan(el: Any?, key: String) {
+                    if (!ok) return
+                    when (el) {
+                        is kotlinx.serialization.json.JsonObject -> {
+                            when (el.str("k")) {
+                                "FuncLit", "DeferStmt", "GoStmt" -> { ok = false; return }
+                                "RangeStmt" -> el.obj("x")?.int("t")?.let { if (tt.under(it) is com.xemantic.typescript.goport.types.SignatureType) { ok = false; return } }
+                                "Ident" -> {
+                                    val id = el.int("obj")
+                                    if (id != null && id in fnParams && !el.bool("def")) {
+                                        val (par, pk) = stack.lastOrNull() ?: (el to "")
+                                        if (!(par.str("k") == "CallExpr" && pk == "fun" && par.str("call") == "dynamic")) { ok = false; return }
+                                    }
+                                    if (self != null && id == self) { ok = false; return }
+                                }
+                            }
+                            for ((k2, v) in el) {
+                                stack += el to k2
+                                scan(v, k2)
+                                stack.removeAt(stack.size - 1)
+                            }
+                        }
+                        is List<*> -> for (v in el) scan(v, key)
+                        else -> {}
+                    }
+                }
+                scan(body, "")
+                if (ok) inlineFuncs[q] = fnParams.values.toSet()
+            }
+        }
+        if (inlineFuncs.isEmpty()) return
+        // No call site may pass nil for an inline parameter.
+        val dropped = HashSet<String>()
+        for (p in packages) for (f in p.files) walk(f) { n ->
+            if (n.str("k") == "CallExpr") {
+                val fe = n.obj("fun")
+                val ident = when (fe?.str("k")) {
+                    "Ident" -> fe
+                    "SelectorExpr" -> fe.obj("sel")
+                    "IndexExpr", "IndexListExpr", "ParenExpr" -> fe.obj("x")?.let { if (it.str("k") == "SelectorExpr") it.obj("sel") else it }
+                    else -> null
+                }
+                val key = ident?.int("obj")?.let { p.obj(it).str("key") }
+                val idx = key?.let { inlineFuncs[it] }
+                if (idx != null) {
+                    val shift = if (n.str("call") == "methodexpr") 1 else 0
+                    val args = n.list("args")
+                    if (n.bool("tupleArg") || idx.any { args.getOrNull(it + shift)?.str("m") == "nil" }) dropped += key
+                }
+            }
+            true
+        }
+        inlineFuncs.keys.removeAll(dropped)
     }
 
     // ---- names of package-level declarations (keyed by the Go qualified name / object key) ----

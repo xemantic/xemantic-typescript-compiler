@@ -241,7 +241,7 @@ fun propagateSubtreeFacts(child: Node?): SubtreeFacts {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.propagateNodeListSubtreeFacts c1618dee
-fun propagateNodeListSubtreeFacts(children: NodeList?, propagate: ((Node?) -> SubtreeFacts)?): SubtreeFacts {
+inline fun propagateNodeListSubtreeFacts(children: NodeList?, propagate: ((Node?) -> SubtreeFacts)): SubtreeFacts {
     if (children == null) {
         return SubtreeFactsNone
     }
@@ -249,7 +249,7 @@ fun propagateNodeListSubtreeFacts(children: NodeList?, propagate: ((Node?) -> Su
     val s0 = children!!.nodes
     l0@ for (i1 in 0 until s0.len) {
         val child: Node? = s0[i1]
-        facts = SubtreeFacts(facts.value or propagate!!(child).value)
+        facts = SubtreeFacts(facts.value or propagate(child).value)
     }
     return facts
 }

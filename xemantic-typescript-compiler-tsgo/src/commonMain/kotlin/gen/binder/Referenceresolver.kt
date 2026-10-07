@@ -118,7 +118,7 @@ class referenceResolver(
                 val isMatchingContainer: ((Node?) -> Boolean)? = fun(n: Node?): Boolean {
                     return (n!!.kind.value == 268 || n!!.kind.value == 267) && this.getSymbolOfDeclaration(n) === parentSymbol
                 }
-                return com.xemantic.typescript.tsgo.ast.findAncestor(node!!.parent, isMatchingContainer)
+                return com.xemantic.typescript.tsgo.ast.findAncestor(node!!.parent, isMatchingContainer!!)
             }
         }
         return null

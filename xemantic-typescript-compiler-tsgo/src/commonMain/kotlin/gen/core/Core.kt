@@ -44,17 +44,17 @@ fun applyDebugStackLimit() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Filter d6f2f463
-fun <T> filter(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): GoSlice<T> {
+inline fun <T> filter(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)): GoSlice<T> {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         var i: Int = i1
         var value_1: T = s0[i1]
-        if (!f!!(value_1)) {
+        if (!f(value_1)) {
             var result: GoSlice<T> = com.xemantic.typescript.tsgo.go.slices.clone<T>(slice.slice(0, i))
             i++
             l1@ while (i < slice.len) {
                 value_1 = slice[i]
-                if (f!!(value_1)) {
+                if (f(value_1)) {
                     result = result.append1(value_1)
                 }
                 i++
@@ -81,17 +81,17 @@ fun <T> filterSeq(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?):
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FilterIndex 6b099512
-fun <T> filterIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T, Int, GoSlice<T>) -> Boolean)?): GoSlice<T> {
+inline fun <T> filterIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T, Int, GoSlice<T>) -> Boolean)): GoSlice<T> {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         var i: Int = i1
         var value_1: T = s0[i1]
-        if (!f!!(value_1, i, slice)) {
+        if (!f(value_1, i, slice)) {
             var result: GoSlice<T> = com.xemantic.typescript.tsgo.go.slices.clone<T>(slice.slice(0, i))
             i++
             l1@ while (i < slice.len) {
                 value_1 = slice[i]
-                if (f!!(value_1, i, slice)) {
+                if (f(value_1, i, slice)) {
                     result = result.append1(value_1)
                 }
                 i++
@@ -103,7 +103,7 @@ fun <T> filterIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T, Int, GoSlice
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Map ba690cea
-fun <T, U> map(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> U)?): GoSlice<U> {
+inline fun <T, U> map(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> U)): GoSlice<U> {
     if (slice.isNil) {
         return goElem_U.nilSlice
     }
@@ -112,13 +112,13 @@ fun <T, U> map(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: (
     l0@ for (i1 in 0 until s0.len) {
         val i: Int = i1
         val value_1: T = s0[i1]
-        result[i] = f!!(value_1)
+        result[i] = f(value_1)
     }
     return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.TryMap 776e523f
-fun <T, U> tryMap(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> Tuple2<U, GoError?>)?): Tuple2<GoSlice<U>, GoError?> {
+inline fun <T, U> tryMap(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> Tuple2<U, GoError?>)): Tuple2<GoSlice<U>, GoError?> {
     if (slice.len == 0) {
         return Tuple2<GoSlice<U>, GoError?>(goElem_U.nilSlice, null)
     }
@@ -127,7 +127,7 @@ fun <T, U> tryMap(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f
     l0@ for (i1 in 0 until s0.len) {
         val i: Int = i1
         val value_1: T = s0[i1]
-        val t2 = f!!(value_1)
+        val t2 = f(value_1)
         val mapped: U = t2.first
         val err: GoError? = t2.second
         if (err != null) {
@@ -139,7 +139,7 @@ fun <T, U> tryMap(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.MapIndex e7314ed0
-fun <T, U> mapIndex(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T, Int) -> U)?): GoSlice<U> {
+inline fun <T, U> mapIndex(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T, Int) -> U)): GoSlice<U> {
     if (slice.isNil) {
         return goElem_U.nilSlice
     }
@@ -148,18 +148,18 @@ fun <T, U> mapIndex(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>,
     l0@ for (i1 in 0 until s0.len) {
         val i: Int = i1
         val value_1: T = s0[i1]
-        result[i] = f!!(value_1, i)
+        result[i] = f(value_1, i)
     }
     return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.MapNonNil 198aab90
-fun <T, U> mapNonNil(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> U)?): GoSlice<U> {
+inline fun <T, U> mapNonNil(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> U)): GoSlice<U> {
     var result: GoSlice<U> = goElem_U.nilSlice
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        val mapped: U = f!!(value_1)
+        val mapped: U = f(value_1)
         if (mapped != goElem_U.zeroValue()) {
             result = result.append1(mapped)
         }
@@ -168,12 +168,12 @@ fun <T, U> mapNonNil(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.MapFiltered 5f429eaa
-fun <T, U> mapFiltered(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> Tuple2<U, Boolean>)?): GoSlice<U> {
+inline fun <T, U> mapFiltered(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> Tuple2<U, Boolean>)): GoSlice<U> {
     var result: GoSlice<U> = goElem_U.nilSlice
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        val t2 = f!!(value_1)
+        val t2 = f(value_1)
         val mapped: U = t2.first
         val ok: Boolean = t2.second
         if (!ok) {
@@ -185,12 +185,12 @@ fun <T, U> mapFiltered(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FlatMap 64d4ff9a
-fun <T, U> flatMap(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> GoSlice<U>)?): GoSlice<U> {
+inline fun <T, U> flatMap(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> GoSlice<U>)): GoSlice<U> {
     var result: GoSlice<U> = goElem_U.nilSlice
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        val mapped: GoSlice<U> = f!!(value_1)
+        val mapped: GoSlice<U> = f(value_1)
         if (mapped.len != 0) {
             result = result.appendSlice(mapped)
         }
@@ -199,19 +199,19 @@ fun <T, U> flatMap(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, 
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.SameMap 2f3ee8be
-fun <T> sameMap(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> T)?): GoSlice<T> {
+inline fun <T> sameMap(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> T)): GoSlice<T> {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val i: Int = i1
         val value_1: T = s0[i1]
-        val mapped: T = f!!(value_1)
+        val mapped: T = f(value_1)
         if (mapped != value_1) {
             val result: GoSlice<T> = GoSlice.make(goElem_T, slice.len)
             goCopy(result, slice.slice(0, i))
             result[i] = mapped
             var j: Int = i + 1
             l1@ while (j < slice.len) {
-                result[j] = f!!(slice[j])
+                result[j] = f(slice[j])
                 j++
             }
             return result
@@ -221,19 +221,19 @@ fun <T> sameMap(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> T)?): GoSlice
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.SameMapIndex 2a7adfe9
-fun <T> sameMapIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T, Int) -> T)?): GoSlice<T> {
+inline fun <T> sameMapIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T, Int) -> T)): GoSlice<T> {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val i: Int = i1
         val value_1: T = s0[i1]
-        val mapped: T = f!!(value_1, i)
+        val mapped: T = f(value_1, i)
         if (mapped != value_1) {
             val result: GoSlice<T> = GoSlice.make(goElem_T, slice.len)
             goCopy(result, slice.slice(0, i))
             result[i] = mapped
             var j: Int = i + 1
             l1@ while (j < slice.len) {
-                result[j] = f!!(slice[j], j)
+                result[j] = f(slice[j], j)
                 j++
             }
             return result
@@ -251,11 +251,11 @@ fun <T> same(goElem_T: GoElem<T>, s1: GoSlice<T>, s2: GoSlice<T>): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Some be7491b3
-fun <T> some(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): Boolean {
+inline fun <T> some(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)): Boolean {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        if (f!!(value_1)) {
+        if (f(value_1)) {
             return true
         }
     }
@@ -263,11 +263,11 @@ fun <T> some(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): Bool
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Every bdb02d61
-fun <T> every(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): Boolean {
+inline fun <T> every(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)): Boolean {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        if (!f!!(value_1)) {
+        if (!f(value_1)) {
             return false
         }
     }
@@ -289,11 +289,11 @@ fun <T> or(goElem_T: GoElem<T>, funcs: GoSlice<((T) -> Boolean)?>): ((T) -> Bool
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Find 0a845d90
-fun <T> find(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): T {
+inline fun <T> find(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)): T {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        if (f!!(value_1)) {
+        if (f(value_1)) {
             return value_1
         }
     }
@@ -301,11 +301,11 @@ fun <T> find(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): T {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FindLast 1389b36e
-fun <T> findLast(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): T {
+inline fun <T> findLast(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)): T {
     var i: Int = slice.len - 1
     l0@ while (i >= 0) {
         val value_1: T = slice[i]
-        if (f!!(value_1)) {
+        if (f(value_1)) {
             return value_1
         }
         i--
@@ -314,12 +314,12 @@ fun <T> findLast(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): 
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FindIndex d639397d
-fun <T> findIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): Int {
+inline fun <T> findIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)): Int {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val i: Int = i1
         val value_1: T = s0[i1]
-        if (f!!(value_1)) {
+        if (f(value_1)) {
             return i
         }
     }
@@ -327,11 +327,11 @@ fun <T> findIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?):
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FindLastIndex 1128f27e
-fun <T> findLastIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): Int {
+inline fun <T> findLastIndex(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)): Int {
     var i: Int = slice.len - 1
     l0@ while (i >= 0) {
         val value_1: T = slice[i]
-        if (f!!(value_1)) {
+        if (f(value_1)) {
             return i
         }
         i--
@@ -369,11 +369,11 @@ fun <T> firstOrNilSeq(goElem_T: GoElem<T>, seq: Seq<T>): T {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.FirstNonNil 58dfbcd5
-fun <T, U> firstNonNil(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> U)?): U {
+inline fun <T, U> firstNonNil(goElem_T: GoElem<T>, goElem_U: GoElem<U>, slice: GoSlice<T>, f: ((T) -> U)): U {
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        val mapped: U = f!!(value_1)
+        val mapped: U = f(value_1)
         if (mapped != goElem_U.zeroValue()) {
             return mapped
         }
@@ -429,12 +429,12 @@ fun <T> splice(goElem_T: GoElem<T>, s1: GoSlice<T>, start_0: Int, deleteCount_1:
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.CountWhere 585e368b
-fun <T> countWhere(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)?): Int {
+inline fun <T> countWhere(goElem_T: GoElem<T>, slice: GoSlice<T>, f: ((T) -> Boolean)): Int {
     var count: Int = 0
     val s0 = slice
     l0@ for (i1 in 0 until s0.len) {
         val value_1: T = s0[i1]
-        if (f!!(value_1)) {
+        if (f(value_1)) {
             count++
         }
     }

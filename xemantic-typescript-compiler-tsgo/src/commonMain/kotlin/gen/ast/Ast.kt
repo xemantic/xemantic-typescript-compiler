@@ -51,19 +51,19 @@ fun setParseJSDocForNode(fn: ((SourceFile?, Node?) -> GoSlice<Node?>)?) {
 typealias Visitor = ((Node?) -> Boolean)?
 
 // go: github.com/microsoft/typescript-go/internal/ast.visit aeee441d
-fun visit(v: Visitor, node: Node?): Boolean {
+inline fun visit(v: ((Node?) -> Boolean), node: Node?): Boolean {
     if (node != null) {
-        return v!!(node)
+        return v(node)
     }
     return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.visitNodes c24074f6
-fun visitNodes(v: Visitor, nodes: GoSlice<Node?>): Boolean {
+inline fun visitNodes(v: ((Node?) -> Boolean), nodes: GoSlice<Node?>): Boolean {
     val s0 = nodes
     l0@ for (i1 in 0 until s0.len) {
         val node: Node? = s0[i1]
-        if (v!!(node)) {
+        if (v(node)) {
             return true
         }
     }
@@ -73,7 +73,7 @@ fun visitNodes(v: Visitor, nodes: GoSlice<Node?>): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.visitNodeList 2eedc084
 fun visitNodeList(v: Visitor, nodeList: NodeList?): Boolean {
     if (nodeList != null) {
-        return visitNodes(v, nodeList!!.nodes)
+        return visitNodes(v!!, nodeList!!.nodes)
     }
     return false
 }
@@ -81,7 +81,7 @@ fun visitNodeList(v: Visitor, nodeList: NodeList?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.visitModifiers b40c4318
 fun visitModifiers(v: Visitor, modifiers: ModifierList?): Boolean {
     if (modifiers != null) {
-        return visitNodes(v, modifiers!!.nodeList.nodes)
+        return visitNodes(v!!, modifiers!!.nodeList.nodes)
     }
     return false
 }
@@ -2809,7 +2809,7 @@ class SourceFile(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.ForEachChild 5cd709a2
     override fun forEachChild(v: Visitor): Boolean {
-        return visitNodeList(v, this.statements) || visit(v, this.endOfFileToken)
+        return visitNodeList(v, this.statements) || visit(v!!, this.endOfFileToken)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.VisitEachChild 3ebefbcf
@@ -3495,7 +3495,7 @@ fun PragmaSpecification?.isTripleSlash(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.forEachChild_JSDocParameterOrPropertyTag 9d769b00
 fun forEachChild_JSDocParameterOrPropertyTag(node: JSDocParameterOrPropertyTag?, v: Visitor): Boolean {
-    return visit(v, node!!.jsDocTagBase.tagName) || (node!!.isNameFirst && (visit(v, node!!.name) || visit(v, node!!.typeExpression))) || (!node!!.isNameFirst && (visit(v, node!!.typeExpression) || visit(v, node!!.name))) || visitNodeList(v, node!!.jsDocTagBase.comment)
+    return visit(v!!, node!!.jsDocTagBase.tagName) || (node!!.isNameFirst && (visit(v!!, node!!.name) || visit(v!!, node!!.typeExpression))) || (!node!!.isNameFirst && (visit(v!!, node!!.typeExpression) || visit(v!!, node!!.name))) || visitNodeList(v, node!!.jsDocTagBase.comment)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.visitEachChild_JSDocParameterOrPropertyTag ac98a9a7

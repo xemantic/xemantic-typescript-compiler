@@ -213,6 +213,9 @@ class PackageEmitter(
         val tm = TypeMapper(fc, tpNames + (member?.tpNames ?: emptyMap()), tpElems + (member?.tpElems ?: emptyMap()))
         val fn = FnCtx(fc, qname, tm)
         member?.let { fn.classMembers = it.memberNames }
+        // An inline function (docs/goport-lowering.md § 3): non-null func-typed parameters.
+        val inlineIdx = if (member == null) prog.inlineFuncs[qname] else null
+        inlineIdx?.let { fn.nonNullParamIdx = it }
         val low = Lowering(fn)
         val goName = d.str("name")!!
         val name = if (recvField != null) prog.methodName(qname, goName) else prog.funName(qname, goName)
@@ -288,7 +291,12 @@ class PackageEmitter(
             low.declareNamedResults()
             low.withDefersIfNeeded(body, sig.results.map { it.t }) { low.body(body.list("list")) }
             report.lowered(pc.pkg, qname, lines)
-            "${traceLine(qname, d.str("hash"))}\n$sigText {\n$bodyWriter}\n" + fn.helpers.joinToString("") { "\n$it" }
+            // A public inline function cannot reference the private helpers a body hoists.
+            val sigOut = if (inlineIdx != null && fn.helpers.isEmpty() && !probeMode) {
+                report.inlined(qname)
+                sigText.replaceFirst("fun ", "inline fun ")
+            } else sigText
+            "${traceLine(qname, d.str("hash"))}\n$sigOut {\n$bodyWriter}\n" + fn.helpers.joinToString("") { "\n$it" }
         } catch (r: Refusal) {
             report.refused(pc.pkg, qname, lines, r, stub = true)
             "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: refused ${r.reason}: $qname\")\n}\n"

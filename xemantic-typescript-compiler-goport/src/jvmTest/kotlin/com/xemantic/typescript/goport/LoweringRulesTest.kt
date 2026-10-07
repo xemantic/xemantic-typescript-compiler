@@ -155,4 +155,27 @@ class LoweringRulesTest {
         val n = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f -> calls.findAll(f.readText()).count() }
         assert(n == 0)
     }
+
+    @Test
+    fun `a function whose func-typed parameters are only called is inline and takes them non-null`() {
+        val scanner = "github.com/microsoft/typescript-go/internal/scanner"
+        // scanASCIIWhile: one call site, six predicates — a megamorphic boxed Function1 unless inlined.
+        val ascii = genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanASCIIWhile")
+        assert(ascii.contains("inline fun Scanner?.scanASCIIWhile(pred: ((Int) -> Boolean))"))
+        assert(ascii.contains("!pred(b)") && !ascii.contains("pred!!"))
+        // A named func type is a NULLABLE typealias (`Visitor`); the inline parameter takes its signature.
+        val visit = genFunction("ast/Ast.kt", "github.com/microsoft/typescript-go/internal/ast.visit")
+        assert(visit.contains("inline fun visit(v: ((Node?) -> Boolean), node: Node?)"))
+        // The callers pass function literals as is (Kotlin inlines them); no `!!` on a literal.
+        val ident = genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanIdentifier")
+        assert(ident.contains("this.scanASCIIWhile(fun(b: Int): Boolean {"))
+        // Every inline function is small: the body is copied into each caller (JIT.1 counts it).
+        val inline = Regex("""// go: (\S+) [0-9a-f]+\n(?:@[^\n]*\n)?inline fun """)
+        val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.flatMap { f -> inline.findAll(f.readText()).map { it.groupValues[1] } }.toList()
+        assert(all.size in 20..60)
+        // A function that stores, nil-tests or passes on its func parameter stays a normal function.
+        // SetParseJSDocForNode STORES its parameter; parseList passes it into a closure.
+        assert(!genFunction("ast/Ast.kt", "github.com/microsoft/typescript-go/internal/ast.SetParseJSDocForNode").contains("inline fun"))
+        assert(!genFunction("parser/Parser1.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.parseList").contains("inline fun"))
+    }
 }

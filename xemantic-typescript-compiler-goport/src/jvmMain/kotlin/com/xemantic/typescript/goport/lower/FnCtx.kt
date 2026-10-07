@@ -74,6 +74,12 @@ class FnCtx(val fc: FileCtx, val qname: String, val tm: TypeMapper) {
     private val used = HashSet<String>()
     private val names = HashMap<Int, String>()
     val boxed = HashSet<Int>()
+
+    /** Func-typed parameters declared non-null (an inline function's, [Program.inlineFuncs]): called without `!!`. */
+    val nonNullFnParams = HashSet<Int>()
+
+    /** Indices of the func-typed parameters [Lowering.paramDecls] declares non-null. */
+    var nonNullParamIdx: Set<Int> = emptySet()
     private var tmp = 0
     private var label = 0
 

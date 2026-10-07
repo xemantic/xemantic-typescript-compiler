@@ -110,7 +110,11 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                 } else {
                     val o = pc.obj(id)
                     val name = fn.declare(id)
-                    if (o.bool("mut") || id in fn.boxed) {
+                    if (i in fn.nonNullParamIdx) {
+                        fn.nonNullFnParams += id
+                        // The UNDERLYING signature: a named func type is a nullable typealias (`Visitor`).
+                        out += "$name: ${tm.kt(types.under(pt).id).removeSuffix("?")}"
+                    } else if (o.bool("mut") || id in fn.boxed) {
                         val pn = fn.fresh("${name}_")
                         paramCopies += Triple(id, pn, pt)
                         out += "$pn: ${tm.kt(pt)}"
