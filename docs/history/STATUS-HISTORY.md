@@ -1,5 +1,8 @@
 
 
+**(P18.308) — (INV.0) EXTRACTION: TS2302 AND TS2729 MOVE OUT OF `Checker.kt` (699 LINES, ZERO WIDENINGS), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 191,075; +15 PINS, 22,931 / 0 / 44 (2026-10-06).**
+Screen 0; grid 8x0; libraries unchanged.
+
 **(P18.307) — (LIBS.3): BARE `infer`, THE EMPTY MAPPED TYPE AND `as`-OVER-TUPLE MAPPED TYPES LANDED with nine supporting fixes — type-fest 141 -> 123, TALLY 209 -> 191, NO ADDED POSITION; a self-inflicted +10 s type-fest cost (uncached conditional-alias results) found and fixed — 15.9 s vs tsgo's 17.1 s; +12 PINS, 22,916 / 0 / 44 (2026-10-06).**
 Screen 0; grid 8x0; mitt and date-fns hold.
 

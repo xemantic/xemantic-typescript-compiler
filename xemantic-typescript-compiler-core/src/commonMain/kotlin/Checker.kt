@@ -3926,6 +3926,25 @@ class Checker(
         }
     }
 
+    /**
+     * (P18.313) [withCtaFrameLocals] plus the frame's `this` class and type-parameter
+     * scope — what [ctaM3StmtAnchorCore] installs before it types a statement. A loop
+     * HEAD is typed at [ctaSpineEnter], outside that anchor, so without this a
+     * `for (const c of this.items)` subject answered `any` inside a class method (the
+     * ambient `this` is the anchor's, i.e. unset) and the loop variable with it — a
+     * silent gap measured against tsgo 7.0.2 (zod `v3/types.ts:1680`).
+     */
+    private inline fun withCtaFrameThis(frame: CtaFrame, block: () -> Unit) {
+        val sThis = currentClassForThis
+        val sTp = currentTypeParamScope
+        currentClassForThis = frame.classForThis
+        currentTypeParamScope = frame.fnTpScope ?: sTp
+        try { withCtaFrameLocals(frame, block) } finally {
+            currentClassForThis = sThis
+            currentTypeParamScope = sTp
+        }
+    }
+
     /** (cta-m2d) part 2: install [frame]'s localTypes-family maps into the
      *  ambient fields, run [block] (the legacy helpers mutate the frame's maps
      *  in place), restore. */
@@ -4250,7 +4269,7 @@ class Checker(
         if (list.declarations.size != 1) return null
         var element: Type? = null
         val out = ArrayList<Pair<String, Type>>(2)
-        withCtaFrameLocals(ctaFrames.last()) {
+        withCtaFrameThis(ctaFrames.last()) {
             element = forOfElementTypeOf(getTypeOfExpression(node.expression), wide = true)
             // (CHK.96)(f): a PATTERN head's leaves through [bindingElementType].
             element?.let { forOfHeadBindings(list, it, out, refuseTypeParams = false) }
@@ -90887,6 +90906,43 @@ interface DataView {
     }
 
     /**
+     * (P18.313) The object-literal twin of [narrowedArrayLiteralType]: does object literal
+     * [obj] relate to the object [target] member by member once its reference VALUES are
+     * flow-narrowed? `return child.isLeaf() ? { leaf: child } : …` against `{ leaf: Leaf |
+     * undefined }` (tsc's `server/scriptVersionCache.ts:727`, reached once a `for … of
+     * this.children` loop variable was typed) built `{ leaf: Coll }` because the literal's
+     * member types are not narrowed. `true` only when some value narrowed, every member is
+     * a target member that its (narrowed or literal) value relates to, and every required
+     * target member is written — monotone, consumers use it only to SUPPRESS a row.
+     */
+    private fun objectLiteralRelatesWithNarrowedValues(obj: ObjectLiteralExpression, target: Type): Boolean {
+        if (target !is Type.Object || target.tupleElementTypes != null) return false
+        var anyNarrowed = false
+        val written = HashSet<String>()
+        for (p in obj.properties) {
+            val (name, value) = when (p) {
+                is PropertyAssignment -> ((p.name as? Identifier)?.text ?: return false) to p.initializer
+                is ShorthandPropertyAssignment -> p.name.text to p.name
+                else -> return false
+            }
+            written.add(name)
+            val slot = getPropertyOfType(target, name)?.let { getTypeOfSymbol(it) } ?: return false
+            val raw = getTypeOfExpression(value)
+            var vt = raw
+            if (value is Identifier || value is PropertyAccessExpression) {
+                val n = getNarrowedTypeForReferenceFollowLoopEntry(raw, value)
+                if (n !== raw && n !== neverType && n !== anyType && n !== errorType) { vt = n; anyNarrowed = true }
+            }
+            if (vt === errorType) return false
+            if (vt === anyType || checkTypeRelatedTo(vt, slot, assignableRelation)) continue
+            val lit = literalTypeOfExpression(value) ?: return false
+            if (!checkTypeRelatedTo(lit, slot, assignableRelation)) return false
+        }
+        if (!anyNarrowed) return false
+        return getPropertiesOfType(target).all { it.name in written || isOptionalProperty(it) }
+    }
+
+    /**
      * (CHK.168) the per-branch conditional check as a RETURN sees it: inside an async
      * function each branch is related to the PROMISED type — tsgo
      * `checkReturnExpression` recurses into both branches with the unwrapped return
@@ -90916,6 +90972,36 @@ interface DataView {
             }
         }
         return checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName, typeParams)
+    }
+
+    /**
+     * (P18.313) Does array literal [arr] fit a FIXED tuple member of [target] — the target
+     * itself or a union constituent, with no rest element — element by element? `true` when
+     * some such member has exactly the literal's arity and every element relates to its slot
+     * (a literal element through its literal type, an `any` element vacuously) — this engine
+     * types an array literal as an array and the relation skips array->tuple (round 459), so
+     * the fit is decided here; `false` when [target] mentions a tuple and none fits (a spread
+     * or omitted element always answers `false`); `null` when [target] mentions no tuple.
+     */
+    private fun arrayLiteralFitsFixedTuple(arr: ArrayLiteralExpression, target: Type): Boolean? {
+        val members = if (target is Type.Union) target.types else listOf(target)
+        val tuples = members.filter { it is Type.Object && it.tupleElementTypes != null }
+        if (tuples.isEmpty()) return null
+        if (arr.elements.any { it is SpreadElement || it is OmittedExpression }) return false
+        val n = arr.elements.size
+        for (t in tuples) {
+            t as Type.Object
+            if (t.tupleHasRest) continue
+            val slots = t.tupleElementTypes!!
+            if (slots.size != n) continue
+            val fits = arr.elements.indices.all { i ->
+                val e = arr.elements[i]
+                val et = literalTypeOfExpression(e) ?: getTypeOfExpression(e)
+                et === anyType || checkTypeRelatedTo(et, slots[i], assignableRelation)
+            }
+            if (fits) return true
+        }
+        return false
     }
 
     private fun checkConditionalReturnBranches(
@@ -90976,6 +91062,10 @@ interface DataView {
             // direct-return path in checkReturnAssignability.
             if (inner is ArrayLiteralExpression &&
                 arrayLiteralSatisfiesTupleTarget(inner, targetNode, currentFileLocals)) continue
+            // (P18.313) the TYPE-side twin for a fixed tuple member — `cond ? [a, b] : []`
+            // against `[A, B] | []` (hono `jsx/dom/css.ts:89`): the `[]` arm typed `any[]`
+            // and was reported. An arm that fits no fixed member keeps the per-arm row it had.
+            if (inner is ArrayLiteralExpression && arrayLiteralFitsFixedTuple(inner, targetType) == true) continue
             // Round 467 (M3.4): an array-literal ARM whose reference elements were
             // guard-narrowed (`isBreakOrContinueStatement(node) ? [node] : …` vs
             // `readonly BreakOrContinueStatement[] | undefined`) — monotone retry,
@@ -90994,6 +91084,9 @@ interface DataView {
                 getNarrowedTypeForReference(branchType, inner).let { n ->
                     n !== branchType && checkTypeRelatedTo(n, targetType, assignableRelation)
                 }) continue
+            // (P18.313) an object-literal ARM whose reference values the condition narrowed
+            // (`child.isLeaf() ? { leaf: child } : …`) — the object twin of round 467's retry.
+            if (inner is ObjectLiteralExpression && objectLiteralRelatesWithNarrowedValues(inner, targetType)) continue
             if (!canUseTypeEngine(branchType, targetType)) { allVerified = false; continue }
             if (withFreshObjLitSource(inner) {
                     checkTypeRelatedTo(branchType, targetType, assignableRelation)
@@ -99052,7 +99145,7 @@ interface DataView {
         // bidirectional contextual-typing rule and produces the correct source
         // display for TS2322 (`Type '"z"'` vs `Type 'string'`).
         val rawSourceTypeRaw = if (propTypeContainsLiteral(targetType)) {
-            literalTypeOfExpression(init, isArrayLikeReference(targetType)) ?: run {
+            literalTypeOfExpression(init, isArrayLiteralContext(targetType)) ?: run {
                 val t0 = CtaSections.t()
                 val r = getTypeOfExpression(init)
                 CtaSections.close(CtaSections.N_GET_TYPE_OF_EXPR, t0)
@@ -100463,6 +100556,16 @@ interface DataView {
         if ((init as? ObjectLiteralExpression)?.let { objectLiteralHasUnresolvedSpread(it) } == true) {
             return
         }
+        // (P18.313) a LOSSY union spread under-approximates the literal's members, so only the
+        // per-member drills may report — never a missing-member or whole-object row.
+        if (init is ObjectLiteralExpression && objectLiteralHasLossyUnionSpread(init)) {
+            if (sourceType is Type.Object && targetType is Type.Object) {
+                emitPerPropertyMismatchesForObjectLiteral(init, sourceType, targetType, displayTarget, source, fileName)
+            } else if (targetType is Type.Intersection) {
+                checkNestedObjLitPropTypes(init, targetType, source, fileName)
+            }
+            return
+        }
         val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
         // Compute outer-level missing properties directly. `lastMissingPropertyName`
         // can leak from inner comparisons (e.g. `IToken[]` vs `IStateToken[]` —
@@ -101312,7 +101415,7 @@ interface DataView {
         ) contextualType = targetType
         val sourceType = try {
             applyContextualLiteralPreservation(
-                (if (propTypeContainsLiteral(targetType)) literalTypeOfExpression(init, isArrayLikeReference(targetType))
+                (if (propTypeContainsLiteral(targetType)) literalTypeOfExpression(init, isArrayLiteralContext(targetType))
                 else enumTargetLiteralSource(init, targetType)) ?: getTypeOfExpression(init),
                 targetType, init,
             )
@@ -101936,6 +102039,26 @@ interface DataView {
         return false
     }
 
+    /** (P18.313) Does [obj] spread a [spreadIsLossyUnion]? */
+    private fun objectLiteralHasLossyUnionSpread(obj: ObjectLiteralExpression): Boolean =
+        obj.properties.any { it is SpreadAssignment && spreadIsLossyUnion(getTypeOfExpression(it.expression)) }
+
+    /**
+     * (P18.313) A spread of a UNION whose non-nullish constituents disagree on their required
+     * members. tsgo DISTRIBUTES such a spread — `{ code: 1, ...(b ? { m: {} } : { h: {} }) }`
+     * is `{ code; m } | { code; h }` — where [getTypeOfObjectLiteral] keeps only the members
+     * every constituent guarantees ([spreadGuaranteedProps]), so the literal's type here is an
+     * UNDER-approximation and a missing-member verdict on it is not evidence (hono
+     * `adapter/aws-lambda/handler.ts:390`). Treated as an unresolved spread: suppression-only.
+     */
+    private fun spreadIsLossyUnion(t: Type): Boolean {
+        if (t !is Type.Union) return false
+        val parts = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void) }
+        if (parts.size < 2) return false
+        val sets = parts.map { spreadGuaranteedProps(it).keys }
+        return sets.any { it != sets[0] }
+    }
+
     /**
      * Exact AST-side satisfaction: required members provided AND no EXCESS property.
      * Reads the file-local `interface [ifaceName]`
@@ -102218,7 +102341,7 @@ interface DataView {
                 if (expr != null) {
                     val widened = getTypeOfExpression(expr)
                     if (propTypeContainsLiteral(targetType)) {
-                        literalTypeOfExpression(expr, isArrayLikeReference(targetType)) ?: widened
+                        literalTypeOfExpression(expr, isArrayLiteralContext(targetType)) ?: widened
                     } else enumTargetLiteralSource(expr, targetType) ?: widened // (CHK.83)
                 } else undefinedType
             } finally {
@@ -102640,7 +102763,8 @@ interface DataView {
         // type — is typed `any` by tsc (the spread poisons the object), so it cannot be
         // "missing" required target properties (the spread may provide them). Runs after
         // the per-property drills (a genuine explicit-prop type mismatch still fires).
-        if (expr is ObjectLiteralExpression && objectLiteralHasUnresolvedSpread(expr)) {
+        if (expr is ObjectLiteralExpression &&
+            (objectLiteralHasUnresolvedSpread(expr) || objectLiteralHasLossyUnionSpread(expr))) {
             return true
         }
         // Round 448: a fresh object literal returned against a UNION of object types
@@ -102657,10 +102781,19 @@ interface DataView {
         // member — `return { kind: "ambient", … }` vs `interface ModuleSpecifierResult {
         // kind: "node_modules" | … | "ambient"; … }` (moduleSpecifiers.ts): the source's
         // `kind: "ambient"` widened to `string`, the retry recovers the literal.
+        // (P18.313) an INTERSECTION target is the same retry (`RequestInit & { duplex?:
+        // 'half' }` against `duplex: cond ? 'half' : undefined`, hono `helper/proxy/index.ts:84`),
+        // and an ASYNC function's `Promise<T>` retries against the AWAITED `T` — the returned
+        // value is wrapped (hono `adapter/lambda-edge/handler.ts:174`, a `bodyEncoding:
+        // 'base64'` spread read as `string` against `Promise<CloudFrontResult>`).
+        val freshTarget = if (inAsyncFunctionBody && targetType is Type.Reference &&
+            targetType.target.symbol?.name == "Promise"
+        ) targetType.resolvedTypeArguments?.singleOrNull() ?: targetType else targetType
         if (expr is ObjectLiteralExpression &&
-            (targetType is Type.Union || targetType is Type.Interface || targetType is Type.Object) &&
-            canUseTypeEngine(sourceType, targetType) &&
-            withFreshObjLitSource(expr) { checkTypeRelatedTo(sourceType, targetType, assignableRelation) }) {
+            (freshTarget is Type.Union || freshTarget is Type.Interface || freshTarget is Type.Object ||
+                freshTarget is Type.Intersection) &&
+            canUseTypeEngine(sourceType, freshTarget) &&
+            withFreshObjLitSource(expr) { checkTypeRelatedTo(sourceType, freshTarget, assignableRelation) }) {
             return true
         }
         // B87.4c (round 73): class-instance source → interface/class return-type
@@ -103352,7 +103485,7 @@ interface DataView {
                     // preserve the literal instead of widening to the primitive (matches
                     // TypeScript's bidirectional contextual-typing rule).
                     val sourceTypeRaw = if (propTypeContainsLiteral(tt)) {
-                        literalTypeOfExpression(expr.right, isArrayLikeReference(tt)) ?: getTypeOfExpression(expr.right)
+                        literalTypeOfExpression(expr.right, isArrayLiteralContext(tt)) ?: getTypeOfExpression(expr.right)
                     } else {
                         enumTargetLiteralSource(expr.right, tt) ?: getTypeOfExpression(expr.right)
                     }
@@ -104900,6 +105033,10 @@ interface DataView {
         val elem = arrayLocalElementType(recvId, varTypes) ?: return false
         val elemObj = elem as? Type.Object ?: return false
         if (elemObj is Type.Reference) return false              // named non-generic interface only
+        // (P18.313) an array literal against a TUPLE element is round 459's undecidable pair
+        // (`groups[i] = [mark, m]` against `[string, string][]`, hono
+        // `router/reg-exp-router/trie.ts:29`, read `string[]` and reported TS2741).
+        if (elemObj.tupleElementTypes != null && conditionalOfArrayLiterals(value)) return false
         // RHS element type: prefer the bare-identifier array element (z[j] → z's element);
         // else the RHS expression's own type.
         val rhsElem: Type = when (value) {
@@ -105444,7 +105581,8 @@ interface DataView {
         // MEASURED: without this the 8-profile grid grows an ours-only TS2322 at tsc's own
         // `builder.ts:1423`, `root[root.length - 2] = [lastButOne, fileId]` against a slot of
         // `IncrementalBuildInfoRootStartEnd | (number & {…})`, which tsgo 7.0.2 accepts.
-        if (value is ArrayLiteralExpression && cheaSlotMentionsTuple(slot)) return
+        // (P18.313): a CONDITIONAL of array literals is the same pair (hono `utils/url.ts:65`).
+        if (conditionalOfArrayLiterals(value) && cheaSlotMentionsTuple(slot)) return
         val valueType = getTypeOfExpression(value)
         if (valueType === anyType || valueType === errorType) return
         // round 431e mirror: this walker has no enclosing-fn typeParams threading, so a value whose
@@ -105459,7 +105597,7 @@ interface DataView {
         if (checkTypeRelatedTo(valueType, slot, assignableRelation)) return
         // (CHK.93)(e) mirror — `getTypeOfExpression` answers the BASE primitive for a literal node,
         // so a literal written into a literal-typed slot needs its literal type to relate.
-        val literalValue = propertyWriteLiteralValueType(value, valueType)
+        val literalValue = propertyWriteLiteralValueType(value, valueType, isArrayLiteralContext(slot))
         if (literalValue != null && checkTypeRelatedTo(literalValue, slot, assignableRelation)) return
         // (CHK.100) mirror — suppression-only, and a `never` (an unreachable position, whose
         // adoption would DELETE a diagnostic) is refused.
@@ -106137,8 +106275,8 @@ interface DataView {
      * for a literal node. Consulted ONLY after the base-typed relation has rejected,
      * so it can turn a rejection into an acceptance and never the reverse.
      */
-    private fun propertyWriteLiteralValueType(value: Expression, valueType: Type): Type? {
-        val lit = literalTypeOfExpression(value) ?: return null
+    private fun propertyWriteLiteralValueType(value: Expression, valueType: Type, arrayCtx: Boolean = false): Type? {
+        val lit = literalTypeOfExpression(value, arrayCtx) ?: return null
         if (lit === valueType || lit === errorType || lit === anyType) return null
         return lit
     }
@@ -111948,6 +112086,14 @@ interface DataView {
             val tInnerNames = tInner.map { it.name }.filter { it.isNotEmpty() }.toSet()
             if (tInnerNames.isEmpty()) continue
             val sInnerNames = weakSourcePropertyNames(sPropType) ?: continue
+            // (P18.313) tsgo's weak-type check needs a source WITH a property or a signature
+            // (`isWeakType(target) && (getPropertiesOfType(source).length > 0 ||
+            // typeHasCallOrConstructSignatures(source))`): an EMPTY object — `w: {}`, or a
+            // spread this checker types `{}` (hono `middleware/language/language.ts:298`,
+            // `secure-headers.ts:109`) — relates to a weak target. An enum member (a
+            // member-less object here) keeps its row: its apparent `String`/`Number` has members.
+            if (sInnerNames.isEmpty() && sPropType is Type.Object &&
+                enumSemantics.enumLiteralApparentPrimitive(sPropType) == null) continue
             if (tInnerNames.any { it in sInnerNames }) continue
             val tgtDisplay = formatTypeForDisplay(ann) ?: typeToString(targetType)
             // The inner target value type must show the COMBINED intersection
@@ -122218,6 +122364,16 @@ interface DataView {
      */
     /** Round 471: true when [t] is an Array/ReadonlyArray reference — the contexts in
      *  which a fresh array literal's elements are contextually typed by the element type. */
+    /**
+     * (P18.313) Does [t] give an array literal's ELEMENTS a contextual type — an `Array` /
+     * `ReadonlyArray` reference, or a UNION with one (tsgo's contextual type for an element
+     * is the union's array constituent's element: `caches: CacheType[] | false` keeps
+     * `['cookie']` as `"cookie"[]`, hono `middleware/language/language.ts:52`)? The
+     * [literalTypeOfExpression] `arrayCtx` predicate at every retry site.
+     */
+    internal fun isArrayLiteralContext(t: Type): Boolean =
+        isArrayLikeReference(t) || (t is Type.Union && t.types.any { isArrayLikeReference(it) })
+
     internal fun isArrayLikeReference(t: Type): Boolean =
         t is Type.Reference &&
             (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray")
@@ -165437,7 +165593,7 @@ interface DataView {
             // walk of `readonly Op[] = ["a", "b"]` reaches here once the outer
             // relation passes with the literal-preserved source).
             val valueType = if (propTypeContainsLiteral(indexValueType))
-                literalTypeOfExpression(valueExpr, isArrayLikeReference(indexValueType))
+                literalTypeOfExpression(valueExpr, isArrayLiteralContext(indexValueType))
                     ?: getTypeOfExpression(valueExpr)
             else getTypeOfExpression(valueExpr)
             if (valueType === anyType || valueType === unknownType || valueType === errorType) return
@@ -166452,6 +166608,52 @@ interface DataView {
         } finally { currentFlowGraph = saved }
     }
 
+    /**
+     * (P18.313) Is [e] an arithmetic expression whose `number` answer comes from tsgo's
+     * TWO-`any` rule (`any % any` is `number`)? This checker answers `any` for an operand
+     * it cannot resolve — a body local this pass's ambient does not record, a union loop
+     * variable — so such a `number` is not evidence: zod `v3/types.ts:1680`'s
+     * `input.data % check.value !== BigInt(0)` read `check.value` as `any` and reported a
+     * `number`-vs-`bigint` TS2367 where tsgo sees `bigint`. The B283 no-overlap rule
+     * refuses such a side (FN over FP; a genuine `a % a !== 0n` over two real `any`s
+     * loses its row).
+     */
+    private fun arithNumberFromTwoAnys(e: Expression): Boolean {
+        var x: Expression = e
+        while (x is ParenthesizedExpression) x = x.expression
+        if (x !is BinaryExpression) return false
+        when (x.operator) {
+            SyntaxKind.Minus, SyntaxKind.Asterisk, SyntaxKind.Slash,
+            SyntaxKind.Percent, SyntaxKind.AsteriskAsterisk -> {}
+            else -> return false
+        }
+        if (getTypeOfExpression(x.left) !== anyType || getTypeOfExpression(x.right) !== anyType) return false
+        return !(operandIsWrittenAny(x.left) && operandIsWrittenAny(x.right))
+    }
+
+    /** (P18.313) Is [e]'s `any` WRITTEN — an identifier or a member whose declaration is
+     *  annotated `any` — rather than this checker's answer for something unresolved? */
+    private fun operandIsWrittenAny(e: Expression): Boolean {
+        var x: Expression = e
+        while (x is ParenthesizedExpression) x = x.expression
+        val decl: Node? = when (x) {
+            is Identifier -> (lexicalScopeSymbol(x, x.text) ?: lookupPerFileForNode(x, x.text))?.valueDeclaration
+            is PropertyAccessExpression -> {
+                val recv = getTypeOfExpression(x.expression)
+                if (recv === anyType || recv === errorType) null
+                else getPropertyOfType(recv, x.name.text)?.valueDeclaration
+            }
+            else -> null
+        }
+        val ann = when (decl) {
+            is VariableDeclaration -> decl.type
+            is Parameter -> decl.type
+            is PropertyDeclaration -> decl.type
+            else -> null
+        }
+        return isAnyKeywordType(ann)
+    }
+
     private fun checkEqualityComparisonNoOverlap(
         expr: BinaryExpression, source: String, fileName: String,
     ) {
@@ -166571,8 +166773,10 @@ interface DataView {
         // fails both directions). Strict kinds only — unions mixing the two, any,
         // and TypeParam operands bail. Displays are the widened bases.
         if (leftType !is Type.TypeParam && rightType !is Type.TypeParam &&
-            ((typeAssignableToBigIntKind(leftType) && typeAssignableToNumberKind(rightType)) ||
-                (typeAssignableToNumberKind(leftType) && typeAssignableToBigIntKind(rightType)))) {
+            ((typeAssignableToBigIntKind(leftType) && typeAssignableToNumberKind(rightType) &&
+                !arithNumberFromTwoAnys(expr.right)) ||
+                (typeAssignableToNumberKind(leftType) && typeAssignableToBigIntKind(rightType) &&
+                    !arithNumberFromTwoAnys(expr.left)))) {
             val start = expr.pos
             val length = expressionTrueEnd(expr.right) - start
             if (length > 0) {
@@ -167053,7 +167257,7 @@ interface DataView {
             // literal-containing element target (tsc contextual typing — a correct
             // literal element passes, a wrong one displays as its literal `"q"`).
             val elemType = if (propTypeContainsLiteral(elementType))
-                literalTypeOfExpression(elem, isArrayLikeReference(elementType))
+                literalTypeOfExpression(elem, isArrayLiteralContext(elementType))
                     ?: getTypeOfExpression(elem)
             else getTypeOfExpression(elem)
             if (elemType === anyType || elemType === errorType) continue
@@ -169070,7 +169274,14 @@ interface DataView {
             // Round 435: fresh literal prop value vs a literal-containing target member —
             // retry with the UN-widened literal type (see checkNestedObjLitPropTypes).
             if (propTypeContainsLiteral(targetPropType)) {
-                val lit = literalTypeOfExpression(unwrapToObjLitValue(propNode.initializer))
+                // (P18.313) in an ARRAY-like member the array literal's elements keep their
+                // literals too — the convention every other retry site follows. Without it
+                // `order: ['path']` against `order: DT[]` was elaborated as `string[]` whenever
+                // a SIBLING member had made the whole-object relation fail (hono
+                // `middleware/language/language.ts:52`).
+                val lit = literalTypeOfExpression(
+                    unwrapToObjLitValue(propNode.initializer), isArrayLiteralContext(targetPropType),
+                )
                 if (lit != null && checkTypeRelatedTo(lit, targetPropType, assignableRelation)) continue
             }
             // (CHK.32) a fresh ARRAY literal vs a TUPLE target member — the same

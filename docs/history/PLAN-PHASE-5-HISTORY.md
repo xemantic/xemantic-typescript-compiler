@@ -1,3 +1,27 @@
+### Round (P18.303) — (INV.0) extraction: the CIRCULARITY family (TS2303 import-alias cycles, TS2449 / TS2506 base-class cycles, TS2456 type-alias cycles, 9 passes) moves verbatim into `CircularityChecks`; `Checker.kt` 192,857 -> 191,529 (-1,328); every receipt identical, per-pass table included (2026-10-05)
+
+One implementation subagent in the (P18.294) order; it finished. **Choice**: the switch family is still scattered; the
+type-argument-constraint closure still reads walk-scoped type-parameter state; the constructor-return family (88222-88918)
+is clean but would widen `checkTypeRelatedTo` / `assignableRelation` on the hot relation path — refused; the circularity
+family needed 3 widenings, none on the relation or spine path. **Moved**: four spans (89245-89615 the TS2303 import-alias
+run; 134843-135471, 135496-135542, 135573-135852 the base-class / type-alias circularity run); two holes stay in `Checker`
+(`matchClosingBracket`, `typeNodeContainsName` — outside callers); three helpers re-pointed (`classHasCircularBase` x2,
+`aliasStatementSpanEnd`, `emitTS2303At`); 11 checker members read, no walk-scoped or spine state, no mutable field read;
+widenings `matchClosingBracket`, `typeNodeContainsName`, and `ambientCyclicBaseClassNamesByFile` (`internal` — the family
+writes it and TS2449's use-before-declaration check reads it, so it stays on `Checker`). **Receipts**: verbatim proof three
+ways; per-pass `--passTiming` 416 rows + 32 counter lines identical; PrintInlining `checkArgumentsAgainstSignature`
+identical on both sides (2 rows this process — the count varies between processes, as CLAUDE.md records); a 17-cell tsgo
+matrix byte-identical before / after (pre-existing divergences now inside `CircularityChecks`: `type A = B; type B = A`
+misses tsgo's TS2456 at both; `X = NumArray<X extends …>` reports TS4109 where tsgo reports TS2456; `type F = () => F[]` an
+extra TS2577; `class S extends S<number>` an extra TS2315); corpus screen 8725 / 0; `cost_gate.py` 0; spine audit clean.
+**Pins**: `CircularityChecksCollaboratorTest` 13; ablation one arm per entry point, 12 arms all RED (`aliasStatementSpanEnd`
+was blind at first — it only changes a squiggle span — and a squiggle-length pin on tsgo's underline lengths made it RED).
+**Gates**: full suite 22,879 / 0 / 44 (+13); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs /
+marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to `CircularityChecks`); library grid OURS-ONLY
+row sets identical to `r302` on all eight (orchestrator's `r303`); warning gate with probe: probe only. Ledger row 25. Next
+candidates: the constructor-return family (blocked only by the relation-path widening) and the TS2507 / TS2302 run (5 cold
+widenings).
+
 ### Round (P18.302) — (LIBS.3) round 11, the `NoInfer` gate: its 74 exposed rows are a STACK four layers deep, not five families; five root-cause fixes landed (Object-prototype members in the relation, a `Type.StringMapping` for `Lowercase<string>` & co., optional slots before a trailing rest in `infer`, `void` vs `undefined` in conditionals, homomorphic readonly) — type-fest 180 -> 175, tally 249 -> 244, NO added position; `NoInfer` NOT landed (45 added with the patch, down from 74); the deepest gate is now the alias / mapped DEPTH BUDGET of 10 (tsgo 100) (2026-10-05)
 
 One implementation subagent. **Where the brief was wrong**: jsonify (29) has nothing to do with `NoInfer` — it is a relation

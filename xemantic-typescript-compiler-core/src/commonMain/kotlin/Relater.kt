@@ -1612,7 +1612,7 @@ internal class Relater(
                 val srcDecl = if (fresh != null && checker.propTypeContainsLiteral(targetPropType))
                     sourceProp.valueDeclaration as? PropertyAssignment else null
                 val lit = if (srcDecl != null && srcDecl.pos in fresh!!)
-                    checker.literalTypeOfExpression(srcDecl.initializer, checker.isArrayLikeReference(targetPropType)) else null
+                    checker.literalTypeOfExpression(srcDecl.initializer, checker.isArrayLiteralContext(targetPropType)) else null
                 if (lit == null || !checkTypeRelatedTo(lit, targetPropType, relation)) return false
             }
         }
