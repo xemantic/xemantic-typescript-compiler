@@ -290,6 +290,10 @@ class RecursionId(
 
     fun goHash(): Int = 31 * value.hashCode()
 
+    override fun equals(other: Any?): Boolean = other is RecursionId && goEquals(other as RecursionId)
+
+    override fun hashCode(): Int = goHash()
+
     companion object {
         val ELEM: GoElem<RecursionId> = GoElem({ RecursionId() }, { it.goCopy() })
     }

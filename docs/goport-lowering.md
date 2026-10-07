@@ -64,12 +64,21 @@ packages, 181,376 Go lines** (checker 59,818). `--check`: no holes.
 | overrides | 4 (`ast.getCombinedFlags`, `checker.hashWrite32`, `checker.hashWrite64`, `tsoptions.floatOrInt32ToFlag`: the four basic-set type-parameter generics, § 4) |
 | `-tsgo` `compileKotlinJvm` | compiles, warning-clean, 0 methods over 8,000 bytecodes |
 | bound oracle | 7,774 / 7,774 |
+| **diagnostics differential** | **6,318 / 6,318** conformance configurations produce tsgo's exact diagnostics (`DiagParityTest`, `TSGO_DIAG=1 TSGO_TEST_HEAP=2g`, then `scripts/tsgo-diag-compare.py build/goport/diag-kotlin`; ~70 s for all) |
 | **milestone** | `CheckerSmokeTest`: `compiler.NewProgram` over an in-memory `vfs.FS` + `bundled.WrapFS` → `GetSemanticDiagnostics` reports `TS2322: Type 'string' is not assignable to type 'number'.` for `const x: number = "s"`, and nothing for a well-typed file |
 
-Open refusals (Go lines): `reflect` + three `jsontext` streaming calls 908 (`tsoptions` config
-parsing, `collections.OrderedMap` JSON, `packagejson`), `int-overflow` 60 (folded expressions
-over `math.MaxInt`), `go` 130 (`core.BreadthFirstSearchParallelEx`), `chan`/`make(chan)`/`select` 19
-(`core` semaphores/throttle), `recover` 19, `api/encoder.noStructuredData` (uint32 sentinel).
+Lowered: 146,556 of 146,763 Go lines (**99.9%**). Open refusals, none reached by the compiler:
+`core.BreadthFirstSearchParallelEx` (`go`, 130 lines; used by `project`), `core.LimitedSemaphore` /
+`ThrottleGroup` (`chan`, used by `osvfs`/`ata`), `api/encoder.noStructuredData` (a uint32 sentinel
+constant). Overrides: 4 (the basic-set type-parameter generics, § 4).
+
+**How the differential found the defects** (each a rule, not a patch): `&s1[0] == &s2[0]` compared
+elements instead of slots (unions over type parameters were never instantiated — ~250
+configurations); struct-value map keys and `goEquals` through a struct alias of a shim struct
+(`CacheHashKey`, the instantiation caches — flow analysis spun forever); a comparable struct handed to
+a `comparable` generic (`slices.Contains(stack, RecursionId)`: constraint recursion ran to depth 50 and
+a tuple grew past 10,000); Go's typed nil in a type switch; a package function shadowed by a method of
+the same name inside an extension method; `packagejson.Fields` and pointer fields under json.
 
 ## 2. Architecture (who owns what)
 
@@ -209,6 +218,19 @@ reference); literal tables over 150 elements are filled by hoisted private helpe
   satisfying a shim interface (`OrderedMap` → json `MarshalerTo`/`UnmarshalerFrom`) declares it, so its
   methods are members the json shim can call. Method identities compare alias-free type keys (`canonKey`).
 - `recover()` in a deferred func literal → the enclosing function's `GoDeferFrame.recover()`.
+- **Slot identity** `&s1[i] == &s2[j]` (`core.Same`) compares `GoSlice.addr` slots — a struct element's `&`
+  is its reference, but an element of a type parameter or a basic type is not.
+- **Comparable structs** (`Program.structKeys`): a struct used as a map key by value, OR passed as the type
+  argument of a `comparable` type parameter (`slices.Contains[RecursionId]`), gets a structural
+  equals/hashCode; every other struct keeps identity (it doubles as Go's pointer). Struct fields and `==`
+  of a struct alias of a shim struct use the shim's `goEquals`/`goHash`.
+- **Typed nil** in a type switch: with no `case nil`, the first single-pointer-type clause whose body tests
+  its variable against nil also takes null (`printer.tryGetEnd`).
+- **Shadowed package functions**: an extension method's body qualifies package-level functions and
+  variables named like a method of the receiver type (`module.mangleScopedPackageName`).
+- **`&x.f` of an opaque type parameter flowing into an interface** (`json.Unmarshal(data, &e.Value)`) is a
+  real pointer (GoFieldPtr/GoBox); an address-taken local of a type parameter is boxed.
+- **json structs**: a struct EMBEDDING a json-tagged struct (`packagejson.Fields`) is a `GoJsonStruct` too.
 - Debugging: `GOPORT_TRACE=<reason>` prints the porter stack of every refusal with that reason.
 
 Extractor fixes: an indexed func-typed FIELD call (`m.targets[i]()`) is `call: "dynamic"`; the

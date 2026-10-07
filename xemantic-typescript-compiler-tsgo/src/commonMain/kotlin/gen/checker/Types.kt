@@ -2449,6 +2449,10 @@ class TupleElementInfo(
 
     fun goHash(): Int = 31 * flags.hashCode() + 31 * labeledDeclaration.hashCode()
 
+    override fun equals(other: Any?): Boolean = other is TupleElementInfo && goEquals(other as TupleElementInfo)
+
+    override fun hashCode(): Int = goHash()
+
     companion object {
         val ELEM: GoElem<TupleElementInfo> = GoElem({ TupleElementInfo() }, { it.goCopy() })
     }

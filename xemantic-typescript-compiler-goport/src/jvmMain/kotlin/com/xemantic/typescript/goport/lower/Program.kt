@@ -394,6 +394,36 @@ class Program(
                 }
             }
         }
+        // A struct VALUE type argument of a generic (`slices.Contains(stack, identity)` with
+        // `RecursionId`, `collections.Set[K]`): generic code compares and hashes it with Go's `==`, so it
+        // gets the structural equals/hashCode too (pointer instantiations keep identity).
+        fun comparableTP(tp: Int): Boolean {
+            val c = (tt.unalias(tp) as? com.xemantic.typescript.goport.types.TypeParamType)?.constraint ?: return false
+            val u = tt.unalias(c)
+            if (u is com.xemantic.typescript.goport.types.NamedType && u.pkg == null) return u.name == "comparable"
+            val i = tt.under(c) as? com.xemantic.typescript.goport.types.InterfaceType ?: return false
+            return i.comparable && i.allMethods.isEmpty()
+        }
+        for (f in p.files) walk(f.list("decls")) { n ->
+            val inst = n.obj("inst")
+            val tps: List<Int> = inst?.let { _ ->
+                val gt = n.int("obj")?.let { p.obj(it).int("t") }?.let { tt.unalias(it) } ?: return@let emptyList()
+                when (gt) {
+                    is com.xemantic.typescript.goport.types.SignatureType -> gt.tparams
+                    is com.xemantic.typescript.goport.types.NamedType -> (gt.origin?.let { tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType } ?: gt).tparams
+                    else -> emptyList()
+                }
+            } ?: emptyList()
+            inst?.ints("targs")?.forEachIndexed { ai, a ->
+                // Only where the type parameter is `comparable` (Go's `==` on it), never e.g. an arena's element.
+                if (!tps.getOrNull(ai).let { it != null && comparableTP(it) }) return@forEachIndexed
+                val k = tt.unalias(a) as? com.xemantic.typescript.goport.types.NamedType ?: return@forEachIndexed
+                if (tt.under(k.id) !is com.xemantic.typescript.goport.types.StructType || k.localAt != null) return@forEachIndexed
+                val origin = k.origin?.let { tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType } ?: k
+                if (origin.pkg == p.path || origin.pkg in byPath) structKeys += origin.key
+            }
+            true
+        }
         for (i in 0 until tt.size) {
             val m = tt[i] as? com.xemantic.typescript.goport.types.MapType ?: continue
             val k = tt.unalias(m.keyType) as? com.xemantic.typescript.goport.types.NamedType ?: continue
