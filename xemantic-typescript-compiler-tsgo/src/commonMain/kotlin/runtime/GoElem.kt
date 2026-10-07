@@ -86,3 +86,6 @@ class GoElem<T>(
     }
 
 }
+
+/** `struct{}` as a container element (`map[K]struct{}` sets, `chan struct{}`): the zero (and only) value is `Unit`. */
+val goUnitElem: GoElem<Unit> = GoElem({ })

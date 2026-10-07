@@ -52,6 +52,13 @@ internal fun describePanicValue(value: Any?): String = when (value) {
 /** `panic(v)`. */
 fun goPanic(value: Any?): Nothing = throw GoPanic(value)
 
+/**
+ * The end of a Go function whose last statement is terminating to Go (a `for {}`, a `switch` with a
+ * `default` whose every arm returns, …) but not to Kotlin's flow analysis. Never reached; it is not a
+ * Go panic, so `recover` does not see it.
+ */
+fun goUnreachable(): Nothing = throw IllegalStateException("goport: unreachable")
+
 /** Go's `index out of range [i] with length n` runtime panic. */
 fun goPanicIndex(i: Int, len: Int): Nothing =
     throw GoPanic(GoRuntimeError("index out of range [$i] with length $len"))

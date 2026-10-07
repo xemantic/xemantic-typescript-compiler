@@ -216,9 +216,9 @@ class Float {
     private var mant: BigNat = BigNat.ZERO
     private var exp2: kotlin.Int = 0 // value = mant * 2^exp2
 
-    /** `z.SetPrec(prec)`. */
-    fun setPrec(prec: UInt): Float {
-        this.prec = prec
+    /** `z.SetPrec(prec)` (Go `uint` = `ULong`, design § 3; above `MaxPrec` = `MaxUint32` it is clamped, as in Go). */
+    fun setPrec(prec: ULong): Float {
+        this.prec = if (prec > UInt.MAX_VALUE.toULong()) UInt.MAX_VALUE else prec.toUInt()
         if (!mant.isZero) roundToPrec()
         return this
     }
@@ -236,7 +236,7 @@ class Float {
 
     private fun roundToPrec() {
         val len = mant.bitLength
-        val p = prec.toInt()
+        val p = if (prec > kotlin.Int.MAX_VALUE.toUInt()) kotlin.Int.MAX_VALUE else prec.toInt()
         if (len <= p) return
         val drop = len - p
         var m = mant.shr(drop)

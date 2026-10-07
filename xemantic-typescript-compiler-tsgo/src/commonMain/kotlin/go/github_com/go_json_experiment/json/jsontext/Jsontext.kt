@@ -31,23 +31,97 @@ import com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.Option
 // `internal/json`, neither of which the parser/encoder path uses. Go 1.27's `encoding/json/jsontext`
 // is the same package (go-json-experiment aliases it), so the lowering maps both import paths here.
 
-/** `jsontext.Kind`. */
+/** `jsontext.Kind`: the first byte of a token's JSON form (`'n' 'f' 't' '"' '0' '{' '}' '[' ']'`); 0 is invalid. */
 @kotlin.jvm.JvmInline
-value class Kind(val value: Int)
+value class Kind(val value: Int) {
+    /** `k.String()`. */
+    fun string(): String = when (value.toChar()) {
+        'n' -> "null"
+        'f' -> "false"
+        't' -> "true"
+        '"' -> "string"
+        '0' -> "number"
+        '{' -> "{"
+        '}' -> "}"
+        '[' -> "["
+        ']' -> "]"
+        else -> "<invalid jsontext.Kind: " + com.xemantic.typescript.tsgo.go.strconv.quote(value.toChar().toString()) + ">"
+    }
+}
 
-/** `jsontext.Token` (stub). */
-class Token {
-    fun kind(): Kind = TODO("shim: jsontext.Token.Kind")
+/**
+ * `jsontext.Token`: one JSON token as a VALUE — its [Kind] and, for a string or number, its value.
+ * Go's `Token` is a struct (zero value = the invalid token, kind 0); it is immutable here, so
+ * [goCopy] returns the token itself. Only the token VALUES are implemented: the streaming
+ * `Encoder`/`Decoder` below are still stubs.
+ */
+class Token(private val k: Int = 0, private val str: String = "", private val num: Double = 0.0) {
+
+    /** `t.Kind()`. */
+    fun kind(): Kind = Kind(k)
+
+    /** `t.String()`: the string value for a string token, else the token's JSON text. */
+    fun string(): String = when (k.toChar()) {
+        '"' -> str
+        'n' -> "null"
+        'f' -> "false"
+        't' -> "true"
+        '0' -> str
+        '{', '}', '[', ']' -> k.toChar().toString()
+        else -> "<invalid jsontext.Token>"
+    }
+
+    /** `t.Bool()`: panics unless a boolean token, as in Go. */
+    fun bool(): Boolean = when (k.toChar()) {
+        't' -> true
+        'f' -> false
+        else -> com.xemantic.typescript.tsgo.runtime.goPanic("invalid JSON token kind: " + kind().string())
+    }
+
+    /** `t.Float()` for a number token. */
+    fun float(): Double {
+        if (k.toChar() != '0') com.xemantic.typescript.tsgo.runtime.goPanic("invalid JSON token kind: " + kind().string())
+        return num
+    }
+
+    fun goCopy(): Token = this
+
+    override fun toString(): String = string()
 }
 
 const val BeginObjectByte: Int = '{'.code
 
-/** `jsontext.BeginObject` and friends (tokens; stubs). */
-val beginObject: Token get() = TODO("shim: jsontext.BeginObject")
-val endObject: Token get() = TODO("shim: jsontext.EndObject")
-val beginArray: Token get() = TODO("shim: jsontext.BeginArray")
-val endArray: Token get() = TODO("shim: jsontext.EndArray")
-val `null`: Token get() = TODO("shim: jsontext.Null")
+/** `jsontext.BeginObject`, `EndObject`, `BeginArray`, `EndArray`, `Null`, `True`, `False`. */
+val beginObject: Token = Token('{'.code)
+val endObject: Token = Token('}'.code)
+val beginArray: Token = Token('['.code)
+val endArray: Token = Token(']'.code)
+val `null`: Token = Token('n'.code)
+val `true`: Token = Token('t'.code)
+val `false`: Token = Token('f'.code)
+
+/** `jsontext.Bool(b)`. */
+fun bool(b: Boolean): Token = if (b) `true` else `false`
+
+/** `jsontext.String(s)`. */
+fun string(s: String): Token = Token('"'.code, s)
+
+/**
+ * `jsontext.Float(f)`: a number token whose text is the JSON (ES6) form of [f]. Go turns a NaN or
+ * infinity into a STRING token (`"NaN"`, `"Infinity"`, `"-Infinity"`); so does this.
+ */
+fun float(f: Double): Token = when {
+    f.isNaN() -> string("NaN")
+    f == Double.POSITIVE_INFINITY -> string("Infinity")
+    f == Double.NEGATIVE_INFINITY -> string("-Infinity")
+    else -> Token('0'.code, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.formatJsonFloat(f), f)
+}
+
+/** `jsontext.Int(n)`. */
+fun int(n: Long): Token = Token('0'.code, n.toString(), n.toDouble())
+
+/** `jsontext.Uint(n)`. */
+fun uint(n: ULong): Token = Token('0'.code, n.toString(), n.toDouble())
 
 /** `jsontext.Value` (raw JSON bytes). */
 typealias Value = com.xemantic.typescript.tsgo.runtime.GoSlice<Int>

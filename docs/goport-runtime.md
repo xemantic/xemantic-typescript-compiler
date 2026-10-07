@@ -104,6 +104,8 @@ A Go string literal is emitted as its UTF-8 bytes, non-ASCII as `\u00XX` escapes
 | `goEq(a, b)` | Go `==` on interface/type-parameter values: floats IEEE (`NaN != NaN`, `-0 == 0`); boxed Kotlin `equals` is the opposite |
 | `goMin/goMax(first, vararg rest)` | builtin `min`/`max` (`Comparable`; `Double` overload keeps NaN and `-0 < +0`) |
 | `goZero(elem)` | zero of a type parameter |
+| `goZeroTP<T>()` | zero of a type parameter where NO element kind is in scope (method values of generic functions): `null` — right for every reference instantiation, an NPE for a primitive one |
+| `goUnitElem` | `GoElem<Unit>` for `struct{}` elements (`map[K]struct{}` sets) |
 
 ## 7. Panics, defer, recover — `GoPanic.kt`
 
@@ -114,6 +116,9 @@ A Go string literal is emitted as its UTF-8 bytes, non-ASCII as `\u00XX` escapes
 | function with `defer` whose deferred calls modify NAMED results | `return withDefersNamed({ readResults }) { frame -> …assign results…; return@withDefersNamed }` — NEVER a non-local `return` in this body (it would skip the defers) |
 | `recover()` in a deferred closure | `frame.recover()` on the frame of the function that deferred it |
 | runtime errors | `goPanicIndex(i, n)`, `goPanicSlice(detail)`, `goPanicDivide()`; `toGoPanic(e)` maps Kotlin `NullPointerException` / `ClassCastException` / `IndexOutOfBoundsException` / `ArithmeticException` to Go runtime errors (so `recover` sees them) |
+
+`goUnreachable(): Nothing` ends a function whose last statement is terminating to Go but not to
+Kotlin's flow analysis (never reached; not a Go panic, so `recover` does not see it).
 
 A panic inside a deferred call replaces the current panic and the remaining defers still run. A
 `StackOverflowError`/`OutOfMemoryError` is NOT recoverable (Go: fatal).
@@ -143,8 +148,7 @@ Go funcs are Kotlin function types (`func(rune) bool` → `(Int) -> Boolean`); v
 `vararg`. Methods that would clash with `java.lang.Object` (`Wait`, `Notify`, …) carry
 `@JvmName("goWait")` etc. — the generated code must do the same for its own such methods.
 
-Status legend: **exact** = bit-for-bit Go (oracle-tested where marked †), **1T** = correct only
-single-threaded, **approx** = see § 10, **stub** = `TODO("shim: …")`, reached only off the
+Status legend: **exact** = bit-for-bit Go (oracle-tested where marked †), **approx** = see § 10, **stub** = `TODO("shim: …")`, reached only off the
 parse/encode path.
 
 | package | declarations | status |
@@ -160,22 +164,73 @@ parse/encode path.
 | `iter` | `typealias Seq<V> = ((V) -> Boolean) -> Unit`, `Seq2<K, V>` | exact |
 | `math` | `abs ceil floor trunc sqrt copysign signbit float64bits float64frombits float32bits float32frombits inf isInf isNaN naN min max mod round frexp ldexp modf log log2 exp pow` + constants | exact †, except `log`/`exp`/fractional `pow` (approx) |
 | `math/bits` | `len len32 len64 leadingZeros64 trailingZeros32/64 onesCount32/64 rotateLeft32/64` | exact |
-| `math/big` | `Int` (`set setInt64 sign setString exp(x, y, null) float64 string text int64 cmp goCopy`), `newInt`, `Float` (`setPrec setInt float64`), `Accuracy` | exact † for these; `Exp` with a modulus stub |
+| `math/big` | `Int` (`set setInt64 sign setString exp(x, y, null) float64 string text int64 cmp goCopy`), `newInt`, `Float` (`setPrec(ULong) setInt float64`), `Accuracy` | exact † for these; `Exp` with a modulus stub |
 | `fmt` | `sprintf sprint sprintln errorf`, `Stringer` | exact for `%d %s %v(builtin kinds) %x %X %q(ASCII) %c %f %e %g %%`, width/flags/precision, `%w`; approx for structs, `%T`, non-ASCII `%q` |
 | `errors` | `new unwrap `` `is` `` join` | exact |
 | `io` | `Reader Writer EOF` | exact |
 | `encoding`, `encoding/binary` | `TextMarshaler TextUnmarshaler`; `littleEndian` (`uint16/32/64 putUint16/32/64 appendUint32`) | exact |
 | `context` | `Context background todo withValue` | values exact; no cancellation (`done()` null) |
-| `sync`, `sync/atomic` | `Mutex RWMutex Once onceValue onceFunc Pool WaitGroup Map`; `Bool Int32 Int64 Uint32 Uint64 Pointer` | 1T |
-| `golang.org/x/sync/errgroup` | `Group` (`go wait`), `withContext` | 1T (runs synchronously) |
+| `sync`, `sync/atomic` | `Mutex` (`lock unlock tryLock`) `RWMutex` (`lock unlock tryLock rLock rUnlock tryRLock`) `Once onceValue onceFunc Pool WaitGroup Map` (`load store loadOrStore loadAndDelete delete clear range`); `Bool Int32 Int64 Uint32 Uint64 Pointer` | thread-safe (§ 9a); `WaitGroup.Go` synchronous |
+| `golang.org/x/sync/errgroup` | `Group` (`go tryGo setLimit wait`), `withContext` | thread-safe first-error; `Go` runs synchronously, no context cancellation |
 | `time` | `Duration Nanosecond Microsecond Millisecond Second` | exact |
 | `os`, `runtime/debug` | `getenv` (always `""`), `setMaxStack` (no-op) | approx |
-| `regexp` | `Regexp` (`replaceAllStringFunc replaceAllString matchString findStringSubmatch string`), `mustCompile` | approx (Kotlin `Regex`) |
-| `golang.org/x/text/language` | `Tag und english parse mustParse Matcher newMatcher Confidence No Low High Exact` | approx |
-| `github.com/zeebo/xxh3` | `Uint128(hi, lo)` + `goEquals goHash` | exact (the hash function itself is not reached) |
+| `regexp` | `Regexp` (`replaceAllStringFunc replaceAllString replaceAllLiteralString matchString findString findStringSubmatch string`), `mustCompile compile quoteMeta`; NOT Go: `translateRe2(expr)` | RE2 syntax translated (§ 9b) †; `ReplaceAllString` uses Go's `$` template rules |
+| `golang.org/x/text/language` | `Tag` (zero `Tag()` = `und`; `string goCopy goEquals goHash`) `und english parse mustParse Matcher newMatcher Confidence No Low High Exact` | approx |
+| `github.com/zeebo/xxh3` | `hashString128 hash128 hashString hash`; `Uint128(hi, lo)` + `bytes goCopy goEquals goHash` | exact † (lengths 0..300, block edges, 64 KiB, 1 MiB; v1.1.0's scalar path). Seeded variants and the streaming `Hasher` (the checker's cache keys) not ported |
 | `github.com/go-json-experiment/json` | `Options deterministic marshal MarshalerTo UnmarshalerFrom`; `unmarshal marshalWrite marshalEncode unmarshalRead unmarshalDecode` | `marshal` exact for float64 † (the scanner's numeric-literal text), ints, bools, nil, plain ASCII strings; rest stub |
-| `…/json/jsontext` (+ alias package `encoding/json/jsontext`) | options `allowInvalidUTF8 allowDuplicateNames withIndent withIndentPrefix`; `Kind Token Value Encoder Decoder newDecoder` tokens | options exact; streaming stub |
+| `…/json/jsontext` (+ alias package `encoding/json/jsontext`) | options `allowInvalidUTF8 allowDuplicateNames withIndent withIndentPrefix`; `Kind` (`string`), `Token` (zero `Token()`; `kind string bool float goCopy`), token values `beginObject endObject beginArray endArray `` `null` `` `` `true` `` `` `false` ``, constructors `bool string float int uint`; `Value Encoder Decoder newDecoder` | options and token values exact; streaming (`Encoder`/`Decoder`) stub |
 | `compress/gzip`, `reflect` | `Reader newReader`; `Value Type valueOf` | stub (reflection is refused by design § 4) |
+
+### 9a. Concurrency
+
+The product host (the IntelliJ plugin) runs one compiler thread per project in ONE JVM, and the
+port's package variables include process-global `sync.Pool`s (parser, binder) and `sync.Map`s
+(`diagnostics.localizedMessagesCache`), so the `sync` shims are thread-safe even though the lowering
+refuses goroutines. They are built on `kotlin.concurrent.atomics` in common code (no `java.*`):
+
+- `Mutex`: one CAS to acquire uncontended; contended, it SPINS (bounded exponential runs of volatile
+  reads between CAS retries) — common Kotlin has no way to park a thread. Not reentrant, as in Go.
+- `RWMutex`: one atomic state (`>0` readers, `-1` writer) plus a waiting-writer count that blocks new
+  readers, as Go's does.
+- `Once`/`OnceValue`/`OnceFunc`: an atomic `done` fast path plus a `Mutex` slow path; a concurrent
+  caller waits for the running `f`; a panic marks the `Once` done and is re-raised by every
+  `OnceValue` call (Go 1.21+ semantics).
+- `Pool`, `Map`: a `HashMap`/free list under a `Mutex`; `Map.Range` calls `f` outside the lock.
+- `WaitGroup`: atomic counter; `Wait` spins to zero; `Go` runs `f` synchronously.
+- `sync/atomic` types wrap `AtomicInt`/`AtomicLong`/`AtomicBoolean`/`AtomicReference` (unsigned
+  kinds wrap the signed atomic of the same width; two's-complement add is identical).
+- `errgroup.Group`: `Go` runs `f` synchronously; the first error is kept with a CAS.
+
+Spinning is the right cost while contention only comes from independent compilations touching a
+shared global briefly. **A port of tsgo's PARALLEL checker must first add an `expect`/`actual` park
+(e.g. `LockSupport` on the JVM)**: a goroutine holding a lock for long would burn a core per waiter.
+Pins: `commonTest/SyncSemanticsTest` (misuse panics, Once/OnceValue panic semantics) and
+`jvmTest/SyncConcurrencyTest` (8 threads; the single-threaded shims fail 3 of its 5 cases).
+
+### 9b. `regexp`: RE2 → Java syntax
+
+`regexp.MustCompile` compiles `translateRe2(expr)`; `String()` still returns the Go source. Both
+engines are leftmost-first, so a translated pattern finds the same matches. Rewrites:
+
+| RE2 | Java (as emitted) | why |
+|---|---|---|
+| `{` not starting a valid `{n}`/`{n,}`/`{n,m}` repetition (or with nothing to repeat), lone `}` | `\{`, `\}` | RE2 literal; Java syntax error (`{(\d+)}` is `diagnostics.placeholderRegexp`) |
+| `[` inside a class | `\[` | Java nests classes |
+| `[:alpha:]` / `[:^alpha:]` inside a class | the ASCII range / `[^…]` | Java has no POSIX bracket syntax |
+| `&` inside a class | `\&` | Java's `&&` is intersection |
+| `]` first in a class | `\]` | portable |
+| `.` (no `s` flag anywhere) | `[^\n]` | Java's `.` also excludes `\r`, `\u0085`, `\u2028`, `\u2029` |
+| `$` (no `m` flag anywhere), `\z` | `(?![\s\S])` | RE2 `$` is end of TEXT; Java's also matches before a final line terminator |
+| `\A` | `(?<![\s\S])` | portable to engines without `\A` |
+| `\s` / `\S` outside a class, `\s` inside | `[\t\n\f\r ]` / `[^…]` / the members | Java's `\s` also matches `\x0B` |
+| `(?P<name>…)`, `(?<name>…)` | `(…)` | names resolved by group index (Java rejects `_` in names) |
+| `\Q…\E` | escaped literals | portable |
+
+`ReplaceAllString` expands templates with Go's `Expand` rules (`$$`, `$name` = longest
+`[A-Za-z0-9_]` run, `${name}`, unknown → `""`). Refused (panic): RE2's `(?U)` (Java's `(?U)` means
+something else) and `\C`. Residue: `\S` inside a class keeps Java's meaning (differs on `\x0B`);
+under `(?m)`/`(?s)` Java's line-terminator set is wider; byte strings make `.` and classes match one
+BYTE where Go matches one rune. Oracle: `RegexpOracleTest` (27 patterns × 21 inputs × 4 operations, real Go).
 
 Lowering rules that come with the shims:
 - `utf8.DecodeRuneInString(s[i:])` → `decodeRuneInStringAt(s, i)` (a JVM `substring` COPIES, so the literal translation is quadratic in a scanner loop); same for `DecodeLastRuneInString(s[:j])`. In general `s[i:]` passed straight to a read-only callee in a loop is a cost hazard.
@@ -189,9 +244,9 @@ Lowering rules that come with the shims:
 2. **`math.Log`/`Exp`** are a port of Go's pure-Go `log` and Kotlin's `exp`; Go on amd64 uses assembly for both. Sampled values agree with Go bit-for-bit (oracle), but the last ulp is not guaranteed. `Log2` and a FRACTIONAL `Pow` exponent inherit this; integer exponents are exact.
 3. **`strconv.Quote` / `%q`** keep every valid non-ASCII rune; Go escapes non-printable ones (`­`, unassigned code points).
 4. **`fmt` `%v` of a struct/pointer** prints Kotlin `toString()`, `%T` names only builtin kinds; map keys in `%v` are sorted by `toString()`.
-5. **`sync`/`atomic`/`errgroup`/`WaitGroup.Go`** are single-threaded (no locking; `Go` runs synchronously). Correct while the port is single-threaded (design § 4 refuses goroutines); NOT thread-safe — e.g. the IntelliJ host running two projects in one JVM needs per-thread isolation or real locks first.
+5. **`WaitGroup.Go` / `errgroup.Group.Go`** run their function synchronously, and contended locks spin rather than park (§ 9a). Mutual exclusion itself is real.
 6. **`context`** has no deadlines or cancellation. **`os.Getenv`** returns `""`. **`debug.SetMaxStack`** is a no-op.
-7. **`regexp`** uses Kotlin `Regex`; verified only for the five simple patterns in the closure.
+7. **`regexp`** compiles a TRANSLATION of the RE2 source with Kotlin `Regex` (§ 9b); the residue listed there is not Go.
 8. **`language`** keeps case-normalized subtags and matches by exact tag then language subtag — not CLDR canonicalization or distance matching.
 9. **NaN payloads**: `math.NaN()` and `ParseFloat("nan")` return Go's bits (`0x7FF8000000000001`), but Kotlin arithmetic may canonicalize a NaN payload where Go preserves it.
 10. **`int` is 32-bit** (design § 3 assumption): `strconv.Atoi` parses with Go's 64-bit `int` then truncates; `IntSize` reports 64.
@@ -203,9 +258,9 @@ Lowering rules that come with the shims:
 
 `strconv.ParseFloat/FormatFloat` with `bitSize 32`; `FormatFloat` fmt `'b'`, `'x'`, `'X'`;
 `big.Int.Exp` with a modulus or a >31-bit exponent; `slices.Concat()` with zero arguments (needs the
-element kind); `regexp.ReplaceAllString` with `$` expansion; `json.Marshal` of strings needing escapes
+element kind); `json.Marshal` of strings needing escapes
 and of composite values; `json.Unmarshal`, `UnmarshalRead`, `UnmarshalDecode`, `MarshalWrite`,
-`MarshalEncode`; all `jsontext` tokens, `Encoder.WriteToken`, `Decoder.PeekKind/ReadToken`,
+`MarshalEncode`; `jsontext` `Encoder.WriteToken`, `Decoder.PeekKind/ReadToken`,
 `NewDecoder`; `gzip.NewReader`, `Reader.Read/Close`; `reflect.ValueOf` (and every other `reflect`
 symbol — absent; the callers need overrides). None is on the scanner → parser → AST → encoder path;
 their callers are `collections` (ordered-map JSON), `core` (option-struct reflection, `MarshalIndent`),

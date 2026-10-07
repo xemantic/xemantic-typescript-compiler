@@ -31,14 +31,24 @@ import com.xemantic.typescript.tsgo.runtime.Tuple2
 import com.xemantic.typescript.tsgo.runtime.Tuple3
 
 /**
- * `language.Tag`: a BCP 47 tag, kept as its normalized string form.
+ * `language.Tag`: a BCP 47 tag, kept as its normalized string form. The zero value `Tag()` is
+ * `und`, as Go's `language.Tag{}` is.
  *
  * APPROXIMATION: x/text canonicalizes tags against CLDR (aliases, script suppression, …); this
  * keeps the case-normalized subtags only. It is reached from `diagnostics`/`locale` (localized
  * message selection), not from the parser/encoder path.
  */
-class Tag(private val s: String) {
+class Tag(private val s: String = "und") {
     fun string(): String = s
+
+    /** A Go value copy: a `Tag` is immutable, so the value itself. */
+    fun goCopy(): Tag = this
+
+    /** Go struct `==`. */
+    fun goEquals(other: Tag): Boolean = s == other.s
+
+    fun goHash(): Int = s.hashCode()
+
     override fun equals(other: Any?): Boolean = other is Tag && other.s == s
     override fun hashCode(): Int = s.hashCode()
     override fun toString(): String = s

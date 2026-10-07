@@ -73,6 +73,16 @@ fun goMax(first: Double, vararg rest: Double): Double {
 fun <T> goZero(elem: GoElem<T>): T = elem.zeroValue()
 
 /**
+ * The zero value of a type parameter `T` WITHOUT an element kind: `null`. The lowering emits it only
+ * where no `goElem_T` dictionary is in scope (method values of generic functions). Correct for every
+ * reference instantiation (pointers, interfaces, structs reached by pointer); an instantiation with
+ * a Kotlin primitive (`int`, `bool`, …) reads it as an NPE — a known limit of erasure
+ * (docs/goport-lowering.md § 5).
+ */
+@Suppress("UNCHECKED_CAST")
+fun <T> goZeroTP(): T = null as T
+
+/**
  * Go's `==` for values of a type parameter or interface: a float compares as IEEE (`NaN != NaN`,
  * `-0 == +0`), where Kotlin's boxed `equals` does the opposite; everything else is `==`
  * (identity for generated struct classes, value equality for strings and boxed integers).

@@ -23,25 +23,43 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.xemantic.typescript.tsgo.go.golang_org.x.sync.errgroup
 
 import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.runtime.GoError
 import com.xemantic.typescript.tsgo.runtime.Tuple2
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
-/** `errgroup.Group`, SINGLE-THREADED: `Go` runs the function immediately; `Wait` returns the first error. */
+/**
+ * `errgroup.Group`: `Go` runs the function IMMEDIATELY, on the calling thread (goroutines are
+ * refused by the lowering, design § 4), so `Wait` has nothing to wait for and returns the first
+ * error. The first error is recorded with a CAS, so a `Group` shared between threads keeps Go's
+ * "first non-nil error wins". `SetLimit` is accepted and has nothing to limit.
+ */
 class Group {
-    private var err: GoError? = null
+    private val err = AtomicReference<GoError?>(null)
 
     fun go(f: () -> GoError?) {
         val e = f()
-        if (e != null && err == null) err = e
+        if (e != null) err.compareAndSet(null, e)
     }
 
-    @kotlin.jvm.JvmName("goWait")
-    fun wait(): GoError? = err
+    /** `g.TryGo(f)`: always starts `f` (there is no limit to hit). */
+    fun tryGo(f: () -> GoError?): Boolean {
+        go(f)
+        return true
+    }
 
-    fun goCopy(): Group = Group().also { it.err = err }
+    @Suppress("UNUSED_PARAMETER")
+    fun setLimit(n: Int) {}
+
+    @kotlin.jvm.JvmName("goWait")
+    fun wait(): GoError? = err.load()
+
+    fun goCopy(): Group = Group().also { it.err.store(err.load()) }
 }
 
 /** `errgroup.WithContext(ctx)`: the derived context is [ctx] itself (no cancellation). */

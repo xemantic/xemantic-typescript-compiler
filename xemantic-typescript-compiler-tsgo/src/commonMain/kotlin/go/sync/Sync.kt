@@ -23,92 +23,167 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.xemantic.typescript.tsgo.go.sync
 
-// Go's `sync` for a SINGLE-THREADED port (docs/goport-design.md § 4: goroutines are refused by the
-// lowering and arrive only through overrides). Every primitive here is correct when all calls come
-// from one thread, and NOT thread-safe otherwise: Mutex/RWMutex do no locking (they only check
-// Go's misuse panics), WaitGroup.Go runs its function synchronously, Pool is a plain free list.
-// docs/goport-runtime.md § Concurrency.
+// Go's `sync`, THREAD-SAFE, in common Kotlin (no `java.*`): every primitive is built on
+// `kotlin.concurrent.atomics` (volatile semantics, so a successful acquire happens-after the
+// matching release, as Go's memory model requires). Common Kotlin cannot PARK a thread, so a
+// contended lock SPINS ([spinWait]) instead of sleeping; the uncontended path is one CAS. That is
+// the right trade while goroutines are refused by the lowering (design § 4) and contention only
+// arises between independent compilations sharing a process-global (the IntelliJ host runs one
+// compiler thread per project in one JVM); a parallel checker port needs an `expect`/`actual`
+// park before it holds a lock for long. `WaitGroup.Go` runs its function synchronously.
+// docs/goport-runtime.md § 9a.
 
 import com.xemantic.typescript.tsgo.runtime.goPanic
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.decrementAndFetch
+import kotlin.concurrent.atomics.incrementAndFetch
 
-/** `sync.Mutex` (single-threaded: records the lock state only). */
-class Mutex {
-    private var locked = false
-
-    fun lock() {
-        locked = true
+/**
+ * The contended-acquire back-off: a bounded, exponentially growing run of volatile reads of
+ * [probe] (each one is a memory fence the JIT cannot remove), then the caller re-tries its CAS.
+ */
+internal fun spinWait(round: Int, probe: AtomicInt) {
+    val n = 1 shl (if (round < 10) round else 10)
+    var i = 0
+    while (i < n) {
+        probe.load()
+        i++
     }
-
-    fun unlock() {
-        if (!locked) goPanic("sync: unlock of unlocked mutex")
-        locked = false
-    }
-
-    fun tryLock(): Boolean {
-        if (locked) return false
-        locked = true
-        return true
-    }
-
-    fun goCopy(): Mutex = Mutex()
 }
 
-/** `sync.RWMutex` (single-threaded). */
-class RWMutex {
-    private var writer = false
-    private var readers = 0
+/** `sync.Mutex`: not reentrant (a second `Lock` from the same thread never returns, as in Go). */
+class Mutex {
+    // 0 = unlocked, 1 = locked
+    private val state = AtomicInt(0)
 
     fun lock() {
-        writer = true
+        if (state.compareAndSet(0, 1)) return
+        var round = 0
+        while (true) {
+            if (state.load() == 0 && state.compareAndSet(0, 1)) return
+            spinWait(round++, state)
+        }
     }
 
+    /** Go's `fatal error: sync: unlock of unlocked mutex` — a [goPanic] here (Go cannot recover it). */
     fun unlock() {
-        if (!writer) goPanic("sync: Unlock of unlocked RWMutex")
-        writer = false
+        if (!state.compareAndSet(1, 0)) goPanic("sync: unlock of unlocked mutex")
+    }
+
+    fun tryLock(): Boolean = state.compareAndSet(0, 1)
+
+    /** A Go value copy copies the lock state (`go vet` flags it; Go allows it). */
+    fun goCopy(): Mutex = Mutex().also { it.state.store(state.load()) }
+}
+
+/**
+ * `sync.RWMutex`: any number of readers or one writer. As in Go, a writer waiting in [lock] blocks
+ * NEW readers (so a recursive `RLock` can deadlock, and writers do not starve).
+ */
+class RWMutex {
+    // > 0 = that many readers, -1 = a writer, 0 = free
+    private val state = AtomicInt(0)
+    private val writersWaiting = AtomicInt(0)
+
+    fun lock() {
+        if (state.compareAndSet(0, -1)) return
+        writersWaiting.incrementAndFetch()
+        var round = 0
+        while (true) {
+            if (state.load() == 0 && state.compareAndSet(0, -1)) break
+            spinWait(round++, state)
+        }
+        writersWaiting.decrementAndFetch()
+    }
+
+    fun tryLock(): Boolean = state.compareAndSet(0, -1)
+
+    fun unlock() {
+        if (!state.compareAndSet(-1, 0)) goPanic("sync: Unlock of unlocked RWMutex")
     }
 
     fun rLock() {
-        readers++
+        var round = 0
+        while (true) {
+            if (writersWaiting.load() == 0) {
+                val s = state.load()
+                if (s >= 0 && state.compareAndSet(s, s + 1)) return
+            }
+            spinWait(round++, state)
+        }
+    }
+
+    fun tryRLock(): Boolean {
+        if (writersWaiting.load() != 0) return false
+        val s = state.load()
+        return s >= 0 && state.compareAndSet(s, s + 1)
     }
 
     fun rUnlock() {
-        if (readers <= 0) goPanic("sync: RUnlock of unlocked RWMutex")
-        readers--
+        while (true) {
+            val s = state.load()
+            if (s <= 0) goPanic("sync: RUnlock of unlocked RWMutex")
+            if (state.compareAndSet(s, s - 1)) return
+        }
     }
 
-    fun goCopy(): RWMutex = RWMutex()
+    fun goCopy(): RWMutex = RWMutex().also { it.state.store(state.load()) }
 }
 
-/** `sync.Once`. */
+/**
+ * `sync.Once`: [do] runs `f` once; a concurrent caller waits until it has returned. A panic in `f`
+ * still marks the `Once` done (Go's `defer o.done.Store(1)`). Calling `Do` from inside `f`
+ * deadlocks, as in Go.
+ */
 class Once {
-    private var done = false
+    private val done = AtomicInt(0)
+    private val m = Mutex()
 
     fun `do`(f: () -> Unit) {
-        if (done) return
-        done = true
-        f()
+        if (done.load() == 1) return
+        doSlow(f)
     }
 
-    fun goCopy(): Once = Once().also { it.done = done }
+    private fun doSlow(f: () -> Unit) {
+        m.lock()
+        try {
+            if (done.load() == 0) {
+                try {
+                    f()
+                } finally {
+                    done.store(1)
+                }
+            }
+        } finally {
+            m.unlock()
+        }
+    }
+
+    fun goCopy(): Once = Once().also { it.done.store(done.load()) }
 }
 
-/** `sync.OnceValue(f)`. A panic in `f` is re-thrown on every call, as in Go. */
+/** `sync.OnceValue(f)`: `f` runs once, under a [Once]; a panic in `f` is re-thrown on every call, as in Go. */
 fun <T> onceValue(f: () -> T): () -> T {
-    var done = false
+    val once = Once()
+    var valid = false
     var value: Any? = null
-    var failure: Throwable? = null
+    var failure: Exception? = null
     return {
-        if (!done) {
-            done = true
+        once.`do` {
             try {
                 value = f()
+                valid = true
             } catch (e: Exception) {
                 failure = e
             }
         }
-        failure?.let { throw it }
+        // the Once's atomic `done` publishes the writes above to every caller that saw it set
+        if (!valid) throw failure!!
         @Suppress("UNCHECKED_CAST")
         value as T
     }
@@ -120,26 +195,40 @@ fun onceFunc(f: () -> Unit): () -> Unit {
     return { v() }
 }
 
-/** `sync.Pool`: `Get` returns a pooled value or `New()`. */
+/** `sync.Pool`: `Get` returns a pooled value or `New()`; the free list is guarded by a [Mutex]. */
 class Pool(var new: (() -> Any?)? = null) {
+    private val m = Mutex()
     private val free = ArrayList<Any?>()
 
-    fun get(): Any? = if (free.isNotEmpty()) free.removeAt(free.size - 1) else new?.invoke()
+    fun get(): Any? {
+        m.lock()
+        val x = try {
+            if (free.isNotEmpty()) free.removeAt(free.size - 1) else null
+        } finally {
+            m.unlock()
+        }
+        return x ?: new?.invoke()
+    }
 
     fun put(x: Any?) {
-        if (x != null) free.add(x)
+        if (x == null) return
+        m.lock()
+        try {
+            free.add(x)
+        } finally {
+            m.unlock()
+        }
     }
 
     fun goCopy(): Pool = Pool(new)
 }
 
-/** `sync.WaitGroup`: `Go` runs the function synchronously. */
+/** `sync.WaitGroup`: `Go` runs the function synchronously; [wait] spins until the counter is zero. */
 class WaitGroup {
-    private var count = 0
+    private val count = AtomicInt(0)
 
     fun add(delta: Int) {
-        count += delta
-        if (count < 0) goPanic("sync: negative WaitGroup counter")
+        if (count.addAndFetch(delta) < 0) goPanic("sync: negative WaitGroup counter")
     }
 
     fun done() {
@@ -157,43 +246,74 @@ class WaitGroup {
 
     // `wait()V` would clash with java.lang.Object.wait on the JVM.
     @kotlin.jvm.JvmName("goWait")
-    fun wait() {}
+    fun wait() {
+        var round = 0
+        while (count.load() != 0) spinWait(round++, count)
+    }
 
-    fun goCopy(): WaitGroup = WaitGroup()
+    fun goCopy(): WaitGroup = WaitGroup().also { it.count.store(count.load()) }
 }
 
-/** `sync.Map` (single-threaded, over a HashMap). Keys and values are `any`. */
+/**
+ * `sync.Map`: a `HashMap` guarded by a [Mutex]. Keys and values are `any`. [range] calls `f`
+ * OUTSIDE the lock (Go lets `f` call any method of the map), over a snapshot of the keys, reading
+ * each key's current value and skipping a key deleted meanwhile.
+ */
 class Map {
+    private val mu = Mutex()
     private val m = HashMap<Any?, Any?>()
 
-    fun load(key: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, Boolean> =
-        com.xemantic.typescript.tsgo.runtime.Tuple2(m[key], m.containsKey(key))
-
-    fun store(key: Any?, value: Any?) {
-        m[key] = value
-    }
-
-    fun loadOrStore(key: Any?, value: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, Boolean> {
-        if (m.containsKey(key)) return com.xemantic.typescript.tsgo.runtime.Tuple2(m[key], true)
-        m[key] = value
-        return com.xemantic.typescript.tsgo.runtime.Tuple2(value, false)
-    }
-
-    fun delete(key: Any?) {
-        m.remove(key)
-    }
-
-    fun clear() {
-        m.clear()
-    }
-
-    /** `m.Range(f)`: stops when [f] returns false; tolerates mutation (iterates a snapshot). */
-    fun range(f: (Any?, Any?) -> Boolean) {
-        for (k in m.keys.toList()) {
-            if (!m.containsKey(k)) continue
-            if (!f(k, m[k])) return
+    private inline fun <R> locked(block: () -> R): R {
+        mu.lock()
+        try {
+            return block()
+        } finally {
+            mu.unlock()
         }
     }
 
-    fun goCopy(): Map = Map().also { it.m.putAll(m) }
+    fun load(key: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, Boolean> =
+        locked { com.xemantic.typescript.tsgo.runtime.Tuple2(m[key], m.containsKey(key)) }
+
+    fun store(key: Any?, value: Any?) {
+        locked { m[key] = value }
+    }
+
+    fun loadOrStore(key: Any?, value: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, Boolean> = locked {
+        if (m.containsKey(key)) {
+            com.xemantic.typescript.tsgo.runtime.Tuple2(m[key], true)
+        } else {
+            m[key] = value
+            com.xemantic.typescript.tsgo.runtime.Tuple2(value, false)
+        }
+    }
+
+    fun loadAndDelete(key: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, Boolean> = locked {
+        val present = m.containsKey(key)
+        com.xemantic.typescript.tsgo.runtime.Tuple2(m.remove(key), present)
+    }
+
+    fun delete(key: Any?) {
+        locked { m.remove(key) }
+    }
+
+    fun clear() {
+        locked { m.clear() }
+    }
+
+    /** `m.Range(f)`: stops when [f] returns false; tolerates concurrent mutation. */
+    fun range(f: (Any?, Any?) -> Boolean) {
+        val keys = locked { m.keys.toList() }
+        for (k in keys) {
+            var present = false
+            val v = locked {
+                present = m.containsKey(k)
+                m[k]
+            }
+            if (!present) continue
+            if (!f(k, v)) return
+        }
+    }
+
+    fun goCopy(): Map = Map().also { c -> locked { c.m.putAll(m) } }
 }
