@@ -9,6 +9,7 @@ Gate (docs/tsgo-port-plan.md § 4.1): **parse throughput, JVM warm, tsc's 78 sou
 |---|---|---|---|---|---|
 | HEAD as generated | **42,163 ms** (40,705–44,061, spread 8.0%, n=3) | 313.9 ms (292–355, 19.8%, n=3) | **134x** | core faster 3/3 (124x–139x) | > 3x, **cause identified** (§ 2) |
 | HEAD + measurement-only fix of 7 suffix-slice sites (§ 2) | **368.5 ms** (367.6–412.1, 12.1%, n=4) | 245.7 ms (237.3–288.5, 20.8%, n=4) | **1.50x** | core faster 4/4 (1.28 / 1.46 / 1.56 / 1.72) | **at the line** |
+| **`73acaf4ea`: two lowering rules, regenerated (§ 0)** | **314.6 ms** (306.1–323.1, 5.4%, n=4) | 248.8 ms (235.1–257.8, 9.1%, n=4) | **1.26x** | core faster 4/4 (1.23 / 1.34 / 1.25 / 1.26) | **go** |
 
 So the port as generated is 134x slower — a single, mechanical, quadratic defect (Go's O(1)
 string slice lowered to Kotlin's copying `substring`), not a property of the approach. With that
@@ -27,7 +28,21 @@ a quiet box before quoting the 1.50x as anything but "at the line".
 |---|---|---|---|---|---|
 | HEAD as generated | 42,163 ms | 313.9 ms | 134x | core 3/3 | `3ce760c6e` |
 | **substring elimination** (window rule, § 2) | 338.5 ms (312.8–352.3, 11.7%) | 236.1 ms (224.5–243.6, 8.1%) | **1.43x** | core 4/4 (1.34–1.47) | `1c9db2fe5` |
-| **single-probe comma-ok map read** | 314.6 ms (306.1–323.1, 5.4%) | 248.8 ms (235.1–257.8, 9.1%) | **1.26x** | core 4/4 (1.23–1.34) | this round |
+| **single-probe comma-ok map read** | 314.6 ms (306.1–323.1, 5.4%) | 248.8 ms (235.1–257.8, 9.1%) | **1.26x** | core 4/4 (1.23–1.34) | `73acaf4ea` |
+
+**Gate status: MET by lowering rules alone** — 1.26x, every paired ratio under 1.5x (load 1.2–1.6,
+3 other JVMs on the box). § 4's items 3 (inline func-typed parameters) and 2 (flattening embedded
+bases) were not needed and are NOT landed; item 5's `IndexAny` fast path is moot (rule 1 removed
+`findImportOrRequire`'s copy and it left the profile). Profile after both rules (JFR, 1,998 bench-thread samples,
+self charged to the nearest `com.xemantic` frame): `scanASCIIWhile` 15.5% (the boxed `Function1`
+predicate — item 3), `GoSlice.load` 9.1% + `Arena.new` 9.8% ported-frame (item 2), `GoMap.probe`
+8.9% under `internIdentifier` (now one probe; the rest is `String.hashCode` of a fresh token and
+`HashMap.getNode`), `scan` 6.0%, `MemberExpressionBase.<init>` 5.3% (item 2's embedded chain),
+`overrideParentInImmediateChildren` 5.3%, `GoMap.get` 3.8% (`getIdentifierToken`),
+`appendRuneBytes` 3.0% + `fromUtf16` 1.2% (the host conversion, item 6). Remaining single-bound
+copies in `gen/` (34) are off the parse path except `parser.parseJSDocComment`'s
+`isJSDocLikeText(sourceText[start:])` — a ported callee, which needs a "window parameter" rule
+(an overload taking `(base, from, to)` for a callee whose string parameter is view-eligible).
 
 ## 1. Setup
 
