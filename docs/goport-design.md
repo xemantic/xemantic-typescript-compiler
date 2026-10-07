@@ -13,8 +13,8 @@ the code that implements it; every part of the porter reads this page, not each 
 | `build/goport/ir/<pkg>.json` | the IR, one file per Go package | no (regenerate) |
 | `xemantic-typescript-compiler-goport/src/main/kotlin/` | the Kotlin lowering IR → Kotlin source (JVM tool) | yes |
 | `xemantic-typescript-compiler-goport/overrides/` | hand/LLM ports, keyed by Go qualified name + body hash | yes |
-| `xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/runtime/` | hand-written Go runtime + stdlib shims | yes |
-| `xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/extern/` | hand shims for NON-tsgo Go modules (`x/text`, `xxh3`, `go-json-experiment`, `x/sync`) | yes |
+| `xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/runtime/` | hand-written Go runtime (`GoSlice`, `GoMap`, builtins, …), API in `docs/goport-runtime.md` | yes |
+| `xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/go/` | hand shims for the Go stdlib AND the non-tsgo modules (`x/text`, `xxh3`, `go-json-experiment`, `x/sync`) | yes |
 | `xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/gen/` | generated Kotlin — never edited by hand | yes |
 | `build/goport/oracle/` | tsgo's encoded-AST bytes per corpus file | no |
 
@@ -30,9 +30,8 @@ tsgo-internal packages (ported mechanically): `ast`, `diagnostics`, `parser`, `s
 `scanner`, `api/encoder`, `core`, `tspath`, `collections`, `jsnum`, `json`, `debug`, `locale`
 (~58k Go lines). External modules (`golang.org/x/text`, `github.com/zeebo/xxh3`,
 `github.com/go-json-experiment/json`, `golang.org/x/sync/errgroup`, `klauspost/cpuid`) are NOT
-ported: each symbol the closure reaches is bound to a hand-written shim in `extern/`, and those
-shims are counted separately from overrides. The Go standard library is likewise bound to
-`runtime/` shims.
+ported: each symbol the closure reaches is bound to a hand-written shim in `go/`, and those
+shims are counted separately from overrides. The Go standard library is bound the same way.
 
 ## 3. Type representation (Go → Kotlin)
 
@@ -74,7 +73,11 @@ emits a stub naming the function and an override must exist.
 ## 5. Naming
 
 Kotlin package = `com.xemantic.typescript.tsgo.<go package path under internal/, '/'→'.'>`
-(`internal/api/encoder` → `com.xemantic.typescript.tsgo.api.encoder`). Types keep their Go name;
+(`internal/api/encoder` → `com.xemantic.typescript.tsgo.api.encoder`). Any OTHER Go package P
+(stdlib or external module) maps to `com.xemantic.typescript.tsgo.go.` + P's segments with `.`
+and `-` replaced by `_` (`strings` → `…tsgo.go.strings`, `unicode/utf8` → `…tsgo.go.unicode.utf8`,
+`golang.org/x/text/language` → `…tsgo.go.golang_org.x.text.language`), and its shim follows the
+same naming rules as ported code — so the lowering treats a shim exactly like a ported package. Types keep their Go name;
 functions, methods, fields and vars become lowerCamelCase (`GetTypeOfSymbol` → `getTypeOfSymbol`);
 constants keep their Go name. Kotlin hard keywords are escaped with backticks. A rename that collides
 inside one Kotlin scope (Go `Foo` and `foo`) REFUSES the build until the rename table
