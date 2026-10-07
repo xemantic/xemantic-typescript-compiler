@@ -15,6 +15,8 @@
 //	    oracle file's own header) and compare with the oracle bytes.
 //	dump [-indices] [-no-strings] <file.bin>
 //	    a line-per-node rendering of an encoded AST, stable for `diff`.
+//	materialize / diags
+//	    the (TSGO.2) diagnostics oracle: see diags.go and docs/goport-diag-oracle.md.
 package main
 
 import (
@@ -51,6 +53,10 @@ func main() {
 		err = cmdCrosscheck(os.Args[2:])
 	case "dump":
 		err = cmdDump(os.Args[2:])
+	case "materialize":
+		err = cmdMaterialize(os.Args[2:])
+	case "diags":
+		err = cmdDiags(os.Args[2:])
 	default:
 		usage()
 	}
@@ -61,7 +67,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tsgo-oracle encode|crosscheck|dump ... (see docs/goport-oracle.md)")
+	fmt.Fprintln(os.Stderr, "usage: tsgo-oracle encode|crosscheck|dump|materialize|diags ... (see docs/goport-oracle.md, docs/goport-diag-oracle.md)")
 	os.Exit(2)
 }
 
