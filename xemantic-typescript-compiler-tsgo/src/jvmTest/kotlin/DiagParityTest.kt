@@ -61,8 +61,10 @@ import kotlin.test.Test
  * (TSGO.2) the diagnostics differential (docs/goport-diag-oracle.md § 4, fallback route): drives the
  * PORTED compiler over every configuration the oracle materialized (`build/goport/diag-cases`), writes
  * `build/goport/diag-kotlin/<case>/<variation>.jsonl` in the oracle's format; then
- * `scripts/tsgo-diag-compare.py build/goport/diag-kotlin` grades it. Opt-in: `TSGO_DIAG=1`
- * (`TSGO_DIAG_LIMIT=n`, `TSGO_DIAG_FILTER=<substring of the case path>`).
+ * `scripts/tsgo-diag-compare.py build/goport/diag-kotlin` grades it — and so does the test itself ([gate]):
+ * it FAILS unless every configuration it ran is equal to `build/goport/diag-oracle`. Opt-in: `TSGO_DIAG=1`
+ * (`TSGO_DIAG_LIMIT=n`, `TSGO_DIAG_FILTER=<substring of the case path>`, `TSGO_DIAG_INJECT=<case>/<variation>`
+ * to perturb one result and watch the gate go red).
  */
 class DiagParityTest {
 
@@ -349,5 +351,115 @@ class DiagParityTest {
         }
         println("DiagParityTest: ${entries.size} configurations, $ok written, $crashed crashed (${(System.nanoTime() - t0) / 1_000_000} ms)")
         crashes.entries.sortedByDescending { it.value }.take(25).forEach { (k, v) -> println("  $v × $k") }
+        gate(entries)
+    }
+
+    // ---------------------------------------------------------------- the gate (scripts/tsgo-diag-compare.py's rule)
+
+    /**
+     * Grades every configuration this run covered against `build/goport/diag-oracle`, with the rule of
+     * `scripts/tsgo-diag-compare.py` (docs/goport-diag-oracle.md § 3): EQUAL when both files hold the same
+     * SEQUENCE of parsed JSON values (every key, `related` and `phase` included); a missing actual file (a
+     * crashed configuration) is `missing`, never "no diagnostics". Fails the test unless every configuration
+     * is equal, printing the first differences. `TSGO_DIAG_INJECT=<case>/<variation>` perturbs one actual
+     * result before grading — the positive control that this gate can go red.
+     */
+    private fun gate(entries: List<Pair<String, String>>) {
+        val oracle = File(root, "build/goport/diag-oracle")
+        check(Regex(""""complete":\s*true""").containsMatchIn(File(oracle, "manifest.json").readText())) { "the oracle manifest is incomplete" }
+        val inject = System.getenv("TSGO_DIAG_INJECT")
+        var equal = 0
+        var missing = 0
+        val differ = ArrayList<String>()
+        for ((case, variation) in entries) {
+            val key = "$case/$variation"
+            val wantFile = File(oracle, "$key.jsonl")
+            check(wantFile.isFile) { "oracle file missing: $wantFile" }
+            val gotFile = File(out, "$key.jsonl")
+            if (!gotFile.isFile) { missing++; if (differ.size < 10) differ += "MISSING (crashed) $key"; continue }
+            val want = jsonLines(wantFile.readText())
+            var got = jsonLines(gotFile.readText())
+            if (key == inject) got = got + mapOf("injected" to true)
+            if (got == want) { equal++; continue }
+            if (differ.size < 10) {
+                val i = (0 until minOf(got.size, want.size)).firstOrNull { got[it] != want[it] } ?: minOf(got.size, want.size)
+                differ += "DIFFER $key oracle=${want.size} actual=${got.size} first difference at #$i\n" +
+                    "   oracle: ${want.getOrNull(i)?.toString()?.take(300) ?: "<end>"}\n   actual: ${got.getOrNull(i)?.toString()?.take(300) ?: "<end>"}"
+            }
+        }
+        val unequal = entries.size - equal
+        println("DiagParityTest gate: ${entries.size} configurations: equal $equal, differ ${unequal - missing}, missing $missing")
+        if (unequal != 0) {
+            kotlin.test.fail("diagnostics differential: $unequal of ${entries.size} configurations not equal to tsgo\n" + differ.joinToString("\n"))
+        }
+    }
+
+    /** One parsed JSON value per non-blank line. */
+    private fun jsonLines(text: String): List<Any?> = text.lineSequence().filter { it.isNotBlank() }.map { Json(it).value() }.toList()
+
+    /** A minimal JSON reader: objects to maps, arrays to lists, numbers to Double — value equality as Python's `==`. */
+    private class Json(private val s: String) {
+        private var i = 0
+        fun value(): Any? {
+            val v = read()
+            ws()
+            check(i == s.length) { "trailing JSON at $i" }
+            return v
+        }
+        private fun ws() { while (i < s.length && s[i].isWhitespace()) i++ }
+        private fun read(): Any? {
+            ws()
+            return when (val c = s[i]) {
+                '{' -> obj()
+                '[' -> arr()
+                '"' -> str()
+                't' -> { i += 4; true }
+                'f' -> { i += 5; false }
+                'n' -> { i += 4; null }
+                else -> { val st = i; while (i < s.length && (s[i].isDigit() || s[i] in "+-.eE")) i++; check(i > st) { "bad JSON char '$c' at $st" }; s.substring(st, i).toDouble() }
+            }
+        }
+        private fun obj(): Map<String, Any?> {
+            i++
+            val m = LinkedHashMap<String, Any?>()
+            ws()
+            if (s[i] == '}') { i++; return m }
+            do {
+                ws()
+                val k = str()
+                ws()
+                check(s[i++] == ':')
+                m[k] = read()
+                ws()
+            } while (s[i++] == ',')
+            return m
+        }
+        private fun arr(): List<Any?> {
+            i++
+            val l = ArrayList<Any?>()
+            ws()
+            if (s[i] == ']') { i++; return l }
+            do {
+                l += read()
+                ws()
+            } while (s[i++] == ',')
+            return l
+        }
+        private fun str(): String {
+            check(s[i++] == '"')
+            val b = StringBuilder()
+            while (true) {
+                val c = s[i++]
+                when (c) {
+                    '"' -> return b.toString()
+                    '\\' -> when (val e = s[i++]) {
+                        'n' -> b.append('\n'); 'r' -> b.append('\r'); 't' -> b.append('\t'); 'b' -> b.append('\b'); 'f' -> b.append('\u000c')
+                        'u' -> { b.append(s.substring(i, i + 4).toInt(16).toChar()); i += 4 }
+                        else -> b.append(e)
+                    }
+                    else -> b.append(c)
+                }
+            }
+        }
     }
 }

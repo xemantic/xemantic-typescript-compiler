@@ -202,7 +202,11 @@ diagnostic is compared).
    then one line per diagnostic as in § 3.
 6. **Run.** Iterate `build/goport/diag-oracle/manifest.json` `entries`; read
    `build/goport/diag-cases/<case>/<variation>/`; write `build/goport/diag-kotlin/<case>/<variation>.jsonl`;
-   then `scripts/tsgo-diag-compare.py build/goport/diag-kotlin`.
+   then `scripts/tsgo-diag-compare.py build/goport/diag-kotlin`. **`DiagParityTest` applies the same rule
+   itself and FAILS** on any unequal or crashed (missing) configuration, printing the first ten
+   differences — the differential is a gate, not only a measurement. Positive control:
+   `TSGO_DIAG_INJECT=<case>/<variation>` appends one row to that configuration's actual result before
+   grading (measured: `1 of 1 configurations not equal`, red).
 
 Never run the Kotlin side against a configuration the oracle manifest does not list: skips are
 decided once, by tsgo, in the materializer.

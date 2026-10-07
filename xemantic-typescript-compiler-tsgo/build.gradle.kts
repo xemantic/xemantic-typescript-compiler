@@ -76,7 +76,7 @@ kotlin {
 tasks.withType<Test>().configureEach {
     for (v in listOf(
         "TSGO_ORACLE", "TSGO_ORACLE_LIMIT", "TSGO_ORACLE_SOURCE", "TSGO_ORACLE_REAL_HASH", "TSGO_ORACLE_DIAGS",
-        "TSGO_DIAG", "TSGO_DIAG_LIMIT", "TSGO_DIAG_FILTER", "TSGO_SNIPPET",
+        "TSGO_DIAG", "TSGO_DIAG_LIMIT", "TSGO_DIAG_FILTER", "TSGO_DIAG_INJECT", "TSGO_SNIPPET",
     )) {
         inputs.property(v, providers.environmentVariable(v).orElse(""))
     }
