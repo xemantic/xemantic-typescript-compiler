@@ -25,6 +25,27 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.1-a) — the tsgo port spike, day 1: extractor, runtime, oracle, porter, binder — 7,774/7,774 BOUND encoded ASTs byte-identical to the tsgo binary; speed is the one open gate criterion (2026-10-07)
+
+Orchestrated as parallel subagents against a written contract (`docs/goport-design.md`), Gradle box-serialized through one `flock`.
+**Landed** (one commit each): `goport-extract` (Go, `go/packages`+`go/types` → deterministic typed JSON IR, `docs/goport-ir.md`, census
+`docs/goport-closure-stats.md`); `-tsgo` module with the Go runtime + shims for the 257 external symbols the closure reaches, oracle-tested
+against real go1.27.1 vectors (`docs/goport-runtime.md`); the oracle (`scripts/tsgo-oracle.py` over `tsc --api` getSourceFile, 7,774 files:
+conformance 6,573, tsc 78, cronstrue, marked, type-fest, hono, rxjs; `oracle-go` in-process encoder/dump via `go build -overlay`, cross-checked
+7,774/7,774 against the binary); the Kotlin porter `-goport` + the generated, checked-in port (81.6k lines, warning-clean); exact xxh3-128,
+RE2→Java regexp translation, real `sync`/`atomic` on `kotlin.concurrent.atomics`; the binder. **Gate (§ 4.1) now**: encoded-AST byte equality
+**7,774/7,774 BOUND** (the binary's own bytes, the port's own hash — `TSGO_ORACLE=bound` OracleParityTest fails on any miss, `TsgoPinTest` gates
+5 fixtures on every build); mechanical share **99.0%** (43,948/44,395 Go lines); overrides **1** (`ast.getCombinedFlags`, `|=` on a
+`~uint32` type parameter); `huge_methods.py --fail-over 0` **0** (switch-splitting rule); warning-clean. **Open: parse speed** — as generated
+**134x** slower than `-core`'s Parser because Go's free string slice lowered to a copying `substring` (quadratic scanner); 7 sites fixed by
+hand in a scratch copy read **1.50x** on a loaded box. A perf agent is turning those into porter RULES (`docs/goport-perf.md`).
+**Surprises**: (1) the API binary BINDS before encoding — 4,024 files carry binder-set flags — so the binder (3.6k lines) joined the spike
+rather than masking bits; (2) Go pointer-receiver methods are called on nil pointers, so they lower to extensions on `T?` (146 crashes); (3)
+generic zero values need a per-type-parameter element kind (`getSpellingSuggestion[string]` returned null); (4) a test env var that is not a
+declared Gradle input leaves the task UP-TO-DATE and measures nothing; (5) the sync shims were first single-threaded — wrong for the IntelliJ
+host running several projects per JVM — fixed before the checker port needs them (contended locks still spin: a platform park is needed
+before (TSGO.2) holds locks long).
+
 ### Round (P18.313) — (LIBS.4) round 2: a `for … of this.<member>` loop variable is typed (zod), seven hono object-literal / array-literal mechanisms, and an object-literal ternary arm narrowed by a type guard (a false positive on tsc's own `server/scriptVersionCache.ts` the first fix exposed) — tally 162 -> 152, NO added position; the builder's session ended before pins and gates and the round was finished from its tree (2026-10-07)
 
 **Where it stood**: the builder had left an un-gated tree (fixes done, census print removed, no pins, no ablation, no grid). Finished
@@ -295,50 +316,6 @@ removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged 
 `TupleMemberCensus`, `MemberResolver`); library grid OURS-ONLY row lists byte-identical on all eight (orchestrator's `r305`;
 tally 238); warning gate with probe: probe only.
 
-### Round (P18.304) — (LIBS.3) round 12: the alias depth budget now runs at tsgo's limits (depth 100, tail 1,000, a per-substitution computation count of 2,000, a 10,000-element tuple cap) in a new `AliasInstantiationBudget`; the OOM at depth 25 was a 2^depth FAN-OUT plus a doubling tuple, not deep recursion; a "FP-safe by construction" TS2589 walker was not; hono 29 -> 28, type-fest 175 -> 170, tally 244 -> 238, NO added position; type-fest wall 9.4 -> 15.5 s from one fixture, accepted for tsgo-exactness with lazy tuple members queued (2026-10-05)
-
-One implementation subagent. **Where the brief / queue were wrong**: raising the budget ALONE changes nothing on the parent
-(all eight libraries byte-identical at 25 and 100; `r/w4` still misses its rows) — the depth gate matters only under the
-held-back stack; the OOM at 25 is one corpus case (`declarationEmitPrivatePromiseLikeInterface`, embedded lib): its
-`TPromise` alias has TWO recursive members (`then`, `catch`) with arguments new at every level — a full binary tree, exactly
-1,023 substitutions at depth 10 (2^10 - 1), ~33 M at 25 — so the substitution cache rightly never hits; a second OOM hid
-behind it (`excessivelyLargeTupleSpread`, `BuildTuple<L, [...T, ...T]>` doubling its tuple per level — needs tsgo's
-10,000-element cap); (P18.293)'s defaults fallback has a SECOND job (absorbing eager evaluation of object-literal members tsgo
-never resolves — removing it turned 4 type-fest TS2578 rows into 4 false TS2589), so it is KEPT, comment corrected; 5 of
-type-fest's 7 TS2589 rows (and hono's 1) are not the budget at all but `checkRecursiveConditionalAliasInstantiation`, whose
-KDoc called it "FP-safe by construction" — an outer base case with a GENERIC inner check type (`TupleMax`) is something tsgo
-defers and never reports. **Mechanisms**: `AliasInstantiationBudget.kt` (108) — three independent limits: depth 100 for
-nested non-tail substitutions, tail 1,000 for consecutive tail substitutions (a reference that is the alias body itself or
-sits in conditional branches does not consume depth), count 2,000 per OUTERMOST substitution (bounds a fan-out at any depth;
-measured: the largest completing evaluation is 1,407 in the corpus — `conditionalTypeDoesntSpinForever` — and 518 in the
-libraries), replacing `typeAliasResolutionDepth >= 10` at `getTypeFromTypeReference` (an `aliasBodyDeclStack` tells it which
-alias body is substituted); the 10,000-element tuple cap in `flattenTupleSpreads` (-> `errorType`; TS2799 from the existing
-walker); `bothBranchConditionalIsDeferred` skips that walker when the inner check type names an alias type parameter or an
-`infer` name and every name resolves. `Checker.kt` +57; `MAPPED_TYPE_MAX_DEPTH` (10) untouched (never reached).
-**Matrix** (`build/bench/p18304-agent/r/`): `Cnt` 40 levels, `TupleOf<0,300>`, `Strip` 120 levels, `TupleMax`,
-`tailRecursiveConditionalTypes` + uses (5 false TS2589 and 5 missing rows -> = tsgo; the corpus pins that case on its `.js`
-channel only, so no gate saw them) all = tsgo; `Loop<'a'>` still TS2589 = tsgo; residues: `Wide` (a 3-member fan-out) keeps an
-ours-only TS2589 (tsgo resolves members lazily); `type D = T extends string ? [Deep<T>] : never` an ours-only TS2589 (tsgo
-defers tuple-element references); `TupleMax<[1,2]>` missing TS2322 (`infer F extends number` in a tuple pattern); alias-name
-display (`Rev<"abc">`, `'T20'`). **Cost, measured and ACCEPTED**: compiler profile 29.1 -> 29.6 s, RSS 1.67 -> 1.62 GB, all 20
-cost counters identical; type-fest 9.4 -> 15.5 s (RSS 0.72 -> 3.28 GB at `-Xmx5g`; passes at `-Xmx1g`, OOM at `-Xmx512m`), ALL
-from `if-not-any-or-never.ts` (1.5 -> 6.3 s) — eight aliases legitimately run the full 1,000 tail iterations with a growing
-tuple accumulator (four tsgo also runs; four from our eager object-literal member evaluation), quadratic because
-`buildTupleFromTypes` writes one never-evicted global `symbolTypes` entry per tuple element (~n^2/2 live entries; ~30% of
-samples, mostly `IntKeyMap.set`; GC only +0.34 s). tsgo's 1,000 is kept (a lower tail could fail code that checks clean in
-VS Code); lazy tuple members queued (CHK.233). **Stack re-measure** (not landed): `NoInfer` + constraint fix: type-fest
-170 -> 159, +15 / -26 (array-slice 5, all-extend 3, require-exactly-one 2, is-readonly / writable-key-of 2, some-extend 1,
-require-all-or-none 1, jsonify 1); full stack + bare `infer` + empty mapped: 170 -> 265, +128 / -33 (remove-suffix 19,
-remove-prefix 18, words 13, conditional-keys 11, extends-strict 9, union-length 8); at the OLD depth the full stack read 359
-with 146 words rows — the budget took words to 13 and `pascal-cased-properties-deep:74` away under every variant. **Pins**:
-`AliasInstantiationBudgetTest` 8; ablation a1 1 / a2 2 / a5 1 RED, a3 (count removed) and a4 (tuple cap removed) OOM at 27 s / 11 s
-via CLI with a timeout. **Gates**: full suite 22,887 / 0 / 44 (+8); corpus screen 8725 / 0 and `--include ''` the same 41;
-`cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; at-risk sweep 314 classes / 4,165 tests; grid 8 x added=0 removed=0 +
-chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to `AliasInstantiationBudget`);
-library grid on the final classes (orchestrator's `r304` vs `r303`): hono 29 -> 28 (`client/types.ts:203`), type-fest
-175 -> 170 (array-reverse:73, tuple:53, tuple:76, string-to-array:90, union-max:54 — all TS2589), the rest unchanged, NO added
-position (tally 244 -> 238); warning gate with probe: probe only.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -423,6 +400,9 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   lowered mechanically, ≤ ~50 overrides, parse within 1.5x of `-core`'s `Parser` warm,
   `huge_methods.py --fail-over 0` green. Timebox 3 weeks of rounds; a no-go writes up which
   lowering class failed. (TSGO.0) decided 2026-10-07 — this is the HEAD of the queue.
+  **PROGRESS 2026-10-07 ((TSGO.1-a) note): steps (a)-(d) built; byte equality 7,774/7,774 BOUND, mechanical 99.0%,
+  1 override, 0 huge methods, warning-clean — ONLY the speed criterion is open (134x as generated; 1.50x with the
+  substring fix done by hand, being turned into porter rules per `docs/goport-perf.md`).**
 - [ ] **(TSGO.2) binder + checker through the porter (after a GO on (TSGO.1)).** ~64k Go. Oracle:
   diagnostics differential against tsgo over all four baseline layers, and the ~2,800
   hand-written pins run against BOTH engines.

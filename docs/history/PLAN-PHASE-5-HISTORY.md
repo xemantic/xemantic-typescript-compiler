@@ -1,3 +1,47 @@
+### Round (P18.304) — (LIBS.3) round 12: the alias depth budget now runs at tsgo's limits (depth 100, tail 1,000, a per-substitution computation count of 2,000, a 10,000-element tuple cap) in a new `AliasInstantiationBudget`; the OOM at depth 25 was a 2^depth FAN-OUT plus a doubling tuple, not deep recursion; a "FP-safe by construction" TS2589 walker was not; hono 29 -> 28, type-fest 175 -> 170, tally 244 -> 238, NO added position; type-fest wall 9.4 -> 15.5 s from one fixture, accepted for tsgo-exactness with lazy tuple members queued (2026-10-05)
+
+One implementation subagent. **Where the brief / queue were wrong**: raising the budget ALONE changes nothing on the parent
+(all eight libraries byte-identical at 25 and 100; `r/w4` still misses its rows) — the depth gate matters only under the
+held-back stack; the OOM at 25 is one corpus case (`declarationEmitPrivatePromiseLikeInterface`, embedded lib): its
+`TPromise` alias has TWO recursive members (`then`, `catch`) with arguments new at every level — a full binary tree, exactly
+1,023 substitutions at depth 10 (2^10 - 1), ~33 M at 25 — so the substitution cache rightly never hits; a second OOM hid
+behind it (`excessivelyLargeTupleSpread`, `BuildTuple<L, [...T, ...T]>` doubling its tuple per level — needs tsgo's
+10,000-element cap); (P18.293)'s defaults fallback has a SECOND job (absorbing eager evaluation of object-literal members tsgo
+never resolves — removing it turned 4 type-fest TS2578 rows into 4 false TS2589), so it is KEPT, comment corrected; 5 of
+type-fest's 7 TS2589 rows (and hono's 1) are not the budget at all but `checkRecursiveConditionalAliasInstantiation`, whose
+KDoc called it "FP-safe by construction" — an outer base case with a GENERIC inner check type (`TupleMax`) is something tsgo
+defers and never reports. **Mechanisms**: `AliasInstantiationBudget.kt` (108) — three independent limits: depth 100 for
+nested non-tail substitutions, tail 1,000 for consecutive tail substitutions (a reference that is the alias body itself or
+sits in conditional branches does not consume depth), count 2,000 per OUTERMOST substitution (bounds a fan-out at any depth;
+measured: the largest completing evaluation is 1,407 in the corpus — `conditionalTypeDoesntSpinForever` — and 518 in the
+libraries), replacing `typeAliasResolutionDepth >= 10` at `getTypeFromTypeReference` (an `aliasBodyDeclStack` tells it which
+alias body is substituted); the 10,000-element tuple cap in `flattenTupleSpreads` (-> `errorType`; TS2799 from the existing
+walker); `bothBranchConditionalIsDeferred` skips that walker when the inner check type names an alias type parameter or an
+`infer` name and every name resolves. `Checker.kt` +57; `MAPPED_TYPE_MAX_DEPTH` (10) untouched (never reached).
+**Matrix** (`build/bench/p18304-agent/r/`): `Cnt` 40 levels, `TupleOf<0,300>`, `Strip` 120 levels, `TupleMax`,
+`tailRecursiveConditionalTypes` + uses (5 false TS2589 and 5 missing rows -> = tsgo; the corpus pins that case on its `.js`
+channel only, so no gate saw them) all = tsgo; `Loop<'a'>` still TS2589 = tsgo; residues: `Wide` (a 3-member fan-out) keeps an
+ours-only TS2589 (tsgo resolves members lazily); `type D = T extends string ? [Deep<T>] : never` an ours-only TS2589 (tsgo
+defers tuple-element references); `TupleMax<[1,2]>` missing TS2322 (`infer F extends number` in a tuple pattern); alias-name
+display (`Rev<"abc">`, `'T20'`). **Cost, measured and ACCEPTED**: compiler profile 29.1 -> 29.6 s, RSS 1.67 -> 1.62 GB, all 20
+cost counters identical; type-fest 9.4 -> 15.5 s (RSS 0.72 -> 3.28 GB at `-Xmx5g`; passes at `-Xmx1g`, OOM at `-Xmx512m`), ALL
+from `if-not-any-or-never.ts` (1.5 -> 6.3 s) — eight aliases legitimately run the full 1,000 tail iterations with a growing
+tuple accumulator (four tsgo also runs; four from our eager object-literal member evaluation), quadratic because
+`buildTupleFromTypes` writes one never-evicted global `symbolTypes` entry per tuple element (~n^2/2 live entries; ~30% of
+samples, mostly `IntKeyMap.set`; GC only +0.34 s). tsgo's 1,000 is kept (a lower tail could fail code that checks clean in
+VS Code); lazy tuple members queued (CHK.233). **Stack re-measure** (not landed): `NoInfer` + constraint fix: type-fest
+170 -> 159, +15 / -26 (array-slice 5, all-extend 3, require-exactly-one 2, is-readonly / writable-key-of 2, some-extend 1,
+require-all-or-none 1, jsonify 1); full stack + bare `infer` + empty mapped: 170 -> 265, +128 / -33 (remove-suffix 19,
+remove-prefix 18, words 13, conditional-keys 11, extends-strict 9, union-length 8); at the OLD depth the full stack read 359
+with 146 words rows — the budget took words to 13 and `pascal-cased-properties-deep:74` away under every variant. **Pins**:
+`AliasInstantiationBudgetTest` 8; ablation a1 1 / a2 2 / a5 1 RED, a3 (count removed) and a4 (tuple cap removed) OOM at 27 s / 11 s
+via CLI with a timeout. **Gates**: full suite 22,887 / 0 / 44 (+8); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; at-risk sweep 314 classes / 4,165 tests; grid 8 x added=0 removed=0 +
+chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged (identity hash extended to `AliasInstantiationBudget`);
+library grid on the final classes (orchestrator's `r304` vs `r303`): hono 29 -> 28 (`client/types.ts:203`), type-fest
+175 -> 170 (array-reverse:73, tuple:53, tuple:76, string-to-array:90, union-max:54 — all TS2589), the rest unchanged, NO added
+position (tally 244 -> 238); warning gate with probe: probe only.
+
 ### Round (P18.303) — (INV.0) extraction: the CIRCULARITY family (TS2303 import-alias cycles, TS2449 / TS2506 base-class cycles, TS2456 type-alias cycles, 9 passes) moves verbatim into `CircularityChecks`; `Checker.kt` 192,857 -> 191,529 (-1,328); every receipt identical, per-pass table included (2026-10-05)
 
 One implementation subagent in the (P18.294) order; it finished. **Choice**: the switch family is still scattered; the
