@@ -228,7 +228,7 @@ not compared here):
 | CLI-equivalent list vs CLI (default) | **6,171** | path-model 94, option-location 26, noemit-option 12, unexplained-by-rule 15 |
 
 Rows: 12,807 gated oracle rows / 13,205 CLI rows; 12,600 rows sit in agreeing configurations. The
-gate simulation alone turns 131 of the 146 raw "unexplained" configurations into agreement.
+gate simulation takes the unexplained class from 146 configurations to 15 (and agreement from 6,019 to 6,171).
 
 The gate simulation applies the two mechanisms that separate the harness from the CLI, both
 taken from tsgo's source, to the oracle's phase-tagged list: **(1) the CLI's diagnostic gate**,
