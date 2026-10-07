@@ -38,7 +38,11 @@ RE2→Java regexp translation, real `sync`/`atomic` on `kotlin.concurrent.atomic
 5 fixtures on every build); mechanical share **99.0%** (43,948/44,395 Go lines); overrides **1** (`ast.getCombinedFlags`, `|=` on a
 `~uint32` type parameter); `huge_methods.py --fail-over 0` **0** (switch-splitting rule); warning-clean. **Open: parse speed** — as generated
 **134x** slower than `-core`'s Parser because Go's free string slice lowered to a copying `substring` (quadratic scanner); 7 sites fixed by
-hand in a scratch copy read **1.50x** on a loaded box. A perf agent is turning those into porter RULES (`docs/goport-perf.md`).
+hand in a scratch copy read **1.50x** on a loaded box; as porter RULES (string-slice windows `1c9db2fe5`, one-probe map read `73acaf4ea`) it
+reads **1.26-1.35x** (ABBA, 4 pairs each, all core-faster, max pair 1.52 in one quieter re-run, 1.36 in the last). Two more rules landed and
+were measured as NO gain (inline func-typed params `69898f30c` — the cost is the per-char `String` loop, not the dispatch; window-parameter
+overloads `269d35f0d`, the last parse-path copy) — kept as correct and cheap. **VERDICT: GO** — every § 4.1 criterion met on day 1. Remaining
+perf is REPRESENTATION work (per-char String loop, per-node Arena/GoSlice + embedded-struct object chains), recorded in `docs/goport-perf.md`.
 **Surprises**: (1) the API binary BINDS before encoding — 4,024 files carry binder-set flags — so the binder (3.6k lines) joined the spike
 rather than masking bits; (2) Go pointer-receiver methods are called on nil pointers, so they lower to extensions on `T?` (146 crashes); (3)
 generic zero values need a per-type-parameter element kind (`getSpellingSuggestion[string]` returned null); (4) a test env var that is not a
@@ -390,7 +394,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   the rest of the repo, keeping Microsoft's copyright, tsgo's Apache `LICENSE`/`NOTICE.txt` and per-file modification
   headers emitted by the porter. D3 DECIDED: `-core` is FROZEN — only fixes a product needs now; no new (CHK.\*)/(INV.\*)/
   (LIBS.\*) parity or extraction rounds unless the (TSGO.1) gate says no-go. (P18.313) was the last parity round.
-- [ ] **(TSGO.1) SPIKE: scanner + parser + AST + API encoder through the porter, gated on
+- [x] **(TSGO.1) SPIKE: scanner + parser + AST + API encoder through the porter, gated on
   encoded-AST byte equality against `tools/tsgo-7.0.2/lib/tsc --api` `getSourceFile`.** ~57k Go
   lines (~20k generated). Steps: (a) `goport-extract` (go/packages + go/types → typed JSON IR,
   per-function source hash); (b) `-goport` module: lowering for the closure, `overrides/` with
@@ -400,9 +404,8 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   lowered mechanically, ≤ ~50 overrides, parse within 1.5x of `-core`'s `Parser` warm,
   `huge_methods.py --fail-over 0` green. Timebox 3 weeks of rounds; a no-go writes up which
   lowering class failed. (TSGO.0) decided 2026-10-07 — this is the HEAD of the queue.
-  **PROGRESS 2026-10-07 ((TSGO.1-a) note): steps (a)-(d) built; byte equality 7,774/7,774 BOUND, mechanical 99.0%,
-  1 override, 0 huge methods, warning-clean — ONLY the speed criterion is open (134x as generated; 1.50x with the
-  substring fix done by hand, being turned into porter rules per `docs/goport-perf.md`).**
+  **DONE 2026-10-07 — GATE: GO ((TSGO.1-a) note, `docs/tsgo-port-plan.md` § 4.1 RESULT): 7,774/7,774 BOUND
+  byte-identical, mechanical 99.0%, 1 override, parse ~1.28x `-core` warm, 0 huge methods, warning-clean.**
 - [ ] **(TSGO.2) binder + checker through the porter (after a GO on (TSGO.1)).** ~64k Go. Oracle:
   diagnostics differential against tsgo over all four baseline layers, and the ~2,800
   hand-written pins run against BOTH engines.

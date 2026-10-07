@@ -183,6 +183,16 @@ and the library probes (cronstrue, marked, knip, type-fest, hono, rxjs).
 method over 8,000 bytecodes is never JIT-compiled (CLAUDE.md, (JIT.1)), so the lowering must
 know how to split, and the spike finds out whether it has to.
 
+**RESULT 2026-10-07 — GO.** Measured on day 1 of the timebox (session note (TSGO.1-a)):
+
+| criterion | result |
+|---|---|
+| encoded-AST byte equality | **7,774 / 7,774** files, BOUND bytes of the `tsc --api` binary, the port's own xxh3 hash (conformance 6,573, tsc 78, cronstrue 54, marked 53, type-fest 453, hono 311, rxjs 252) |
+| mechanically lowered share | **99.0%** (43,948 / 44,395 Go lines; scanner, parser, binder, encoder at 99-100%) |
+| overrides | **1** (`ast.getCombinedFlags`) |
+| parse throughput, JVM warm, tsc's 78 sources | **~1.28x** `-core` (4 ABBA pairs 1.13-1.36; `docs/goport-perf.md`) — 134x as first generated, cured by two porter rules (string-slice windows, one-probe map read) |
+| build | warning-clean, `huge_methods.py --fail-over 0` = 0 (switch-splitting rule) |
+
 **If no-go:** the written result is the deliverable — which lowering class failed and why — and
 the `-core` lane continues. **If go:** (TSGO.2).
 
