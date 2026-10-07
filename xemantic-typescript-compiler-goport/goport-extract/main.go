@@ -28,7 +28,7 @@ import (
 )
 
 // irSchemaVersion is bumped on every incompatible change to the IR shape.
-const irSchemaVersion = 1
+const irSchemaVersion = 2
 
 const tsgoModule = "github.com/microsoft/typescript-go"
 

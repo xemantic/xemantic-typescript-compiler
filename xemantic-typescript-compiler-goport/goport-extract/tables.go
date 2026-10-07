@@ -405,7 +405,7 @@ func (p *px) fillType(e *O, t types.Type, full bool) {
 	case *types.Array:
 		e.S("k", "array").S("len", int(t.Len())).S("elem", p.typ(t.Elem(), full))
 	case *types.Map:
-		e.S("k", "map").S("key", p.typ(t.Key(), full)).S("elem", p.typ(t.Elem(), full))
+		e.S("k", "map").S("keyType", p.typ(t.Key(), full)).S("elem", p.typ(t.Elem(), full))
 	case *types.Chan:
 		dir := map[types.ChanDir]string{types.SendRecv: "both", types.SendOnly: "send", types.RecvOnly: "recv"}[t.Dir()]
 		e.S("k", "chan").S("dir", dir).S("elem", p.typ(t.Elem(), full))

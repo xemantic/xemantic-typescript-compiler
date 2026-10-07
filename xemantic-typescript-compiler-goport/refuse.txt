@@ -1,0 +1,15 @@
+# goport pinned refusals: <Go qualified name> <reason>
+#
+# Declarations the porter must stub although a rule could lower them — each line is a known gap
+# OUTSIDE the porter (normally a shim whose signature departs from docs/goport-design.md § 3) and
+# names what would remove it. Keyed by the Go name; the report counts them under `pinned:<reason>`.
+
+# go/math/big shim: Float.SetPrec takes UInt, but Go `uint` is ULong per the contract.
+github.com/microsoft/typescript-go/internal/jsnum.Number.Exponentiate shim-signature-big.Float.SetPrec
+
+# jsontext shim: the BeginObject/EndObject tokens are TODO stubs; as package variables they would
+# fail internal/json's whole file initialization (reached from jsnum.Number.String).
+github.com/microsoft/typescript-go/internal/json.BeginObject shim-stub-jsontext.BeginObject
+github.com/microsoft/typescript-go/internal/json.EndObject shim-stub-jsontext.EndObject
+github.com/microsoft/typescript-go/internal/json.BeginArray shim-stub-jsontext.BeginArray
+github.com/microsoft/typescript-go/internal/json.EndArray shim-stub-jsontext.EndArray

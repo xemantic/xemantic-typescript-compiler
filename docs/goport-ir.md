@@ -46,7 +46,7 @@ mangle invalid UTF-8. Only names, type keys, doc comments and raw literal spelli
 ## 3. Package object
 
 ```
-{ "schema": 1, "path": "github.com/microsoft/typescript-go/internal/core", "name": "core",
+{ "schema": 2, "path": "github.com/microsoft/typescript-go/internal/core", "name": "core",
   "files": [File...], "initOrder": [Init...],
   "types": [Type...], "objects": [Object...], "scopes": [Scope...] }
 ```
@@ -349,7 +349,7 @@ treat it as an opaque join key). Kinds:
 | `alias` | `name`, `pkg?`, `tparams?`, `targs?`, `rhs` (the aliased type as written), `actual` (fully unaliased) |
 | `pointer`, `slice` | `elem` |
 | `array` | `len`, `elem` |
-| `map` | `key`, `elem` |
+| `map` | `keyType`, `elem` (schema 2; schema 1 wrote the key type as a second `key` field, which JSON parsers drop) |
 | `chan` | `dir` (`both`/`send`/`recv`), `elem` |
 | `signature` | `params`, `results` (`[{name, t}]`; names may be `""`), `variadic?` (the last param's type is the slice `[]E`), `recv?: {name, t, ptr}` (method objects only), `tparams?`, `recvTparams?` |
 | `struct` | `fields: [{name, t, embedded?, exported, pkg? (unexported: the declaring package), tag?}]` |
@@ -494,7 +494,7 @@ Tables it references (trimmed):
 {"id":2469,"k":"typeparam","name":"T","index":0,"at":"set.go:24:14","constraint":0,"key":"typeparam:T@set.go:413"}
 {"id":2607,"k":"pointer","elem":2608,"key":"*…/collections.Set[typeparam:T@set.go:413]"}
 {"id":2608,"k":"named","name":"Set","pkg":"…/collections","origin":2465,"targs":[2469],"u":2609,"isStruct":true,"comparable":false,…}
-{"id":2610,"k":"map","key":2469,"elem":97,"key":"map[typeparam:T@set.go:413]struct{}"}
+{"id":2610,"k":"map","keyType":2469,"elem":97,"key":"map[typeparam:T@set.go:413]struct{}"}
 
 {"id":493,"k":"recv","name":"s","t":2607,"at":"set.go:24:7","local":true,"scope":110,"fn":"…/collections.Set.Add"}
 {"id":494,"k":"typename","name":"T","t":2469,"local":true,…}

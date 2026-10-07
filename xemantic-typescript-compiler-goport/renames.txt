@@ -1,0 +1,14 @@
+# goport rename table (docs/goport-design.md § 5): <Go qualified name> <Kotlin name>
+#
+# Only for names the systematic rules map onto an existing Kotlin name in the same scope (the
+# porter refuses to write such a collision). Keyed by the GO name, so a rename never makes an
+# override stale.
+
+# ast.NodeVisitor has exported VisitX and unexported visitX with identical signatures.
+github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitNode visitNodeImpl
+github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitEmbeddedStatement visitEmbeddedStatementImpl
+github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitNodes visitNodesImpl
+github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitModifiers visitModifiersImpl
+
+# collections.OrderedMap / OrderedSet: exported Clone (nil-safe) and unexported clone.
+github.com/microsoft/typescript-go/internal/collections.OrderedMap.clone cloneImpl
