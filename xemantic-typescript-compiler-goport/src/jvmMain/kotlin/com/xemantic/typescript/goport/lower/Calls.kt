@@ -163,6 +163,15 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
     private fun special(o: Node, e: Node): Ex? {
         val key = o.str("key") ?: return null
         val args = e.list("args")
+        FUSIONS[key]?.let { f ->
+            // Substring elimination: `F(s[lo:hi], …)` → `FAt(s, lo, …)` / `FIn(s, lo, hi, …)`.
+            val w = windowOf(args[0]) ?: return@let
+            if (w.to != null && !f.inOk) return@let
+            val rest = args.drop(1).map { flow(it).code }
+            val head = if (w.to == null) listOf(w.base, w.from) else listOf(w.base, w.from, w.to)
+            val fname = f.name + (if (w.to == null) "At" else "In")
+            return Ex.primary("${f.pkg}.$fname(${(head + rest).joinToString(", ")})")
+        }
         fun suffixArg(a: Node): Pair<Node, Node>? =
             if (a.k == "SliceExpr" && a.str("sk") == "string" && a.obj("high") == null && a.obj("low") != null) a.reqObj("x") to a.reqObj("low") else null
         when (key) {
@@ -177,6 +186,103 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             }
         }
         return null
+    }
+
+    // ------------------------------------------------------------------ substring elimination
+
+    /** The shim key of a `func` call's callee, or null. */
+    fun calleeKey(call: Node): String? =
+        if (call.k == "CallExpr" && call.str("call") == "func") runCatching { calleeObj(call.reqObj("fun")).str("key") }.getOrNull() else null
+
+    /**
+     * The string locals of this declaration that lower as windows (docs/goport-lowering.md § 3):
+     * defined once from a string slice `s[lo:hi]` (`:=` or `var x = `), never reassigned or
+     * address-taken, and used ONLY as `len(x)`, `x[k]`, or `x[lo:hi]` that is itself a window
+     * (the first argument of a fused `strings` call that has a bounded form, or the left operand
+     * of `==`/`!=`). Anything else keeps the copying `substring`.
+     */
+    fun viewCandidates(): Set<Int> {
+        fn.viewable?.let { return it }
+        val root = fn.root
+        val defs = HashMap<Int, Node>()
+        val defIdents = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
+        fun isStringSlice(n: Node) = n.k == "SliceExpr" && n.str("sk") == "string" && !n.bool("slice3") &&
+            (n.obj("low") != null || n.obj("high") != null)
+        fun candidate(ident: Node, value: Node) {
+            val id = ident.int("obj") ?: return
+            val o = pc.obj(id)
+            if (!o.bool("local") || o.bool("mut") || o.bool("addr") || !isStringSlice(value)) return
+            defs[id] = value
+            defIdents += ident
+        }
+        if (root != null) Program.walk(listOf(root)) { n ->
+            when (n.str("k")) {
+                "AssignStmt" -> if (n.str("tok") == ":=") {
+                    val l = n.list("lhs")
+                    val r = n.list("rhs")
+                    if (l.size == 1 && r.size == 1 && l[0].k == "Ident" && l[0].bool("def")) candidate(l[0], r[0])
+                }
+                "ValueSpec" -> {
+                    val names = n.list("names")
+                    val values = n.list("values")
+                    if (names.size == 1 && values.size == 1) candidate(names[0], values[0])
+                }
+            }
+            true
+        }
+        val bad = HashSet<Int>()
+        if (defs.isNotEmpty()) {
+            // Every reference must sit in an allowed context: parent (with its key) and grandparent.
+            val stack = ArrayList<Pair<Node, String>>()
+            fun allowed(): Boolean {
+                val (p, pk) = stack[stack.size - 1]
+                if (p.k == "CallExpr" && p.str("call") == "builtin" && p.str("builtin") == "len") return true
+                if (p.k == "IndexExpr" && pk == "x" && p.str("ik") == "string") return true
+                if (pk == "x" && isStringSlice(p) && stack.size >= 2) {
+                    val (g, gk) = stack[stack.size - 2]
+                    if (g.k == "BinaryExpr" && gk == "x" && g.str("op") in setOf("==", "!=")) return true
+                    if (g.k == "CallExpr" && gk == "args" && g.list("args").firstOrNull() === p) {
+                        val f = calleeKey(g)?.let { FUSIONS[it] }
+                        if (f != null && f.inOk) return true
+                    }
+                }
+                return false
+            }
+            fun walk(el: kotlinx.serialization.json.JsonElement, key: String) {
+                when (el) {
+                    is kotlinx.serialization.json.JsonObject -> {
+                        if (el.str("k") == "Ident" && el !in defIdents) {
+                            val id = el.int("obj")
+                            if (id != null && id in defs && id !in bad && (stack.isEmpty() || !allowed())) bad += id
+                        }
+                        for ((k2, v) in el) {
+                            stack += el to k2
+                            walk(v, k2)
+                            stack.removeAt(stack.size - 1)
+                        }
+                    }
+                    is kotlinx.serialization.json.JsonArray -> for (v in el) walk(v, key)
+                    else -> {}
+                }
+            }
+            walk(root!!, "")
+        }
+        val r = defs.keys - bad
+        fn.viewable = r
+        return r
+    }
+
+    /** Declares view local [id] from the string slice [slice]: three locals, no copy. */
+    fun declareView(id: Int, slice: Node, emit: (String) -> Unit) {
+        val n = fn.declare(id)
+        val w = windowOf(slice) ?: refuse("view-def")
+        val b = fn.fresh("${n}_b")
+        val o = fn.fresh("${n}_o")
+        val l = fn.fresh("${n}_n")
+        emit("val $b: String = ${w.base}")
+        emit("val $o: Int = ${w.from}")
+        emit("val $l: Int = goStrView($b, $o, ${w.to ?: "$b.length"})")
+        fn.views[id] = View(b, o, l)
     }
 
     fun methodCall(e: Node): Ex {
@@ -207,6 +313,25 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val callee = raw(f)
         if (f.k == "FuncLit" || (f.k == "ParenExpr" && f.reqObj("x").k == "FuncLit")) return Ex.primary("(${callee.code})($a)")
         return Ex.primary("${callee.at(PRIMARY)}!!($a)")
+    }
+
+    /** A `strings` function with window variants `<name>At` (suffix) and, when [inOk], `<name>In`. */
+    class Fusion(val pkg: String, val name: String, val inOk: Boolean)
+
+    companion object {
+        private const val STRINGS = "com.xemantic.typescript.tsgo.go.strings"
+
+        /** The fusable shim calls by callee key (rune-decoding ones have no bounded form). */
+        val FUSIONS: Map<String, Fusion> = mapOf(
+            "strings.HasPrefix" to Fusion(STRINGS, "hasPrefix", true),
+            "strings.HasSuffix" to Fusion(STRINGS, "hasSuffix", false),
+            "strings.Index" to Fusion(STRINGS, "index", true),
+            "strings.Contains" to Fusion(STRINGS, "contains", true),
+            "strings.IndexByte" to Fusion(STRINGS, "indexByte", true),
+            "strings.IndexRune" to Fusion(STRINGS, "indexRune", false),
+            "strings.IndexAny" to Fusion(STRINGS, "indexAny", false),
+            "strings.ContainsAny" to Fusion(STRINGS, "containsAny", false),
+        )
     }
 
     // ------------------------------------------------------------------ conversions
@@ -334,6 +459,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             "len" -> {
                 val a = args[0]
                 if (a.str("m") == "const" && a.obj("c") != null && types.isString(ty(a))) return constant(e)
+                viewOf(a)?.let { return wrap(Ex.primary(it.len), ty(e)) }
                 val u = types.under(types.core(ty(a)))
                 val r = raw(a)
                 Ex.primary(when (u) {

@@ -218,6 +218,7 @@ class PackageEmitter(
         val name = if (recvField != null) prog.methodName(qname, goName) else prog.funName(qname, goName)
         val out = CodeWriter()
         fn.w = out
+        fn.root = d.obj("body")
         val lines = d.reqInt("lines")
         // Signature first: a refusal here leaves no stub (callers then fail visibly).
         val ft = d.reqObj("type")
@@ -264,6 +265,7 @@ class PackageEmitter(
         if (split != null) {
             val text = splitFuncDecl(d, split, sigText, declList, tparamsText, resultText, recvTypeText, name, low, sig, ft, params, recvField, extension) {
                 val f = FnCtx(fc, qname, tm)
+                f.root = d.obj("body")
                 member?.let { f.classMembers = it.memberNames }
                 val l = Lowering(f)
                 if (recvField != null) recvField.list("names").firstOrNull()?.int("obj")?.let { r ->

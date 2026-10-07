@@ -389,7 +389,7 @@ fun extractPragmas(commentRange: CommentRange, text_0: String): GoSlice<Pragma> 
 
 // go: github.com/microsoft/typescript-go/internal/parser.match 21d2f4e8
 fun match(text: String, pos: Int, s: String): Boolean {
-    return com.xemantic.typescript.tsgo.go.strings.hasPrefix(text.substring(pos), s)
+    return com.xemantic.typescript.tsgo.go.strings.hasPrefixAt(text, pos, s)
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.skipBlanks 19cc8a5b
@@ -415,7 +415,7 @@ fun skipTo(text: String, pos: Int, s: String): Int {
     if (pos >= text.length) {
         return -1
     }
-    val i: Int = com.xemantic.typescript.tsgo.go.strings.index(text.substring(pos), s)
+    val i: Int = com.xemantic.typescript.tsgo.go.strings.indexAt(text, pos, s)
     if (i < 0) {
         return -1
     }

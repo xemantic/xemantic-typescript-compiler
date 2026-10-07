@@ -167,6 +167,7 @@ open class ExprLowering(val fn: FnCtx) {
         return when (o.str("k")) {
             "var", "param", "result", "recv" -> {
                 if (id == fn.recvObj) return Ex.primary("this")
+                if (id in fn.views) refuse("view-escape", name ?: "?")
                 if (o.bool("local")) {
                     val n = fn.nameOf(id) ?: fn.declare(id)
                     if (id in fn.boxed) Ex.primary("$n.value") else Ex.primary(n)
@@ -316,6 +317,11 @@ open class ExprLowering(val fn: FnCtx) {
         val xt = ty(x)
         val u = types.under(xt)
         val k = if (neg) "!=" else "=="
+        if (u is BasicType && tm.rep(u) == Rep.STRING) windowOf(x)?.let { w ->
+            // `s[a:b] == t` compares in place (the window is the LEFT operand, so Go's order holds).
+            val eq = if (w.to == null) "goStrEqAt(${w.base}, ${w.from}, ${raw(y).code})" else "goStrEqIn(${w.base}, ${w.from}, ${w.to}, ${raw(y).code})"
+            return if (neg) Ex("!$eq", PREFIX) else Ex.primary(eq)
+        }
         return when {
             u is BasicType -> Ex("${raw(x).at(EQ + 1)} $k ${raw(y).at(EQ + 1)}", EQ)
             u is PointerType && types.under(u.elem) is StructType && types.under(ty(y)) is PointerType ->
@@ -551,11 +557,40 @@ open class ExprLowering(val fn: FnCtx) {
         return when (e.str("ik")) {
             "slice", "array" -> Ex.primary("${raw(x).at(PRIMARY)}[${intIndex(e.reqObj("index")).code}]")
             "ptrarray" -> Ex.primary("${nn(lower(x)).code}[${intIndex(e.reqObj("index")).code}]")
-            "string" -> Ex.primary("${raw(x).at(PRIMARY)}[${intIndex(e.reqObj("index")).code}].code")
+            "string" -> viewOf(x)?.let { v -> Ex.primary("goViewByte(${v.base}, ${v.off}, ${v.len}, ${intIndex(e.reqObj("index")).code})") }
+                ?: Ex.primary("${raw(x).at(PRIMARY)}[${intIndex(e.reqObj("index")).code}].code")
             "map" -> Ex.primary("${raw(x).at(PRIMARY)}[${flow(e.reqObj("index")).code}]")
             "instantiate" -> refuse("generic-func-value")
             else -> refuse("index-kind", e.str("ik") ?: "?")
         }
+    }
+
+    // ------------------------------------------------------------------ string windows
+
+    /** A string window `base[from:to]` (`to == null`: to the end of `base`) — Go's O(1) slice, no copy. */
+    class Window(val base: String, val from: String, val to: String?)
+
+    /** The view local [x] names, if it is one (docs/goport-lowering.md § 3, substring elimination). */
+    fun viewOf(x: Node): View? = if (x.k == "Ident") x.int("obj")?.let { fn.views[it] } else null
+
+    /**
+     * [a] as a window when it is a string slice `s[lo:hi]` with at least one bound — of a plain
+     * string, or of a view local (whose sub-slice bounds are checked against the VIEW, as Go does).
+     * The parts are rendered in Go's evaluation order: base, then low, then high.
+     */
+    fun windowOf(a: Node): Window? {
+        if (a.k != "SliceExpr" || a.str("sk") != "string" || a.bool("slice3")) return null
+        val lo = a.obj("low")
+        val hi = a.obj("high")
+        if (lo == null && hi == null) return null
+        val x = a.reqObj("x")
+        val v = viewOf(x)
+        if (v != null) {
+            val from = if (lo == null) v.off else "${v.off} + goViewBound(${v.len}, ${intIndex(lo).code})"
+            val to = if (hi == null) "${v.off} + ${v.len}" else "${v.off} + goViewBound(${v.len}, ${intIndex(hi).code})"
+            return Window(v.base, from, to)
+        }
+        return Window(raw(x).code, lo?.let { intIndex(it).code } ?: "0", hi?.let { intIndex(it).code })
     }
 
     fun sliceExpr(e: Node): Ex {

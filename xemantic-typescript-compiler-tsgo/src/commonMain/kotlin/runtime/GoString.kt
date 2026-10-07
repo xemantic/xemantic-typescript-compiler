@@ -294,3 +294,41 @@ fun goRuneCount(s: String): Int {
     }
     return n
 }
+
+// ---------------------------------------------------------------------------------------------
+// String windows (docs/goport-lowering.md § 3, "substring elimination"): Go's `s[a:b]` is an O(1)
+// view, Kotlin's `substring` a copy. A slice that only feeds a length, an index, an equality or a
+// fused `strings` call is lowered to a (base, offset, length) window over the base string instead.
+// Every helper keeps Go's bounds panic at the point Go would panic.
+
+/** NOT Go API — a window `s[from:to]`: checks Go's bounds and answers its length `to - from`. */
+fun goStrView(s: String, from: Int, to: Int): Int {
+    if (to < 0 || to > s.length) goPanicSlice("[:$to] with length ${s.length}")
+    if (from < 0 || from > to) goPanicSlice("[$from:$to]")
+    return to - from
+}
+
+/** NOT Go API — `w[k]` of a window of length [n] at [off] in [s]. */
+@Suppress("NOTHING_TO_INLINE")
+inline fun goViewByte(s: String, off: Int, n: Int, k: Int): Int {
+    if (k < 0 || k >= n) goPanicIndex(k, n)
+    return s[off + k].code
+}
+
+/** NOT Go API — a sub-slice bound [b] of a window of length [n] (`0 <= b <= n`); answers [b]. */
+fun goViewBound(n: Int, b: Int): Int {
+    if (b < 0 || b > n) goPanicSlice("[$b] with length $n")
+    return b
+}
+
+/** NOT Go API — `s[from:] == t` without the copy. */
+fun goStrEqAt(s: String, from: Int, t: String): Boolean {
+    if (from < 0 || from > s.length) goPanicSlice("[$from:] with length ${s.length}")
+    return s.length - from == t.length && s.regionMatches(from, t, 0, t.length)
+}
+
+/** NOT Go API — `s[from:to] == t` without the copy. */
+fun goStrEqIn(s: String, from: Int, to: Int, t: String): Boolean {
+    goStrView(s, from, to)
+    return to - from == t.length && s.regionMatches(from, t, 0, t.length)
+}

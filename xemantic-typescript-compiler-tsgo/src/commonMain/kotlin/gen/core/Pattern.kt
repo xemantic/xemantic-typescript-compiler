@@ -50,7 +50,7 @@ class Pattern(
 // go: github.com/microsoft/typescript-go/internal/core.TryParsePattern b2ae1e0a
 fun tryParsePattern(pattern: String): Pattern {
     val starIndex: Int = com.xemantic.typescript.tsgo.go.strings.index(pattern, "*")
-    if (starIndex == -1 || !com.xemantic.typescript.tsgo.go.strings.contains(pattern.substring(starIndex + 1), "*")) {
+    if (starIndex == -1 || !com.xemantic.typescript.tsgo.go.strings.containsAt(pattern, starIndex + 1, "*")) {
         return Pattern(text = pattern, starIndex = starIndex)
     }
     return Pattern()

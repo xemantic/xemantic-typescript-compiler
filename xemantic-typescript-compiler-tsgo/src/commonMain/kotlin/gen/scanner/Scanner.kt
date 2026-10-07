@@ -424,10 +424,12 @@ fun Scanner?.charAndSize(): Tuple2<Int, Int> {
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.scanASCIIWhile e705e82f
 fun Scanner?.scanASCIIWhile(pred: ((Int) -> Boolean)?) {
-    val text: String = this!!.text.substring(this!!.scannerState.pos, this!!.end)
+    val text_b0: String = this!!.text
+    val text_o1: Int = this!!.scannerState.pos
+    val text_n2: Int = goStrView(text_b0, text_o1, this!!.end)
     var i: Int = 0
-    l0@ while (i < text.length) {
-        val b: Int = text[i].code
+    l0@ while (i < text_n2) {
+        val b: Int = goViewByte(text_b0, text_o1, text_n2, i)
         if (b >= 128 || !pred!!(b)) {
             break@l0
         }
@@ -689,7 +691,7 @@ fun Scanner?.scan(): Kind {
                             this!!.scannerState.tokenValue = cachedValue
                         } else {
                             val rawText: String = this!!.text.substring(start, this!!.scannerState.pos)
-                            if (com.xemantic.typescript.tsgo.go.strings.hasPrefix(rawText, "0x") && rawText.substring(2) == digits) {
+                            if (com.xemantic.typescript.tsgo.go.strings.hasPrefix(rawText, "0x") && goStrEqAt(rawText, 2, digits)) {
                                 this!!.scannerState.tokenValue = rawText
                             } else {
                                 this!!.scannerState.tokenValue = "0x" + digits
@@ -1000,10 +1002,10 @@ fun Scanner?.processCommentDirective(start: Int, end: Int, multiline: Boolean) {
     pos++
     var kind: CommentDirectiveKind = CommentDirectiveKind(0)
     when {
-        com.xemantic.typescript.tsgo.go.strings.hasPrefix(this!!.text.substring(pos), "ts-expect-error") -> {
+        com.xemantic.typescript.tsgo.go.strings.hasPrefixAt(this!!.text, pos, "ts-expect-error") -> {
             kind = CommentDirectiveKind(1)
         }
-        com.xemantic.typescript.tsgo.go.strings.hasPrefix(this!!.text.substring(pos), "ts-ignore") -> {
+        com.xemantic.typescript.tsgo.go.strings.hasPrefixAt(this!!.text, pos, "ts-ignore") -> {
             kind = CommentDirectiveKind(2)
         }
         else -> {
@@ -1624,7 +1626,7 @@ fun Scanner?.scanString(jsxAttributeString: Boolean): String {
         this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 65536)
     }
     this!!.scannerState.pos = this!!.scannerState.pos + 1
-    val strLen: Int = com.xemantic.typescript.tsgo.go.strings.indexByte(this!!.text.substring(this!!.scannerState.pos), goUint8(quote))
+    val strLen: Int = com.xemantic.typescript.tsgo.go.strings.indexByteAt(this!!.text, this!!.scannerState.pos, goUint8(quote))
     if (strLen == 0) {
         this!!.scannerState.pos = this!!.scannerState.pos + 1
         return ""
@@ -3021,7 +3023,7 @@ fun iterateCommentRanges(f: NodeFactory?, text: String, pos_0: Int, trailing: Bo
                                 pos += s
                             }
                         } else {
-                            val i: Int = com.xemantic.typescript.tsgo.go.strings.index(text.substring(pos), "*/")
+                            val i: Int = com.xemantic.typescript.tsgo.go.strings.indexAt(text, pos, "*/")
                             if (i >= 0) {
                                 pos += (i + 2)
                             } else {

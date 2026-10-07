@@ -46,6 +46,9 @@ class Target(
     var switchBroken = false
 }
 
+/** A string local lowered as a window `base[off:off+len]` (docs/goport-lowering.md § 3). */
+class View(val base: String, val off: String, val len: String)
+
 /** Per function-like activation (the top-level function or a func literal). */
 class Frame(val results: List<Int>, val namedResults: List<Int>?) {
     var deferFrame: String? = null
@@ -79,6 +82,13 @@ class FnCtx(val fc: FileCtx, val qname: String, val tm: TypeMapper) {
     /** The switch-splitting rule ([SwitchSplit]): while lowering one PART, the split switch and the clauses it keeps. */
     var splitSwitch: Node? = null
     var splitKeep: Set<Int> = emptySet()
+
+    /** The declaration's body (the view analysis of [CallLowering.viewCandidates] walks it). */
+    var root: Node? = null
+    /** Locals the substring-elimination rule lowers as string windows, once computed. */
+    var viewable: Set<Int>? = null
+    /** Declared string windows: Go object id → its (base, offset, length) locals. */
+    val views = HashMap<Int, View>()
 
     /** Top-level private helpers the lowering hoisted out of this declaration (large literal tables). */
     val helpers = ArrayList<String>()

@@ -2869,7 +2869,7 @@ fun findImportOrRequire(text: String, start: Int): Tuple2<Int, Int> {
     index = maxOf(start, 0)
     val n: Int = text.length
     l0@ while (index < n) {
-        val next: Int = com.xemantic.typescript.tsgo.go.strings.indexAny(text.substring(index), "ir")
+        val next: Int = com.xemantic.typescript.tsgo.go.strings.indexAnyAt(text, index, "ir")
         if (next < 0) {
             break@l0
         }
@@ -2882,7 +2882,7 @@ fun findImportOrRequire(text: String, start: Int): Tuple2<Int, Int> {
             size = 7
             expected = "require"
         }
-        if (index + size <= n && text.substring(index, index + size) == expected) {
+        if (index + size <= n && goStrEqIn(text, index, index + size, expected)) {
             return Tuple2<Int, Int>(index, size)
         }
         index++

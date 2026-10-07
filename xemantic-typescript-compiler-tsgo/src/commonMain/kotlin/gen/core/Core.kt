@@ -829,7 +829,7 @@ fun <S> checkEachDefined(goElem_S: GoElem<S>, s: GoSlice<S>, msg: String): GoSli
 
 // go: github.com/microsoft/typescript-go/internal/core.IndexAfter 7deb55f8
 fun indexAfter(s: String, pattern: String, startIndex: Int): Int {
-    val matched: Int = com.xemantic.typescript.tsgo.go.strings.index(s.substring(startIndex), pattern)
+    val matched: Int = com.xemantic.typescript.tsgo.go.strings.indexAt(s, startIndex, pattern)
     if (matched == -1) {
         return -1
     } else {

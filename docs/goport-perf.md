@@ -21,6 +21,13 @@ JVMs from concurrent agents' compiles). The core arm's own process medians span 
 batches (240 vs 314 ms), which is the box, not the parser. Re-run `scripts/tsgo-parse-bench.sh` on
 a quiet box before quoting the 1.50x as anything but "at the line".
 
+## 0. Progress — each lowering rule, re-measured (same harness, ABBA, 4 processes per arm)
+
+| after | tsgo arm | core arm | ratio | paired | commit |
+|---|---|---|---|---|---|
+| HEAD as generated | 42,163 ms | 313.9 ms | 134x | core 3/3 | `3ce760c6e` |
+| **substring elimination** (window rule, § 2) | 338.5 ms (312.8–352.3, 11.7%) | 236.1 ms (224.5–243.6, 8.1%) | **1.43x** | core 4/4 (1.34–1.47) | this round |
+
 ## 1. Setup
 
 - **Harness**: `xemantic-typescript-compiler-tsgo/src/jvmTest/kotlin/ParseBenchMain.kt`,

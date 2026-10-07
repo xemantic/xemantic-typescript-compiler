@@ -237,6 +237,9 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         val rhs = s.list("rhs")
         if (tok != "=" && tok != ":=") return opAssign(lhs.single(), tok.dropLast(1), rhs.single())
         val define = tok == ":="
+        if (define && lhs.size == 1 && rhs.size == 1 && lhs[0].k == "Ident" && lhs[0].bool("def") &&
+            lhs[0].int("obj")?.let { it in viewCandidates() } == true
+        ) return declareView(lhs[0].int("obj")!!, rhs[0]) { w.line(it) }
         if (lhs.size == rhs.size) {
             if (lhs.size == 1) return single(lhs[0], flow(rhs[0]), define)
             // Parallel assignment: every right side is evaluated before any store.
@@ -378,6 +381,10 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                 val values = spec.list("values")
                 if (values.size == 1 && names.size > 1) {
                     multi(names, values[0], true)
+                    continue
+                }
+                if (names.size == 1 && values.size == 1 && names[0].int("obj")?.let { it in viewCandidates() } == true) {
+                    declareView(names[0].int("obj")!!, values[0]) { w.line(it) }
                     continue
                 }
                 names.forEachIndexed { i, n ->

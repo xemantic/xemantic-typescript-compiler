@@ -139,6 +139,23 @@ reference); literal tables over 150 elements are filled by hoisted private helpe
   dispatches by `<` over contiguous ranges of the sorted constants (one constant per clause
   required; `String.compareTo` is the same on every target). The report lists every split.
 
+Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a hand edit of `gen/`):
+
+- **Substring elimination** (`Exprs.windowOf`, `Calls.viewCandidates`/`declareView`/`FUSIONS`).
+  Go's `s[a:b]` is an O(1) view; Kotlin's `substring` copies, and a suffix of the source text per
+  token made the scanner quadratic (134x). A string slice is lowered as a WINDOW `(base, from, to)`
+  where it only feeds: (a) the first argument of a fused `strings` call — `HasPrefix`, `HasSuffix`,
+  `Index`, `Contains`, `IndexByte`, `IndexRune`, `IndexAny`, `ContainsAny` → the shim's
+  `<name>At(s, from, …)` / `<name>In(s, from, to, …)` (an index result relative to `from`;
+  rune-decoding ones have only the suffix form); (b) the LEFT operand of `==`/`!=` →
+  `goStrEqAt`/`goStrEqIn`; (c) a **view local** — `t := s[a:b]` (or `var t = …`), never reassigned
+  or address-taken, used only as `len(t)`, `t[k]`, or a sub-slice that is itself (a)/(b) — lowers
+  to three locals `t_b`/`t_o`/`t_n` (`goStrView` checks Go's bounds once, `goViewByte` per index,
+  `goViewBound` for a sub-slice's bounds, checked against the VIEW as Go does). Anything else keeps
+  `substring`. First run: 19 sites rewritten (14 fused calls, 4 equalities, 1 view local);
+  single-bound copies in `gen/` 48 → 34. Pins: `WindowShimTest` (`-tsgo`, values printed by
+  go1.27.1), `LoweringRulesTest` (named parse-path functions carry no copy; census does not grow).
+
 Pins: `-goport/src/jvmTest/.../LoweringRulesTest.kt` (naming, byte-string literals, constant edges);
 the end-to-end gates are `-tsgo/src/jvmTest/kotlin/OracleParityTest.kt` (corpus, opt-in) and
 `TsgoPinTest.kt` (always on).

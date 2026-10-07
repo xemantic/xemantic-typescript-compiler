@@ -1054,7 +1054,7 @@ fun Parser?.parseTypeTag(previousTags: GoSlice<Node?>, start: Int, tagName: Node
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseSeeTag ab4b4dda
 fun Parser?.parseSeeTag(start: Int, tagName: Node?, indent: Int, indentText: String): Node? {
-    val hasNameReference: Boolean = this.isIdentifier() && !com.xemantic.typescript.tsgo.go.strings.hasPrefix(this!!.sourceText.substring(this!!.scanner.tokenEnd()), "://") || this!!.token.value == 18 && this.lookAhead(fun(p0: Parser?): Boolean = p0.nextTokenIsIdentifierOrKeyword())
+    val hasNameReference: Boolean = this.isIdentifier() && !com.xemantic.typescript.tsgo.go.strings.hasPrefixAt(this!!.sourceText, this!!.scanner.tokenEnd(), "://") || this!!.token.value == 18 && this.lookAhead(fun(p0: Parser?): Boolean = p0.nextTokenIsIdentifierOrKeyword())
     var nameExpression: Node? = null
     if (hasNameReference) {
         nameExpression = this.parseJSDocNameReference()

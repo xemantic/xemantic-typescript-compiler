@@ -66,7 +66,7 @@ const val ExtensionDcts: String = ".d.cts"
 
 // go: github.com/microsoft/typescript-go/internal/tspath.ExtensionIsTs 50b565e1
 fun extensionIsTs(ext: String): Boolean {
-    return ext == ".ts" || ext == ".tsx" || ext == ".d.ts" || ext == ".mts" || ext == ".d.mts" || ext == ".cts" || ext == ".d.cts" || ext.length >= 7 && ext.substring(0, 3) == ".d." && ext.substring(ext.length - 3) == ".ts"
+    return ext == ".ts" || ext == ".tsx" || ext == ".d.ts" || ext == ".mts" || ext == ".d.mts" || ext == ".cts" || ext == ".d.cts" || ext.length >= 7 && goStrEqIn(ext, 0, 3, ".d.") && goStrEqAt(ext, ext.length - 3, ".ts")
 }
 
 // go: github.com/microsoft/typescript-go/internal/tspath.RemoveFileExtension d82b440b

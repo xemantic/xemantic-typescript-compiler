@@ -194,7 +194,7 @@ fun getEncodedRootLength(path: String): Int {
             return 1
         }
         val offset: Int = 2
-        val p1: Int = com.xemantic.typescript.tsgo.go.strings.indexByte(path.substring(offset), ch0)
+        val p1: Int = com.xemantic.typescript.tsgo.go.strings.indexByteAt(path, offset, ch0)
         if (p1 < 0) {
             return ln
         }
@@ -215,7 +215,7 @@ fun getEncodedRootLength(path: String): Int {
     val schemeEnd: Int = com.xemantic.typescript.tsgo.go.strings.index(path, "://")
     if (schemeEnd != -1) {
         val authorityStart: Int = schemeEnd + 3
-        val authorityLength: Int = com.xemantic.typescript.tsgo.go.strings.index(path.substring(authorityStart), "/")
+        val authorityLength: Int = com.xemantic.typescript.tsgo.go.strings.indexAt(path, authorityStart, "/")
         if (authorityLength != -1) {
             val authorityEnd: Int = authorityStart + authorityLength
             val scheme: String = path.substring(0, schemeEnd)
@@ -432,7 +432,7 @@ fun getNormalizedAbsolutePath(fileName_0: String, currentDirectory: String): Str
             }
             segmentStart = index
         }
-        var segmentEnd: Int = com.xemantic.typescript.tsgo.go.strings.indexByte(fileName.substring(index + 1), 47)
+        var segmentEnd: Int = com.xemantic.typescript.tsgo.go.strings.indexByteAt(fileName, index + 1, 47)
         if (segmentEnd == -1) {
             segmentEnd = length_1
         } else {

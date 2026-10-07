@@ -40,6 +40,7 @@ import com.xemantic.typescript.tsgo.runtime.appendRuneBytes
 import com.xemantic.typescript.tsgo.runtime.goDecodeLastRune
 import com.xemantic.typescript.tsgo.runtime.goDecodeRune
 import com.xemantic.typescript.tsgo.runtime.goPanic
+import com.xemantic.typescript.tsgo.runtime.goPanicSlice
 import com.xemantic.typescript.tsgo.runtime.goRuneCount
 import com.xemantic.typescript.tsgo.runtime.goRuneToString
 
@@ -486,3 +487,115 @@ fun fields(s: String): GoSlice<String> {
     if (start >= 0) out = out.append1(s.substring(start))
     return if (out.isNil) GoSlice.make(GoElem.STRING, 0) else out
 }
+
+// ---------------------------------------------------------------------------------------------
+// NOT Go API: the window variants the lowering fuses `F(s[from:], …)` / `F(s[from:to], …)` into
+// (docs/goport-lowering.md § 3, "substring elimination"). Each checks Go's slice bounds, then
+// answers exactly what `F` answers on the slice; an index result is RELATIVE to [from], as Go's is
+// relative to the slice. Rune-decoding functions have only the suffix (`At`) form: a rune crossing
+// a window's end decodes differently inside the window than in the base string.
+
+private fun checkFrom(s: String, from: Int) {
+    if (from < 0 || from > s.length) goPanicSlice("[$from:] with length ${s.length}")
+}
+
+private fun checkIn(s: String, from: Int, to: Int) {
+    if (to < 0 || to > s.length) goPanicSlice("[:$to] with length ${s.length}")
+    if (from < 0 || from > to) goPanicSlice("[$from:$to]")
+}
+
+/** `strings.HasPrefix(s[from:], prefix)`. */
+fun hasPrefixAt(s: String, from: Int, prefix: String): Boolean {
+    checkFrom(s, from)
+    return s.startsWith(prefix, from)
+}
+
+/** `strings.HasPrefix(s[from:to], prefix)`. */
+fun hasPrefixIn(s: String, from: Int, to: Int, prefix: String): Boolean {
+    checkIn(s, from, to)
+    return to - from >= prefix.length && s.startsWith(prefix, from)
+}
+
+/** `strings.HasSuffix(s[from:], suffix)`. */
+fun hasSuffixAt(s: String, from: Int, suffix: String): Boolean {
+    checkFrom(s, from)
+    return s.length - from >= suffix.length && s.endsWith(suffix)
+}
+
+/** `strings.Index(s[from:to], substr)`, scanning only the window. */
+private fun indexRange(s: String, from: Int, to: Int, substr: String): Int {
+    val m = substr.length
+    if (m == 0) return 0
+    val first = substr[0]
+    val last = to - m
+    var i = from
+    while (i <= last) {
+        if (s[i] == first && s.regionMatches(i + 1, substr, 1, m - 1)) return i - from
+        i++
+    }
+    return -1
+}
+
+/** `strings.Index(s[from:], substr)`. */
+fun indexAt(s: String, from: Int, substr: String): Int {
+    checkFrom(s, from)
+    val r = s.indexOf(substr, from)
+    return if (r < 0) -1 else r - from
+}
+
+/** `strings.Index(s[from:to], substr)`. */
+fun indexIn(s: String, from: Int, to: Int, substr: String): Int {
+    checkIn(s, from, to)
+    return indexRange(s, from, to, substr)
+}
+
+/** `strings.Contains(s[from:], substr)`. */
+fun containsAt(s: String, from: Int, substr: String): Boolean = indexAt(s, from, substr) >= 0
+
+/** `strings.Contains(s[from:to], substr)`. */
+fun containsIn(s: String, from: Int, to: Int, substr: String): Boolean = indexIn(s, from, to, substr) >= 0
+
+/** `strings.IndexByte(s[from:], c)`. */
+fun indexByteAt(s: String, from: Int, c: Int): Int {
+    checkFrom(s, from)
+    val r = s.indexOf((c and 0xFF).toChar(), from)
+    return if (r < 0) -1 else r - from
+}
+
+/** `strings.IndexByte(s[from:to], c)`. */
+fun indexByteIn(s: String, from: Int, to: Int, c: Int): Int {
+    checkIn(s, from, to)
+    val ch = (c and 0xFF).toChar()
+    var i = from
+    while (i < to) {
+        if (s[i] == ch) return i - from
+        i++
+    }
+    return -1
+}
+
+/** `strings.IndexRune(s[from:], r)`. */
+fun indexRuneAt(s: String, from: Int, r: Int): Int {
+    checkFrom(s, from)
+    if (r in 0 until RUNE_SELF) {
+        val i = s.indexOf(r.toChar(), from)
+        return if (i < 0) -1 else i - from
+    }
+    return indexRune(s.substring(from), r)
+}
+
+/** `strings.IndexAny(s[from:], chars)`. */
+fun indexAnyAt(s: String, from: Int, chars: String): Int {
+    checkFrom(s, from)
+    if (chars.isEmpty()) return -1
+    var i = from
+    while (i < s.length) {
+        val p = runeAt(s, i)
+        if (indexRune(chars, p.rune()) >= 0) return i - from
+        i += p.width()
+    }
+    return -1
+}
+
+/** `strings.ContainsAny(s[from:], chars)`. */
+fun containsAnyAt(s: String, from: Int, chars: String): Boolean = indexAnyAt(s, from, chars) >= 0

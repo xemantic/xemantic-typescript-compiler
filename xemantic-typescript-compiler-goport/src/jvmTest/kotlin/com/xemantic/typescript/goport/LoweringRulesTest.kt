@@ -26,11 +26,13 @@
 package com.xemantic.typescript.goport
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.typescript.goport.lower.CallLowering
 import com.xemantic.typescript.goport.lower.Literals
 import com.xemantic.typescript.goport.lower.TypeMapper
 import com.xemantic.typescript.goport.naming.Naming
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.io.File
 import kotlin.test.Test
 
 /**
@@ -87,5 +89,59 @@ class LoweringRulesTest {
             true
         }
         assert(refused)
+    }
+
+    // ---- substring elimination (docs/goport-lowering.md § 3) — a census over the checked-in gen/
+
+    /** A copying single-bound slice `s.substring(i)`. */
+    private val suffixCopy = Regex("""\.substring\([^,()]*\)""")
+
+    private val gen = File("../xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/gen")
+
+    /** The text of the generated function whose `// go:` trace line names [goQname] (to the next trace line). */
+    private fun genFunction(file: String, goQname: String): String {
+        val text = File(gen, file).readText()
+        val start = text.indexOf("// go: $goQname ")
+        assert(start >= 0)
+        val end = text.indexOf("// go: ", start + 1).let { if (it < 0) text.length else it }
+        return text.substring(start, end)
+    }
+
+    @Test
+    fun `the parse-path string slices that only feed an index or a prefix test are never copied`() {
+        val scanner = "github.com/microsoft/typescript-go/internal/scanner"
+        val parser = "github.com/microsoft/typescript-go/internal/parser"
+        val ast = "github.com/microsoft/typescript-go/internal/ast"
+        // A view local: `text := s.text[s.pos:s.end]` read only through len/index (the 134x of docs/goport-perf.md § 2).
+        val ascii = genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanASCIIWhile")
+        assert(!ascii.contains(".substring("))
+        assert(ascii.contains("goStrView(") && ascii.contains("goViewByte("))
+        // Fused calls: HasPrefix / IndexByte / Index over a suffix of the source.
+        // (scanString keeps ONE bounded `substring`: the literal's value genuinely escapes as a string.)
+        assert(genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanString").let { it.contains("indexByteAt(") && !suffixCopy.containsMatchIn(it) })
+        assert(!genFunction("scanner/Scanner.kt", "$scanner.Scanner.processCommentDirective").contains(".substring("))
+        assert(!genFunction("parser/Parser3.kt", "$parser.match").contains(".substring("))
+        assert(!genFunction("parser/Parser3.kt", "$parser.skipTo").contains(".substring("))
+        // IndexAny(text[index:], "ir") and text[index:index+size] == expected.
+        val find = genFunction("ast/Utilities1.kt", "$ast.findImportOrRequire")
+        assert(!find.contains(".substring("))
+        assert(find.contains("indexAnyAt(") && find.contains("goStrEqIn("))
+    }
+
+    @Test
+    fun `every fused strings call has its window variants in the shim`() {
+        val shim = File("../xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/go/strings/Strings.kt").readText()
+        for ((key, f) in CallLowering.FUSIONS) {
+            assert(key.startsWith("strings.") && f.pkg.endsWith(".go.strings"))
+            assert(shim.contains("fun ${f.name}At(s: String, from: Int,"))
+            assert(!f.inOk || shim.contains("fun ${f.name}In(s: String, from: Int, to: Int,"))
+        }
+    }
+
+    @Test
+    fun `the census of copying single-bound string slices in gen does not grow`() {
+        val n = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f -> suffixCopy.findAll(f.readText()).count() }
+        // 48 as first generated; 34 after the window rule (2026-10-07). Lower it as rules land.
+        assert(n <= 34)
     }
 }
