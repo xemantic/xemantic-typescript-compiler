@@ -29,5 +29,5 @@ import com.xemantic.typescript.tsgo.runtime.*
 const val _SignatureKind_name: String = "SignatureKindCallSignatureKindConstruct"
 
 // go: github.com/microsoft/typescript-go/internal/checker._SignatureKind_index c0a3b41f
-@kotlin.jvm.JvmField val _SignatureKind_index: GoArray<Int> = GoArray(3, GoElem.INT).also { it[0] = 0; it[1] = 17; it[2] = 39 }
+@kotlin.jvm.JvmField val _SignatureKind_index: GoArray<Int> = GoArray(3, GoElem.BYTE).also { it[0] = 0; it[1] = 17; it[2] = 39 }
 

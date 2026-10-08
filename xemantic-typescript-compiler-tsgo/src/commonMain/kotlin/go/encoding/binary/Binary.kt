@@ -116,7 +116,7 @@ fun read(r: com.xemantic.typescript.tsgo.go.io.Reader?, order: ByteOrder?, data:
     val ptr = data as? com.xemantic.typescript.tsgo.runtime.GoPtr<GoSlice<Int>>
         ?: com.xemantic.typescript.tsgo.runtime.goPanic("binary.Read: unsupported data type (the port carries *[]uint16 only)")
     val out = ptr.value
-    val buf = GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.INT, 2 * out.len)
+    val buf = GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE, 2 * out.len)
     var n = 0
     while (n < buf.len) {
         val (k, err) = r!!.read(buf.slice(n))

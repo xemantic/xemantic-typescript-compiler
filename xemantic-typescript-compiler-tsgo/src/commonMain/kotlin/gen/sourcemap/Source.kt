@@ -24,13 +24,14 @@
 package com.xemantic.typescript.tsgo.sourcemap
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.diagnosticwriter.FileLike
 import com.xemantic.typescript.tsgo.ast.SourceFileLike
 import com.xemantic.typescript.tsgo.core.TextPos
 
 // go: github.com/microsoft/typescript-go/internal/sourcemap.Source 4d5d0f38
-interface Source : SourceFileLike {
+interface Source : SourceFileLike, FileLike {
     override fun ecmaLineMap(): GoSlice<TextPos>
-    fun fileName(): String
+    override fun fileName(): String
     override fun text(): String
 }
 

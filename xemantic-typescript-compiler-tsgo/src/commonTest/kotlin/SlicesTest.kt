@@ -78,7 +78,8 @@ class SlicesTest {
     @Test
     fun `Concat Clone and Grow keep Go's nil and capacity results`() {
         // Go: Concat(empty, nil) == nil -> true; Clone(empty) == nil -> false; Clone(nil) == nil -> true
-        assert(concat(GoSlice.make(GoElem.INT, 0), GoElem.INT.nilSlice).isNil)
+        assert(concat(GoElem.slice(GoElem.INT), GoSlice.make(GoElem.INT, 0), GoElem.INT.nilSlice).isNil)
+        assert(concat(GoElem.slice(GoElem.INT)).isNil)
         assert(!clone(GoSlice.make(GoElem.INT, 0)).isNil)
         assert(clone(GoElem.INT.nilSlice).isNil)
         // Go: len 1, cap >= 6

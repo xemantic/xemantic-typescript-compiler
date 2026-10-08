@@ -7,6 +7,7 @@
 package testrunner
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -161,4 +162,70 @@ func XtscErrorBaseline(t *testing.T, files []*harnessutil.TestFile, errors []*as
 		return baseline.NoContent
 	}
 	return tsbaseline.GetErrorBaseline(t, files, diagnosticwriter.WrapASTDiagnostics(errors), diagnosticwriter.CompareASTDiagnostics, pretty)
+}
+
+// ---- (TSGO.3) the emit baselines (docs/goport-emit-oracle.md) ----
+
+// XtscEmitArtifact is one emit baseline of a configuration, as runSingleConfigTest's
+// verifyJavaScriptOutput / verifySourceMapOutput / verifySourceMapRecord would write it.
+type XtscEmitArtifact struct {
+	Kind     string // "output" | "sourcemap" | "sourcemap record" (the runner's subtest names)
+	Status   string // "ok" (Baseline/Content hold what baseline.Run would get) | "absent" (never reaches baseline.Run) | "skipped" | "failed" (t.Fatal or a panic)
+	Baseline string // the baseline file name, e.g. foo(target=es2015).js
+	Content  string // the text baseline.Run would compare ("<no content>" = the file must not exist)
+}
+
+// XtscEmitBaselines is newCompilerTest (UNMODIFIED, i.e. harnessutil.CompileFiles with emit, the
+// TS-1 count check and the runner's own options) followed by the three emit verifications of
+// runSingleConfigTest, each in its own subtest as the runner runs them. `header` is the
+// `tests/cases/<suite>/<file>` path the verifications derive from repo.TestDataPath(). A
+// verification's panic is recovered here (the runner's RecoverAndFail turns it into t.Fatal):
+// both end the artifact as "failed".
+func XtscEmitBaselines(t *testing.T, testName string, filename string, content string, named *harnessutil.NamedTestConfiguration, header string) []*XtscEmitArtifact {
+	payload := makeUnitsFromTest(content, filename)
+	if named != nil {
+		named = &harnessutil.NamedTestConfiguration{Name: named.Name, Config: maps.Clone(named.Config)}
+	}
+	c := newCompilerTest(t, testName, filename, &payload, named)
+	opts := baseline.Options{}
+	run := func(kind string, fn func(a *XtscEmitArtifact)) *XtscEmitArtifact {
+		a := &XtscEmitArtifact{Kind: kind, Status: "failed"}
+		t.Run(kind, func(t *testing.T) {
+			defer func() {
+				if p := recover(); p != nil {
+					a.Status = "failed"
+					a.Content = fmt.Sprint(p)
+				}
+			}()
+			fn(a)
+		})
+		return a
+	}
+	var out []*XtscEmitArtifact
+	// verifyJavaScriptOutput
+	if !c.hasNonDtsFiles {
+		out = append(out, &XtscEmitArtifact{Kind: "output", Status: "absent"})
+	} else if _, ok := skippedEmitTests[c.basename]; ok {
+		out = append(out, &XtscEmitArtifact{Kind: "output", Status: "skipped"})
+	} else {
+		out = append(out, run("output", func(a *XtscEmitArtifact) {
+			a.Baseline, a.Content = tsbaseline.XtscJSEmitBaseline(t, c.configuredName, header, c.options, c.result, c.tsConfigFiles, c.toBeCompiled, c.otherFiles, c.harnessOptions, opts)
+			a.Status = "ok"
+		}))
+	}
+	// verifySourceMapOutput
+	out = append(out, run("sourcemap", func(a *XtscEmitArtifact) {
+		var ran bool
+		a.Baseline, a.Content, ran = tsbaseline.XtscSourcemapBaseline(t, c.configuredName, header, c.options, c.result, c.harnessOptions, opts)
+		a.Status = "absent"
+		if ran {
+			a.Status = "ok"
+		}
+	}))
+	// verifySourceMapRecord
+	out = append(out, run("sourcemap record", func(a *XtscEmitArtifact) {
+		a.Baseline, a.Content = tsbaseline.XtscSourcemapRecordBaseline(t, c.configuredName, header, c.options, c.result, c.harnessOptions, opts)
+		a.Status = "ok"
+	}))
+	return out
 }

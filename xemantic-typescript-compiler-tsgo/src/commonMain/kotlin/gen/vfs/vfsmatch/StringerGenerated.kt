@@ -29,5 +29,5 @@ import com.xemantic.typescript.tsgo.runtime.*
 const val _Usage_name: String = "FilesDirectoriesExclude"
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch._Usage_index 8ea5ef24
-@kotlin.jvm.JvmField val _Usage_index: GoArray<Int> = GoArray(4, GoElem.INT).also { it[0] = 0; it[1] = 5; it[2] = 16; it[3] = 23 }
+@kotlin.jvm.JvmField val _Usage_index: GoArray<Int> = GoArray(4, GoElem.BYTE).also { it[0] = 0; it[1] = 5; it[2] = 16; it[3] = 23 }
 

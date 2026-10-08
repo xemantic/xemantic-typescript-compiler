@@ -616,7 +616,7 @@ fun toFileNameLowerCase(fileName: String): String {
         if (!needsLower) {
             return fileName
         }
-        val b: GoSlice<Int> = GoSlice.make(GoElem.INT, fileNameLen)
+        val b: GoSlice<Int> = GoSlice.make(GoElem.BYTE, fileNameLen)
         l1@ for (i1 in 0 until fileNameLen) {
             val i_1: Int = i1
             var c_1: Int = fileName[i_1].code

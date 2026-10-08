@@ -33,13 +33,21 @@ import com.xemantic.typescript.tsgo.tspath.ComparePathsOptions
 import com.xemantic.typescript.tsgo.compiler.CompilerHost
 import com.xemantic.typescript.tsgo.core.CompilerOptions
 import com.xemantic.typescript.tsgo.tsoptions.CompilerOptionsValue
+import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.ast.Diagnostic
 import com.xemantic.typescript.tsgo.go.io.fs.DirEntry
-import com.xemantic.typescript.tsgo.go.io.fs.FS
+import com.xemantic.typescript.tsgo.compiler.EmitOptions
+import com.xemantic.typescript.tsgo.compiler.EmitResult
+import com.xemantic.typescript.tsgo.vfs.FS
 import com.xemantic.typescript.tsgo.go.testing.fstest.MapFile
+import com.xemantic.typescript.tsgo.sourcemap.Mapping
+import com.xemantic.typescript.tsgo.sourcemap.MappingsDecoder
 import com.xemantic.typescript.tsgo.diagnostics.Message
+import com.xemantic.typescript.tsgo.core.NewLineKind
+import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.tsoptions.ParseConfigHost
 import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
+import com.xemantic.typescript.tsgo.core.ParsedOptions
 import com.xemantic.typescript.tsgo.tspath.Path
 import com.xemantic.typescript.tsgo.compiler.Program
 import com.xemantic.typescript.tsgo.compiler.ProgramLike
@@ -48,19 +56,32 @@ import com.xemantic.typescript.tsgo.module.ResolutionHost
 import com.xemantic.typescript.tsgo.core.ScriptKind
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
+import com.xemantic.typescript.tsgo.compiler.SourceMapEmitResult
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.collections.SyncMap
 import com.xemantic.typescript.tsgo.go.testing.T
 import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.tsoptions.TsConfigSourceFile
 import com.xemantic.typescript.tsgo.go.io.Writer
+import com.xemantic.typescript.tsgo.ast.addRelatedInfo
+import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.get
+import com.xemantic.typescript.tsgo.collections.getOrZero
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.load
 import com.xemantic.typescript.tsgo.collections.loadOrStore
+import com.xemantic.typescript.tsgo.collections.set
+import com.xemantic.typescript.tsgo.collections.size
+import com.xemantic.typescript.tsgo.collections.values
+import com.xemantic.typescript.tsgo.core.clone
+import com.xemantic.typescript.tsgo.core.getEmitDeclarations
 import com.xemantic.typescript.tsgo.diagnostics.localize
+import com.xemantic.typescript.tsgo.sourcemap.isSourceMapping
+import com.xemantic.typescript.tsgo.sourcemap.values
 import com.xemantic.typescript.tsgo.tsoptions.compilerOptions
 import com.xemantic.typescript.tsgo.tsoptions.elements
 import com.xemantic.typescript.tsgo.tsoptions.enumMap
+import com.xemantic.typescript.tsgo.tsoptions.fileNames
 
 // go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.testLibFolder def98420
 const val testLibFolder: String = "/.lib"
@@ -148,6 +169,133 @@ class HarnessOptions(
     companion object {
         val ELEM: GoElem<HarnessOptions> = GoElem({ HarnessOptions() }, { it.goCopy() })
     }
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompileFiles 2a8e2988
+fun compileFiles(t: T?, inputFiles: GoSlice<TestFile?>, otherFiles: GoSlice<TestFile?>, testConfig: GoMap<String, String>, tsconfig: ParsedCommandLine?, currentDirectory: String, symlinks: GoMap<String, String>): CompilationResult? {
+    var compilerOptions_1: CompilerOptions? = null
+    if (tsconfig != null) {
+        compilerOptions_1 = tsconfig!!.parsedConfig!!.compilerOptions.clone()
+    }
+    if (compilerOptions_1 == null) {
+        compilerOptions_1 = CompilerOptions()
+    }
+    if (compilerOptions_1!!.newLine.value == 0) {
+        compilerOptions_1!!.newLine = NewLineKind(1)
+    }
+    if (compilerOptions_1!!.skipDefaultLibCheck.value == 0) {
+        compilerOptions_1!!.skipDefaultLibCheck = Tristate(2)
+    }
+    compilerOptions_1!!.noErrorTruncation = Tristate(2)
+    val harnessOptions: HarnessOptions = HarnessOptions(useCaseSensitiveFileNames = true, currentDirectory = currentDirectory)
+    if (!testConfig.isNil) {
+        setOptionsFromTestConfig(t, testConfig, compilerOptions_1, harnessOptions, currentDirectory, false)
+    }
+    return compileFilesEx(t, inputFiles, otherFiles, harnessOptions, compilerOptions_1, currentDirectory, symlinks, tsconfig)
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompileFilesEx 45fb2063
+fun compileFilesEx(t: T?, inputFiles: GoSlice<TestFile?>, otherFiles: GoSlice<TestFile?>, harnessOptions: HarnessOptions?, compilerOptions_1: CompilerOptions?, currentDirectory: String, symlinks: GoMap<String, String>, tsconfig: ParsedCommandLine?): CompilationResult? {
+    var programFileNames: GoSlice<String> = GoElem.STRING.nilSlice
+    val s0 = inputFiles
+    l0@ for (i1 in 0 until s0.len) {
+        val file: TestFile? = s0[i1]
+        val fileName: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(file!!.unitName, currentDirectory)
+        if (!com.xemantic.typescript.tsgo.tspath.fileExtensionIs(fileName, ".json") && !com.xemantic.typescript.tsgo.tspath.fileExtensionIs(fileName, ".tsbuildinfo")) {
+            programFileNames = programFileNames.append1(fileName)
+        }
+    }
+    var includeLibDir: Boolean = com.xemantic.typescript.tsgo.core.some<TestFile?>(GoElem.ref<TestFile?>(), inputFiles, fun(file_1: TestFile?): Boolean {
+        return com.xemantic.typescript.tsgo.go.strings.contains(file_1!!.content, "/.lib/")
+    })
+    if (harnessOptions!!.libFiles.len > 0) {
+        val s2 = harnessOptions!!.libFiles
+        l1@ for (i3 in 0 until s2.len) {
+            val libFile: String = s2[i3]
+            if (libFile == "lib.d.ts" && compilerOptions_1!!.noLib.value != 2) {
+                continue@l1
+            }
+            programFileNames = programFileNames.append1(com.xemantic.typescript.tsgo.tspath.combinePaths("/.lib", GoSlice.of(GoElem.STRING, libFile)))
+            includeLibDir = true
+        }
+    }
+    if (includeLibDir) {
+        com.xemantic.typescript.tsgo.repo.skipIfNoTypeScriptSubmodule(t)
+    }
+    if (compilerOptions_1!!.outDir != "") {
+        compilerOptions_1!!.outDir = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(compilerOptions_1!!.outDir, currentDirectory)
+    }
+    if (compilerOptions_1!!.project != "") {
+        compilerOptions_1!!.project = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(compilerOptions_1!!.project, currentDirectory)
+    }
+    if (compilerOptions_1!!.rootDir != "") {
+        compilerOptions_1!!.rootDir = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(compilerOptions_1!!.rootDir, currentDirectory)
+    }
+    if (compilerOptions_1!!.tsBuildInfoFile != "") {
+        compilerOptions_1!!.tsBuildInfoFile = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(compilerOptions_1!!.tsBuildInfoFile, currentDirectory)
+    }
+    if (compilerOptions_1!!.baseUrl != "") {
+        compilerOptions_1!!.baseUrl = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(compilerOptions_1!!.baseUrl, currentDirectory)
+    }
+    if (compilerOptions_1!!.declarationDir != "") {
+        compilerOptions_1!!.declarationDir = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(compilerOptions_1!!.declarationDir, currentDirectory)
+    }
+    val s4 = compilerOptions_1!!.rootDirs
+    l2@ for (i5 in 0 until s4.len) {
+        val i: Int = i5
+        val rootDir: String = s4[i5]
+        compilerOptions_1!!.rootDirs[i] = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(rootDir, currentDirectory)
+    }
+    val s6 = compilerOptions_1!!.typeRoots
+    l3@ for (i7 in 0 until s6.len) {
+        val i_1: Int = i7
+        val typeRoot: String = s6[i7]
+        compilerOptions_1!!.typeRoots[i_1] = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(typeRoot, currentDirectory)
+    }
+    val testfs: GoMap<String, Any?> = GoMap.make<String, Any?>(GoElem.ref<Any?>())
+    val s8 = inputFiles
+    l4@ for (i9 in 0 until s8.len) {
+        val file_2: TestFile? = s8[i9]
+        val fileName_1: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(file_2!!.unitName, currentDirectory)
+        testfs[fileName_1] = MapFile(data = goStringToBytes(file_2!!.content))
+    }
+    val s10 = otherFiles
+    l5@ for (i11 in 0 until s10.len) {
+        val file_3: TestFile? = s10[i11]
+        val fileName_2: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(file_3!!.unitName, currentDirectory)
+        testfs[fileName_2] = MapFile(data = goStringToBytes(file_3!!.content))
+    }
+    val mi12 = symlinks.iter()
+    l6@ while (mi12.next()) {
+        val src: String = mi12.key
+        val target: String = mi12.value
+        val srcFileName: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(src, currentDirectory)
+        val targetFileName: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(target, currentDirectory)
+        testfs[srcFileName] = com.xemantic.typescript.tsgo.vfs.vfstest.symlink(targetFileName)
+    }
+    if (includeLibDir) {
+        com.xemantic.typescript.tsgo.go.maps.copy<String, Any?>(testfs, testLibFolderMap!!())
+    }
+    var fs: FS? = com.xemantic.typescript.tsgo.vfs.vfstest.fromMap<Any?>(GoElem.ref<Any?>(), testfs, harnessOptions!!.useCaseSensitiveFileNames)
+    fs = com.xemantic.typescript.tsgo.bundled.wrapFS(fs)
+    fs = newOutputRecorderFS(fs)
+    val host: com.xemantic.typescript.tsgo.testutil.harnessutil.cachedCompilerHost? = createCompilerHost(fs, com.xemantic.typescript.tsgo.bundled.libPath(), currentDirectory)
+    var configFile: TsConfigSourceFile? = null
+    var errors: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+    if (tsconfig != null) {
+        configFile = tsconfig!!.configFile
+        errors = tsconfig!!.errors
+    }
+    val result: CompilationResult? = compileFilesWithHost(host, ParsedCommandLine(parsedConfig = ParsedOptions(compilerOptions = compilerOptions_1, fileNames = programFileNames), configFile = configFile, errors = errors), harnessOptions)
+    result!!.symlinks = symlinks
+    result!!.trace = host!!.tracer!!.string()
+    result!!.repeat = fun(testConfig: GoMap<String, String>): CompilationResult? {
+        val newHarnessOptions: HarnessOptions = harnessOptions!!.goCopy()
+        val newCompilerOptions: CompilerOptions? = compilerOptions_1.clone()
+        setOptionsFromTestConfig(t, testConfig, newCompilerOptions, newHarnessOptions, currentDirectory, false)
+        return compileFilesEx(t, inputFiles, otherFiles, newHarnessOptions, newCompilerOptions, currentDirectory, symlinks, tsconfig)
+    }
+    return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.SetOptionsFromTestConfig 04d3f59a
@@ -348,7 +496,7 @@ class cachedCompilerHost(
 
     override fun defaultLibraryPath(): String = this.compilerHost!!.defaultLibraryPath()
 
-    override fun fs(): com.xemantic.typescript.tsgo.vfs.FS? = this.compilerHost!!.fs()
+    override fun fs(): FS? = this.compilerHost!!.fs()
 
     override fun getCurrentDirectory(): String = this.compilerHost!!.getCurrentDirectory()
 
@@ -515,9 +663,347 @@ fun TracerForBaselining?.reset() {
 }
 
 // go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.createCompilerHost f4d63d96
-fun createCompilerHost(fs: com.xemantic.typescript.tsgo.vfs.FS?, defaultLibraryPath: String, currentDirectory: String): com.xemantic.typescript.tsgo.testutil.harnessutil.cachedCompilerHost? {
+fun createCompilerHost(fs: FS?, defaultLibraryPath: String, currentDirectory: String): com.xemantic.typescript.tsgo.testutil.harnessutil.cachedCompilerHost? {
     val tracer: TracerForBaselining? = newTracerForBaselining(ComparePathsOptions(useCaseSensitiveFileNames = fs!!.useCaseSensitiveFileNames(), currentDirectory = currentDirectory), Builder())
     return com.xemantic.typescript.tsgo.testutil.harnessutil.cachedCompilerHost(compilerHost = com.xemantic.typescript.tsgo.compiler.newCompilerHost(currentDirectory, fs, defaultLibraryPath, null, run { val r0 = tracer; fun(p0: Message?, p1: GoSlice<Any?>) = r0.trace(p0, p1) }), tracer = tracer)
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.compileFilesWithHost 6f45e3cd
+fun compileFilesWithHost(host: CompilerHost?, config: ParsedCommandLine?, harnessOptions: HarnessOptions?): CompilationResult? {
+    val ctx: Context? = com.xemantic.typescript.tsgo.go.context.background()
+    var preErrors: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+    val preCompilerOptions: CompilerOptions? = config.compilerOptions().clone()
+    preCompilerOptions!!.traceResolution = Tristate(1)
+    val preConfig: ParsedCommandLine? = ParsedCommandLine(parsedConfig = ParsedOptions(compilerOptions = preCompilerOptions, fileNames = config.fileNames()), configFile = config!!.configFile, errors = config!!.errors)
+    val preProgram: ProgramLike? = createProgram(host, preConfig)
+    preErrors = preErrors.appendSlice(preProgram!!.getConfigFileParsingDiagnostics())
+    preErrors = preErrors.appendSlice(preProgram!!.getProgramDiagnostics())
+    preErrors = preErrors.appendSlice(preProgram!!.getSyntacticDiagnostics(ctx, null))
+    preErrors = preErrors.appendSlice(preProgram!!.getSemanticDiagnostics(ctx, null))
+    preErrors = preErrors.appendSlice(preProgram!!.getGlobalDiagnostics(ctx))
+    if (preProgram!!.options().getEmitDeclarations()) {
+        preErrors = preErrors.appendSlice(preProgram!!.getDeclarationDiagnostics(ctx, null))
+    }
+    if (harnessOptions!!.captureSuggestions) {
+        preErrors = preErrors.appendSlice(preProgram!!.getSuggestionDiagnostics(ctx, null))
+    }
+    preErrors = com.xemantic.typescript.tsgo.compiler.sortAndDeduplicateDiagnostics(preErrors)
+    val postProgram: ProgramLike? = createProgram(host, config)
+    val emitResult: EmitResult? = postProgram!!.emit(ctx, EmitOptions())
+    var postErrors: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
+    postErrors = postErrors.appendSlice(postProgram!!.getConfigFileParsingDiagnostics())
+    postErrors = postErrors.appendSlice(postProgram!!.getProgramDiagnostics())
+    postErrors = postErrors.appendSlice(postProgram!!.getSyntacticDiagnostics(ctx, null))
+    postErrors = postErrors.appendSlice(postProgram!!.getSemanticDiagnostics(ctx, null))
+    postErrors = postErrors.appendSlice(postProgram!!.getGlobalDiagnostics(ctx))
+    if (postProgram!!.options().getEmitDeclarations()) {
+        postErrors = postErrors.appendSlice(postProgram!!.getDeclarationDiagnostics(ctx, null))
+    }
+    if (harnessOptions!!.captureSuggestions) {
+        postErrors = postErrors.appendSlice(postProgram!!.getSuggestionDiagnostics(ctx, null))
+    }
+    postErrors = com.xemantic.typescript.tsgo.compiler.sortAndDeduplicateDiagnostics(postErrors)
+    var errors: GoSlice<Diagnostic?> = postErrors
+    if (postErrors.len != preErrors.len) {
+        var longerErrors: GoSlice<Diagnostic?> = postErrors
+        var shorterErrors: GoSlice<Diagnostic?> = preErrors
+        if (preErrors.len > postErrors.len) {
+            val t0 = preErrors
+            val t1 = postErrors
+            longerErrors = t0
+            shorterErrors = t1
+        }
+        var diag: Diagnostic? = com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.newAdHocMessage(com.xemantic.typescript.tsgo.go.fmt.sprintf("Pre-emit (%d) and post-emit (%d) diagnostic counts do not match! This can indicate that a semantic _error_ was added by the emit resolver - such an error may not be reflected on the command line or in the editor, but may be captured in a baseline here!", preErrors.len, postErrors.len)), GoElem.ref<Any?>().nilSlice)
+        diag = diag.addRelatedInfo(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.newAdHocMessage("The excess diagnostics are:"), GoElem.ref<Any?>().nilSlice))
+        val s2 = longerErrors
+        l0@ for (i3 in 0 until s2.len) {
+            val d: Diagnostic? = s2[i3]
+            var matched: Boolean = false
+            val s4 = shorterErrors
+            l1@ for (i5 in 0 until s4.len) {
+                val d2: Diagnostic? = s4[i5]
+                val comparison: Int = com.xemantic.typescript.tsgo.ast.compareDiagnostics(d, d2)
+                if (comparison == 0) {
+                    matched = true
+                    break@l1
+                }
+            }
+            if (!matched) {
+                diag = diag.addRelatedInfo(d)
+            }
+        }
+        errors = shorterErrors
+        errors = errors.append1(diag)
+    }
+    return newCompilationResult(host, config.compilerOptions(), postProgram, emitResult, errors, harnessOptions)
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult fd662eba
+class CompilationResult(
+    @kotlin.jvm.JvmField var diagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
+    @kotlin.jvm.JvmField var result: EmitResult? = null,
+    @kotlin.jvm.JvmField var program: ProgramLike? = null,
+    @kotlin.jvm.JvmField var options: CompilerOptions? = null,
+    @kotlin.jvm.JvmField var harnessOptions: HarnessOptions? = null,
+    @kotlin.jvm.JvmField var js: OrderedMap<String, TestFile?> = OrderedMap<String, TestFile?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<TestFile?>()),
+    @kotlin.jvm.JvmField var dts: OrderedMap<String, TestFile?> = OrderedMap<String, TestFile?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<TestFile?>()),
+    @kotlin.jvm.JvmField var maps: OrderedMap<String, TestFile?> = OrderedMap<String, TestFile?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<TestFile?>()),
+    @kotlin.jvm.JvmField var symlinks: GoMap<String, String> = GoMap.nil<String, String>(GoElem.STRING),
+    @kotlin.jvm.JvmField var repeat: ((GoMap<String, String>) -> CompilationResult?)? = null,
+    @kotlin.jvm.JvmField var outputs: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice,
+    @kotlin.jvm.JvmField var inputs: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice,
+    @kotlin.jvm.JvmField var inputsAndOutputs: OrderedMap<String, CompilationOutput?> = OrderedMap<String, CompilationOutput?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<CompilationOutput?>()),
+    @kotlin.jvm.JvmField var trace: String = "",
+    @kotlin.jvm.JvmField var host: CompilerHost? = null,
+) {
+
+    fun goCopy(): CompilationResult = CompilationResult(diagnostics = diagnostics, result = result, program = program, options = options, harnessOptions = harnessOptions, js = js.goCopy(), dts = dts.goCopy(), maps = maps.goCopy(), symlinks = symlinks, repeat = repeat, outputs = outputs, inputs = inputs, inputsAndOutputs = inputsAndOutputs.goCopy(), trace = trace, host = host)
+
+    fun goSet(o: CompilationResult) {
+        diagnostics = o.diagnostics
+        result = o.result
+        program = o.program
+        options = o.options
+        harnessOptions = o.harnessOptions
+        js = o.js.goCopy()
+        dts = o.dts.goCopy()
+        maps = o.maps.goCopy()
+        symlinks = o.symlinks
+        repeat = o.repeat
+        outputs = o.outputs
+        inputs = o.inputs
+        inputsAndOutputs = o.inputsAndOutputs.goCopy()
+        trace = o.trace
+        host = o.host
+    }
+
+    companion object {
+        val ELEM: GoElem<CompilationResult> = GoElem({ CompilationResult() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationOutput f8e6b94c
+class CompilationOutput(
+    @kotlin.jvm.JvmField var inputs: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice,
+    @kotlin.jvm.JvmField var js: TestFile? = null,
+    @kotlin.jvm.JvmField var dts: TestFile? = null,
+    @kotlin.jvm.JvmField var map: TestFile? = null,
+) {
+
+    fun goCopy(): CompilationOutput = CompilationOutput(inputs = inputs, js = js, dts = dts, map = map)
+
+    fun goSet(o: CompilationOutput) {
+        inputs = o.inputs
+        js = o.js
+        dts = o.dts
+        map = o.map
+    }
+
+    companion object {
+        val ELEM: GoElem<CompilationOutput> = GoElem({ CompilationOutput() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.newCompilationResult ec3badb8
+fun newCompilationResult(host: CompilerHost?, options_0: CompilerOptions?, program: ProgramLike?, result: EmitResult?, diagnostics: GoSlice<Diagnostic?>, harnessOptions: HarnessOptions?): CompilationResult? {
+    var options: CompilerOptions? = options_0
+    if (program != null) {
+        options = program!!.options()
+    }
+    val c: CompilationResult? = CompilationResult(diagnostics = diagnostics, result = result, program = program, options = options, harnessOptions = harnessOptions, host = host)
+    val fs: OutputRecorderFS? = host!!.fs() as OutputRecorderFS
+    if (fs != null && program != null) {
+        val js: OrderedMap<String, TestFile?> = OrderedMap<String, TestFile?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<TestFile?>())
+        val dts: OrderedMap<String, TestFile?> = OrderedMap<String, TestFile?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<TestFile?>())
+        val maps: OrderedMap<String, TestFile?> = OrderedMap<String, TestFile?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<TestFile?>())
+        val s1 = fs.outputs()
+        l0@ for (i2 in 0 until s1.len) {
+            val document: TestFile? = s1[i2]
+            if (com.xemantic.typescript.tsgo.tspath.hasJSFileExtension(document!!.unitName) || com.xemantic.typescript.tsgo.tspath.hasJSONFileExtension(document!!.unitName)) {
+                js.set(document!!.unitName, document)
+            } else if (com.xemantic.typescript.tsgo.tspath.isDeclarationFileName(document!!.unitName)) {
+                dts.set(document!!.unitName, document)
+            } else if (com.xemantic.typescript.tsgo.tspath.fileExtensionIs(document!!.unitName, ".map")) {
+                maps.set(document!!.unitName, document)
+            }
+        }
+        val s3 = program!!.getSourceFiles()
+        l1@ for (i4 in 0 until s3.len) {
+            val sourceFile: SourceFile? = s3[i4]
+            val input: TestFile? = TestFile(unitName = sourceFile!!.fileName(), content = sourceFile!!.text())
+            c!!.inputs = c!!.inputs.append1(input)
+            if (!com.xemantic.typescript.tsgo.tspath.isDeclarationFileName(sourceFile!!.fileName())) {
+                val extname: String = com.xemantic.typescript.tsgo.outputpaths.getOutputExtension(sourceFile!!.fileName(), options!!.jsx)
+                val outputs: CompilationOutput? = CompilationOutput(inputs = GoSlice.of(GoElem.ref<TestFile?>(), input), js = js.getOrZero(c.getOutputPath(sourceFile!!.fileName(), extname)), dts = dts.getOrZero(c.getOutputPath(sourceFile!!.fileName(), com.xemantic.typescript.tsgo.tspath.getDeclarationEmitExtensionForPath(sourceFile!!.fileName()))), map = maps.getOrZero(c.getOutputPath(sourceFile!!.fileName(), extname + ".map")))
+                c!!.inputsAndOutputs.set(sourceFile!!.fileName(), outputs)
+                if (outputs!!.js != null) {
+                    c!!.inputsAndOutputs.set(outputs!!.js!!.unitName, outputs)
+                    c!!.js.set(outputs!!.js!!.unitName, outputs!!.js)
+                    js.delete(outputs!!.js!!.unitName)
+                    c!!.outputs = c!!.outputs.append1(outputs!!.js)
+                }
+                if (outputs!!.dts != null) {
+                    c!!.inputsAndOutputs.set(outputs!!.dts!!.unitName, outputs)
+                    c!!.dts.set(outputs!!.dts!!.unitName, outputs!!.dts)
+                    dts.delete(outputs!!.dts!!.unitName)
+                    c!!.outputs = c!!.outputs.append1(outputs!!.dts)
+                }
+                if (outputs!!.map != null) {
+                    c!!.inputsAndOutputs.set(outputs!!.map!!.unitName, outputs)
+                    c!!.maps.set(outputs!!.map!!.unitName, outputs!!.map)
+                    maps.delete(outputs!!.map!!.unitName)
+                    c!!.outputs = c!!.outputs.append1(outputs!!.map)
+                }
+            }
+        }
+        val s5 = com.xemantic.typescript.tsgo.go.slices.sortedFunc<TestFile?>(GoElem.ref<TestFile?>(), (js.values())!!, (fun(p0: TestFile?, p1: TestFile?): Int = compareTestFiles(p0, p1))!!)
+        l2@ for (i6 in 0 until s5.len) {
+            val document_1: TestFile? = s5[i6]
+            c!!.js.set(document_1!!.unitName, document_1)
+        }
+        val s7 = com.xemantic.typescript.tsgo.go.slices.sortedFunc<TestFile?>(GoElem.ref<TestFile?>(), (dts.values())!!, (fun(p0: TestFile?, p1: TestFile?): Int = compareTestFiles(p0, p1))!!)
+        l3@ for (i8 in 0 until s7.len) {
+            val document_2: TestFile? = s7[i8]
+            c!!.dts.set(document_2!!.unitName, document_2)
+        }
+        val s9 = com.xemantic.typescript.tsgo.go.slices.sortedFunc<TestFile?>(GoElem.ref<TestFile?>(), (maps.values())!!, (fun(p0: TestFile?, p1: TestFile?): Int = compareTestFiles(p0, p1))!!)
+        l4@ for (i10 in 0 until s9.len) {
+            val document_3: TestFile? = s9[i10]
+            c!!.maps.set(document_3!!.unitName, document_3)
+        }
+    }
+    return c
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.compareTestFiles d28da6c0
+fun compareTestFiles(a: TestFile?, b: TestFile?): Int {
+    return com.xemantic.typescript.tsgo.go.strings.compare(a!!.unitName, b!!.unitName)
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.getOutputPath 94b8d1fa
+fun CompilationResult?.getOutputPath(path_0: String, ext: String): String {
+    var path: String = path_0
+    path = com.xemantic.typescript.tsgo.tspath.resolvePath(this!!.host!!.getCurrentDirectory(), GoSlice.of(GoElem.STRING, path))
+    var outDir: String = ""
+    if (ext == ".d.ts" || ext == ".d.mts" || ext == ".d.cts" || (com.xemantic.typescript.tsgo.go.strings.hasSuffix(ext, ".ts") && com.xemantic.typescript.tsgo.go.strings.contains(ext, ".d."))) {
+        outDir = this!!.options!!.declarationDir
+        if (outDir == "") {
+            outDir = this!!.options!!.outDir
+        }
+    } else {
+        outDir = this!!.options!!.outDir
+    }
+    if (outDir != "") {
+        val common: String = this!!.program!!.commonSourceDirectory()
+        if (common != "") {
+            path = com.xemantic.typescript.tsgo.tspath.getRelativePathFromDirectory(common, path, ComparePathsOptions(useCaseSensitiveFileNames = this!!.host!!.fs()!!.useCaseSensitiveFileNames(), currentDirectory = this!!.host!!.getCurrentDirectory()))
+            path = com.xemantic.typescript.tsgo.tspath.combinePaths(com.xemantic.typescript.tsgo.tspath.resolvePath(this!!.host!!.getCurrentDirectory(), GoSlice.of(GoElem.STRING, this!!.options!!.outDir)), GoSlice.of(GoElem.STRING, path))
+        }
+    }
+    return com.xemantic.typescript.tsgo.tspath.changeExtension(path, ext)
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.FS bf6848b4
+fun CompilationResult?.fs(): FS? {
+    return this!!.host!!.fs()
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.GetNumberOfJSFiles d4bd3459
+fun CompilationResult?.getNumberOfJSFiles(includeJson: Boolean): Int {
+    if (includeJson) {
+        return this!!.js.size()
+    }
+    var count: Int = 0
+    this!!.js.values()!!(fun(y0: TestFile?): Boolean {
+            val file: TestFile? = y0
+            if (!com.xemantic.typescript.tsgo.tspath.fileExtensionIs(file!!.unitName, ".json")) {
+                count++
+            }
+            return true
+    })
+    return count
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.Inputs 4bd02463
+fun CompilationResult?.inputs(): GoSlice<TestFile?> {
+    return this!!.inputs
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.Outputs 014411a4
+fun CompilationResult?.outputs(): GoSlice<TestFile?> {
+    return this!!.outputs
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.GetInputsAndOutputsForFile 90213c2c
+fun CompilationResult?.getInputsAndOutputsForFile(path: String): CompilationOutput? {
+    return this!!.inputsAndOutputs.getOrZero(com.xemantic.typescript.tsgo.tspath.resolvePath(this!!.host!!.getCurrentDirectory(), GoSlice.of(GoElem.STRING, path)))
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.GetInputsForFile d5f4bde6
+fun CompilationResult?.getInputsForFile(path: String): GoSlice<TestFile?> {
+    val outputs_1: CompilationOutput? = this.getInputsAndOutputsForFile(path)
+    if (outputs_1 != null) {
+        return outputs_1!!.inputs
+    }
+    return GoElem.ref<TestFile?>().nilSlice
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.GetOutput 174bd7c2
+fun CompilationResult?.getOutput(path: String, kind: String): TestFile? {
+    val outputs_1: CompilationOutput? = this.getInputsAndOutputsForFile(path)
+    if (outputs_1 != null) {
+        when (kind) {
+            "js" -> {
+                return outputs_1!!.js
+            }
+            "dts" -> {
+                return outputs_1!!.dts
+            }
+            "map" -> {
+                return outputs_1!!.map
+            }
+        }
+    }
+    return null
+}
+
+// go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.CompilationResult.GetSourceMapRecord 7fc6250b
+fun CompilationResult?.getSourceMapRecord(): String {
+    if (this!!.result == null || this!!.result!!.sourceMaps.len == 0) {
+        return ""
+    }
+    val sourceMapRecorder: com.xemantic.typescript.tsgo.testutil.harnessutil.writerAggregator = com.xemantic.typescript.tsgo.testutil.harnessutil.writerAggregator()
+    val s0 = this!!.result!!.sourceMaps
+    l0@ for (i1 in 0 until s0.len) {
+        val sourceMapData: SourceMapEmitResult? = s0[i1]
+        var prevSourceFile: SourceFile? = null
+        var currentFile: TestFile? = null
+        if (com.xemantic.typescript.tsgo.tspath.isDeclarationFileName(sourceMapData!!.generatedFile)) {
+            currentFile = this!!.dts.getOrZero(sourceMapData!!.generatedFile)
+        } else {
+            currentFile = this!!.js.getOrZero(sourceMapData!!.generatedFile)
+        }
+        val sourceMapSpanWriter: com.xemantic.typescript.tsgo.testutil.harnessutil.sourceMapSpanWriter? = newSourceMapSpanWriter(sourceMapRecorder, sourceMapData!!.sourceMap, currentFile)
+        val mapper: MappingsDecoder? = com.xemantic.typescript.tsgo.sourcemap.decodeMappings(sourceMapData!!.sourceMap!!.mappings)
+        mapper.values()!!(fun(y2: Mapping?): Boolean {
+                    val decodedSourceMapping: Mapping? = y2
+                    var currentSourceFile: SourceFile? = null
+                    if (decodedSourceMapping.isSourceMapping()) {
+                        currentSourceFile = this!!.program!!.getSourceFile(sourceMapData!!.inputSourceFileNames[decodedSourceMapping!!.sourceIndex.value])
+                    }
+                    if (currentSourceFile !== prevSourceFile) {
+                        if (currentSourceFile != null) {
+                            sourceMapSpanWriter.recordNewSourceFileSpan(decodedSourceMapping, currentSourceFile!!.text())
+                        }
+                        prevSourceFile = currentSourceFile
+                    } else {
+                        sourceMapSpanWriter.recordSourceMapSpan(decodedSourceMapping)
+                    }
+                    return true
+        })
+        sourceMapSpanWriter.close()
+    }
+    return sourceMapRecorder.builder.string()
 }
 
 // go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.testBuildInfoReader b3b52dff
@@ -835,7 +1321,7 @@ fun skipUnsupportedCompilerOptions(t: T?, options: CompilerOptions?) {
 // go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.testLibFolderMap 4cd2a183
 @kotlin.jvm.JvmField val testLibFolderMap: (() -> GoMap<String, Any?>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<String, Any?>>(fun(): GoMap<String, Any?> {
     val testfs: GoMap<String, Any?> = GoMap.make<String, Any?>(GoElem.ref<Any?>())
-    val libfs: FS? = com.xemantic.typescript.tsgo.go.os.dirFS(com.xemantic.typescript.tsgo.go.path.filepath.join(com.xemantic.typescript.tsgo.repo.typeScriptSubmodulePath(), "tests", "lib"))
+    val libfs: com.xemantic.typescript.tsgo.go.io.fs.FS? = com.xemantic.typescript.tsgo.go.os.dirFS(com.xemantic.typescript.tsgo.go.path.filepath.join(com.xemantic.typescript.tsgo.repo.typeScriptSubmodulePath(), "tests", "lib"))
     val err_1: GoError? = com.xemantic.typescript.tsgo.go.io.fs.walkDir(libfs, ".", fun(path: String, d: DirEntry?, err_0: GoError?): GoError? {
         var err: GoError? = err_0
         if (err != null) {

@@ -35,11 +35,11 @@ const val _ModuleKind_name_1: String = "ESNextNode16Node18Node20"
 const val _ModuleKind_name_2: String = "NodeNextPreserve"
 
 // go: github.com/microsoft/typescript-go/internal/core._ModuleKind_index_0 79ea5e36
-@kotlin.jvm.JvmField val _ModuleKind_index_0: GoArray<Int> = GoArray(9, GoElem.INT).also { it[0] = 0; it[1] = 4; it[2] = 12; it[3] = 15; it[4] = 18; it[5] = 24; it[6] = 30; it[7] = 36; it[8] = 42 }
+@kotlin.jvm.JvmField val _ModuleKind_index_0: GoArray<Int> = GoArray(9, GoElem.BYTE).also { it[0] = 0; it[1] = 4; it[2] = 12; it[3] = 15; it[4] = 18; it[5] = 24; it[6] = 30; it[7] = 36; it[8] = 42 }
 
 // go: github.com/microsoft/typescript-go/internal/core._ModuleKind_index_1 61a8f14b
-@kotlin.jvm.JvmField val _ModuleKind_index_1: GoArray<Int> = GoArray(5, GoElem.INT).also { it[0] = 0; it[1] = 6; it[2] = 12; it[3] = 18; it[4] = 24 }
+@kotlin.jvm.JvmField val _ModuleKind_index_1: GoArray<Int> = GoArray(5, GoElem.BYTE).also { it[0] = 0; it[1] = 6; it[2] = 12; it[3] = 18; it[4] = 24 }
 
 // go: github.com/microsoft/typescript-go/internal/core._ModuleKind_index_2 f3c05929
-@kotlin.jvm.JvmField val _ModuleKind_index_2: GoArray<Int> = GoArray(3, GoElem.INT).also { it[0] = 0; it[1] = 8; it[2] = 16 }
+@kotlin.jvm.JvmField val _ModuleKind_index_2: GoArray<Int> = GoArray(3, GoElem.BYTE).also { it[0] = 0; it[1] = 8; it[2] = 16 }
 

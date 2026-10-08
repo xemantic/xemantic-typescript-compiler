@@ -52,7 +52,7 @@ import com.xemantic.typescript.tsgo.ast.newToken
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder 8556a9d3
 class astDecoder(
-    @kotlin.jvm.JvmField var raw: GoSlice<Int> = GoElem.INT.nilSlice,
+    @kotlin.jvm.JvmField var raw: GoSlice<Int> = GoElem.BYTE.nilSlice,
     @get:kotlin.jvm.JvmName("goGet_strTable") @set:kotlin.jvm.JvmName("goSet_strTable") var strTable: UInt = 0u,
     @get:kotlin.jvm.JvmName("goGet_strData") @set:kotlin.jvm.JvmName("goSet_strData") var strData: UInt = 0u,
     @get:kotlin.jvm.JvmName("goGet_extData") @set:kotlin.jvm.JvmName("goSet_extData") var extData: UInt = 0u,

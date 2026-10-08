@@ -414,7 +414,7 @@ fun <T> concatenate(goElem_T: GoElem<T>, s1: GoSlice<T>, s2: GoSlice<T>): GoSlic
     if (s1.len == 0) {
         return s2
     }
-    return com.xemantic.typescript.tsgo.go.slices.concat<T>(s1, s2)
+    return com.xemantic.typescript.tsgo.go.slices.concat<T>(GoElem.slice(goElem_T), s1, s2)
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.Splice 150e4b43
@@ -437,7 +437,7 @@ fun <T> splice(goElem_T: GoElem<T>, s1: GoSlice<T>, start_0: Int, deleteCount_1:
     if (start == end && items.len == 0) {
         return s1
     }
-    return com.xemantic.typescript.tsgo.go.slices.concat<T>(s1.slice(0, start), items, s1.slice(end))
+    return com.xemantic.typescript.tsgo.go.slices.concat<T>(GoElem.slice(goElem_T), s1.slice(0, start), items, s1.slice(end))
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.CountWhere 585e368b

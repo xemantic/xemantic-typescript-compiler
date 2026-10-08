@@ -29,5 +29,5 @@ import com.xemantic.typescript.tsgo.runtime.*
 const val _ScriptKind_name: String = "ScriptKindUnknownScriptKindJSScriptKindJSXScriptKindTSScriptKindTSXScriptKindExternalScriptKindJSONScriptKindDeferred"
 
 // go: github.com/microsoft/typescript-go/internal/core._ScriptKind_index a330c5cd
-@kotlin.jvm.JvmField val _ScriptKind_index: GoArray<Int> = GoArray(9, GoElem.INT).also { it[0] = 0; it[1] = 17; it[2] = 29; it[3] = 42; it[4] = 54; it[5] = 67; it[6] = 85; it[7] = 99; it[8] = 117 }
+@kotlin.jvm.JvmField val _ScriptKind_index: GoArray<Int> = GoArray(9, GoElem.BYTE).also { it[0] = 0; it[1] = 17; it[2] = 29; it[3] = 42; it[4] = 54; it[5] = 67; it[6] = 85; it[7] = 99; it[8] = 117 }
 

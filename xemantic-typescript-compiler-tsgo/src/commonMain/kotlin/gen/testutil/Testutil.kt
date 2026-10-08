@@ -24,6 +24,12 @@
 package com.xemantic.typescript.tsgo.testutil
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.testing.T
+
+// go: github.com/microsoft/typescript-go/internal/testutil.RecoverAndFail c64b464c
+fun recoverAndFail(t: T?, msg: String) {
+    TODO("goport: refused recover-outside-defer: github.com/microsoft/typescript-go/internal/testutil.RecoverAndFail")
+}
 
 // go: github.com/microsoft/typescript-go/internal/testutil.TestProgramIsSingleThreaded 44061fc8
 fun testProgramIsSingleThreaded(): Boolean {

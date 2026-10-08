@@ -275,7 +275,7 @@ fun encodeSourceFile(sourceFile: SourceFile?): Tuple3<GoSlice<Int>, NodeIndexTab
     var nodeTable: NodeIndexTable? = t0.second
     val err: GoError? = t0.third
     if (err != null) {
-        return Tuple3<GoSlice<Int>, NodeIndexTable?, GoError?>(GoElem.INT.nilSlice, null, err)
+        return Tuple3<GoSlice<Int>, NodeIndexTable?, GoError?>(GoElem.BYTE.nilSlice, null, err)
     }
     nodeTable = com.xemantic.typescript.tsgo.ast.getOrComputeSourceFileData<NodeIndexTable?>(GoElem.ref<NodeIndexTable?>(), sourceFile, nodeIndexTableKey, fun(p1: SourceFile?): NodeIndexTable? {
         return nodeTable
@@ -293,8 +293,8 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
     var parentIndex: UInt = 0u
     var nodeCount: UInt = 0u
     var prevIndex: UInt = 0u
-    val extendedData: GoBox<GoSlice<Int>> = GoBox(GoElem.INT.nilSlice)
-    val structuredData: GoBox<GoSlice<Int>> = GoBox(GoElem.INT.nilSlice)
+    val extendedData: GoBox<GoSlice<Int>> = GoBox(GoElem.BYTE.nilSlice)
+    val structuredData: GoBox<GoSlice<Int>> = GoBox(GoElem.BYTE.nilSlice)
     var strs: com.xemantic.typescript.tsgo.api.encoder.stringTable? = null
     var positionMap: PositionMap? = null
     if (rootNode!!.kind.value == 307) {
@@ -316,7 +316,7 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
     if (sourceFile != null) {
         initialNodeCount = sourceFile!!.nodeCount
     }
-    var nodes: GoSlice<Int> = GoSlice.make(GoElem.INT, 0, (initialNodeCount + 1) * 28)
+    var nodes: GoSlice<Int> = GoSlice.make(GoElem.BYTE, 0, (initialNodeCount + 1) * 28)
     var nodeTable: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 1, initialNodeCount + 1)
     var nodeIndexMap: GoMap<Node?, UInt> = GoMap.nil<Node?, UInt>(GoElem.UINT)
     var sfExtendedDataOffset: Int = 0
@@ -462,11 +462,11 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
     val offsetStructuredData: Int = offsetExtendedData + extendedData.value.len
     val offsetNodes: Int = offsetStructuredData + structuredData.value.len
     val header: GoSlice<UInt> = GoSlice.of(GoElem.UINT, metadata, hash.lo.toUInt(), (hash.lo shr 32).toUInt(), hash.hi.toUInt(), (hash.hi shr 32).toUInt(), parseOpts, offsetStringTableOffsets.toUInt(), offsetStringTableData.toUInt(), offsetExtendedData.toUInt(), offsetStructuredData.toUInt(), offsetNodes.toUInt())
-    var headerBytes: GoSlice<Int> = GoElem.INT.nilSlice
-    var strsBytes: GoSlice<Int> = GoElem.INT.nilSlice
-    headerBytes = appendUint32s(GoElem.INT.nilSlice, header)
+    var headerBytes: GoSlice<Int> = GoElem.BYTE.nilSlice
+    var strsBytes: GoSlice<Int> = GoElem.BYTE.nilSlice
+    headerBytes = appendUint32s(GoElem.BYTE.nilSlice, header)
     strsBytes = strs.encode()
-    return Tuple3<GoSlice<Int>, NodeIndexTable?, GoError?>(com.xemantic.typescript.tsgo.go.slices.concat<Int>(headerBytes, strsBytes, extendedData.value, structuredData.value, nodes), NodeIndexTable(nodes = nodeTable), null)
+    return Tuple3<GoSlice<Int>, NodeIndexTable?, GoError?>(com.xemantic.typescript.tsgo.go.slices.concat<Int>(GoElem.slice(GoElem.BYTE), headerBytes, strsBytes, extendedData.value, structuredData.value, nodes), NodeIndexTable(nodes = nodeTable), null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.appendUint32s c0135407

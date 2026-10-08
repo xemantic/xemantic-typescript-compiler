@@ -25,6 +25,7 @@ package com.xemantic.typescript.tsgo.ast
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.sync.atomic.Bool
+import com.xemantic.typescript.tsgo.diagnosticwriter.FileLike
 import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 import com.xemantic.typescript.tsgo.synth.Iface_KindString_f376415e
 import com.xemantic.typescript.tsgo.core.LanguageVariant
@@ -2761,7 +2762,7 @@ class SourceFile(
     @kotlin.jvm.JvmField var nameTable: GoMap<String, Int> = GoMap.nil<String, Int>(GoElem.INT),
     @kotlin.jvm.JvmField var positionMapOnce: Once = Once(),
     @kotlin.jvm.JvmField var positionMap: PositionMap? = null,
-) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData, FileLike, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SourceFile = SourceFile(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), fileName = fileName, parseOptions = parseOptions.goCopy(), text = text, statements = statements, endOfFileToken = endOfFileToken, dataMu = dataMu.goCopy(), data = data, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, languageVariant = languageVariant, scriptKind = scriptKind, isDeclarationFile = isDeclarationFile, containsNonASCII = containsNonASCII, usesUriStyleNodeCoreModules = usesUriStyleNodeCoreModules, identifiers = identifiers, identifierCount = identifierCount, imports = imports, moduleAugmentations = moduleAugmentations, ambientModuleNames = ambientModuleNames, commentDirectives = commentDirectives, jsdocCache = jsdocCache, jsdocMu = jsdocMu.goCopy(), hasLazyJSDoc = hasLazyJSDoc, reparsedClones = reparsedClones, pragmas = pragmas, referencedFiles = referencedFiles, typeReferenceDirectives = typeReferenceDirectives, libReferenceDirectives = libReferenceDirectives, checkJsDirective = checkJsDirective, nodeCount = nodeCount, textCount = textCount, commonJSModuleIndicator = commonJSModuleIndicator, externalModuleIndicator = externalModuleIndicator, isBound = isBound.goCopy(), bindOnce = bindOnce.goCopy(), bindDiagnostics = bindDiagnostics, bindSuggestionDiagnostics = bindSuggestionDiagnostics, endFlowNode = endFlowNode, symbolCount = symbolCount, classifiableNames = classifiableNames.goCopy(), patternAmbientModules = patternAmbientModules, globalExports = globalExports, ecmaLineMapMu = ecmaLineMapMu.goCopy(), ecmaLineMap = ecmaLineMap, hash = hash.goCopy(), tokenCacheMu = tokenCacheMu.goCopy(), tokenCache = tokenCache, tokenFactory = tokenFactory, declarationMapMu = declarationMapMu.goCopy(), declarationMap = declarationMap, nameTableOnce = nameTableOnce.goCopy(), nameTable = nameTable, positionMapOnce = positionMapOnce.goCopy(), positionMap = positionMap)
 

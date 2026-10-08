@@ -2116,7 +2116,7 @@ fun Checker?.combineValueAndTypeSymbols(valueSymbol: Symbol?, typeSymbol: Symbol
     }
     val result: Symbol? = this.newSymbol(SymbolFlags(valueSymbol!!.flags.value or typeSymbol!!.flags.value), valueSymbol!!.name)
     com.xemantic.typescript.tsgo.debug.assert(valueSymbol!!.declarations.len > 0 || typeSymbol!!.declarations.len > 0, GoElem.ref<Any?>().nilSlice)
-    result!!.declarations = com.xemantic.typescript.tsgo.go.slices.compact<Node?>(com.xemantic.typescript.tsgo.go.slices.concat<Node?>(valueSymbol!!.declarations, typeSymbol!!.declarations))
+    result!!.declarations = com.xemantic.typescript.tsgo.go.slices.compact<Node?>(com.xemantic.typescript.tsgo.go.slices.concat<Node?>(GoElem.slice(GoElem.ref<Node?>()), valueSymbol!!.declarations, typeSymbol!!.declarations))
     result!!.parent = valueSymbol!!.parent
     if (result!!.parent == null) {
         result!!.parent = typeSymbol!!.parent

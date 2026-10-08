@@ -301,7 +301,7 @@ fun Program?.getSemanticDiagnosticsOfFile(file: SourceFile?): GoSlice<Diagnostic
     if (!ok) {
         goPanic("After handling all the affected files, there shouldnt be more changes")
     }
-    return com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(com.xemantic.typescript.tsgo.compiler.filterNoEmitSemanticDiagnostics(cachedDiagnostics.getDiagnostics(this!!.program, file), this!!.snapshot!!.options), this!!.program.getIncludeProcessorDiagnostics(file))
+    return com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(GoElem.slice(GoElem.ref<Diagnostic?>()), com.xemantic.typescript.tsgo.compiler.filterNoEmitSemanticDiagnostics(cachedDiagnostics.getDiagnostics(this!!.program, file), this!!.snapshot!!.options), this!!.program.getIncludeProcessorDiagnostics(file))
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/incremental.Program.collectSemanticDiagnosticsOfAffectedFiles f4fdd181

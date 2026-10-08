@@ -1544,7 +1544,7 @@ fun com.xemantic.typescript.tsgo.checker.keyBuilder?.hash(): CacheHashKey {
 
 // go: github.com/microsoft/typescript-go/internal/checker.keyBuilder.writeByte ebf03d0a
 fun com.xemantic.typescript.tsgo.checker.keyBuilder?.writeByte(c: Int) {
-    val t0 = this!!.h.write(GoSlice.of(GoElem.INT, c))
+    val t0 = this!!.h.write(GoSlice.of(GoElem.BYTE, c))
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.keyBuilder.writeString 8f6c6e72

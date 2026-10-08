@@ -235,7 +235,7 @@ fun goSubstring(s: String, low: Int = 0, high: Int = s.length): String {
 fun goStringToBytes(s: String): GoSlice<Int> {
     val a = arrayOfNulls<Any?>(s.length)
     for (k in s.indices) a[k] = s[k].code
-    return GoSlice.wrap(GoElem.INT, a)
+    return GoSlice.wrap(GoElem.BYTE, a)
 }
 
 /** `string(b)` for a byte slice. */

@@ -336,7 +336,7 @@ fun TypeEraserTransformer?.visit(node: Node?): Node? {
                     if (modifiers == null) {
                         modifiers = this!!.transformer.factory()!!.nodeFactory.newModifierList(visited)
                     } else {
-                        modifiers = this!!.transformer.factory()!!.nodeFactory.newModifierList(com.xemantic.typescript.tsgo.go.slices.concat<Node?>(modifiers!!.nodeList.nodes, visited))
+                        modifiers = this!!.transformer.factory()!!.nodeFactory.newModifierList(com.xemantic.typescript.tsgo.go.slices.concat<Node?>(GoElem.slice(GoElem.ref<Node?>()), modifiers!!.nodeList.nodes, visited))
                     }
                 }
                 return this!!.transformer.factory()!!.nodeFactory.updateParameterDeclaration(n_14, modifiers, n_14!!.dotDotDotToken, this!!.transformer.visitor().visitNode(n_14!!.name()), null, null, this!!.transformer.visitor().visitNode(n_14!!.initializer))

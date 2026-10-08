@@ -32,7 +32,7 @@ import com.xemantic.typescript.tsgo.go.io.Writer
 // go: github.com/microsoft/typescript-go/internal/json.Marshal 105d86b5
 fun marshal(in_: Any?, opts_0: GoSlice<Options?>): Tuple2<GoSlice<Int>, GoError?> {
     var opts: GoSlice<Options?> = opts_0
-    var out: GoSlice<Int> = GoElem.INT.nilSlice
+    var out: GoSlice<Int> = GoElem.BYTE.nilSlice
     var err: GoError? = null
     if (opts.len == 0) {
         opts = allowInvalid
@@ -68,7 +68,7 @@ fun marshalWrite(out: Writer?, in_: Any?, opts_0: GoSlice<Options?>): GoError? {
 
 // go: github.com/microsoft/typescript-go/internal/json.MarshalIndent e3d3535d
 fun marshalIndent(in_: Any?, prefix: String, indent: String): Tuple2<GoSlice<Int>, GoError?> {
-    var out: GoSlice<Int> = GoElem.INT.nilSlice
+    var out: GoSlice<Int> = GoElem.BYTE.nilSlice
     var err: GoError? = null
     if (prefix == "" && indent == "") {
         return marshal(in_, GoElem.ref<Options?>().nilSlice)

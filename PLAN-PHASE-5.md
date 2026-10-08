@@ -25,6 +25,56 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.3-a) — EMIT PARITY: the ported runner renders tsgo's `.js` / `.js.map` / `.sourcemap.txt` baselines byte-identical on 13,127 / 13,127 configurations, and tsc's own 78 sources emit byte-identical to the tsgo 7.0.2 binary; 4 port defects fixed, all mechanisms (2026-10-08)
+
+**The gate**, defined as tsgo's compiler runner defines it (`docs/goport-emit-oracle.md`). `runSingleConfigTest` baselines
+emit in three subtests: `output` (`.js`, with its `.d.ts`, its `DtsFileErrors` re-compile and its noCheck re-compile),
+`sourcemap` (`.js.map` with preview link) and `sourcemap record` (`.sourcemap.txt`). The overlay
+`oracle-go/overlay/tsbaseline/xtsc_export.go` holds VERBATIM copies of `DoJSEmitBaseline` / `DoSourcemapBaseline` /
+`DoSourcemapRecordBaseline` whose only change is that `baseline.Run` RETURNS the text. `testrunner.XtscEmitBaselines`
+runs the unmodified `newCompilerTest` and then the three verifications, each in its own `t.Run`. Go runs it in the oracle
+(`tsgo-oracle emit`, `scripts/tsgo-emit-oracle.py`), and the port runs the same code mechanically lowered (`EmitParityTest`,
+`TSGO_EMIT=1`). Both write one byte-exact frame per configuration, and the gate compares bytes. Same population as the
+diag differential: the four suites, 13,127 configurations.
+
+**Receipts:**
+- **Oracle vs tsgo's committed baselines:** `.js` 13,058 / 13,058 (61 absent = `.d.ts`-only, 8 = `skippedEmitTests`),
+  `.js.map` 146 / 146, `.sourcemap.txt` 13,127 / 13,127 byte-identical. Determinism 100 / 100, 33 s on 5 workers.
+- **`EmitParityTest`:** **13,127 / 13,127 equal, 0 differ, 0 missing** (89 s, 4 threads).
+  - Positive control: `TSGO_EMIT_INJECT=compiler/emitBOM.ts/_` reads `differ 1`, red.
+- **Project receipt** (`scripts/tsgo-emit-project.sh`, `EmitProjectMain` against `tools/tsgo-7.0.2/lib/tsc -p … --outDir`,
+  `diff -r`): tsc's 78 sources give **78 files, 8,841,387 bytes, IDENTICAL**, with 65 diagnostics on both sides.
+- **Gates:** `TSGO_DIAG=1 TSGO_ORACLE=bound` `-tsgo` 99 / 0 and `-goport` 15 / 0. That covers DiagParityTest 13,127 equal
+  and OracleParityTest 7,774 / 7,774.
+
+**Port defects (first full run: 12,964 equal, 153 differ, 10 crashed)**, every one fixed by a rule or a shim, none by a
+per-case patch:
+1. **`fmt` printed a named integer type as `%!d(UTF16Offset=…)`.** A generated value class (`GoBasicValue`) now formats as
+   its underlying value. This was 147 source-map records. It was ALSO a real emit bug: the transformers name temporaries
+   through `fmt.Sprintf("_%d", tempFlags)`, so `var _0, _1` came out as `var _%!d(tempFlags=…)` (6 `.js` baselines),
+   which is silently wrong JavaScript on any program with more than 26 temporaries.
+2. **The json shim could not marshal a named basic type** (`incremental.BuildInfoFileId`): every `incremental` build
+   panicked writing `.tsbuildinfo` (6 crashes). It now marshals the underlying kind, map keys too.
+3. **`slices.Concat()` over zero slices** (a program with no files, 4 crashes). The shim takes the porter's
+   `GoElem<S>` dictionary.
+4. **`[]byte` was indistinguishable from `[]int` once inside an `any`**, so `%s` printed `%!s([]=[91 34 …])` (4
+   `sourcesContent:` records). There is a new `GoElem.BYTE` kind: the porter emits it for `uint8`/`byte` elements, and
+   `fmt`'s `%s`/`%q`/`%x` print such a slice's bytes.
+
+**What the closure needed:**
+- Partial packages `testutil/tsbaseline` and `testutil/baseline`; `diagnosticwriter` whole.
+- The porter now accepts a THIRD-PARTY Go package listed in `THIRD_PARTY` (Main.kt: version, copyright, licence) and
+  emits it under `gen/thirdparty/` with its own header. The first is `github.com/peter-evans/patience` (MIT, tsgo's baseline
+  diff; `LICENSE-patience` in -tsgo); no configuration reaches it.
+- Shims: `testing.T.Run`, `net/url` Query(Un)Escape, `gotest.tools` `assert.Check` / `cmp.Equal`.
+- Two lowering rules: an imported PROMOTED nil-safe extension method, and a type parameter shadowing a same-named
+  imported class.
+- `baseline.Run` is a pinned refusal: it writes files.
+- Harness census bound 7 → 8.
+
+**Open:** (TSGO.3-b) the type oracle (another agent). The json shim's `[]byte` is still a number array where Go writes
+base64; nothing in the closure marshals one.
+
 ### Round (TSGO.2-c) — the diagnostics differential covers ALL FOUR suites tsgo's compiler runner runs: 13,127 / 13,127 configurations equal, 0 crashed, 0 port defects; (TSGO.2)'s oracle is complete (2026-10-08)
 
 **The four layers, as tsgo's runner defines them** (`internal/testrunner/compiler_runner_test.go`): `TestSubmodule`
@@ -318,27 +368,6 @@ corpus screen 8725 / 0 and `--include ''` the same 41 (byte-identical diffs); `c
 --fail-over 0` 0; at-risk sweep 284 classes; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns
 1 unchanged (identity hash extended to `IntersectionMemberAccess`); library grid OURS-ONLY row sets identical to `r308` on all
 eight (orchestrator's `r309`; tally 191); warning gate with probe: probe only.
-
-### Round (P18.308) — (INV.0) extraction: two families with ZERO widenings — TS2302 (static members referencing class type parameters) into `StaticTypeParamRefChecks` and TS2729 (property used before initialization) into `PropertyInitOrderChecks`; `Checker.kt` 191,774 -> 191,075 (-699); every receipt identical, per-pass table included (2026-10-06)
-
-One implementation subagent in the (P18.294) order; it finished. **Choice**: the (P18.303) report's "TS2507 / TS2302 run" is
-two separate families — TS2302 needs no widening, all five cold widenings belong to TS2507 (left); the census found a second
-zero-widening family, TS2729; refused: TS2430 / index-signature / overload-compatibility / full-index-constraint families
-(relation-path widening), the type-argument-constraint family (walk-scoped type-parameter state). **Moved**: 134973-135353
-(TS2302) and 140130-140451 (TS2729, with its TS2728 related row); reads `checkedResults`, `isDtsFile`,
-`getLineAndCharacterOfPosition`, `diagnostics` (+ `globals` for TS2729's base-class lookup); no walk state, no spine state,
-no mutable field; the only outside callers are the two `pass(…)` lambdas. **Receipts**: verbatim proof three ways for both
-families; per-pass `--passTiming` 416 rows + 33 other lines identical; PrintInlining `checkArgumentsAgainstSignature` identical;
-an 18-cell tsgo matrix byte-identical before / after (pre-existing divergences now inside the collaborators: s06 the TS2302
-type walker has no `TypeOperator` arm — `keyof U` missed; p07 a cyclic `extends` chain hides TS2729; p08 a write target
-`this.b = …` in a field initializer is not reported; p09 an ours-only TS2729 because the base-class lookup reads
-`checker.globals[baseName]` and never finds a base declared in a MODULE file); corpus screen 8725 / 0; `cost_gate.py` 0; spine
-audit clean. **Pins**: `StaticAndInitOrderChecksCollaboratorTest` 15; ablation every entry point and helper RED (6 RED for most;
-`shadowedTypeParamNames` and `collectInheritedPropertyNames` were blind at first and got new pins). **Gates**: full suite
-22,931 / 0 / 44 (+15); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue /
-mitt 0 / date-fns 1 unchanged (identity hash extended to both collaborators); library grid OURS-ONLY row sets identical to
-`r307o` on all eight (orchestrator's `r308`); warning gate with probe: probe only. Ledger row 26. Next candidates: TS2507
-`checkNonConstructorExtends` (5 cold widenings) and `checkSuperBeforeThis` (3 small widenings).
 
 ## QUEUE
 

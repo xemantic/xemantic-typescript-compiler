@@ -61,15 +61,18 @@ fun <T> grow(s: GoSlice<T>, n0: Int): GoSlice<T> {
     return s
 }
 
-/** `slices.Concat(slices...)`: nil when the total length is 0. */
-fun <T> concat(vararg slices: GoSlice<T>): GoSlice<T> {
+/**
+ * `slices.Concat(slices...)`: nil when the total length is 0. [sliceElem] is the kind of `S` (the porter's
+ * dictionary argument for `Concat[S ~[]E, E any]`): `Concat(xs...)` over an EMPTY `xs` — a program with no
+ * files — has no slice to read the element kind from.
+ */
+fun <T> concat(sliceElem: com.xemantic.typescript.tsgo.runtime.GoElem<GoSlice<T>>, vararg slices: GoSlice<T>): GoSlice<T> {
     var size = 0
     for (s in slices) {
         size += s.len
         if (size < 0) goPanic("len out of range")
     }
-    if (slices.isEmpty()) TODO("shim: slices.Concat() with no arguments needs the element kind")
-    var out = grow(slices[0].elem.nilSlice, size)
+    var out = grow(sliceElem.zeroValue(), size)
     for (s in slices) out = out.appendSlice(s)
     return out
 }

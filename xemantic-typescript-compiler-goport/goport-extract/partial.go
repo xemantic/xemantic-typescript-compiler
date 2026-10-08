@@ -29,7 +29,9 @@ import (
 
 // partialClosure: package (under internal/) -> root declaration names (functions, types, vars).
 var partialClosure = map[string][]string{
-	"testrunner":              {"XtscPrepare", "XtscIsSkippedTest", "XtscCaseConfigurations"},
+	"testrunner":              {"XtscPrepare", "XtscIsSkippedTest", "XtscCaseConfigurations", "XtscEmitBaselines"},
+	"testutil/tsbaseline":     {"XtscJSEmitBaseline", "XtscSourcemapBaseline", "XtscSourcemapRecordBaseline"},
+	"testutil/baseline":       {"NoContent"},
 	"testutil/harnessutil":    {"XtscDerive", "XtscCompileCheckOnly", "SkipUnsupportedCompilerOptions"},
 	"tsoptions/tsoptionstest": {"NewVFSParseConfigHost"},
 	"testutil":                {"TestProgramIsSingleThreaded"},

@@ -228,15 +228,15 @@ fun decodeBytes(s_0: String): Tuple2<String, Boolean> {
     var s: String = s_0
     var contents: String = ""
     var ok: Boolean = false
-    var bom: GoArray<Int> = GoArray(2, GoElem.INT)
+    var bom: GoArray<Int> = GoArray(2, GoElem.BYTE)
     if (s.length >= 2) {
-        bom = GoArray(2, GoElem.INT).also { it[0] = s[0].code; it[1] = s[1].code }
+        bom = GoArray(2, GoElem.BYTE).also { it[0] = s[0].code; it[1] = s[1].code }
         val tag1 = bom
         when {
-            tag1.goEquals(GoArray(2, GoElem.INT).also { it[0] = 255; it[1] = 254 }) -> {
+            tag1.goEquals(GoArray(2, GoElem.BYTE).also { it[0] = 255; it[1] = 254 }) -> {
                 return Tuple2<String, Boolean>(decodeUtf16(s.substring(2), com.xemantic.typescript.tsgo.go.encoding.binary.littleEndian), true)
             }
-            tag1.goEquals(GoArray(2, GoElem.INT).also { it[0] = 254; it[1] = 255 }) -> {
+            tag1.goEquals(GoArray(2, GoElem.BYTE).also { it[0] = 254; it[1] = 255 }) -> {
                 return Tuple2<String, Boolean>(decodeUtf16(s.substring(2), com.xemantic.typescript.tsgo.go.encoding.binary.bigEndian), true)
             }
         }

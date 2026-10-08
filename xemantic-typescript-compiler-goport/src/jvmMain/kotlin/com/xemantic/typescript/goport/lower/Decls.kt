@@ -674,7 +674,7 @@ class PackageEmitter(
                     continue
                 }
                 w.line()
-                w.raw(promotedDelegate(named, e, mn, tm))
+                w.raw(promotedDelegate(named, e, mn, tm, fc))
             }
             if (reflect) {
                 w.line()
@@ -758,7 +758,12 @@ class PackageEmitter(
         else -> "$n == o.$n"
     }
 
-    private fun promotedDelegate(named: NamedType, e: com.xemantic.typescript.goport.types.MethodSetEntry, name: String, tm: TypeMapper): String {
+    private fun promotedDelegate(named: NamedType, e: com.xemantic.typescript.goport.types.MethodSetEntry, name: String, tm: TypeMapper, fc: FileCtx): String {
+        // A promoted NIL-SAFE method of another package is an extension (on `T?`): callable only through an import.
+        if (e.fn in prog.extensionMethods) {
+            val mpkg = e.fn.substringBeforeLast('.').substringBeforeLast('.')
+            if (mpkg != pc.pkg.path) fc.importFun(Naming.kotlinPackage(mpkg), name)
+        }
         val sig = types.unalias(e.sig) as SignatureType
         val ps = sig.params.indices.map { "p$it" }
         val decl = sig.params.mapIndexed { i, p -> "${ps[i]}: ${tm.kt(p.t)}" }.joinToString(", ")

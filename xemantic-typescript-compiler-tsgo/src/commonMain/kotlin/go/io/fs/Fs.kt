@@ -215,7 +215,7 @@ fun validPath(name0: String): Boolean {
 fun readFile(fsys: FS?, name: String): Tuple2<GoSlice<Int>, GoError?> {
     if (fsys is ReadFileFS) return fsys.readFile(name)
     val (file, err) = fsys!!.open(name)
-    if (err != null) return Tuple2(GoElem.INT.nilSlice, err)
+    if (err != null) return Tuple2(GoElem.BYTE.nilSlice, err)
     try {
         var size = 0
         val (info, serr) = file!!.stat()
@@ -223,7 +223,7 @@ fun readFile(fsys: FS?, name: String): Tuple2<GoSlice<Int>, GoError?> {
             val size64 = info!!.size()
             if (size64.toInt().toLong() == size64) size = size64.toInt()
         }
-        var data = GoSlice.make(GoElem.INT, 0, size + 1)
+        var data = GoSlice.make(GoElem.BYTE, 0, size + 1)
         while (true) {
             if (data.len >= data.cap) {
                 val d = data.slice(0, data.cap).append1(0)
@@ -313,7 +313,7 @@ private class SubFSImpl(private val fsys: FS, private val dir: String) : ReadDir
 
     override fun readFile(name: String): Tuple2<GoSlice<Int>, GoError?> {
         val (full, err) = fullName("read", name)
-        if (err != null) return Tuple2(GoElem.INT.nilSlice, err)
+        if (err != null) return Tuple2(GoElem.BYTE.nilSlice, err)
         val (d, derr) = readFile(fsys, full)
         return Tuple2(d, fixErr(derr))
     }

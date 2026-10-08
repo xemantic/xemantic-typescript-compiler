@@ -84,6 +84,33 @@ fun runConfiguration(fileName: String, content: String, named: NamedTestConfigur
  * harness keeps every parse for the whole run; sharing a parse across configurations is what the
  * cache is for, and re-parsing yields the same tree, so this only bounds a long run's heap.
  */
+/**
+ * (TSGO.3) the EMIT baselines of one configuration (docs/goport-emit-oracle.md): the runner's
+ * UNMODIFIED `newCompilerTest` (CompileFiles with emit) and the three emit verifications of
+ * `runSingleConfigTest` — `output` (.js), `sourcemap` (.js.map), `sourcemap record` (.sourcemap.txt) —
+ * through the generated `testrunner.xtscEmitBaselines`. [header] is the `tests/cases/<suite>/<file>` path
+ * the runner derives from the case's location.
+ */
+fun emitBaselines(fileName: String, content: String, named: NamedTestConfiguration?, header: String, t: T = T(fileName)): List<com.xemantic.typescript.tsgo.testrunner.XtscEmitArtifact> {
+    val base = fileName.substringAfterLast('/')
+    val testName = named?.name?.takeIf { it.isNotEmpty() }?.let { "$base $it" } ?: base
+    val arts = com.xemantic.typescript.tsgo.testrunner.xtscEmitBaselines(t, testName, fileName, content, named, header)
+    return List(arts.len) { arts[it]!! }
+}
+
+/**
+ * The emit oracle's frame (oracle-go/emit.go `emitFrame`), byte for byte: per artifact
+ * `== <kind>\t<status>\t<baseline>\t<byte length>\n<content>\n`, a non-`ok` artifact's content omitted.
+ * The result is a Go byte string (one char per byte).
+ */
+fun emitFrame(arts: List<com.xemantic.typescript.tsgo.testrunner.XtscEmitArtifact>): String = buildString {
+    for (a in arts) {
+        val c = if (a.status == "ok") a.content else ""
+        append("== ").append(a.kind).append('\t').append(a.status).append('\t').append(a.baseline).append('\t').append(c.length).append('\n')
+        append(c).append('\n')
+    }
+}
+
 fun purgeSourceFileCache() {
     val drop = ArrayList<SourceFileCacheKey>()
     sourceFileCache.range { k, _ ->

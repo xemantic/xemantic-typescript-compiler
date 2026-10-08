@@ -3,3 +3,9 @@
 # Declarations the porter must stub although a rule could lower them — each line is a known gap
 # OUTSIDE the porter (normally a shim whose signature departs from docs/goport-design.md § 3) and
 # names what would remove it. Keyed by the Go name; the report counts them under `pinned:<reason>`.
+
+# (TSGO.3) tsgo's baseline WRITER: compares against and writes files under testdata/baselines and
+# records them through testing.TB (no shim). The emit gate never calls it — the overlay copies
+# (oracle-go/overlay/tsbaseline) RETURN the rendered text instead — so it stays a stub.
+github.com/microsoft/typescript-go/internal/testutil/baseline.Run baseline-files-on-disk
+github.com/microsoft/typescript-go/internal/testutil/baseline.RunAgainstSubmodule baseline-files-on-disk

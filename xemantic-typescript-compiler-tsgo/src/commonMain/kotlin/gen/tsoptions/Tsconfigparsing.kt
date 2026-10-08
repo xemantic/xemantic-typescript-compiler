@@ -1908,7 +1908,7 @@ fun getSupportedExtensions(compilerOptions: CompilerOptions?, extraFileExtension
             result = result.append1(GoSlice.of(GoElem.STRING, x.extension))
         }
     }
-    val extensions: GoSlice<GoSlice<String>> = com.xemantic.typescript.tsgo.go.slices.concat<GoSlice<String>>(builtins, result)
+    val extensions: GoSlice<GoSlice<String>> = com.xemantic.typescript.tsgo.go.slices.concat<GoSlice<String>>(GoElem.slice(GoElem.slice(GoElem.STRING)), builtins, result)
     return extensions
 }
 
@@ -1923,7 +1923,7 @@ fun getSupportedExtensionsWithJsonIfResolveJsonModule(compilerOptions: CompilerO
     if (com.xemantic.typescript.tsgo.core.same<GoSlice<String>>(GoElem.slice(GoElem.STRING), supportedExtensions, com.xemantic.typescript.tsgo.tspath.supportedTSExtensions)) {
         return com.xemantic.typescript.tsgo.tspath.supportedTSExtensionsWithJson
     }
-    return com.xemantic.typescript.tsgo.go.slices.concat<GoSlice<String>>(supportedExtensions, GoSlice.of(GoElem.slice(GoElem.STRING), GoSlice.of(GoElem.STRING, ".json")))
+    return com.xemantic.typescript.tsgo.go.slices.concat<GoSlice<String>>(GoElem.slice(GoElem.slice(GoElem.STRING)), supportedExtensions, GoSlice.of(GoElem.slice(GoElem.STRING), GoSlice.of(GoElem.STRING, ".json")))
 }
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.GetParsedCommandLineOfConfigFile 3126087c

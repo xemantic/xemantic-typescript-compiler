@@ -63,10 +63,10 @@ private class DirFS(private val dir: String) :
 
     override fun readFile(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.runtime.GoSlice<Int>, com.xemantic.typescript.tsgo.runtime.GoError?> {
         val (full, err) = join("open", name)
-        if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(com.xemantic.typescript.tsgo.runtime.GoElem.INT.nilSlice, err)
+        if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE.nilSlice, err)
         val bytes = platformReadFile(full!!)
-            ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(com.xemantic.typescript.tsgo.runtime.GoElem.INT.nilSlice, notExist("open", name))
-        val out = com.xemantic.typescript.tsgo.runtime.GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.INT, bytes.size)
+            ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE.nilSlice, notExist("open", name))
+        val out = com.xemantic.typescript.tsgo.runtime.GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE, bytes.size)
         for (i in bytes.indices) out[i] = bytes[i].toInt() and 0xFF
         return com.xemantic.typescript.tsgo.runtime.Tuple2(out, null)
     }

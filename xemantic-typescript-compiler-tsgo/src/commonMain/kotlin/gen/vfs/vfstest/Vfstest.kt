@@ -178,7 +178,7 @@ class MapFS(
                     return com.xemantic.typescript.tsgo.go.fmt.errorf("append %q: parent path exists but is not a directory", path)
                 }
             }
-            var existing: GoSlice<Int> = GoElem.INT.nilSlice
+            var existing: GoSlice<Int> = GoElem.BYTE.nilSlice
             var existingMode: FileMode = FileMode(0u)
             val t3 = this.getFollowingSymlinks(this.getCanonicalPath(path))
             val file: MapFile? = t3.first
@@ -195,7 +195,7 @@ class MapFS(
                 existing = file!!.data
                 existingMode = file!!.mode
             }
-            var combined: GoSlice<Int> = GoSlice.make(GoElem.INT, 0, existing.len + data.length)
+            var combined: GoSlice<Int> = GoSlice.make(GoElem.BYTE, 0, existing.len + data.length)
             combined = combined.appendSlice(existing)
             combined = goAppendString(combined, data)
             var mode: FileMode = existingMode

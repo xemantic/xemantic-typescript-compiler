@@ -57,6 +57,8 @@ func main() {
 		err = cmdMaterialize(os.Args[2:])
 	case "diags":
 		err = cmdDiags(os.Args[2:])
+	case "emit":
+		err = cmdEmit(os.Args[2:])
 	default:
 		usage()
 	}
@@ -67,7 +69,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tsgo-oracle encode|crosscheck|dump|materialize|diags ... (see docs/goport-oracle.md, docs/goport-diag-oracle.md)")
+	fmt.Fprintln(os.Stderr, "usage: tsgo-oracle encode|crosscheck|dump|materialize|diags|emit ... (see docs/goport-oracle.md, docs/goport-diag-oracle.md, docs/goport-emit-oracle.md)")
 	os.Exit(2)
 }
 

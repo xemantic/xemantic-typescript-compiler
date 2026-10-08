@@ -269,13 +269,13 @@ fun getPossibleOriginalInputExtensionForExtension(path: String): GoSlice<String>
 @kotlin.jvm.JvmField val supportedJSExtensionsFlat: GoSlice<String> = GoSlice.of(GoElem.STRING, ".js", ".jsx", ".mjs", ".cjs")
 
 // go: github.com/microsoft/typescript-go/internal/tspath.AllSupportedExtensionsWithJson 4f89c04f
-@kotlin.jvm.JvmField val allSupportedExtensionsWithJson: GoSlice<GoSlice<String>> = com.xemantic.typescript.tsgo.go.slices.concat<GoSlice<String>>(allSupportedExtensions, GoSlice.of(GoElem.slice(GoElem.STRING), GoSlice.of(GoElem.STRING, ".json")))
+@kotlin.jvm.JvmField val allSupportedExtensionsWithJson: GoSlice<GoSlice<String>> = com.xemantic.typescript.tsgo.go.slices.concat<GoSlice<String>>(GoElem.slice(GoElem.slice(GoElem.STRING)), allSupportedExtensions, GoSlice.of(GoElem.slice(GoElem.STRING), GoSlice.of(GoElem.STRING, ".json")))
 
 // go: github.com/microsoft/typescript-go/internal/tspath.SupportedTSExtensionsWithJson ead48ce5
-@kotlin.jvm.JvmField val supportedTSExtensionsWithJson: GoSlice<GoSlice<String>> = com.xemantic.typescript.tsgo.go.slices.concat<GoSlice<String>>(supportedTSExtensions, GoSlice.of(GoElem.slice(GoElem.STRING), GoSlice.of(GoElem.STRING, ".json")))
+@kotlin.jvm.JvmField val supportedTSExtensionsWithJson: GoSlice<GoSlice<String>> = com.xemantic.typescript.tsgo.go.slices.concat<GoSlice<String>>(GoElem.slice(GoElem.slice(GoElem.STRING)), supportedTSExtensions, GoSlice.of(GoElem.slice(GoElem.STRING), GoSlice.of(GoElem.STRING, ".json")))
 
 // go: github.com/microsoft/typescript-go/internal/tspath.SupportedTSExtensionsWithJsonFlat 5a96b5d2
-@kotlin.jvm.JvmField val supportedTSExtensionsWithJsonFlat: GoSlice<String> = com.xemantic.typescript.tsgo.go.slices.concat<String>(supportedTSExtensionsFlat, GoSlice.of(GoElem.STRING, ".json"))
+@kotlin.jvm.JvmField val supportedTSExtensionsWithJsonFlat: GoSlice<String> = com.xemantic.typescript.tsgo.go.slices.concat<String>(GoElem.slice(GoElem.STRING), supportedTSExtensionsFlat, GoSlice.of(GoElem.STRING, ".json"))
 
 // go: github.com/microsoft/typescript-go/internal/tspath.ExtensionsNotSupportingExtensionlessResolution 439bd6da
 @kotlin.jvm.JvmField val extensionsNotSupportingExtensionlessResolution: GoSlice<String> = GoSlice.of(GoElem.STRING, ".mts", ".d.mts", ".mjs", ".cts", ".d.cts", ".cjs")

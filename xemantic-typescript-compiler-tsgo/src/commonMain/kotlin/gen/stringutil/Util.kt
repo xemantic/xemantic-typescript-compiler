@@ -355,7 +355,7 @@ const val surrogateUTF8Byte1Max: Int = 191
 // go: github.com/microsoft/typescript-go/internal/stringutil.EncodeJSStringRune 10086b8b
 fun encodeJSStringRune(ch: Int): String {
     if (isSurrogate(ch)) {
-        return goBytesToString(GoSlice.of(GoElem.INT, 237, goUint8(128 or ((ch shr 6) and 63)), goUint8(128 or (ch and 63))))
+        return goBytesToString(GoSlice.of(GoElem.BYTE, 237, goUint8(128 or ((ch shr 6) and 63)), goUint8(128 or (ch and 63))))
     }
     return goRuneToString(ch)
 }

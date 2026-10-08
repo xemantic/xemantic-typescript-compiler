@@ -32,8 +32,8 @@ const val _ScriptTarget_name_0: String = "NoneES5ES2015ES2016ES2017ES2018ES2019E
 const val _ScriptTarget_name_1: String = "ESNextJSON"
 
 // go: github.com/microsoft/typescript-go/internal/core._ScriptTarget_index_0 655348ad
-@kotlin.jvm.JvmField val _ScriptTarget_index_0: GoArray<Int> = GoArray(14, GoElem.INT).also { it[0] = 0; it[1] = 4; it[2] = 7; it[3] = 13; it[4] = 19; it[5] = 25; it[6] = 31; it[7] = 37; it[8] = 43; it[9] = 49; it[10] = 55; it[11] = 61; it[12] = 67; it[13] = 73 }
+@kotlin.jvm.JvmField val _ScriptTarget_index_0: GoArray<Int> = GoArray(14, GoElem.BYTE).also { it[0] = 0; it[1] = 4; it[2] = 7; it[3] = 13; it[4] = 19; it[5] = 25; it[6] = 31; it[7] = 37; it[8] = 43; it[9] = 49; it[10] = 55; it[11] = 61; it[12] = 67; it[13] = 73 }
 
 // go: github.com/microsoft/typescript-go/internal/core._ScriptTarget_index_1 b17c60fc
-@kotlin.jvm.JvmField val _ScriptTarget_index_1: GoArray<Int> = GoArray(3, GoElem.INT).also { it[0] = 0; it[1] = 6; it[2] = 10 }
+@kotlin.jvm.JvmField val _ScriptTarget_index_1: GoArray<Int> = GoArray(3, GoElem.BYTE).also { it[0] = 0; it[1] = 6; it[2] = 10 }
 

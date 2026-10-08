@@ -53,6 +53,11 @@ class TypeMapper(
     val tpElems: Map<Int, String> = emptyMap(),
 ) {
 
+    /** Kotlin names of the type parameters in scope: a class's ([tpNames]) and a generic function's (its [tpElems] dictionaries). */
+    private val typeParamsInScope: Set<String> by lazy {
+        tpNames.values.map { it.trim('`') }.toSet() + tpElems.keys.mapNotNull { (types.unalias(it) as? TypeParamType)?.name }
+    }
+
     /** The dictionary parameter a generic struct class carries for type parameter [name]. */
     fun elemParam(name: String): String = "goElem_" + name.trim('`')
 
@@ -151,6 +156,9 @@ class TypeMapper(
         // An unexported Go type (`tempFlags`) is spelled like a field or local of the same name, which
         // shadows it in expression position (`tempFlags.ELEM`, `tempFlags(0)`): always qualify it.
         if (name[0].isLowerCase()) return "$kpkg.$name"
+        // A type parameter in scope shadows a same-named imported class: Go keeps them apart by the
+        // package qualifier (`GetErrorBaseline[T diagnosticwriter.Diagnostic](t *testing.T, …)`).
+        if (name in typeParamsInScope) return "$kpkg.$name"
         return fc.typeRef(kpkg, name)
     }
 
@@ -421,7 +429,7 @@ class TypeMapper(
         return when (t) {
             is BasicType -> when (rep(t)) {
                 Rep.BOOL -> "GoElem.BOOL"
-                Rep.INT -> "GoElem.INT"
+                Rep.INT -> if (t.kind == "Uint8") "GoElem.BYTE" else "GoElem.INT"
                 Rep.UINT -> "GoElem.UINT"
                 Rep.LONG -> "GoElem.LONG"
                 Rep.ULONG -> "GoElem.ULONG"

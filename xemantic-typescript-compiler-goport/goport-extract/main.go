@@ -46,6 +46,9 @@ var defaultClosure = []string{
 	// (TSGO.2) the compiler test harness's case preparation (docs/goport-diag-oracle.md § 4):
 	// these whole, plus the partial packages of partial.go.
 	"execute/incremental", "vfs/iovfs", "vfs/internal", "vfs/vfstest", "testutil/race",
+	// (TSGO.3) the emit baselines (docs/goport-emit-oracle.md): the error-baseline renderer the
+	// `.js` baseline embeds, and its noCheck comparison's third-party diff (gen/thirdparty/).
+	"diagnosticwriter", "github.com/peter-evans/patience",
 }
 
 // overlayFiles are ADDED to tsgo packages through go/packages' Overlay (never written into
@@ -55,6 +58,7 @@ var overlayFiles = map[string]string{
 	"internal/testrunner/zz_xtsc_export.go":           "../oracle-go/overlay/testrunner/xtsc_export.go",
 	"internal/testutil/harnessutil/zz_xtsc_export.go": "../oracle-go/overlay/harnessutil/xtsc_export.go",
 	"internal/testrunner/zz_xtsc_port.go":             "overlay/testrunner/xtsc_port.go",
+	"internal/testutil/tsbaseline/zz_xtsc_export.go":  "../oracle-go/overlay/tsbaseline/xtsc_export.go",
 }
 
 // overlaySrc holds the overlay files' contents by their virtual path (they exist on no disk).

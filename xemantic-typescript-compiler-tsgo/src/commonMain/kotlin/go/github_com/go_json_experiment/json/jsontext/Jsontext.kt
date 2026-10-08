@@ -661,7 +661,7 @@ class Decoder internal constructor(private val src: String, internal val flags: 
 internal fun readAll(r: com.xemantic.typescript.tsgo.go.io.Reader?): Tuple2<String, GoError?> {
     if (r == null) throw NullPointerException("jsontext: nil io.Reader")
     val sb = StringBuilder()
-    val buf = GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.INT, 4096)
+    val buf = GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE, 4096)
     while (true) {
         val (n, e) = r.read(buf)
         for (i in 0 until n) sb.append(buf[i].toChar())

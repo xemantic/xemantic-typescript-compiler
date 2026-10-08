@@ -463,7 +463,7 @@ fun ParsedCommandLine?.extendedSourceFiles(): GoSlice<String> {
 // go: github.com/microsoft/typescript-go/internal/tsoptions.ParsedCommandLine.GetConfigFileParsingDiagnostics 257367b3
 fun ParsedCommandLine?.getConfigFileParsingDiagnostics(): GoSlice<Diagnostic?> {
     if (this!!.configFile != null) {
-        return com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(this!!.configFile!!.sourceFile.diagnostics(), this!!.errors)
+        return com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(GoElem.slice(GoElem.ref<Diagnostic?>()), this!!.configFile!!.sourceFile.diagnostics(), this!!.errors)
     }
     return this!!.errors
 }

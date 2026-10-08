@@ -65,8 +65,13 @@ class GoElem<T>(
         /** Pointers, interfaces, `func` values: zero is `null`, values are references. */
         val REF: GoElem<Any?> = GoElem(null)
         val BOOL: GoElem<Boolean> = GoElem({ false })
-        /** `int`, `int8`, `int16`, `int32`, `rune`, `uint8`/`byte`, `uint16`. */
+        /** `int`, `int8`, `int16`, `int32`, `rune`, `uint16`. */
         val INT: GoElem<Int> = GoElem(INT_ZERO)
+        /**
+         * `uint8`/`byte`: represented as [Int] like [INT], but a DISTINCT kind, so a `[]byte` that reaches an
+         * interface is still known to be one (`fmt`'s `%s`/`%q`/`%x` print its bytes as a string, as Go does).
+         */
+        val BYTE: GoElem<Int> = GoElem(INT_ZERO)
         val UINT: GoElem<UInt> = GoElem({ 0u })
         val LONG: GoElem<Long> = GoElem({ 0L })
         val ULONG: GoElem<ULong> = GoElem({ 0uL })

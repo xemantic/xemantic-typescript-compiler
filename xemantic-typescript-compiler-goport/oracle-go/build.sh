@@ -26,12 +26,14 @@ cat > "$work/overlay.json" <<JSON
 {"Replace": {
   "$tsgo/cmd/xtsc-oracle/main.go": "$here/main.go",
   "$tsgo/cmd/xtsc-oracle/diags.go": "$here/diags.go",
+  "$tsgo/cmd/xtsc-oracle/emit.go": "$here/emit.go",
+  "$tsgo/internal/testutil/tsbaseline/zz_xtsc_export.go": "$here/overlay/tsbaseline/xtsc_export.go",
   "$tsgo/internal/testrunner/zz_xtsc_export.go": "$here/overlay/testrunner/xtsc_export.go",
   "$tsgo/internal/testutil/harnessutil/zz_xtsc_export.go": "$here/overlay/harnessutil/xtsc_export.go",
   "$tsgo/internal/repo/zz_xtsc_submodule.go": "$here/overlay/repo/xtsc_submodule.go"
 }}
 JSON
-for f in internal/testrunner/zz_xtsc_export.go internal/testutil/harnessutil/zz_xtsc_export.go internal/repo/zz_xtsc_submodule.go; do
+for f in internal/testutil/tsbaseline/zz_xtsc_export.go internal/testrunner/zz_xtsc_export.go internal/testutil/harnessutil/zz_xtsc_export.go internal/repo/zz_xtsc_submodule.go; do
   [[ ! -e "$tsgo/$f" ]] || { echo "build.sh: $tsgo/$f exists on disk; the overlay must only ADD files" >&2; exit 2; }
 done
 cd "$tsgo"

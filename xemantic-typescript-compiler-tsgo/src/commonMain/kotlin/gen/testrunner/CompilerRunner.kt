@@ -24,9 +24,24 @@
 package com.xemantic.typescript.tsgo.testrunner
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.strings.Builder
+import com.xemantic.typescript.tsgo.checker.Checker
 import com.xemantic.typescript.tsgo.tsoptions.CommandLineOption
+import com.xemantic.typescript.tsgo.testutil.harnessutil.CompilationResult
+import com.xemantic.typescript.tsgo.core.CompilerOptions
+import com.xemantic.typescript.tsgo.testutil.harnessutil.HarnessOptions
+import com.xemantic.typescript.tsgo.testutil.harnessutil.NamedTestConfiguration
+import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.testutil.baseline.Options
+import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
+import com.xemantic.typescript.tsgo.compiler.Program
+import com.xemantic.typescript.tsgo.compiler.ProgramLike
 import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.testing.T
 import com.xemantic.typescript.tsgo.testutil.harnessutil.TestFile
+import com.xemantic.typescript.tsgo.checker.Type
+import com.xemantic.typescript.tsgo.checker.types
+import com.xemantic.typescript.tsgo.compiler.forEachCheckerParallel
 
 // go: github.com/microsoft/typescript-go/internal/testrunner.getCompilerVaryByMap 3f060b07
 fun getCompilerVaryByMap(): GoMap<String, Unit> {
@@ -42,6 +57,42 @@ fun getCompilerVaryByMap(): GoMap<String, Unit> {
         varyByMap[com.xemantic.typescript.tsgo.go.strings.toLower(option_2)] = Unit
     }
     return varyByMap
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest d994e498
+class compilerTest(
+    @kotlin.jvm.JvmField var testName: String = "",
+    @kotlin.jvm.JvmField var filename: String = "",
+    @kotlin.jvm.JvmField var basename: String = "",
+    @kotlin.jvm.JvmField var configuredName: String = "",
+    @kotlin.jvm.JvmField var options: CompilerOptions? = null,
+    @kotlin.jvm.JvmField var harnessOptions: HarnessOptions? = null,
+    @kotlin.jvm.JvmField var result: CompilationResult? = null,
+    @kotlin.jvm.JvmField var tsConfigFiles: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice,
+    @kotlin.jvm.JvmField var toBeCompiled: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice,
+    @kotlin.jvm.JvmField var otherFiles: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice,
+    @kotlin.jvm.JvmField var hasNonDtsFiles: Boolean = false,
+) {
+
+    fun goCopy(): compilerTest = compilerTest(testName = testName, filename = filename, basename = basename, configuredName = configuredName, options = options, harnessOptions = harnessOptions, result = result, tsConfigFiles = tsConfigFiles, toBeCompiled = toBeCompiled, otherFiles = otherFiles, hasNonDtsFiles = hasNonDtsFiles)
+
+    fun goSet(o: compilerTest) {
+        testName = o.testName
+        filename = o.filename
+        basename = o.basename
+        configuredName = o.configuredName
+        options = o.options
+        harnessOptions = o.harnessOptions
+        result = o.result
+        tsConfigFiles = o.tsConfigFiles
+        toBeCompiled = o.toBeCompiled
+        otherFiles = o.otherFiles
+        hasNonDtsFiles = o.hasNonDtsFiles
+    }
+
+    companion object {
+        val ELEM: GoElem<compilerTest> = GoElem({ compilerTest() }, { it.goCopy() })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/testrunner.testCaseContentWithConfig 869ae8e1
@@ -62,9 +113,144 @@ class testCaseContentWithConfig(
     }
 }
 
+// go: github.com/microsoft/typescript-go/internal/testrunner.newCompilerTest 70e170b2
+fun newCompilerTest(t: T?, testName: String, filename: String, testContent: com.xemantic.typescript.tsgo.testrunner.testCaseContent?, namedConfiguration: NamedTestConfiguration?): com.xemantic.typescript.tsgo.testrunner.compilerTest? {
+    val basename: String = com.xemantic.typescript.tsgo.tspath.getBaseFileName(filename)
+    var configuredName: String = basename
+    if (namedConfiguration != null && namedConfiguration!!.name != "") {
+        val extname: String = com.xemantic.typescript.tsgo.tspath.getAnyExtensionFromPath(basename, GoElem.STRING.nilSlice, false)
+        val extensionlessBasename: String = basename.substring(0, basename.length - extname.length)
+        configuredName = com.xemantic.typescript.tsgo.go.fmt.sprintf("%s(%s)%s", extensionlessBasename, namedConfiguration!!.name, extname)
+    }
+    var configuration: GoMap<String, String> = GoMap.nil<String, String>(GoElem.STRING)
+    if (namedConfiguration != null) {
+        configuration = namedConfiguration!!.config
+    }
+    val testCaseContentWithConfig: com.xemantic.typescript.tsgo.testrunner.testCaseContentWithConfig = com.xemantic.typescript.tsgo.testrunner.testCaseContentWithConfig(testCaseContent = testContent!!.goCopy(), configuration = configuration)
+    val harnessConfig: GoMap<String, String> = testCaseContentWithConfig.configuration
+    val currentDirectory: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(harnessConfig["currentdirectory"], srcFolder)
+    val units: GoSlice<com.xemantic.typescript.tsgo.testrunner.testUnit?> = testCaseContentWithConfig.testCaseContent.testUnitData
+    var toBeCompiled: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice
+    var otherFiles: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice
+    var tsConfig: ParsedCommandLine? = null
+    val hasNonDtsFiles: Boolean = com.xemantic.typescript.tsgo.core.some<com.xemantic.typescript.tsgo.testrunner.testUnit?>(GoElem.ref<com.xemantic.typescript.tsgo.testrunner.testUnit?>(), units, fun(unit: com.xemantic.typescript.tsgo.testrunner.testUnit?): Boolean {
+        return !com.xemantic.typescript.tsgo.tspath.fileExtensionIs(unit!!.name, ".d.ts")
+    })
+    var tsConfigFiles: GoSlice<TestFile?> = GoElem.ref<TestFile?>().nilSlice
+    if (testCaseContentWithConfig.testCaseContent.tsConfig != null) {
+        tsConfig = testCaseContentWithConfig.testCaseContent.tsConfig
+        tsConfigFiles = GoSlice.of(GoElem.ref<TestFile?>(), createHarnessTestFile(testCaseContentWithConfig.testCaseContent.tsConfigFileUnitData, currentDirectory))
+        val s0 = units
+        l0@ for (i1 in 0 until s0.len) {
+            val unit_1: com.xemantic.typescript.tsgo.testrunner.testUnit? = s0[i1]
+            if (com.xemantic.typescript.tsgo.go.slices.contains<String>(tsConfig!!.parsedConfig!!.fileNames, com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(unit_1!!.name, currentDirectory))) {
+                toBeCompiled = toBeCompiled.append1(createHarnessTestFile(unit_1, currentDirectory))
+            } else {
+                otherFiles = otherFiles.append1(createHarnessTestFile(unit_1, currentDirectory))
+            }
+        }
+    } else {
+        val t2 = harnessConfig.probe("baseurl")
+        val baseUrl: String = goProbeValue<String>(t2) { "" }
+        val ok: Boolean = t2 !== GoMapAbsent
+        if (ok && !com.xemantic.typescript.tsgo.tspath.isRootedDiskPath(baseUrl)) {
+            harnessConfig["baseurl"] = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(baseUrl, currentDirectory)
+        }
+        val lastUnit: com.xemantic.typescript.tsgo.testrunner.testUnit? = units[units.len - 1]
+        if (testCaseContentWithConfig.configuration["noimplicitreferences"] != "" || com.xemantic.typescript.tsgo.go.strings.contains(lastUnit!!.content, requireStr) || referencesRegex!!.matchString(lastUnit!!.content)) {
+            toBeCompiled = toBeCompiled.append1(createHarnessTestFile(lastUnit, currentDirectory))
+            val s3 = units.slice(0, units.len - 1)
+            l1@ for (i4 in 0 until s3.len) {
+                val unit_2: com.xemantic.typescript.tsgo.testrunner.testUnit? = s3[i4]
+                otherFiles = otherFiles.append1(createHarnessTestFile(unit_2, currentDirectory))
+            }
+        } else {
+            toBeCompiled = com.xemantic.typescript.tsgo.core.map<com.xemantic.typescript.tsgo.testrunner.testUnit?, TestFile?>(GoElem.ref<com.xemantic.typescript.tsgo.testrunner.testUnit?>(), GoElem.ref<TestFile?>(), units, fun(unit_3: com.xemantic.typescript.tsgo.testrunner.testUnit?): TestFile? {
+                return createHarnessTestFile(unit_3, currentDirectory)
+            })
+        }
+    }
+    val result: CompilationResult? = com.xemantic.typescript.tsgo.testutil.harnessutil.compileFiles(t, toBeCompiled, otherFiles, harnessConfig, tsConfig, currentDirectory, testCaseContentWithConfig.testCaseContent.symlinks)
+    return com.xemantic.typescript.tsgo.testrunner.compilerTest(testName = testName, filename = filename, basename = basename, configuredName = configuredName, options = result!!.options, harnessOptions = result!!.harnessOptions, result = result, tsConfigFiles = tsConfigFiles, toBeCompiled = toBeCompiled, otherFiles = otherFiles, hasNonDtsFiles = hasNonDtsFiles)
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyDiagnostics 71c394f4
+fun com.xemantic.typescript.tsgo.testrunner.compilerTest?.verifyDiagnostics(t: T?, suiteName: String, isSubmodule: Boolean) {
+    t!!.run("error", fun(t_1: T?) {
+        withDefers({ Unit }) { df0 ->
+            val da1 = t_1
+            val da2 = "Panic on creating error baseline for test " + this!!.filename
+            df0.defer { com.xemantic.typescript.tsgo.testutil.recoverAndFail(da1, da2) }
+            val files: GoSlice<TestFile?> = com.xemantic.typescript.tsgo.core.concatenate<TestFile?>(GoElem.ref<TestFile?>(), this!!.tsConfigFiles, com.xemantic.typescript.tsgo.core.concatenate<TestFile?>(GoElem.ref<TestFile?>(), this!!.toBeCompiled, this!!.otherFiles))
+            com.xemantic.typescript.tsgo.testutil.tsbaseline.doErrorBaseline(t_1, this!!.configuredName, files, this!!.result!!.diagnostics, this!!.result!!.options!!.pretty.isTrue(), Options(subfolder = suiteName, isSubmodule = isSubmodule, diffFixupOld = fun(old: String): String {
+                val sb: Builder = Builder()
+                sb.grow(old.length)
+                com.xemantic.typescript.tsgo.go.strings.splitSeq(old, "\n")!!(fun(y3: String): Boolean {
+                                    var line: String = y3
+                                    val t4 = com.xemantic.typescript.tsgo.go.strings.cutPrefix(line, "==== ./")
+                                    val rest: String = t4.first
+                                    val ok: Boolean = t4.second
+                                    if (ok) {
+                                        line = "==== " + rest
+                                    }
+                                    sb.writeString(line)
+                                    sb.writeString("\n")
+                                    return true
+                })
+                return sb.string().substring(0, sb.len() - 1)
+            }))
+        }
+    })
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyJavaScriptOutput a362b47a
+fun com.xemantic.typescript.tsgo.testrunner.compilerTest?.verifyJavaScriptOutput(t: T?, suiteName: String, isSubmodule: Boolean) {
+    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyJavaScriptOutput")
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifySourceMapOutput 13e74bd4
+fun com.xemantic.typescript.tsgo.testrunner.compilerTest?.verifySourceMapOutput(t: T?, suiteName: String, isSubmodule: Boolean) {
+    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifySourceMapOutput")
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifySourceMapRecord a864c82b
+fun com.xemantic.typescript.tsgo.testrunner.compilerTest?.verifySourceMapRecord(t: T?, suiteName: String, isSubmodule: Boolean) {
+    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifySourceMapRecord")
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyTypesAndSymbols 5d3abf79
+fun com.xemantic.typescript.tsgo.testrunner.compilerTest?.verifyTypesAndSymbols(t: T?, suiteName: String, isSubmodule: Boolean) {
+    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyTypesAndSymbols")
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyModuleResolution 83915491
+fun com.xemantic.typescript.tsgo.testrunner.compilerTest?.verifyModuleResolution(t: T?, suiteName: String, isSubmodule: Boolean) {
+    if (!this!!.options!!.traceResolution.isTrue()) {
+        return
+    }
+    t!!.run("module resolution", fun(t_1: T?) {
+        withDefers({ Unit }) { df0 ->
+            val da1 = t_1
+            val da2 = "Panic on creating module resolution baseline for test " + this!!.filename
+            df0.defer { com.xemantic.typescript.tsgo.testutil.recoverAndFail(da1, da2) }
+            com.xemantic.typescript.tsgo.testutil.tsbaseline.doModuleResolutionBaseline(t_1, this!!.configuredName, this!!.result!!.trace, Options(subfolder = suiteName, isSubmodule = isSubmodule, skipDiffWithOld = true))
+        }
+    })
+}
+
 // go: github.com/microsoft/typescript-go/internal/testrunner.createHarnessTestFile 561d65e0
 fun createHarnessTestFile(unit: com.xemantic.typescript.tsgo.testrunner.testUnit?, currentDirectory: String): TestFile? {
     return TestFile(unitName = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(unit!!.name, currentDirectory), content = unit!!.content)
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyUnionOrdering c9f5a9c5
+fun com.xemantic.typescript.tsgo.testrunner.compilerTest?.verifyUnionOrdering(t: T?) {
+    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyUnionOrdering")
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyParentPointers 64d96a45
+fun com.xemantic.typescript.tsgo.testrunner.compilerTest?.verifyParentPointers(t: T?) {
+    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/testrunner.compilerTest.verifyParentPointers")
 }
 
 // go: github.com/microsoft/typescript-go/internal/testrunner.compilerBaselineRegex 26866921
@@ -84,4 +270,7 @@ fun createHarnessTestFile(unit: com.xemantic.typescript.tsgo.testrunner.testUnit
 
 // go: github.com/microsoft/typescript-go/internal/testrunner.compilerVaryBy 5cded080
 @kotlin.jvm.JvmField val compilerVaryBy: GoMap<String, Unit> = getCompilerVaryByMap()
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.skippedEmitTests cb2b843f
+@kotlin.jvm.JvmField val skippedEmitTests: GoMap<String, String> = GoMap.make<String, String>(GoElem.STRING).also { it["filesEmittingIntoSameOutput.ts"] = "Output order nondeterministic due to collision on filename during parallel emit."; it["jsFileCompilationWithJsEmitPathSameAsInput.ts"] = "Output order nondeterministic due to collision on filename during parallel emit."; it["grammarErrors.ts"] = "Output order nondeterministic due to collision on filename during parallel emit."; it["jsFileCompilationEmitBlockedCorrectly.ts"] = "Output order nondeterministic due to collision on filename during parallel emit."; it["jsDeclarationsReexportAliasesEsModuleInterop.ts"] = "cls.d.ts is missing statements when run concurrently."; it["jsFileCompilationWithoutJsExtensions.ts"] = "No files are emitted."; it["typeOnlyMerge2.ts"] = "Nondeterministic contents when run concurrently."; it["typeOnlyMerge3.ts"] = "Nondeterministic contents when run concurrently." }
 

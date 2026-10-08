@@ -314,6 +314,12 @@ private class Printer(private val args: Array<out Any?>, private val wrapErrs: B
                 is Stringer -> { fmtString(arg.string(), verb); return }
             }
         }
+        // A named basic type (a generated value class, `core.UTF16Offset`) prints as its underlying value:
+        // Go's printArg switches on the reflect KIND once no method applies.
+        if (arg is com.xemantic.typescript.tsgo.runtime.GoBasicValue) {
+            printArg(arg.goRaw, verb)
+            return
+        }
         when (arg) {
             is Boolean -> if (verb == 'v' || verb == 't') pad(if (arg) "true" else "false") else badVerb(verb, arg)
             is Int -> fmtInteger(arg.toLong(), false, verb)
@@ -323,7 +329,11 @@ private class Printer(private val args: Array<out Any?>, private val wrapErrs: B
             is Double -> fmtFloat(arg, verb)
             is Float -> fmtFloat(arg.toDouble(), verb)
             is String -> fmtString(arg, verb)
-            is GoSlice<*> -> if (verb == 'v') {
+            // A `[]byte` (GoElem.BYTE) under a string verb prints its bytes as a string (Go's fmtBytes).
+            is GoSlice<*> -> if (verb in "sqxX" && arg.elem === com.xemantic.typescript.tsgo.runtime.GoElem.BYTE) {
+                @Suppress("UNCHECKED_CAST")
+                fmtString(com.xemantic.typescript.tsgo.runtime.goBytesToString(arg as GoSlice<Int>), verb)
+            } else if (verb == 'v') {
                 buf.append('[')
                 for (k in 0 until arg.len) {
                     if (k > 0) buf.append(' ')

@@ -157,8 +157,9 @@ class LoweringRulesTest {
         assert(census(spike) <= 33)
         // The whole (TSGO.2) closure (checker, compiler, printer, transformers, …): 108 at first generation (2026-10-07).
         assert(census(null) <= 108)
-        // The harness slices: 7 at first generation (2026-10-08).
-        assert(census(null, harnessOnly = true) <= 7)
+        // The harness slices: 7 at first generation (2026-10-08); 8 once (TSGO.3) reached the emit baselines
+        // (`harnessutil` `Repeat`'s option parsing, `tsbaseline` type baselines — none on the compiler's path).
+        assert(census(null, harnessOnly = true) <= 8)
     }
 
     @Test

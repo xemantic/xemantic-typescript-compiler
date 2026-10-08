@@ -29,5 +29,5 @@ import com.xemantic.typescript.tsgo.runtime.*
 const val _LanguageVariant_name: String = "LanguageVariantStandardLanguageVariantJSX"
 
 // go: github.com/microsoft/typescript-go/internal/core._LanguageVariant_index 24e19ee1
-@kotlin.jvm.JvmField val _LanguageVariant_index: GoArray<Int> = GoArray(3, GoElem.INT).also { it[0] = 0; it[1] = 23; it[2] = 41 }
+@kotlin.jvm.JvmField val _LanguageVariant_index: GoArray<Int> = GoArray(3, GoElem.BYTE).also { it[0] = 0; it[1] = 23; it[2] = 41 }
 

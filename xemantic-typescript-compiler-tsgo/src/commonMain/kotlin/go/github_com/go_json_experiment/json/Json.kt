@@ -124,7 +124,7 @@ internal fun formatJsonFloat(src: Double): String {
 fun marshal(input: Any?, vararg opts: Options): Tuple2<GoSlice<Int>, GoError?> {
     val enc = Encoder(null, Flags(opts), true)
     val err = marshalValue(enc, input)
-    if (err != null && input is Double) return Tuple2(GoElem.INT.nilSlice, err)
+    if (err != null && input is Double) return Tuple2(GoElem.BYTE.nilSlice, err)
     return Tuple2(goStringToBytes(enc.buf.toString()), err)
 }
 
@@ -191,6 +191,9 @@ internal fun marshalValue(enc: Encoder, v: Any?): GoError? {
             }
             return enc.writeToken(com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endObject)
         }
+        // A named basic type (a generated value class, `incremental.BuildInfoFileId`) with no marshaler
+        // method marshals as its underlying kind, as Go's arshaler for that reflect.Kind does.
+        is com.xemantic.typescript.tsgo.runtime.GoBasicValue -> return marshalValue(enc, v.goRaw)
         is Boolean -> return enc.writeToken(com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.bool(v))
         is String -> return enc.writeToken(com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.string(v))
         is Int -> return enc.writeToken(com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.int(v.toLong()))
@@ -222,6 +225,14 @@ internal fun marshalValue(enc: Encoder, v: Any?): GoError? {
                         val (b, e) = k.marshalText()
                         if (e != null) keyErr = e
                         goBytesToString(b)
+                    }
+                    is com.xemantic.typescript.tsgo.runtime.GoBasicValue -> when (val raw = k.goRaw) {
+                        is String -> raw
+                        is Int, is Long, is UInt, is ULong -> raw.toString()
+                        else -> {
+                            keyErr = SemanticError("cannot marshal map key of Go type " + goTypeName(k))
+                            ""
+                        }
                     }
                     else -> {
                         keyErr = SemanticError("cannot marshal map key of Go type " + goTypeName(k))

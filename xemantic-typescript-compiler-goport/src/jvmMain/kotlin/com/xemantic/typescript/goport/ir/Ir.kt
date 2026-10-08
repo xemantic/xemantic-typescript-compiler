@@ -91,7 +91,14 @@ class IrPackage(
     val scopes: List<Node>,
     val initOrder: List<Node>,
 ) {
-    val shortPath: String get() = path.removePrefix(MODULE + "/internal/")
+    /** Output directory under `gen/` (and the report's name): `ast`, `testutil/tsbaseline`, or `thirdparty/<module path>`. */
+    val shortPath: String get() = if (isTsgo) path.removePrefix(MODULE + "/internal/") else "thirdparty/$path"
+
+    /** A package of typescript-go itself (`internal/…`); otherwise one of its third-party dependencies ([ThirdParty]). */
+    val isTsgo: Boolean get() = path.startsWith("$MODULE/internal/")
+
+    /** The Go source directory, as a generated file's header names it. */
+    val sourceDir: String get() = if (isTsgo) "internal/$shortPath" else path
 
     fun obj(id: Int): Node = objects[id]
 

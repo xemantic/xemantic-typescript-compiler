@@ -47,6 +47,24 @@ class T(name: String = "") : com.xemantic.typescript.tsgo.repo.SkippableTest {
     override fun helper() = common.helper()
 
     override fun skipf(format: String, vararg args: Any?): Nothing = common.skipf(format, *args)
+
+    /**
+     * `t.Run(name, f)`: runs [f] as a subtest (Go: in its own goroutine, waited for) and reports
+     * whether it passed. A skip or fatal ([TestSkipped]/[TestFailed], Go's `runtime.Goexit`) ends
+     * the SUBTEST only; a failed subtest also fails its parent, as in Go. Anything else is a panic,
+     * which in Go aborts the whole test binary: it propagates.
+     */
+    fun run(name: String, f: ((T?) -> Unit)?): Boolean {
+        val sub = T(common.name() + "/" + name)
+        try {
+            f!!(sub)
+        } catch (_: TestSkipped) {
+        } catch (e: TestFailed) {
+            sub.common.errors += e.message ?: ""
+        }
+        if (sub.common.failed()) common.errors += "subtest ${sub.name()} failed"
+        return !sub.common.failed()
+    }
 }
 
 /** Go's `testing.common`: the methods `T` and `B` share. */

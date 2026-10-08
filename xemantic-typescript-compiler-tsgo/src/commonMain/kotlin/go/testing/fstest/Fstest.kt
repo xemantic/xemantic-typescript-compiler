@@ -57,7 +57,7 @@ typealias MapFS = GoMap<String, MapFile?>
 
 /** `fstest.MapFile`. */
 class MapFile(
-    var data: GoSlice<Int> = GoElem.INT.nilSlice,
+    var data: GoSlice<Int> = GoElem.BYTE.nilSlice,
     var mode: FileMode = FileMode(0u),
     var modTime: Time = Time(),
     var sys: Any? = null,

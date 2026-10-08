@@ -29,5 +29,5 @@ import com.xemantic.typescript.tsgo.runtime.*
 const val _Category_name: String = "CategoryWarningCategoryErrorCategorySuggestionCategoryMessage"
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics._Category_index 0df6f785
-@kotlin.jvm.JvmField val _Category_index: GoArray<Int> = GoArray(5, GoElem.INT).also { it[0] = 0; it[1] = 15; it[2] = 28; it[3] = 46; it[4] = 61 }
+@kotlin.jvm.JvmField val _Category_index: GoArray<Int> = GoArray(5, GoElem.BYTE).also { it[0] = 0; it[1] = 15; it[2] = 28; it[3] = 46; it[4] = 61 }
 

@@ -83,7 +83,7 @@ fun com.xemantic.typescript.tsgo.api.encoder.stringTable?.add(text: String, kind
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.stringTable.encode 634a8fdc
 fun com.xemantic.typescript.tsgo.api.encoder.stringTable?.encode(): GoSlice<Int> {
-    var result: GoSlice<Int> = GoSlice.make(GoElem.INT, 0, this.encodedLength())
+    var result: GoSlice<Int> = GoSlice.make(GoElem.BYTE, 0, this.encodedLength())
     result = appendUint32s(result, this!!.offsets)
     result = goAppendString(result, this!!.fileText)
     result = goAppendString(result, this!!.otherStrings!!.string())

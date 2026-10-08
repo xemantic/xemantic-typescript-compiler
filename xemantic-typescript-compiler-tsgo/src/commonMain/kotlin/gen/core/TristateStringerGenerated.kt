@@ -29,5 +29,5 @@ import com.xemantic.typescript.tsgo.runtime.*
 const val _Tristate_name: String = "TSUnknownTSFalseTSTrue"
 
 // go: github.com/microsoft/typescript-go/internal/core._Tristate_index 2ea51f2d
-@kotlin.jvm.JvmField val _Tristate_index: GoArray<Int> = GoArray(4, GoElem.INT).also { it[0] = 0; it[1] = 9; it[2] = 16; it[3] = 22 }
+@kotlin.jvm.JvmField val _Tristate_index: GoArray<Int> = GoArray(4, GoElem.BYTE).also { it[0] = 0; it[1] = 9; it[2] = 16; it[3] = 22 }
 

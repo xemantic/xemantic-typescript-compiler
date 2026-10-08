@@ -2791,7 +2791,7 @@ fun NodeBuilderImpl?.createTypeNodesFromResolvedType(resolvedType: StructuredTyp
     val s4 = resolvedType!!.indexInfos
     l2@ for (i5 in 0 until s4.len) {
         val info: IndexInfo? = s4[i5]
-        typeElements = com.xemantic.typescript.tsgo.go.slices.concat<Node?>(typeElements, this.indexInfoToObjectComputedNamesOrSignatureDeclaration(info, com.xemantic.typescript.tsgo.core.ifElse<Node?>(GoElem.ref<Node?>(), resolvedType!!.constrainedType.typeBase.type.objectFlags.value and 1024u != 0u, this.createElidedInformationPlaceholder(), null)))
+        typeElements = com.xemantic.typescript.tsgo.go.slices.concat<Node?>(GoElem.slice(GoElem.ref<Node?>()), typeElements, this.indexInfoToObjectComputedNamesOrSignatureDeclaration(info, com.xemantic.typescript.tsgo.core.ifElse<Node?>(GoElem.ref<Node?>(), resolvedType!!.constrainedType.typeBase.type.objectFlags.value and 1024u != 0u, this.createElidedInformationPlaceholder(), null)))
     }
     val properties: GoSlice<Symbol?> = resolvedType!!.properties
     if (properties.len == 0) {

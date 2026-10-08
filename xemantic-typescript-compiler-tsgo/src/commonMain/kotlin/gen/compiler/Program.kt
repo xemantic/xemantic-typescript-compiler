@@ -996,7 +996,7 @@ fun Program?.collectDiagnostics(ctx: Context?, sourceFile: SourceFile?, concurre
         result = collect!!(ctx, sourceFile)
     } else {
         val diagnostics: GoSlice<GoSlice<Diagnostic?>> = this.collectDiagnosticsFromFiles(ctx, this!!.processedFiles.files, concurrent, collect)
-        result = com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(*diagnostics.toList().toTypedArray())
+        result = com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(GoElem.slice(GoElem.ref<Diagnostic?>()), *diagnostics.toList().toTypedArray())
     }
     return sortAndDeduplicateDiagnostics(result)
 }
@@ -1030,7 +1030,7 @@ fun Program?.collectCheckerDiagnostics(ctx: Context?, sourceFile: SourceFile?, c
         done!!()
         return sortAndDeduplicateDiagnostics(result)
     }
-    return sortAndDeduplicateDiagnostics(com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(*this.collectCheckerDiagnosticsFromFiles(ctx, this!!.processedFiles.files, collect).toList().toTypedArray()))
+    return sortAndDeduplicateDiagnostics(com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(GoElem.slice(GoElem.ref<Diagnostic?>()), *this.collectCheckerDiagnosticsFromFiles(ctx, this!!.processedFiles.files, collect).toList().toTypedArray()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/compiler.Program.collectCheckerDiagnosticsFromFiles e1bb3b76
@@ -1225,7 +1225,7 @@ fun Program?.verifyCompilerOptions() {
                 relative = "./" + relative
             }
             val suggestion: String = com.xemantic.typescript.tsgo.tspath.combinePaths(relative, GoSlice.of(GoElem.STRING, "*"))
-            useInstead_1 = com.xemantic.typescript.tsgo.go.fmt.sprintf("\"paths\": {\"*\": [%s]}", run { val ta0 = com.xemantic.typescript.tsgo.json.marshal(suggestion, GoElem.ref<Options?>().nilSlice); com.xemantic.typescript.tsgo.core.must<GoSlice<Int>>(GoElem.slice(GoElem.INT), ta0.first, ta0.second) })
+            useInstead_1 = com.xemantic.typescript.tsgo.go.fmt.sprintf("\"paths\": {\"*\": [%s]}", run { val ta0 = com.xemantic.typescript.tsgo.json.marshal(suggestion, GoElem.ref<Options?>().nilSlice); com.xemantic.typescript.tsgo.core.must<GoSlice<Int>>(GoElem.slice(GoElem.BYTE), ta0.first, ta0.second) })
         }
         createRemovedOptionDiagnostic!!("baseUrl", "", useInstead_1)
     }

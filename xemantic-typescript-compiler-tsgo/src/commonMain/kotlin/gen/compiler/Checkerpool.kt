@@ -178,7 +178,7 @@ fun com.xemantic.typescript.tsgo.compiler.checkerPool?.getGlobalDiagnostics(): G
     this.forEachCheckerParallel(fun(idx: Int, checker: Checker?) {
         globalDiagnostics[idx] = checker.getGlobalDiagnostics()
     })
-    return sortAndDeduplicateDiagnostics(com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(*globalDiagnostics.toList().toTypedArray()))
+    return sortAndDeduplicateDiagnostics(com.xemantic.typescript.tsgo.go.slices.concat<Diagnostic?>(GoElem.slice(GoElem.ref<Diagnostic?>()), *globalDiagnostics.toList().toTypedArray()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/compiler.checkerPool.forEachCheckerGroupDo 95a5c827

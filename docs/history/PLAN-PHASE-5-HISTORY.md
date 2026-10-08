@@ -1,3 +1,24 @@
+### Round (P18.308) — (INV.0) extraction: two families with ZERO widenings — TS2302 (static members referencing class type parameters) into `StaticTypeParamRefChecks` and TS2729 (property used before initialization) into `PropertyInitOrderChecks`; `Checker.kt` 191,774 -> 191,075 (-699); every receipt identical, per-pass table included (2026-10-06)
+
+One implementation subagent in the (P18.294) order; it finished. **Choice**: the (P18.303) report's "TS2507 / TS2302 run" is
+two separate families — TS2302 needs no widening, all five cold widenings belong to TS2507 (left); the census found a second
+zero-widening family, TS2729; refused: TS2430 / index-signature / overload-compatibility / full-index-constraint families
+(relation-path widening), the type-argument-constraint family (walk-scoped type-parameter state). **Moved**: 134973-135353
+(TS2302) and 140130-140451 (TS2729, with its TS2728 related row); reads `checkedResults`, `isDtsFile`,
+`getLineAndCharacterOfPosition`, `diagnostics` (+ `globals` for TS2729's base-class lookup); no walk state, no spine state,
+no mutable field; the only outside callers are the two `pass(…)` lambdas. **Receipts**: verbatim proof three ways for both
+families; per-pass `--passTiming` 416 rows + 33 other lines identical; PrintInlining `checkArgumentsAgainstSignature` identical;
+an 18-cell tsgo matrix byte-identical before / after (pre-existing divergences now inside the collaborators: s06 the TS2302
+type walker has no `TypeOperator` arm — `keyof U` missed; p07 a cyclic `extends` chain hides TS2729; p08 a write target
+`this.b = …` in a field initializer is not reported; p09 an ours-only TS2729 because the base-class lookup reads
+`checker.globals[baseName]` and never finds a base declared in a MODULE file); corpus screen 8725 / 0; `cost_gate.py` 0; spine
+audit clean. **Pins**: `StaticAndInitOrderChecksCollaboratorTest` 15; ablation every entry point and helper RED (6 RED for most;
+`shadowedTypeParamNames` and `collectInheritedPropertyNames` were blind at first and got new pins). **Gates**: full suite
+22,931 / 0 / 44 (+15); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue /
+mitt 0 / date-fns 1 unchanged (identity hash extended to both collaborators); library grid OURS-ONLY row sets identical to
+`r307o` on all eight (orchestrator's `r308`); warning gate with probe: probe only. Ledger row 26. Next candidates: TS2507
+`checkNonConstructorExtends` (5 cold widenings) and `checkSuperBeforeThis` (3 small widenings).
+
 ### Round (P18.307) — (LIBS.3) round 14: the last two held-back fixes LANDED — bare `infer` and the empty mapped type — with the `as`-over-tuple mapped type and nine supporting fixes; type-fest 141 -> 123, tally 209 -> 191, NO added position; a +10 s type-fest regression the round itself caused was traced to UNCACHED conditional-alias results and fixed (type-fest 15.4 -> 15.9 s, under tsgo's 17.1 s) (2026-10-06)
 
 One implementation subagent. **Where the brief / queue were wrong**: the "+128" figure was stale — on today's parent (b)+(c)

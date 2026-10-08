@@ -25,7 +25,9 @@ package com.xemantic.typescript.tsgo.testrunner
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.testutil.harnessutil.NamedTestConfiguration
+import com.xemantic.typescript.tsgo.testutil.baseline.Options
 import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
+import com.xemantic.typescript.tsgo.go.testing.T
 import com.xemantic.typescript.tsgo.testutil.harnessutil.TestFile
 
 // go: github.com/microsoft/typescript-go/internal/testrunner.XtscIsSkippedTest 57203aa6
@@ -115,5 +117,93 @@ fun xtscPrepare(filename: String, content: String, named: NamedTestConfiguration
         }
     }
     return XtscPrepared(harnessConfig = harnessConfig, currentDirectory = currentDirectory, toBeCompiled = toBeCompiled, otherFiles = otherFiles, tsConfigFiles = tsConfigFiles, tsConfig = tsConfig, symlinks = testContent.symlinks, hasNonDtsFiles = hasNonDtsFiles)
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.XtscEmitArtifact 6f52ba64
+class XtscEmitArtifact(
+    @kotlin.jvm.JvmField var kind: String = "",
+    @kotlin.jvm.JvmField var status: String = "",
+    @kotlin.jvm.JvmField var baseline: String = "",
+    @kotlin.jvm.JvmField var content: String = "",
+) {
+
+    fun goCopy(): XtscEmitArtifact = XtscEmitArtifact(kind = kind, status = status, baseline = baseline, content = content)
+
+    fun goSet(o: XtscEmitArtifact) {
+        kind = o.kind
+        status = o.status
+        baseline = o.baseline
+        content = o.content
+    }
+
+    fun goEquals(o: XtscEmitArtifact): Boolean = kind == o.kind && status == o.status && baseline == o.baseline && content == o.content
+
+    fun goHash(): Int = 31 * kind.hashCode() + 31 * status.hashCode() + 31 * baseline.hashCode() + 31 * content.hashCode()
+
+    companion object {
+        val ELEM: GoElem<XtscEmitArtifact> = GoElem({ XtscEmitArtifact() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/testrunner.XtscEmitBaselines 94ff55d4
+fun xtscEmitBaselines(t: T?, testName: String, filename: String, content: String, named_0: NamedTestConfiguration?, header: String): GoSlice<XtscEmitArtifact?> {
+    var named: NamedTestConfiguration? = named_0
+    val payload: com.xemantic.typescript.tsgo.testrunner.testCaseContent = makeUnitsFromTest(content, filename)
+    if (named != null) {
+        named = NamedTestConfiguration(name = named!!.name, config = com.xemantic.typescript.tsgo.go.maps.clone<String, String>(named!!.config))
+    }
+    val c: com.xemantic.typescript.tsgo.testrunner.compilerTest? = newCompilerTest(t, testName, filename, payload, named)
+    val opts: Options = Options()
+    val run: ((String, ((XtscEmitArtifact?) -> Unit)?) -> XtscEmitArtifact?)? = fun(kind: String, fn: ((XtscEmitArtifact?) -> Unit)?): XtscEmitArtifact? {
+        val a: XtscEmitArtifact? = XtscEmitArtifact(kind = kind, status = "failed")
+        t!!.run(kind, fun(t_1: T?) {
+            withDefers({ Unit }) { df1 ->
+                df1.defer(fun() {
+                    val p: Any? = df1.recover()
+                    if (p != null) {
+                        a!!.status = "failed"
+                        a!!.content = com.xemantic.typescript.tsgo.go.fmt.sprint(p)
+                    }
+                })
+                fn!!(a)
+            }
+        })
+        return a
+    }
+    var out: GoSlice<XtscEmitArtifact?> = GoElem.ref<XtscEmitArtifact?>().nilSlice
+    if (!c!!.hasNonDtsFiles) {
+        out = out.append1(XtscEmitArtifact(kind = "output", status = "absent"))
+    } else {
+        val t2 = skippedEmitTests.probe(c!!.basename)
+        val ok: Boolean = t2 !== GoMapAbsent
+        if (ok) {
+            out = out.append1(XtscEmitArtifact(kind = "output", status = "skipped"))
+        } else {
+            out = out.append1(run!!("output", fun(a_1: XtscEmitArtifact?) {
+                val t3 = com.xemantic.typescript.tsgo.testutil.tsbaseline.xtscJSEmitBaseline(t, c!!.configuredName, header, c!!.options, c!!.result, c!!.tsConfigFiles, c!!.toBeCompiled, c!!.otherFiles, c!!.harnessOptions, opts.goCopy())
+                a_1!!.baseline = t3.first
+                a_1!!.content = t3.second
+                a_1!!.status = "ok"
+            }))
+        }
+    }
+    out = out.append1(run!!("sourcemap", fun(a_2: XtscEmitArtifact?) {
+        var ran: Boolean = false
+        val t4 = com.xemantic.typescript.tsgo.testutil.tsbaseline.xtscSourcemapBaseline(t, c!!.configuredName, header, c!!.options, c!!.result, c!!.harnessOptions, opts.goCopy())
+        a_2!!.baseline = t4.first
+        a_2!!.content = t4.second
+        ran = t4.third
+        a_2!!.status = "absent"
+        if (ran) {
+            a_2!!.status = "ok"
+        }
+    }))
+    out = out.append1(run!!("sourcemap record", fun(a_3: XtscEmitArtifact?) {
+        val t5 = com.xemantic.typescript.tsgo.testutil.tsbaseline.xtscSourcemapRecordBaseline(t, c!!.configuredName, header, c!!.options, c!!.result, c!!.harnessOptions, opts.goCopy())
+        a_3!!.baseline = t5.first
+        a_3!!.content = t5.second
+        a_3!!.status = "ok"
+    }))
+    return out
 }
 
