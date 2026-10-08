@@ -1,0 +1,106 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
+package com.xemantic.typescript.tsgo
+
+import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.compiler.ProgramOptions
+import com.xemantic.typescript.tsgo.core.TSFalse
+import com.xemantic.typescript.tsgo.core.TSTrue
+import com.xemantic.typescript.tsgo.runtime.GoSlice
+import com.xemantic.typescript.tsgo.runtime.GoString
+import kotlin.system.exitProcess
+import kotlin.time.TimeSource
+
+/**
+ * (TSGO.6) The end-to-end native probe: `tsgo-check <abs tsconfig.json> [single|parallel] [iters=1]`.
+ *
+ * Does what `tsc --noEmit -p <project>` does (with `--singleThreaded` for `single`): parse the tsconfig,
+ * build a `compiler.Program` over the host disk with the bundled libs, collect config, program,
+ * syntactic, global and semantic diagnostics, and print them through tsgo's own non-pretty writer
+ * (`diagnosticwriter.WriteFormatDiagnostics`, paths relative to the project directory, so the output
+ * diffs against `tsc --noEmit -p` run there), with a `time:` line per iteration on stderr.
+ */
+fun nativeCheckMain(args: Array<String>) {
+    val config = args.getOrNull(0) ?: run {
+        println("usage: tsgo-check <absolute tsconfig.json> [single|parallel] [iters]")
+        exitProcess(2)
+    }
+    val parallel = args.getOrNull(1) == "parallel"
+    val iters = args.getOrNull(2)?.toInt() ?: 1
+    val count = onGoStack {
+        TsgoProject.init()
+        var last = 0
+        repeat(iters) { i ->
+            val t0 = TimeSource.Monotonic.markNow()
+            val rows = check(config, parallel)
+            val ms = t0.elapsedNow().inWholeMilliseconds
+            if (i == iters - 1) rows.forEach(::println)
+            val n = rows.count { !it.startsWith(" ") }
+            platform.posix.fprintf(platform.posix.stderr, "time: iter=${i + 1} ms=$ms diags=$n\n")
+            last = n
+        }
+        last
+    }
+    exitProcess(if (count == 0) 0 else 1)
+}
+
+private fun check(config: String, parallel: Boolean): List<String> {
+    val configName = com.xemantic.typescript.tsgo.tspath.normalizePath(GoString.fromUtf16(config))
+    val cwd = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(configName)
+    val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(TsgoProject.diskFS())
+    val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost(cwd, fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)!!
+    val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(configName, null, null, host, null)
+    val all = ArrayList<Diagnostic>()
+    fun add(ds: GoSlice<Diagnostic?>) {
+        for (k in 0 until ds.len) all += ds[k]!!
+    }
+    add(configDiags)
+    if (parsed != null) {
+        val program = com.xemantic.typescript.tsgo.compiler.newProgram(
+            ProgramOptions(host = host, config = parsed, singleThreaded = if (parallel) TSFalse else TSTrue),
+        )!!
+        val ctx = com.xemantic.typescript.tsgo.go.context.background()
+        add(program.getConfigFileParsingDiagnostics())
+        add(program.getProgramDiagnostics())
+        add(program.getSyntacticDiagnostics(ctx, null))
+        add(program.getGlobalDiagnostics(ctx))
+        add(program.getSemanticDiagnostics(ctx, null))
+    }
+    // tsgo's own non-pretty writer (`tsc --noEmit -p` without a TTY), paths relative to the project.
+    val out = com.xemantic.typescript.tsgo.go.strings.Builder()
+    val sorted = com.xemantic.typescript.tsgo.compiler.sortAndDeduplicateDiagnostics(GoSlice.of(com.xemantic.typescript.tsgo.runtime.GoElem.ref(), *all.toTypedArray()))
+    com.xemantic.typescript.tsgo.diagnosticwriter.writeFormatDiagnostics(
+        out,
+        com.xemantic.typescript.tsgo.diagnosticwriter.fromASTDiagnostics(sorted),
+        com.xemantic.typescript.tsgo.diagnosticwriter.FormattingOptions(
+            comparePathsOptions = com.xemantic.typescript.tsgo.tspath.ComparePathsOptions(true, cwd),
+            newLine = "\n",
+        ),
+    )
+    return GoString.toUtf16(out.string()).split('\n').filter { it.isNotEmpty() }
+}

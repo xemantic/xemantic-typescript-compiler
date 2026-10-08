@@ -181,8 +181,46 @@ fun log2(x: Double): Double {
     return log(frac) * (1 / Ln2) + exp.toDouble()
 }
 
-/** `math.Exp`. APPROXIMATION: Kotlin's `exp`, not Go's (amd64 assembly) `Exp`. */
-fun exp(x: Double): Double = kotlin.math.exp(x)
+/**
+ * `math.Exp` — Go's portable algorithm (exp.go, fdlibm's reduction + `expmulti`), NOT the platform
+ * `exp`: glibc's (Kotlin/Native) and the JVM's differ from Go in the last ulp on some inputs (measured:
+ * `Pow(7, 1.5)`), while Go's amd64 assembly agrees with this one on the oracle vectors.
+ */
+fun exp(x: Double): Double {
+    val ln2Hi = 6.93147180369123816490e-01
+    val ln2Lo = 1.90821492927058770002e-10
+    val log2e = 1.44269504088896338700e+00
+    val overflow = 7.09782712893383973096e+02
+    val underflow = -7.45133219101941108420e+02
+    val nearZero = 1.0 / (1 shl 28)
+    when {
+        x.isNaN() -> return x
+        x > overflow -> return Double.POSITIVE_INFINITY
+        x < underflow -> return 0.0
+        -nearZero < x && x < nearZero -> return 1 + x
+    }
+    val k = when {
+        x < 0 -> (log2e * x - 0.5).toInt()
+        x > 0 -> (log2e * x + 0.5).toInt()
+        else -> 0
+    }
+    val hi = x - k.toDouble() * ln2Hi
+    val lo = k.toDouble() * ln2Lo
+    return expmulti(hi, lo, k)
+}
+
+private fun expmulti(hi: Double, lo: Double, k: Int): Double {
+    val p1 = 1.66666666666666657415e-01
+    val p2 = -2.77777777770155933842e-03
+    val p3 = 6.61375632143793436117e-05
+    val p4 = -1.65339022054652515390e-06
+    val p5 = 4.13813679705723846039e-08
+    val r = hi - lo
+    val t = r * r
+    val c = r - t * (p1 + t * (p2 + t * (p3 + t * (p4 + t * p5))))
+    val y = 1 - ((lo - (r * c) / (2 - c)) - hi)
+    return ldexp(y, k)
+}
 
 private fun isOddInt(x: Double): Boolean {
     if (kotlin.math.abs(x) >= (1L shl 53).toDouble()) return false
@@ -192,7 +230,7 @@ private fun isOddInt(x: Double): Boolean {
 
 /**
  * `math.Pow` — Go's algorithm. Bit-exact for integer exponents (successive squaring with
- * Frexp/Ldexp); a fractional exponent goes through [exp]/[log] (APPROXIMATION, last ulp).
+ * Frexp/Ldexp); a fractional exponent goes through Go's own [exp]/[log] ports.
  */
 fun pow(x: Double, y: Double): Double {
     when {

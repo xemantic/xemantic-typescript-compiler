@@ -217,7 +217,7 @@ class ShimOracleTest {
     }
 
     @Test
-    fun `base64 encodes and decodes as Go, error offsets included`() {
+    fun `base64 encodes and decodes as Go - error offsets included`() {
         val bad = ArrayList<String>()
         for (row in BASE64_ENCODE) {
             val r = f(row)

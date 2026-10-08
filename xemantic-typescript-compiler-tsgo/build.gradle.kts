@@ -50,6 +50,18 @@ kotlin {
 
     jvm()
 
+    // (TSGO.6) Kotlin/Native, opt-in exactly as -core's: only with `-PenableNativeTargets=true`, so a
+    // plain JVM build never sees it. Native builds run ALONE under CLAUDE.md's memory protocol (zero
+    // swap; K/N compiles inside the GRADLE daemon). The executable checks one tsconfig project
+    // (`nativeMain/kotlin/NativeCheckMain.kt`), the end-to-end probe against the JVM port and tsgo.
+    if (project.findProperty("enableNativeTargets") == "true") {
+        linuxX64 {
+            binaries.executable {
+                entryPoint = "com.xemantic.typescript.tsgo.nativeCheckMain"
+            }
+        }
+    }
+
     sourceSets {
 
         commonTest {

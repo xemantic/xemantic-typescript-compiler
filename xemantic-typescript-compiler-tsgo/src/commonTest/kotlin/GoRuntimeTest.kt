@@ -178,7 +178,7 @@ class GoRuntimeTest {
 
     // GoMap.iter is what the lowering emits for `for k, v := range m` (docs/goport-perf.md § 6).
     @Test
-    fun `a map iteration produces each entry once, skips deleted ones and reads current values`() {
+    fun `a map iteration produces each entry once - skips deleted ones and reads current values`() {
         val m = GoMap.make<String?, Int>(GoElem.INT)
         for (i in 0 until 100) m["k$i"] = i
         m[null] = -1 // a nil key is a key like any other
