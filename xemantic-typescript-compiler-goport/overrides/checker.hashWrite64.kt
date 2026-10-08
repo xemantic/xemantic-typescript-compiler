@@ -10,6 +10,6 @@ fun <T : Comparable<T>> hashWrite64(goElem_T: GoElem<T>, h: com.xemantic.typescr
         is ULong -> value_1
         else -> error("hashWrite64: unexpected ${value_1::class}")
     }
-    h!!.write(GoSlice.of(GoElem.INT, (v and 0xFFuL).toInt(), ((v shr 8) and 0xFFuL).toInt(), ((v shr 16) and 0xFFuL).toInt(), ((v shr 24) and 0xFFuL).toInt(),
-        ((v shr 32) and 0xFFuL).toInt(), ((v shr 40) and 0xFFuL).toInt(), ((v shr 48) and 0xFFuL).toInt(), ((v shr 56) and 0xFFuL).toInt()))
+    // binary.LittleEndian.PutUint64 + Write, without the byte slice (docs/goport-perf.md § 6).
+    h!!.writeU64le(v.toLong())
 }

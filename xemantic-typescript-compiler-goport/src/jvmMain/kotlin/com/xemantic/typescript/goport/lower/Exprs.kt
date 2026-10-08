@@ -333,8 +333,10 @@ open class ExprLowering(val fn: FnCtx) {
         val sx = slot(x)
         val sy = slot(y)
         if (sx != null && sy != null) {
-            fun addr(ix: Node) = "${raw(ix.reqObj("x")).at(PRIMARY)}.addr(${intIndex(ix.reqObj("index")).code})"
-            return Ex("${addr(sx)} ${if (neg) "!=" else "=="} ${addr(sy)}", EQ)
+            // One runtime call, no pointer objects (GoSlice.sameSlot: same panics, same answer).
+            val same = "${raw(sx.reqObj("x")).at(PRIMARY)}.sameSlot(${intIndex(sx.reqObj("index")).code}, " +
+                "${raw(sy.reqObj("x")).code}, ${intIndex(sy.reqObj("index")).code})"
+            return if (neg) Ex("!$same", PREFIX) else Ex.primary(same)
         }
         val xt = ty(x)
         val u = types.under(xt)

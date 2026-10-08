@@ -541,7 +541,7 @@ fun newParser(): Parser? {
 
 // go: github.com/microsoft/typescript-go/internal/parser.isMissingNodeList b53c8f65
 fun isMissingNodeList(list: NodeList?): Boolean {
-    return list != null && list!!.nodes.cap == 1 && list!!.nodes.slice(0, 1).addr(0) == missingListNodes.slice(0, 1).addr(0)
+    return list != null && list!!.nodes.cap == 1 && list!!.nodes.slice(0, 1).sameSlot(0, missingListNodes.slice(0, 1), 0)
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.getParser 409ea3c2

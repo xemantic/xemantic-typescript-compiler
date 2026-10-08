@@ -11,5 +11,6 @@ fun <T : Comparable<T>> hashWrite32(goElem_T: GoElem<T>, h: com.xemantic.typescr
         is UInt -> value_1
         else -> error("hashWrite32: unexpected ${value_1::class}")
     }
-    h!!.write(GoSlice.of(GoElem.INT, (v and 0xFFu).toInt(), ((v shr 8) and 0xFFu).toInt(), ((v shr 16) and 0xFFu).toInt(), ((v shr 24) and 0xFFu).toInt()))
+    // binary.LittleEndian.PutUint32 + Write, without the byte slice (docs/goport-perf.md § 6).
+    h!!.writeU32le(v.toInt())
 }

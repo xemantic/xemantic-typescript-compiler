@@ -175,6 +175,16 @@ class GoSlice<T> internal constructor(
         return GoElemPtr(this, offset + i)
     }
 
+    /**
+     * NOT Go API — `&s[i] == &o[j]` (`core.Same`) without allocating two pointers: whether both
+     * name the same backing slot. Bounds panic exactly as the two `addr` calls would, left first.
+     */
+    fun sameSlot(i: Int, o: GoSlice<*>, j: Int): Boolean {
+        if (i < 0 || i >= len) goPanicIndex(i, len)
+        if (j < 0 || j >= o.len) goPanicIndex(j, o.len)
+        return array === o.array && offset + i == o.offset + j
+    }
+
     /** The elements as a list (a snapshot; for `range` and debugging). */
     fun toList(): List<T> = List(len) { load(offset + it) }
 

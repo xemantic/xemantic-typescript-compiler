@@ -95,15 +95,18 @@ fun hashString128(s: String): Uint128 {
  * written. Go's zero value is usable (it resets itself on first use); so is `Hasher()`.
  */
 class Hasher {
-    private val acc = LongArray(8)
+    // Allocated on demand (NOT Go's layout, same states): the checker's key builder makes a Hasher per
+    // cache key and writes a few dozen bytes, so a full 1,088-char buffer and the accumulators per key
+    // were most of its cost (docs/goport-perf.md § 6). `acc` is needed only once a block is folded.
+    private var acc: LongArray? = null
     private var blk = 0L
     private var len = 0
     private var keyed = false
-    private val buf = CharArray(BLOCK + STRIPE)
+    private var buf: CharArray = EMPTY_BUF
 
     /** `h.Reset()`. */
     fun reset() {
-        initialAccs().copyInto(acc)
+        acc = null
         blk = 0
         len = 0
     }
@@ -114,14 +117,41 @@ class Hasher {
 
     /** `h.Write(b)` → (len(b), nil). */
     fun write(b: GoSlice<Int>): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, com.xemantic.typescript.tsgo.runtime.GoError?> {
-        update(goBytesToString(b))
-        return com.xemantic.typescript.tsgo.runtime.Tuple2(b.len, null)
+        val n = b.len
+        if (n <= STRIPE) {
+            ensureKey()
+            for (i in 0 until n) put(b[i].toChar())
+        } else {
+            update(goBytesToString(b))
+        }
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(n, null)
     }
 
     /** `h.WriteString(s)` → (len(s), nil). */
     fun writeString(s: String): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, com.xemantic.typescript.tsgo.runtime.GoError?> {
         update(s)
         return com.xemantic.typescript.tsgo.runtime.Tuple2(s.length, null)
+    }
+
+    /** NOT Go API — `h.Write([]byte{b})` without the slice. */
+    fun writeU8(b: Int) {
+        ensureKey()
+        put((b and 0xFF).toChar())
+    }
+
+    /** NOT Go API — the 4 little-endian bytes of [v] (`binary.LittleEndian.PutUint32` + `Write`). */
+    fun writeU32le(v: Int) {
+        ensureKey()
+        put((v and 0xFF).toChar())
+        put(((v ushr 8) and 0xFF).toChar())
+        put(((v ushr 16) and 0xFF).toChar())
+        put(((v ushr 24) and 0xFF).toChar())
+    }
+
+    /** NOT Go API — the 8 little-endian bytes of [v]. */
+    fun writeU64le(v: Long) {
+        writeU32le(v.toInt())
+        writeU32le((v ushr 32).toInt())
     }
 
     private fun ensureKey() {
@@ -131,28 +161,50 @@ class Hasher {
         }
     }
 
+    private fun accs(): LongArray = acc ?: initialAccs().also { acc = it }
+
+    private fun ensureBuf(need: Int) {
+        if (buf.size >= need) return
+        var n = maxOf(buf.size * 2, 64)
+        while (n < need) n *= 2
+        buf = buf.copyOf(minOf(n, BUF_SIZE))
+    }
+
+    /** One byte of input: the per-char step of [update]. */
+    private fun put(c: Char) {
+        if (len >= BUF_SIZE) foldFullBuffer()
+        if (len >= buf.size) ensureBuf(len + 1)
+        buf[len++] = c
+    }
+
+    /** A full buffer folds its first block when more input arrives; the last stripe stays. */
+    private fun foldFullBuffer() {
+        accumBlock(accs(), buf.concatToString(0, BLOCK), 0)
+        blk++
+        len = STRIPE
+        buf.copyInto(buf, 0, BLOCK, BLOCK + STRIPE)
+    }
+
     private fun update(s: String) {
         ensureKey()
         var p = 0
         val n = s.length
         // first write of more than a buffer: whole blocks straight from the input
-        while (len == 0 && n - p > buf.size) {
-            accumBlock(acc, s, p)
+        while (len == 0 && n - p > BUF_SIZE) {
+            accumBlock(accs(), s, p)
             p += BLOCK
             blk++
         }
         while (p < n) {
-            if (len < buf.size) {
-                val k = minOf(buf.size - len, n - p)
+            if (len < BUF_SIZE) {
+                val k = minOf(BUF_SIZE - len, n - p)
+                ensureBuf(len + k)
                 for (i in 0 until k) buf[len + i] = s[p + i]
                 len += k
                 p += k
                 continue
             }
-            accumBlock(acc, buf.concatToString(0, BLOCK), 0)
-            blk++
-            len = STRIPE
-            buf.copyInto(buf, 0, BLOCK, BLOCK + STRIPE)
+            foldFullBuffer()
         }
     }
 
@@ -163,7 +215,7 @@ class Hasher {
         if (blk == 0L) return hashAny(data).toULong()
         val l = blk * BLOCK + len
         var a = l * PRIME64_1
-        val accs = acc.copyOf()
+        val accs = accs().copyOf()
         if (len > 0) accumScalar(accs, data, len)
         a += mulFold64(accs[0] xor K[11], accs[1] xor K[19])
         a += mulFold64(accs[2] xor K[27], accs[3] xor K[35])
@@ -180,7 +232,7 @@ class Hasher {
         val l = blk * BLOCK + len
         var lo = l * PRIME64_1
         var hi = (l * PRIME64_2).inv()
-        val accs = acc.copyOf()
+        val accs = accs().copyOf()
         if (len > 0) accumScalar(accs, data, len)
         lo += mulFold64(accs[0] xor K[11], accs[1] xor K[19])
         hi += mulFold64(accs[0] xor K[117], accs[1] xor K[125])
@@ -204,15 +256,16 @@ class Hasher {
     /** A Go value copy (the checker embeds a `Hasher` by value in its key builder). */
     fun goCopy(): Hasher {
         val c = Hasher()
-        acc.copyInto(c.acc)
+        c.acc = acc?.copyOf()
         c.blk = blk
         c.len = len
         c.keyed = keyed
-        buf.copyInto(c.buf)
+        c.buf = if (buf.isEmpty()) EMPTY_BUF else buf.copyOf()
         return c
     }
 }
 
+private val EMPTY_BUF = CharArray(0)
 /** `xxh3.New()`. */
 fun new(): Hasher = Hasher()
 
@@ -220,6 +273,7 @@ fun new(): Hasher = Hasher()
 
 private const val STRIPE = 64
 private const val BLOCK = 1024
+private const val BUF_SIZE = 1088 // BLOCK + STRIPE
 
 private const val PRIME32_1: Long = 2654435761L
 private const val PRIME32_2: Long = 2246822519L

@@ -2,7 +2,7 @@
 """Aggregate a JFR CPU profile of ParseBenchMain's tsgo arm (docs/goport-perf.md).
 
     jfr print --events jdk.ExecutionSample --stack-depth 512 tsgo.jfr > samples.txt
-    python3 scripts/tsgo_parse_profile.py samples.txt
+    python3 scripts/tsgo_parse_profile.py samples.txt [thread]
 
 Only samples on the `parse-bench-deep-stack` thread count. Prints: self time by leaf
 frame:line; self time charged to the nearest com.xemantic frame (a stdlib leaf belongs to its
@@ -12,7 +12,7 @@ whose deepest stack reaches the --stack-depth cap (round 868's truncation trap).
 """
 import collections, re, sys
 
-def main(path, cap=512):
+def main(path, cap=512, thread='parse-bench-deep-stack'):
     evs = open(path).read().split('jdk.ExecutionSample {')[1:]
     fr = re.compile(r'^\s+([\w.$<>\-]+)\(.*?line: (\d+)', re.M)
     n = 0; maxd = 0
@@ -31,7 +31,7 @@ def main(path, cap=512):
         ('goCopy', lambda j: 'goCopy' in j),
     ]
     for e in evs:
-        if 'parse-bench-deep-stack' not in e:
+        if thread not in e:
             continue
         fs = [(m.group(1), m.group(2)) for m in fr.finditer(e)]
         if not fs:
@@ -57,4 +57,5 @@ def main(path, cap=512):
             print(f'{v * 100 / n:5.1f}% {key}')
 
 if __name__ == '__main__':
-    main(sys.argv[1])
+    # optional 2nd argument: the bench thread (CheckBenchMain's is check-bench-deep-stack)
+    main(sys.argv[1], thread=sys.argv[2] if len(sys.argv) > 2 else 'parse-bench-deep-stack')
