@@ -154,8 +154,8 @@ parse/encode path.
 
 | package | declarations | status |
 |---|---|---|
-| `strings` | `compare contains containsAny containsRune containsFunc count cut cutPrefix cutSuffix equalFold hasPrefix hasSuffix index indexByte indexRune indexAny indexFunc lastIndexFunc join lastIndex lastIndexByte map repeat replace replaceAll split splitN splitAfter toLower toUpper toValidUTF8 trimFunc trimLeftFunc trimRightFunc trimLeft trimRight trim trimPrefix trimSuffix trimSpace fields newReader clone newReplacer`; `Builder` (`string len cap reset grow write writeByte writeRune writeString goCopy`; implements `io.Writer`/`io.StringWriter`), `Reader`, `Replacer` (`replace`: Go's priority = earliest pair, not longest; an empty old string matches at every position but not twice in a row) | exact † (`Builder.cap` approx) |
-| `strconv` | `parseInt parseUint atoi itoa formatInt formatUint formatBool parseFloat formatFloat appendFloat quote`, `errRange errSyntax NumError IntSize` | exact † (`quote` approx; `bitSize 32` and fmt `'b'`/`'x'` stubs) |
+| `strings` | `compare contains containsAny containsRune containsFunc count cut cutPrefix cutSuffix equalFold hasPrefix hasSuffix index indexByte indexRune indexAny indexFunc lastIndexFunc join lastIndex lastIndexByte map repeat replace replaceAll split splitN splitAfter toLower toUpper toValidUTF8 trimFunc trimLeftFunc trimRightFunc trimLeft trimRight trim trimPrefix trimSuffix trimSpace fields newReader clone newReplacer splitSeq`; `Builder` (`string len cap reset grow write writeByte writeRune writeString goCopy`; implements `io.Writer`/`io.StringWriter`), `Reader`, `Replacer` (`replace`: Go's priority = earliest pair, not longest; an empty old string matches at every position but not twice in a row) | exact † (`Builder.cap` approx) |
+| `strconv` | `parseInt parseUint atoi itoa formatInt formatUint formatBool parseBool parseFloat formatFloat appendFloat quote`, `errRange errSyntax NumError IntSize` | exact † (`quote` approx; `bitSize 32` and fmt `'b'`/`'x'` stubs) |
 | `unicode` | `` `is` `` `isSpace toLower toUpper simpleFold zs whiteSpace version`, `RangeTable Range16 Range32`, `MaxRune ReplacementChar MaxASCII MaxLatin1` | exact † (tables dumped from Go 1.27.1 = Unicode 17.0.0) |
 | `unicode/utf8` | `decodeRuneInString decodeLastRuneInString decodeRune runeLen runeCount runeCountInString validRune validString runeStart fullRuneInString encodeRune appendRune`, `RuneError RuneSelf MaxRune UTFMax`; NOT Go: `decodeRuneInStringAt(s, i)`, `decodeLastRuneInStringBefore(s, end)` | exact † |
 | `unicode/utf16` | `isSurrogate decodeRune encodeRune runeLen` | exact |
@@ -167,19 +167,24 @@ parse/encode path.
 | `math/bits` | `len len32 len64 leadingZeros64 trailingZeros32/64 onesCount onesCount8/16/32/64 rotateLeft32/64` | exact |
 | `math/big` | `Int` (`set setInt64 sign setString exp(x, y, null) float64 string text int64 cmp goCopy`), `newInt`, `Float` (`setPrec(ULong) setInt float64`), `Accuracy` | exact † for these; `Exp` with a modulus stub |
 | `fmt` | `sprintf sprint sprintln errorf fprintf fprint fprintln` (the `F` forms write the formatted bytes with one `w.Write`), `Stringer` | exact for `%d %s %v(builtin kinds) %x %X %q(ASCII) %c %f %e %g %%`, width/flags/precision, `%w`; approx for structs, `%T`, non-ASCII `%q` |
-| `errors` | `new unwrap `` `is` `` join` | exact |
-| `io` | `Reader Writer Closer ReadCloser WriteCloser StringWriter EOF` | exact |
-| `io/fs` | `FileMode` (`isDir isRegular perm type string`), constants `ModeDir … ModeIrregular ModeType ModePerm`, `FileInfo DirEntry` (interfaces), `fileInfoToDirEntry formatDirEntry`, `WalkDirFunc`, vars `errInvalid errPermission errExist errNotExist errClosed skipDir skipAll` | exact † (`FileMode.String`); no file system here — tsgo's `vfs` is the file access |
+| `errors` | `new unwrap `` `is` `` join`, `asType<E>` (reified: `errors.AsType[E]`) | exact (no `As(any) bool` hook: no ported or shimmed error has one) |
+| `io` | `Reader Writer Closer ReadCloser WriteCloser StringWriter EOF errUnexpectedEOF` | exact |
+| `io/fs` | `FileMode` (`isDir isRegular perm type string`), constants `ModeDir … ModeIrregular ModeType ModePerm`, `FileInfo DirEntry` (interfaces), `fileInfoToDirEntry formatDirEntry`, `WalkDirFunc`, vars `errInvalid errPermission errExist errNotExist errClosed skipDir skipAll`; (TSGO.2, for the ported harness's `vfstest`/`iovfs`) `FS File ReadDirFile ReadFileFS ReadDirFS StatFS SubFS` (interfaces), `PathError`, `validPath readFile readDir stat sub walkDir` | exact † (`FileMode.String`; the functions are go1.27.1's, incl. the `ReadFileFS`/`StatFS`/`ReadDirFS`/`SubFS` fast paths); `sub`'s `subFS` carries no `Glob`/`ReadLink`/`Lstat` |
 | `path/filepath` | `Separator ListSeparator fromSlash toSlash clean join dir base ext isAbs` | exact † for UNIX semantics (no Windows host) |
+| `path` | `clean join dir base isAbs split` | exact (slash-separated: the `filepath` algorithms) |
+| `testing/fstest` | `MapFS` (`typealias` of `GoMap<String, MapFile?>`; extension `open`), `MapFile` (`data mode modTime sys goCopy ELEM`) | exact for `Open` and its file/dir/info types (go1.27.1); `Glob`/`ReadLink`/`Lstat`/`ReadFile`/`Stat`/`ReadDir`/`Sub` not carried (`vfstest` uses only `Open`) |
+| `os` | `getenv` (always `""`), `dirFS` (read-only, over the platform `actual` in `src/jvmMain/kotlin/go/os/Os.jvm.kt`) | `dirFS`: modes are 0644/0755, mod time zero (the harness reads only names and bytes) |
+| `encoding/hex` | `encodeToString` | exact |
+| `unicode/utf16` | `isSurrogate decodeRune encodeRune runeLen decode` | exact |
 | `encoding/base64` | `Encoding` (`encodeToString encode appendEncode decodeString decode encodedLen decodedLen withPadding strict`), vars `stdEncoding urlEncoding rawStdEncoding rawURLEncoding`, `newEncoding newEncoder` (a `WriteCloser`), `CorruptInputError`, `StdPadding NoPadding` | exact † (decoder error offsets, `\r`/`\n` skipping) |
-| `runtime`, `testing` | `caller` (always `ok = false`), `GOOS GOARCH`; `testing()` (false) | approx (§ 10) |
-| `encoding`, `encoding/binary` | `TextMarshaler TextUnmarshaler`; `littleEndian` (`uint16/32/64 putUint16/32/64 appendUint32`) | exact |
+| `runtime`, `testing` | `caller` (always `ok = false`), `GOOS GOARCH`; `testing()` (false); `T` (`common`, `name helper skipf`; `Common`: `helper skipf skip fatalf fatal errorf failed`) | approx (§ 10); `Skipf`/`Fatalf` end the test by throwing `TestSkipped`/`TestFailed` (Go's `Goexit`), which the Kotlin driver catches |
+| `encoding`, `encoding/binary` | `TextMarshaler TextUnmarshaler`; `ByteOrder` (`uint16`), `littleEndian` (`uint16/32/64 putUint16/32/64 appendUint32`), `bigEndian` (`uint16`), `read` | exact; `read` carries only `*[]uint16` (`vfs/internal.decodeUtf16`) and panics on anything else |
 | `context` | `Context background todo withValue` | values exact; no cancellation (`done()` null) |
 | `sync`, `sync/atomic` | `Locker`, `Mutex` (`lock unlock tryLock`) `RWMutex` (`lock unlock tryLock rLock rUnlock tryRLock rLocker`) `Once onceValue onceFunc Pool WaitGroup Map` (`load store loadOrStore loadAndDelete delete clear range`); `Bool Int32 Int64 Uint32 Uint64 Pointer` (`load store add swap compareAndSwap`) | thread-safe, contended waiters PARK (§ 9a); `WaitGroup.Go` synchronous |
 | `golang.org/x/sync/errgroup` | `Group` (`go tryGo setLimit wait`), `withContext` | thread-safe first-error; `Go` runs synchronously, no context cancellation |
 | `time` | `Duration` (`nanoseconds microseconds milliseconds seconds`), `Nanosecond … Hour`; `Time` (`sub isZero unixNano unixMilli equal before after goCopy goEquals goHash`), `now since` | `Duration` exact; `Time` approx (§ 10) |
 | `os`, `runtime/debug` | `getenv` (always `""`), `setMaxStack` (no-op) | approx |
-| `regexp` | `Regexp` (`replaceAllStringFunc replaceAllString replaceAllLiteralString matchString findString findStringSubmatch findAllString split string`), `mustCompile compile quoteMeta`; NOT Go: `translateRe2(expr)` | RE2 syntax translated (§ 9b) †; `ReplaceAllString` uses Go's `$` template rules; `split`/`findAllString` use Go's `allMatches` (an empty match right after a match is skipped) † |
+| `regexp` | `Regexp` (`replaceAllStringFunc replaceAllString replaceAllLiteralString matchString findString findStringSubmatch findAllString findAllStringSubmatch split string`), `mustCompile compile quoteMeta`; NOT Go: `translateRe2(expr)` | RE2 syntax translated (§ 9b) †; `ReplaceAllString` uses Go's `$` template rules; `split`/`findAllString` use Go's `allMatches` (an empty match right after a match is skipped) † |
 | `golang.org/x/text/language` | `Tag` (zero `Tag()` = `und`; `string goCopy goEquals goHash`) `und english parse mustParse Matcher newMatcher Confidence No Low High Exact` | approx |
 | `github.com/zeebo/xxh3` | `hashString128 hash128 hashString hash`; `Uint128(hi, lo)` + `bytes goCopy goEquals goHash`; `Hasher` (`write writeString sum64 sum128 sum reset blockSize size goCopy`), `new` | exact † (lengths 0..300, block edges, 64 KiB, 1 MiB; v1.1.0's scalar path; the `Hasher` over 290 chunkings across the 1088-byte buffer and 1024-byte block edges, including a `Sum64` mid-stream). Seeded variants not ported |
 | `github.com/go-json-experiment/json` | `Options deterministic`, `Marshaler MarshalerTo Unmarshaler UnmarshalerFrom` (typealiases of `encoding/json/v2`'s), `Decoder Encoder` (aliases of `jsontext`'s), `marshal marshalWrite marshalEncode unmarshal unmarshalRead unmarshalDecode`, `SemanticError`; NOT Go: `GoJsonStruct`/`JsonField` (§ 9c) | exact † for the representations in § 9c (values AND whether Go errs; layouts; string escaping); approx § 10 |
@@ -302,6 +307,7 @@ Lowering rules that come with the shims:
 15. **`time.Time`** carries Unix nanoseconds plus a monotonic reading; no calendar, zone or formatting; Go's zero `Time` (year 1) is approximated by `isZero()` and a clamped wall clock.
 16. **`runtime.Caller`** always answers `ok = false`; `testing.Testing()` is false; `filepath` is UNIX-only.
 17. **Contended locks are not fair**: a woken waiter re-competes with newly arriving threads (Go's normal mode); Go's starvation mode (hand-off after 1 ms) is not modelled.
+18. **`json.Marshal` of a value class with a `MarshalJSONTo` method** (`core.Tristate`) writes its underlying number, not the method's output (`true`/`false`): the shim does not dispatch marshaller methods on value classes (decoding through `<V>_Ptr` does). Two values marshalled the same way still compare correctly.
 
 ## 11. Stubs (`TODO("shim: …")`)
 
@@ -332,6 +338,8 @@ the boxed `ScriptTarget`) so the json shim decodes a JSON number into them; `ref
 wraps the raw value back (`goWithRaw`) and unwraps on `Set`. `reflect.TypeOf` of an `any` holding a
 generated struct answers a POINTER to it (tsgo stores structs in interfaces by pointer throughout).
 Approximations: `TypeOf` of a slice/map in an `any` has no element type (tsgo only asks `Kind()`);
-a struct that never reaches reflect has no fields to `reflect` (`Field` panics naming the porter rule).
+a struct that never reaches reflect has no fields to `reflect` (`Field` panics naming the porter rule),
+so `DeepEqual` of two such structs (`collections.OrderedMap`) is IDENTITY, not Go's field-wise answer.
+`DeepEqual` of two non-struct pointers (`*int` options are `GoBox`es) compares the pointees, as Go.
 Pins: `jvmTest/ReflectByCodegenTest` (tsgo's json form of `CompilerOptions` decodes; `Clone` and
 `DeepEqual` through reflect; `TypeFor` fields and tags).

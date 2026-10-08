@@ -55,3 +55,22 @@ fun runeLen(r: Int): Int = when {
     r in SURR_SELF..MAX_RUNE -> 2
     else -> -1
 }
+
+/** `utf16.Decode(s)`: the runes of the UTF-16 sequence [s]; an unpaired surrogate decodes to U+FFFD. */
+fun decode(s: com.xemantic.typescript.tsgo.runtime.GoSlice<Int>): com.xemantic.typescript.tsgo.runtime.GoSlice<Int> {
+    var out = com.xemantic.typescript.tsgo.runtime.GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.INT, 0, s.len)
+    var i = 0
+    while (i < s.len) {
+        val r = s[i]
+        when {
+            r < SURR1 || SURR3 <= r -> out = out.append1(r)
+            r in SURR1 until SURR2 && i + 1 < s.len && s[i + 1] in SURR2 until SURR3 -> {
+                out = out.append1(decodeRune(r, s[i + 1]))
+                i++
+            }
+            else -> out = out.append1(REPLACEMENT_CHAR)
+        }
+        i++
+    }
+    return out
+}

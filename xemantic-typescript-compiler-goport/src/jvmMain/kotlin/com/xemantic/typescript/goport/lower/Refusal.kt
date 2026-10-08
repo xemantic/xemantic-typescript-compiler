@@ -50,7 +50,11 @@ class ShimIndex(
     private val needsArgs: Map<String, Set<String>>,
     /** Top-level generic functions whose leading parameters are `GoElem<…>` dictionaries: name → count. */
     private val elemDicts: Map<String, Map<String, Int>> = emptyMap(),
+    /** Top-level EXTENSION functions (`fun MapFS.open(…)`): a method of a shim typealias, callable only through an import. */
+    private val extensions: Map<String, Set<String>> = emptyMap(),
 ) {
+
+    fun isExtension(kotlinPackage: String, name: String): Boolean = extensions[kotlinPackage]?.contains(name) ?: false
 
     /** How many leading `GoElem` dictionary parameters shim function [name] takes (0: none). */
     fun elemDictCount(kotlinPackage: String, name: String): Int = elemDicts[kotlinPackage]?.get(name) ?: 0
@@ -76,6 +80,7 @@ class ShimIndex(
             val cls = HashMap<String, MutableMap<String, MutableSet<String>>>()
             val args = HashMap<String, MutableSet<String>>()
             val dicts = HashMap<String, MutableMap<String, Int>>()
+            val exts = HashMap<String, MutableSet<String>>()
             val aliases = ArrayList<Triple<String, String, String>>() // (package, alias name, target fqn)
             for (root in roots) {
                 if (!root.isDirectory) continue
@@ -119,6 +124,7 @@ class ShimIndex(
                             mem.getOrPut(pkg) { HashSet() } += name
                             if (indent.length == 4 && current != null) cls.getValue(pkg).getValue(current) += name
                             if (receiver.isNotEmpty()) {
+                                if (indent.isEmpty() && kind == "fun") exts.getOrPut(pkg) { HashSet() } += name
                                 val r = receiver.removeSuffix(".").substringBefore('<').removeSuffix("?")
                                 cls.getOrPut(pkg) { HashMap() }.getOrPut(r) { HashSet() } += name
                             }
@@ -134,7 +140,7 @@ class ShimIndex(
                 mem[tp]?.let { mem.getOrPut(pkg) { HashSet() } += it }
                 cls[tp]?.get(tn)?.let { cls.getOrPut(pkg) { HashMap() }.getOrPut(name) { HashSet() } += it }
             }
-            return ShimIndex(top, mem, cls, args, dicts)
+            return ShimIndex(top, mem, cls, args, dicts, exts)
         }
     }
 }

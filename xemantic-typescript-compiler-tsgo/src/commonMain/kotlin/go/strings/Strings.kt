@@ -310,6 +310,12 @@ fun replace(s: String, old: String, new: String, nIn: Int): String {
 /** `strings.ReplaceAll(s, old, new)`. */
 fun replaceAll(s: String, old: String, new: String): String = replace(s, old, new, -1)
 
+/** `strings.SplitSeq(s, sep)`: the substrings `Split` returns, as an iterator. */
+fun splitSeq(s: String, sep: String): com.xemantic.typescript.tsgo.go.iter.Seq<String> = { yield ->
+    val parts = genSplit(s, sep, 0, -1)
+    for (i in 0 until parts.len) if (!yield(parts[i])) break
+}
+
 /** `strings.Split(s, sep)`. */
 fun split(s: String, sep: String): GoSlice<String> = genSplit(s, sep, 0, -1)
 

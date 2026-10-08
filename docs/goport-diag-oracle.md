@@ -162,8 +162,17 @@ port (the 2026-09-21 directive).
 
 ## 4. Kotlin-side harness contract
 
-The ported compiler is driven per configuration, from the project directory, so that the only
-variable left is the engine. **Preferred route: port the harness too.** The Go functions the
+The ported compiler is driven per configuration, so that the only variable left is the engine.
+**IMPLEMENTED 2026-10-08 — the preferred route:** `DiagParityTest` reads the RAW case and runs it
+through the PORTED harness (`-tsgo/src/commonMain/kotlin/harness/Harness.kt` over the generated
+`testrunner`/`harnessutil`: `caseConfigurations` → `runConfiguration` = `XtscPrepare` +
+`XtscCompileCheckOnly`, the same overlay copies the oracle runs, docs/goport-lowering.md § 1c), then
+cross-checks the derived state against `case.json` (case hash, current directory, root files, every
+file's path/role/hash, symlinks, the final options' JSON VALUE — `case.json`'s object members are
+key-sorted, so `paths` order is not compared there) before grading diagnostics: **6,318 / 6,318**.
+The cross-check found a porter defect on its first run (a `switch` over a `[2]byte` tag compared by
+identity, so UTF-16 cases lost their directives). The fallback route below is history.
+**Preferred route: port the harness too.** The Go functions the
 oracle calls are ordinary non-test code that `goport` can lower like the rest of tsgo:
 `testrunner.makeUnitsFromTest` / `ParseTestFilesAndSymlinks` / `extractCompilerSettings`,
 `harnessutil.GetFileBasedTestConfigurations`, `SetOptionsFromTestConfig` (+ `getOptionValue`,

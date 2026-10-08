@@ -81,3 +81,29 @@ fun join(vararg errs: GoError?): GoError? {
     val nonNil = errs.filterNotNull()
     return if (nonNil.isEmpty()) null else JoinError(nonNil)
 }
+
+/**
+ * `errors.AsType[E](err)`: the first error in [err]'s `Unwrap` chain (single and multi, depth-first)
+ * that is an [E]. Go also consults an `As(any) bool` method; no ported or shimmed error has one.
+ */
+inline fun <reified E> asType(err: GoError?): com.xemantic.typescript.tsgo.runtime.Tuple2<E?, Boolean> {
+    if (err == null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, false)
+    val stack = ArrayDeque<GoError>()
+    stack.addLast(err)
+    while (stack.isNotEmpty()) {
+        var e: GoError? = stack.removeLast()
+        while (e != null) {
+            if (e is E) return com.xemantic.typescript.tsgo.runtime.Tuple2(e, true)
+            e = when (e) {
+                is GoUnwrapper -> e.unwrap()
+                is GoMultiUnwrapper -> {
+                    val errs = e.unwrapAll()
+                    for (i in errs.len - 1 downTo 0) errs[i]?.let { stack.addLast(it) }
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+    return com.xemantic.typescript.tsgo.runtime.Tuple2(null, false)
+}

@@ -20,7 +20,7 @@ type ifaceCand struct {
 	t   types.Type
 }
 
-func collectInterfaces(pkgs []*packages.Package) []ifaceCand {
+func collectInterfaces(pkgs []*packages.Package, kept keptDecls) []ifaceCand {
 	seen := map[string]types.Type{}
 	if len(pkgs) == 0 {
 		return nil
@@ -55,8 +55,18 @@ func collectInterfaces(pkgs []*packages.Package) []ifaceCand {
 		inClosure[p.PkgPath] = true
 	}
 	for _, p := range pkgs {
+		// A partial package contributes only the imports its kept declarations use.
+		var usedImports map[string]bool
+		if k := kept[p.PkgPath]; k != nil {
+			usedImports = map[string]bool{}
+			for id, o := range p.TypesInfo.Uses {
+				if o.Pkg() != nil && inKeptDecl(k, p, id.Pos()) {
+					usedImports[o.Pkg().Path()] = true
+				}
+			}
+		}
 		for _, imp := range p.Types.Imports() {
-			if inClosure[imp.Path()] {
+			if inClosure[imp.Path()] || usedImports != nil && !usedImports[imp.Path()] {
 				continue
 			}
 			for _, name := range imp.Scope().Names() {
@@ -67,16 +77,19 @@ func collectInterfaces(pkgs []*packages.Package) []ifaceCand {
 		}
 	}
 	for _, p := range pkgs {
-		for _, tv := range p.TypesInfo.Types {
-			consider(tv.Type)
+		k := kept[p.PkgPath]
+		for e, tv := range p.TypesInfo.Types {
+			if inKeptDecl(k, p, e.Pos()) {
+				consider(tv.Type)
+			}
 		}
-		for _, o := range p.TypesInfo.Uses {
-			if tn, ok := o.(*types.TypeName); ok {
+		for id, o := range p.TypesInfo.Uses {
+			if tn, ok := o.(*types.TypeName); ok && inKeptDecl(k, p, id.Pos()) {
 				consider(tn.Type())
 			}
 		}
-		for _, o := range p.TypesInfo.Defs {
-			if tn, ok := o.(*types.TypeName); ok {
+		for id, o := range p.TypesInfo.Defs {
+			if tn, ok := o.(*types.TypeName); ok && inKeptDecl(k, p, id.Pos()) {
 				consider(tn.Type())
 			}
 		}
@@ -138,7 +151,7 @@ func (p *px) addImplements() {
 	sc := p.pkg.Types.Scope()
 	for _, name := range sc.Names() { // Names() is sorted
 		tn, ok := sc.Lookup(name).(*types.TypeName)
-		if !ok || tn.IsAlias() {
+		if !ok || tn.IsAlias() || !inKeptDecl(p.kept, p.pkg, tn.Pos()) {
 			continue
 		}
 		n, ok := tn.Type().(*types.Named)
@@ -160,6 +173,9 @@ func (p *px) addImplements() {
 func (p *px) initOrder() Lines {
 	out := Lines{}
 	for _, in := range p.info.InitOrder {
+		if !inKeptDecl(p.kept, p.pkg, in.Rhs.Pos()) {
+			continue
+		}
 		var lhs []int
 		for _, v := range in.Lhs {
 			lhs = append(lhs, p.objID(v))

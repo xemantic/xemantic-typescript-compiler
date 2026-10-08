@@ -229,8 +229,18 @@ func (p *px) posKey(pos token.Pos) string {
 	if f == nil {
 		return "-"
 	}
+	if !closureFiles[f.Name()] {
+		// A dependency outside the closure: line granularity, as in export data (see closureFiles).
+		return filepath.Base(f.Name()) + ":" + strconv.Itoa(f.Line(pos)-1)
+	}
 	return filepath.Base(f.Name()) + ":" + strconv.Itoa(f.Offset(pos))
 }
+
+// closureFiles: the source files of the extracted packages. go/packages loads every other package
+// from EXPORT DATA, whose positions are line-granular (a fake file of one byte per line) — unless an
+// Overlay is set, which makes it type-check dependencies from source. Rendering a non-closure
+// position at line granularity keeps the IR byte-identical whichever way the dependency was loaded.
+var closureFiles = map[string]bool{}
 
 // posLC renders "file.go:line:col".
 func (p *px) posLC(pos token.Pos) string {
@@ -238,6 +248,9 @@ func (p *px) posLC(pos token.Pos) string {
 		return ""
 	}
 	ps := p.fset.Position(pos)
+	if !closureFiles[ps.Filename] {
+		return filepath.Base(ps.Filename) + ":" + strconv.Itoa(ps.Line) + ":1"
+	}
 	return filepath.Base(ps.Filename) + ":" + strconv.Itoa(ps.Line) + ":" + strconv.Itoa(ps.Column)
 }
 

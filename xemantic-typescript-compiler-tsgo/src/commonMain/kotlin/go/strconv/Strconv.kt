@@ -66,6 +66,13 @@ private fun baseError(fn: String, s: String, base: Int): GoError =
 private fun bitSizeError(fn: String, s: String, bitSize: Int): GoError =
     NumError(fn, s, GoPlainError("invalid bit size $bitSize"))
 
+/** `strconv.ParseBool(str)`. */
+fun parseBool(str: String): Tuple2<Boolean, GoError?> = when (str) {
+    "1", "t", "T", "TRUE", "true", "True" -> Tuple2(true, null)
+    "0", "f", "F", "FALSE", "false", "False" -> Tuple2(false, null)
+    else -> Tuple2(false, NumError("ParseBool", str, errSyntax))
+}
+
 /** `strconv.ParseUint(s, base, bitSize)`. */
 fun parseUint(s: String, base: Int, bitSize: Int): Tuple2<ULong, GoError?> {
     val r = parseUintInternal(s, base, bitSize)

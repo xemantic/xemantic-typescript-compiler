@@ -284,6 +284,8 @@ fun deepEqual(x: Any?, y: Any?): Boolean {
             @Suppress("UNCHECKED_CAST") val xm = x as GoMap<Any?, Any?>
             ym.contains(k) && deepEqual(xm[k], ym[k])
         }
+        // Go: pointers are deeply equal when they point to deeply equal values (`*int` options are `GoBox`es).
+        x is GoPtr<*> && y is GoPtr<*> && x !is GoReflectStruct && y !is GoReflectStruct -> deepEqual(x.value, y.value)
         x is GoReflectStruct && y is GoReflectStruct -> x::class == y::class &&
             x.goStructInfo().fields.indices.all { deepEqual(x.goFieldPtr(it).value, y.goFieldPtr(it).value) }
         else -> x == y

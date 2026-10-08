@@ -726,9 +726,19 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                 w.line("run ${t.kLabel}@{")
                 w.push()
             }
-            val tagCode = tag?.let { raw(it) }
+            var tagCode = tag?.let { raw(it) }
             val tagVc = tag != null && tm.isValueClass(ty(tag))
-            w.line(if (tagCode != null) "when (${tagCode.code}) {" else "when {")
+            // An array or comparable-struct tag compares by VALUE (`goEquals`), not by Kotlin's `equals`
+            // (identity for `GoArray` and for struct classes): bind it once (Go evaluates the tag once) and
+            // test each case with `goEquals` (`switch bom { case [2]byte{0xFF, 0xFE}: … }`, vfs/internal).
+            val tagU = tag?.let { types.under(ty(it)) }
+            val byValue = tag != null && !tagVc && (tagU is ArrayType || tagU is StructType && tm.hasGoEquals(ty(tag)))
+            if (byValue) {
+                val v = fn.fresh("tag")
+                w.line("val $v = ${tagCode!!.code}")
+                tagCode = Ex.primary(v)
+            }
+            w.line(if (tagCode != null && !byValue) "when (${tagCode.code}) {" else "when {")
             w.indent {
                 var default: List<Node>? = null
                 val split = fn.splitSwitch === s
@@ -740,9 +750,10 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                     }
                     if (split && ci !in fn.splitKeep) return@forEachIndexed
                     val conds = c.list("list").map { v ->
-                        if (tag != null) (if (tagVc) raw(v) else flow(v)).code else lower(v).at(Ex.OR + 1)
+                        if (byValue) "${tagCode!!.code}.goEquals(${flow(v).code})"
+                        else if (tag != null) (if (tagVc) raw(v) else flow(v)).code else lower(v).at(Ex.OR + 1)
                     }
-                    w.line("${conds.joinToString(if (tag != null) ", " else " || ")} -> {")
+                    w.line("${conds.joinToString(if (tag != null && !byValue) ", " else " || ")} -> {")
                     w.indent { body(bodyStmts) }
                     w.line("}")
                 }

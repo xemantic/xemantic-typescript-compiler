@@ -56,3 +56,6 @@ interface StringWriter {
 
 /** `io.EOF`. */
 val EOF: GoError = GoPlainError("EOF")
+
+/** `io.ErrUnexpectedEOF`. */
+val errUnexpectedEOF: GoError = GoPlainError("unexpected EOF")

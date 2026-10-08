@@ -533,6 +533,7 @@ open class ExprLowering(val fn: FnCtx) {
         }
         val nilSafe = key in prog.extensionMethods
         if (nilSafe && mpkg != null && mpkg != pc.pkg.path) fn.fc.importFun(naming(mpkg), name)
+        if (mpkg != null && mpkg !in prog.ported && prog.shims.isExtension(naming(mpkg), name.trim('`'))) fn.fc.importFun(naming(mpkg), name.trim('`'))
         var r = recv
         // `(*T)(nil).M()` with M never reading its receiver: any instance of T will do.
         val xi = if (x.k == "ParenExpr") x.reqObj("x") else x

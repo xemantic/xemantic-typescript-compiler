@@ -25,5 +25,57 @@
 
 package com.xemantic.typescript.tsgo.go.testing
 
+import com.xemantic.typescript.tsgo.go.fmt.sprintf
+
 /** `testing.Testing()`: the port's code is never a `go test` binary — false. */
 fun testing(): Boolean = false
+
+/**
+ * `*testing.T`, as the ported test harness (`testrunner`, `harnessutil`, (TSGO.2)) uses it: a test
+ * that skips or fails ends by throwing [TestSkipped] / [TestFailed] — Go's `runtime.Goexit`, which
+ * ends the test's goroutine — so the caller (the Kotlin driver) catches it per test. `Errorf` records
+ * a failure and continues, as in Go. The methods live on the embedded [Common] (Go's `testing.common`):
+ * the lowering reaches promoted methods through the embedded field.
+ */
+class T(name: String = "") : com.xemantic.typescript.tsgo.repo.SkippableTest {
+
+    /** Go's embedded `testing.common`. */
+    val common: Common = Common(name)
+
+    fun name(): String = common.name()
+
+    override fun helper() = common.helper()
+
+    override fun skipf(format: String, vararg args: Any?): Nothing = common.skipf(format, *args)
+}
+
+/** Go's `testing.common`: the methods `T` and `B` share. */
+class Common(private val name: String) {
+
+    /** The `Errorf`/`Error` messages, in order. */
+    val errors: MutableList<String> = ArrayList()
+
+    fun name(): String = name
+
+    fun helper() {}
+
+    fun skipf(format: String, vararg args: Any?): Nothing = throw TestSkipped(sprintf(format, *args))
+
+    fun skip(vararg args: Any?): Nothing = throw TestSkipped(args.joinToString(" "))
+
+    fun fatalf(format: String, vararg args: Any?): Nothing = throw TestFailed(sprintf(format, *args))
+
+    fun fatal(vararg args: Any?): Nothing = throw TestFailed(args.joinToString(" ") { it.toString() })
+
+    fun errorf(format: String, vararg args: Any?) {
+        errors += sprintf(format, *args)
+    }
+
+    fun failed(): Boolean = errors.isNotEmpty()
+}
+
+/** `t.Skipf`: the test ended as SKIPPED with [message]. */
+class TestSkipped(message: String) : RuntimeException(message)
+
+/** `t.Fatalf`: the test ended as FAILED with [message]. */
+class TestFailed(message: String) : RuntimeException(message)

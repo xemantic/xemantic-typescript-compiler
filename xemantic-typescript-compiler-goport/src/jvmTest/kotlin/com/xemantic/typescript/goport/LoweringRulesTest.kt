@@ -146,14 +146,19 @@ class LoweringRulesTest {
 
     @Test
     fun `the census of copying single-bound string slices in gen does not grow`() {
-        fun census(dirs: List<String>?) = gen.walkTopDown()
-            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) }
+        // The (TSGO.2) compiler test harness (docs/goport-lowering.md § 1c): not on the compiler's path, counted apart.
+        val harness = listOf("testrunner/", "testutil/", "execute/", "tsoptions/tsoptionstest/", "vfs/vfstest/", "vfs/iovfs/", "vfs/internal/")
+        fun isHarness(f: File) = harness.any { f.relativeTo(gen).path.startsWith(it) }
+        fun census(dirs: List<String>?, harnessOnly: Boolean = false) = gen.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) && isHarness(it) == harnessOnly }
             .sumOf { f -> suffixCopy.findAll(f.readText()).count() }
         // The (TSGO.1) spike's 14 packages: 48 as first generated; 34 after the window rule, 33 after window parameters (2026-10-07).
         val spike = listOf("api", "ast", "binder", "collections", "core", "debug", "diagnostics", "jsnum", "json", "locale", "parser", "scanner", "stringutil", "tspath")
         assert(census(spike) <= 33)
         // The whole (TSGO.2) closure (checker, compiler, printer, transformers, …): 108 at first generation (2026-10-07).
         assert(census(null) <= 108)
+        // The harness slices: 7 at first generation (2026-10-08).
+        assert(census(null, harnessOnly = true) <= 7)
     }
 
     @Test

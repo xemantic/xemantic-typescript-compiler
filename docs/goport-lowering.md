@@ -80,6 +80,23 @@ a `comparable` generic (`slices.Contains(stack, RecursionId)`: constraint recurs
 a tuple grew past 10,000); Go's typed nil in a type switch; a package function shadowed by a method of
 the same name inside an extension method; `packagejson.Fields` and pointer fields under json.
 
+## 1c. (TSGO.2) the compiler test harness, ported (2026-10-08)
+
+The diagnostics differential's driver reads the RAW case through tsgo's own harness
+(docs/goport-diag-oracle.md § 4, the preferred route): the closure adds `execute/incremental`,
+`vfs/iovfs`, `vfs/internal`, `vfs/vfstest`, `testutil/race` whole and the harness slices
+(`testrunner`, `testutil/harnessutil`, `tsoptions/tsoptionstest`, `testutil`) as PARTIAL packages
+(docs/goport-ir.md § 1), plus the oracle's own overlay copies of the runner's prepare block and the
+harness's option derivation / check-only compile. **All of it lowers mechanically: 0 overrides, 0
+stubs in the new packages** (`execute/incremental` 2,743, `testrunner` 351, `harnessutil` 741,
+`vfstest` 562, `iovfs` 156, `vfs/internal` 165 Go lines); the existing packages' generated code is
+byte-identical. What it took: shims for the `io/fs` FS family, `testing/fstest.MapFS`, `path`,
+`testing.T`, `os.DirFS` (the first platform `actual` besides the thread park), `encoding/hex`,
+`binary.BigEndian`/`Read`, `utf16.Decode`, `errors.AsType`, `strconv.ParseBool`, `strings.SplitSeq`,
+`regexp.FindAllStringSubmatch` (docs/goport-runtime.md § 9); a hand-written `internal/repo`
+(`go/internal_repo/Repo.kt`: it locates the checkout through `runtime.Caller`, which a port has not);
+and three lowering rules (below). Entry points: `-tsgo/src/commonMain/kotlin/harness/Harness.kt`.
+
 ## 2. Architecture (who owns what)
 
 | file (under `src/jvmMain/kotlin/com/xemantic/typescript/goport/`) | concern |
@@ -294,6 +311,19 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   view (refusal, hoisted helper), it is a delegation that copies — callers are decided before the
   body is lowered, so the overload always exists. First run: 1 function (`parser.isJSDocLikeText`,
   the per-JSDoc-comment suffix copy). Pin: `LoweringRulesTest`.
+
+(TSGO.2) harness rules:
+
+- **A `switch` whose tag is an array or a comparable struct compares by VALUE**: the tag is bound
+  once and every case tests `tag.goEquals(case)` (`when { … }`), because Kotlin's `when (x)` uses
+  `equals`, which is identity for `GoArray` and struct classes. Found by the harness's `case.json`
+  cross-check: `vfs/internal.decodeBytes`'s `switch bom { case [2]byte{0xFF, 0xFE}: … }` never
+  matched, so UTF-16 case files read as garbage (no directives, wrong configurations).
+- **`unsafe.Slice(unsafe.StringData(s), n)`** is a byte view of a string → `goStringToBytes(s).slice(0, n)`
+  (the mirror of the `unsafe.String` rule; `vfstest.MapFS.WriteFile`).
+- **A shim method that is a Kotlin EXTENSION** (a method of a shim `typealias`, e.g.
+  `fstest.MapFS.open`) is imported at the call site (`ShimIndex.isExtension`), as ported extension
+  methods already are.
 
 Pins: `-goport/src/jvmTest/.../LoweringRulesTest.kt` (naming, byte-string literals, constant edges);
 the end-to-end gates are `-tsgo/src/jvmTest/kotlin/OracleParityTest.kt` (corpus, opt-in) and

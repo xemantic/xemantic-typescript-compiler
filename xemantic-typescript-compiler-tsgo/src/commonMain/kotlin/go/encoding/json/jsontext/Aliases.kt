@@ -32,3 +32,4 @@ typealias Kind = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.j
 typealias Token = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.Token
 typealias Encoder = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.Encoder
 typealias Decoder = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.Decoder
+typealias Value = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.Value

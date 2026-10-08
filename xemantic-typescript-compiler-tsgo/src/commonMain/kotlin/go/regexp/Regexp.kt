@@ -97,6 +97,16 @@ class Regexp internal constructor(private val expr: String, private val re: Rege
         }
     }
 
+    /** `re.FindAllStringSubmatch(s, n)`: per match, the groups (`""` for an unmatched group); nil when none. */
+    fun findAllStringSubmatch(s: String, n: Int): GoSlice<GoSlice<String>> {
+        var out = GoElem.slice(GoElem.STRING).nilSlice
+        allMatches(s, n) { a, _ ->
+            val m = re.find(s, a)!!
+            out = out.append1(GoSlice.of(GoElem.STRING, *m.groupValues.toTypedArray()))
+        }
+        return out
+    }
+
     /** `re.FindAllString(s, n)`: the nil slice when there is no match. */
     fun findAllString(s: String, n: Int): GoSlice<String> {
         var out = GoElem.STRING.nilSlice

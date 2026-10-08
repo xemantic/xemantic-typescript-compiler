@@ -24,9 +24,10 @@ type px struct {
 	pkg     *packages.Package
 	fset    *token.FileSet
 	info    *types.Info
-	closure map[string]bool // package paths being extracted in this run
-	ifaces  []ifaceCand     // run-wide interface candidates (implements.go)
-	module  string          // tsgo module path
+	closure map[string]bool   // package paths being extracted in this run
+	kept    map[ast.Decl]bool // partial package: the declarations to extract (nil: all; partial.go)
+	ifaces  []ifaceCand       // run-wide interface candidates (implements.go)
+	module  string            // tsgo module path
 
 	keyMemo     map[types.Type]string
 	typeIds     map[string]int
@@ -237,6 +238,9 @@ func (p *px) file(f *ast.File, name string) (*O, fileInfo) {
 	n.S("lineOffsets", tf.Lines())
 	var decls Lines
 	for _, d := range f.Decls {
+		if gd, isGen := d.(*ast.GenDecl); p.kept != nil && !p.kept[d] && !(isGen && gd.Tok == token.IMPORT) {
+			continue
+		}
 		decls = append(decls, p.decl(d, gen))
 	}
 	if decls == nil {

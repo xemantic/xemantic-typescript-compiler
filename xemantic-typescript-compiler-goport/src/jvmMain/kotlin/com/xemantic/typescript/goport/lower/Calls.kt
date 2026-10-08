@@ -653,6 +653,14 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
                 }
                 Ex.primary("goBytesToString(${Ex(b, 0).at(PRIMARY)}.slice($i, $i + $n))")
             }
+            "unsafe.Slice" -> {
+                // unsafe.Slice(unsafe.StringData(s), n): a byte view of string s → a copy (byte strings).
+                val p = args[0].let { if (it.k == "ParenExpr") it.reqObj("x") else it }
+                if (!(p.k == "CallExpr" && p.str("builtin") == "unsafe.StringData")) refuse("unsafe")
+                val str = raw(p.list("args")[0]).code
+                val n = intIndex(args[1]).code
+                Ex.primary("goStringToBytes(${Ex(str, 0).at(PRIMARY)}).slice(0, $n)")
+            }
             else -> refuse("builtin", name)
         }
     }

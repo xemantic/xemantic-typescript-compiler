@@ -43,9 +43,29 @@ var defaultClosure = []string{
 	"transformers/estransforms", "transformers/inliners", "transformers/jsxtransforms",
 	"transformers/moduletransforms", "transformers/tstransforms", "tsoptions", "vfs",
 	"vfs/cachedvfs", "vfs/vfsmatch", "bundled",
+	// (TSGO.2) the compiler test harness's case preparation (docs/goport-diag-oracle.md § 4):
+	// these whole, plus the partial packages of partial.go.
+	"execute/incremental", "vfs/iovfs", "vfs/internal", "vfs/vfstest", "testutil/race",
 }
 
-func readFile(name string) ([]byte, error) { return os.ReadFile(name) }
+// overlayFiles are ADDED to tsgo packages through go/packages' Overlay (never written into
+// typescript-go-repo): the oracle's verbatim copies of the runner's/harness's prepare blocks
+// (oracle-go/overlay) and the port's own glue (overlay/), so the port and the oracle run the same code.
+var overlayFiles = map[string]string{
+	"internal/testrunner/zz_xtsc_export.go":           "../oracle-go/overlay/testrunner/xtsc_export.go",
+	"internal/testutil/harnessutil/zz_xtsc_export.go": "../oracle-go/overlay/harnessutil/xtsc_export.go",
+	"internal/testrunner/zz_xtsc_port.go":             "overlay/testrunner/xtsc_port.go",
+}
+
+// overlaySrc holds the overlay files' contents by their virtual path (they exist on no disk).
+var overlaySrc = map[string][]byte{}
+
+func readFile(name string) ([]byte, error) {
+	if b, ok := overlaySrc[name]; ok {
+		return b, nil
+	}
+	return os.ReadFile(name)
+}
 
 // repoRoot finds the xtsc repository root by walking up from the working
 // directory to the first directory holding typescript-go-repo/.
@@ -72,8 +92,16 @@ func main() {
 	flag.Parse()
 
 	pkgs := flag.Args()
+	partial := map[string][]string{}
+	useOverlay := false
 	if len(pkgs) == 0 {
 		pkgs = defaultClosure
+		for p, roots := range partialClosure {
+			pkgs = append(pkgs, p)
+			partial[tsgoModule+"/internal/"+p] = roots
+		}
+		sort.Strings(pkgs[len(defaultClosure):])
+		useOverlay = true
 	}
 	var patterns []string
 	closure := map[string]bool{}
@@ -103,6 +131,23 @@ func main() {
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 		Tests: false,
 	}
+	if useOverlay {
+		here := filepath.Join(root, "xemantic-typescript-compiler-goport", "goport-extract")
+		cfg.Overlay = map[string][]byte{}
+		for dst, src := range overlayFiles {
+			abs := filepath.Join(*tsgoDir, dst)
+			if _, err := os.Stat(abs); err == nil {
+				fmt.Fprintln(os.Stderr, "overlay target exists on disk (an overlay only ADDS files):", abs)
+				os.Exit(2)
+			}
+			b, err := os.ReadFile(filepath.Join(here, src))
+			if err != nil {
+				panic(err)
+			}
+			cfg.Overlay[abs] = b
+			overlaySrc[abs] = b
+		}
+	}
 	loaded, err := packages.Load(cfg, patterns...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "load:", err)
@@ -123,9 +168,16 @@ func main() {
 	var order []string
 	holesTotal := 0
 	allHoles := map[string][]string{}
-	ifaces := collectInterfaces(loaded)
+	for _, pkg := range loaded {
+		for _, f := range pkg.CompiledGoFiles {
+			closureFiles[f] = true
+		}
+	}
+	kept := computePartial(loaded, partial)
+	ifaces := collectInterfaces(loaded, kept)
 	for _, pkg := range loaded {
 		p := newPx(pkg, closure, tsgoModule, st, ifaces)
+		p.kept = kept[pkg.PkgPath]
 		ir, files := p.packageIR()
 		short := strings.TrimPrefix(pkg.PkgPath, tsgoModule+"/")
 		name := strings.ReplaceAll(short, "/", "_") + ".json"

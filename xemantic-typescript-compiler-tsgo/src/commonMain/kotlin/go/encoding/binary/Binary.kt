@@ -27,8 +27,13 @@ package com.xemantic.typescript.tsgo.go.encoding.binary
 
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 
+/** `binary.ByteOrder` (the 16-bit half the port reaches). */
+interface ByteOrder {
+    fun uint16(b: GoSlice<Int>): Int
+}
+
 /** The type of `binary.LittleEndian` (Go's unexported `littleEndian`). */
-class LittleEndianOrder {
+class LittleEndianOrder : ByteOrder {
 
     /** `binary.LittleEndian.Uint32(b)`. */
     fun uint32(b: GoSlice<Int>): UInt {
@@ -71,7 +76,7 @@ class LittleEndianOrder {
     }
 
     /** `binary.LittleEndian.Uint16(b)`. */
-    fun uint16(b: GoSlice<Int>): Int {
+    override fun uint16(b: GoSlice<Int>): Int {
         if (b.len < 2) b[1]
         return (b[0] and 0xFF) or ((b[1] and 0xFF) shl 8)
     }
@@ -87,3 +92,40 @@ class LittleEndianOrder {
 
 /** `binary.LittleEndian`. */
 val littleEndian: LittleEndianOrder = LittleEndianOrder()
+
+/** The type of `binary.BigEndian`. */
+class BigEndianOrder : ByteOrder {
+    override fun uint16(b: GoSlice<Int>): Int {
+        if (b.len < 2) b[1]
+        return (b[1] and 0xFF) or ((b[0] and 0xFF) shl 8)
+    }
+
+    override fun toString(): String = "BigEndian"
+}
+
+/** `binary.BigEndian`. */
+val bigEndian: BigEndianOrder = BigEndianOrder()
+
+/**
+ * `binary.Read(r, order, data)` for the one shape the port reaches: `data` a pointer to a `[]uint16`
+ * (`vfs/internal.decodeUtf16`). Fills the slice from [r]; `io.ErrUnexpectedEOF` on a short read
+ * after some bytes, `io.EOF` when nothing was read, as Go's `io.ReadFull`.
+ */
+fun read(r: com.xemantic.typescript.tsgo.go.io.Reader?, order: ByteOrder?, data: Any?): com.xemantic.typescript.tsgo.runtime.GoError? {
+    @Suppress("UNCHECKED_CAST")
+    val ptr = data as? com.xemantic.typescript.tsgo.runtime.GoPtr<GoSlice<Int>>
+        ?: com.xemantic.typescript.tsgo.runtime.goPanic("binary.Read: unsupported data type (the port carries *[]uint16 only)")
+    val out = ptr.value
+    val buf = GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.INT, 2 * out.len)
+    var n = 0
+    while (n < buf.len) {
+        val (k, err) = r!!.read(buf.slice(n))
+        n += k
+        if (err != null) {
+            if (n >= buf.len) break
+            return if (n == 0) err else com.xemantic.typescript.tsgo.go.io.errUnexpectedEOF
+        }
+    }
+    for (i in 0 until out.len) out[i] = order!!.uint16(buf.slice(2 * i, 2 * i + 2))
+    return null
+}

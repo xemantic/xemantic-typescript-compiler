@@ -26,43 +26,25 @@
 package com.xemantic.typescript.tsgo
 
 import com.xemantic.typescript.tsgo.ast.Diagnostic
-import com.xemantic.typescript.tsgo.ast.SourceFile
-import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
 import com.xemantic.typescript.tsgo.ast.equalDiagnosticsNoRelatedInfo
 import com.xemantic.typescript.tsgo.ast.localize
-import com.xemantic.typescript.tsgo.compiler.CompilerHost
-import com.xemantic.typescript.tsgo.compiler.ProgramOptions
-import com.xemantic.typescript.tsgo.core.CompilerOptions
-import com.xemantic.typescript.tsgo.core.ParsedOptions
-import com.xemantic.typescript.tsgo.core.TSFalse
-import com.xemantic.typescript.tsgo.core.TSTrue
-import com.xemantic.typescript.tsgo.core.clone
-import com.xemantic.typescript.tsgo.core.getEmitDeclarations
-import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
-import com.xemantic.typescript.tsgo.go.io.fs.WalkDirFunc
-import com.xemantic.typescript.tsgo.go.time.Time
-import com.xemantic.typescript.tsgo.runtime.GoBox
-import com.xemantic.typescript.tsgo.runtime.GoElem
-import com.xemantic.typescript.tsgo.runtime.GoError
-import com.xemantic.typescript.tsgo.runtime.GoMap
-import com.xemantic.typescript.tsgo.runtime.GoSlice
+import com.xemantic.typescript.tsgo.go.testing.T
+import com.xemantic.typescript.tsgo.harness.HarnessRun
 import com.xemantic.typescript.tsgo.runtime.GoString
-import com.xemantic.typescript.tsgo.runtime.Tuple2
-import com.xemantic.typescript.tsgo.runtime.goBytesToString
-import com.xemantic.typescript.tsgo.runtime.goStringToBytes
-import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
-import com.xemantic.typescript.tsgo.vfs.Entries
-import com.xemantic.typescript.tsgo.vfs.FS
 import java.io.File
-import java.util.IdentityHashMap
+import java.security.MessageDigest
 import kotlin.test.Test
 
 /**
- * (TSGO.2) the diagnostics differential (docs/goport-diag-oracle.md § 4, fallback route): drives the
- * PORTED compiler over every configuration the oracle materialized (`build/goport/diag-cases`), writes
- * `build/goport/diag-kotlin/<case>/<variation>.jsonl` in the oracle's format; then
- * `scripts/tsgo-diag-compare.py build/goport/diag-kotlin` grades it — and so does the test itself ([gate]):
- * it FAILS unless every configuration it ran is equal to `build/goport/diag-oracle`. Opt-in: `TSGO_DIAG=1`
+ * (TSGO.2) the diagnostics differential (docs/goport-diag-oracle.md § 4, the PREFERRED route): for every
+ * configuration the oracle materialized, the PORTED compiler test harness (`com.xemantic.typescript.tsgo.harness`
+ * over the generated `testrunner`/`harnessutil`) reads the RAW case (`typescript-repo/tests/cases/<case>`),
+ * enumerates its configurations, prepares and compiles the named one check-only, and the result is written to
+ * `build/goport/diag-kotlin/<case>/<variation>.jsonl` in the oracle's format. Before any diagnostic is
+ * compared, the harness's derived state is cross-checked against the materialized `case.json` (current
+ * directory, root files, every file's path/role/hash, symlinks, the final compiler options) — a cheap first
+ * gate that the port prepared the SAME program the oracle compiled. Then the test grades every configuration
+ * against `build/goport/diag-oracle` ([gate]) and FAILS unless all are equal. Opt-in: `TSGO_DIAG=1`
  * (`TSGO_DIAG_LIMIT=n`, `TSGO_DIAG_FILTER=<substring of the case path>`, `TSGO_DIAG_INJECT=<case>/<variation>`
  * to perturb one result and watch the gate go red).
  */
@@ -70,200 +52,105 @@ class DiagParityTest {
 
     private val root = File("..").absoluteFile.normalize()
     private val cases = File(root, "build/goport/diag-cases")
+    private val casesRoot = File(root, "typescript-repo/tests/cases")
     private val out = File(root, "build/goport/diag-kotlin")
 
-    // ---------------------------------------------------------------- json via the ported shim
+    // ---------------------------------------------------------------- one configuration, through the ported harness
 
-    private fun parseJson(text: ByteArray): Any? {
-        val box = GoBox<Any?>(null)
-        val err = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshal(goStringToBytes(String(text, Charsets.ISO_8859_1)), box)
-        check(err == null) { "json: ${err!!.error()}" }
-        return box.value
+    private fun runConfiguration(case: String, variation: String): List<String> {
+        val filename = File(casesRoot, case).path
+        val content = com.xemantic.typescript.tsgo.harness.decodeCaseText(String(File(filename).readBytes(), Charsets.ISO_8859_1))
+        val t = T("$case $variation")
+        val configs = com.xemantic.typescript.tsgo.harness.caseConfigurations(content, t)
+        val found = configs.filter { com.xemantic.typescript.tsgo.harness.variationName(it) == variation }
+        check(found.size == 1) { // (a configuration may be null: a case with no directives at all)
+            "variation not found: $variation (the harness enumerates ${configs.map { com.xemantic.typescript.tsgo.harness.variationName(it) }})"
+        }
+        val named = found[0]
+        val run = com.xemantic.typescript.tsgo.harness.runConfiguration(filename, content, named, t)
+        try {
+            crossCheck(File(cases, "$case/$variation/case.json"), content, run)
+            val check = run.check
+            return (0 until check.diagnostics.len).map { i ->
+                val d = check.diagnostics[i]!!
+                val phase = check.phase.lookup(d).let { (p, ok) -> if (ok) p else null }
+                    ?: check.phase.keysSnapshot().firstOrNull { equalDiagnosticsNoRelatedInfo(it, d) }?.let { check.phase[it] }
+                    ?: "unknown"
+                line(d, phase)
+            }
+        } finally {
+            com.xemantic.typescript.tsgo.harness.purgeSourceFileCache()
+        }
     }
 
+    /** The harness's derived state against the oracle's `case.json` (docs/goport-diag-oracle.md § 2). */
     @Suppress("UNCHECKED_CAST")
-    private fun Any?.obj(): GoMap<String, Any?> = this as GoMap<String, Any?>
-    private fun Any?.str(): String = GoString.toUtf16(this as String)
-    private fun GoMap<String, Any?>.list(k: String): List<Any?> = (this[k] as? GoSlice<*>)?.let { s -> (0 until s.len).map { s[it] } } ?: emptyList()
-
-    // ---------------------------------------------------------------- the harness FS (vfstest.FromMap + vfs/internal decoding)
-
-    class CaseFS(private val files: Map<String, String>, private val symlinks: Map<String, String>, private val caseSensitive: Boolean) : FS {
-        private val dirs: Set<String> = (files.keys + symlinks.keys).flatMap { f ->
-            // Every ancestor directory; a Windows-style root (`A:`) is spelled `A:/` as tspath does.
-            f.split('/').dropLast(1).runningReduce { a, b -> "$a/$b" }.map { if (it.length == 2 && it[1] == ':') "$it/" else it.ifEmpty { "/" } }
-        }.toSet() + "/"
-
-        /** Case-folded, without a trailing separator (except a root): the harness MapFS's canonical path. */
-        private fun canon(p0: String): String {
-            val p = if (p0.length > 1 && p0.endsWith("/") && !(p0.length == 3 && p0[1] == ':')) p0.trimEnd('/').ifEmpty { "/" } else p0
-            return if (caseSensitive) p else p.lowercase()
+    private fun crossCheck(caseJson: File, content: String, run: HarnessRun) {
+        val cj = Json(caseJson.readText()).value() as Map<String, Any?>
+        val prep = run.prepared
+        val check = run.check
+        val problems = ArrayList<String>()
+        fun expect(what: String, want: Any?, got: Any?) {
+            if (want != got) problems += "$what: case.json=$want harness=$got"
         }
-        private val byCanon = files.keys.associateBy { canon(it) }
-        private val dirsByCanon = dirs.associateBy { canon(it) }
-
-        /** Follows symlinks (whole-path prefixes), as the harness's MapFS does. */
-        private fun resolve(p: String): String {
-            var cur = p
-            repeat(40) {
-                val hit = symlinks.entries.firstOrNull { (src, _) -> cur == src || cur.startsWith("$src/") } ?: return cur
-                cur = hit.value + cur.substring(hit.key.length)
+        expect("caseSha256", cj["caseSha256"], sha(content))
+        expect("currentDirectory", cj["currentDirectory"], u(prep.currentDirectory))
+        expect("rootFiles", cj["rootFiles"], (0 until check.programFileNames.len).map { u(check.programFileNames[it]) })
+        // files: last content wins per path, in first-write order (the oracle's writeProject)
+        val files = LinkedHashMap<String, Pair<String, String>>()
+        fun norm(name: String) = u(com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(name, prep.currentDirectory))
+        for (i in 0 until prep.tsConfigFiles.len) prep.tsConfigFiles[i]!!.let { files[norm(it.unitName)] = "tsconfig" to sha(it.content) }
+        for (i in 0 until prep.toBeCompiled.len) prep.toBeCompiled[i]!!.let { files[norm(it.unitName)] = "root" to sha(it.content) }
+        for (i in 0 until prep.otherFiles.len) prep.otherFiles[i]!!.let { files[norm(it.unitName)] = "other" to sha(it.content) }
+        for (p in check.libDirFiles.keysSnapshot().sorted()) files[u(p)] = "testlib" to sha(check.libDirFiles[p])
+        expect("files", (cj["files"] as List<Map<String, Any?>>).map { listOf(it["path"], it["role"], it["sha256"]) },
+            files.map { (p, rs) -> listOf(p, rs.first, rs.second) })
+        val symlinks = prep.symlinks.keysSnapshot().associate { norm(it) to norm(prep.symlinks[it]) }
+        expect("symlinks", cj["symlinks"], symlinks)
+        // The final options: case.json holds them in tsgo's own JSON form. Decoded into the ported struct and
+        // re-encoded by the ported marshaller, they must read exactly as the harness's options do through the
+        // same marshaller (the oracle's own check is a reflect.DeepEqual round trip, diags.go writeProject; the
+        // reflect shim cannot see into a non-reflect struct such as `collections.OrderedMap`, json can).
+        val want = com.xemantic.typescript.tsgo.core.CompilerOptions()
+        val wantJson = caseJson.readText().let { t -> // the raw "compilerOptions" object, as written
+            val i = t.indexOf("\"compilerOptions\"")
+            val o = t.indexOf('{', i)
+            var depth = 0
+            var j = o
+            var inString = false
+            while (true) {
+                val c = t[j]
+                when {
+                    inString -> if (c == '\\') j++ else if (c == '"') inString = false
+                    c == '"' -> inString = true
+                    c == '{' -> depth++
+                    c == '}' -> { depth--; if (depth == 0) break }
+                }
+                j++
             }
-            return cur
+            t.substring(o, j + 1)
         }
-
-        override fun useCaseSensitiveFileNames(): Boolean = caseSensitive
-        override fun fileExists(p0: String): Boolean = canon(resolve(p0)) in byCanon
-        override fun readFile(p0: String): Tuple2<String, Boolean> {
-            val k = byCanon[canon(resolve(p0))] ?: return Tuple2("", false)
-            return Tuple2(decode(files.getValue(k)), true)
+        val err = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshal(
+            com.xemantic.typescript.tsgo.runtime.goStringToBytes(GoString.fromUtf16(wantJson)), want,
+        )
+        check(err == null) { "case.json compilerOptions: ${err!!.error()}" }
+        fun encode(o: Any?): String {
+            val (b, e) = com.xemantic.typescript.tsgo.json.marshal(o, com.xemantic.typescript.tsgo.runtime.GoElem.ref<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.Options?>().nilSlice)
+            check(e == null) { "marshal compilerOptions: ${e!!.error()}" }
+            return u(com.xemantic.typescript.tsgo.runtime.goBytesToString(b))
         }
-        override fun directoryExists(p0: String): Boolean = canon(resolve(p0)) in dirsByCanon || p0 in symlinks && canon(resolve(p0)) in dirsByCanon
-        override fun getAccessibleEntries(p0: String): Entries {
-            val dir = dirsByCanon[canon(resolve(p0))] ?: return Entries()
-            val prefix = if (dir.endsWith("/")) dir else "$dir/"
-            val names = (files.keys + dirs + symlinks.keys).filter { it.startsWith(prefix) && it.length > prefix.length && '/' !in it.substring(prefix.length) }.toSortedSet()
-            val fs = names.filter { fileExists(it) }.map { it.substring(prefix.length) }
-            val ds = names.filter { !fileExists(it) && directoryExists(it) }.map { it.substring(prefix.length) }
-            return Entries(
-                files = GoSlice.of(GoElem.STRING, *fs.toTypedArray()),
-                directories = GoSlice.of(GoElem.STRING, *ds.toTypedArray()),
-                symlinks = GoMap.make<String, Unit>(com.xemantic.typescript.tsgo.runtime.goUnitElem).also { m ->
-                    names.filter { it in symlinks }.forEach { m[it.substring(prefix.length)] = Unit }
-                },
-            )
-        }
-        override fun realpath(p0: String): String {
-            val r = resolve(p0)
-            return byCanon[canon(r)] ?: dirsByCanon[canon(r)] ?: r
-        }
-        override fun stat(p0: String): FileInfo? = null
-        override fun walkDir(p0: String, p1: WalkDirFunc?): GoError? = error("walkDir not supported")
-        override fun writeFile(p0: String, p1: String): GoError? = null
-        override fun appendFile(p0: String, p1: String): GoError? = null
-        override fun remove(p0: String): GoError? = null
-        override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = null
-
-        /** vfs/internal.decodeBytes: a UTF-16 BOM decodes; a UTF-8 BOM is stripped. */
-        private fun decode(s: String): String {
-            if (s.length >= 2 && s[0].code == 0xFF && s[1].code == 0xFE) return GoString.fromUtf16(utf16(s.substring(2), little = true))
-            if (s.length >= 2 && s[0].code == 0xFE && s[1].code == 0xFF) return GoString.fromUtf16(utf16(s.substring(2), little = false))
-            if (s.length >= 3 && s[0].code == 0xEF && s[1].code == 0xBB && s[2].code == 0xBF) return s.substring(3)
-            return s
-        }
-
-        private fun utf16(s: String, little: Boolean): String = buildString {
-            var i = 0
-            while (i + 1 < s.length) {
-                val a = s[i].code
-                val b = s[i + 1].code
-                append((if (little) (b shl 8) or a else (a shl 8) or b).toChar())
-                i += 2
-            }
-        }
+        // compared as JSON VALUES: case.json's object members are key-sorted (the materializer re-serializes it),
+        // so a map option's (`paths`) member order is not part of what it records.
+        expect("compilerOptions", Json(encode(want)).value(), Json(encode(check.options)).value())
+        check(problems.isEmpty()) { "harness state differs from case.json:\n  " + problems.joinToString("\n  ") }
     }
 
-    /** The harness's cachedCompilerHost: parsed source files shared across programs by (options, text, kind). */
-    class CachedHost(private val inner: CompilerHost) : CompilerHost by inner {
-        override fun getSourceFile(p0: SourceFileParseOptions): SourceFile? {
-            val read = inner.fs()!!.readFile(p0.fileName)
-            if (!read.second) return null
-            val kind = com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(p0.fileName)
-            // Only the bundled libs are shared across configurations (the harness caches every file; the
-            // test JVM's heap does not hold 6,318 cases' trees).
-            if (!p0.fileName.startsWith("bundled:")) return com.xemantic.typescript.tsgo.parser.parseSourceFile(p0, read.first, kind)
-            return cache.getOrPut(Key(p0.goCopy(), read.first, kind.value)) {
-                com.xemantic.typescript.tsgo.parser.parseSourceFile(p0, read.first, kind)!!
-            }
-        }
+    /** A Go byte string as Kotlin text. */
+    private fun u(s: String): String = GoString.toUtf16(s)
 
-        /** The harness's SourceFileCacheKey: Go compares the options struct by value. */
-        class Key(val opts: SourceFileParseOptions, val text: String, val kind: Int) {
-            override fun equals(other: Any?): Boolean = other is Key && kind == other.kind && text == other.text && opts.goEquals(other.opts)
-            override fun hashCode(): Int = opts.goHash() * 31 + text.hashCode() * 7 + kind
-        }
-
-        companion object {
-            val cache = java.util.concurrent.ConcurrentHashMap<Key, SourceFile>()
-        }
-    }
-
-    // ---------------------------------------------------------------- one configuration
-
-    private fun runConfiguration(dir: File): List<String> {
-        val case = parseJson(File(dir, "case.json").readBytes()).obj()
-        val harness = case["harnessOptions"].obj()
-        val caseSensitive = harness["UseCaseSensitiveFileNames"] as Boolean
-        val files = LinkedHashMap<String, String>()
-        val allFiles = LinkedHashMap<String, String>()
-        for (f in case.list("files")) {
-            val fo = f.obj()
-            val path = fo["path"].str()
-            val text = String(File(dir, "vfs/" + path.removePrefix("/")).readBytes(), Charsets.ISO_8859_1)
-            allFiles[path] = text
-            if (fo["role"].str() != "tsconfig") files[path] = text
-        }
-        val symlinks = (case["symlinks"] as? GoMap<*, *>)?.let { m -> m.keysSnapshot().associate { k -> (k as String).let(GoString::toUtf16) to (m.obj()[k]).str() } } ?: emptyMap()
-        val currentDirectory = case["currentDirectory"].str()
-        // compilerOptions: tsgo's own json form, decoded by the ported json shim into the ported struct.
-        val options = CompilerOptions()
-        val (bytes, merr) = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshal(case["compilerOptions"])
-        check(merr == null)
-        val uerr = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshal(bytes, options)
-        check(uerr == null) { "compilerOptions: ${uerr!!.error()}" }
-        val pre = options.clone()!!
-        pre.traceResolution = TSFalse
-        val roots = case.list("rootFiles").map { it.str() }
-        val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(CaseFS(files.mapKeys { GoString.fromUtf16(it.key) }, symlinks, caseSensitive))
-        val host = CachedHost(com.xemantic.typescript.tsgo.compiler.newCompilerHost(GoString.fromUtf16(currentDirectory), fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)!!)
-        val config = ParsedCommandLine(parsedConfig = ParsedOptions(compilerOptions = pre, fileNames = GoSlice.of(GoElem.STRING, *roots.map { GoString.fromUtf16(it) }.toTypedArray())))
-        // The embedded tsconfig, parsed as the runner does (testrunner/test_case_parser.go): its ConfigFile and
-        // Errors ride along (its options are already merged into compilerOptions).
-        (case["tsconfig"] as? String)?.let { tsconfigPath ->
-            val cd = GoString.fromUtf16(currentDirectory)
-            val name = GoString.fromUtf16(GoString.toUtf16(tsconfigPath))
-            val parseFs = CaseFS(allFiles.mapKeys { GoString.fromUtf16(it.key) }, emptyMap(), true)
-            val parseHost = object : com.xemantic.typescript.tsgo.tsoptions.ParseConfigHost {
-                override fun fs(): FS = parseFs
-                override fun getCurrentDirectory(): String = cd
-            }
-            val json = com.xemantic.typescript.tsgo.parser.parseSourceFile(
-                SourceFileParseOptions(fileName = name, path = com.xemantic.typescript.tsgo.tspath.toPath(name, cd, true)),
-                allFiles.getValue(GoString.toUtf16(tsconfigPath)), com.xemantic.typescript.tsgo.core.ScriptKind(6),
-            )
-            val parsed = com.xemantic.typescript.tsgo.tsoptions.parseJsonSourceFileConfigFileContent(
-                com.xemantic.typescript.tsgo.tsoptions.TsConfigSourceFile(sourceFile = json), parseHost,
-                com.xemantic.typescript.tsgo.tspath.getDirectoryPath(name), null, null, name,
-                com.xemantic.typescript.tsgo.tspath.Path.ELEM.nilSlice,
-                com.xemantic.typescript.tsgo.tsoptions.FileExtensionInfo.ELEM.nilSlice, null,
-            )!!
-            config.configFile = parsed.configFile
-            config.errors = parsed.errors
-        }
-        val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = config, singleThreaded = TSTrue))!!
-        val ctx = com.xemantic.typescript.tsgo.go.context.background()
-        val phases = ArrayList<Pair<String, GoSlice<Diagnostic?>>>()
-        phases += "config" to program.getConfigFileParsingDiagnostics()
-        phases += "program" to program.getProgramDiagnostics()
-        phases += "syntactic" to program.getSyntacticDiagnostics(ctx, null)
-        phases += "semantic" to program.getSemanticDiagnostics(ctx, null)
-        phases += "global" to program.getGlobalDiagnostics(ctx)
-        if (program.options().getEmitDeclarations()) phases += "declaration" to program.getDeclarationDiagnostics(ctx, null)
-        if (harness["CaptureSuggestions"] == true) phases += "suggestion" to program.getSuggestionDiagnostics(ctx, null)
-        val phaseOf = IdentityHashMap<Diagnostic, String>()
-        val all = GoSlice.make(GoElem.ref<Diagnostic?>(), 0)
-        var acc = all
-        for ((name, ds) in phases) {
-            for (i in 0 until ds.len) ds[i]?.let { phaseOf.putIfAbsent(it, name) }
-            acc = acc.appendSlice(ds)
-        }
-        val sorted = com.xemantic.typescript.tsgo.compiler.sortAndDeduplicateDiagnostics(acc)
-        return (0 until sorted.len).map { i ->
-            val d = sorted[i]!!
-            val phase = phaseOf[d] ?: phaseOf.entries.firstOrNull { equalDiagnosticsNoRelatedInfo(it.key, d) }?.value ?: "?"
-            line(d, phase)
-        }
-    }
+    /** sha256 of a Go byte string (its bytes, as the oracle hashes them). */
+    private fun sha(s: String): String =
+        MessageDigest.getInstance("SHA-256").digest(s.toByteArray(Charsets.ISO_8859_1)).joinToString("") { "%02x".format(it) }
 
     // ---------------------------------------------------------------- the oracle's line format (§ 3)
 
@@ -306,7 +193,7 @@ class DiagParityTest {
     @Test
     fun `the ported compiler's diagnostics per conformance configuration`() {
         if (System.getenv("TSGO_DIAG").isNullOrEmpty()) {
-            println("DiagParityTest: skipped (set TSGO_DIAG=1; needs build/goport/diag-cases from scripts/tsgo-diag-cases.py)")
+            println("DiagParityTest: skipped (set TSGO_DIAG=1; needs build/goport/diag-cases and diag-oracle from scripts/tsgo-diag-cases.py / tsgo-diag-oracle.py)")
             return
         }
         // The manifest's entries in order (a regex over the 4.8 MB file: the case JSON is what the shim decodes).
@@ -316,6 +203,9 @@ class DiagParityTest {
         val entries = Regex(""""case":\s*"([^"]+)",\s*"variation":\s*"([^"]+)"""").findAll(manifest)
             .map { it.groupValues[1] to it.groupValues[2] }.filter { filter == null || it.first.contains(filter) }.take(limit).toList()
         TsgoPort.init()
+        com.xemantic.typescript.tsgo.harness.typeScriptSubmodule = File(root, "build/goport/ts-submodule").also {
+            check(File(it, "tests/lib").isDirectory) { "no /.lib test libraries at $it/tests/lib (scripts/tsgo-diag-cases.py extracts them)" }
+        }.path
         var ok = 0
         var crashed = 0
         val crashes = LinkedHashMap<String, Int>()
@@ -331,7 +221,7 @@ class DiagParityTest {
             var result: List<String>? = null
             var error: Throwable? = null
             val th = Thread(null, {
-                try { result = runConfiguration(File(cases, "$case/$variation")) } catch (t: Throwable) { error = t }
+                try { result = runConfiguration(case, variation) } catch (t: Throwable) { error = t }
             }, "tsgo-diag", 1L shl 30)
             th.isDaemon = true
             th.start()

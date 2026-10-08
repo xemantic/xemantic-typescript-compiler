@@ -24,6 +24,19 @@ GOTOOLCHAIN=local tools/go/bin/go build -C xemantic-typescript-compiler-goport/g
   The repo root is found by walking up from the working directory to the directory holding
   `typescript-go-repo/`; the extractor prepends `<repo>/tools/go/bin` to `PATH` so `go/packages`
   runs the pinned toolchain.
+- **Partial packages and overlays (TSGO.2).** With no `pkg`, the run also extracts tsgo's compiler
+  test harness — `testrunner`, `testutil/harnessutil`, `tsoptions/tsoptionstest`, `testutil` — as
+  PARTIAL packages (`partial.go`): only the top-level declarations reachable from the roots in
+  `partialClosure` (computed over all partial packages at once; a kept GenDecl is kept whole, a kept
+  type keeps all its methods, import declarations always stay). Interface candidates (§ 5.3) count
+  only kept declarations of a partial package. Overlay files are ADDED to tsgo packages through
+  go/packages' `Overlay` (never written into `typescript-go-repo`): the oracle's verbatim copies
+  `oracle-go/overlay/{testrunner,harnessutil}/xtsc_export.go` and the port's own
+  `goport-extract/overlay/testrunner/xtsc_port.go`. Because an overlay makes go/packages type-check
+  DEPENDENCIES from source (instead of export data), every position outside the extracted packages is
+  rendered at LINE granularity (`closureFiles`, tables.go) — the export-data form — so the IR of the
+  other packages stays byte-identical whichever way the dependency was loaded (residue: three
+  `reflect.Value` method types keep their source result names, changing nothing the porter emits).
 - `--stats FILE` writes the closure census (markdown). `--check` lists IR holes and exits 1 if
   there are any (§ 8).
 - The extractor refuses (exit 2) if tsgo does not type-check.
