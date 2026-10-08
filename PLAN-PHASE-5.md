@@ -62,6 +62,10 @@ control `TSGO_CLI_INJECT=profile-project-noemit` red (1 differ). Profiles: all 8
 (78-312 files) byte-identical incl. their tsconfig's `"pretty": true` (colours, code frames, summary). TsgoCliTest
 6/0 (incl. the real `main` in a child JVM). Kept green on the final gen (oracle inputs SYMLINKED from the main tree's build/goport — the API/LS oracles are the tsgo binary's, the diag/emit ones `oracle-go`'s, which this round's overlay does not touch): DiagParityTest 13,127 / 13,127, EmitParityTest 13,127 / 13,127, OracleParityTest bound 7,774 / 7,774, ApiParityTest 594,007 / 594,007, LsParityTest 21,614 / 21,614; `-tsgo` 117 tests / 0 failed, `-goport` 15 / 0 (two census bands widened for the new code: the inline-function band 20..60 → 20..64 at 61 with `tsc.WriteConfigFile`, and a CLI string-slice census ≤ 1 split out of the harness one), `-lsp` 38 / 0. `huge_methods.py --fail-over 0` = 0 (4,850 classes). Warning-clean (positive control `1 as Int` read its `w:`, deleted).
 
+**Kotlin/Native**: (TSGO.6)'s `linuxX64` target landed on main during this round; every new platform shim got a POSIX
+`actual` (open/write/mkdir/unlink/utime, lstat kinds, realpath, zlib inflate for gzip) in a follow-up commit —
+`compileKotlinLinuxX64` green, the CLI not yet RUN natively.
+
 **Incident (fixed, data restored)**: the first CliParityTest deleted its previous work copies with Kotlin's
 `File.deleteRecursively()`, which FOLLOWS a directory symlink — it emptied the original `node_modules` of the 8
 tsc profiles (`build/bench/tsc-*`) and of the census libraries mitt and ky. Restored: mitt/ky from
