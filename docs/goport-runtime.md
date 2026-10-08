@@ -180,7 +180,7 @@ parse/encode path.
 | `runtime`, `testing` | `caller` (always `ok = false`), `GOOS GOARCH`; `testing()` (false); `T` (`common`, `name helper skipf`; `Common`: `helper skipf skip fatalf fatal errorf failed`) | approx (§ 10); `Skipf`/`Fatalf` end the test by throwing `TestSkipped`/`TestFailed` (Go's `Goexit`), which the Kotlin driver catches |
 | `encoding`, `encoding/binary` | `TextMarshaler TextUnmarshaler`; `ByteOrder` (`uint16`), `littleEndian` (`uint16/32/64 putUint16/32/64 appendUint32`), `bigEndian` (`uint16`), `read` | exact; `read` carries only `*[]uint16` (`vfs/internal.decodeUtf16`) and panics on anything else |
 | `context` | `Context background todo withValue` | values exact; no cancellation (`done()` null) |
-| `sync`, `sync/atomic` | `Locker`, `Mutex` (`lock unlock tryLock`) `RWMutex` (`lock unlock tryLock rLock rUnlock tryRLock rLocker`) `Once onceValue onceFunc Pool WaitGroup Map` (`load store loadOrStore loadAndDelete delete clear range`); `Bool Int32 Int64 Uint32 Uint64 Pointer` (`load store add swap compareAndSwap`) | thread-safe, contended waiters PARK (§ 9a); `WaitGroup.Go` starts a goroutine (a 1 GB-stack daemon thread, `goSpawn`) |
+| `sync`, `sync/atomic` | `Locker`, `Mutex` (`lock unlock tryLock`) `RWMutex` (`lock unlock tryLock rLock rUnlock tryRLock rLocker`) `Once onceValue onceFunc Pool WaitGroup Map` (`load store loadOrStore loadAndDelete delete clear range`); `Bool Int32 Int64 Uint32 Uint64 Pointer` (`load store add swap compareAndSwap`) | thread-safe, contended waiters PARK (§ 9a); `WaitGroup.Go` starts a goroutine (a pooled 1 GB-stack daemon thread, `goSpawn`) |
 | `golang.org/x/sync/errgroup` | `Group` (`go tryGo setLimit wait`), `withContext` | thread-safe first-error; `Go` runs synchronously, no context cancellation |
 | `time` | `Duration` (`nanoseconds microseconds milliseconds seconds`), `Nanosecond … Hour`; `Time` (`sub isZero unixNano unixMilli equal before after goCopy goEquals goHash`), `now since` | `Duration` exact; `Time` approx (§ 10) |
 | `os`, `runtime/debug` | `getenv` (always `""`), `setMaxStack` (no-op) | approx |
@@ -215,8 +215,9 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
   `OnceValue` call (Go 1.21+ semantics).
 - `Pool`, `Map`: a `HashMap`/free list under a `Mutex`; `Map.Range` calls `f` outside the lock.
 - `WaitGroup`: atomic counter; `Wait` parks until zero (`Add` reaching zero wakes waiters); `Go` runs
-  `f` in a new goroutine: `expect fun goSpawn` (JVM: a daemon platform thread with Go's 1 GB maximum
-  goroutine stack, reserved and committed as it is touched). It is what `core.parallelWorkGroup` uses,
+  `f` in a new goroutine: `expect fun goSpawn` (JVM: an unbounded cached pool of daemon platform
+  threads with Go's 1 GB maximum goroutine stack, reserved and committed as it is touched; an idle
+  thread is reused for 30 s, so a parse's goroutine per file does not create a thread each). It is what `core.parallelWorkGroup` uses,
   i.e. a program built WITHOUT `SingleThreaded` (tsgo's default: 4 checkers, parallel parse and bind).
   Running `f` synchronously instead DEADLOCKS there — the files parser queues children while holding a
   mutex they take. A panic in a goroutine crashes a Go program; here the first one is kept and `Wait`

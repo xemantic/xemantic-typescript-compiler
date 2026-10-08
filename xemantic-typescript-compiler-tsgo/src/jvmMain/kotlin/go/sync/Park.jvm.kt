@@ -37,9 +37,22 @@ internal actual fun unpark(token: Any) {
     LockSupport.unpark(token as Thread)
 }
 
+/**
+ * Goroutines run on daemon platform threads with Go's maximum goroutine stack (reserved, committed as
+ * it is touched), REUSED while idle: a program's parse queues a goroutine per file and import, most of
+ * them short or parked on a per-file mutex, and creating a 1 GB-stack thread for each was a visible part
+ * of a parallel build. Unbounded (a cached pool: a direct hand-off, a new thread whenever none is idle),
+ * so a goroutine waiting on another goroutine can never starve it, as in Go.
+ */
+private val goroutines: java.util.concurrent.ExecutorService by lazy {
+    val n = java.util.concurrent.atomic.AtomicInteger()
+    java.util.concurrent.ThreadPoolExecutor(
+        0, Int.MAX_VALUE, 30L, java.util.concurrent.TimeUnit.SECONDS, java.util.concurrent.SynchronousQueue(),
+    ) { r ->
+        Thread(null, r, "goroutine-${n.incrementAndGet()}", 1L shl 30).also { it.isDaemon = true }
+    }
+}
+
 internal actual fun goSpawn(f: () -> Unit) {
-    // A daemon platform thread with Go's maximum goroutine stack (reserved, committed as it is touched).
-    val t = Thread(null, f, "goroutine", 1L shl 30)
-    t.isDaemon = true
-    t.start()
+    goroutines.execute(f)
 }
