@@ -38,7 +38,9 @@ import kotlin.test.Test
 /**
  * (TSGO.2) the diagnostics differential (docs/goport-diag-oracle.md § 4, the PREFERRED route): for every
  * configuration the oracle materialized, the PORTED compiler test harness (`com.xemantic.typescript.tsgo.harness`
- * over the generated `testrunner`/`harnessutil`) reads the RAW case (`typescript-repo/tests/cases/<case>`),
+ * over the generated `testrunner`/`harnessutil`) reads the RAW case (`build/goport/diag-src/<case>`: the four suites
+ * tsgo's compiler runner covers — the TypeScript submodule's `compiler/` and `conformance/`, extracted in full, and
+ * tsgo's own `local/compiler/` and `local/conformance/` from `typescript-go-repo/testdata/tests/cases`),
  * enumerates its configurations, prepares and compiles the named one check-only, and the result is written to
  * `build/goport/diag-kotlin/<case>/<variation>.jsonl` in the oracle's format. Before any diagnostic is
  * compared, the harness's derived state is cross-checked against the materialized `case.json` (current
@@ -52,7 +54,7 @@ class DiagParityTest {
 
     private val root = File("..").absoluteFile.normalize()
     private val cases = File(root, "build/goport/diag-cases")
-    private val casesRoot = File(root, "typescript-repo/tests/cases")
+    private val casesRoot = File(root, "build/goport/diag-src") // scripts/tsgo-diag-cases.py makes it
     private val out = File(root, "build/goport/diag-kotlin")
 
     // ---------------------------------------------------------------- one configuration, through the ported harness
@@ -191,7 +193,7 @@ class DiagParityTest {
     // ---------------------------------------------------------------- the run
 
     @Test
-    fun `the ported compiler's diagnostics per conformance configuration`() {
+    fun `the ported compiler's diagnostics per compiler-runner configuration`() {
         if (System.getenv("TSGO_DIAG").isNullOrEmpty()) {
             println("DiagParityTest: skipped (set TSGO_DIAG=1; needs build/goport/diag-cases and diag-oracle from scripts/tsgo-diag-cases.py / tsgo-diag-oracle.py)")
             return

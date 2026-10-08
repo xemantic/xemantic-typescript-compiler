@@ -41,9 +41,9 @@ ends that case only.
 
 **Evidence.** With `-runner` every configuration is also compiled through the unmodified runner
 path (pre-emit program, emitting program, TS-1 count check) and rendered exactly as tsgo's
-`.errors.txt`: **6,318 / 6,318 configurations are byte-identical to tsgo's committed baseline**
-under `typescript-go-repo/testdata/baselines/reference/submodule/<suite>/` (absent baseline ⇔
-`<no content>` included). That is a statement about the whole pipeline — splitting, variations,
+`.errors.txt`: **13,127 / 13,127 configurations are byte-identical to tsgo's committed baseline**
+under `typescript-go-repo/testdata/baselines/reference/submodule/<suite>/` (a submodule case) or
+`reference/<suite>/` (a `local/` case) (absent baseline ⇔ `<no content>` included). That is a statement about the whole pipeline — splitting, variations,
 option resolution, file system, libs, diagnostic text, related information, ordering.
 
 ### Which list is the oracle
@@ -63,7 +63,10 @@ suggestion  = GetSuggestionDiagnostics(ctx, nil)    only if harness option @capt
 list = compiler.SortAndDeduplicateDiagnostics(concat in that order)
 ```
 
-The two lists agree in 6,287 configurations. The other 31 are all checker order dependence that
+Over all four suites (2026-10-08) the two lists agree in 13,054 of 13,127 configurations; the other
+73 are 69 `submoduleTriaged` (55 TS-1, 14 same-count differences), 3 TS-1 with no diff layer and 1
+TS-1 in a `local/` case. The rest of this paragraph is the conformance-only census of 2026-10-07: the
+two lists agreed in 6,287 configurations. The other 31 are all checker order dependence that
 tsgo itself records as a bug: 23 carry the harness's `TS-1 Pre-emit (N) and post-emit (M)
 diagnostic counts do not match!` (21 `submoduleTriaged`, 2 where pristine tsc's harness printed
 the same TS-1, so no diff layer exists), and 8 have the same count but the emitting program
@@ -76,7 +79,29 @@ reference for (TSGO.2). The manifest records `runner.checkOnlyVsRunner` per conf
 
 ## 2. Case materialization (`scripts/tsgo-diag-cases.py`)
 
-Cases: `tests/cases/compiler/*.ts{,x}` (flat) + `tests/cases/conformance/**/*.ts{,x}` — tsgo's
+**The four suites (2026-10-08).** tsgo's compiler runner (`internal/testrunner/compiler_runner_test.go`)
+is two tests, each over a `compiler` and a `conformance` `CompilerBaselineRunner`: `TestSubmodule`
+reads `_submodules/TypeScript/tests/cases/{compiler,conformance}` and baselines into
+`reference/submodule/<suite>/` (with the `.diff` record in `submodule`/`submoduleAccepted`/`submoduleTriaged`),
+`TestLocal` reads tsgo's own `testdata/tests/cases/{compiler,conformance}` and baselines into
+`reference/<suite>/`. The materializer covers all four through ONE cases root, `build/goport/diag-src`:
+
+| `<case>` prefix | source | cases | configurations ok / skipped |
+|---|---|---|---|
+| `compiler/` | the submodule's `tests/cases/compiler` | 6,537 | 6,282 / 987 |
+| `conformance/` | the submodule's `tests/cases/conformance`, **extracted in full** | 5,907 | 6,515 / 1,176 |
+| `local/compiler/` | `typescript-go-repo/testdata/tests/cases/compiler` | 297 | 305 / 3 |
+| `local/conformance/` | `typescript-go-repo/testdata/tests/cases/conformance` | 19 | 25 / 1 |
+
+`typescript-repo`'s WORKING TREE is a sparse checkout (36 conformance cases), but its git objects
+hold the whole `4d4f005c` tree, so the materializer `git archive`s `tests/cases` into
+`build/goport/ts-submodule/tests/cases` (the same directory that already provides `/.lib`; re-extracted
+when the tree hash changes) and links `diag-src/{compiler,conformance}` to it and `diag-src/local` to
+tsgo's testdata. The `local/` prefix is the only difference the tool sees: `suiteOf` strips it, and
+`-runner` looks the baseline up under `reference/<suite>/` instead of `reference/submodule/<suite>/`.
+The runner's own invariant — no base name twice within one runner pair — is asserted.
+
+Cases (history, 2026-10-07): `tests/cases/compiler/*.ts{,x}` (flat) + `tests/cases/conformance/**/*.ts{,x}` — tsgo's
 runner regex `\.tsx?$` — i.e. **6,573 cases** in this sparse clone (6,537 compiler, 36
 conformance). Everything is materialized, including `.tsx` and conformance categories the Kotlin
 corpus has not adopted; `inCorpus` marks the subset the generated Kotlin corpus runs (`.ts` only,
@@ -93,7 +118,9 @@ Skips, in the manifest with a reason, all decided by tsgo's own code except the 
 | `SkipUnsupportedCompilerOptions` on the RESOLVED options (embedded tsconfig, then directives) | 962 configurations | the real function, called on the derived options |
 | corpus-only `tsconfigInTestUsesRemovedFeature` (build.gradle.kts, (LEGACY.1)(g)) | 52 cases flagged (`corpusSkip`) | Python port of the Kotlin predicate; **all 52 are also skipped by tsgo's own rule**, so it removes nothing extra (still materialized unless `--corpus-skips`) |
 
-**6,318 configurations are materialized** (6,176 `inCorpus`); 0 fatal.
+**6,318 configurations are materialized** (6,176 `inCorpus`); 0 fatal. **Since 2026-10-08, all four
+suites: 12,760 cases → 15,249 configurations → 13,127 materialized** (skips: `skippedTests` 45
+files, `SkipUnsupportedCompilerOptions` 2,122 configurations — 2,118 submodule, 4 local); 0 fatal.
 
 ### The project directory
 
@@ -156,7 +183,9 @@ manifest and exits non-zero unless every configuration is equal. Self-test: the 
 itself is 6,318 equal; one moved offset and one deleted file read `equal 6316, missing 1, differ 1`.
 
 Each manifest entry also carries `layer` — the tsgo diff layer of the configuration's
-`.errors.txt` (`submoduleTriaged` 31, `submoduleAccepted` 225, `submodule` 29, none 6,033): a
+`.errors.txt` (`submoduleTriaged` 31, `submoduleAccepted` 225, `submodule` 29, none 6,033; over all
+four suites `submoduleTriaged` 71, `submoduleAccepted` 418, `submodule` 234, none 12,074, and `local`
+330 for tsgo's own cases, which have no diff layer): a
 Kotlin/oracle disagreement on a `submoduleTriaged` configuration is evidence about tsgo, not the
 port (the 2026-09-21 directive).
 
@@ -169,7 +198,9 @@ through the PORTED harness (`-tsgo/src/commonMain/kotlin/harness/Harness.kt` ove
 `XtscCompileCheckOnly`, the same overlay copies the oracle runs, docs/goport-lowering.md § 1c), then
 cross-checks the derived state against `case.json` (case hash, current directory, root files, every
 file's path/role/hash, symlinks, the final options' JSON VALUE — `case.json`'s object members are
-key-sorted, so `paths` order is not compared there) before grading diagnostics: **6,318 / 6,318**.
+key-sorted, so `paths` order is not compared there) before grading diagnostics: **6,318 / 6,318**;
+over all four suites (2026-10-08, raw cases from `build/goport/diag-src`) **13,127 / 13,127 equal, 0
+crashed** in 84 s, with the injected positive control red on a `local/` case (`1 of 330 not equal`).
 The cross-check found a porter defect on its first run (a `switch` over a `[2]byte` tag compared by
 identity, so UTF-16 cases lost their directives). The fallback route below is history.
 **Preferred route: port the harness too.** The Go functions the
@@ -222,7 +253,7 @@ decided once, by tsgo, in the materializer.
 
 ## 5. Cross-checks and disagreement classes
 
-**(a) Committed tsgo baselines** — 6,318 / 6,318 byte-identical (§ 1). This also covers the four
+**(a) Committed tsgo baselines** — 13,127 / 13,127 byte-identical over the four suites (§ 1). This also covers the four
 layers of `docs/tsgo-baselines.md`: the full file under `submodule/` is tsgo's output whatever
 layer its `.diff` lives in, and every one matches.
 
@@ -282,6 +313,9 @@ oracle; the CLI is a second witness that agrees wherever it compiles the same pr
 | `tsgo-diag-cases.py` | 6,573 cases → 7,280 configurations → 6,318 materialized, 0 fatal; 212 MB | ~3 s (4 workers) |
 | `tsgo-diag-oracle.py` (with `-runner`) | 6,318 ok, 3,200 with diagnostics, 13,698 diagnostics (phases before dedup: semantic 12,157, syntactic 1,114, declaration 209, program 82, global 68, suggestion 36, config 32); 49 MB of JSONL | ~25 s (4 workers, ~4 cores, 1.3 GB peak RSS) |
 | re-run, nothing changed | fully cached | ~2 s |
+| `tsgo-diag-cases.py`, four suites (2026-10-08) | 12,760 cases → 15,249 configurations → 13,127 materialized, 0 fatal; 461 MB | ~12 s (6 workers) |
+| `tsgo-diag-oracle.py`, four suites (with `-runner`) | 13,127 ok (baselines 13,127 equal), 7,162 with diagnostics, 40,820 diagnostics; 106 MB of JSONL | ~33 s (6 workers) |
+| `DiagParityTest`, four suites (`TSGO_TEST_HEAP=2g`) | 13,127 equal, 0 crashed | 84 s in-test, ~3 min with Gradle |
 | `tsgo-diag-cli-crosscheck.py` (all 6,318) | § 5(c) | ~140 s |
 
 Caching: the materializer keys on (case bytes, tool sha256, layout version); the driver on

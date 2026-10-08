@@ -3,7 +3,7 @@
 // Commands:
 //
 //	materialize -cases-root DIR -out DIR [-list FILE | CASE...]
-//	    turn conformance cases (paths relative to -cases-root) into project directories, one per
+//	    turn compiler-runner cases (paths relative to -cases-root) into project directories, one per
 //	    configuration, exactly as tsgo's compiler runner splits them. One JSON status line per
 //	    configuration on stdout.
 //	diags -cases-root DIR [-runner] [-baselines DIR] [-o OUT] PROJECT_DIR
@@ -173,7 +173,13 @@ func variationDir(name string) string {
 	return name
 }
 
+// localPrefix marks a case of tsgo's OWN suite (`typescript-go-repo/testdata/tests/cases`, the
+// runner's TestLocal); every other case is the TypeScript submodule's (TestSubmodule). The two
+// differ only in where their committed baselines live (docs/goport-diag-oracle.md § 2).
+const localPrefix = "local/"
+
 func suiteOf(rel string) string {
+	rel = strings.TrimPrefix(rel, localPrefix)
 	if i := strings.IndexByte(rel, '/'); i > 0 {
 		return rel[:i]
 	}
@@ -580,7 +586,7 @@ type runnerCheck struct {
 	// "equal": the check-only list equals the runner's list; "ts1": the runner appended the
 	// TS-1 pre/post count diagnostic; "differ": anything else.
 	CheckOnlyVsRunner string `json:"checkOnlyVsRunner"`
-	Baseline          string `json:"baseline"`      // path relative to -baselines
+	Baseline          string `json:"baseline"`      // path relative to -baselines (reference/)
 	BaselineMatch     string `json:"baselineMatch"` // equal | differ | missing-expected | unexpected-absent
 	RunnerCount       int    `json:"runnerCount"`
 	// "differ" only: the first differing position, both sides rendered as oracle lines
@@ -607,7 +613,7 @@ func cmdDiags(args []string) error {
 	fl := flag.NewFlagSet("diags", flag.ExitOnError)
 	casesRoot := fl.String("cases-root", "", "typescript-repo/tests/cases")
 	runner := fl.Bool("runner", false, "also run the unmodified runner and compare against tsgo's committed baseline")
-	baselines := fl.String("baselines", "", "typescript-go-repo/testdata/baselines/reference/submodule (with -runner)")
+	baselines := fl.String("baselines", "", "typescript-go-repo/testdata/baselines/reference (with -runner): a local case's baseline is under <suite>/, a submodule case's under submodule/<suite>/")
 	out := fl.String("o", "", "output JSONL (default stdout; single project)")
 	batch := fl.String("batch", "", "file of PROJECT_DIR<TAB>OUT lines")
 	status := fl.String("status", "", "status JSONL (with -batch)")
@@ -861,7 +867,10 @@ func runnerCompare(t *testing.T, cj *caseJSON, filename, content string, configs
 	if baselines != "" {
 		name := strings.TrimSuffix(strings.TrimSuffix(cj.ConfiguredName, ".tsx"), ".ts") + ".errors.txt"
 		rc.Baseline = cj.Suite + "/" + name
-		b, err := os.ReadFile(filepath.Join(baselines, cj.Suite, name))
+		if !strings.HasPrefix(cj.Case, localPrefix) {
+			rc.Baseline = "submodule/" + rc.Baseline
+		}
+		b, err := os.ReadFile(filepath.Join(baselines, filepath.FromSlash(rc.Baseline)))
 		const noContent = "<no content>"
 		switch {
 		case err != nil && rendered == noContent:

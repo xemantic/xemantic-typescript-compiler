@@ -11,9 +11,11 @@ diagnostics:
 With --runner (default ON) every configuration is ALSO compiled through the unmodified runner path
 (pre-emit program + emitting program + the TS-1 count check), rendered exactly as tsgo's
 `.errors.txt`, and compared byte-for-byte with tsgo's committed baseline under
-typescript-go-repo/testdata/baselines/reference/submodule/<suite>/ — the evidence that the
-oracle IS tsgo's harness. The diff layer of that baseline (submodule / submoduleAccepted /
-submoduleTriaged, docs/tsgo-baselines.md) is recorded per configuration.
+typescript-go-repo/testdata/baselines/reference/submodule/<suite>/ (a submodule case) or
+reference/<suite>/ (a `local/` case, tsgo's own testdata) — the evidence that the oracle IS tsgo's
+harness. The layer of that baseline is recorded per configuration: `local` for tsgo's own cases, and
+for a submodule case the directory its `.errors.txt.diff` lives in (submodule / submoduleAccepted /
+submoduleTriaged, docs/tsgo-baselines.md) or none.
 
 Caching: an entry is reused when sha256(case.json) and the tool's sha256 are unchanged and its
 output file still hashes to the recorded value. --force ignores the cache.
@@ -34,7 +36,7 @@ import sys
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-CASES_ROOT = os.path.join(REPO, "typescript-repo/tests/cases")
+CASES_ROOT = os.path.join(REPO, "build/goport/diag-src")  # made by scripts/tsgo-diag-cases.py
 CASES_DIR = os.path.join(REPO, "build/goport/diag-cases")
 OUT = os.path.join(REPO, "build/goport/diag-oracle")
 TOOL = os.path.join(REPO, "build/goport/bin/tsgo-oracle")
@@ -52,7 +54,9 @@ def die(msg, code=2):
     sys.exit(code)
 
 
-def diff_layer(suite, configured):
+def diff_layer(case, suite, configured):
+    if case.startswith("local/"):
+        return "local"
     name = configured
     for ext in (".tsx", ".ts"):
         if name.endswith(ext):
@@ -73,7 +77,7 @@ def run_batch(wid, items, work, runner, label):
             f.write(f"{it['projectDir']}\t{it['outPath']}\n")
     cmd = [TOOL, "diags", "-cases-root", CASES_ROOT, "-batch", lst, "-status", st]
     if runner:
-        cmd += ["-runner", "-baselines", os.path.join(BASELINES, "submodule")]
+        cmd += ["-runner", "-baselines", BASELINES]
     env = dict(os.environ, XTSC_TS_SUBMODULE=TS_SUBMODULE)
     if os.path.exists(st):
         os.remove(st)
@@ -148,7 +152,7 @@ def main():
             out_rel = os.path.join(rel, c["variation"] + ".jsonl")
             e = {"case": rel, "variation": c["variation"], "out": out_rel, "inCorpus": ce["inCorpus"],
                  "inputSha256": sha256(cj_raw), "configuredName": cj["configuredName"],
-                 "layer": diff_layer(cj["suite"], cj["configuredName"]),
+                 "layer": diff_layer(rel, cj["suite"], cj["configuredName"]),
                  "projectDir": pdir, "outPath": os.path.join(OUT, out_rel)}
             prev = old.get((rel, c["variation"]))
             if (prev and prev.get("status") == "ok" and prev["inputSha256"] == e["inputSha256"]
@@ -211,6 +215,8 @@ def main():
         ph.update(e.get("phaseCounts") or {})
     summary["phaseCountsBeforeDedup"] = dict(ph)
     summary["layers"] = dict(collections.Counter(e["layer"] or "none" for e in entries))
+    summary["suites"] = dict(collections.Counter(("local/" if e["case"].startswith("local/") else "")
+                                                 + e["case"].removeprefix("local/").split("/")[0] for e in entries))
     if runner:
         summary["checkOnlyVsRunner"] = dict(collections.Counter((e.get("runner") or {}).get("checkOnlyVsRunner", "n/a") for e in entries))
         summary["baselineMatch"] = dict(collections.Counter((e.get("runner") or {}).get("baselineMatch", "n/a") for e in entries))

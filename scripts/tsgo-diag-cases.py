@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Case materializer for the (TSGO.2) diagnostics oracle (docs/goport-diag-oracle.md).
 
-Turns every conformance case under typescript-repo/tests/cases into one project directory per
-configuration, split EXACTLY as tsgo's compiler runner splits it (the splitting, the variation
-enumeration, the option resolution and tsgo's own skips run in-process in Go, through
+Turns every case tsgo's compiler runner covers into one project directory per configuration. The
+runner has FOUR suites (internal/testrunner/compiler_runner_test.go: TestLocal and TestSubmodule,
+each over a compiler and a conformance runner):
+
+    compiler/**, conformance/**              the TypeScript submodule's tests/cases (4d4f005c),
+                                             extracted IN FULL from typescript-repo's git objects
+                                             (the working tree is a sparse checkout)
+    local/compiler/**, local/conformance/**  typescript-go-repo/testdata/tests/cases (tsgo's own)
+
+all reached through one cases root, build/goport/diag-src (symlinks). Each case is split EXACTLY as
+tsgo's compiler runner splits it (the splitting, the variation enumeration, the option resolution and tsgo's own skips run in-process in Go, through
 `build/goport/bin/tsgo-oracle materialize`, which calls the runner's own code):
 
     build/goport/diag-cases/<case>/<variation>/case.json      inputs + derived harness state
@@ -11,7 +19,7 @@ enumeration, the option resolution and tsgo's own skips run in-process in Go, th
     build/goport/diag-cases/<case>/<variation>/tsconfig.json  for a CLI cross-check ONLY
     build/goport/diag-cases/manifest.json
 
-<case> is the path relative to tests/cases (e.g. compiler/foo.ts); <variation> is tsgo's
+<case> is the path relative to the cases root (e.g. compiler/foo.ts, local/compiler/bar.ts); <variation> is tsgo's
 configuration name (e.g. `target=es2015,strict=true`) or `_` for a case without variations.
 
 Skips, all recorded in the manifest with a reason:
@@ -31,6 +39,7 @@ Exit status is non-zero (manifest "complete": false) on any fatal case or dead w
 """
 
 import argparse
+import collections
 import concurrent.futures as cf
 import fnmatch
 import hashlib
@@ -43,7 +52,8 @@ import sys
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-CASES_ROOT = os.path.join(REPO, "typescript-repo/tests/cases")
+CASES_ROOT = os.path.join(REPO, "build/goport/diag-src")
+LOCAL_CASES = os.path.join(REPO, "typescript-go-repo/testdata/tests/cases")
 OUT = os.path.join(REPO, "build/goport/diag-cases")
 TOOL = os.path.join(REPO, "build/goport/bin/tsgo-oracle")
 ORACLE_GO = os.path.join(REPO, "xemantic-typescript-compiler-goport/oracle-go")
@@ -97,6 +107,36 @@ def ensure_ts_submodule():
     return lib
 
 
+def ensure_cases_root():
+    """build/goport/diag-src: compiler/ and conformance/ -> the submodule's FULL tests/cases (extracted
+    with `git archive` into build/goport/ts-submodule, re-extracted when the tree hash changes), and
+    local/ -> tsgo's own testdata/tests/cases."""
+    ts = os.path.join(REPO, "typescript-repo")
+    tree = subprocess.run(["git", "-C", ts, "rev-parse", "HEAD:tests/cases"], check=True, capture_output=True,
+                          text=True).stdout.strip()
+    dst = os.path.join(TS_SUBMODULE, "tests/cases")
+    stamp = os.path.join(TS_SUBMODULE, "tests/.cases-tree")
+    if not (os.path.isdir(dst) and os.path.exists(stamp) and open(stamp).read().strip() == tree):
+        print(f"tsgo-diag-cases: extracting the submodule's tests/cases ({tree[:12]})", file=sys.stderr)
+        shutil.rmtree(dst, ignore_errors=True)
+        os.makedirs(TS_SUBMODULE, exist_ok=True)
+        arc = subprocess.run(["git", "-C", ts, "archive", "HEAD", "tests/cases"], check=True, capture_output=True,
+                             env=dict(os.environ, GIT_NO_LAZY_FETCH="1")).stdout
+        subprocess.run(["tar", "-x", "-C", TS_SUBMODULE], input=arc, check=True)
+        open(stamp, "w").write(tree + "\n")
+    if not os.path.isdir(LOCAL_CASES):
+        die(f"no {LOCAL_CASES}")
+    os.makedirs(CASES_ROOT, exist_ok=True)
+    for name, target in (("compiler", os.path.join(dst, "compiler")), ("conformance", os.path.join(dst, "conformance")),
+                         ("local", LOCAL_CASES)):
+        link = os.path.join(CASES_ROOT, name)
+        if os.path.islink(link) and os.readlink(link) == target:
+            continue
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(target, link)
+
+
 def tool_env():
     env = dict(os.environ)
     env["XTSC_TS_SUBMODULE"] = TS_SUBMODULE
@@ -114,25 +154,35 @@ def conformance_categories():
     return re.findall(r'^\s*"([^"]+)"', m.group(1), re.M)
 
 
+SUITES = ("compiler/", "conformance/", "local/compiler/", "local/conformance/")
+
+
 def enumerate_cases():
-    """Like tsgo's runner: compiler/ (flat, as tests/cases/compiler is flat) + conformance/**,
-    files matching `\\.tsx?$`."""
+    """Like tsgo's runner (harnessutil.EnumerateFiles, recursive, `\\.tsx?$`) over its four suites,
+    submodule first. Also asserts the runner's own invariant: no base name twice within the submodule
+    pair or within the local pair (compiler_runner_test.go `Duplicate test file`)."""
     out = []
-    comp = os.path.join(CASES_ROOT, "compiler")
-    for fn in sorted(os.listdir(comp)):
-        if re.search(r"\.tsx?$", fn) and os.path.isfile(os.path.join(comp, fn)):
-            out.append("compiler/" + fn)
-    conf = os.path.join(CASES_ROOT, "conformance")
-    for dp, dns, fns in os.walk(conf):
-        dns.sort()
-        for fn in sorted(fns):
-            if re.search(r"\.tsx?$", fn):
-                out.append(os.path.relpath(os.path.join(dp, fn), CASES_ROOT))
+    for suite in SUITES:
+        top = os.path.join(CASES_ROOT, suite)
+        for dp, dns, fns in os.walk(top, followlinks=True):
+            dns.sort()
+            for fn in sorted(fns):
+                if re.search(r"\.tsx?$", fn):
+                    out.append(suite + os.path.relpath(os.path.join(dp, fn), top))
+    for pair in (("compiler/", "conformance/"), ("local/",)):
+        names = [os.path.basename(c) for c in out if c.startswith(pair) and (pair[0] == "local/" or not c.startswith("local/"))]
+        dup = {n for n, k in collections.Counter(names).items() if k > 1}
+        if dup:
+            die(f"duplicate test file name(s) within one runner pair: {sorted(dup)[:5]}")
     return out
 
 
+def suite_of(rel):
+    return next(s for s in reversed(SUITES) if rel.startswith(s)).rstrip("/")
+
+
 def in_corpus(rel, cats):
-    if not rel.endswith(".ts"):
+    if not rel.endswith(".ts") or rel.startswith("local/"):
         return False
     if rel.startswith("compiler/") and rel.count("/") == 1:
         return True
@@ -244,10 +294,9 @@ def main():
                     help="also do not materialize cases the corpus-only rule removes")
     args = ap.parse_args()
 
-    if not os.path.isdir(CASES_ROOT):
-        die(f"no {CASES_ROOT}")
     tool_sha = ensure_tool()
     ensure_ts_submodule()
+    ensure_cases_root()
     cats = conformance_categories()
     cases = enumerate_cases()
     if args.only:
@@ -310,11 +359,15 @@ def main():
                 fatal.append(f"{rel} [{c['variation']}]: {c.get('reason')}")
 
     counts = {"cases": len(entries), "configs": 0, "ok": 0, "skipped": {}, "fatal": len(fatal),
-              "okInCorpus": 0, "okCorpusSkip": 0}
+              "okInCorpus": 0, "okCorpusSkip": 0, "suites": {}}
     for rel, e in entries.items():
+        su = counts["suites"].setdefault(suite_of(rel), {"cases": 0, "ok": 0, "skipped": 0})
+        su["cases"] += 1
         for c in e.get("configs", []):
             if c["variation"] != "*":
                 counts["configs"] += 1
+            if c["status"] in ("ok", "skipped"):
+                su[c["status"]] += 1
             if c["status"] == "ok":
                 counts["ok"] += 1
                 counts["okInCorpus"] += e["inCorpus"]
