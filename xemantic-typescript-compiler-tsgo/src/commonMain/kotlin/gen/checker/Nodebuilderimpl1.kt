@@ -2446,7 +2446,7 @@ fun NodeBuilderImpl?.shouldUsePlaceholderForProperty(propertySymbol: Symbol?): B
     if (propertySymbol!!.checkFlags.value and 8192u == 0u) {
         return false
     }
-    if (com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(this!!.ctx!!.reverseMappedStack, (propertySymbol)!!)) {
+    if (com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(this!!.ctx!!.reverseMappedStack, propertySymbol)) {
         return true
     }
     if (this!!.ctx!!.reverseMappedStack.len > 0) {

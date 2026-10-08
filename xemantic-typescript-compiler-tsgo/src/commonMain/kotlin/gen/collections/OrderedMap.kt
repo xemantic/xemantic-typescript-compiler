@@ -35,6 +35,7 @@ import com.xemantic.typescript.tsgo.go.encoding.TextMarshaler
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Token
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
 import com.xemantic.typescript.tsgo.go.reflect.Value
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
 
 // go: github.com/microsoft/typescript-go/internal/collections.OrderedMap 7373826d
 class OrderedMap<K, V>(

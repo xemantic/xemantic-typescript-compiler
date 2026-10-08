@@ -67,7 +67,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
     }
 
     /** The argument list for a call with signature [sig] (`variadicFrom` packing, `spread`, tuple args). */
-    fun args(e: Node, sig: SignatureType, shimVararg: Boolean, shim: Boolean = shimVararg): List<String> {
+    fun args(e: Node, sig: SignatureType, shimVararg: Boolean, shim: Boolean = shimVararg, generic: SignatureType? = null): List<String> {
         val raw0 = args0(e, sig, shimVararg)
         if (!shim) return raw0
         // Shims take non-null function and struct-pointer parameters (docs/goport-runtime.md § 9):
@@ -75,6 +75,9 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val argNodes = e.list("args")
         return raw0.mapIndexed { i, code ->
             val pt = sig.params.getOrNull(minOf(i, sig.params.size - 1))?.t ?: return@mapIndexed code
+            // A GENERIC shim's type-parameter parameter (`slices.Contains(s, v E)`) takes the element as is:
+            // `E` may be a nullable pointer ((TSGO.4-a): `slices.Contains(allSearchSymbols, sym)` with a nil sym).
+            if (generic != null && generic.params.getOrNull(minOf(i, generic.params.size - 1))?.t?.let { types.unalias(it) is TypeParamType } == true) return@mapIndexed code
             val node = argNodes.getOrNull(i)
             val under = types.under(pt)
             val needs = (under is SignatureType || (under is PointerType && types.under(under.elem) is StructType)) &&
@@ -219,7 +222,33 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             val wref = ref.substringBeforeLast('.', "").let { if (it.isEmpty()) "" else "$it." } + prog.windowName(o.str("key")!!, o.str("name")!!)
             return Ex.primary("$wref(${codes.joinToString(", ")})")
         }
-        return withTuplePrelude(Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + inlineArgs(e, o.str("key"), args(e, sig, shim && sig.variadic, shim))).joinToString(", ")})"))
+        val generic = if (shim) o.int("t")?.let { types.unalias(it) as? SignatureType }?.takeIf { it.tparams.isNotEmpty() } else null
+        val codes = opaquePointerArgs(o, e, args(e, sig, shim && sig.variadic, shim, generic))
+        return withTuplePrelude(Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + inlineArgs(e, o.str("key"), codes)).joinToString(", ")})"))
+    }
+
+    /**
+     * A ported generic function's `*T` parameter (T its own type parameter) is lowered as `T?` — the
+     * pointer IS the reference, true when T is a struct (design § 3). Instantiated with a NON-struct T
+     * the caller holds a real `GoPtr<X>`, so it passes the pointee (`p?.value`; nil stays null): the
+     * callee reads `*v` as `v as T`. Sound for a callee that only READS through the pointer, which is
+     * every such function in the closure (`lsproto.derefOr`, (TSGO.4-a)); a write through it would be lost.
+     */
+    private fun opaquePointerArgs(o: Node, e: Node, codes: List<String>): List<String> {
+        if (o.str("k") != "func" || o.str("pkg") !in prog.ported) return codes
+        val generic = o.int("t")?.let { types.unalias(it) as? SignatureType } ?: return codes
+        if (generic.tparams.isEmpty() || e.int("variadicFrom") != null || e.bool("tupleArg")) return codes
+        val argNodes = e.list("args")
+        return codes.mapIndexed { i, code ->
+            val pt = generic.params.getOrNull(i)?.t ?: return@mapIndexed code
+            val under = types.under(pt) as? PointerType ?: return@mapIndexed code
+            if (types.unalias(under.elem) !is com.xemantic.typescript.goport.types.TypeParamType) return@mapIndexed code
+            val arg = argNodes.getOrNull(i) ?: return@mapIndexed code
+            val at = types.under(ty(arg)) as? PointerType ?: return@mapIndexed code
+            val elem = types.under(at.elem)
+            if (elem is StructType || elem is ArrayType || types.unalias(at.elem) is com.xemantic.typescript.goport.types.TypeParamType) return@mapIndexed code
+            "${Ex(code, 0).at(PRIMARY)}?.value"
+        }
     }
 
     /** The single type argument of a generic call (`reflect.TypeFor[T]()`, explicit or inferred). */
@@ -622,6 +651,17 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             }
             "new" -> {
                 val t = ty(args[0])
+                // Go 1.26's `new(expr)` ((TSGO.4-a): `lsconv`'s `Integer: new(diagnostic.Code())`, `new("ts")`):
+                // a pointer to a fresh variable holding the expression's value — for a struct the (copied)
+                // value itself, else a box. `new(T)` of a type is the zero value's.
+                if (args[0].str("m") != "type") {
+                    val v = flow(args[0])
+                    return when {
+                        tm.isStructValue(t) || types.under(t) is ArrayType -> if (tm.hasGoCopy(t) && !v.code.endsWith(".goCopy()")) Ex.primary("${v.at(PRIMARY)}.goCopy()") else v
+                        tm.opaqueTP(t) -> v
+                        else -> Ex.primary("GoBox<${tm.kt(t)}>(${v.code})")
+                    }
+                }
                 when {
                     tm.isStructValue(t) || types.under(t) is ArrayType -> Ex.primary(tm.zero(t))
                     // `new(T)` is a `*T`, which for a type parameter IS a `T` (design § 3: a pointer to a

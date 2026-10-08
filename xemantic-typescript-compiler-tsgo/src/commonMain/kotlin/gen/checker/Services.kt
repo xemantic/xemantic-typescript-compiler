@@ -1088,13 +1088,13 @@ fun Checker?.getTypeOfAssignmentPattern(expr: Node?): Type? {
     if (com.xemantic.typescript.tsgo.ast.isPropertyAssignment(expr!!.parent)) {
         val node: Node? = expr!!.parent!!.parent
         val typeOfParentObjectLiteral: Type? = com.xemantic.typescript.tsgo.core.orElse<Type?>(GoElem.ref<Type?>(), this.getTypeOfAssignmentPattern(node), this!!.errorType)
-        val propertyIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(node.properties(), (expr!!.parent)!!)
+        val propertyIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(node.properties(), expr!!.parent)
         return this.checkObjectLiteralDestructuringPropertyAssignment(node, typeOfParentObjectLiteral, propertyIndex, null, false)
     }
     val node_1: Node? = expr!!.parent
     val typeOfArrayLiteral: Type? = com.xemantic.typescript.tsgo.core.orElse<Type?>(GoElem.ref<Type?>(), this.getTypeOfAssignmentPattern(node_1), this!!.errorType)
     val elementType: Type? = com.xemantic.typescript.tsgo.core.orElse<Type?>(GoElem.ref<Type?>(), this.checkIteratedTypeOrElementType(IterationUseDestructuring, typeOfArrayLiteral, this!!.undefinedType, expr!!.parent), this!!.errorType)
-    return this.checkArrayLiteralDestructuringElementAssignment(node_1, typeOfArrayLiteral, com.xemantic.typescript.tsgo.go.slices.index<Node?>(node_1.elements(), (expr)!!), elementType, CheckModeNormal)
+    return this.checkArrayLiteralDestructuringElementAssignment(node_1, typeOfArrayLiteral, com.xemantic.typescript.tsgo.go.slices.index<Node?>(node_1.elements(), expr), elementType, CheckModeNormal)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.GetSignatureFromDeclaration 14c62047

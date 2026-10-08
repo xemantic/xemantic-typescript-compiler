@@ -539,7 +539,11 @@ class PackageEmitter(
                 out += tm.fc.typeRef(Naming.kotlinPackage(b.pkg), prog.typeName(b.key, b.name))
                 overrideNames += mnames
             }
-            return out.toList() to overrideNames
+            // The IR's GENERIC interfaces over the type's own parameters ((TSGO.4-a): `*dirty.Box[T]`
+            // implements `dirty.Value[T]`); the non-generic ones are the porter's own match above.
+            if (named.node.list("implements").none { im -> (types.unalias(im.reqInt("iface")) as? NamedType)?.targs?.isNotEmpty() == true }) {
+                return out.toList() to overrideNames
+            }
         }
         val valueClass = tm.namedKind(named) == TypeMapper.NamedKind.VALUE
         for (im in named.node.list("implements")) {
@@ -555,8 +559,10 @@ class PackageEmitter(
                             val kp = Naming.kotlinPackage(it.pkg!!)
                             if (!prog.shims.hasTop(kp, it.name)) continue
                         }
-                        if (it.tparams.isNotEmpty() || it.targs.isNotEmpty()) continue
-                        tm.namedRef(it) to (types.under(ifId) as InterfaceType)
+                        // An INSTANTIATED generic interface (`dirty.Cloneable[*directory]`, `dirty.Value[T]` over the
+                        // type's own parameter, (TSGO.4-a)) with its type arguments; an uninstantiated one never.
+                        if (it.targs.isEmpty() && it.tparams.isNotEmpty()) continue
+                        tm.namedRef(it) + (if (it.targs.isNotEmpty()) tm.typeArgs(it) else "") to (types.under(ifId) as InterfaceType)
                     }
                     it is InterfaceType -> tm.synthIface(it) to it
                     else -> continue
@@ -693,7 +699,8 @@ class PackageEmitter(
                         // A value-class field is handed out RAW (its underlying Kotlin value): json decodes
                         // a number into it; reflect wraps it back (go/reflect Value.field).
                         val box = (types.unalias(f.t) as? NamedType)?.takeIf { prog.hasValuePtrBox(it.key) }
-                        if (box != null) w.line("$i -> ${tm.namedRef(box)}_Ptr({ $n }, { $n = it })")
+                        // The box sits beside its value class: qualified, since an imported class's box is not imported.
+                        if (box != null) w.line("$i -> ${Naming.kotlinPackage((box.origin?.let { types.unalias(it) as NamedType } ?: box).pkg!!)}.${tm.namedRef(box).substringAfterLast('.')}_Ptr({ $n }, { $n = it })")
                         else if (tm.isValueClass(f.t)) w.line("$i -> GoFieldPtr(this, $i, { $n.value }, { $n = $kt(it as ${tm.kt(types.under(f.t).id)}) })")
                         else w.line("$i -> GoFieldPtr(this, $i, { $n }, { $n = $v })")
                     }

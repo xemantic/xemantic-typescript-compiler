@@ -104,6 +104,10 @@ class LoweringRulesTest {
 
     private val gen = File("../xemantic-typescript-compiler-tsgo/src/commonMain/kotlin/gen")
 
+    /** (TSGO.4-a) the language service's packages, counted apart in the census pins (docs/goport-ls.md). */
+    private fun isLanguageService(f: File): Boolean =
+        listOf("ls/", "lsp/", "format/", "project/", "vfs/wrapvfs/", "jsonrpc/").any { f.relativeTo(gen).path.startsWith(it) }
+
     /** The text of the generated function whose `// go:` trace line names [goQname] (to the next trace line). */
     private fun genFunction(file: String, goQname: String): String {
         val text = File(gen, file).readText()
@@ -151,8 +155,8 @@ class LoweringRulesTest {
         fun isHarness(f: File) = harness.any { f.relativeTo(gen).path.startsWith(it) }
         // (TSGO.3-b) the API session (gen/api/*.kt, not api/encoder): counted apart too.
         fun isApiSession(f: File) = f.relativeTo(gen).path.let { it.startsWith("api/") && !it.startsWith("api/encoder/") }
-        fun census(dirs: List<String>?, harnessOnly: Boolean = false, apiOnly: Boolean = false) = gen.walkTopDown()
-            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) && isHarness(it) == harnessOnly && isApiSession(it) == apiOnly }
+        fun census(dirs: List<String>?, harnessOnly: Boolean = false, apiOnly: Boolean = false, lsOnly: Boolean = false) = gen.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) && isHarness(it) == harnessOnly && isApiSession(it) == apiOnly && isLanguageService(it) == lsOnly }
             .sumOf { f -> suffixCopy.findAll(f.readText()).count() }
         // The (TSGO.1) spike's 14 packages: 48 as first generated; 34 after the window rule, 33 after window parameters (2026-10-07).
         val spike = listOf("api", "ast", "binder", "collections", "core", "debug", "diagnostics", "jsnum", "json", "locale", "parser", "scanner", "stringutil", "tspath")
@@ -164,6 +168,8 @@ class LoweringRulesTest {
         assert(census(null, harnessOnly = true) <= 8)
         // The API session: 1 at first generation (2026-10-08, `resolveNodeHandle`'s path tail).
         assert(census(null, apiOnly = true) <= 1)
+        // (TSGO.4-a) the language service (ls, lsp, format, project/*, vfs/wrapvfs, jsonrpc): 54 at first generation (2026-10-08).
+        assert(census(null, lsOnly = true) <= 54)
     }
 
     @Test
@@ -192,8 +198,11 @@ class LoweringRulesTest {
         assert(ident.contains("this.scanASCIIWhile(fun(b: Int): Boolean {"))
         // Every inline function is small: the body is copied into each caller (JIT.1 counts it).
         val inline = Regex("""// go: (\S+) [0-9a-f]+\n(?:@[^\n]*\n)?inline fun """)
-        val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.flatMap { f -> inline.findAll(f.readText()).map { it.groupValues[1] } }.toList()
+        val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") && !isLanguageService(it) }.flatMap { f -> inline.findAll(f.readText()).map { it.groupValues[1] } }.toList()
         assert(all.size in 20..60)
+        // (TSGO.4-a) the language service's: 9 at first generation (2026-10-08).
+        val ls = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") && isLanguageService(it) }.sumOf { f -> inline.findAll(f.readText()).count() }
+        assert(ls <= 9)
         // A function that stores, nil-tests or passes on its func parameter stays a normal function.
         // SetParseJSDocForNode STORES its parameter; parseList passes it into a closure.
         assert(!genFunction("ast/Ast.kt", "github.com/microsoft/typescript-go/internal/ast.SetParseJSDocForNode").contains("inline fun"))

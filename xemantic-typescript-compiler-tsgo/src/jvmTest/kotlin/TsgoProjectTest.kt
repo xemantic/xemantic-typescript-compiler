@@ -101,6 +101,22 @@ class TsgoProjectTest {
     }
 
     @Test
+    fun `the language-service handlers of the API answer - completions and references`() {
+        // (TSGO.4-a) ported with internal/ls; not yet in the API recording (LsParityTest gates the language service itself).
+        val completions = project.request(
+            "getCompletionsAtPosition",
+            """{"snapshot":${project.snapshotId},"project":"/p/tsconfig.json","file":"/p/a.ts","position":${at("home)")}}""",
+        )
+        assert("\"name\":\"home\"" in completions && "\"name\":\"len\"" in completions)
+        val point = project.symbolAtPosition("/p/a.ts", at("Point {", 1))!!
+        val refs = project.request(
+            "getReferencesToSymbolInFile",
+            """{"snapshot":${project.snapshotId},"project":"/p/tsconfig.json","file":"/p/a.ts","symbol":${point.id}}""",
+        )
+        assert(refs.count { it == ',' } + 1 == 3) // the declaration and the two type references
+    }
+
+    @Test
     fun `a refused query throws the handler's error`() {
         val e = runCatching { project.typeAtPosition("/p/missing.ts", 0) }.exceptionOrNull()
         assert(e is TsgoApiException && "source file not found" in e.message!! && !e.panicked)

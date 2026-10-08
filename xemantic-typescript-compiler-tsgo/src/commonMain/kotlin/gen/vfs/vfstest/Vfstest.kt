@@ -32,6 +32,7 @@ import com.xemantic.typescript.tsgo.go.io.fs.File
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
 import com.xemantic.typescript.tsgo.go.io.fs.FileMode
 import com.xemantic.typescript.tsgo.go.testing.fstest.MapFile
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
 import com.xemantic.typescript.tsgo.go.sync.RWMutex
 import com.xemantic.typescript.tsgo.go.io.ReadCloser
 import com.xemantic.typescript.tsgo.go.io.fs.ReadDirFile
@@ -335,7 +336,7 @@ fun <File> fromMapWithClock(goElem_File: GoElem<File>, m: GoMap<String, File>, u
                 val f_1: String = x2 as String
                 file = MapFile(data = goStringToBytes(f_1), modTime = clock!!.now())
             }
-            x2 is GoSlice<*> -> {
+            x2 is com.xemantic.typescript.tsgo.runtime.GoSlice<*> -> {
                 val f_2: GoSlice<Int> = x2 as GoSlice<Int>
                 file = MapFile(data = f_2, modTime = clock!!.now())
             }
@@ -666,7 +667,7 @@ class fileInfo(
     @kotlin.jvm.JvmField var fileInfo: FileInfo? = null,
     @kotlin.jvm.JvmField var sys: Any? = null,
     @kotlin.jvm.JvmField var realpath: String = "",
-) : FileInfo {
+) : Named, FileInfo {
 
     fun goCopy(): fileInfo = fileInfo(fileInfo = fileInfo, sys = sys, realpath = realpath)
 

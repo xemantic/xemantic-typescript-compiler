@@ -717,7 +717,7 @@ class BuildInfoEmitSignature(
             val ok_1: Boolean = t2.second
             if (!ok_1) {
                 val x5 = fileIdAndSignature.value[1]
-                val t4 = if (x5 is GoSlice<*>) Tuple2(x5 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
+                val t4 = if (x5 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x5 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
                 val signatureList: GoSlice<Any?> = t4.first
                 val ok_2: Boolean = t4.second
                 if (!ok_2) {

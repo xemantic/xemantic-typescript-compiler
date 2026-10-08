@@ -234,12 +234,12 @@ fun Checker?.inferFromTypes(n: InferenceState?, source_0: Type?, target_1: Type?
                 }
                 if (n!!.priority.value == inference!!.priority.value) {
                     if (n!!.contravariant && !n!!.bivariant) {
-                        if (!com.xemantic.typescript.tsgo.go.slices.contains<Type?>(inference!!.contraCandidates, (candidate)!!)) {
+                        if (!com.xemantic.typescript.tsgo.go.slices.contains<Type?>(inference!!.contraCandidates, candidate)) {
                             inference!!.contraCandidates = inference!!.contraCandidates.append1(candidate)
                             clearCachedInferences(n!!.inferences)
                         }
                     } else {
-                        var index: Int = com.xemantic.typescript.tsgo.go.slices.index<Type?>(inference!!.candidates, (candidate)!!)
+                        var index: Int = com.xemantic.typescript.tsgo.go.slices.index<Type?>(inference!!.candidates, candidate)
                         if (index < 0 || inference!!.candidateDepths[index] < n!!.depth) {
                             if (index >= 0) {
                                 inference!!.candidates = com.xemantic.typescript.tsgo.go.slices.delete<Type?>(inference!!.candidates, index, index + 1)
@@ -443,12 +443,12 @@ fun Checker?.inferFromMatchingTypes(n: InferenceState?, sources_0: GoSlice<Type?
     }
     if (matchedSources.len != 0) {
         sources = com.xemantic.typescript.tsgo.core.filter<Type?>(GoElem.ref<Type?>(), sources, fun(t_1: Type?): Boolean {
-            return !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(matchedSources, (t_1)!!)
+            return !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(matchedSources, t_1)
         })
     }
     if (matchedTargets.len != 0) {
         targets = com.xemantic.typescript.tsgo.core.filter<Type?>(GoElem.ref<Type?>(), targets, fun(t_2: Type?): Boolean {
-            return !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(matchedTargets, (t_2)!!)
+            return !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(matchedTargets, t_2)
         })
     }
     return Tuple2<GoSlice<Type?>, GoSlice<Type?>>(sources, targets)

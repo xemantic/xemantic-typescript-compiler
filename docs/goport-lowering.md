@@ -97,6 +97,18 @@ byte-identical. What it took: shims for the `io/fs` FS family, `testing/fstest.M
 (`go/internal_repo/Repo.kt`: it locates the checkout through `runtime.Caller`, which a port has not);
 and three lowering rules (below). Entry points: `-tsgo/src/commonMain/kotlin/harness/Harness.kt`.
 
+## 1d. (TSGO.4-a) the language service (2026-10-08)
+
+The closure gains `internal/ls` and what it reaches (`lsp/lsproto`, `ls/lsutil`, `ls/lsconv`, `ls/change`,
+`ls/autoimport`, `format`, `project/dirty`, `project/logging`, `vfs/wrapvfs`, `jsonrpc`; ~62k Go lines): 67
+packages, 99.5% lowered mechanically (`ls` 99.4%, `lsp/lsproto` 100%). The gate is LsParityTest against
+`tsc --lsp` (docs/goport-ls.md § 4): **21,614 / 21,614** requests equal. Rules added (each general, listed with
+the defect that found it in docs/goport-ls.md § 1): Go 1.26 `new(expr)`; instantiated and generic-over-own-
+parameters interface implementation (extractor + `supertypes`); reflect through a parameter
+(`reflectThroughParameters`); struct context keys in `structKeys`; a generic shim's type-parameter argument
+passed as is; a ported generic `*T` parameter instantiated with a non-struct T (`opaquePointerArgs`); an erased
+container in a type test; a qualified `_Ptr` box.
+
 ## 2. Architecture (who owns what)
 
 | file (under `src/jvmMain/kotlin/com/xemantic/typescript/goport/`) | concern |

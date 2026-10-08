@@ -1437,7 +1437,7 @@ fun Binder?.bindParameter(node: Node?) {
         this.checkStrictModeEvalOrArguments(node, decl!!.name())
     }
     if (com.xemantic.typescript.tsgo.ast.isBindingPattern(decl!!.name())) {
-        val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(node!!.parent.parameters(), (node)!!)
+        val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(node!!.parent.parameters(), node)
         this.bindAnonymousDeclaration(node, SymbolFlags(1u), "__" + com.xemantic.typescript.tsgo.go.strconv.itoa(index))
     } else {
         this.declareSymbolAndAddToSymbolTable(node, SymbolFlags(1u), SymbolFlags(111551u))

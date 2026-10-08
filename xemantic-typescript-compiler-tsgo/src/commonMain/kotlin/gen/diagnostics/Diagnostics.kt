@@ -26,13 +26,14 @@ package com.xemantic.typescript.tsgo.diagnostics
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
 import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
 import com.xemantic.typescript.tsgo.go.regexp.Regexp
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
 
 // go: github.com/microsoft/typescript-go/internal/diagnostics.Category 9ed85a7d
 @kotlin.jvm.JvmInline
-value class Category(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Comparable<Category>, GoBasicValue {
+value class Category(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Named, Comparable<Category>, GoBasicValue {
 
     override fun compareTo(other: Category): Int = value.compareTo(other.value)
 
@@ -41,7 +42,7 @@ value class Category(val value: Int) : Stringer, com.xemantic.typescript.tsgo.gl
     override fun goWithRaw(raw: Any): GoBasicValue = Category(raw as Int)
 
     // go: github.com/microsoft/typescript-go/internal/diagnostics.Category.Name 566d8301
-    fun name(): String {
+    override fun name(): String {
         when (this.value) {
             0 -> {
                 return "warning"

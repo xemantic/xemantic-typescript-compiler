@@ -2188,7 +2188,7 @@ fun isPartOfTypeNodeInParent(node: Node?): Boolean {
             return node === parent.type()
         }
         214, 215, 216 -> {
-            return com.xemantic.typescript.tsgo.go.slices.contains<Node?>(parent.typeArguments(), (node)!!)
+            return com.xemantic.typescript.tsgo.go.slices.contains<Node?>(parent.typeArguments(), node)
         }
     }
     return false

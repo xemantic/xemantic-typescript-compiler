@@ -80,12 +80,16 @@ func XtscOpenProgram(configFileName string, fs vfs.FS, libPath string) (*compile
 // XtscCheckerPool is the project checker pool (project/checkerpool.go) reduced to its three
 // categories, one checker each: the persistent API checker every API query uses (created on first use,
 // never disposed — stable type/symbol identity), the diagnostics checker, and the query checker.
-// Each acquisition is exclusive.
+// Each acquisition is exclusive — except within one REQUEST (core.WithRequestID, as the language
+// server tags each request's context): a request that already holds a checker gets it again without
+// blocking, the pool's request affinity (tryReacquireForRequest), which find-all-references needs (it
+// acquires a checker per file while holding the first).
 type XtscCheckerPool struct {
 	program  *compiler.Program
 	mu       sync.Mutex
 	checkers [3]*checker.Checker
 	locks    [3]sync.Mutex
+	heldBy   [3]string
 }
 
 func (p *XtscCheckerPool) GetChecker(ctx context.Context, file *ast.SourceFile) (*checker.Checker, func()) {
@@ -96,14 +100,30 @@ func (p *XtscCheckerPool) GetChecker(ctx context.Context, file *ast.SourceFile) 
 	case core.CheckerLifetimeDiagnostics:
 		i = 1
 	}
+	requestID := core.GetRequestID(ctx)
+	if requestID != "" {
+		p.mu.Lock()
+		if p.heldBy[i] == requestID {
+			c := p.checkers[i]
+			p.mu.Unlock()
+			return c, func() {}
+		}
+		p.mu.Unlock()
+	}
 	p.locks[i].Lock()
 	p.mu.Lock()
 	if p.checkers[i] == nil {
 		p.checkers[i], _ = checker.NewChecker(p.program, nil)
 	}
 	c := p.checkers[i]
+	p.heldBy[i] = requestID
 	p.mu.Unlock()
-	return c, sync.OnceFunc(p.locks[i].Unlock)
+	return c, sync.OnceFunc(func() {
+		p.mu.Lock()
+		p.heldBy[i] = ""
+		p.mu.Unlock()
+		p.locks[i].Unlock()
+	})
 }
 
 // GetGlobalDiagnostics is the global (file-less) diagnostics of every checker created so far, as

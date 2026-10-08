@@ -628,7 +628,7 @@ fun Parser?.parseJSONText(): SourceFile? {
             }
             if (expressions != null) {
                 val x1 = expressions
-                val t0 = if (x1 is GoSlice<*>) Tuple2(x1 as GoSlice<Node?>, true) else Tuple2(GoElem.ref<Node?>().nilSlice, false)
+                val t0 = if (x1 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x1 as GoSlice<Node?>, true) else Tuple2(GoElem.ref<Node?>().nilSlice, false)
                 val es: GoSlice<Node?> = t0.first
                 val ok: Boolean = t0.second
                 if (ok) {
@@ -645,7 +645,7 @@ fun Parser?.parseJSONText(): SourceFile? {
         }
         var expression_1: Node? = null
         val x3 = expressions
-        val t2 = if (x3 is GoSlice<*>) Tuple2(x3 as GoSlice<Node?>, true) else Tuple2(GoElem.ref<Node?>().nilSlice, false)
+        val t2 = if (x3 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x3 as GoSlice<Node?>, true) else Tuple2(GoElem.ref<Node?>().nilSlice, false)
         val es_1: GoSlice<Node?> = t2.first
         val ok_1: Boolean = t2.second
         if (ok_1) {

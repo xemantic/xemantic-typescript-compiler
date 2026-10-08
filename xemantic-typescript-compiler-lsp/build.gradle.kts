@@ -34,7 +34,7 @@ base {
 }
 
 // THE LSP SERVER (owner directive 2026-09-01, Phase 18): JSON-RPC 2.0 over
-// stdio, mapped onto the `-project` embedding API — so anyone can try the
+// stdio, answered by tsgo's language service ported to Kotlin (`-tsgo`, (TSGO.4-a)) — so anyone can try the
 // checker from any editor in five minutes. No lsp4j (JVM-only Java; this repo
 // is KMP): the protocol layer is kotlinx-serialization-json over kotlinx-io,
 // both already in the version catalog.
@@ -54,7 +54,7 @@ kotlin {
 
         commonMain {
             dependencies {
-                api(project(":xemantic-typescript-compiler-project"))
+                api(project(":xemantic-typescript-compiler-tsgo"))
                 implementation(libs.kotlinx.serialization.json)
                 implementation(libs.kotlinx.io.core)
             }

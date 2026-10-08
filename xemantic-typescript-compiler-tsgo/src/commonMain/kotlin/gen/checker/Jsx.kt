@@ -320,7 +320,7 @@ fun Checker?.getContextualTypeForChildJsxExpression(node: Node?, child: Node?, c
         return null
     }
     val realChildren: GoSlice<Node?> = com.xemantic.typescript.tsgo.ast.getSemanticJsxChildren(node.children()!!.nodes)
-    val childIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(realChildren, (child)!!)
+    val childIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(realChildren, child)
     val childFieldType: Type? = this.getTypeOfPropertyOfContextualTypeImpl(attributesType, jsxChildrenPropertyName)
     if (childFieldType == null) {
         return null

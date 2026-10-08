@@ -79,28 +79,30 @@ fun xtscOpenProgram(configFileName: String, fs_0: FS?, libPath_1: String): Tuple
     return Tuple3<Program?, XtscCheckerPool?, GoSlice<Diagnostic?>>(program, pool, errs)
 }
 
-// go: github.com/microsoft/typescript-go/internal/api.XtscCheckerPool 223dac3a
+// go: github.com/microsoft/typescript-go/internal/api.XtscCheckerPool 88509101
 class XtscCheckerPool(
     @kotlin.jvm.JvmField var program: Program? = null,
     @kotlin.jvm.JvmField var mu: Mutex = Mutex(),
     @kotlin.jvm.JvmField var checkers: GoArray<Checker?> = GoArray(3, GoElem.ref<Checker?>()),
     @kotlin.jvm.JvmField var locks: GoArray<Mutex> = GoArray(3, GoElem<Mutex>({ Mutex() }, { it.goCopy() })),
+    @kotlin.jvm.JvmField var heldBy: GoArray<String> = GoArray(3, GoElem.STRING),
 ) : CheckerPool {
 
-    fun goCopy(): XtscCheckerPool = XtscCheckerPool(program = program, mu = mu.goCopy(), checkers = checkers.goCopy(), locks = locks.goCopy())
+    fun goCopy(): XtscCheckerPool = XtscCheckerPool(program = program, mu = mu.goCopy(), checkers = checkers.goCopy(), locks = locks.goCopy(), heldBy = heldBy.goCopy())
 
     fun goSet(o: XtscCheckerPool) {
         program = o.program
         mu = o.mu.goCopy()
         checkers = o.checkers.goCopy()
         locks = o.locks.goCopy()
+        heldBy = o.heldBy.goCopy()
     }
 
-    fun goEquals(o: XtscCheckerPool): Boolean = program === o.program && mu == o.mu && checkers.goEquals(o.checkers) && locks.goEquals(o.locks)
+    fun goEquals(o: XtscCheckerPool): Boolean = program === o.program && mu == o.mu && checkers.goEquals(o.checkers) && locks.goEquals(o.locks) && heldBy.goEquals(o.heldBy)
 
-    fun goHash(): Int = 31 * program.hashCode() + 31 * mu.hashCode() + 31 * checkers.goHash() + 31 * locks.goHash()
+    fun goHash(): Int = 31 * program.hashCode() + 31 * mu.hashCode() + 31 * checkers.goHash() + 31 * locks.goHash() + 31 * heldBy.goHash()
 
-    // go: github.com/microsoft/typescript-go/internal/api.XtscCheckerPool.GetChecker bfe26303
+    // go: github.com/microsoft/typescript-go/internal/api.XtscCheckerPool.GetChecker 9d11da76
     override fun getChecker(ctx: Context?, file: SourceFile?): Tuple2<Checker?, (() -> Unit)?> {
         var i: Int = 2
         when (com.xemantic.typescript.tsgo.core.getCheckerLifetime(ctx).value) {
@@ -111,15 +113,32 @@ class XtscCheckerPool(
                 i = 1
             }
         }
+        val requestID: String = com.xemantic.typescript.tsgo.core.getRequestID(ctx)
+        if (requestID != "") {
+            this.mu.lock()
+            if (this.heldBy[i] == requestID) {
+                val c: Checker? = this.checkers[i]
+                this.mu.unlock()
+                return Tuple2<Checker?, (() -> Unit)?>(c, fun() {
+                })
+            }
+            this.mu.unlock()
+        }
         this.locks[i].lock()
         this.mu.lock()
         if (this.checkers[i] == null) {
             val t0 = com.xemantic.typescript.tsgo.checker.newChecker(this.program, null)
             this.checkers[i] = t0.first
         }
-        val c: Checker? = this.checkers[i]
+        val c_1: Checker? = this.checkers[i]
+        this.heldBy[i] = requestID
         this.mu.unlock()
-        return Tuple2<Checker?, (() -> Unit)?>(c, com.xemantic.typescript.tsgo.go.sync.onceFunc((run { val r1 = this.locks[i]; fun() = r1.unlock() })!!))
+        return Tuple2<Checker?, (() -> Unit)?>(c_1, com.xemantic.typescript.tsgo.go.sync.onceFunc(fun() {
+            this.mu.lock()
+            this.heldBy[i] = ""
+            this.mu.unlock()
+            this.locks[i].unlock()
+        }))
     }
 
     companion object {

@@ -37,7 +37,9 @@ var partialClosure = map[string][]string{
 	"testutil":                {"TestProgramIsSingleThreaded"},
 	// (TSGO.3-b) the API session in-process (docs/goport-api.md): the overlay's entry points keep
 	// Session, whose methods (HandleRequest and every handler) are kept with it.
-	"api": {"XtscNewSession", "XtscMarshal", "XtscOpenProgram"},
+	"api": {"XtscNewSession", "XtscMarshal", "XtscOpenProgram",
+		// (TSGO.4-a) the language service behind the language server's handlers (docs/goport-ls.md)
+		"XtscResolveClientCapabilities", "XtscUserPreferences", "XtscLanguageService"},
 }
 
 // partialStubs: methods ("Recv.Name") or functions of a partial package kept as a SIGNATURE ONLY — the
@@ -50,13 +52,9 @@ var partialStubs = map[string][]string{
 		// the project-session lifecycle: replaced by XtscNewSession's caller-built snapshot
 		"Session.handleInitialize", "Session.handleUpdateSnapshot", "Session.handleRelease",
 		"Session.handleGetDefaultProjectForFile", "Session.Close", "Session.releaseOpenRefs",
-		"Session.toFileChangeSummary", "computeSnapshotChanges", "Session.setupLanguageService",
+		"Session.toFileChangeSummary", "computeSnapshotChanges",
 		// runtime/pprof
 		"Session.handleStartCPUProfile", "Session.handleStopCPUProfile", "Session.handleSaveHeapProfile",
-		// internal/ls (not ported yet)
-		"Session.handleGetCompletionsAtPosition", "Session.handleGetReferencesToSymbolInFile",
-		"Session.handleGetReferencedSymbolsForNode", "Session.handleGetSignatureUsages",
-		"Session.handleGetJSDocTags", "Session.handleGetDocumentationComment",
 	},
 }
 

@@ -156,7 +156,7 @@ fun com.xemantic.typescript.tsgo.execute.incremental.toBuildInfo?.toRelativeToBu
     if (option!!.kind.value == "list") {
         if (option.elements()!!.isFilePath) {
             val x1 = v
-            val t0 = if (x1 is GoSlice<*>) Tuple2(x1 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+            val t0 = if (x1 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x1 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
             val arr: GoSlice<String> = t0.first
             val ok: Boolean = t0.second
             if (ok) {

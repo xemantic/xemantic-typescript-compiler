@@ -27,6 +27,8 @@ import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.pprof.CPUProfiler
 import com.xemantic.typescript.tsgo.checker.Checker
 import com.xemantic.typescript.tsgo.core.CheckerLifetime
+import com.xemantic.typescript.tsgo.ls.CompletionItem
+import com.xemantic.typescript.tsgo.ls.CompletionList
 import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.checker.ContextFlags
 import com.xemantic.typescript.tsgo.ast.Diagnostic
@@ -48,12 +50,15 @@ import com.xemantic.typescript.tsgo.printer.PrinterOptions
 import com.xemantic.typescript.tsgo.compiler.Program
 import com.xemantic.typescript.tsgo.project.Project
 import com.xemantic.typescript.tsgo.go.sync.RWMutex
+import com.xemantic.typescript.tsgo.ls.ReferenceEntry
 import com.xemantic.typescript.tsgo.checker.Signature
 import com.xemantic.typescript.tsgo.checker.SignatureKind
+import com.xemantic.typescript.tsgo.ls.SignatureUsage
 import com.xemantic.typescript.tsgo.project.Snapshot
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.SourceFileMetaData
 import com.xemantic.typescript.tsgo.ast.Symbol
+import com.xemantic.typescript.tsgo.ls.SymbolAndEntries
 import com.xemantic.typescript.tsgo.ast.SymbolFlags
 import com.xemantic.typescript.tsgo.ast.SymbolTable
 import com.xemantic.typescript.tsgo.tsoptions.TsConfigSourceFile
@@ -104,6 +109,7 @@ import com.xemantic.typescript.tsgo.checker.getNullType
 import com.xemantic.typescript.tsgo.checker.getNumberType
 import com.xemantic.typescript.tsgo.checker.getPropertiesOfType
 import com.xemantic.typescript.tsgo.checker.getPropertyOfType
+import com.xemantic.typescript.tsgo.checker.getReferencesToSymbolInFile
 import com.xemantic.typescript.tsgo.checker.getResolvedSignature
 import com.xemantic.typescript.tsgo.checker.getRestTypeOfSignature
 import com.xemantic.typescript.tsgo.checker.getReturnTypeOfSignature
@@ -156,6 +162,16 @@ import com.xemantic.typescript.tsgo.checker.types
 import com.xemantic.typescript.tsgo.checker.valueType
 import com.xemantic.typescript.tsgo.compiler.getSourceFileByPath
 import com.xemantic.typescript.tsgo.compiler.getTypeChecker
+import com.xemantic.typescript.tsgo.ls.definitionNode
+import com.xemantic.typescript.tsgo.ls.definitionSymbol
+import com.xemantic.typescript.tsgo.ls.getCompletionsAtPosition
+import com.xemantic.typescript.tsgo.ls.getReferencedSymbolsForNode
+import com.xemantic.typescript.tsgo.ls.getSignatureUsages
+import com.xemantic.typescript.tsgo.ls.getSymbolDocumentationComment
+import com.xemantic.typescript.tsgo.ls.getSymbolJSDocTags
+import com.xemantic.typescript.tsgo.ls.isNodeEntry
+import com.xemantic.typescript.tsgo.ls.node
+import com.xemantic.typescript.tsgo.ls.references
 import com.xemantic.typescript.tsgo.printer.emit
 import com.xemantic.typescript.tsgo.tsoptions.compilerOptions
 import com.xemantic.typescript.tsgo.tsoptions.fileNames
@@ -640,7 +656,12 @@ fun Session?.setupChecker(ctx: Context?, snapshot: SnapshotID, projectHandle: Pr
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.setupLanguageService 680c9e25
 fun Session?.setupLanguageService(sd: com.xemantic.typescript.tsgo.api.snapshotData?, program: Program?, projectHandle: ProjectID, activeFile: String): Tuple2<LanguageService?, GoError?> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/api.Session.setupLanguageService")
+    val projectName: Path = parseProjectHandle(projectHandle)
+    val proj: Project? = sd!!.snapshot!!.projectCollection!!.getProjectByPath(projectName)
+    if (proj == null) {
+        return Tuple2<LanguageService?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("%w: project %s not found", errClientError, projectName))
+    }
+    return Tuple2<LanguageService?, GoError?>(com.xemantic.typescript.tsgo.ls.newLanguageService(proj!!.id(), program, sd!!.snapshot, activeFile), null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.HandleRequest 3f4393dc
@@ -3068,12 +3089,73 @@ fun Session?.handleGetMemberInModuleExports(ctx: Context?, params: GetMemberInMo
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.handleGetJSDocTags a876796a
 fun Session?.handleGetJSDocTags(ctx: Context?, params: CheckerSymbolParams?): Tuple2<GoSlice<JSDocTagInfo?>, GoError?> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/api.Session.handleGetJSDocTags")
+    return withDefers({ Tuple2<GoSlice<JSDocTagInfo?>, GoError?>(GoElem.ref<JSDocTagInfo?>().nilSlice, null) }) { df0 ->
+        val t1 = this.setupChecker(ctx, params!!.snapshot, params!!.project)
+        val setup: com.xemantic.typescript.tsgo.api.checkerSetup = t1.first
+        var err: GoError? = t1.second
+        if (err != null) {
+            return Tuple2<GoSlice<JSDocTagInfo?>, GoError?>(GoElem.ref<JSDocTagInfo?>().nilSlice, err)
+        }
+        val df2 = setup.done
+        df0.defer { df2!!() }
+        val t3 = setup.resolveSymbolHandle(params!!.symbol)
+        val symbol: Symbol? = t3.first
+        err = t3.second
+        if (err != null) {
+            return Tuple2<GoSlice<JSDocTagInfo?>, GoError?>(GoElem.ref<JSDocTagInfo?>().nilSlice, err)
+        }
+        if (symbol == null) {
+            return Tuple2<GoSlice<JSDocTagInfo?>, GoError?>(GoElem.ref<JSDocTagInfo?>().nilSlice, null)
+        }
+        val t4 = this.setupLanguageService(setup.sd, setup.program, params!!.project, "")
+        val langSvc: LanguageService? = t4.first
+        err = t4.second
+        if (err != null) {
+            return Tuple2<GoSlice<JSDocTagInfo?>, GoError?>(GoElem.ref<JSDocTagInfo?>().nilSlice, err)
+        }
+        val tags: GoSlice<com.xemantic.typescript.tsgo.ls.JSDocTagInfo> = langSvc.getSymbolJSDocTags(symbol)
+        if (tags.len == 0) {
+            return Tuple2<GoSlice<JSDocTagInfo?>, GoError?>(GoElem.ref<JSDocTagInfo?>().nilSlice, null)
+        }
+        val results: GoSlice<JSDocTagInfo?> = GoSlice.make(GoElem.ref<JSDocTagInfo?>(), tags.len)
+        val s5 = tags
+        l0@ for (i6 in 0 until s5.len) {
+            val i: Int = i6
+            val tag: com.xemantic.typescript.tsgo.ls.JSDocTagInfo = s5[i6].goCopy()
+            results[i] = JSDocTagInfo(name = tag.name, text = tag.text)
+        }
+        return Tuple2<GoSlice<JSDocTagInfo?>, GoError?>(results, null)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.handleGetDocumentationComment 5b02c9f8
 fun Session?.handleGetDocumentationComment(ctx: Context?, params: CheckerSymbolParams?): Tuple2<String, GoError?> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/api.Session.handleGetDocumentationComment")
+    return withDefers({ Tuple2<String, GoError?>("", null) }) { df0 ->
+        val t1 = this.setupChecker(ctx, params!!.snapshot, params!!.project)
+        val setup: com.xemantic.typescript.tsgo.api.checkerSetup = t1.first
+        var err: GoError? = t1.second
+        if (err != null) {
+            return Tuple2<String, GoError?>("", err)
+        }
+        val df2 = setup.done
+        df0.defer { df2!!() }
+        val t3 = setup.resolveSymbolHandle(params!!.symbol)
+        val symbol: Symbol? = t3.first
+        err = t3.second
+        if (err != null) {
+            return Tuple2<String, GoError?>("", err)
+        }
+        if (symbol == null) {
+            return Tuple2<String, GoError?>("", null)
+        }
+        val t4 = this.setupLanguageService(setup.sd, setup.program, params!!.project, "")
+        val langSvc: LanguageService? = t4.first
+        err = t4.second
+        if (err != null) {
+            return Tuple2<String, GoError?>("", err)
+        }
+        return Tuple2<String, GoError?>(langSvc.getSymbolDocumentationComment(setup.checker, symbol), null)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.handleGetTypeArguments eb24dcf1
@@ -3415,22 +3497,199 @@ fun Session?.resolveOptionalSourceFile(program: Program?, file: DocumentIdentifi
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.handleGetReferencesToSymbolInFile 3517ff4e
 fun Session?.handleGetReferencesToSymbolInFile(ctx: Context?, params: GetReferencesToSymbolInFileParams?): Tuple2<GoSlice<NodeHandle>, GoError?> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/api.Session.handleGetReferencesToSymbolInFile")
+    return withDefers({ Tuple2<GoSlice<NodeHandle>, GoError?>(NodeHandle.ELEM.nilSlice, null) }) { df0 ->
+        val t1 = this.setupChecker(ctx, params!!.snapshot, params!!.project)
+        val setup: com.xemantic.typescript.tsgo.api.checkerSetup = t1.first
+        var err: GoError? = t1.second
+        if (err != null) {
+            return Tuple2<GoSlice<NodeHandle>, GoError?>(NodeHandle.ELEM.nilSlice, err)
+        }
+        val df2 = setup.done
+        df0.defer { df2!!() }
+        val t3 = setup.resolveSymbolHandle(params!!.symbol)
+        val symbol: Symbol? = t3.first
+        err = t3.second
+        if (err != null) {
+            return Tuple2<GoSlice<NodeHandle>, GoError?>(NodeHandle.ELEM.nilSlice, err)
+        }
+        if (symbol == null) {
+            return Tuple2<GoSlice<NodeHandle>, GoError?>(NodeHandle.ELEM.nilSlice, null)
+        }
+        val sourceFile: SourceFile? = setup.program!!.getSourceFile(params!!.file.toFileName())
+        if (sourceFile == null) {
+            return Tuple2<GoSlice<NodeHandle>, GoError?>(NodeHandle.ELEM.nilSlice, com.xemantic.typescript.tsgo.go.fmt.errorf("%w: source file not found: %v", errClientError, params!!.file.goCopy()))
+        }
+        val nodes: GoSlice<Node?> = setup.checker.getReferencesToSymbolInFile(sourceFile, symbol)
+        val result: GoSlice<NodeHandle> = GoSlice.make(NodeHandle.ELEM, nodes.len)
+        val s4 = nodes
+        l0@ for (i5 in 0 until s4.len) {
+            val i: Int = i5
+            val node: Node? = s4[i5]
+            result[i] = setup.sd.nodeHandleFrom(node)
+        }
+        return Tuple2<GoSlice<NodeHandle>, GoError?>(result, null)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.handleGetSignatureUsages 921c3e81
 fun Session?.handleGetSignatureUsages(ctx: Context?, params: GetSignatureUsagesParams?): Tuple2<GoSlice<SignatureUsageResponse>, GoError?> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/api.Session.handleGetSignatureUsages")
+    val t0 = this.getSnapshotData(params!!.snapshot)
+    val sd: com.xemantic.typescript.tsgo.api.snapshotData? = t0.first
+    var err: GoError? = t0.second
+    if (err != null) {
+        return Tuple2<GoSlice<SignatureUsageResponse>, GoError?>(SignatureUsageResponse.ELEM.nilSlice, err)
+    }
+    val t1 = sd.getProgram(params!!.project)
+    val program: Program? = t1.first
+    err = t1.second
+    if (err != null) {
+        return Tuple2<GoSlice<SignatureUsageResponse>, GoError?>(SignatureUsageResponse.ELEM.nilSlice, err)
+    }
+    val t2 = sd.resolveNodeHandle(program, params!!.signatureDecl)
+    val signatureDecl: Node? = t2.first
+    err = t2.second
+    if (err != null) {
+        return Tuple2<GoSlice<SignatureUsageResponse>, GoError?>(SignatureUsageResponse.ELEM.nilSlice, err)
+    }
+    if (signatureDecl == null) {
+        return Tuple2<GoSlice<SignatureUsageResponse>, GoError?>(SignatureUsageResponse.ELEM.nilSlice, null)
+    }
+    val t3 = this.setupLanguageService(sd, program, params!!.project, "")
+    val langSvc: LanguageService? = t3.first
+    err = t3.second
+    if (err != null) {
+        return Tuple2<GoSlice<SignatureUsageResponse>, GoError?>(SignatureUsageResponse.ELEM.nilSlice, err)
+    }
+    val usages: GoSlice<SignatureUsage> = langSvc.getSignatureUsages(ctx, signatureDecl)
+    if (usages.isNil) {
+        return Tuple2<GoSlice<SignatureUsageResponse>, GoError?>(SignatureUsageResponse.ELEM.nilSlice, null)
+    }
+    var result: GoSlice<SignatureUsageResponse> = GoSlice.make(SignatureUsageResponse.ELEM, 0, usages.len)
+    val s4 = usages
+    l0@ for (i5 in 0 until s4.len) {
+        val u: SignatureUsage = s4[i5].goCopy()
+        val entry: SignatureUsageResponse = SignatureUsageResponse(name = sd.nodeHandleFrom(u.name))
+        if (u.call != null) {
+            entry.call = sd.nodeHandleFrom(u.call)
+        }
+        result = result.append1(entry.goCopy())
+    }
+    return Tuple2<GoSlice<SignatureUsageResponse>, GoError?>(result, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.handleGetCompletionsAtPosition 498b6170
 fun Session?.handleGetCompletionsAtPosition(ctx_0: Context?, params: GetCompletionsAtPositionParams?): Tuple2<CompletionInfoResponse?, GoError?> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/api.Session.handleGetCompletionsAtPosition")
+    var ctx: Context? = ctx_0
+    if (params!!.includeSymbol) {
+        ctx = com.xemantic.typescript.tsgo.core.withCheckerLifetime(ctx, CheckerLifetime(2))
+    }
+    val t1 = this.getSnapshotData(params!!.snapshot)
+    val sd: com.xemantic.typescript.tsgo.api.snapshotData? = t1.first
+    var err: GoError? = t1.second
+    if (err != null) {
+        return Tuple2<CompletionInfoResponse?, GoError?>(null, err)
+    }
+    val t2 = sd.getProgram(params!!.project)
+    val program: Program? = t2.first
+    err = t2.second
+    if (err != null) {
+        return Tuple2<CompletionInfoResponse?, GoError?>(null, err)
+    }
+    val sourceFile: SourceFile? = program!!.getSourceFile(params!!.file.toFileName())
+    if (sourceFile == null) {
+        return Tuple2<CompletionInfoResponse?, GoError?>(null, null)
+    }
+    val t3 = this.setupLanguageService(sd, program, params!!.project, "")
+    val langSvc: LanguageService? = t3.first
+    err = t3.second
+    if (err != null) {
+        return Tuple2<CompletionInfoResponse?, GoError?>(null, err)
+    }
+    val positionMap: PositionMap? = sourceFile.getPositionMap()
+    val internalPos: Int = positionMap.utf16ToUTF8(params!!.position.toInt())
+    val t4 = langSvc.getCompletionsAtPosition(ctx, sourceFile, internalPos, params!!.triggerCharacter, params!!.includeSymbol)
+    val result: CompletionList? = t4.first
+    err = t4.second
+    if (err != null || result == null) {
+        return Tuple2<CompletionInfoResponse?, GoError?>(null, err)
+    }
+    var entries: GoSlice<CompletionEntryResponse?> = GoSlice.make(GoElem.ref<CompletionEntryResponse?>(), 0, result!!.items.len)
+    val s5 = result!!.items
+    l0@ for (i6 in 0 until s5.len) {
+        val item: CompletionItem? = s5[i6]
+        val entry: CompletionEntryResponse? = CompletionEntryResponse(name = item!!.completionItem!!.label, sortText = item!!.completionItem!!.sortText, insertText = item!!.completionItem!!.insertText, filterText = item!!.completionItem!!.filterText, detail = item!!.completionItem!!.detail)
+        if (item!!.completionItem!!.kind != null) {
+            entry!!.kind = item!!.completionItem!!.kind!!.value.value
+        }
+        if (item!!.completionItem!!.labelDetails != null) {
+            entry!!.labelDetails = CompletionEntryLabelDetailsResponse(detail = item!!.completionItem!!.labelDetails!!.detail, description = item!!.completionItem!!.labelDetails!!.description)
+        }
+        if (item!!.symbol != null) {
+            entry!!.symbol = sd.newSymbolResponse(item!!.symbol, params!!.project)
+        }
+        entries = entries.append1(entry)
+    }
+    return Tuple2<CompletionInfoResponse?, GoError?>(CompletionInfoResponse(isIncomplete = result!!.isIncomplete, entries = entries), null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api.Session.handleGetReferencedSymbolsForNode 07ec9e62
 fun Session?.handleGetReferencedSymbolsForNode(ctx: Context?, params: GetReferencedSymbolsForNodeParams?): Tuple2<GoSlice<ReferencedSymbolEntry>, GoError?> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/api.Session.handleGetReferencedSymbolsForNode")
+    val t0 = this.getSnapshotData(params!!.snapshot)
+    val sd: com.xemantic.typescript.tsgo.api.snapshotData? = t0.first
+    var err: GoError? = t0.second
+    if (err != null) {
+        return Tuple2<GoSlice<ReferencedSymbolEntry>, GoError?>(ReferencedSymbolEntry.ELEM.nilSlice, err)
+    }
+    val t1 = sd.getProgram(params!!.project)
+    val program: Program? = t1.first
+    err = t1.second
+    if (err != null) {
+        return Tuple2<GoSlice<ReferencedSymbolEntry>, GoError?>(ReferencedSymbolEntry.ELEM.nilSlice, err)
+    }
+    val t2 = sd.resolveNodeHandle(program, params!!.node)
+    val node: Node? = t2.first
+    err = t2.second
+    if (err != null) {
+        return Tuple2<GoSlice<ReferencedSymbolEntry>, GoError?>(ReferencedSymbolEntry.ELEM.nilSlice, err)
+    }
+    if (node == null) {
+        return Tuple2<GoSlice<ReferencedSymbolEntry>, GoError?>(ReferencedSymbolEntry.ELEM.nilSlice, null)
+    }
+    val t3 = this.setupLanguageService(sd, program, params!!.project, "")
+    val langSvc: LanguageService? = t3.first
+    err = t3.second
+    if (err != null) {
+        return Tuple2<GoSlice<ReferencedSymbolEntry>, GoError?>(ReferencedSymbolEntry.ELEM.nilSlice, err)
+    }
+    val sourceFiles: GoSlice<SourceFile?> = program!!.getSourceFiles()
+    val entries: GoSlice<SymbolAndEntries?> = langSvc.getReferencedSymbolsForNode(ctx, params!!.position, node, sourceFiles)
+    if (entries.isNil) {
+        return Tuple2<GoSlice<ReferencedSymbolEntry>, GoError?>(ReferencedSymbolEntry.ELEM.nilSlice, null)
+    }
+    var result: GoSlice<ReferencedSymbolEntry> = ReferencedSymbolEntry.ELEM.nilSlice
+    val s4 = entries
+    l0@ for (i5 in 0 until s4.len) {
+        val entry: SymbolAndEntries? = s4[i5]
+        val defNode: Node? = entry.definitionNode()
+        if (defNode == null) {
+            continue@l0
+        }
+        var refs: GoSlice<NodeHandle> = NodeHandle.ELEM.nilSlice
+        val s6 = entry.references()
+        l1@ for (i7 in 0 until s6.len) {
+            val ref: ReferenceEntry? = s6[i7]
+            if (ref.isNodeEntry()) {
+                refs = refs.append1(sd.nodeHandleFrom(ref.node()))
+            }
+        }
+        val re: ReferencedSymbolEntry = ReferencedSymbolEntry(definition = sd.nodeHandleFrom(defNode), references = refs)
+        val sym: Symbol? = entry.definitionSymbol()
+        if (sym != null) {
+            re.symbol = sd.newSymbolResponse(sym, params!!.project)
+        }
+        result = result.append1(re.goCopy())
+    }
+    return Tuple2<GoSlice<ReferencedSymbolEntry>, GoError?>(result, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/api.sessionIDCounter e0fd8f86

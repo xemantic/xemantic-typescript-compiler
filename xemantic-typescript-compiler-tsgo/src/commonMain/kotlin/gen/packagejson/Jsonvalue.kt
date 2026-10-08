@@ -29,6 +29,7 @@ import com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.Option
 import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
 
 // go: github.com/microsoft/typescript-go/internal/packagejson.JSONValueType ed9c1aa8
 @kotlin.jvm.JvmInline

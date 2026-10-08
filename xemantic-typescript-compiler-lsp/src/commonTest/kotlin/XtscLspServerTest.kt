@@ -26,408 +26,215 @@
 package com.xemantic.typescript.compiler.lsp
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.project.Project
 import kotlinx.io.Buffer
 import kotlinx.io.Source
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 
 /**
- * The whole server loop driven over in-memory [Buffer]s with a real [Project]
- * on an [InMemoryVfs] — byte-identical to a production stdio session.
- *
- * Every expected hover VALUE comes from a parallel [Project] over the same
- * fixture asked directly — self-consistency, never a hand-written type string —
- * so these pins survive display changes in the compiler and redden only when
- * the SERVER layer diverges from the API it wraps.
+ * (TSGO.4-a) the server loop over in-memory [Buffer]s, answered by tsgo's ported language service on an
+ * in-memory project ([OverlayFS] with no disk under it). The ANSWERS are tsgo's (graded against the tsgo
+ * binary's own language server by `-tsgo`'s LsParityTest); these pins fix the server's end: framing,
+ * routing a request to the language service, the client's buffers, the project lookup, the push of
+ * diagnostics and the exit codes. The expected texts were read from `tsc --lsp` 7.0.2 on the same fixture.
  */
 class XtscLspServerTest {
 
-    private val config =
-        """{ "compilerOptions": { "target": "es2020", "module": "esnext", "strict": true },""" +
-            """ "include": ["src/**/*.ts"] }"""
+    private val config = """{ "compilerOptions": { "target": "es2020", "module": "esnext", "strict": true }, "include": ["src/**/*.ts"] }"""
 
-    private val file = "/proj/src/a.ts"
     private val fileUri = "file:///proj/src/a.ts"
 
-    /**
-     * Line 0 carries an astral-plane character BEFORE the hover target, so an
-     * LSP `character` for `abc` differs between UTF-16 units (what the protocol
-     * and this API both count) and code points — the UTF-16 pin lives on it.
-     */
-    private val line0 = "const s = \"\uD835\uDD4F\"; const abc = 1;"
+    /** Line 0 carries an astral-plane character BEFORE `abc`, so its LSP character is UTF-16 units. */
+    private val line0 = "const s = \"𝕏\"; const abc = 1;"
     private val line1 = "const other = abc + 1;"
     private val sourceText = line0 + "\n" + line1 + "\n"
 
-    private fun fixture(): Map<String, String> =
-        mapOf("/proj/tsconfig.json" to config, file to sourceText)
+    private fun disk(source: String = sourceText): OverlayFS = OverlayFS().apply {
+        put("/proj/tsconfig.json", config)
+        put("/proj/src/a.ts", source)
+    }
 
-    private fun directProject(): Project = Project.open("/proj", InMemoryVfs(fixture()))
-
-    // --- protocol builders ------------------------------------------------------
-
-    private fun request(id: Int, method: String, params: JsonObject? = null): String =
-        buildJsonObject {
-            put("jsonrpc", "2.0")
-            put("id", id)
-            put("method", method)
-            if (params != null) put("params", params)
-        }.toString()
-
-    private fun notification(method: String, params: JsonObject? = null): String =
-        buildJsonObject {
-            put("jsonrpc", "2.0")
-            put("method", method)
-            if (params != null) put("params", params)
-        }.toString()
-
-    private fun initializeParams(rootUri: String): JsonObject =
-        buildJsonObject { put("rootUri", rootUri) }
-
-    private fun didOpenParams(uri: String, text: String): JsonObject = buildJsonObject {
+    private val capabilities = buildJsonObject {
         put(
             "textDocument",
             buildJsonObject {
-                put("uri", uri)
-                put("languageId", "typescript")
-                put("version", 1)
-                put("text", text)
+                put("hover", buildJsonObject { put("contentFormat", buildJsonArray { add(JsonPrimitive("plaintext")) }) })
             },
         )
     }
 
-    private fun hoverParams(uri: String, line: Int, character: Int): JsonObject =
-        buildJsonObject {
+    // --- protocol builders ------------------------------------------------------
+
+    private fun request(id: Int, method: String, params: JsonObject? = null): String = buildJsonObject {
+        put("jsonrpc", "2.0")
+        put("id", id)
+        put("method", method)
+        if (params != null) put("params", params)
+    }.toString()
+
+    private fun notification(method: String, params: JsonObject? = null): String = buildJsonObject {
+        put("jsonrpc", "2.0")
+        put("method", method)
+        if (params != null) put("params", params)
+    }.toString()
+
+    private fun initialize(id: Int = 1) = request(id, "initialize", buildJsonObject {
+        put("processId", JsonNull)
+        put("rootUri", "file:///proj")
+        put("capabilities", capabilities)
+    })
+
+    private fun didOpen(text: String, uri: String = fileUri) = notification("textDocument/didOpen", buildJsonObject {
+        put("textDocument", buildJsonObject {
+            put("uri", uri)
+            put("languageId", "typescript")
+            put("version", 1)
+            put("text", text)
+        })
+    })
+
+    private fun didChange(text: String) = notification("textDocument/didChange", buildJsonObject {
+        put("textDocument", buildJsonObject { put("uri", fileUri); put("version", 2) })
+        put("contentChanges", buildJsonArray { add(buildJsonObject { put("text", text) }) })
+    })
+
+    private fun at(id: Int, method: String, line: Int, character: Int, uri: String = fileUri, extra: JsonObject? = null) =
+        request(id, method, buildJsonObject {
             put("textDocument", buildJsonObject { put("uri", uri) })
-            put(
-                "position",
-                buildJsonObject {
-                    put("line", line)
-                    put("character", character)
-                },
-            )
-        }
+            put("position", buildJsonObject { put("line", line); put("character", character) })
+            extra?.forEach { (k, v) -> put(k, v) }
+        })
 
-    /** All responses on [source], keyed by their integer id. */
-    private fun readResponses(source: Source): Map<Int, JsonObject> {
+    private class Session(val responses: Map<Int, JsonObject>, val notifications: List<JsonObject>, val exitCode: Int)
+
+    private fun session(server: XtscLanguageServer, vararg messages: String): Session {
+        val input = Buffer()
+        for (m in messages) writeFrame(input, m)
+        val output = Buffer()
+        val code = server.serve(input, output)
         val byId = HashMap<Int, JsonObject>()
+        val notes = ArrayList<JsonObject>()
         while (true) {
-            val text = readFrame(source) ?: return byId
+            val text = readFrame(output as Source) ?: break
             val obj = Json.parseToJsonElement(text).jsonObject
-            val id = obj.int("id") ?: continue
-            byId[id] = obj
+            val id = obj.int("id")
+            if (id != null) byId[id] = obj else notes += obj
         }
+        return Session(byId, notes, code)
     }
 
-    // --- the full session -------------------------------------------------------
+    private fun JsonObject.result(): JsonObject = this["result"]!!.jsonObject
+
+    private fun shutdownExit(id: Int = 99) = arrayOf(request(id, "shutdown"), notification("exit"))
+
+    // --- the session ------------------------------------------------------------
 
     @Test
-    fun `a full session over buffers hovers with the checker's own answer`() {
-        val hoverChar = line0.indexOf("abc")
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
-        writeFrame(input, notification("initialized"))
-        writeFrame(input, notification("textDocument/didOpen", didOpenParams(fileUri, sourceText)))
-        writeFrame(input, request(2, "textDocument/hover", hoverParams(fileUri, 0, hoverChar)))
-        writeFrame(input, request(3, "shutdown"))
-        writeFrame(input, notification("exit"))
-        val output = Buffer()
+    fun `hover is tsgo's quick info, at an LSP position counted in UTF-16 units`() {
+        val col = line0.indexOf("abc")
+        val s = session(XtscLanguageServer(disk()), initialize(), didOpen(sourceText), at(2, "textDocument/hover", 0, col), *shutdownExit())
+        val contents = s.responses[2]!!.result()["contents"]!!.jsonObject
+        assert(contents["kind"]!!.jsonPrimitive.content == "plaintext")
+        assert(contents["value"]!!.jsonPrimitive.content == "const abc: 1")
+        val range = s.responses[2]!!.result()["range"]!!.jsonObject
+        assert(range["start"]!!.jsonObject.int("character") == col)
+        assert(s.exitCode == 0)
+    }
 
-        val exitCode = XtscLanguageServer(InMemoryVfs(fixture())).serve(input, output)
-        assert(exitCode == 0)
-        val responses = readResponses(output)
-
-        // initialize: the announced surface.
-        val capabilities = responses[1]?.obj("result")?.obj("capabilities")
-        val hoverProvider = (capabilities?.get("hoverProvider") as? JsonPrimitive)?.booleanOrNull
-        val syncKind = capabilities?.int("textDocumentSync")
-        val serverName = responses[1]?.obj("result")?.obj("serverInfo")?.string("name")
-        assert(hoverProvider == true)
-        assert(syncKind == 1)
-        assert(serverName == "xtsc-lsp")
-
-        // hover: the value the embedding API answers for the same caret.
-        val expected = directProject().quickInfoAt(file, sourceText.indexOf("abc"))
-        assert(expected != null)
-        val result = responses[2]?.obj("result")
-        val kind = result?.obj("contents")?.string("kind")
-        val value = result?.obj("contents")?.string("value")
-        assert(kind == "plaintext")
-        assert(value == expected.displayString)
-
-        // the range round-trips to the QuickInfo span through the same API.
-        // (`result` smart-casts to non-null here: the asserts above compared a
-        // value reached through it against non-null expectations.)
-        val start = result.obj("range")?.obj("start")
-        val end = result.obj("range")?.obj("end")
-        val startOffset = directProject().offsetAt(
-            file,
-            (start?.int("line") ?: -1) + 1,
-            (start?.int("character") ?: -1) + 1,
+    @Test
+    fun `definition and references follow the symbol across lines`() {
+        val use = line1.indexOf("abc")
+        val s = session(
+            XtscLanguageServer(disk()), initialize(), didOpen(sourceText),
+            at(2, "textDocument/definition", 1, use),
+            at(3, "textDocument/references", 1, use, extra = buildJsonObject { put("context", buildJsonObject { put("includeDeclaration", true) }) }),
+            *shutdownExit(),
         )
-        val endOffset = directProject().offsetAt(
-            file,
-            (end?.int("line") ?: -1) + 1,
-            (end?.int("character") ?: -1) + 1,
+        val def = s.responses[2]!!["result"]!!.jsonArray
+        assert(def.size == 1)
+        assert(def[0].jsonObject["range"]!!.jsonObject["start"]!!.jsonObject.int("line") == 0)
+        val refs = s.responses[3]!!["result"]!!.jsonArray
+        assert(refs.map { it.jsonObject["range"]!!.jsonObject["start"]!!.jsonObject.int("line") } == listOf(0, 1))
+    }
+
+    @Test
+    fun `completion lists the file's declarations`() {
+        val s = session(XtscLanguageServer(disk()), initialize(), didOpen(sourceText), at(2, "textDocument/completion", 1, line1.indexOf("abc")), *shutdownExit())
+        val result = s.responses[2]!!.result()
+        val labels = result["items"]!!.jsonArray.map { it.jsonObject["label"]!!.jsonPrimitive.content }
+        assert("abc" in labels && "s" in labels && "Math" in labels)
+        // `other` is being declared at the caret: tsgo does not offer it in its own initializer.
+        assert("other" !in labels)
+    }
+
+    @Test
+    fun `an error is pushed for the open document and cleared when the buffer is fixed`() {
+        val bad = "const x: number = \"s\";\n"
+        val s = session(XtscLanguageServer(disk()), initialize(), didOpen(bad), didChange("const x: number = 1;\n"), *shutdownExit())
+        val pushes = s.notifications.filter { it.string("method") == "textDocument/publishDiagnostics" }
+        assert(pushes.size == 2)
+        val first = pushes[0]["params"]!!.jsonObject["diagnostics"]!!.jsonArray
+        assert(first.size == 1)
+        val d = first[0].jsonObject
+        assert(d["code"]!!.jsonPrimitive.content == "2322")
+        assert(d["message"]!!.jsonPrimitive.content == "Type 'string' is not assignable to type 'number'.")
+        assert(pushes[1]["params"]!!.jsonObject["diagnostics"]!!.jsonArray.isEmpty())
+    }
+
+    @Test
+    fun `pull diagnostics answer the full report of the buffer`() {
+        val bad = "const x: number = \"s\";\n"
+        val s = session(
+            XtscLanguageServer(disk()), initialize(), didOpen(bad),
+            request(2, "textDocument/diagnostic", buildJsonObject { put("textDocument", buildJsonObject { put("uri", fileUri) }) }),
+            *shutdownExit(),
         )
-        assert(startOffset == expected.start)
-        assert(endOffset == expected.end)
-
-        // shutdown: result null, not an error.
-        val shutdownResultIsNull = responses[3]?.get("result") is JsonNull
-        assert(shutdownResultIsNull)
+        val report = s.responses[2]!!.result()
+        assert(report["kind"]!!.jsonPrimitive.content == "full")
+        assert((report["items"] as JsonArray).size == 1)
     }
 
     @Test
-    fun `LSP characters are UTF-16 code units - the astral pin`() {
-        // Kotlin string indices ARE UTF-16 code units, so `indexOf` computes the
-        // LSP column directly; the astral char before `abc` makes that column
-        // differ from the code-point column by one. If either conversion counted
-        // anything but UTF-16 units the served range could not equal these.
-        val hoverChar = line0.indexOf("abc")
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
-        writeFrame(input, request(2, "textDocument/hover", hoverParams(fileUri, 0, hoverChar)))
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(fixture())).serve(input, output)
-
-        val result = readResponses(output)[2]?.obj("result")
-        val startLine = result?.obj("range")?.obj("start")?.int("line")
-        val startChar = result?.obj("range")?.obj("start")?.int("character")
-        val endChar = result?.obj("range")?.obj("end")?.int("character")
-        assert(startLine == 0)
-        assert(startChar == hoverChar)
-        assert(endChar == hoverChar + 3)
-    }
-
-    @Test
-    fun `the touch rule answers one to the left of a caret just past an identifier`() {
-        // The identifier is the last CONTENT of its line, so the caret one past
-        // it sits on the line terminator — inside no node's real span — and only
-        // the § 12 fallback at offset minus one can answer. (The file must end
-        // with that newline: see the file-final-identifier pin below for what
-        // happens without one.)
-        val text = "const abc = 1;\nconst tail = abc\n"
-        val vfsFiles = mapOf("/proj/tsconfig.json" to config, file to text)
-        val lastLine = "const tail = abc"
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
-        writeFrame(input, notification("textDocument/didOpen", didOpenParams(fileUri, text)))
-        writeFrame(input, request(2, "textDocument/hover", hoverParams(fileUri, 1, lastLine.length)))
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(vfsFiles)).serve(input, output)
-
-        val direct = Project.open("/proj", InMemoryVfs(vfsFiles))
-        val caret = text.length - 1
-        val primary = direct.quickInfoAt(file, caret)
-        val expected = direct.quickInfoAt(file, caret - 1)
-        assert(primary == null)
-        assert(expected != null)
-        val value = readResponses(output)[2]?.obj("result")?.obj("contents")?.string("value")
-        assert(value == expected.displayString)
-    }
-
-    @Test
-    fun `a file-final identifier with no trailing newline hovers like any other - the healed -project edge`() {
-        // Until (API.18) landed this was the RECORDED-DEFECT inversion of the
-        // touch-rule test above: the last token of a file with no trailing
-        // trivia has an EXACT raw end (the EOF lookahead is zero-width),
-        // `SourceIndex.realEndOf`'s strictly-below snap truncated every
-        // containing span short of it, and `quickInfoAt` answered null
-        // ANYWHERE inside such an identifier. The fix decides ownership of the
-        // file-final token by a descent (`SourceIndex.finalTokenOwnerByKey`),
-        // so the hover must now answer exactly what the trailing-newline
-        // variant answers.
-        val text = "const abc = 1;\nconst tail = abc"
-        val vfsFiles = mapOf("/proj/tsconfig.json" to config, file to text)
-        val direct = Project.open("/proj", InMemoryVfs(vfsFiles))
-        val insideFinal = direct.quickInfoAt(file, text.length - 2)
-        val healthyFiles = mapOf("/proj/tsconfig.json" to config, file to (text + "\n"))
-        val healthy = Project.open("/proj", InMemoryVfs(healthyFiles))
-        val healthyAnswer = healthy.quickInfoAt(file, text.length - 2)
-        assert(insideFinal != null)
-        assert(healthyAnswer != null)
-        val sameDisplay = insideFinal.displayString == healthyAnswer.displayString
-        assert(sameDisplay)
-
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
-        writeFrame(
-            input,
-            request(2, "textDocument/hover", hoverParams(fileUri, 1, "const tail = a".length)),
+    fun `a file under no tsconfig answers null and an empty report`() {
+        val fs = OverlayFS().apply { put("/loose/b.ts", "const q = 1;\n") }
+        val s = session(
+            XtscLanguageServer(fs), initialize(),
+            at(2, "textDocument/hover", 0, 6, uri = "file:///loose/b.ts"),
+            request(3, "textDocument/diagnostic", buildJsonObject { put("textDocument", buildJsonObject { put("uri", "file:///loose/b.ts") }) }),
+            *shutdownExit(),
         )
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(vfsFiles)).serve(input, output)
-        val value = readResponses(output)[2]?.obj("result")?.obj("contents")?.string("value")
-        assert(value == insideFinal.displayString)
+        assert(s.responses[2]!!["result"] is JsonNull)
+        assert((s.responses[3]!!.result()["items"] as JsonArray).isEmpty())
     }
-
-    @Test
-    fun `hover on an unknown file answers a null result`() {
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
-        writeFrame(
-            input,
-            request(2, "textDocument/hover", hoverParams("file:///proj/src/none.ts", 0, 0)),
-        )
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(fixture())).serve(input, output)
-        val response = readResponses(output)[2]
-        val resultIsNull = response?.get("result") is JsonNull
-        val hasError = response?.obj("error") != null
-        assert(resultIsNull)
-        assert(!hasError)
-    }
-
-    @Test
-    fun `hover on a line the file does not have answers a null result`() {
-        // A client one keystroke ahead of the server names a line we do not
-        // hold; `offsetAt` throws for it and the server answers "nothing".
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
-        writeFrame(input, request(2, "textDocument/hover", hoverParams(fileUri, 99, 0)))
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(fixture())).serve(input, output)
-        val resultIsNull = readResponses(output)[2]?.get("result") is JsonNull
-        assert(resultIsNull)
-    }
-
-    @Test
-    fun `didOpen text overrides what is on disk`() {
-        val diskText = "const abc = 1;\n"
-        val bufferText = "const abc = \"x\";\n"
-        val vfsFiles = mapOf("/proj/tsconfig.json" to config, file to diskText)
-
-        // The control that this pin can discriminate: the two texts hover
-        // differently through the API itself.
-        val withBuffer = Project.open("/proj", InMemoryVfs(vfsFiles)).let {
-            it.updateFile(file, bufferText)
-            it.quickInfoAt(file, bufferText.indexOf("abc"))
-        }
-        val withDisk = Project.open("/proj", InMemoryVfs(vfsFiles))
-            .quickInfoAt(file, diskText.indexOf("abc"))
-        assert(withBuffer != null)
-        assert(withDisk != null)
-        assert(withBuffer.displayString != withDisk.displayString)
-
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
-        writeFrame(input, notification("textDocument/didOpen", didOpenParams(fileUri, bufferText)))
-        writeFrame(
-            input,
-            request(2, "textDocument/hover", hoverParams(fileUri, 0, bufferText.indexOf("abc"))),
-        )
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(vfsFiles)).serve(input, output)
-        val value = readResponses(output)[2]?.obj("result")?.obj("contents")?.string("value")
-        assert(value == withBuffer.displayString)
-    }
-
-    @Test
-    fun `initialize falls back to rootPath when rootUri is absent`() {
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", buildJsonObject { put("rootPath", "/proj") }))
-        writeFrame(input, request(2, "textDocument/hover", hoverParams(fileUri, 1, line1.indexOf("other"))))
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(fixture())).serve(input, output)
-
-        val expected = directProject().quickInfoAt(file, sourceText.indexOf("other"))
-        assert(expected != null)
-        val value = readResponses(output)[2]?.obj("result")?.obj("contents")?.string("value")
-        assert(value == expected.displayString)
-    }
-
-    @Test
-    fun `a percent-encoded root URI opens the project it names`() {
-        val spacedFile = "/my proj/src/a.ts"
-        val text = "const abc = 1;\n"
-        val vfsFiles = mapOf("/my proj/tsconfig.json" to config, spacedFile to text)
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///my%20proj")))
-        writeFrame(
-            input,
-            request(
-                2,
-                "textDocument/hover",
-                hoverParams("file:///my%20proj/src/a.ts", 0, text.indexOf("abc")),
-            ),
-        )
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(vfsFiles)).serve(input, output)
-
-        val expected = Project.open("/my proj", InMemoryVfs(vfsFiles))
-            .quickInfoAt(spacedFile, text.indexOf("abc"))
-        assert(expected != null)
-        val value = readResponses(output)[2]?.obj("result")?.obj("contents")?.string("value")
-        assert(value == expected.displayString)
-    }
-
-    @Test
-    fun `initialize on a nonexistent root still succeeds and hover answers null`() {
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///nowhere")))
-        writeFrame(input, request(2, "textDocument/hover", hoverParams("file:///nowhere/a.ts", 0, 0)))
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(emptyMap())).serve(input, output)
-        val responses = readResponses(output)
-        val initialized = responses[1]?.obj("result")?.obj("capabilities") != null
-        val hoverIsNull = responses[2]?.get("result") is JsonNull
-        assert(initialized)
-        assert(hoverIsNull)
-    }
-
-    // --- exit codes -------------------------------------------------------------
 
     @Test
     fun `exit after shutdown returns zero`() {
-        val input = Buffer()
-        writeFrame(input, request(1, "shutdown"))
-        writeFrame(input, notification("exit"))
-        val code = XtscLanguageServer(InMemoryVfs(emptyMap())).serve(input, Buffer())
-        assert(code == 0)
+        assert(session(XtscLanguageServer(OverlayFS()), *shutdownExit()).exitCode == 0)
     }
 
     @Test
     fun `exit without shutdown returns one`() {
-        val input = Buffer()
-        writeFrame(input, notification("exit"))
-        val code = XtscLanguageServer(InMemoryVfs(emptyMap())).serve(input, Buffer())
-        assert(code == 1)
+        assert(session(XtscLanguageServer(OverlayFS()), notification("exit")).exitCode == 1)
     }
 
     @Test
     fun `end of input without shutdown returns one`() {
-        val input = Buffer()
-        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
-        val code = XtscLanguageServer(InMemoryVfs(fixture())).serve(input, Buffer())
-        assert(code == 1)
-    }
-
-    @Test
-    fun `end of input after shutdown returns zero`() {
-        val input = Buffer()
-        writeFrame(input, request(1, "shutdown"))
-        val code = XtscLanguageServer(InMemoryVfs(emptyMap())).serve(input, Buffer())
-        assert(code == 0)
+        assert(session(XtscLanguageServer(OverlayFS()), initialize()).exitCode == 1)
     }
 
     @Test
     fun `messages after exit are not served`() {
-        val input = Buffer()
-        writeFrame(input, request(1, "shutdown"))
-        writeFrame(input, notification("exit"))
-        writeFrame(input, request(2, "shutdown"))
-        val output = Buffer()
-        XtscLanguageServer(InMemoryVfs(emptyMap())).serve(input, output)
-        val responses = readResponses(output)
-        val second = responses[2]
-        assert(second == null)
+        val s = session(XtscLanguageServer(OverlayFS()), notification("exit"), request(5, "shutdown"))
+        assert(s.responses.isEmpty())
     }
 }

@@ -418,7 +418,7 @@ fun Checker?.getIntersectionTypeEx(types: GoSlice<Type?>, flags: IntersectionFla
     var typeSet: GoSlice<Type?> = orderedTypes.values
     var objectFlags: ObjectFlags = ObjectFlagsNone
     if (includes.value and 262144u != 0u) {
-        if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(typeSet, (this!!.silentNeverType)!!)) {
+        if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(typeSet, this!!.silentNeverType)) {
             return this!!.silentNeverType
         }
         return this!!.neverType
@@ -463,7 +463,7 @@ fun Checker?.getIntersectionTypeEx(types: GoSlice<Type?>, flags: IntersectionFla
         }
     }
     if (includes.value and 524288u != 0u) {
-        typeSet[com.xemantic.typescript.tsgo.go.slices.index<Type?>(typeSet, (this!!.undefinedType)!!)] = this!!.missingType
+        typeSet[com.xemantic.typescript.tsgo.go.slices.index<Type?>(typeSet, this!!.undefinedType)] = this!!.missingType
     }
     if (typeSet.len == 0) {
         return this!!.unknownType
@@ -947,14 +947,14 @@ fun Checker?.removeType(t: Type?, targetType: Type?): Type? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.containsType 4036f4b4
 fun containsType(types: GoSlice<Type?>, t: Type?): Boolean {
-    val t0 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Type?, Type?>(types, (t)!!, (fun(p0: Type?, p1: Type?): Int = compareTypes(p0, p1))!!)
+    val t0 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Type?, Type?>(types, t, (fun(p0: Type?, p1: Type?): Int = compareTypes(p0, p1))!!)
     val ok: Boolean = t0.second
     return ok
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.insertType 03477be2
 fun insertType(types: GoSlice<Type?>, t: Type?): Tuple2<GoSlice<Type?>, Boolean> {
-    val t0 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Type?, Type?>(types, (t)!!, (fun(p0: Type?, p1: Type?): Int = compareTypes(p0, p1))!!)
+    val t0 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Type?, Type?>(types, t, (fun(p0: Type?, p1: Type?): Int = compareTypes(p0, p1))!!)
     val i: Int = t0.first
     val ok: Boolean = t0.second
     if (!ok) {
@@ -3461,7 +3461,7 @@ fun Checker?.getTemplateLiteralType(texts: GoSlice<String>, types: GoSlice<Type?
             return this.getTemplateLiteralType(texts, com.xemantic.typescript.tsgo.core.replaceElement<Type?>(GoElem.ref<Type?>(), types, unionIndex, t_1))
         })
     }
-    if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(types, (this!!.wildcardType)!!)) {
+    if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(types, this!!.wildcardType)) {
         return this!!.wildcardType
     }
     var newTypes: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice

@@ -2007,7 +2007,7 @@ fun Checker?.getTypeFromIntersectionTypeNode(node: Node?): Type? {
         val types: GoSlice<Type?> = com.xemantic.typescript.tsgo.core.map<Node?, Type?>(GoElem.ref<Node?>(), GoElem.ref<Type?>(), node.asIntersectionTypeNode()!!.unionOrIntersectionTypeNodeBase.types!!.nodes, (run { val r0 = this; fun(p0: Node?): Type? = r0.getTypeFromTypeNodeImpl(p0) })!!)
         var noSupertypeReduction: Boolean = false
         if (types.len == 2) {
-            val emptyIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Type?>(types, (this!!.emptyTypeLiteralType)!!)
+            val emptyIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Type?>(types, this!!.emptyTypeLiteralType)
             if (emptyIndex >= 0) {
                 val t: Type? = types[1 - emptyIndex]
                 noSupertypeReduction = t!!.flags.value and 224u != 0u || t!!.flags.value and 4194304u != 0u && this.isPatternLiteralType(t)
@@ -3675,7 +3675,7 @@ fun Checker?.addTypeToUnion(typeSet_0: GoSlice<Type?>, includes_1: TypeFlags, t:
                 includes = TypeFlags(includes.value or 2097152u)
             }
         } else {
-            val t2 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Type?, Type?>(typeSet, (t)!!, (fun(p0: Type?, p1: Type?): Int = compareTypes(p0, p1))!!)
+            val t2 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Type?, Type?>(typeSet, t, (fun(p0: Type?, p1: Type?): Int = compareTypes(p0, p1))!!)
             val index: Int = t2.first
             val ok: Boolean = t2.second
             if (!ok) {

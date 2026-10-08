@@ -45,10 +45,10 @@ class TypeAcquisition(
     override fun goStructInfo(): GoStructInfo = GO_STRUCT
 
     override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
-        0 -> Tristate_Ptr({ enable }, { enable = it })
+        0 -> com.xemantic.typescript.tsgo.core.Tristate_Ptr({ enable }, { enable = it })
         1 -> GoFieldPtr(this, 1, { include }, { include = it as GoSlice<String> })
         2 -> GoFieldPtr(this, 2, { exclude }, { exclude = it as GoSlice<String> })
-        3 -> Tristate_Ptr({ disableFilenameBasedTypeAcquisition }, { disableFilenameBasedTypeAcquisition = it })
+        3 -> com.xemantic.typescript.tsgo.core.Tristate_Ptr({ disableFilenameBasedTypeAcquisition }, { disableFilenameBasedTypeAcquisition = it })
         else -> goPanicIndex(i, 4)
     }
 

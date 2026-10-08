@@ -74,7 +74,7 @@ fun parseTristate(value_1: Any?): Tristate {
 // go: github.com/microsoft/typescript-go/internal/tsoptions.ParseStringArray a5b8c8cb
 fun parseStringArray(value_1: Any?): GoSlice<String> {
     val x1 = value_1
-    val t0 = if (x1 is GoSlice<*>) Tuple2(x1 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
+    val t0 = if (x1 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x1 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
     val arr: GoSlice<Any?> = t0.first
     val ok: Boolean = t0.second
     if (ok) {
@@ -618,7 +618,7 @@ fun parseCompilerOptionsImpl(key_0: String, value_1: Any?, allOptions: CompilerO
         }
         "lib" -> {
             val x2 = value_1
-            val t1 = if (x2 is GoSlice<*>) Tuple2(x2 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+            val t1 = if (x2 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x2 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
             val ok: Boolean = t1.second
             if (ok) {
                 allOptions!!.lib = value_1 as GoSlice<String>
@@ -1074,7 +1074,7 @@ fun convertOptionToAbsolutePath(o: String, v: Any?, optionMap: CommandLineOption
     if (option!!.kind.value == "list") {
         if (option.elements()!!.isFilePath) {
             val x1 = v
-            val t0 = if (x1 is GoSlice<*>) Tuple2(x1 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+            val t0 = if (x1 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x1 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
             val arr: GoSlice<String> = t0.first
             val ok: Boolean = t0.second
             if (ok) {
@@ -1083,7 +1083,7 @@ fun convertOptionToAbsolutePath(o: String, v: Any?, optionMap: CommandLineOption
                 }), true)
             }
             val x3 = v
-            val t2 = if (x3 is GoSlice<*>) Tuple2(x3 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
+            val t2 = if (x3 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x3 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
             val arr_1: GoSlice<Any?> = t2.first
             val ok_1: Boolean = t2.second
             if (ok_1) {

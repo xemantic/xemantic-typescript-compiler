@@ -689,7 +689,7 @@ fun PseudoChecker?.typeFromParameter(node: ParameterDeclaration?): PseudoType? {
         return newPseudoTypeNoResult(node!!.nodeBase.nodeDefault.asNode())
     }
     val p: GoSlice<Node?> = parent.parameters()
-    val selfIdx: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(p, (node!!.nodeBase.nodeDefault.asNode())!!)
+    val selfIdx: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(p, node!!.nodeBase.nodeDefault.asNode())
     val lastRequired: Int = lastRequiredParamIndex(p)
     return this.typeFromParameterWorker(node, selfIdx, lastRequired)
 }

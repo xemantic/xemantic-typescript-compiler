@@ -29,6 +29,7 @@ import com.xemantic.typescript.tsgo.vfs.Entries
 import com.xemantic.typescript.tsgo.vfs.FS
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
 import com.xemantic.typescript.tsgo.go.io.fs.FileMode
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
 import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.go.io.fs.WalkDirFunc
 
@@ -277,7 +278,7 @@ class fileInfo(
     @get:kotlin.jvm.JvmName("goGet_mode") @set:kotlin.jvm.JvmName("goSet_mode") var mode: FileMode = FileMode(0u),
     @kotlin.jvm.JvmField var name: String = "",
     @kotlin.jvm.JvmField var size: Long = 0L,
-) : DirEntry, FileInfo {
+) : Named, DirEntry, FileInfo {
 
     fun goCopy(): fileInfo = fileInfo(mode = mode, name = name, size = size)
 

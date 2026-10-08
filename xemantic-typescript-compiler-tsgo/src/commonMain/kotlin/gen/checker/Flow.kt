@@ -1240,7 +1240,7 @@ fun Checker?.narrowTypeBySwitchOnDiscriminant(t: Type?, data: FlowSwitchClauseDa
         return t
     }
     val clauseTypes: GoSlice<Type?> = switchTypes.slice(data!!.clauseStart, data!!.clauseEnd)
-    val hasDefaultClause: Boolean = data!!.clauseStart == data!!.clauseEnd || com.xemantic.typescript.tsgo.go.slices.contains<Type?>(clauseTypes, (this!!.neverType)!!)
+    val hasDefaultClause: Boolean = data!!.clauseStart == data!!.clauseEnd || com.xemantic.typescript.tsgo.go.slices.contains<Type?>(clauseTypes, this!!.neverType)
     if ((t!!.flags.value and 2u != 0u) && !hasDefaultClause) {
         var groundClauseTypes: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice
         val s0 = clauseTypes
@@ -1413,7 +1413,7 @@ fun Checker?.getTypeAtFlowBranchLabel(f: FlowState?, flow: FlowNode?, antecedent
             this!!.antecedentTypes = this!!.antecedentTypes.slice(0, antecedentStart)
             return FlowType(t = flowType.t)
         }
-        if (!com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.antecedentTypes.slice(antecedentStart), (flowType.t)!!)) {
+        if (!com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.antecedentTypes.slice(antecedentStart), flowType.t)) {
             this!!.antecedentTypes = this!!.antecedentTypes.append1(flowType.t)
         }
         if (!this.isTypeSubsetOf(flowType.t, f!!.initialType)) {
@@ -1425,7 +1425,7 @@ fun Checker?.getTypeAtFlowBranchLabel(f: FlowState?, flow: FlowNode?, antecedent
     }
     if (bypassFlow != null) {
         val flowType_1: FlowType = this.getTypeAtFlowNode(f, bypassFlow)
-        if (flowType_1.t!!.flags.value and 262144u == 0u && !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.antecedentTypes.slice(antecedentStart), (flowType_1.t)!!) && !this.isExhaustiveSwitchStatement(bypassFlow!!.node.asFlowSwitchClauseData()!!.switchStatement)) {
+        if (flowType_1.t!!.flags.value and 262144u == 0u && !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.antecedentTypes.slice(antecedentStart), flowType_1.t) && !this.isExhaustiveSwitchStatement(bypassFlow!!.node.asFlowSwitchClauseData()!!.switchStatement)) {
             if (flowType_1.t === f!!.declaredType && f!!.declaredType === f!!.initialType) {
                 this!!.antecedentTypes = this!!.antecedentTypes.slice(0, antecedentStart)
                 return FlowType(t = flowType_1.t)
@@ -1883,7 +1883,7 @@ fun Checker?.getAccessedPropertyName(access: Node?): Tuple2<String, Boolean> {
         return this.getDestructuringPropertyName(access)
     }
     if (com.xemantic.typescript.tsgo.ast.isParameterDeclaration(access)) {
-        return Tuple2<String, Boolean>(com.xemantic.typescript.tsgo.go.strconv.itoa(com.xemantic.typescript.tsgo.go.slices.index<Node?>(access!!.parent.parameters(), (access)!!)), true)
+        return Tuple2<String, Boolean>(com.xemantic.typescript.tsgo.go.strconv.itoa(com.xemantic.typescript.tsgo.go.slices.index<Node?>(access!!.parent.parameters(), access)), true)
     }
     return Tuple2<String, Boolean>("", false)
 }
@@ -1957,7 +1957,7 @@ fun Checker?.getDestructuringPropertyName(node: Node?): Tuple2<String, Boolean> 
         return this.getLiteralPropertyNameText(node.name())
     }
     if (com.xemantic.typescript.tsgo.ast.isArrayLiteralExpression(parent) || com.xemantic.typescript.tsgo.ast.isArrayBindingPattern(parent)) {
-        return Tuple2<String, Boolean>(com.xemantic.typescript.tsgo.go.strconv.itoa(com.xemantic.typescript.tsgo.go.slices.index<Node?>(parent.elements(), (node)!!)), true)
+        return Tuple2<String, Boolean>(com.xemantic.typescript.tsgo.go.strconv.itoa(com.xemantic.typescript.tsgo.go.slices.index<Node?>(parent.elements(), node)), true)
     }
     return Tuple2<String, Boolean>("", false)
 }
@@ -2153,10 +2153,10 @@ fun Checker?.computeExhaustiveSwitchStatement(node: Node?): Boolean {
 fun Checker?.eachTypeContainedIn(source: Type?, types: GoSlice<Type?>): Boolean {
     if (source!!.flags.value and 134217728u != 0u) {
         return !com.xemantic.typescript.tsgo.core.some<Type?>(GoElem.ref<Type?>(), source.asUnionType()!!.unionOrIntersectionType.types, fun(t: Type?): Boolean {
-            return !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(types, (t)!!)
+            return !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(types, t)
         })
     }
-    return com.xemantic.typescript.tsgo.go.slices.contains<Type?>(types, (source)!!)
+    return com.xemantic.typescript.tsgo.go.slices.contains<Type?>(types, source)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getSwitchClauseTypeOfWitnesses f9f0489c
@@ -2472,7 +2472,7 @@ fun Checker?.getInitialTypeOfBindingElement(node: Node?): Type? {
             t = this.getTypeOfDestructuredProperty(parentType, getBindingElementPropertyName(node))
         }
         !hasDotDotDotToken(node) -> {
-            t = this.getTypeOfDestructuredArrayElement(parentType, com.xemantic.typescript.tsgo.go.slices.index<Node?>(pattern.elements(), (node)!!))
+            t = this.getTypeOfDestructuredArrayElement(parentType, com.xemantic.typescript.tsgo.go.slices.index<Node?>(pattern.elements(), node))
         }
         else -> {
             t = this.getTypeOfDestructuredSpreadExpression(parentType)
@@ -2527,7 +2527,7 @@ fun Checker?.getAssignedTypeOfBinaryExpression(node: Node?): Type? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getAssignedTypeOfArrayLiteralElement 1f7215cc
 fun Checker?.getAssignedTypeOfArrayLiteralElement(node: Node?, element: Node?): Type? {
-    return this.getTypeOfDestructuredArrayElement(this.getAssignedType(node), com.xemantic.typescript.tsgo.go.slices.index<Node?>(node.elements(), (element)!!))
+    return this.getTypeOfDestructuredArrayElement(this.getAssignedType(node), com.xemantic.typescript.tsgo.go.slices.index<Node?>(node.elements(), element))
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getTypeOfDestructuredArrayElement 217cd376

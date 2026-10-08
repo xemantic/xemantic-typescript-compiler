@@ -486,7 +486,7 @@ fun convertJsonOptionOfListType(option: CommandLineOption?, values: Any?, basePa
     var expression: Node? = null
     var errors: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
     val x1 = values
-    val t0 = if (x1 is GoSlice<*>) Tuple2(x1 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
+    val t0 = if (x1 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x1 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
     val values_1: GoSlice<Any?> = t0.first
     val ok: Boolean = t0.second
     if (ok) {
@@ -1199,7 +1199,7 @@ fun parseConfig(json: OrderedMap<String, Any?>?, sourceFile: TsConfigSourceFile?
                     val ok_1: Boolean = t8.second
                     if (ok_1 && rawMap_1.has(propertyName)) {
                         val x11 = rawMap_1.getOrZero(propertyName)
-                        val t10 = if (x11 is GoSlice<*>) Tuple2(x11 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
+                        val t10 = if (x11 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x11 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
                         val slice: GoSlice<Any?> = t10.first
                         if (!slice.isNil) {
                             val value_1: GoSlice<Any?> = com.xemantic.typescript.tsgo.core.map<Any?, Any?>(GoElem.ref<Any?>(), GoElem.ref<Any?>(), slice, fun(path: Any?): Any? {
@@ -1258,7 +1258,7 @@ fun parseConfig(json: OrderedMap<String, Any?>?, sourceFile: TsConfigSourceFile?
             applyExtendedConfig!!(result_2, ownConfig!!.extendedConfigPath as String)
         } else {
             val x20 = ownConfig!!.extendedConfigPath
-            val t19 = if (x20 is GoSlice<*>) Tuple2(x20 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+            val t19 = if (x20 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x20 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
             val configPath: GoSlice<String> = t19.first
             val ok_4: Boolean = t19.second
             if (ok_4) {
@@ -1341,7 +1341,7 @@ fun parseJsonConfigFileContentWorker(json: OrderedMap<String, Any?>?, sourceFile
             if (com.xemantic.typescript.tsgo.go.reflect.typeOf(value_1)!!.kind().value == 23uL) {
                 val result: Any? = rawConfig.getOrZero(prop)
                 val x3 = result
-                val t2 = if (x3 is GoSlice<*>) Tuple2(x3 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
+                val t2 = if (x3 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x3 as GoSlice<Any?>, true) else Tuple2(GoElem.ref<Any?>().nilSlice, false)
                 val ok: Boolean = t2.second
                 if (ok) {
                     if (sourceFile == null && !com.xemantic.typescript.tsgo.core.every<Any?>(GoElem.ref<Any?>(), result as GoSlice<Any?>, validateElement!!)) {

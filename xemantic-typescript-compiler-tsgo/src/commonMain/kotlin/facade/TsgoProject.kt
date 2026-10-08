@@ -138,7 +138,7 @@ class TsgoProject private constructor(
         private val initialized = AtomicInt(0)
 
         /** Go's package initialization for what the session reaches (`parser` installs its JSDoc hook). */
-        private fun init() {
+        internal fun init() {
             if (initialized.compareAndSet(0, 1)) com.xemantic.typescript.tsgo.parser.goInitPackage()
         }
 
@@ -163,7 +163,9 @@ class TsgoProject private constructor(
             val id = 1uL
             val path = Path(name)
             val proj = com.xemantic.typescript.tsgo.project.Project(path, program, pool)
-            val snapshot = com.xemantic.typescript.tsgo.project.Snapshot(id, com.xemantic.typescript.tsgo.project.ProjectCollection(mapOf(name to proj)))
+            val snapshot = com.xemantic.typescript.tsgo.project.Snapshot(id, com.xemantic.typescript.tsgo.project.ProjectCollection(mapOf(name to proj)), if (libDirectory == null) com.xemantic.typescript.tsgo.bundled.wrapFS(fs) else fs,
+                // Auto-import completions need the project system's registry (not ported, docs/goport-ls.md): off.
+                com.xemantic.typescript.tsgo.ls.lsutil.newDefaultUserPreferences().also { it.includeCompletionsForModuleExports = com.xemantic.typescript.tsgo.core.TSFalse })
             val projectSession = com.xemantic.typescript.tsgo.project.Session(fs, com.xemantic.typescript.tsgo.tspath.getDirectoryPath(name))
             val (session, handle) = com.xemantic.typescript.tsgo.api.xtscNewSession(projectSession, snapshot)
             TsgoProject(GoString.toUtf16(name), program, diags, session!!, handle.value)

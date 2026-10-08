@@ -962,49 +962,49 @@ fun com.xemantic.typescript.tsgo.tracing.typeTracer?.buildTypeDescriptor(typ: Tr
     }
     val indexType: TracedType? = typ!!.indexType()
     if (indexType != null) {
-        desc.keyofType = goNew(GoElem.UINT)
+        desc.keyofType = GoBox<UInt>(indexType!!.id())
     }
     val objType: TracedType? = typ!!.indexedAccessObjectType()
     if (objType != null) {
-        desc.indexedAccessObjectType = goNew(GoElem.UINT)
+        desc.indexedAccessObjectType = GoBox<UInt>(objType!!.id())
     }
     val idxType: TracedType? = typ!!.indexedAccessIndexType()
     if (idxType != null) {
-        desc.indexedAccessIndexType = goNew(GoElem.UINT)
+        desc.indexedAccessIndexType = GoBox<UInt>(idxType!!.id())
     }
     if (typ!!.isConditional()) {
         val checkType: TracedType? = typ!!.conditionalCheckType()
         if (checkType != null) {
-            desc.conditionalCheckType = goNew(GoElem.UINT)
+            desc.conditionalCheckType = GoBox<UInt>(checkType!!.id())
         }
         val extendsType: TracedType? = typ!!.conditionalExtendsType()
         if (extendsType != null) {
-            desc.conditionalExtendsType = goNew(GoElem.UINT)
+            desc.conditionalExtendsType = GoBox<UInt>(extendsType!!.id())
         }
         val trueType: TracedType? = typ!!.conditionalTrueType()
         if (trueType != null) {
-            desc.conditionalTrueType = goNew(GoElem.INT)
+            desc.conditionalTrueType = GoBox<Int>(trueType!!.id().toInt())
         } else {
-            desc.conditionalTrueType = goNew(GoElem.INT)
+            desc.conditionalTrueType = GoBox<Int>(-1)
         }
         val falseType: TracedType? = typ!!.conditionalFalseType()
         if (falseType != null) {
-            desc.conditionalFalseType = goNew(GoElem.INT)
+            desc.conditionalFalseType = GoBox<Int>(falseType!!.id().toInt())
         } else {
-            desc.conditionalFalseType = goNew(GoElem.INT)
+            desc.conditionalFalseType = GoBox<Int>(-1)
         }
     }
     val baseType: TracedType? = typ!!.substitutionBaseType()
     if (baseType != null) {
-        desc.substitutionBaseType = goNew(GoElem.UINT)
+        desc.substitutionBaseType = GoBox<UInt>(baseType!!.id())
     }
     val constraint: TracedType? = typ!!.substitutionConstraintType()
     if (constraint != null) {
-        desc.constraintType = goNew(GoElem.UINT)
+        desc.constraintType = GoBox<UInt>(constraint!!.id())
     }
     val target: TracedType? = typ!!.referenceTarget()
     if (target != null) {
-        desc.instantiatedType = goNew(GoElem.UINT)
+        desc.instantiatedType = GoBox<UInt>(target!!.id())
     }
     val args_1: GoSlice<TracedType?> = typ!!.referenceTypeArguments()
     if (args_1.len > 0) {
@@ -1016,23 +1016,23 @@ fun com.xemantic.typescript.tsgo.tracing.typeTracer?.buildTypeDescriptor(typ: Tr
     }
     val sourceType: TracedType? = typ!!.reverseMappedSourceType()
     if (sourceType != null) {
-        desc.reverseMappedSourceType = goNew(GoElem.UINT)
+        desc.reverseMappedSourceType = GoBox<UInt>(sourceType!!.id())
     }
     val mappedType: TracedType? = typ!!.reverseMappedMappedType()
     if (mappedType != null) {
-        desc.reverseMappedMappedType = goNew(GoElem.UINT)
+        desc.reverseMappedMappedType = GoBox<UInt>(mappedType!!.id())
     }
     val constraintType: TracedType? = typ!!.reverseMappedConstraintType()
     if (constraintType != null) {
-        desc.reverseMappedConstraintType = goNew(GoElem.UINT)
+        desc.reverseMappedConstraintType = GoBox<UInt>(constraintType!!.id())
     }
     val elemType: TracedType? = typ!!.evolvingArrayElementType()
     if (elemType != null) {
-        desc.evolvingArrayElementType = goNew(GoElem.UINT)
+        desc.evolvingArrayElementType = GoBox<UInt>(elemType!!.id())
     }
     val finalType: TracedType? = typ!!.evolvingArrayFinalType()
     if (finalType != null) {
-        desc.evolvingArrayFinalType = goNew(GoElem.UINT)
+        desc.evolvingArrayFinalType = GoBox<UInt>(finalType!!.id())
     }
     val pattern: Node? = typ!!.pattern()
     if (pattern != null) {

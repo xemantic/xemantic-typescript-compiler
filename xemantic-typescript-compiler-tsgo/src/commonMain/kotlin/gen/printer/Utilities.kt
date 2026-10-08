@@ -485,8 +485,8 @@ fun siblingNodePositionsAreComparable(emitContext: EmitContext?, previousNode_0:
     }
     val parentNodeArray: NodeList? = getContainingNodeArray(previousNode)
     if (parentNodeArray != null) {
-        val prevNodeIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(parentNodeArray!!.nodes, (previousNode)!!)
-        return prevNodeIndex >= 0 && com.xemantic.typescript.tsgo.go.slices.index<Node?>(parentNodeArray!!.nodes, (nextNode)!!) == prevNodeIndex + 1
+        val prevNodeIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(parentNodeArray!!.nodes, previousNode)
+        return prevNodeIndex >= 0 && com.xemantic.typescript.tsgo.go.slices.index<Node?>(parentNodeArray!!.nodes, nextNode) == prevNodeIndex + 1
     }
     return false
 }

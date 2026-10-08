@@ -28,3 +28,15 @@ package com.xemantic.typescript.tsgo.go.runtime.debug
 /** `debug.SetMaxStack(bytes)`: the JVM's stack is fixed per thread; returns Go's default (1 GB). */
 @Suppress("UNUSED_PARAMETER")
 fun setMaxStack(bytes: Int): Int = 1_000_000_000
+
+/**
+ * `debug.Stack()`: Go formats the calling goroutine's stack, which inside a recovering deferred call still
+ * holds the panic's frames; the port renders the stack of the panic most recently recovered
+ * ([com.xemantic.typescript.tsgo.runtime.lastRecoveredPanic], its Kotlin cause when it has one) ((TSGO.4-a):
+ * `ls.handleCrossProject` reports a goroutine's panic with it).
+ */
+fun stack(): com.xemantic.typescript.tsgo.runtime.GoSlice<Int> {
+    val p = com.xemantic.typescript.tsgo.runtime.lastRecoveredPanic ?: return com.xemantic.typescript.tsgo.runtime.GoElem.BYTE.nilSlice
+    val trace = (p.cause ?: p).stackTraceToString().lineSequence().take(40).joinToString("\n")
+    return com.xemantic.typescript.tsgo.runtime.goStringToBytes(com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(trace))
+}

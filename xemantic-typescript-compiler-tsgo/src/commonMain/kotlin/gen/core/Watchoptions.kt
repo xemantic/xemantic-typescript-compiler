@@ -56,7 +56,7 @@ class WatchOptions(
         1 -> GoFieldPtr(this, 1, { fileKind.value }, { fileKind = WatchFileKind(it as Int) })
         2 -> GoFieldPtr(this, 2, { directoryKind.value }, { directoryKind = WatchDirectoryKind(it as Int) })
         3 -> GoFieldPtr(this, 3, { fallbackPolling.value }, { fallbackPolling = PollingKind(it as Int) })
-        4 -> Tristate_Ptr({ syncWatchDir }, { syncWatchDir = it })
+        4 -> com.xemantic.typescript.tsgo.core.Tristate_Ptr({ syncWatchDir }, { syncWatchDir = it })
         5 -> GoFieldPtr(this, 5, { excludeDir }, { excludeDir = it as GoSlice<String> })
         6 -> GoFieldPtr(this, 6, { excludeFiles }, { excludeFiles = it as GoSlice<String> })
         else -> goPanicIndex(i, 7)

@@ -299,14 +299,14 @@ fun Checker?.getContainersOfSymbol(symbol: Symbol?, enclosingDeclaration: Node?,
         if (!com.xemantic.typescript.tsgo.ast.isAmbientModule(d) && d!!.parent != null) {
             if (hasNonGlobalAugmentationExternalModuleSymbol(d!!.parent)) {
                 val sym: Symbol? = this.getSymbolOfDeclaration(d!!.parent)
-                if (sym != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, (sym)!!)) {
+                if (sym != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, sym)) {
                     candidates = candidates.append1(sym)
                 }
                 continue@l0
             }
             if (com.xemantic.typescript.tsgo.ast.isModuleBlock(d!!.parent) && d!!.parent!!.parent != null && this.resolveExternalModuleSymbolImpl(this.getSymbolOfDeclaration(d!!.parent!!.parent), false) === symbol) {
                 val sym_1: Symbol? = this.getSymbolOfDeclaration(d!!.parent!!.parent)
-                if (sym_1 != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, (sym_1)!!)) {
+                if (sym_1 != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, sym_1)) {
                     candidates = candidates.append1(sym_1)
                 }
                 continue@l0
@@ -315,14 +315,14 @@ fun Checker?.getContainersOfSymbol(symbol: Symbol?, enclosingDeclaration: Node?,
         if (com.xemantic.typescript.tsgo.ast.isClassExpression(d) && com.xemantic.typescript.tsgo.ast.isBinaryExpression(d!!.parent) && d!!.parent.asBinaryExpression()!!.operatorToken!!.kind.value == 63 && com.xemantic.typescript.tsgo.ast.isAccessExpression(d!!.parent.asBinaryExpression()!!.left) && com.xemantic.typescript.tsgo.ast.isEntityNameExpression(d!!.parent.asBinaryExpression()!!.left.expression())) {
             if (com.xemantic.typescript.tsgo.ast.isModuleExportsAccessExpression(d!!.parent.asBinaryExpression()!!.left) || com.xemantic.typescript.tsgo.ast.isExportsIdentifier(d!!.parent.asBinaryExpression()!!.left.expression())) {
                 val sym_2: Symbol? = this.getSymbolOfDeclaration(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(d)!!.nodeBase.nodeDefault.asNode())
-                if (sym_2 != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, (sym_2)!!)) {
+                if (sym_2 != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, sym_2)) {
                     candidates = candidates.append1(sym_2)
                 }
                 continue@l0
             }
             this.checkExpressionCached(d!!.parent.asBinaryExpression()!!.left.expression())
             val sym_3: Symbol? = this!!.symbolNodeLinks.get(d!!.parent.asBinaryExpression()!!.left.expression())!!.resolvedSymbol
-            if (sym_3 != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, (sym_3)!!)) {
+            if (sym_3 != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, sym_3)) {
                 candidates = candidates.append1(sym_3)
             }
             continue@l0

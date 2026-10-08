@@ -38,3 +38,7 @@ fun caller(skip: Int): Tuple4<ULong, String, Int, Boolean> = Tuple4(0uL, "", 0, 
 /** `runtime.GOOS`, `runtime.GOARCH`: the port reports a Linux/amd64-like host (tsgo branches on GOOS only for Windows paths). */
 const val GOOS: String = "linux"
 const val GOARCH: String = "amd64"
+
+/** `runtime.GOMAXPROCS(n)`: the port runs goroutines on threads; it reports a fixed 4 and ignores [n] ((TSGO.4-a): sizes autoimport's checker pool). */
+@Suppress("UNUSED_PARAMETER")
+fun gomaxprocs(n: Int): Int = 4

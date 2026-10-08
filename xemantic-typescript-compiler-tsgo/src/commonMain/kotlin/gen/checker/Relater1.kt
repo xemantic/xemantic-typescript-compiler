@@ -3160,11 +3160,11 @@ fun Relater?.unionOrIntersectionRelatedTo(source_0: Type?, target: Type?, report
     if (source!!.flags.value and 134217728u != 0u) {
         if (target!!.flags.value and 134217728u != 0u) {
             val sourceOrigin: Type? = source.asUnionType()!!.origin
-            if (sourceOrigin != null && sourceOrigin!!.flags.value and 268435456u != 0u && target!!.alias != null && com.xemantic.typescript.tsgo.go.slices.contains<Type?>(sourceOrigin.types(), (target)!!)) {
+            if (sourceOrigin != null && sourceOrigin!!.flags.value and 268435456u != 0u && target!!.alias != null && com.xemantic.typescript.tsgo.go.slices.contains<Type?>(sourceOrigin.types(), target)) {
                 return TernaryTrue
             }
             val targetOrigin: Type? = target.asUnionType()!!.origin
-            if (targetOrigin != null && targetOrigin!!.flags.value and 134217728u != 0u && source!!.alias != null && com.xemantic.typescript.tsgo.go.slices.contains<Type?>(targetOrigin.types(), (source)!!)) {
+            if (targetOrigin != null && targetOrigin!!.flags.value and 134217728u != 0u && source!!.alias != null && com.xemantic.typescript.tsgo.go.slices.contains<Type?>(targetOrigin.types(), source)) {
                 return TernaryTrue
             }
         }

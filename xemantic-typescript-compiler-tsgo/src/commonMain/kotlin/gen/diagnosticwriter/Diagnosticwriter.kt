@@ -30,6 +30,7 @@ import com.xemantic.typescript.tsgo.tspath.ComparePathsOptions
 import com.xemantic.typescript.tsgo.core.CompilerOptions
 import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.ls.lsconv.Script
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.SourceFileLike
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
@@ -48,9 +49,9 @@ import com.xemantic.typescript.tsgo.diagnostics.code
 import com.xemantic.typescript.tsgo.diagnostics.localize
 
 // go: github.com/microsoft/typescript-go/internal/diagnosticwriter.FileLike 86b16b30
-interface FileLike : SourceFileLike {
+interface FileLike : SourceFileLike, Script {
     override fun ecmaLineMap(): GoSlice<TextPos>
-    fun fileName(): String
+    override fun fileName(): String
     override fun text(): String
 }
 

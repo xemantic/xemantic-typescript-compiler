@@ -216,6 +216,114 @@ class Value(
 
     fun bool(): Boolean = raw(getter()) as Boolean
     fun float(): Double = raw(getter()) as Double
+
+    // ---------------------------------------------------------------- (TSGO.4-a): lsproto's struct codec,
+    // lsutil's preference (de)serializer.
+
+    /** `v.Fields()` (Go 1.26): each field of a struct value with its [StructField], in declaration order. */
+    fun fields(): com.xemantic.typescript.tsgo.go.iter.Seq2<StructField, Value> = { yield ->
+        val info = structOfValue().goStructInfo()
+        for (i in info.fields.indices) {
+            val f = info.fields[i]
+            val sf = StructField(name = f.name, pkgPath = if (f.exported) "" else "unexported", type = Type(f.type), tag = StructTag(f.tag), anonymous = f.embedded)
+            if (!yield(sf, field(i))) break
+        }
+    }
+
+    /**
+     * `v.Addr()` of an addressable value (a struct field): Go's `*T`. A struct or array T's pointer IS
+     * the instance; a pointer-typed field's pointer decodes a fresh pointee as the json shim's pointer
+     * fields do; any other T's is a [GoPtr] reading and writing through the field.
+     */
+    fun addr(): Value {
+        val s = setter ?: goPanic("reflect.Value.Addr of unaddressable value")
+        val t = ti
+        val g = getter
+        val ptrInfo = GoTypeInfo.ptr(t)
+        return when (t.kind) {
+            GoTypeInfo.KIND_STRUCT, GoTypeInfo.KIND_ARRAY -> Value(ptrInfo, g)
+            GoTypeInfo.KIND_POINTER -> Value(ptrInfo, { PointeeCell(g, s, t.elem) })
+            else -> {
+                val cell = object : GoPtr<Any?> {
+                    override var value: Any?
+                        get() = g()
+                        set(v) = s(v)
+                }
+                Value(ptrInfo, { cell })
+            }
+        }
+    }
+
+    /** `v.Len()` of a slice, map or string. */
+    fun len(): Int = when (val v = raw(getter())) {
+        is GoSlice<*> -> v.len
+        is GoMap<*, *> -> v.len
+        is String -> v.length
+        else -> goPanic("reflect: call of reflect.Value.Len on $ti Value")
+    }
+
+    /** `v.Index(i)` of a slice. */
+    fun index(i: Int): Value {
+        @Suppress("UNCHECKED_CAST") val s = getter() as GoSlice<Any?>
+        val et = ti.elem ?: GoTypeInfo(0)
+        return Value(et, { s[i] }, { s[i] = it })
+    }
+
+    private fun setRaw(x: Any?) {
+        val s = setter ?: goPanic("reflect: reflect.Value.Set using unaddressable value")
+        val vc = if (t?.cls != null) t.zero() as? GoBasicValue else null
+        s(vc?.goWithRaw(x!!) ?: x)
+    }
+
+    fun setBool(x: Boolean) = setRaw(x)
+
+    fun setInt(x: Long) = setRaw(when ((t?.kind ?: 0)) {
+        GoTypeInfo.KIND_INT64 -> x
+        else -> x.toInt()
+    })
+
+    fun setString(x: String) = setRaw(x)
+}
+
+/**
+ * `Addr()` of a POINTER-typed field (a `**T`) as the json shim decodes into it ((TSGO.4-a): lsproto's
+ * `unmarshalStruct`): the shim reads a target's Go type from its CURRENT value, which for a nil `*T` is
+ * nothing, so the cell hands out a zero T as that value — a struct's pointer IS the struct, allocated into
+ * the field on first read and filled in place; any other T's pointee is boxed into the field when set.
+ */
+internal class PointeeCell(private val get: () -> Any?, private val set: (Any?) -> Unit, private val elem: GoTypeInfo?) : GoPtr<Any?> {
+    private val structLike = elem != null && (elem.kind == GoTypeInfo.KIND_STRUCT || elem.kind == GoTypeInfo.KIND_ARRAY)
+
+    override var value: Any?
+        get() {
+            if (structLike) {
+                get()?.let { return it }
+                val fresh = elem!!.zero()
+                set(fresh)
+                return fresh
+            }
+            return (get() as? GoPtr<*>)?.value ?: elem?.zero?.invoke()
+        }
+        set(v) {
+            set(if (structLike || v == null) v else com.xemantic.typescript.tsgo.runtime.GoBox(v))
+        }
+}
+
+/** `reflect.MakeSlice(typ, len, cap)` of a slice type whose element zero value the type info knows. */
+fun makeSlice(typ: Type?, len: Int, cap: Int): Value {
+    val info = typ!!.info
+    val elem = info.elem
+    val ge = com.xemantic.typescript.tsgo.runtime.GoElem<Any?>({ elem?.zero?.invoke() })
+    val s = GoSlice.make(ge, len, cap)
+    return Value(info, { s })
+}
+
+/** `reflect.Append(s, x...)`. */
+fun append(s: Value, vararg x: Value): Value {
+    @Suppress("UNCHECKED_CAST") var out = s.`interface`() as GoSlice<Any?>
+    for (v in x) out = out.append1(v.`interface`())
+    val result = out
+    return Value(s.type()!!.info, { result })
 }
 
 private fun raw(v: Any?): Any? = if (v is GoBasicValue) v.goRaw else v

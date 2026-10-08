@@ -45,7 +45,7 @@ value class TextPos(val value: Int) : Comparable<TextPos>, GoBasicValue {
 class TextRange(
     @get:kotlin.jvm.JvmName("goGet_pos") @set:kotlin.jvm.JvmName("goSet_pos") var pos: TextPos = TextPos(0),
     @get:kotlin.jvm.JvmName("goGet_end") @set:kotlin.jvm.JvmName("goSet_end") var end: TextPos = TextPos(0),
-) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): TextRange = TextRange(pos = pos, end = end)
 
@@ -122,7 +122,23 @@ class TextRange(
         return start.value <= end_1.value
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { pos.value }, { pos = TextPos(it as Int) })
+        1 -> GoFieldPtr(this, 1, { end.value }, { end = TextPos(it as Int) })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("core.TextRange", listOf(
+                GoFieldInfo("pos", "", false, false, GoTypeInfo(5, "core.TextPos", cls = TextPos::class, zero = { TextPos(0) })),
+                GoFieldInfo("end", "", false, false, GoTypeInfo(5, "core.TextPos", cls = TextPos::class, zero = { TextPos(0) })),
+            ))
+        }
         val ELEM: GoElem<TextRange> = GoElem({ TextRange() }, { it.goCopy() })
     }
 }

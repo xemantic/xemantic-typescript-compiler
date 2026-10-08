@@ -36,10 +36,26 @@ import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.tsoptions.ParseConfigHost
 import com.xemantic.typescript.tsgo.tspath.Path
 import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.core.computeECMALineStarts
+import com.xemantic.typescript.tsgo.go.sync.Mutex
+import com.xemantic.typescript.tsgo.ls.Host
+import com.xemantic.typescript.tsgo.ls.autoimport.Registry
+import com.xemantic.typescript.tsgo.ls.lsconv.Converters
+import com.xemantic.typescript.tsgo.ls.lsconv.LSPLineMap
+import com.xemantic.typescript.tsgo.ls.lsconv.computeLSPLineStarts
+import com.xemantic.typescript.tsgo.ls.lsconv.newConverters
+import com.xemantic.typescript.tsgo.ls.lsutil.UserPreferences
+import com.xemantic.typescript.tsgo.ls.lsutil.newDefaultUserPreferences
+import com.xemantic.typescript.tsgo.lsp.lsproto.PositionEncodingKind
+import com.xemantic.typescript.tsgo.lsp.lsproto.PositionEncodingKindUTF16
+import com.xemantic.typescript.tsgo.runtime.Tuple2
+import com.xemantic.typescript.tsgo.sourcemap.ECMALineInfo
+import com.xemantic.typescript.tsgo.sourcemap.createECMALineInfo
+import com.xemantic.typescript.tsgo.vfs.vfsmatch.readDirectory
 
 // tsgo's `internal/project` (the language server's project system: snapshots, file watching, configured
 // and inferred projects, checker pools, ATA), HAND-WRITTEN as the few members the ported API session
-// reads ((TSGO.3-b), docs/goport-api.md). The in-process session does not run the project system: its
+// and language service read ((TSGO.3-b) docs/goport-api.md, (TSGO.4-a) docs/goport-ls.md). The in-process session does not run the project system: its
 // host builds ONE program per tsconfig (`api.XtscOpenProgram`, the way `Project.CreateProgram` does) and
 // hands the session a snapshot of it. Everything below is the Go member's contract over that program.
 
@@ -49,9 +65,69 @@ class Session(private val fs: FS?, private val currentDirectory: String) : Parse
     override fun getCurrentDirectory(): String = currentDirectory
 }
 
-/** `project.Snapshot`: an immutable set of projects, identified by [id]. */
-class Snapshot(private val id: ULong, var projectCollection: ProjectCollection?) {
+/**
+ * `project.Snapshot`: an immutable set of projects, identified by [id] — and, as in tsgo, the language
+ * service's [Host] ((TSGO.4-a), docs/goport-ls.md): its files come from [fs] (the project system's
+ * overlay-over-disk view, here the disk alone), each file's LSP line map and ECMAScript line info computed
+ * once ([fileBase] in overlayfs.go), its [converters] speak [positionEncoding], and its preferences are the
+ * session's [userPreferences] for every file (`Snapshot.GetPreferences` ignores the active file).
+ */
+class Snapshot(
+    private val id: ULong,
+    var projectCollection: ProjectCollection?,
+    private val fs: FS? = null,
+    private val userPreferences: UserPreferences = newDefaultUserPreferences(),
+    positionEncoding: PositionEncodingKind = PositionEncodingKindUTF16,
+    private val autoImports: Registry? = null,
+) : Host {
     fun id(): ULong = id
+
+    private class FileHandle(val content: String) {
+        val lspLineMap: LSPLineMap? by lazy { computeLSPLineStarts(content) }
+        val ecmaLineInfo: ECMALineInfo? by lazy { createECMALineInfo(content, computeECMALineStarts(content)) }
+    }
+
+    private val files = HashMap<String, FileHandle?>()
+    private val filesLock = Mutex()
+
+    /** `Snapshot.GetFile`: the file's content, read once per snapshot (a snapshot is immutable). */
+    private fun getFile(fileName: String): FileHandle? {
+        val fs = fs ?: return null
+        filesLock.lock()
+        try {
+            if (fileName in files) return files[fileName]
+        } finally {
+            filesLock.unlock()
+        }
+        val (content, ok) = fs.readFile(fileName)
+        val handle = if (ok) FileHandle(content) else null
+        filesLock.lock()
+        try {
+            return files.getOrPut(fileName) { handle }
+        } finally {
+            filesLock.unlock()
+        }
+    }
+
+    /** `Snapshot.LSPLineMap`. */
+    fun lspLineMap(fileName: String): LSPLineMap? = getFile(fileName)?.lspLineMap
+
+    private val converters: Converters? = newConverters(positionEncoding) { lspLineMap(it) }
+
+    override fun getECMALineInfo(p0: String): ECMALineInfo? = getFile(p0)?.ecmaLineInfo
+    override fun getPreferences(p0: String): UserPreferences = userPreferences
+    fun userPreferences(): UserPreferences = userPreferences
+    override fun converters(): Converters? = converters
+    override fun autoImportRegistry(): Registry? = autoImports
+    override fun useCaseSensitiveFileNames(): Boolean = fs?.useCaseSensitiveFileNames() ?: true
+    override fun readFile(p0: String): Tuple2<String, Boolean> =
+        getFile(p0)?.let { Tuple2(it.content, true) } ?: Tuple2("", false)
+    override fun directoryExists(p0: String): Boolean = fs?.directoryExists(p0) ?: false
+    override fun fileExists(p0: String): Boolean = fs?.fileExists(p0) ?: false
+    override fun getDirectories(p0: String): GoSlice<String> =
+        fs?.getAccessibleEntries(p0)?.directories ?: GoElem.STRING.nilSlice
+    override fun readDirectory(p0: String, p1: String, p2: GoSlice<String>, p3: GoSlice<String>, p4: GoSlice<String>, p5: Int): GoSlice<String> =
+        readDirectory(fs, p0, p1, p2, p3, p4, p5)
 }
 
 /** `project.ProjectCollection`: the snapshot's projects by config path. */
@@ -64,9 +140,14 @@ class ProjectCollection(private val projects: Map<String, Project>) {
  * `project.Project` of a configured project: [id] is the tsconfig's path (`Project.ID`), [program] its
  * program and [checkerPool] the program's pool (`GetProjectDiagnostics` reads its global diagnostics).
  */
-class Project(private val id: Path, private val program: Program?, private val checkerPool: XtscCheckerPool?) {
-    fun id(): Path = id
-    fun getProgram(): Program? = program
+class Project(private val id: Path, private val program: Program?, private val checkerPool: XtscCheckerPool?) :
+    com.xemantic.typescript.tsgo.ls.Project {
+    /** `Project.ID` and `Project.Id` (the language service's `ls.Project`): the tsconfig's path. */
+    override fun id(): Path = id
+    override fun getProgram(): Program? = program
+
+    /** `Project.HasFile`: the program has a source file of [p0]'s path. */
+    override fun hasFile(p0: String): Boolean = program?.getSourceFile(p0) != null
 
     /** `Project.GetProjectDiagnostics`: config-file, program and global diagnostics, sorted and deduplicated. */
     fun getProjectDiagnostics(ctx: Context?): GoSlice<Diagnostic?> {

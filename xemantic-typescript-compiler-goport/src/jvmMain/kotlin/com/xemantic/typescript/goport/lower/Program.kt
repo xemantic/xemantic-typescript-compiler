@@ -202,6 +202,7 @@ class Program(
 
     init {
         for (p in packages) index(p)
+        reflectThroughParameters()
         // Close the reflect/json structs over their embedded structs (json flattens them).
         // ... and a struct EMBEDDING a json struct is one too (`packagejson.Fields` embeds the tagged
         // HeaderFields/PathFields/DependencyFields and is what `json.Unmarshal` receives).
@@ -290,6 +291,56 @@ class Program(
             !found
         }
         return found
+    }
+
+    /**
+     * A struct reaches `reflect` THROUGH A PARAMETER ((TSGO.4-a)): a ported function that hands its
+     * parameter to `reflect.ValueOf` (`lsproto.marshalUnion(v any, …)`, `countNonNil`, `unmarshalStruct`)
+     * makes the struct type of every argument passed there a reflect struct, as a direct `reflect.ValueOf(s)` does.
+     */
+    private fun reflectThroughParameters() {
+        val reflecting = HashMap<String, MutableSet<Int>>() // function key -> parameter indexes
+        for (p in packages) for (f in p.files) for (d in f.list("decls")) {
+            if (d.k != "FuncDecl" || d.obj("recv") != null) continue
+            val key = d.int("obj")?.let { p.obj(it).str("key") } ?: continue
+            val params = ArrayList<Int?>()
+            for (fld in d.obj("type")?.obj("params")?.list("list") ?: emptyList()) {
+                val names = fld.list("names")
+                if (names.isEmpty()) params += null else for (nm in names) params += nm.int("obj")
+            }
+            walk(d.obj("body")) { n ->
+                if (n.str("k") == "CallExpr" && n.str("call") == "func") {
+                    val fe = n.obj("fun")
+                    val sel = if (fe?.str("k") == "SelectorExpr") fe.obj("sel") else fe
+                    if (sel?.int("obj")?.let { p.obj(it).str("key") } == "reflect.ValueOf") {
+                        val a = n.list("args").firstOrNull()
+                        val id = if (a?.str("k") == "Ident") a.int("obj") else null
+                        val i = if (id != null) params.indexOf(id) else -1
+                        if (i >= 0) reflecting.getOrPut(key) { HashSet() } += i
+                    }
+                }
+                true
+            }
+        }
+        if (reflecting.isEmpty()) return
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (f in p.files) walk(f.list("decls")) { n ->
+                if (n.str("k") == "CallExpr" && n.str("call") == "func") {
+                    val fe = n.obj("fun")
+                    val sel = if (fe?.str("k") == "SelectorExpr") fe.obj("sel") else fe
+                    val idx = sel?.int("obj")?.let { p.obj(it).str("key") }?.let { reflecting[it] }
+                    if (idx != null) for (i in idx) {
+                        var t = n.list("args").getOrNull(i)?.int("t")?.let { tt.unalias(it) } ?: continue
+                        if (t is com.xemantic.typescript.goport.types.PointerType) t = tt.unalias(t.elem)
+                        val nt = t as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                        val o = nt.origin?.let { tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType } ?: nt
+                        if (o.tparams.isEmpty() && (o.pkg == p.path || o.pkg in byPath) && tt.under(o.id) is com.xemantic.typescript.goport.types.StructType) reflectStructs += o.key
+                    }
+                }
+                true
+            }
+        }
     }
 
     private fun index(p: IrPackage) {
@@ -421,6 +472,30 @@ class Program(
                 if (tt.under(k.id) !is com.xemantic.typescript.goport.types.StructType || k.localAt != null) return@forEachIndexed
                 val origin = k.origin?.let { tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType } ?: k
                 if (origin.pkg == p.path || origin.pkg in byPath) structKeys += origin.key
+            }
+            true
+        }
+        // A struct VALUE as a context key (`context.WithValue(ctx, clientCapabilitiesKey{}, caps)`,
+        // `ctx.Value(clientCapabilitiesKey{})`, (TSGO.4-a)): the context compares keys with Go's `==` on
+        // interfaces, i.e. by value — two `clientCapabilitiesKey{}` are the same key.
+        for (f in p.files) walk(f.list("decls")) { n ->
+            if (n.str("k") == "CallExpr") {
+                val fe = n.obj("fun")
+                val key = when (fe?.str("k")) {
+                    "SelectorExpr" -> {
+                        val sel = fe.obj("sel")
+                        val objKey = sel?.int("obj")?.let { p.obj(it).str("key") }
+                        if (objKey == "context.WithValue") n.list("args").getOrNull(1)
+                        else if (sel?.str("name") == "Value" && fe.obj("x")?.int("t")?.let { (tt.unalias(it) as? com.xemantic.typescript.goport.types.NamedType)?.key } == "context.Context") n.list("args").firstOrNull()
+                        else null
+                    }
+                    else -> null
+                }
+                val k = key?.int("t")?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.NamedType
+                if (k != null && tt.under(k.id) is com.xemantic.typescript.goport.types.StructType && k.localAt == null) {
+                    val origin = k.origin?.let { tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType } ?: k
+                    if (origin.pkg == p.path || origin.pkg in byPath) structKeys += origin.key
+                }
             }
             true
         }

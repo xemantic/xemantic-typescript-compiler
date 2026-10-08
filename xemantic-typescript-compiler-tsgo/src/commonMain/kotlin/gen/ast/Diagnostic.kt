@@ -355,7 +355,7 @@ fun DiagnosticsCollection?.lookup(diagnostic: Diagnostic?): Diagnostic? {
         } else {
             diagnostics = this.getGlobalDiagnosticsLocked()
         }
-        val t2 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Diagnostic?, Diagnostic?>(diagnostics, (diagnostic)!!, (fun(p0: Diagnostic?, p1: Diagnostic?): Int = compareDiagnostics(p0, p1))!!)
+        val t2 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Diagnostic?, Diagnostic?>(diagnostics, diagnostic, (fun(p0: Diagnostic?, p1: Diagnostic?): Int = compareDiagnostics(p0, p1))!!)
         val i: Int = t2.first
         val ok: Boolean = t2.second
         if (ok) {

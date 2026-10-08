@@ -100,6 +100,7 @@ import com.xemantic.typescript.tsgo.checker.texts
 import com.xemantic.typescript.tsgo.checker.typeArguments
 import com.xemantic.typescript.tsgo.checker.typeParameters
 import com.xemantic.typescript.tsgo.checker.value
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
 
 // go: github.com/microsoft/typescript-go/internal/api.Method dea5a590
 @kotlin.jvm.JvmInline

@@ -22,15 +22,18 @@ Overlay, never written into `typescript-go-repo`):
 The roots keep `Session`, and a kept type keeps all its methods: `HandleRequest`, every handler,
 `snapshotData`'s registries, proto.go's request/response types and `unmarshalers` are ported verbatim.
 **Stubs** (`partialStubs`, signature only, body not extracted; the porter emits
-`TODO("goport: refused partial-stub …")` and counts them under `partial-stub`, 17 declarations):
+`TODO("goport: refused partial-stub …")` and counts them under `partial-stub`, 10 declarations):
 
 - the project-session lifecycle — `handleInitialize`, `handleUpdateSnapshot`, `handleRelease`,
   `handleGetDefaultProjectForFile`, `Close`, `releaseOpenRefs`, `toFileChangeSummary`,
-  `computeSnapshotChanges`, `setupLanguageService` (replaced by `XtscNewSession`'s caller-built snapshot);
-- `runtime/pprof` profiles — `handleStartCPUProfile`, `handleStopCPUProfile`, `handleSaveHeapProfile`;
-- `internal/ls` (the language service, ~29k lines, not ported yet) — `handleGetCompletionsAtPosition`,
-  `handleGetReferencesToSymbolInFile`, `handleGetReferencedSymbolsForNode`, `handleGetSignatureUsages`,
-  `handleGetJSDocTags`, `handleGetDocumentationComment`.
+  `computeSnapshotChanges` (replaced by `XtscNewSession`'s caller-built snapshot);
+- `runtime/pprof` profiles — `handleStartCPUProfile`, `handleStopCPUProfile`, `handleSaveHeapProfile`.
+
+The six language-service handlers (`handleGetCompletionsAtPosition`, `handleGetReferencesToSymbolInFile`,
+`handleGetReferencedSymbolsForNode`, `handleGetSignatureUsages`, `handleGetJSDocTags`,
+`handleGetDocumentationComment`) and `setupLanguageService` are PORTED since (TSGO.4-a) with `internal/ls`
+(docs/goport-ls.md); they are not in the API recording yet (the language service itself is gated by
+LsParityTest). The snapshot's preferences switch auto-import completions off (the registry is not ported).
 
 Not reached at all: the transport (`conn_*.go`, `protocol_*.go`, `transport*.go`, `server.go`,
 `callbackfs.go`, timing) — the in-process caller is the transport.
@@ -39,10 +42,7 @@ Not reached at all: the transport (`conn_*.go`, `protocol_*.go`, `transport*.go`
 
 | package | shim |
 |---|---|
-| `internal/project` | `Session` (FS + cwd, a `tsoptions.ParseConfigHost`), `Snapshot` (id, `ProjectCollection`), `ProjectCollection.GetProjectByPath`, `Project` (`ID`, `GetProgram`, `GetProjectDiagnostics` = config + program + the pool's global diagnostics, sorted/deduplicated), `FileChangeSummary` (a stub's signature) |
-| `internal/lsp/lsproto` | `DocumentUri` + `FileName` (bundled names, `file://` with percent-decoding and the drive-letter fix, other schemes as `^/scheme/authority/path`) |
-| `internal/ls/lsconv` | `FileNameToDocumentURI` (`url.PathEscape` + tsgo's extra escapes) |
-| `internal/ls` | `LanguageService` (an empty class: a stub's signature) |
+| `internal/project` | `Session` (FS + cwd, a `tsoptions.ParseConfigHost`), `Snapshot` (id, `ProjectCollection`; since (TSGO.4-a) also the language service's `ls.Host`), `ProjectCollection.GetProjectByPath`, `Project` (`ID`, `GetProgram`, `GetProjectDiagnostics` = config + program + the pool's global diagnostics, sorted/deduplicated), `FileChangeSummary` (a stub's signature) |
 | `internal/pprof` | `CPUProfiler` (an empty class: a `Session` field) |
 
 Porter rules added for the API (each general, docs/goport-lowering.md):
@@ -91,10 +91,9 @@ Differences from `tsc --api`: one snapshot per project (no `updateSnapshot`); th
 
 ## 3. Not ported yet (the remaining surface)
 
-The 10 language-service and lifecycle methods stubbed in § 1 (completions, references, signature
-usages, JSDoc tags, documentation comments; initialize/updateSnapshot/release/getDefaultProjectForFile;
-profiles), which need `internal/ls` (+ `ls/lsutil`, `format`, `ls/autoimport`, `ls/change`, the
-generated `lsp/lsproto`, ~60k lines) or the project system (`internal/project`, file watching, ATA).
+The lifecycle and profile methods stubbed in § 1 (initialize/updateSnapshot/release/getDefaultProjectForFile;
+profiles), which need the project system (`internal/project`, file watching, ATA) or `runtime/pprof`.
+The language service (`internal/ls`) is ported since (TSGO.4-a): docs/goport-ls.md.
 
 ## 4. The gate
 

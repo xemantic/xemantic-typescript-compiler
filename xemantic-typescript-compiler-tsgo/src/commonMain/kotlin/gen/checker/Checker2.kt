@@ -3236,7 +3236,7 @@ fun Checker?.isReferenceToType(t: Type?, target: Type?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.isReferenceToSomeType a7fe531a
 fun Checker?.isReferenceToSomeType(t: Type?, targets: GoSlice<Type?>): Boolean {
-    return t != null && t!!.objectFlags.value and 4u != 0u && com.xemantic.typescript.tsgo.go.slices.contains<Type?>(targets, (t.target())!!)
+    return t != null && t!!.objectFlags.value and 4u != 0u && com.xemantic.typescript.tsgo.go.slices.contains<Type?>(targets, t.target())
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getBuiltinIteratorReturnType 9ff3cd31

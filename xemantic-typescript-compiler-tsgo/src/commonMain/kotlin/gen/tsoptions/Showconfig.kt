@@ -259,7 +259,7 @@ fun serializeCompilerOptions(options: CompilerOptions?, configFilePath: String, 
                 val elem: CommandLineOption? = optionDecl.elements()
                 if (elem != null && elem!!.isFilePath) {
                     val x2 = value_1
-                    val t1 = if (x2 is GoSlice<*>) Tuple2(x2 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+                    val t1 = if (x2 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x2 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
                     val strs: GoSlice<String> = t1.first
                     val ok: Boolean = t1.second
                     if (ok) {
@@ -278,7 +278,7 @@ fun serializeCompilerOptions(options: CompilerOptions?, configFilePath: String, 
                 if (elem != null && elem.enumMap() != null) {
                     val elemMap: OrderedMap<String, Any?>? = elem.enumMap()
                     val x6 = value_1
-                    val t5 = if (x6 is GoSlice<*>) Tuple2(x6 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
+                    val t5 = if (x6 is com.xemantic.typescript.tsgo.runtime.GoSlice<*>) Tuple2(x6 as GoSlice<String>, true) else Tuple2(GoElem.STRING.nilSlice, false)
                     val strs_1: GoSlice<String> = t5.first
                     val ok_1: Boolean = t5.second
                     if (ok_1) {

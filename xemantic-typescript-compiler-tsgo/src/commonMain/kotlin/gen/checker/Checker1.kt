@@ -4275,7 +4275,7 @@ fun Checker?.checkSourceElementUnreachable(node: Node?): Boolean {
     val parent: Node? = node!!.parent
     if (parent.canHaveStatements()) {
         val statements: GoSlice<Node?> = parent.statements()
-        val offset: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(statements, (node)!!)
+        val offset: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(statements, node)
         if (offset >= 0) {
             val first: Int = offset
             var last: Int = offset
@@ -4545,7 +4545,7 @@ fun Checker?.checkParameter(node: Node?) {
         this.error(node, com.xemantic.typescript.tsgo.diagnostics.a_binding_pattern_parameter_cannot_be_optional_in_an_implementation_signature, GoElem.ref<Any?>().nilSlice)
     }
     if (paramName == "this" || paramName == "new") {
-        if (com.xemantic.typescript.tsgo.go.slices.index<Node?>(fn.parameters(), (node)!!) != 0) {
+        if (com.xemantic.typescript.tsgo.go.slices.index<Node?>(fn.parameters(), node) != 0) {
             this.error(node, com.xemantic.typescript.tsgo.diagnostics.a_0_parameter_must_be_the_first_parameter, GoSlice.of(GoElem.ref<Any?>(), paramName))
         }
         if (com.xemantic.typescript.tsgo.ast.isConstructorDeclaration(fn) || com.xemantic.typescript.tsgo.ast.isConstructSignatureDeclaration(fn) || com.xemantic.typescript.tsgo.ast.isConstructorTypeNode(fn)) {

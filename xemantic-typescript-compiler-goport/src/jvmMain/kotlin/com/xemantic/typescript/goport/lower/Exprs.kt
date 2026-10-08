@@ -706,6 +706,13 @@ open class ExprLowering(val fn: FnCtx) {
 
     /** The `is` check for Go type [t] (erased generics use star projections). */
     fun isCheck(t: Int): String {
+        // A slice or map type may be spelled through a typealias (`jsontext.Value` = `GoSlice<Int>`): check the
+        // erased container (TSGO.4-a, `lsproto.RequestInfo.UnmarshalResult`'s `result.(json.Value)`).
+        if (tm.boxOf(t) == null) when (types.under(t)) {
+            is SliceType -> return "com.xemantic.typescript.tsgo.runtime.GoSlice<*>"
+            is MapType -> return "com.xemantic.typescript.tsgo.runtime.GoMap<*, *>"
+            else -> {}
+        }
         val k = castTarget(t)
         val gen = k.indexOf('<')
         return if (gen > 0) k.substring(0, gen) + "<" + k.substring(gen + 1, k.lastIndexOf('>')).split(',').joinToString(", ") { "*" } + ">" else k.removeSuffix("?")

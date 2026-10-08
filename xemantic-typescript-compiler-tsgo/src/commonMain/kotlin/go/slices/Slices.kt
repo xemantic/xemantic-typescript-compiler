@@ -174,6 +174,24 @@ fun <T> insert(s: GoSlice<T>, i: Int, vararg v: T): GoSlice<T> {
     return t
 }
 
+/** `slices.Replace(s, i, j, v...)`: `s[i:j]` replaced by [v]; a shrunk tail is zeroed in place. */
+fun <T> replace(s: GoSlice<T>, i: Int, j: Int, vararg v: T): GoSlice<T> {
+    s.slice(i, j) // bounds check
+    if (i == j) return insert(s, i, *v)
+    val m = v.size
+    val oldLen = s.len
+    val tot = oldLen - (j - i) + m
+    val vs = GoSlice.of(s.elem, *v)
+    if (i + m <= j) {
+        goCopy(s.slice(i), vs)
+        goCopy(s.slice(i + m), s.slice(j))
+        goClear(s.slice(tot))
+        return s.slice(0, tot)
+    }
+    val tail = clone(s.slice(j))
+    return s.slice(0, i).appendSlice(vs).appendSlice(tail)
+}
+
 /** `slices.Reverse(s)`. */
 fun <T> reverse(s: GoSlice<T>) {
     var i = 0

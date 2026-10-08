@@ -373,7 +373,7 @@ fun NodeBuilderImpl?.typeToTypeNode(t_0: Type?): Node? {
                 this!!.ctx!!.depth = this!!.ctx!!.depth - 1
                 return result_1
             }
-            if (t!!.flags.value and 524288u != 0u && com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.ctx!!.inferTypeParameters, (t)!!)) {
+            if (t!!.flags.value and 524288u != 0u && com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.ctx!!.inferTypeParameters, t)) {
                 this!!.ctx!!.approximateLength += (com.xemantic.typescript.tsgo.ast.symbolName(t!!.symbol).length + 6)
                 var constraintNode: Node? = null
                 val constraint: Type? = this!!.ch.getConstraintOfTypeParameterImpl(t)

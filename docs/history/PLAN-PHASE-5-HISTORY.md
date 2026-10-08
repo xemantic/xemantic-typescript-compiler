@@ -1,3 +1,26 @@
+### Round (P18.312) — (INV.0) extraction: two families — the `in`-RHS primitive / unconstrained type-parameter checks (TS2322 + TS2208 related, the `= undefined` default, `Object.keys` TS2769) into `InRhsPrimitiveTypeParamChecks` and the type-used-as-namespace family (TS2702 / TS2713 / TS2339 / TS2749) into `TypeAsNamespaceChecks`; `Checker.kt` 191,430 -> 190,700 (-730); every receipt identical, per-pass table included (2026-10-06)
+
+One implementation subagent in the (P18.294) order; it finished. **Choice**: the census found two cleaner families than the brief
+named — `checkInRhsPrimitiveTypeParams` (491 lines, one run, one widening) and `checkTypeUsedAsNamespaceRefs` (255 lines, one run,
+none); refused: `checkSuperBeforeThis` (3 widenings, a shared helper), `checkNonConstructorExtends` (two runs ~25k lines apart),
+`checkInterfaceExtendsInterface` (relation-path widening), the type-argument-constraint family (walk-scoped type-parameter state).
+**Moved**: 180160-180650 and 187473-187715; the only callers are the two `pass(…)` lambdas; one widening, `pinRel` (a cold
+diagnostic builder, no relation or spine use). One trap noted by the builder: the moved local `unconstrainedTpNames` shares its name
+with a `Checker` member, so it was deliberately NOT prefixed with `checker.` — that would have re-bound the call silently.
+**Receipts**: verbatim proof three ways; per-pass `--passTiming` 415 rows + 33 counter lines identical; PrintInlining
+`checkArgumentsAgainstSignature` row counts vary between two runs of ONE binary (3/9/6 vs 3/11/9) and match across arms run for
+run, i.e. noise, unmangled 0 — CLAUDE.md's "not stable across processes"; a 16-cell tsgo matrix byte-identical before / after
+(pre-existing divergences now inside the collaborators: n05 `E.A.x` — tsgo TS2713 at the member, ours TS2749 on the whole name;
+i02 a primitive-union constraint `T extends string | number` on the right of `in` reports nothing; i07 `Object.keys` of an
+unconstrained type parameter only in an arrow EXPRESSION body; the lib related row carries no position where tsgo names
+`lib.es5.d.ts:262:5`); corpus screen 8725 / 0; `cost_gate.py` 0; spine audit clean. **Pins**:
+`InRhsAndTypeAsNamespaceCollaboratorTest` 11; ablation entry points 5 / 4 RED, helpers 4 / 4 / 1 / 1 / 3 / 2 / 3 RED. **Gates**: full
+suite 22,985 / 0 / 44 (+11); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue /
+mitt 0 / date-fns 1 unchanged (identity hash extended to both collaborators); library grid OURS-ONLY row sets identical to `r311`
+on all eight (orchestrator's `r312`; tally 160); warning gate with probe: probe only. Ledger row 27. Next candidates:
+`checkIdenticallyNamedTypeAssignment` (277 lines, one widening), `checkMultipleDefaultExports` (375, with `DefaultDeclKind`),
+`checkSuperBeforeThis`.
+
 ### Round (P18.311) — (LIBS.4) real-library false-positive sweep: eight mechanisms on APPLICATION code — `any` with a bigint operand, expando writes in the weak-type check, flow-narrowed spread operands, `Function` members on a `typeof C`-constrained type parameter, tsgo's `isTypeDerivedFrom` for a negative `instanceof`, `extends Map`/`Set`/`Array` without type arguments, `this[key] =` as a definite assignment, a TS2540 receiver resolved through its own local declaration — tally 179 -> 162 (corrected; the builder reported 160), NO added position (2026-10-06)
 
 One implementation subagent; it ran the grid and the at-risk sweep BEFORE ablation (the (P18.310) lesson) and finished. **Where the

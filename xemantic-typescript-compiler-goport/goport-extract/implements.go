@@ -20,6 +20,10 @@ type ifaceCand struct {
 	t   types.Type
 }
 
+// genericIfaces: the uninstantiated generic method-set interfaces of the run, by key ((TSGO.4-a):
+// a generic struct satisfies one over its own type parameters, `*dirty.Box[T]` a `dirty.Value[T]`).
+var genericIfaces = map[string]*types.Named{}
+
 func collectInterfaces(pkgs []*packages.Package, kept keptDecls) []ifaceCand {
 	seen := map[string]types.Type{}
 	if len(pkgs) == 0 {
@@ -33,7 +37,11 @@ func collectInterfaces(pkgs []*packages.Package, kept keptDecls) []ifaceCand {
 		t = types.Unalias(t)
 		if n, ok := t.(*types.Named); ok {
 			if n.TypeParams().Len() > 0 && n.TypeArgs().Len() == 0 {
-				return // uninstantiated generic
+				// uninstantiated generic: a candidate for GENERIC types only (genericImplementsOf)
+				if it, ok := n.Underlying().(*types.Interface); ok && it.NumMethods() > 0 && it.IsMethodSet() {
+					genericIfaces[k.typeKey(n)] = n
+				}
+				return
 			}
 		}
 		it, ok := t.Underlying().(*types.Interface)
@@ -91,6 +99,55 @@ func collectInterfaces(pkgs []*packages.Package, kept keptDecls) []ifaceCand {
 		for id, o := range p.TypesInfo.Defs {
 			if tn, ok := o.(*types.TypeName); ok && inKeptDecl(k, p, id.Pos()) {
 				consider(tn.Type())
+			}
+		}
+		// (TSGO.4-a) An instantiation satisfies its type parameters' constraints, and a constraint that
+		// is a generic interface over those parameters (`V Cloneable[V]`, project/dirty) names an
+		// instantiated interface (`Cloneable[*directory]`) that appears in no expression: the type
+		// argument must implement it nominally in Kotlin, so it is a candidate too.
+		for id, inst := range p.TypesInfo.Instances {
+			if !inKeptDecl(k, p, id.Pos()) {
+				continue
+			}
+			var tparams *types.TypeParamList
+			switch t := inst.Type.(type) {
+			case *types.Named:
+				tparams = t.Origin().TypeParams()
+			case *types.Signature:
+				if o, ok := p.TypesInfo.Uses[id]; ok {
+					if f, ok := o.(*types.Func); ok {
+						tparams = f.Origin().Signature().TypeParams()
+					}
+				}
+			}
+			if tparams == nil || tparams.Len() != inst.TypeArgs.Len() {
+				continue
+			}
+			for i := 0; i < tparams.Len(); i++ {
+				c, ok := types.Unalias(tparams.At(i).Constraint()).(*types.Named)
+				if !ok || c.TypeArgs().Len() == 0 {
+					continue
+				}
+				args := make([]types.Type, c.TypeArgs().Len())
+				mapped := true
+				for j := 0; j < c.TypeArgs().Len(); j++ {
+					tp, ok := c.TypeArgs().At(j).(*types.TypeParam)
+					if !ok || tp.Index() >= inst.TypeArgs.Len() || tparams.At(tp.Index()) != tp {
+						mapped = false
+						break
+					}
+					args[j] = inst.TypeArgs.At(tp.Index())
+					if _, open := types.Unalias(args[j]).(*types.TypeParam); open {
+						mapped = false // an instantiation inside generic code: no concrete type to decorate
+						break
+					}
+				}
+				if !mapped {
+					continue
+				}
+				if ct, err := types.Instantiate(nil, c.Origin(), args, false); err == nil {
+					consider(ct)
+				}
 			}
 		}
 	}
@@ -161,7 +218,11 @@ func (p *px) addImplements() {
 		id := p.typ(n, true)
 		e := p.typeEntries[id]
 		if n.TypeParams().Len() > 0 {
-			e.S("implementsSkipped", "generic")
+			if impl := p.genericImplementsOf(n); len(impl) > 0 {
+				e.S("implements", impl)
+			} else {
+				e.S("implementsSkipped", "generic")
+			}
 			continue
 		}
 		e.S("implements", p.implementsOf(n))
@@ -182,6 +243,68 @@ func (p *px) initOrder() Lines {
 		}
 		out = append(out, obj().S("lhs", lhs).S("file", fileBase(p, in.Rhs)).
 			S("o", p.off(in.Rhs.Pos())).S("e", p.off(in.Rhs.End())))
+	}
+	return out
+}
+
+// genericImplementsOf returns the "implements" list of a GENERIC named type: each generic interface of the
+// run with as many type parameters, instantiated with the type's OWN type parameters (positionally), that
+// the type instantiated with those same parameters (or a pointer to it) satisfies — `*Box[T]` implements
+// `Value[T]`. The entry's iface type names the type's own type parameters.
+func (p *px) genericImplementsOf(n *types.Named) []any {
+	out := []any{}
+	tps := make([]types.Type, n.TypeParams().Len())
+	for i := range tps {
+		tps[i] = n.TypeParams().At(i)
+	}
+	self, err := types.Instantiate(nil, n, tps, false)
+	if err != nil {
+		return out
+	}
+	keys := make([]string, 0, len(genericIfaces))
+	for key := range genericIfaces {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		gi := genericIfaces[key]
+		m := gi.TypeParams().Len()
+		if m > len(tps) || m > 3 {
+			continue
+		}
+		// every m-tuple of the type's own parameters (`MapEntry[K, V]` implements `Value[V]`)
+		idx := make([]int, m)
+		for {
+			args := make([]types.Type, m)
+			for i, j := range idx {
+				args[i] = tps[j]
+			}
+			if inst, err := types.Instantiate(nil, gi, args, true); err == nil {
+				if it, ok := inst.Underlying().(*types.Interface); ok {
+					via := ""
+					if types.Implements(self, it) {
+						via = "value"
+					} else if types.Implements(types.NewPointer(self), it) {
+						via = "pointer"
+					}
+					if via != "" {
+						out = append(out, obj().S("iface", p.typ(inst, false)).S("key", p.typeKey(inst)).S("via", via))
+					}
+				}
+			}
+			k := m - 1
+			for k >= 0 {
+				idx[k]++
+				if idx[k] < len(tps) {
+					break
+				}
+				idx[k] = 0
+				k--
+			}
+			if k < 0 {
+				break
+			}
+		}
 	}
 	return out
 }

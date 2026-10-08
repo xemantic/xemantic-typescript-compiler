@@ -1163,7 +1163,7 @@ fun Checker?.getNarrowedTypeOfSymbol(symbol: Symbol?, location: Node?): Type? {
                         val restType: Type? = this.getReducedApparentType(this.instantiateType(this.getTypeOfSymbolImpl(contextualSignature!!.parameters[0]), mapper))
                         if (restType!!.flags.value and 134217728u != 0u && everyType(restType, fun(p0: Type?): Boolean = isTupleTypeImpl(p0)) && !com.xemantic.typescript.tsgo.core.some<Node?>(GoElem.ref<Node?>(), fn.parameters(), (run { val r1 = this; fun(p0: Node?): Boolean = r1.isSomeSymbolAssigned(p0) })!!)) {
                             val narrowedType_1: Type? = this.getFlowTypeOfReferenceEx(fn, restType, restType, null, getFlowNodeOfNode(location))
-                            val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(fn.parameters(), (declaration)!!) - com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, com.xemantic.typescript.tsgo.ast.getThisParameter(fn) != null, 1, 0)
+                            val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(fn.parameters(), declaration) - com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, com.xemantic.typescript.tsgo.ast.getThisParameter(fn) != null, 1, 0)
                             t = this.getIndexedAccessType(narrowedType_1, this.getNumberLiteralType(com.xemantic.typescript.tsgo.jsnum.Number(index.toDouble())))
                         }
                     }

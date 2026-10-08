@@ -462,7 +462,7 @@ fun Checker?.getContextuallyTypedParameterType(parameter: Node?): Type? {
     val iife: Node? = com.xemantic.typescript.tsgo.ast.getImmediatelyInvokedFunctionExpression(fn)
     if (iife != null) {
         val args: GoSlice<Node?> = this.getEffectiveCallArguments(iife)
-        val indexOfParameter: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(fn.parameters(), (parameter)!!)
+        val indexOfParameter: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(fn.parameters(), parameter)
         if (hasDotDotDotToken(parameter)) {
             return this.getSpreadArgumentType(args, indexOfParameter, args.len, this!!.anyType, null, CheckModeNormal)
         }
@@ -486,7 +486,7 @@ fun Checker?.getContextuallyTypedParameterType(parameter: Node?): Type? {
     }
     val contextualSignature: Signature? = this.getContextualSignature(fn)
     if (contextualSignature != null) {
-        val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(fn.parameters(), (parameter)!!) - com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, com.xemantic.typescript.tsgo.ast.getThisParameter(fn) != null, 1, 0)
+        val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(fn.parameters(), parameter) - com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, com.xemantic.typescript.tsgo.ast.getThisParameter(fn) != null, 1, 0)
         if (hasDotDotDotToken(parameter) && com.xemantic.typescript.tsgo.core.lastOrNil<Node?>(GoElem.ref<Node?>(), fn.parameters()) === parameter) {
             return this.getRestTypeAtPosition(contextualSignature, index, false)
         }
@@ -605,7 +605,7 @@ fun Checker?.getContextualTypeForBindingElement(declaration: Node?, contextFlags
         return null
     }
     if (com.xemantic.typescript.tsgo.ast.isArrayBindingPattern(parent.name())) {
-        val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(declaration!!.parent.elements(), (declaration)!!)
+        val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(declaration!!.parent.elements(), declaration)
         if (index < 0) {
             return null
         }
@@ -765,7 +765,7 @@ fun Checker?.getContextualTypeForAwaitOperand(node: Node?, contextFlags: Context
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getContextualTypeForArgument c34c3950
 fun Checker?.getContextualTypeForArgument(callTarget: Node?, arg: Node?): Type? {
     val args: GoSlice<Node?> = this.getEffectiveCallArguments(callTarget)
-    val argIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(args, (arg)!!)
+    val argIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(args, arg)
     if (argIndex == -1) {
         return null
     }
@@ -1197,7 +1197,7 @@ fun Checker?.getLegacyDecoratorCallSignature(decorator: Node?): Signature? {
                     if (com.xemantic.typescript.tsgo.ast.getThisParameter(node!!.parent) === node) {
                         return@sw0
                     }
-                    val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(node!!.parent.parameters(), (node)!!) - com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, com.xemantic.typescript.tsgo.ast.getThisParameter(node!!.parent) != null, 1, 0)
+                    val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(node!!.parent.parameters(), node) - com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, com.xemantic.typescript.tsgo.ast.getThisParameter(node!!.parent) != null, 1, 0)
                     com.xemantic.typescript.tsgo.debug.assert(index >= 0, GoElem.ref<Any?>().nilSlice)
                     var targetType_1: Type? = null
                     var keyType: Type? = null
@@ -2275,7 +2275,7 @@ fun Checker?.getAwaitedTypeNoAliasEx(t: Type?, errorNode: Node?, diagnosticMessa
         return awaitedType
     }
     if (t!!.flags.value and 134217728u != 0u) {
-        if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.awaitedTypeStack, (t)!!)) {
+        if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.awaitedTypeStack, t)) {
             if (errorNode != null) {
                 this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.type_is_referenced_directly_or_indirectly_in_the_fulfillment_callback_of_its_own_then_method, GoElem.ref<Any?>().nilSlice)
             }
@@ -2296,7 +2296,7 @@ fun Checker?.getAwaitedTypeNoAliasEx(t: Type?, errorNode: Node?, diagnosticMessa
     val thisTypeForError: GoBox<Type?> = GoBox(null)
     val promisedType: Type? = this.getPromisedTypeOfPromiseEx(t, null, thisTypeForError)
     if (promisedType != null) {
-        if (t === promisedType || com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.awaitedTypeStack, (promisedType)!!)) {
+        if (t === promisedType || com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.awaitedTypeStack, promisedType)) {
             if (errorNode != null) {
                 this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.type_is_referenced_directly_or_indirectly_in_the_fulfillment_callback_of_its_own_then_method, GoElem.ref<Any?>().nilSlice)
             }

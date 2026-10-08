@@ -25,6 +25,63 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.4-a) — THE LANGUAGE SERVICE: tsgo's `internal/ls` (+ `lsp/lsproto`, `ls/lsutil`, `ls/lsconv`, `ls/change`, `ls/autoimport`, `format`, ~62k Go lines) is ported mechanically and answers in process behind `TsgoLanguageService`; 21,614 / 21,614 LSP requests over tsc's 78 sources and 200 conformance projects equal the tsgo 7.0.2 language server's (`tsc --lsp`); `-lsp` re-based onto it (2026-10-08)
+
+**What is ported** (`docs/goport-ls.md`). The extractor's default closure gains `jsonrpc`, `lsp/lsproto`, `ls/lsutil`, `format`,
+`ls/lsconv`, `ls/change`, `project/dirty`, `project/logging`, `vfs/wrapvfs`, `ls/autoimport`, `ls` — whole packages, 67 in all,
+99.5% lowered mechanically (`ls` 99.4%, `lsp/lsproto` 100%); the hand stand-ins `go/internal_ls`, `go/internal_lsconv`,
+`go/internal_lsproto` are deleted. The language SERVER and the project system stay unported: a new overlay
+`goport-extract/overlay/api/xtsc_ls.go` is the server's ends — `XtscResolveClientCapabilities` (handleInitialize),
+`XtscUserPreferences` (RequestConfiguration), `XtscLanguageService.XtscLSRequest` (server.go's handler table for hover, definition,
+typeDefinition, references, implementation, completion, signatureHelp, documentHighlight, diagnostic, bodies verbatim) and a
+one-project `crossProjectOrchestrator`. `XtscCheckerPool` gained the project pool's request affinity (find-all-references re-acquires
+its checker). The `project` shim's `Snapshot` is now the `ls.Host` and `Project` an `ls.Project`. The API session's six
+language-service handlers and `setupLanguageService` are no longer stubs (17 → 10 `partial-stub`s; smoke-pinned in TsgoProjectTest,
+not yet in the API recording). One override: `format.getAllRules` split for the JIT limit (generated body verbatim).
+
+**The Kotlin API**: `TsgoLanguageService.open(tsconfig, fs, libDirectory, initializeParams, configuration)`; `request(method, json)`
+(the raw LSP result) and typed `hover`/`definition`/`references`/`completions`/`diagnostics` at UTF-16 offsets. **`-lsp`** now depends
+on `-tsgo`, not `-project`: `XtscLanguageServer` keeps its JSON-RPC/stdio loop and routes every language-service method to
+`TsgoLanguageService.request`; buffers are an `OverlayFS` over the disk, a file's project is the nearest tsconfig.json, diagnostics are
+pushed for open documents and served on pull. Its old -project feature tests (rename, signature help label offsets, …) are replaced by
+`XtscLspServerTest` (expected texts read from `tsc --lsp`) and a stdio end-to-end smoke (`XtscLspStdioSmokeTest`, the shipped `main` in
+a child JVM).
+
+**The gate.** `scripts/tsgo-ls-oracle.py` drives the SHIPPED `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` over `build/goport/api-projects`
+(VS Code-like capabilities, auto-imports off, every file opened BOM-less as an editor does) and records per file a pull diagnostic, 60
+hover + definition, 6 references and 4 completion carets → `build/goport/ls-oracle` (21,614 requests). `LsParityTest` (`TSGO_LS=1`)
+replays them through the port (each file's project = its nearest tsconfig, as the server picks: tsc's sources carry a nested
+`src/compiler/tsconfig.json`) and compares JSON — a completion list's items as a MULTISET, because tsgo's own order is a Go map's
+(two recordings of the binary differ).
+
+**Receipts**: **LsParityTest 21,614 / 21,614 equal**, 0 differ, 0 crash, ~260 s (hover 9,496, definition 9,496, references 1,515,
+completion 829, diagnostic 278; tsc's 78 sources alone 9,898 / 9,898); positive control `TSGO_LS_INJECT=conf-0010:5` red (1 differ).
+DiagParityTest 13,127 / 13,127, EmitParityTest 13,127 / 13,127, OracleParityTest bound 7,774 / 7,774, ApiParityTest 594,007 / 594,007.
+`-tsgo` 110 tests / 0 failed, `-goport` 15 / 0, `-lsp` 38 / 0. `huge_methods.py --fail-over 0` = 0 (4,785 classes). Warning-clean
+(positive control `1 as Int` read its `w:`, deleted).
+
+**Port defects fixed** (first differential: 407 equal / 825 differ / 1,198 crash on 20 projects), each a rule or a shim:
+(1) **Go 1.26 `new(expr)` lowered as `new(T)`** — a silent ZERO (every LSP diagnostic `code` was 0, `source` ""); the extractor
+already said `m != "type"`. (2) **Struct context keys compared by identity** (`clientCapabilitiesKey{}`): no request saw the client's
+capabilities (plaintext hovers, no definition links); `structKeys` now includes `context.WithValue` / `ctx.Value` keys. (3) Structs
+reaching `reflect` through a parameter (`lsproto.marshalUnion(v any)`) were not `GoReflectStruct`s. (4) A generic shim's
+type-parameter argument got `!!` (`slices.Contains(syms, nilSym)` threw: every find-all-references on a shorthand property).
+(5) Instantiated generic interfaces were never implemented nominally (`Cloneable<directory?>`), nor a generic struct's interface over
+its own parameters (`Box<T> : Value<T>`) — extractor + porter. (6) A ported generic `*T` parameter instantiated with a non-struct T
+(`derefOr`). (7) `result.(json.Value)` type test on an erased typealias. (8) An imported value class's `_Ptr` box unqualified.
+(9) The json shim could not decode into a nil `*T` struct field nor an LSP named numeric (`CompletionItemKind`) — `PointeeCell` and an
+lsproto-scoped numeric decode (§ 10 #14 keeps the rest refused). Shims added: `bytes`, `url.PathEscape`/`Parse`,
+`unicode.IsUpper/IsLower/IsDigit/Mn` (dumped from Go 1.27.1), `runtime.GOMAXPROCS`, `debug.Stack` (the last recovered panic's stack —
+what made defect 4 findable), `slices.Replace`, `jsontext.Value.Kind`, reflect `Fields/Addr/Len/Index/Set*`, `MakeSlice/Append`.
+Recorder artifacts found and fixed on the way: a UTF-8 BOM sent in `didOpen` (an editor strips it; 20 conformance files), and the
+nested tsconfig.
+
+**Not ported / remaining** (TSGO.4-a's surface): auto-import completions and code actions (the project system's auto-import
+registry: `ErrNeedsAutoImports` is an error, so clients must set `suggest.autoImports: false`), inferred projects, rename (server.go's
+cross-project workspace edit), the project system's incremental program updates (`-lsp` rebuilds the program after any change),
+call hierarchy (`defer` with named results), organize-imports collation (`x/text/unicode/norm`). Not yet gated: typeDefinition,
+implementation, signatureHelp, documentHighlight (wired, in no recording), and the API's six language-service handlers.
+
 ### Round (TSGO.4-b) — THE EXTERNALS GENERATOR READS THE PORT: `-externals` depends on `-tsgo` and no longer on `-core`; every generated Kotlin DECLARATION of the 250-output test corpus is unchanged and only marker text moved, the 51-module `@types/node` set compiles with 0 metadata / 0 Kotlin/JS errors, and it generates 1.6-1.8x faster (2026-10-08)
 
 **What changed.** `xemantic-typescript-compiler-externals` (commonMain) depends on `-tsgo` (`implementation`) and
@@ -443,29 +500,6 @@ element rows, we now report none (was one TS2741 at the wrong anchor); recorded 
 OK (the first final build read +1 on harness and server — mechanism (9)); rxjs / marked 0, cronstrue 1, mitt 0, date-fns 1 unchanged;
 library grid `f313` vs `b313`: hono 27 -> 18, zod 14 -> 13, others unchanged, **0 added positions**; warning gate with probe: probe
 only. `Checker.kt` 190,700 -> 190,911 (+211). This is the last `-core` parity round: (TSGO.0) decided the same day, `-core` frozen (D3).
-
-### Round (P18.312) — (INV.0) extraction: two families — the `in`-RHS primitive / unconstrained type-parameter checks (TS2322 + TS2208 related, the `= undefined` default, `Object.keys` TS2769) into `InRhsPrimitiveTypeParamChecks` and the type-used-as-namespace family (TS2702 / TS2713 / TS2339 / TS2749) into `TypeAsNamespaceChecks`; `Checker.kt` 191,430 -> 190,700 (-730); every receipt identical, per-pass table included (2026-10-06)
-
-One implementation subagent in the (P18.294) order; it finished. **Choice**: the census found two cleaner families than the brief
-named — `checkInRhsPrimitiveTypeParams` (491 lines, one run, one widening) and `checkTypeUsedAsNamespaceRefs` (255 lines, one run,
-none); refused: `checkSuperBeforeThis` (3 widenings, a shared helper), `checkNonConstructorExtends` (two runs ~25k lines apart),
-`checkInterfaceExtendsInterface` (relation-path widening), the type-argument-constraint family (walk-scoped type-parameter state).
-**Moved**: 180160-180650 and 187473-187715; the only callers are the two `pass(…)` lambdas; one widening, `pinRel` (a cold
-diagnostic builder, no relation or spine use). One trap noted by the builder: the moved local `unconstrainedTpNames` shares its name
-with a `Checker` member, so it was deliberately NOT prefixed with `checker.` — that would have re-bound the call silently.
-**Receipts**: verbatim proof three ways; per-pass `--passTiming` 415 rows + 33 counter lines identical; PrintInlining
-`checkArgumentsAgainstSignature` row counts vary between two runs of ONE binary (3/9/6 vs 3/11/9) and match across arms run for
-run, i.e. noise, unmangled 0 — CLAUDE.md's "not stable across processes"; a 16-cell tsgo matrix byte-identical before / after
-(pre-existing divergences now inside the collaborators: n05 `E.A.x` — tsgo TS2713 at the member, ours TS2749 on the whole name;
-i02 a primitive-union constraint `T extends string | number` on the right of `in` reports nothing; i07 `Object.keys` of an
-unconstrained type parameter only in an arrow EXPRESSION body; the lib related row carries no position where tsgo names
-`lib.es5.d.ts:262:5`); corpus screen 8725 / 0; `cost_gate.py` 0; spine audit clean. **Pins**:
-`InRhsAndTypeAsNamespaceCollaboratorTest` 11; ablation entry points 5 / 4 RED, helpers 4 / 4 / 1 / 1 / 3 / 2 / 3 RED. **Gates**: full
-suite 22,985 / 0 / 44 (+11); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue /
-mitt 0 / date-fns 1 unchanged (identity hash extended to both collaborators); library grid OURS-ONLY row sets identical to `r311`
-on all eight (orchestrator's `r312`; tally 160); warning gate with probe: probe only. Ledger row 27. Next candidates:
-`checkIdenticallyNamedTypeAssignment` (277 lines, one widening), `checkMultipleDefaultExports` (375, with `DefaultDeclKind`),
-`checkSuperBeforeThis`.
 
 ## QUEUE
 

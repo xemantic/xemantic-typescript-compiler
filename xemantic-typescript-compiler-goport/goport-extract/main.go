@@ -49,6 +49,9 @@ var defaultClosure = []string{
 	// (TSGO.3) the emit baselines (docs/goport-emit-oracle.md): the error-baseline renderer the
 	// `.js` baseline embeds, and its noCheck comparison's third-party diff (gen/thirdparty/).
 	"diagnosticwriter", "github.com/peter-evans/patience",
+	// (TSGO.4-a) the language service (docs/goport-ls.md): `go list -deps ./internal/ls` minus the above.
+	"jsonrpc", "lsp/lsproto", "ls/lsutil", "format", "ls/lsconv", "ls/change", "project/dirty",
+	"project/logging", "vfs/wrapvfs", "ls/autoimport", "ls",
 }
 
 // overlayFiles are ADDED to tsgo packages through go/packages' Overlay (never written into
@@ -60,6 +63,7 @@ var overlayFiles = map[string]string{
 	"internal/testrunner/zz_xtsc_port.go":             "overlay/testrunner/xtsc_port.go",
 	"internal/testutil/tsbaseline/zz_xtsc_export.go":  "../oracle-go/overlay/tsbaseline/xtsc_export.go",
 	"internal/api/zz_xtsc_api.go":                     "overlay/api/xtsc_api.go",
+	"internal/api/zz_xtsc_ls.go":                      "overlay/api/xtsc_ls.go",
 }
 
 // overlaySrc holds the overlay files' contents by their virtual path (they exist on no disk).

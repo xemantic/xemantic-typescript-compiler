@@ -305,7 +305,7 @@ fun Checker?.getExportsOfModuleWorker(moduleSymbol_0: Symbol?): Tuple2<SymbolTab
                 nonTypeOnlyNames.add(name)
             }
         }
-        if (symbol == null || symbol!!.exports.isNil || com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(visitedSymbols, (symbol)!!)) {
+        if (symbol == null || symbol!!.exports.isNil || com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(visitedSymbols, symbol)) {
             return GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>())
         }
         visitedSymbols = visitedSymbols.append1(symbol)
@@ -1254,7 +1254,7 @@ fun Checker?.getInferredTypeParameterConstraint(t: Type?, omitTypeReferences: Bo
                     com.xemantic.typescript.tsgo.ast.isTypeReferenceNode(parent) && !omitTypeReferences -> {
                         val typeParameters: GoSlice<Type?> = this.getTypeParametersForTypeReferenceOrImport(parent)
                         if (!typeParameters.isNil) {
-                            val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(parent.typeArguments(), (child)!!)
+                            val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(parent.typeArguments(), child)
                             if (index >= 0 && index < typeParameters.len) {
                                 val declaredConstraint: Type? = this.getConstraintOfTypeParameterImpl(typeParameters[index])
                                 if (declaredConstraint != null) {
@@ -1600,7 +1600,7 @@ fun com.xemantic.typescript.tsgo.checker.keyBuilder?.writeGenericTypeReferences(
             val t: Type? = s0[i1]
             if (t!!.flags.value and 524288u != 0u) {
                 if (ignoreConstraints || t!!.checker.getConstraintOfTypeParameterImpl(t) == null) {
-                    var index: Int = com.xemantic.typescript.tsgo.go.slices.index<Type?>(typeParameters, (t)!!)
+                    var index: Int = com.xemantic.typescript.tsgo.go.slices.index<Type?>(typeParameters, t)
                     if (index < 0) {
                         index = typeParameters.len
                         typeParameters = typeParameters.append1(t)
@@ -1932,7 +1932,7 @@ fun Checker?.getBindingElementTypeFromParentType(declaration: Node?, parentType_
         }
         208 -> {
             val elementType: Type? = this.checkIteratedTypeOrElementType(IterationUse(65u or com.xemantic.typescript.tsgo.core.ifElse<IterationUse>(IterationUse.ELEM, hasDotDotDotToken(declaration), IterationUse(0u), IterationUsePossiblyOutOfBounds).value), parentType, this!!.undefinedType, pattern)
-            val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(pattern.elements(), (declaration)!!)
+            val index: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(pattern.elements(), declaration)
             if (hasDotDotDotToken(declaration)) {
                 val baseConstraint: Type? = this.mapType(parentType, fun(t_1: Type?): Type? {
                     if (t_1!!.flags.value and 117964800u != 0u) {
@@ -2497,8 +2497,8 @@ fun Checker?.reportImplicitAny(declaration: Node?, t: Type?, wideningKind: Widen
             if (com.xemantic.typescript.tsgo.ast.isIdentifier(param!!.name())) {
                 val name: Identifier? = param!!.name().asIdentifier()
                 val originalKeywordKind: Kind = com.xemantic.typescript.tsgo.scanner.identifierToKeywordKind(name)
-                if ((com.xemantic.typescript.tsgo.ast.isCallSignatureDeclaration(declaration!!.parent) || com.xemantic.typescript.tsgo.ast.isMethodSignatureDeclaration(declaration!!.parent) || com.xemantic.typescript.tsgo.ast.isFunctionTypeNode(declaration!!.parent)) && com.xemantic.typescript.tsgo.go.slices.contains<Node?>(declaration!!.parent.parameters(), (declaration)!!) && (com.xemantic.typescript.tsgo.ast.isTypeNodeKind(originalKeywordKind) || this!!.resolveName!!(declaration, name!!.text, SymbolFlags(788968u), null, true, false) != null)) {
-                    val newName: String = com.xemantic.typescript.tsgo.go.fmt.sprintf("arg%v", com.xemantic.typescript.tsgo.go.slices.index<Node?>(declaration!!.parent.parameters(), (declaration)!!))
+                if ((com.xemantic.typescript.tsgo.ast.isCallSignatureDeclaration(declaration!!.parent) || com.xemantic.typescript.tsgo.ast.isMethodSignatureDeclaration(declaration!!.parent) || com.xemantic.typescript.tsgo.ast.isFunctionTypeNode(declaration!!.parent)) && com.xemantic.typescript.tsgo.go.slices.contains<Node?>(declaration!!.parent.parameters(), declaration) && (com.xemantic.typescript.tsgo.ast.isTypeNodeKind(originalKeywordKind) || this!!.resolveName!!(declaration, name!!.text, SymbolFlags(788968u), null, true, false) != null)) {
+                    val newName: String = com.xemantic.typescript.tsgo.go.fmt.sprintf("arg%v", com.xemantic.typescript.tsgo.go.slices.index<Node?>(declaration!!.parent.parameters(), declaration))
                     val typeName: String = com.xemantic.typescript.tsgo.scanner.declarationNameToString(param!!.name()) + com.xemantic.typescript.tsgo.core.ifElse<String>(GoElem.STRING, param!!.dotDotDotToken != null, "[]", "")
                     this.errorOrSuggestion(this!!.noImplicitAny, declaration, com.xemantic.typescript.tsgo.diagnostics.parameter_has_a_name_but_no_type_Did_you_mean_0_Colon_1, GoSlice.of(GoElem.ref<Any?>(), newName, typeName))
                     return

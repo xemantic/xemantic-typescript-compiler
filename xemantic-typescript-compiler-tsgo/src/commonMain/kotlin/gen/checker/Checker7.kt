@@ -931,7 +931,7 @@ fun Checker?.getSignatureOfFullSignatureType(node: Node?): Signature? {
 fun Checker?.getParameterTypeOfFullSignature(node: Node?, parameter: Node?): Type? {
     val signature: Signature? = this.getSignatureOfFullSignatureType(node)
     if (signature != null) {
-        val pos: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(node.parameters(), (parameter)!!)
+        val pos: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(node.parameters(), parameter)
         if (parameter.asParameterDeclaration()!!.dotDotDotToken != null) {
             return this.getRestTypeAtPosition(signature, pos, false)
         } else {
@@ -2560,7 +2560,7 @@ fun Checker?.hasCommonDeclaration(symbols: OrderedSet<Symbol?>?): Boolean {
             val mi5 = commonDeclarations.keys().iter()
             l2@ while (mi5.next()) {
                 val d_1: Node? = mi5.key
-                if (!com.xemantic.typescript.tsgo.go.slices.contains<Node?>(symbol!!.declarations, (d_1)!!)) {
+                if (!com.xemantic.typescript.tsgo.go.slices.contains<Node?>(symbol!!.declarations, d_1)) {
                     commonDeclarations.delete(d_1)
                 }
             }
@@ -3538,7 +3538,7 @@ fun Checker?.instantiateMappedTupleType(tupleType: Type?, mappedType: Type?, typ
         newElementTypes[i] = mapped
     }
     val newReadonly: Boolean = getModifiedReadonlyState(tupleType.targetTupleType()!!.readonly, getMappedTypeModifiers(mappedType))
-    if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(newElementTypes, (this!!.errorType)!!)) {
+    if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(newElementTypes, this!!.errorType)) {
         return this!!.errorType
     }
     return this.createTupleTypeEx(newElementTypes, newElementInfos, newReadonly)

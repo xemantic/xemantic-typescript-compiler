@@ -56,12 +56,12 @@ class BuildOptions(
 
     override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
         0 -> GoFieldPtr(this, 0, { blank0 }, { blank0 = it as com.xemantic.typescript.tsgo.core.noCopy })
-        1 -> Tristate_Ptr({ dry }, { dry = it })
-        2 -> Tristate_Ptr({ force }, { force = it })
-        3 -> Tristate_Ptr({ verbose }, { verbose = it })
+        1 -> com.xemantic.typescript.tsgo.core.Tristate_Ptr({ dry }, { dry = it })
+        2 -> com.xemantic.typescript.tsgo.core.Tristate_Ptr({ force }, { force = it })
+        3 -> com.xemantic.typescript.tsgo.core.Tristate_Ptr({ verbose }, { verbose = it })
         4 -> GoFieldPtr(this, 4, { builders }, { builders = it as GoPtr<Int>? })
-        5 -> Tristate_Ptr({ stopBuildOnErrors }, { stopBuildOnErrors = it })
-        6 -> Tristate_Ptr({ clean }, { clean = it })
+        5 -> com.xemantic.typescript.tsgo.core.Tristate_Ptr({ stopBuildOnErrors }, { stopBuildOnErrors = it })
+        6 -> com.xemantic.typescript.tsgo.core.Tristate_Ptr({ clean }, { clean = it })
         else -> goPanicIndex(i, 7)
     }
 

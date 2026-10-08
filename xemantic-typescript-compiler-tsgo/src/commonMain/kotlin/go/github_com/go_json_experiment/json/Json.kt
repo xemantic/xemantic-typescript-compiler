@@ -347,6 +347,14 @@ private fun jsonKindName(k: Int): String = when (k.toChar()) {
     else -> "value"
 }
 
+/**
+ * Whether a named NUMERIC type decodes as its underlying number: the LSP protocol's ((TSGO.4-a),
+ * `lsproto.CompletionItemKind`, `DiagnosticSeverity`, … in requests and capabilities) do; any other stays
+ * refused (docs/goport-runtime.md § 10 #14: `incremental`'s buildinfo reader would get past one gap into two more).
+ */
+private fun decodesNamedNumber(v: Any): Boolean =
+    v::class.qualifiedName?.startsWith("com.xemantic.typescript.tsgo.lsp.lsproto.") == true
+
 /** Decodes the next value as the Go type the CURRENT value [cur] stands for (see the file comment). */
 private fun decodeShaped(dec: Decoder, cur: Any?): Tuple2<Any?, GoError?> {
     when (cur) {
@@ -358,7 +366,7 @@ private fun decodeShaped(dec: Decoder, cur: Any?): Tuple2<Any?, GoError?> {
         // decoding it lets `incremental`'s buildinfo reader get past `[][]BuildInfoFileId` into two more
         // gaps (`[]*BuildInfoFileInfo` and `*[2]BuildInfoFileId` decode as `any`), so it stays failing
         // where it failed before — the program is rebuilt, and the diagnostics agree either way.
-        is com.xemantic.typescript.tsgo.runtime.GoBasicValue -> if (cur.goRaw is String) {
+        is com.xemantic.typescript.tsgo.runtime.GoBasicValue -> if (cur.goRaw is String || decodesNamedNumber(cur)) {
             val (v, e) = decodeShaped(dec, cur.goRaw)
             return Tuple2(if (e == null && v != null) cur.goWithRaw(v) else cur, e)
         }

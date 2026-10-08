@@ -110,7 +110,7 @@ fun com.xemantic.typescript.tsgo.compiler.checkerPool?.getCheckerForFileNonExclu
 fun com.xemantic.typescript.tsgo.compiler.checkerPool?.getCheckerForFileExclusive(ctx: Context?, file: SourceFile?): Tuple2<Checker?, (() -> Unit)?> {
     this.createCheckers()
     val c: Checker? = this!!.fileAssociations[file]
-    val idx: Int = com.xemantic.typescript.tsgo.go.slices.index<Checker?>(this!!.checkers, (c)!!)
+    val idx: Int = com.xemantic.typescript.tsgo.go.slices.index<Checker?>(this!!.checkers, c)
     this!!.locks[idx]!!.lock()
     return Tuple2<Checker?, (() -> Unit)?>(c, com.xemantic.typescript.tsgo.go.sync.onceFunc(fun() {
         this!!.locks[idx]!!.unlock()

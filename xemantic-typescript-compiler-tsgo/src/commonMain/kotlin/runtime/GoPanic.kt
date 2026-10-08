@@ -49,6 +49,13 @@ internal fun describePanicValue(value: Any?): String = when (value) {
     else -> value.toString()
 }
 
+/**
+ * The panic most recently stopped by a `recover()` (any goroutine): what `runtime/debug.Stack()` renders, since
+ * Go's deferred recovering function runs ON the panicking stack. A diagnostic aid only (racy across goroutines).
+ */
+@kotlin.concurrent.Volatile
+var lastRecoveredPanic: GoPanic? = null
+
 /** `panic(v)`. */
 fun goPanic(value: Any?): Nothing = throw GoPanic(value)
 
@@ -115,6 +122,7 @@ class GoDeferFrame @PublishedApi internal constructor() {
         val p = panic ?: return null
         panic = null
         recovered = true
+        lastRecoveredPanic = p
         return p.value
     }
 

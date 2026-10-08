@@ -334,7 +334,7 @@ fun isCallOrNewExpression(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.IndexOfNode 625d4821
 fun indexOfNode(nodes: GoSlice<Node?>, node: Node?): Int {
-    val t0 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Node?, Node?>(nodes, (node)!!, (fun(p0: Node?, p1: Node?): Int = compareNodePositions(p0, p1))!!)
+    val t0 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Node?, Node?>(nodes, node, (fun(p0: Node?, p1: Node?): Int = compareNodePositions(p0, p1))!!)
     val index: Int = t0.first
     val ok: Boolean = t0.second
     if (ok) {
@@ -1087,7 +1087,7 @@ fun getReparsedNodeForNode(node: Node?): Node? {
     if (node != null && node!!.flags.value and 4194304u != 0u && node!!.flags.value and 8u == 0u) {
         val file: SourceFile? = getSourceFileOfNode(node)
         if (file != null && file!!.reparsedClones.len != 0) {
-            val t0 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Node?, Node?>(file!!.reparsedClones, (node)!!, (fun(p0: Node?, p1: Node?): Int = compareNodePositions(p0, p1))!!)
+            val t0 = com.xemantic.typescript.tsgo.go.slices.binarySearchFunc<Node?, Node?>(file!!.reparsedClones, node, (fun(p0: Node?, p1: Node?): Int = compareNodePositions(p0, p1))!!)
             var pos: Int = t0.first
             val found: Boolean = t0.second
             if (!found && pos > 0) {

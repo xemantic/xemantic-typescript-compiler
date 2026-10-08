@@ -1744,7 +1744,7 @@ fun Checker?.checkIdentifier(node: Node?, checkMode: CheckMode): Type? {
     }
     var declaration: Node? = localOrExportSymbol!!.valueDeclaration
     val immediateDeclaration: Node? = declaration
-    if (declaration != null && declaration!!.kind.value == 209 && com.xemantic.typescript.tsgo.go.slices.contains<Node?>(this!!.contextualBindingPatterns, (declaration!!.parent)!!) && com.xemantic.typescript.tsgo.ast.findAncestor(node, fun(parent: Node?): Boolean {
+    if (declaration != null && declaration!!.kind.value == 209 && com.xemantic.typescript.tsgo.go.slices.contains<Node?>(this!!.contextualBindingPatterns, declaration!!.parent) && com.xemantic.typescript.tsgo.ast.findAncestor(node, fun(parent: Node?): Boolean {
         return parent === declaration!!.parent
     }) != null) {
         return this!!.nonInferrableAnyType

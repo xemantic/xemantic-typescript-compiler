@@ -298,7 +298,7 @@ class ArrayToSingleTypeMapper(
 
     // go: github.com/microsoft/typescript-go/internal/checker.ArrayToSingleTypeMapper.Map 461e9f3b
     override fun map(t: Type?): Type? {
-        if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this.sources, (t)!!)) {
+        if (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this.sources, t)) {
             return this.target
         }
         return t

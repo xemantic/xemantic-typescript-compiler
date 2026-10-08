@@ -35,6 +35,7 @@ import com.xemantic.typescript.tsgo.go.sync.Once
 import com.xemantic.typescript.tsgo.tspath.Path
 import com.xemantic.typescript.tsgo.core.Pattern
 import com.xemantic.typescript.tsgo.go.sync.RWMutex
+import com.xemantic.typescript.tsgo.ls.lsconv.Script
 import com.xemantic.typescript.tsgo.core.ScriptKind
 import com.xemantic.typescript.tsgo.go.iter.Seq
 import com.xemantic.typescript.tsgo.sourcemap.Source
@@ -269,7 +270,7 @@ class Node(
     @kotlin.jvm.JvmField var id: Uint64 = Uint64(),
     @kotlin.jvm.JvmField var parent: Node? = null,
     @kotlin.jvm.JvmField var data: com.xemantic.typescript.tsgo.ast.nodeData? = null,
-) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc.goCopy(), id = id.goCopy(), parent = parent, data = data)
 
@@ -301,7 +302,31 @@ class Node(
         return this.kind.string()
     }
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { kind.value }, { kind = Kind(it as Int) })
+        1 -> GoFieldPtr(this, 1, { flags.value }, { flags = NodeFlags(it as UInt) })
+        2 -> GoFieldPtr(this, 2, { loc }, { loc = (it as TextRange).goCopy() })
+        3 -> GoFieldPtr(this, 3, { id }, { id = (it as Uint64).goCopy() })
+        4 -> GoFieldPtr(this, 4, { parent }, { parent = it as Node? })
+        5 -> GoFieldPtr(this, 5, { data }, { data = it as com.xemantic.typescript.tsgo.ast.nodeData? })
+        else -> goPanicIndex(i, 6)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("ast.Node", listOf(
+                GoFieldInfo("Kind", "", true, false, GoTypeInfo(4, "ast.Kind", cls = Kind::class, zero = { Kind(0) })),
+                GoFieldInfo("Flags", "", true, false, GoTypeInfo(10, "ast.NodeFlags", cls = NodeFlags::class, zero = { NodeFlags(0u) })),
+                GoFieldInfo("Loc", "", true, false, GoTypeInfo(25, "core.TextRange", cls = TextRange::class, structInfo = { TextRange.GO_STRUCT }, zero = { TextRange() })),
+                GoFieldInfo("id", "", false, false, GoTypeInfo(25, "atomic.Uint64", cls = Uint64::class, zero = { Uint64() })),
+                GoFieldInfo("Parent", "", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "ast.Node", cls = Node::class, structInfo = { Node.GO_STRUCT }, zero = { Node() }), zero = { null })),
+                GoFieldInfo("data", "", false, false, GoTypeInfo(20, "ast.nodeData", zero = { null })),
+            ))
+        }
         val ELEM: GoElem<Node> = GoElem({ Node() }, { it.goCopy() })
     }
 }
@@ -2762,7 +2787,7 @@ class SourceFile(
     @kotlin.jvm.JvmField var nameTable: GoMap<String, Int> = GoMap.nil<String, Int>(GoElem.INT),
     @kotlin.jvm.JvmField var positionMapOnce: Once = Once(),
     @kotlin.jvm.JvmField var positionMap: PositionMap? = null,
-) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData, FileLike, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData, FileLike, Script, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SourceFile = SourceFile(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), fileName = fileName, parseOptions = parseOptions.goCopy(), text = text, statements = statements, endOfFileToken = endOfFileToken, dataMu = dataMu.goCopy(), data = data, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, languageVariant = languageVariant, scriptKind = scriptKind, isDeclarationFile = isDeclarationFile, containsNonASCII = containsNonASCII, usesUriStyleNodeCoreModules = usesUriStyleNodeCoreModules, identifiers = identifiers, identifierCount = identifierCount, imports = imports, moduleAugmentations = moduleAugmentations, ambientModuleNames = ambientModuleNames, commentDirectives = commentDirectives, jsdocCache = jsdocCache, jsdocMu = jsdocMu.goCopy(), hasLazyJSDoc = hasLazyJSDoc, reparsedClones = reparsedClones, pragmas = pragmas, referencedFiles = referencedFiles, typeReferenceDirectives = typeReferenceDirectives, libReferenceDirectives = libReferenceDirectives, checkJsDirective = checkJsDirective, nodeCount = nodeCount, textCount = textCount, commonJSModuleIndicator = commonJSModuleIndicator, externalModuleIndicator = externalModuleIndicator, isBound = isBound.goCopy(), bindOnce = bindOnce.goCopy(), bindDiagnostics = bindDiagnostics, bindSuggestionDiagnostics = bindSuggestionDiagnostics, endFlowNode = endFlowNode, symbolCount = symbolCount, classifiableNames = classifiableNames.goCopy(), patternAmbientModules = patternAmbientModules, globalExports = globalExports, ecmaLineMapMu = ecmaLineMapMu.goCopy(), ecmaLineMap = ecmaLineMap, hash = hash.goCopy(), tokenCacheMu = tokenCacheMu.goCopy(), tokenCache = tokenCache, tokenFactory = tokenFactory, declarationMapMu = declarationMapMu.goCopy(), declarationMap = declarationMap, nameTableOnce = nameTableOnce.goCopy(), nameTable = nameTable, positionMapOnce = positionMapOnce.goCopy(), positionMap = positionMap)
 

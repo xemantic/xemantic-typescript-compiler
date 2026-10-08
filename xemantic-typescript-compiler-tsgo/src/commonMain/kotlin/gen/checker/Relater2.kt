@@ -1399,7 +1399,7 @@ fun Relater?.reportErrorResults(originalSource: Type?, originalTarget: Type?, so
             val targetTypes: GoSlice<Type?> = target.types()
             val intrinsicAttributes: Type? = this!!.c.getJsxType(jsxNames.intrinsicAttributes, this!!.errorNode)
             val intrinsicClassAttributes: Type? = this!!.c.getJsxType(jsxNames.intrinsicClassAttributes, this!!.errorNode)
-            if (!this!!.c.isErrorType(intrinsicAttributes) && !this!!.c.isErrorType(intrinsicClassAttributes) && (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(targetTypes, (intrinsicAttributes)!!) || com.xemantic.typescript.tsgo.go.slices.contains<Type?>(targetTypes, (intrinsicClassAttributes)!!))) {
+            if (!this!!.c.isErrorType(intrinsicAttributes) && !this!!.c.isErrorType(intrinsicClassAttributes) && (com.xemantic.typescript.tsgo.go.slices.contains<Type?>(targetTypes, intrinsicAttributes) || com.xemantic.typescript.tsgo.go.slices.contains<Type?>(targetTypes, intrinsicClassAttributes))) {
                 return
             }
         }

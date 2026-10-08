@@ -157,6 +157,22 @@ fun uint(n: ULong): Token = Token('0'.code, n.toString(), n.toDouble())
 /** `jsontext.Value` (raw JSON bytes). */
 typealias Value = GoSlice<Int>
 
+/** `v.Kind()`: the kind of the value's first token after whitespace (a number is `'0'`), or 0 when empty. */
+fun Value.kind(): Kind = valueKind(this)
+
+/** [kind] of [v]. */
+fun valueKind(v: Value): Kind {
+    val len = v.len
+    var i = 0
+    while (i < len) {
+        val c = v[i]
+        if (c == ' '.code || c == '\t'.code || c == '\r'.code || c == '\n'.code) i++ else break
+    }
+    if (i >= len) return Kind(0)
+    val c = v[i]
+    return Kind(if (c == '-'.code || c in '0'.code..'9'.code) '0'.code else c)
+}
+
 /** `jsontext.SyntacticError`. */
 class SyntacticError(val byteOffset: Long, private val msg: String) : GoError {
     override fun error(): String = "jsontext: $msg after offset $byteOffset"

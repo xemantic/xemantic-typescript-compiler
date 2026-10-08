@@ -119,7 +119,7 @@ fun isIdentifierReference(name: Node?, parent: Node?): Boolean {
             return parent.asConditionalExpression()!!.condition === name || parent.asConditionalExpression()!!.whenTrue === name || parent.asConditionalExpression()!!.whenFalse === name
         }
         214, 215 -> {
-            return parent.expression() === name || com.xemantic.typescript.tsgo.go.slices.contains<Node?>(parent.arguments(), (name)!!)
+            return parent.expression() === name || com.xemantic.typescript.tsgo.go.slices.contains<Node?>(parent.arguments(), name)
         }
         216 -> {
             return parent.asTaggedTemplateExpression()!!.tag === name

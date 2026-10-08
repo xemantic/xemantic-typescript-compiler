@@ -193,3 +193,30 @@ fun simpleFold(r: Int): Int {
     if (r < 0 || r > MaxRune) return r
     return lookup(SIMPLE_FOLD_KEYS, SIMPLE_FOLD_VALUES, r)
 }
+
+/** `unicode.Mn` (nonspacing marks). */
+val mn: RangeTable by lazy { tableFromTriples(MN_RANGES, MN_LATIN_OFFSET) }
+
+private fun inPairs(pairs: IntArray, r: Int): Boolean {
+    var lo = 0
+    var hi = pairs.size / 2
+    while (lo < hi) {
+        val m = (lo + hi) ushr 1
+        when {
+            r < pairs[2 * m] -> hi = m
+            r > pairs[2 * m + 1] -> lo = m + 1
+            else -> return true
+        }
+    }
+    return false
+}
+
+/** `unicode.IsUpper(r)` (Go 1.27.1's answer for every rune, [IS_UPPER_RANGES]). */
+fun isUpper(r: Int): Boolean = inPairs(IS_UPPER_RANGES, r)
+
+/** `unicode.IsLower(r)`. */
+fun isLower(r: Int): Boolean = inPairs(IS_LOWER_RANGES, r)
+
+/** `unicode.IsDigit(r)`. */
+fun isDigit(r: Int): Boolean = inPairs(IS_DIGIT_RANGES, r)
+
