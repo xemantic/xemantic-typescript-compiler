@@ -497,6 +497,18 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   surface (`internal/ls`-backed handlers) in the (TSGO.3-b) note.
 - [ ] **(TSGO.4) re-base externals, KIR and the LSP onto `-tsgo`; decide `-core`'s retirement on
   measured parity.** Kotlin/Native measured separately (no escape analysis).
+  DECOMPOSED 2026-10-08 (orchestrator):
+  - (4-a) **language service**: port tsgo's `internal/ls` (+ what it reaches) through the porter, wire the 17
+    `internal/api` stubs that need it, and re-base `-lsp` on the port; gate = a differential against
+    `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` (hover, definition, references, completions, diagnostics) over
+    tsc's 78 sources + conformance cases, with a positive control.
+  - (4-b) **externals** on the ported checker: the generator's semantic layer reads `-tsgo` types/symbols; gate =
+    its existing pins + the Kotlin compile gate green, every output change versus the `-core` output adjudicated.
+  - (4-c) **KIR** on the ported checker: the lowering front end (`CheckedFacts`) reads `-tsgo`; gate = the KIR
+    corpus/run tests and `kir-bench.sh`'s equivalence gate unchanged.
+  - (4-d) **`-core` sunset — measured, then an OWNER decision**: a parity/cost report (pins, 8-profile grid,
+    library probes, wall/heap per engine) and a recommendation; deleting `-core` is not done autonomously.
+  Kotlin/Native for `-tsgo` is a separate later measurement.
 
 - [x] **(CHK.134) CLOSED 2026-09-12 ((P18.81) note: (2) `bind` — `Checker.bindType`, the two real overloads built per call, `OmitThisParameter` as the receiver itself when its `this` is absent/`unknown`/`any`; residues: a union receiver, an optional-chain receiver, a spread partial, the bare `f.bind` display, a class value displayed without `typeof`). (1) `call`/`apply` LANDED 2026-09-12 ((P18.80) note) — `functionObjectMemberType` /
   `bindCallApplyType` BUILD the member from the receiver's last signature (no inference: each of `T`/`A`/`R` has one
