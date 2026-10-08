@@ -1,3 +1,35 @@
+### Round (P18.311) — (LIBS.4) real-library false-positive sweep: eight mechanisms on APPLICATION code — `any` with a bigint operand, expando writes in the weak-type check, flow-narrowed spread operands, `Function` members on a `typeof C`-constrained type parameter, tsgo's `isTypeDerivedFrom` for a negative `instanceof`, `extends Map`/`Set`/`Array` without type arguments, `this[key] =` as a definite assignment, a TS2540 receiver resolved through its own local declaration — tally 179 -> 162 (corrected; the builder reported 160), NO added position (2026-10-06)
+
+One implementation subagent; it ran the grid and the at-risk sweep BEFORE ablation (the (P18.310) lesson) and finished. **Where the
+brief was wrong**: the "number vs bigint" rows are `any`-operand arithmetic (`any % 1n` typed `number`, tsgo `bigint`; hono's
+`(local >> 16n)` the same), but zod `v3/types.ts:1680` has a different, WIDE root — a `for (const c of this._def.checks)` loop
+variable types `any` (and `this.arr` likewise) — NOT fixed; zod's `unwrap` on `T` is a NARROWING bug, not a member lookup — the
+false branch of `type instanceof ZodUndefined` used ASSIGNABILITY, `ZodType<any, any, any>` is assignable to `ZodUndefined`, so the
+reference became `never` and the next `else if (… instanceof ZodOptional)` read the declared `T`; `typeof T` (with
+`T extends typeof C`) lacked the `Function` members and was displayed as `typeof T` (tsgo `T`); ky `index.ts:29/30` TS2540 is a
+SHADOWING bug (the reader resolved a function-local `const ky` to the file-level one); ky `index.ts:12` TS2560 — tsgo counts an
+annotated const's expando writes as source members, which the relation already did and the weak-type check did not.
+**Mechanisms** (`Checker.kt` +178): `arithBothBigIntResult` (`any` pairs with a bigint operand; two `any`s stay `number`);
+`tryEmitWeakValuePosition(hostDecl=)` applies `annotatedExpandoSource`; `spreadOperandFlowRescued` narrows a spread operand
+through the flow graph first (suppression only); `Function` members for a type-parameter override on a constructor side and no
+`typeof` prefix for a type-parameter receiver; `instanceOfNegativeDrops` / `derivesNominally` — tsgo's `isTypeDerivedFrom` (a
+base-chain walk by symbol through generic bases and constraints), only for generic-instance or type-parameter subjects against a
+class; `libValueExtendsTakesNoTypeArgs` (no TS2314 when the lib constructor has a signature needing no type arguments);
+`collectThisAssignment` counts `this[DS] =` / `this["k"] =`; `readonlyReceiverLocalType` walks from the receiver to its own local
+declaration or annotated parameter (answering `any` for an unannotated or destructured local) — which also produces one NEW
+CORRECT row tsgo reports (a non-shadowing local `o.a =`). **Matrix** 8 fixtures, every after-cell = tsgo, each with a
+row-producing control. **Pins**: `RealLibraryFalsePositiveSweepTest` 9; ablation 13 arms all RED. **Gates**: full suite
+22,974 / 0 / 44 (+9); corpus screen 8725 / 0 and `--include ''` byte-identical to the before arm (41); `cost_gate.py` 0
+(against a re-run of the before binary: `typeOfExpr.calls` -1389, `typeNode.cacheable` / `cacheHits` +675, `globals.lookups` /
+`misses` -1684 — the TS2540 reader typing a local receiver from its annotation instead of `getTypeOfExpression`);
+`huge_methods.py --fail-over 0` 0; at-risk sweep 308 classes / 3,976 tests; grid 8 x added=0 removed=0 + chain OK, rxjs /
+marked / cronstrue / mitt 0 / date-fns 1 unchanged; library grid on the final classes (orchestrator's `r311` vs `r310`):
+superstruct 5 -> 4 (`utils.ts:97`), immer 5 -> 1 (`mapset.ts:35, 36, 206, 207`), ky 9 -> 5 (`index.ts:12, 29, 30`, `Ky.ts:81`),
+hono 28 -> 27 (`ipaddr.ts:229`), zod 21 -> 14 (`v3:3086-3092` x4, `checks.ts:172`, `classic:2880`, `mini:1936`), type-fest 111,
+NO added position (tally 179 -> 162; the builder reported 160, the per-library counts sum to 162); warning gate with probe: probe only (the builder's own run caught and fixed a real `!!`
+warning first). Residues: the `for (const c of this.<member>)` loop variable typed `any` (zod `v3:1680`, broad and SILENT — its fix
+will surface new rows, its own round); `extends Promise` TS2314 here vs TS2508 in tsgo; zod `classic/schemas.ts:111` TS2304 `R`.
+
 ### Round (P18.310) — (LIBS.3) round 15: `Omit` / `Pick` / mapped-type member materialization COMPLETED and trusted by `IntersectionMemberAccess`, a TYPE-level `X['k']` TS2339 added — type-fest's fixed-length-array (12) closed, tally 191 -> 179, NO added position; the builder STALLED before its grid and at-risk sweep, and the orchestrator's gates caught what it would have shipped: 6 hover pins and a FALSE POSITIVE on tsc's own `scriptInfo.ts`, both fixed (2026-10-06)
 
 One implementation subagent; it stalled (27 min, no process) during its fourth ablation batch, was stopped, and the orchestrator

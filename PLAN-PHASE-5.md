@@ -25,6 +25,76 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.4-b) — THE EXTERNALS GENERATOR READS THE PORT: `-externals` depends on `-tsgo` and no longer on `-core`; every generated Kotlin DECLARATION of the 250-output test corpus is unchanged and only marker text moved, the 51-module `@types/node` set compiles with 0 metadata / 0 Kotlin/JS errors, and it generates 1.6-1.8x faster (2026-10-08)
+
+**What changed.** `xemantic-typescript-compiler-externals` (commonMain) depends on `-tsgo` (`implementation`) and
+nothing else of this repo; `-core` and `-tsgo` are untouched. The generator's ~8.5k lines of rules are unchanged
+except for imports and the entry points: they walk a typed VIEW of tsgo's AST (`ts/Ast.kt`, one wrapper per tsgo
+node, built lazily and memoized by node identity, so a symbol's `declarations` are `===` the nodes the scan
+collected) and a classified view of tsgo's types and symbols (`ts/Types.kt`), and ask tsgo's own `Checker`
+AFTER the check through a six-method `CheckedLens` (`getTypeAtLocation`, `getTypeFromTypeNode`,
+`getSymbolAtLocation`, `getAliasedSymbol`, `typeToStringEx`) — the in-walk `CheckedNodeSink` is gone, because a
+post-hoc question is exact in tsgo. `ts/TsgoEngine.kt` builds one program per call (tsgo's `compiler` test recipe:
+an in-memory map FS + the bundled libs, default TypeScript 7 options, `singleThreaded`, per-file diagnostics
+first so types resolve in tsgo's order) on a 1 GB-stack thread; a per-module set (`generateKotlinExternalsPerModule`)
+now checks ONE program for both passes and all modules where `-core` built 2 x N checkers. The view normalises
+four tsgo spellings to the shapes the generator was written against (call/construct signature as a method named
+`""`/`new`, a dotted namespace as one declaration, `null` type as a keyword, `true`/`false` literal as an
+identifier). Public API: `SourceFileEntry`, `DiagnosticCategory` and `ExternalsDiagnostic` (1-based line/column)
+are the module's own; the `options: CompilerOptions` parameter is gone (tsgo's defaults).
+
+**Adapter defects found and fixed while gating** (each a wrong or degraded answer of the ADAPTER, not of tsgo):
+(1) type classification recursed eagerly through tsgo's cyclic type graph (`type TomlValue = … | TomlValue[]`):
+`StackOverflowError` through a 1 GB stack and a 5.9 GB worker RSS — constituents are now wrapped on first ask;
+(2) every program re-parsed the whole bundled lib set (DOM included): 3.4 GB RSS on the generator test class
+alone — `BundledLibSharingHost` parses each bundled lib file once per process (copy-on-write, tsgo's own sharing
+model: binding is once per file) — 1.1 GB; (3) a single-member enum's declared type is tsgo's `Enum`-flagged
+member literal, not a union — classified as the enum; (4) tsgo flattens `K | undefined` to the members'
+literals — complete enums are folded back so `p?: K` still maps to `K?`; (5) a template literal / string mapping
+type widens to `String` like a string literal (`randomUUID(): String` in `@types/node`, not a marker); (6) an
+alias's skip marker printed the alias's own name — rendered with `InTypeAlias`; markers render untruncated.
+
+**A/B (`XTSC_EXTERNALS_DUMP`, every generation keyed by its inputs, `-core` HEAD vs this tree).**
+| corpus | outputs | identical | differ | generated-declaration lines changed | marker-only lines changed |
+|---|---|---|---|---|---|
+| the module's whole test suite (290 tests) | 250 | 237 | 13 | **0** | 740 |
+| rxjs 7 `dist/types` (250 files, wired `rxjs`) | 1 | 0 | 1 | 2 | 264 |
+| `@types/node` 20.19.43, 51 modules + the flat probe | 52 | 0 | 52 | 432 (255 hunks) | 3,781 |
+
+Adjudication — every difference is the port being right, none an adapter defect left open: the marker changes
+are tsgo's display (alias names kept — `TeardownLogic`, `PathLike`; a type parameter where `-core` printed
+`any` — `Partial<Observer<T>>`, `Promise<T | undefined>`, `this`; `Record<string, number>` resolved rather than
+"resolved to any"; `typeof Holder` of an interface and `Plain` without its type argument ARE errors in tsgo,
+TS2693/TS2314, so `any`). The rxjs shape lines are two `.d.ts`-annotated returns `-core` had degraded to `any`
+(now `Observable<T>`). The `@types/node` shape lines: 207 hunks are `NonSharedBuffer` = `Buffer<ArrayBuffer>`
+(`buffer.buffer.d.ts:458`), which `-core` read as a bare `Buffer` and filled from the default (`Buffer<Any?>`):
+tsgo keeps the `ArrayBuffer` argument, which has no Kotlin mapping, so the reference now refuses to its marker;
+35 are the overload collapses that follows from it; 2 are `node:sea`'s un-imported `Blob`, the GLOBAL `Blob`
+in tsgo (`node.buffer.global.Blob`) where `-core` named the module's. Pins re-pointed to tsgo's answers: 26
+expected-text occurrences (`repin.py` over the A/B pairs, scratch) plus 6 error assertions now naming the
+diagnostics tsgo 7.0.2 reports and `-core` missed — TS2300 x3 twice and TS2567 x2 (each confirmed with
+`tools/tsgo-7.0.2/lib/tsc`), TS2681 (a constructor `this` parameter), and in both rxjs gates the TS2307 rows for
+the 156 / 152 re-exports of files those fixtures do not carry (checked: none names a carried file).
+
+**Receipts.** `:xemantic-typescript-compiler-externals:jvmTest` **291 / 291** green (290 before + the engine
+bench), 37 s, worker peak RSS 1.3-4.0 GB (2 GB heap; the 512 MB Gradle default cannot hold a tsgo program over
+the default libs, so the build sets `maxHeapSize = "2g"`, `XTSC_TEST_HEAP` overrides); typescript.d.ts gate
+(`XTSC_TYPESCRIPT_DTS`) green; `@types/node` per-module set 0 metadata / 0 Kotlin/JS errors, rxjs 0 / 0;
+warning-clean (positive control `1 as Int` read its `w:`, then removed); `huge_methods.py --fail-over 0
+--classes …-externals/…/main` 0 over (174 classes). `-tsgo` not touched.
+
+**For the `-core` sunset report** (`XTSC_EXTERNALS_BENCH=3`, `@types/node` 20.19.43 per-module set, 51 modules,
+17,880 lines, one JVM, `XTSC_TEST_HEAP=4g`): `-core` **34.5 s cold / 29.9 / 29.8 s warm, peak heap 843 / 690 /
+688 MB**; `-tsgo` **23.1 s cold / 17.6 / 16.7 s warm, peak heap 1,049 / 1,587 / 1,603 MB** (pool peaks after a
+`System.gc()`: GC-timing-sensitive, read as an upper bound). The tsgo arm checks ONE program for the set where
+`-core` built 102 checkers, and still allocates more per program (the full bundled lib set's AST is resident).
+
+**Left open.** Stale KDoc in the generator still explains `-core` quirks (CHK.73's instance-typed class value, the
+written-name fallbacks for `declare module` bodies) that tsgo does not have — the code paths are harmless and the
+A/B says they change nothing; retiring them is a cleanup round with its own A/B. Kotlin/Native for `-externals`
+now depends on `-tsgo`'s native story. Recorder (`XTSC_EXTERNALS_DUMP`, `.kt` + `.diag` per generation) and bench
+stay as the instruments for the next A/B.
+
 ### Round (TSGO.4-c) — KIR on the ported checker: the JVM backend's front end asks tsgo, not `-core`'s checker; kir 313/313, `kir-bench.sh`'s equivalence gate unchanged (mitt + toml, all 3 arms agree), 9 of 33 programs lower differently and every change is toward TYPED operations; the tsgo front end is faster than `-core`'s on this corpus (1,265 vs 1,973 ms) at the same peak heap (2026-10-08)
 
 **What moved.** `checkTypeScript` / `checkTypeScriptProject` (`-kir`'s only checker seam) now build a tsgo program and answer
@@ -396,38 +466,6 @@ mitt 0 / date-fns 1 unchanged (identity hash extended to both collaborators); li
 on all eight (orchestrator's `r312`; tally 160); warning gate with probe: probe only. Ledger row 27. Next candidates:
 `checkIdenticallyNamedTypeAssignment` (277 lines, one widening), `checkMultipleDefaultExports` (375, with `DefaultDeclKind`),
 `checkSuperBeforeThis`.
-
-### Round (P18.311) — (LIBS.4) real-library false-positive sweep: eight mechanisms on APPLICATION code — `any` with a bigint operand, expando writes in the weak-type check, flow-narrowed spread operands, `Function` members on a `typeof C`-constrained type parameter, tsgo's `isTypeDerivedFrom` for a negative `instanceof`, `extends Map`/`Set`/`Array` without type arguments, `this[key] =` as a definite assignment, a TS2540 receiver resolved through its own local declaration — tally 179 -> 162 (corrected; the builder reported 160), NO added position (2026-10-06)
-
-One implementation subagent; it ran the grid and the at-risk sweep BEFORE ablation (the (P18.310) lesson) and finished. **Where the
-brief was wrong**: the "number vs bigint" rows are `any`-operand arithmetic (`any % 1n` typed `number`, tsgo `bigint`; hono's
-`(local >> 16n)` the same), but zod `v3/types.ts:1680` has a different, WIDE root — a `for (const c of this._def.checks)` loop
-variable types `any` (and `this.arr` likewise) — NOT fixed; zod's `unwrap` on `T` is a NARROWING bug, not a member lookup — the
-false branch of `type instanceof ZodUndefined` used ASSIGNABILITY, `ZodType<any, any, any>` is assignable to `ZodUndefined`, so the
-reference became `never` and the next `else if (… instanceof ZodOptional)` read the declared `T`; `typeof T` (with
-`T extends typeof C`) lacked the `Function` members and was displayed as `typeof T` (tsgo `T`); ky `index.ts:29/30` TS2540 is a
-SHADOWING bug (the reader resolved a function-local `const ky` to the file-level one); ky `index.ts:12` TS2560 — tsgo counts an
-annotated const's expando writes as source members, which the relation already did and the weak-type check did not.
-**Mechanisms** (`Checker.kt` +178): `arithBothBigIntResult` (`any` pairs with a bigint operand; two `any`s stay `number`);
-`tryEmitWeakValuePosition(hostDecl=)` applies `annotatedExpandoSource`; `spreadOperandFlowRescued` narrows a spread operand
-through the flow graph first (suppression only); `Function` members for a type-parameter override on a constructor side and no
-`typeof` prefix for a type-parameter receiver; `instanceOfNegativeDrops` / `derivesNominally` — tsgo's `isTypeDerivedFrom` (a
-base-chain walk by symbol through generic bases and constraints), only for generic-instance or type-parameter subjects against a
-class; `libValueExtendsTakesNoTypeArgs` (no TS2314 when the lib constructor has a signature needing no type arguments);
-`collectThisAssignment` counts `this[DS] =` / `this["k"] =`; `readonlyReceiverLocalType` walks from the receiver to its own local
-declaration or annotated parameter (answering `any` for an unannotated or destructured local) — which also produces one NEW
-CORRECT row tsgo reports (a non-shadowing local `o.a =`). **Matrix** 8 fixtures, every after-cell = tsgo, each with a
-row-producing control. **Pins**: `RealLibraryFalsePositiveSweepTest` 9; ablation 13 arms all RED. **Gates**: full suite
-22,974 / 0 / 44 (+9); corpus screen 8725 / 0 and `--include ''` byte-identical to the before arm (41); `cost_gate.py` 0
-(against a re-run of the before binary: `typeOfExpr.calls` -1389, `typeNode.cacheable` / `cacheHits` +675, `globals.lookups` /
-`misses` -1684 — the TS2540 reader typing a local receiver from its annotation instead of `getTypeOfExpression`);
-`huge_methods.py --fail-over 0` 0; at-risk sweep 308 classes / 3,976 tests; grid 8 x added=0 removed=0 + chain OK, rxjs /
-marked / cronstrue / mitt 0 / date-fns 1 unchanged; library grid on the final classes (orchestrator's `r311` vs `r310`):
-superstruct 5 -> 4 (`utils.ts:97`), immer 5 -> 1 (`mapset.ts:35, 36, 206, 207`), ky 9 -> 5 (`index.ts:12, 29, 30`, `Ky.ts:81`),
-hono 28 -> 27 (`ipaddr.ts:229`), zod 21 -> 14 (`v3:3086-3092` x4, `checks.ts:172`, `classic:2880`, `mini:1936`), type-fest 111,
-NO added position (tally 179 -> 162; the builder reported 160, the per-library counts sum to 162); warning gate with probe: probe only (the builder's own run caught and fixed a real `!!`
-warning first). Residues: the `for (const c of this.<member>)` loop variable typed `any` (zod `v3:1680`, broad and SILENT — its fix
-will surface new rows, its own round); `extends Promise` TS2314 here vs TS2508 in tsgo; zod `classic/schemas.ts:111` TS2304 `R`.
 
 ## QUEUE
 
