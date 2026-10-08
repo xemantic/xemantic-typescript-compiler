@@ -106,29 +106,39 @@ CLINIT = re.compile(r"^  static \{\};")
 OPCODE = re.compile(r"^\s+(\d+): [a-z]")
 
 
+def _census_one(cf):
+    """The (max bytecode offset, owner, method) rows of one class file."""
+    try:
+        text = subprocess.run(
+            ["javap", "-c", "-p", cf],
+            capture_output=True, text=True, check=False,
+        ).stdout
+    except FileNotFoundError:
+        sys.exit("error: `javap` not on PATH (it ships with the JDK)")
+    out = []
+    owner = os.path.basename(cf)[:-len(".class")]
+    cur, mx = None, 0
+    for line in text.split("\n"):
+        if SIG.match(line) or CLINIT.match(line):
+            if cur:
+                out.append((mx, owner, cur))
+            cur, mx = line.strip(), 0
+        else:
+            m = OPCODE.match(line)
+            if m:
+                mx = max(mx, int(m.group(1)))
+    if cur:
+        out.append((mx, owner, cur))
+    return out
+
+
 def census(class_files):
     out = []
-    for cf in class_files:
-        try:
-            text = subprocess.run(
-                ["javap", "-c", "-p", cf],
-                capture_output=True, text=True, check=False,
-            ).stdout
-        except FileNotFoundError:
-            sys.exit("error: `javap` not on PATH (it ships with the JDK)")
-        owner = os.path.basename(cf)[:-len(".class")]
-        cur, mx = None, 0
-        for line in text.split("\n"):
-            if SIG.match(line) or CLINIT.match(line):
-                if cur:
-                    out.append((mx, owner, cur))
-                cur, mx = line.strip(), 0
-            else:
-                m = OPCODE.match(line)
-                if m:
-                    mx = max(mx, int(m.group(1)))
-        if cur:
-            out.append((mx, owner, cur))
+    # One javap JVM per class, several at a time (a 2,500-class module took ~10 minutes serially).
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(1, min(8, os.cpu_count() or 1))) as pool:
+        for rows in pool.map(_census_one, class_files):
+            out.extend(rows)
     out.sort(reverse=True)
     return out
 
