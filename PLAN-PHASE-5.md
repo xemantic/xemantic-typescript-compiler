@@ -25,6 +25,67 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.4-c) — KIR on the ported checker: the JVM backend's front end asks tsgo, not `-core`'s checker; kir 313/313, `kir-bench.sh`'s equivalence gate unchanged (mitt + toml, all 3 arms agree), 9 of 33 programs lower differently and every change is toward TYPED operations; the tsgo front end is faster than `-core`'s on this corpus (1,265 vs 1,973 ms) at the same peak heap (2026-10-08)
+
+**What moved.** `checkTypeScript` / `checkTypeScriptProject` (`-kir`'s only checker seam) now build a tsgo program and answer
+`CheckedFacts` post hoc (`kir/front/TsgoProgram.kt`, `TsgoFacts.kt`): tsgo's `tsoptions` + `NewProgram` + the API's
+`XtscCheckerPool`, bundled libs parsed once per process (a caching compiler host, as tsgo's harness and project system share
+them), the program SINGLE-THREADED; then every `-core` node the lowering walks is paired with its tsgo node (`FileNodeMap`:
+kind + first-token offset, outermost first within a group; `-core`'s keyword identifiers and literal node names mapped; a
+modified tsgo node keyed also after its modifiers, because `-core`'s declaration `pos` skips them) and tsgo's answers are
+rebuilt in `-core`'s value shapes (`TsgoTranslator`: flags by NAME — tsgo reordered `TypeFlags` and `-core` numbers
+`SymbolFlags` its own way; an instantiation as a `Type.Reference` over its target `Type.Interface` with no symbol of its own,
+as `-core` reported it; tuples, call/construct signatures, `false|true` read back as `boolean`; a library declaration a
+stand-in node in no program file). Every fact the `-core` sink recorded in its walk is asked AFTER the check, which tsgo
+supports and `-core` could not. `-core` still supplies the PARSER/AST the lowering walks and the value classes; its checker
+stays reachable as `XTSC_KIR_ENGINE=core` (the sunset A/B). `-tsgo` untouched; `-core` untouched (frozen).
+
+**Translation rules that are mechanisms, not shape-copying**: the polymorphic `this` type is its constraint (the class
+instance type); a generic `Events[Key]` / conditional / `keyof T` is its BASE CONSTRAINT (`unknown` → `Any?`; `-core` typed
+these `any`); an intersection drops EMPTY object members (`X & {}` is TypeScript's `NonNullable<X>` — kept, mitt's
+`handler(evt!)` cast a `String` to `JsObject` at run time, measured); a namespace import's export table is tsgo's
+`getExportsOfModule` (stars, renames, a star's `default`), ordered as `-core` built it and ONE table per module (a table per
+mention made `ns === ns` print `false`, measured); a shorthand member's name resolves through
+`getShorthandAssignmentValueSymbol`; a derived class's inherited construct signature is handed over without the base's
+declaration.
+
+**Lowering changes (two, both in `KirFileLowering`)**: a module namespace object's type (`typeof import("./m")`, which
+`-core` typed `any`) erases to the bag the lowering already builds for it; a NESTED class — which tsgo binds and `-core`
+never did — now meets the backend first as a TYPE (`typeof P`) or a CALL declaration (`p.describe()`), so both refuse with
+the existing nested-class reason (`nestedClassOf`) rather than a generic "cannot map".
+
+**Adjudicated (each against the tsgo 7.0.2 binary).** Four fixtures were not TypeScript 7: `14-strings.ts` and
+`KirEqualitySemanticsTest`'s switch case declare a script-level `name`, which collides with lib.dom's (TS2451 + `void`);
+`19-nullish.ts`'s `"" || x` is TS2873; `yes === no` over two `const ...: boolean` initialized `true`/`false` is TS2367
+(narrowed); `KirReceiverShapeTest`'s field initializer reading a parameter property is TS2729 under define semantics (TS7's
+default) — fixtures renamed / routed through a `string`/`boolean`-typed binding, and the last one now runs with
+`useDefineForClassFields: false` (which `checkTypeScript` honours, with `strict` written false). All corpus and project
+fixtures re-swept: tsgo binary 0 errors each. ONE refusal went away and its value was audited: a 71-hop barrel chain past
+`-core`'s walk-depth bound now resolves and prints the leaf's `"D"`, as JavaScript does (test re-pointed). Lowering diff
+(`KirFrontEndCompareMain`, `javap -c -p` of each program, both engines): 24 identical, 9 changed (`10-closures`,
+`15-control`, `17-rest-params`, `22-entries-destructuring`, `25-library-members`, `26-callback-arity`,
+`27-array-callbacks`, `30-nested-functions`, `toml`) — every change is a more precise type: typed `dadd` / `jsStrictEqualsNumbers`
+/ `jsStrictEqualsStrings` replacing `jsAdd` / `...Any...`, `toml` `jsGet` 5→3, `jsInvoke` 5→1, `jsIndexGet` 16→12, `25` and
+`27` lose their last `jsInvoke`/`jsGet`, `26`'s `${x}` of a `string | undefined` now renders through the undefined-aware
+path; outputs unchanged.
+
+**Receipts.** kir `jvmTest` **313 / 313** (tsgo; baseline 313 / 313 on `-core`, 84 s → 89 s of test time); the same suite with
+`XTSC_KIR_ENGINE=core` (`--rerun`): **312 / 313**, the one red being the re-pointed barrel-depth pin (that engine still
+refuses past its walk-depth bound — the positive control that the switch reaches the test JVM). `scripts/kir-bench.sh 1`: equivalence gate **mitt + toml, all 3 arms agree**
+(`kir:sink=128000000`, `-5440000`); one-process timings not quoted. Warning-clean (a positive-control `1 as Int` file read
+its `w:` on a from-scratch kir compile, then deleted). `huge_methods.py --fail-over 0` on kir: 0 over, 129 classes.
+
+**Wall / heap per engine** (for (TSGO.4-d); `KirFrontEndCompareMain`, one warm-up pass over the corpus, ONE draw per arm,
+`-Xmx4g`): front-end total over 30 corpus programs + 3 projects **tsgo 1,265 ms vs `-core` 1,973 ms**, process peak heap
+**394 MB vs 367 MB**; toml 373 vs 483 ms, mitt-consumer 104 vs 373 ms. Before the front end skipped the bundled libs' semantic
+check (tsgo's CLI checks them; they are clean) it was 10,981 ms and 4,116 MB — the first version of this round's numbers.
+
+**Not moved / what remains for a full re-base**: the lowering still walks `-core`'s AST and reads `-core`'s `Type` / `Symbol` /
+`Signature` classes, so `-kir` still depends on `-core` (parser + value classes, not the checker). Removing that is a rewrite
+of `KirFileLowering` (7.1k lines) over tsgo's `ast.Node`, plus a KIR-owned value model. `census/StructuralCensus*` (a census of
+`-core`'s own sink) stays on `-core` by design. The Kotlin/Native plugin path (`KirNativePlugin`, inside konanc) now pulls
+`-tsgo` onto the plugin classpath through `jvmRuntimeClasspath` — not rebuilt this round (native builds are run alone).
+
 ### Round (TSGO.3-b) — THE TYPE ORACLE: tsgo's `internal/api` session is ported and runs in process behind a Kotlin facade (`TsgoProject`); 594,007 / 594,007 API requests over tsc's 78 sources and 200 conformance projects answer byte-for-byte as the tsgo 7.0.2 binary's `--api`, handles compared as a bijection (2026-10-08)
 
 **What is ported** (`docs/goport-api.md`). `internal/api` is a PARTIAL package (6,049 Go lines, 3,670 of them
@@ -367,36 +428,6 @@ hono 28 -> 27 (`ipaddr.ts:229`), zod 21 -> 14 (`v3:3086-3092` x4, `checks.ts:172
 NO added position (tally 179 -> 162; the builder reported 160, the per-library counts sum to 162); warning gate with probe: probe only (the builder's own run caught and fixed a real `!!`
 warning first). Residues: the `for (const c of this.<member>)` loop variable typed `any` (zod `v3:1680`, broad and SILENT — its fix
 will surface new rows, its own round); `extends Promise` TS2314 here vs TS2508 in tsgo; zod `classic/schemas.ts:111` TS2304 `R`.
-
-### Round (P18.310) — (LIBS.3) round 15: `Omit` / `Pick` / mapped-type member materialization COMPLETED and trusted by `IntersectionMemberAccess`, a TYPE-level `X['k']` TS2339 added — type-fest's fixed-length-array (12) closed, tally 191 -> 179, NO added position; the builder STALLED before its grid and at-risk sweep, and the orchestrator's gates caught what it would have shipped: 6 hover pins and a FALSE POSITIVE on tsc's own `scriptInfo.ts`, both fixed (2026-10-06)
-
-One implementation subagent; it stalled (27 min, no process) during its fourth ablation batch, was stopped, and the orchestrator
-finished: the source equalled the builder's ablation snapshot (no arm left applied), arms a10-a12 were run by hand (1 / 1 / 2 RED),
-and a9 (the provisional-table guard) read 0 RED — kept as a recorded belt-and-braces guard, because the in-flight table it refuses
-is exactly what produced ky's 23 false positives and the staleness check (a10) covers it only by construction. **Mechanisms (the
-builder)**: `Omit` / `Pick` keep index signatures, filter non-public members, take `Readonly`'s source flags, and display as the
-REFERENCE (`Omit<O, "c">`, `Pick<Info, "fileName">` — tsgo's hover shows exactly this); a materialized mapped / utility type
-records its SOURCE table and a snapshot of its member count (`memberSetSource`, `memberSetSnapshot`), and `trusted()` refuses a
-table copied while its source was still IN FLIGHT (ky's `InitOptions` read `Options` before `KyOptions`' members landed — 23 FPs
-reappeared the moment trust widened); a type-level indexed access `X['k']` / `X[0]` on a non-generic object or intersection now
-reports TS2339 (it was unimplemented even for plain objects; `walkTypeForIndexedAccess` hook + numeric value keys).
-**What the gates caught (orchestrator)**: (1) the full suite failed 6 hover pins in `CaptureDisplayResolutionTest` /
-`CaptureModifierMemberDisplayTest`, which asserted the old EXPANDED display of `Pick<…>` / `Readonly<…>`; tsgo's own hover
-(`tsc --lsp -stdio`) prints `const q: (file: Pick<Info, "fileName">, r: Readonly<Info>) => void`, so the CODE is right — the pins were
-re-pointed to tsgo's text, and their real invariant (the members resolve, not `any`, under a narrowed build) is now probed through
-member reads (`fn: string`, `cn: number | undefined`, `fi: Info`, `ex: Info | undefined`, each tsgo-verified); (2) the 8-profile grid
-read +1 row on harness AND server — `src/server/scriptInfo.ts:349` TS7053 on `fileName[0]` where `fileName` is a BRANDED string
-(`string & { __normalizedPathTag: any }`); tsgo accepts it because `String` has `[index: number]: string`, but the primitive
-constituent arm of `IntersectionMemberAccess` asked only for a PROPERTY named `"0"` — fixed (a primitive's wrapper index covers a
-numeric key; `hasNumberIndex` counts a primitive's wrapper so a non-numeric key — tsgo's unmodelled TS7015 — stays silent), pinned
-(`a branded string read with a numeric key stays silent as tsgo`), ablated (RED without it), grid back to 8 x 0 / 0. `Checker.kt`
-+105, `IntersectionMemberAccess.kt` +69, `Type.kt` +12. **Pins**: `OmitPickMaterializationTest` 12 (incl. the branded-string pin),
-`IntersectionMemberAccessTest` updated, the two hover classes re-pointed (12 tests); ablation a1-a12 (a9 redundant, kept) + the
-branded-string arm. **Gates**: full suite 22,965 / 0 / 44 (+14); corpus screen 8725 / 0 and `--include ''` the same 41;
-`cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK (after the fix), rxjs / marked /
-cronstrue / mitt 0 / date-fns 1 unchanged; library grid (orchestrator's `r310` vs `r309`): type-fest 123 -> 111 (all twelve
-`fixed-length-array.ts` rows), the rest unchanged, NO added position (tally 191 -> 179); type-fest wall 17.70 -> 17.47 s (same
-session, under tsgo's ~17 s); warning gate with probe: probe only.
 
 ## QUEUE
 

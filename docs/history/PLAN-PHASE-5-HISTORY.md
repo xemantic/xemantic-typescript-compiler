@@ -1,3 +1,34 @@
+### Round (P18.310) — (LIBS.3) round 15: `Omit` / `Pick` / mapped-type member materialization COMPLETED and trusted by `IntersectionMemberAccess`, a TYPE-level `X['k']` TS2339 added — type-fest's fixed-length-array (12) closed, tally 191 -> 179, NO added position; the builder STALLED before its grid and at-risk sweep, and the orchestrator's gates caught what it would have shipped: 6 hover pins and a FALSE POSITIVE on tsc's own `scriptInfo.ts`, both fixed (2026-10-06)
+
+One implementation subagent; it stalled (27 min, no process) during its fourth ablation batch, was stopped, and the orchestrator
+finished: the source equalled the builder's ablation snapshot (no arm left applied), arms a10-a12 were run by hand (1 / 1 / 2 RED),
+and a9 (the provisional-table guard) read 0 RED — kept as a recorded belt-and-braces guard, because the in-flight table it refuses
+is exactly what produced ky's 23 false positives and the staleness check (a10) covers it only by construction. **Mechanisms (the
+builder)**: `Omit` / `Pick` keep index signatures, filter non-public members, take `Readonly`'s source flags, and display as the
+REFERENCE (`Omit<O, "c">`, `Pick<Info, "fileName">` — tsgo's hover shows exactly this); a materialized mapped / utility type
+records its SOURCE table and a snapshot of its member count (`memberSetSource`, `memberSetSnapshot`), and `trusted()` refuses a
+table copied while its source was still IN FLIGHT (ky's `InitOptions` read `Options` before `KyOptions`' members landed — 23 FPs
+reappeared the moment trust widened); a type-level indexed access `X['k']` / `X[0]` on a non-generic object or intersection now
+reports TS2339 (it was unimplemented even for plain objects; `walkTypeForIndexedAccess` hook + numeric value keys).
+**What the gates caught (orchestrator)**: (1) the full suite failed 6 hover pins in `CaptureDisplayResolutionTest` /
+`CaptureModifierMemberDisplayTest`, which asserted the old EXPANDED display of `Pick<…>` / `Readonly<…>`; tsgo's own hover
+(`tsc --lsp -stdio`) prints `const q: (file: Pick<Info, "fileName">, r: Readonly<Info>) => void`, so the CODE is right — the pins were
+re-pointed to tsgo's text, and their real invariant (the members resolve, not `any`, under a narrowed build) is now probed through
+member reads (`fn: string`, `cn: number | undefined`, `fi: Info`, `ex: Info | undefined`, each tsgo-verified); (2) the 8-profile grid
+read +1 row on harness AND server — `src/server/scriptInfo.ts:349` TS7053 on `fileName[0]` where `fileName` is a BRANDED string
+(`string & { __normalizedPathTag: any }`); tsgo accepts it because `String` has `[index: number]: string`, but the primitive
+constituent arm of `IntersectionMemberAccess` asked only for a PROPERTY named `"0"` — fixed (a primitive's wrapper index covers a
+numeric key; `hasNumberIndex` counts a primitive's wrapper so a non-numeric key — tsgo's unmodelled TS7015 — stays silent), pinned
+(`a branded string read with a numeric key stays silent as tsgo`), ablated (RED without it), grid back to 8 x 0 / 0. `Checker.kt`
++105, `IntersectionMemberAccess.kt` +69, `Type.kt` +12. **Pins**: `OmitPickMaterializationTest` 12 (incl. the branded-string pin),
+`IntersectionMemberAccessTest` updated, the two hover classes re-pointed (12 tests); ablation a1-a12 (a9 redundant, kept) + the
+branded-string arm. **Gates**: full suite 22,965 / 0 / 44 (+14); corpus screen 8725 / 0 and `--include ''` the same 41;
+`cost_gate.py` 0; `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 + chain OK (after the fix), rxjs / marked /
+cronstrue / mitt 0 / date-fns 1 unchanged; library grid (orchestrator's `r310` vs `r309`): type-fest 123 -> 111 (all twelve
+`fixed-length-array.ts` rows), the rest unchanged, NO added position (tally 191 -> 179); type-fest wall 17.70 -> 17.47 s (same
+session, under tsgo's ~17 s); warning gate with probe: probe only.
+
+
 ### Round (P18.309) — TS2729's ancestor exemption is now tsgo's `isPropertyDeclaredInAncestorClass` (the module-file base-class FP and five more cells fixed), the TS2302 walker gains five arms, and (CHK.234) LANDED under a conservative trust rule: a missing member on an INTERSECTION receiver reports TS2339 / TS2551 / TS7053 — 0 would-emit FPs across 1,100+ census reads in the profiles and libraries; the B271 additive walker retired as redundant; tally 191 -> 191, NO moved row anywhere (2026-10-06)
 
 One implementation subagent. **Where the brief / queue were wrong**: the old TS2729 collector skipped WRITE targets on the claim

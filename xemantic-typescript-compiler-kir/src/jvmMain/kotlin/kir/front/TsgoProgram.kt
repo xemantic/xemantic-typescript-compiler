@@ -160,9 +160,33 @@ internal object TsgoPrograms {
         val all = getDiagnosticsOfAnyProgram(
             ctx, program, null, false,
             { c, f -> program.getBindDiagnostics(c, f) },
-            { c, f -> program.getSemanticDiagnostics(c, f) },
+            { c, f -> if (f != null) program.getSemanticDiagnostics(c, f) else ownSemanticDiagnostics(opened, c) },
         )
         return (opened.configErrors + List(all.len) { all[it]!! }).map { convert(it, fileNameOf) }
+    }
+
+    /**
+     * The semantic diagnostics of every file but the DEFAULT LIBRARIES.
+     *
+     * tsgo's CLI checks the bundled `lib.*.d.ts` too (`skipDefaultLibCheck`
+     * is off by default), and they are clean — so checking them answers
+     * nothing and was most of a small program's front-end wall (measured:
+     * ~300 ms of a one-file KIR compile). A program's own `.d.ts` files, and
+     * a package's under `node_modules`, are still checked.
+     */
+    private fun ownSemanticDiagnostics(
+        opened: TsgoProgram,
+        ctx: com.xemantic.typescript.tsgo.go.context.Context?,
+    ): GoSlice<TsgoDiagnostic?> {
+        val program = opened.program
+        val files = program.getSourceFiles()
+        var out: GoSlice<TsgoDiagnostic?> = com.xemantic.typescript.tsgo.runtime.GoElem.ref<TsgoDiagnostic?>().nilSlice
+        for (i in 0 until files.len) {
+            val file = files[i] ?: continue
+            if (!isProgramFile(program, file)) continue
+            out = out.appendSlice(program.getSemanticDiagnostics(ctx, file))
+        }
+        return out
     }
 
     private fun convert(d: TsgoDiagnostic, fileNameOf: (String) -> String): Diagnostic {
