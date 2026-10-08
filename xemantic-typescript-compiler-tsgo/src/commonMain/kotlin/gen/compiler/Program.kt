@@ -429,16 +429,12 @@ class Program(
     override fun getPackagesMap(): GoMap<String, Boolean> {
         this.packagesMapOnce.`do`(fun() {
             this.packagesMap = GoMap.make<String, Boolean>(GoElem.BOOL)
-            val m0 = this.processedFiles.resolvedModules
-            l0@ for (k1 in m0.keysSnapshot()) {
-                val e2 = m0.probe(k1)
-                if (e2 === GoMapAbsent) continue
-                val resolvedModulesInFile: ModeAwareCache<ResolvedModule?> = goProbeValue<ModeAwareCache<ResolvedModule?>>(e2) { GoMap.nil<ModeAwareCacheKey, ResolvedModule?>(GoElem.ref<ResolvedModule?>()) }
-                val m3 = resolvedModulesInFile
-                l1@ for (k4 in m3.keysSnapshot()) {
-                    val e5 = m3.probe(k4)
-                    if (e5 === GoMapAbsent) continue
-                    val mod: ResolvedModule? = goProbeValue<ResolvedModule?>(e5) { null }
+            val mi0 = this.processedFiles.resolvedModules.iter()
+            l0@ while (mi0.next()) {
+                val resolvedModulesInFile: ModeAwareCache<ResolvedModule?> = mi0.value
+                val mi1 = resolvedModulesInFile.iter()
+                l1@ while (mi1.next()) {
+                    val mod: ResolvedModule? = mi1.value
                     if (mod!!.packageId.name != "") {
                         this.packagesMap[mod!!.packageId.name] = this.packagesMap[mod!!.packageId.name] || mod!!.extension == ".d.ts"
                     }
@@ -665,12 +661,10 @@ class Program(
                 knownSymlinks_1.setSymlinksFromResolutions(run { val r0 = this; fun(p0: ((ResolvedModule?, String, ModuleKind, Path) -> Unit)?, p1: SourceFile?) = r0.forEachResolvedModule(p0, p1) }, run { val r1 = this; fun(p0: ((ResolvedTypeReferenceDirective?, String, ModuleKind, Path) -> Unit)?, p1: SourceFile?) = r1.forEachResolvedTypeReferenceDirective(p0, p1) })
             }
             val seenPackageJsons: com.xemantic.typescript.tsgo.collections.Set<Path> = com.xemantic.typescript.tsgo.collections.Set<Path>(goElem_T = Path.ELEM)
-            val m2 = this.processedFiles.sourceFileMetaDatas
-            l0@ for (k3 in m2.keysSnapshot()) {
-                val e4 = m2.probe(k3)
-                if (e4 === GoMapAbsent) continue
-                val filePath: Path = k3
-                val meta: SourceFileMetaData = goProbeValue<SourceFileMetaData>(e4) { SourceFileMetaData() }.goCopy()
+            val mi2 = this.processedFiles.sourceFileMetaDatas.iter()
+            l0@ while (mi2.next()) {
+                val filePath: Path = mi2.key
+                val meta: SourceFileMetaData = mi2.value.goCopy()
                 if (meta.packageJsonDirectory == "" || !this.sourceFileMayBeEmitted(this.getSourceFileByPath(filePath), false) || !seenPackageJsons.addIfAbsent(this.toPath(meta.packageJsonDirectory))) {
                     continue@l0
                 }
@@ -679,11 +673,9 @@ class Program(
                 if (info.getContents() == null) {
                     continue@l0
                 }
-                val m5 = info.getContents()!!.fields.dependencyFields.getRuntimeDependencyNames().keys()
-                l1@ for (k6 in m5.keysSnapshot()) {
-                    val e7 = m5.probe(k6)
-                    if (e7 === GoMapAbsent) continue
-                    val dep: String = k6
+                val mi3 = info.getContents()!!.fields.dependencyFields.getRuntimeDependencyNames().keys().iter()
+                l1@ while (mi3.next()) {
+                    val dep: String = mi3.key
                     val possibleDirectoryPath: Path = this.toPath(com.xemantic.typescript.tsgo.tspath.combinePaths(meta.packageJsonDirectory, GoSlice.of(GoElem.STRING, "node_modules", dep)))
                     if (knownSymlinks_1.hasDirectory(possibleDirectoryPath)) {
                         continue@l1
@@ -949,12 +941,10 @@ fun Program?.extractUnresolvedImports(): com.xemantic.typescript.tsgo.collection
 fun Program?.extractUnresolvedImportsFromSourceFile(file: SourceFile?): GoSlice<String> {
     var unresolvedImports: GoSlice<String> = GoElem.STRING.nilSlice
     val resolvedModules: ModeAwareCache<ResolvedModule?> = this!!.processedFiles.resolvedModules[file!!.path()]
-    val m0 = resolvedModules
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val cacheKey: ModeAwareCacheKey = k1
-        val resolution: ResolvedModule? = goProbeValue<ResolvedModule?>(e2) { null }
+    val mi0 = resolvedModules.iter()
+    l0@ while (mi0.next()) {
+        val cacheKey: ModeAwareCacheKey = mi0.key
+        val resolution: ResolvedModule? = mi0.value
         val resolved: Boolean = resolution.isResolved()
         if ((!resolved || !com.xemantic.typescript.tsgo.tspath.extensionIsOneOf(resolution!!.extension, com.xemantic.typescript.tsgo.tspath.supportedTSExtensionsWithJsonFlat)) && !com.xemantic.typescript.tsgo.tspath.isExternalModuleNameRelative(cacheKey.name)) {
             unresolvedImports = unresolvedImports.append1(cacheKey.name)
@@ -1676,11 +1666,9 @@ fun Program?.getBindAndCheckDiagnosticsWithChecker(ctx: Context?, fileChecker: C
     val t0 = this.getDiagnosticsWithPrecedingDirectives(sourceFile, diags)
     var filtered: GoSlice<Diagnostic?> = t0.first
     val directivesByLine: GoMap<Int, CommentDirective> = t0.second
-    val m1 = directivesByLine
-    l0@ for (k2 in m1.keysSnapshot()) {
-        val e3 = m1.probe(k2)
-        if (e3 === GoMapAbsent) continue
-        val directive: CommentDirective = goProbeValue<CommentDirective>(e3) { CommentDirective() }.goCopy()
+    val mi1 = directivesByLine.iter()
+    l0@ while (mi1.next()) {
+        val directive: CommentDirective = mi1.value.goCopy()
         if (directive.kind.value == 1) {
             filtered = filtered.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, directive.loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.unused_ts_expect_error_directive, GoElem.ref<Any?>().nilSlice))
         }
@@ -2312,28 +2300,22 @@ inline fun <T> forEachResolution(goElem_T: GoElem<T>, resolutionCache: GoMap<Pat
         val resolutions: ModeAwareCache<T> = goProbeValue<ModeAwareCache<T>>(t0) { GoMap.nil<ModeAwareCacheKey, T>(goElem_T) }
         val ok: Boolean = t0 !== GoMapAbsent
         if (ok) {
-            val m1 = resolutions
-            l0@ for (k2 in m1.keysSnapshot()) {
-                val e3 = m1.probe(k2)
-                if (e3 === GoMapAbsent) continue
-                val key: ModeAwareCacheKey = k2
-                val resolution: T = goProbeValue<T>(e3) { goElem_T.zeroValue() }
+            val mi1 = resolutions.iter()
+            l0@ while (mi1.next()) {
+                val key: ModeAwareCacheKey = mi1.key
+                val resolution: T = mi1.value
                 callback(resolution, key.name, key.mode, file!!.path())
             }
         }
     } else {
-        val m4 = resolutionCache
-        l1@ for (k5 in m4.keysSnapshot()) {
-            val e6 = m4.probe(k5)
-            if (e6 === GoMapAbsent) continue
-            val filePath: Path = k5
-            val resolutions_1: ModeAwareCache<T> = goProbeValue<ModeAwareCache<T>>(e6) { GoMap.nil<ModeAwareCacheKey, T>(goElem_T) }
-            val m7 = resolutions_1
-            l2@ for (k8 in m7.keysSnapshot()) {
-                val e9 = m7.probe(k8)
-                if (e9 === GoMapAbsent) continue
-                val key_1: ModeAwareCacheKey = k8
-                val resolution_1: T = goProbeValue<T>(e9) { goElem_T.zeroValue() }
+        val mi2 = resolutionCache.iter()
+        l1@ while (mi2.next()) {
+            val filePath: Path = mi2.key
+            val resolutions_1: ModeAwareCache<T> = mi2.value
+            val mi3 = resolutions_1.iter()
+            l2@ while (mi3.next()) {
+                val key_1: ModeAwareCacheKey = mi3.key
+                val resolution_1: T = mi3.value
                 callback(resolution_1, key_1.name, key_1.mode, filePath)
             }
         }

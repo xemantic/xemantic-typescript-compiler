@@ -418,15 +418,13 @@ fun Checker?.checkFunctionOrConstructorSymbolWorker(symbol: Symbol?) {
                 val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(overload)
                 groups[sourceFile] = groups[sourceFile].append1(overload)
             }
-            val m2 = groups
-            l1@ for (k3 in m2.keysSnapshot()) {
-                val e4 = m2.probe(k3)
-                if (e4 === GoMapAbsent) continue
-                val overloadsInFile: GoSlice<Node?> = goProbeValue<GoSlice<Node?>>(e4) { GoElem.ref<Node?>().nilSlice }
+            val mi2 = groups.iter()
+            l1@ while (mi2.next()) {
+                val overloadsInFile: GoSlice<Node?> = mi2.value
                 val canonicalFlagsForFile: ModifierFlags = this.getEffectiveDeclarationFlagsImpl(getCanonicalOverload!!(overloadsInFile, implementation_1), flagsToCheck_1)
-                val s5 = overloadsInFile
-                l2@ for (i6 in 0 until s5.len) {
-                    val overload_1: Node? = s5[i6]
+                val s3 = overloadsInFile
+                l2@ for (i4 in 0 until s3.len) {
+                    val overload_1: Node? = s3[i4]
                     val deviation: ModifierFlags = ModifierFlags(this.getEffectiveDeclarationFlagsImpl(overload_1, flagsToCheck_1).value xor canonicalFlags.value)
                     val deviationInFile: ModifierFlags = ModifierFlags(this.getEffectiveDeclarationFlagsImpl(overload_1, flagsToCheck_1).value xor canonicalFlagsForFile.value)
                     when {
@@ -450,9 +448,9 @@ fun Checker?.checkFunctionOrConstructorSymbolWorker(symbol: Symbol?) {
     val checkQuestionTokenAgreementBetweenOverloads: ((GoSlice<Node?>, Node?, Boolean, Boolean) -> Unit)? = fun(overloads_2: GoSlice<Node?>, implementation_2: Node?, someHaveQuestionToken_1: Boolean, allHaveQuestionToken_1: Boolean) {
         if (someHaveQuestionToken_1 != allHaveQuestionToken_1) {
             val canonicalHasQuestionToken: Boolean = isOptionalDeclaration(getCanonicalOverload!!(overloads_2, implementation_2))
-            val s7 = overloads_2
-            l4@ for (i8 in 0 until s7.len) {
-                val o: Node? = s7[i8]
+            val s5 = overloads_2
+            l4@ for (i6 in 0 until s5.len) {
+                val o: Node? = s5[i6]
                 if (isOptionalDeclaration(o) != canonicalHasQuestionToken) {
                     this.error(com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(o), com.xemantic.typescript.tsgo.diagnostics.overload_signatures_must_all_be_optional_or_required, GoElem.ref<Any?>().nilSlice)
                 }
@@ -503,9 +501,9 @@ fun Checker?.checkFunctionOrConstructorSymbolWorker(symbol: Symbol?) {
             }
         }
     }
-    val s9 = declarations
-    l5@ for (i10 in 0 until s9.len) {
-        val node_1: Node? = s9[i10]
+    val s7 = declarations
+    l5@ for (i8 in 0 until s7.len) {
+        val node_1: Node? = s7[i8]
         val inAmbientContext: Boolean = node_1!!.flags.value and 8388608u != 0u
         val inAmbientContextOrInterface: Boolean = inAmbientContext || node_1!!.parent != null && (com.xemantic.typescript.tsgo.ast.isInterfaceDeclaration(node_1!!.parent) || com.xemantic.typescript.tsgo.ast.isTypeLiteralNode(node_1!!.parent))
         if (inAmbientContextOrInterface) {
@@ -545,31 +543,31 @@ fun Checker?.checkFunctionOrConstructorSymbolWorker(symbol: Symbol?) {
         }
     }
     if (multipleConstructorImplementation) {
-        val s11 = functionDeclarations
-        l6@ for (i12 in 0 until s11.len) {
-            val declaration: Node? = s11[i12]
+        val s9 = functionDeclarations
+        l6@ for (i10 in 0 until s9.len) {
+            val declaration: Node? = s9[i10]
             this.error(declaration, com.xemantic.typescript.tsgo.diagnostics.multiple_constructor_implementations_are_not_allowed, GoElem.ref<Any?>().nilSlice)
         }
     }
     if (duplicateFunctionDeclaration) {
-        val s13 = functionDeclarations
-        l7@ for (i14 in 0 until s13.len) {
-            val declaration_1: Node? = s13[i14]
+        val s11 = functionDeclarations
+        l7@ for (i12 in 0 until s11.len) {
+            val declaration_1: Node? = s11[i12]
             this.error(com.xemantic.typescript.tsgo.core.orElse<Node?>(GoElem.ref<Node?>(), com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(declaration_1), declaration_1), com.xemantic.typescript.tsgo.diagnostics.duplicate_function_implementation, GoElem.ref<Any?>().nilSlice)
         }
     }
     if (hasNonAmbientClass && !isConstructor && symbol!!.flags.value and 16u != 0u && declarations.len != 0) {
         var relatedDiagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice
-        val s15 = declarations
-        l8@ for (i16 in 0 until s15.len) {
-            val declaration_2: Node? = s15[i16]
+        val s13 = declarations
+        l8@ for (i14 in 0 until s13.len) {
+            val declaration_2: Node? = s13[i14]
             if (com.xemantic.typescript.tsgo.ast.isClassDeclaration(declaration_2)) {
                 relatedDiagnostics = relatedDiagnostics.append1(createDiagnosticForNode(declaration_2, com.xemantic.typescript.tsgo.diagnostics.consider_adding_a_declare_modifier_to_this_class, GoElem.ref<Any?>().nilSlice))
             }
         }
-        val s17 = declarations
-        l9@ for (i18 in 0 until s17.len) {
-            val declaration_3: Node? = s17[i18]
+        val s15 = declarations
+        l9@ for (i16 in 0 until s15.len) {
+            val declaration_3: Node? = s15[i16]
             var diagnostic_1: Message? = null
             when (declaration_3!!.kind.value) {
                 264 -> {
@@ -593,9 +591,9 @@ fun Checker?.checkFunctionOrConstructorSymbolWorker(symbol: Symbol?) {
         if (bodyDeclaration != null) {
             val signatures: GoSlice<Signature?> = this.getSignaturesOfSymbol(symbol)
             val bodySignature: Signature? = this.getSignatureFromDeclarationImpl(bodyDeclaration)
-            val s19 = signatures
-            l11@ for (i20 in 0 until s19.len) {
-                val signature: Signature? = s19[i20]
+            val s17 = signatures
+            l11@ for (i18 in 0 until s17.len) {
+                val signature: Signature? = s17[i18]
                 if (!this.isImplementationCompatibleWithOverload(bodySignature, signature)) {
                     val errorNode_2: Node? = signature!!.declaration
                     this.error(errorNode_2, com.xemantic.typescript.tsgo.diagnostics.this_overload_signature_is_not_compatible_with_its_implementation_signature, GoElem.ref<Any?>().nilSlice).addRelatedInfo(createDiagnosticForNode(bodyDeclaration, com.xemantic.typescript.tsgo.diagnostics.the_implementation_signature_is_declared_here, GoElem.ref<Any?>().nilSlice))
@@ -1151,11 +1149,9 @@ fun Checker?.checkCatchClause(node: Node?) {
         } else {
             val blockLocals: SymbolTable = node.asCatchClause()!!.block.locals()
             if (!blockLocals.isNil) {
-                val m0 = node.locals()
-                l0@ for (k1 in m0.keysSnapshot()) {
-                    val e2 = m0.probe(k1)
-                    if (e2 === GoMapAbsent) continue
-                    val caughtName: String = k1
+                val mi0 = node.locals().iter()
+                l0@ while (mi0.next()) {
+                    val caughtName: String = mi0.key
                     val blockLocal: Symbol? = blockLocals[caughtName]
                     if (blockLocal != null && blockLocal!!.valueDeclaration != null && blockLocal!!.flags.value and 2u != 0u) {
                         this.grammarErrorOnNode(blockLocal!!.valueDeclaration, com.xemantic.typescript.tsgo.diagnostics.cannot_redeclare_identifier_0_in_catch_clause, GoSlice.of(GoElem.ref<Any?>(), caughtName))
@@ -1521,12 +1517,10 @@ fun Checker?.checkKindsOfPropertyMemberOverrides(t: Type?, baseType: Type?) {
             this.error(com.xemantic.typescript.tsgo.core.orElse<Node?>(GoElem.ref<Node?>(), com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(derived!!.valueDeclaration), derived!!.valueDeclaration), errorMessage, GoSlice.of(GoElem.ref<Any?>(), this.typeToString(baseType), this.symbolToStringImpl(base), this.typeToString(t)))
         }
     }
-    val m4 = notImplementedInfo
-    l2@ for (k5 in m4.keysSnapshot()) {
-        val e6 = m4.probe(k5)
-        if (e6 === GoMapAbsent) continue
-        val errorNode: Node? = k5
-        val memberInfo: com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides = goProbeValue<com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides>(e6) { com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides() }.goCopy()
+    val mi4 = notImplementedInfo.iter()
+    l2@ while (mi4.next()) {
+        val errorNode: Node? = mi4.key
+        val memberInfo: com.xemantic.typescript.tsgo.checker.MemberInfo_Checker_checkKindsOfPropertyMemberOverrides = mi4.value.goCopy()
         when {
             memberInfo.missedProperties.len == 1 -> {
                 val missedProperty: String = memberInfo.missedProperties[0]
@@ -1831,16 +1825,14 @@ fun Checker?.checkTypeForDuplicateIndexSignatures(node: Node?) {
             }
         }
     }
-    val m4 = indexSignatureMap
-    l2@ for (k5 in m4.keysSnapshot()) {
-        val e6 = m4.probe(k5)
-        if (e6 === GoMapAbsent) continue
-        val t_1: Type? = k5
-        val declarations: GoSlice<Node?> = goProbeValue<GoSlice<Node?>>(e6) { GoElem.ref<Node?>().nilSlice }
+    val mi4 = indexSignatureMap.iter()
+    l2@ while (mi4.next()) {
+        val t_1: Type? = mi4.key
+        val declarations: GoSlice<Node?> = mi4.value
         if (declarations.len > 1) {
-            val s7 = declarations
-            l3@ for (i8 in 0 until s7.len) {
-                val declaration_1: Node? = s7[i8]
+            val s5 = declarations
+            l3@ for (i6 in 0 until s5.len) {
+                val declaration_1: Node? = s5[i6]
                 this.error(declaration_1, com.xemantic.typescript.tsgo.diagnostics.duplicate_index_signature_for_type_0, GoSlice.of(GoElem.ref<Any?>(), this.typeToString(t_1)))
             }
         }
@@ -1983,27 +1975,25 @@ fun Checker?.checkInheritedPropertiesAreIdentical(t: Type?, typeNode: Node?): Bo
         return true
     }
     val seen: GoMap<String, InheritanceInfo> = GoMap.make<String, InheritanceInfo>(InheritanceInfo.ELEM)
-    val m0 = this.resolveDeclaredMembers(t)!!.declaredMembers
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val id: String = k1
-        val p: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = this.resolveDeclaredMembers(t)!!.declaredMembers.iter()
+    l0@ while (mi0.next()) {
+        val id: String = mi0.key
+        val p: Symbol? = mi0.value
         if (this.isNamedMember(p, id)) {
             seen[p!!.name] = InheritanceInfo(prop = p, containingType = t)
         }
     }
     var identical: Boolean = true
-    val s3 = baseTypes
-    l1@ for (i4 in 0 until s3.len) {
-        val base: Type? = s3[i4]
+    val s1 = baseTypes
+    l1@ for (i2 in 0 until s1.len) {
+        val base: Type? = s1[i2]
         val properties: GoSlice<Symbol?> = this.getPropertiesOfTypeImpl(this.getTypeWithThisArgument(base, t.asInterfaceType()!!.thisType, false))
-        val s5 = properties
-        l2@ for (i6 in 0 until s5.len) {
-            val prop: Symbol? = s5[i6]
-            val t7 = seen.probe(prop!!.name)
-            val existing: InheritanceInfo = goProbeValue<InheritanceInfo>(t7) { InheritanceInfo() }.goCopy()
-            val ok: Boolean = t7 !== GoMapAbsent
+        val s3 = properties
+        l2@ for (i4 in 0 until s3.len) {
+            val prop: Symbol? = s3[i4]
+            val t5 = seen.probe(prop!!.name)
+            val existing: InheritanceInfo = goProbeValue<InheritanceInfo>(t5) { InheritanceInfo() }.goCopy()
+            val ok: Boolean = t5 !== GoMapAbsent
             if (!ok) {
                 seen[prop!!.name] = InheritanceInfo(prop = prop, containingType = base)
             } else {
@@ -2619,12 +2609,10 @@ fun Checker?.checkExternalModuleExports(node: Node?) {
                 this.error(declaration, com.xemantic.typescript.tsgo.diagnostics.an_export_assignment_cannot_be_used_in_a_module_with_other_exported_elements, GoElem.ref<Any?>().nilSlice)
             }
         }
-        val m0 = this.getExportsOfModuleImpl(moduleSymbol)
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val id: String = k1
-            val symbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+        val mi0 = this.getExportsOfModuleImpl(moduleSymbol).iter()
+        l0@ while (mi0.next()) {
+            val id: String = mi0.key
+            val symbol: Symbol? = mi0.value
             if (id == "\u00FEexport") {
                 continue@l0
             }
@@ -2640,9 +2628,9 @@ fun Checker?.checkExternalModuleExports(node: Node?) {
             if (exportedDeclarationsCount > 1 && !com.xemantic.typescript.tsgo.core.every<Node?>(GoElem.ref<Node?>(), symbol!!.declarations, fun(node_1: Node?): Boolean {
                 return com.xemantic.typescript.tsgo.ast.getAssignmentDeclarationKind(node_1).value == 2
             })) {
-                val s3 = symbol!!.declarations
-                l1@ for (i4 in 0 until s3.len) {
-                    val declaration_1: Node? = s3[i4]
+                val s1 = symbol!!.declarations
+                l1@ for (i2 in 0 until s1.len) {
+                    val declaration_1: Node? = s1[i2]
                     if (isNotOverload(declaration_1)) {
                         this.error(declaration_1, com.xemantic.typescript.tsgo.diagnostics.cannot_redeclare_exported_variable_0, GoSlice.of(GoElem.ref<Any?>(), id))
                     }
@@ -2655,11 +2643,9 @@ fun Checker?.checkExternalModuleExports(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.hasExportedMembersOfKind 777c85eb
 fun Checker?.hasExportedMembersOfKind(moduleSymbol: Symbol?, kind: SymbolFlags): Boolean {
-    val m0 = moduleSymbol!!.exports
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val symbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = moduleSymbol!!.exports.iter()
+    l0@ while (mi0.next()) {
+        val symbol: Symbol? = mi0.value
         if (symbol!!.name != "export=" && this.getSymbolFlagsImpl(symbol).value and kind.value != 0u) {
             return true
         }

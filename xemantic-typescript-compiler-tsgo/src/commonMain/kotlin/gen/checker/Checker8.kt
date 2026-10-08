@@ -1540,11 +1540,9 @@ fun Checker?.getOuterTypeParameters(node_0: Node?, includeThisTypes: Boolean): G
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getInferTypeParameters 2f93969e
 fun Checker?.getInferTypeParameters(node: Node?): GoSlice<Type?> {
     var result: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice
-    val m0 = node.locals()
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val symbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = node.locals().iter()
+    l0@ while (mi0.next()) {
+        val symbol: Symbol? = mi0.value
         if (symbol!!.flags.value and 262144u != 0u) {
             result = result.append1(this.getDeclaredTypeOfSymbolImpl(symbol))
         }

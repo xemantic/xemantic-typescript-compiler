@@ -411,11 +411,9 @@ fun DiagnosticsCollection?.getDiagnostics(): GoSlice<Diagnostic?> {
         df0.defer { dr1.unlock() }
         var diagnostics: GoSlice<Diagnostic?> = GoSlice.make(GoElem.ref<Diagnostic?>(), 0, this!!.count)
         diagnostics = diagnostics.appendSlice(this!!.nonFileDiagnostics)
-        val m2 = this!!.fileDiagnostics
-        l0@ for (k3 in m2.keysSnapshot()) {
-            val e4 = m2.probe(k3)
-            if (e4 === GoMapAbsent) continue
-            val diags: GoSlice<Diagnostic?> = goProbeValue<GoSlice<Diagnostic?>>(e4) { GoElem.ref<Diagnostic?>().nilSlice }
+        val mi2 = this!!.fileDiagnostics.iter()
+        l0@ while (mi2.next()) {
+            val diags: GoSlice<Diagnostic?> = mi2.value
             diagnostics = diagnostics.appendSlice(diags)
         }
         com.xemantic.typescript.tsgo.go.slices.sortFunc<Diagnostic?>(diagnostics, (fun(p0: Diagnostic?, p1: Diagnostic?): Int = compareDiagnostics(p0, p1))!!)

@@ -679,16 +679,14 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                     }
                 }
                 "map" -> {
-                    val m = fn.fresh("m")
-                    val k = fn.fresh("k")
-                    w.line("val $m = ${raw(x).code}")
-                    w.block("${t.kLabel}@ for ($k in $m.keysSnapshot())") {
-                        val lv = fn.fresh("e")
-                        w.line("val $lv = $m.probe($k)")
-                        w.line("if ($lv === GoMapAbsent) continue")
-                        bindRange(key, Ex.primary(k), define)
+                    // One snapshot of the table, no per-entry probe while the map is unchanged (GoMap.iter,
+                    // docs/goport-perf.md § 6); the iterator keeps Go's guarantees under mutation.
+                    val it = fn.fresh("mi")
+                    w.line("val $it = ${raw(x).at(PRIMARY)}.iter()")
+                    w.block("${t.kLabel}@ while ($it.next())") {
+                        bindRange(key, Ex.primary("$it.key"), define)
                         val vt = (types.under(types.core(ty(x))) as MapType).elem
-                        val read = "goProbeValue<${tm.kt(vt)}>($lv) { ${tm.zero(vt)} }"
+                        val read = "$it.value"
                         val vv = if ((s.bool("valueCopy") || tm.isStructValue(vt)) && tm.hasGoCopy(vt)) "$read.goCopy()" else read
                         bindRange(value, Ex.primary(vv), define)
                         body(s.reqObj("body").list("list"))

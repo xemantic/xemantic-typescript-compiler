@@ -3207,11 +3207,9 @@ fun Checker?.initializeChecker() {
                     this.addDiagnostic(newDiagnosticForNode(d, com.xemantic.typescript.tsgo.diagnostics.declaration_name_conflicts_with_built_in_global_identifier_0, GoSlice.of(GoElem.ref<Any?>(), "globalThis")))
                 }
             }
-            val m4 = file!!.localsContainerBase.locals
-            l2@ for (k5 in m4.keysSnapshot()) {
-                val e6 = m4.probe(k5)
-                if (e6 === GoMapAbsent) continue
-                val symbol: Symbol? = goProbeValue<Symbol?>(e6) { null }
+            val mi4 = file!!.localsContainerBase.locals.iter()
+            l2@ while (mi4.next()) {
+                val symbol: Symbol? = mi4.value
                 if (symbol!!.flags.value and 1536u != 0u && com.xemantic.typescript.tsgo.ast.isAmbientModuleSymbolName(symbol!!.name)) {
                     ambientModuleSymbols = ambientModuleSymbols.append1(symbol)
                 } else {
@@ -3222,26 +3220,24 @@ fun Checker?.initializeChecker() {
         this!!.patternAmbientModules = this!!.patternAmbientModules.appendSlice(file!!.patternAmbientModules)
         augmentations = augmentations.append1(file!!.moduleAugmentations)
         if (file!!.declarationBase.symbol != null) {
-            val m7 = file!!.globalExports
-            l3@ for (k8 in m7.keysSnapshot()) {
-                val e9 = m7.probe(k8)
-                if (e9 === GoMapAbsent) continue
-                val name: String = k8
-                val symbol_1: Symbol? = goProbeValue<Symbol?>(e9) { null }
-                val t10 = this!!.globals.probe(name)
-                val ok: Boolean = t10 !== GoMapAbsent
+            val mi5 = file!!.globalExports.iter()
+            l3@ while (mi5.next()) {
+                val name: String = mi5.key
+                val symbol_1: Symbol? = mi5.value
+                val t6 = this!!.globals.probe(name)
+                val ok: Boolean = t6 !== GoMapAbsent
                 if (!ok) {
                     this!!.globals[name] = symbol_1
                 }
             }
         }
     }
-    val s11 = augmentations
-    l4@ for (i12 in 0 until s11.len) {
-        val list: GoSlice<Node?> = s11[i12]
-        val s13 = list
-        l5@ for (i14 in 0 until s13.len) {
-            val augmentation: Node? = s13[i14]
+    val s7 = augmentations
+    l4@ for (i8 in 0 until s7.len) {
+        val list: GoSlice<Node?> = s7[i8]
+        val s9 = list
+        l5@ for (i10 in 0 until s9.len) {
+            val augmentation: Node? = s9[i10]
             if (com.xemantic.typescript.tsgo.ast.isGlobalScopeAugmentation(augmentation!!.parent)) {
                 this.mergeModuleAugmentation(augmentation)
             }
@@ -3272,17 +3268,17 @@ fun Checker?.initializeChecker() {
     }
     this!!.anyReadonlyArrayType = this.createTypeFromGenericGlobalType(this!!.globalReadonlyArrayType, GoSlice.of(GoElem.ref<Type?>(), this!!.anyType))
     this!!.globalThisType = this.getGlobalType("ThisType", 1, false)
-    val s15 = ambientModuleSymbols
-    l6@ for (i16 in 0 until s15.len) {
-        val symbol_2: Symbol? = s15[i16]
+    val s11 = ambientModuleSymbols
+    l6@ for (i12 in 0 until s11.len) {
+        val symbol_2: Symbol? = s11[i12]
         this.mergeGlobalSymbol(symbol_2)
     }
-    val s17 = augmentations
-    l7@ for (i18 in 0 until s17.len) {
-        val list_1: GoSlice<Node?> = s17[i18]
-        val s19 = list_1
-        l8@ for (i20 in 0 until s19.len) {
-            val augmentation_1: Node? = s19[i20]
+    val s13 = augmentations
+    l7@ for (i14 in 0 until s13.len) {
+        val list_1: GoSlice<Node?> = s13[i14]
+        val s15 = list_1
+        l8@ for (i16 in 0 until s15.len) {
+            val augmentation_1: Node? = s15[i16]
             if (!com.xemantic.typescript.tsgo.ast.isGlobalScopeAugmentation(augmentation_1!!.parent)) {
                 this.mergeModuleAugmentation(augmentation_1)
             }
@@ -3330,12 +3326,10 @@ fun Checker?.mergeModuleAugmentation(moduleName: Node?) {
             } else {
                 if (mainModule!!.exports["\u00FEexport"] != null && moduleAugmentation!!.declarationBase.symbol!!.exports.len != 0) {
                     val resolvedExports: SymbolTable = this.getResolvedMembersOrExportsOfSymbol(mainModule, MembersOrExportsResolutionKindResolvedExports)
-                    val m1 = moduleAugmentation!!.declarationBase.symbol!!.exports
-                    l0@ for (k2 in m1.keysSnapshot()) {
-                        val e3 = m1.probe(k2)
-                        if (e3 === GoMapAbsent) continue
-                        val key: String = k2
-                        val value_1: Symbol? = goProbeValue<Symbol?>(e3) { null }
+                    val mi1 = moduleAugmentation!!.declarationBase.symbol!!.exports.iter()
+                    l0@ while (mi1.next()) {
+                        val key: String = mi1.key
+                        val value_1: Symbol? = mi1.value
                         if (resolvedExports[key] != null && mainModule!!.exports[key] == null) {
                             this.mergeSymbol(resolvedExports[key], value_1, false)
                         }
@@ -3610,14 +3604,12 @@ fun Checker?.getSuggestedSymbolForNonexistentSymbol(location: Node?, outerName: 
 // go: github.com/microsoft/typescript-go/internal/checker.getPrimitiveTypeAliasSuggestions ac84d7bc
 fun getPrimitiveTypeAliasSuggestions(symbols: SymbolTable): Seq<Symbol?>? {
     return fun(yield: ((Symbol?) -> Boolean)?) {
-        val m0 = primitiveTypeAliasSuggestions!!()
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val builtinName: String = k1
-            val suggestion: Symbol? = goProbeValue<Symbol?>(e2) { null }
-            val t3 = symbols.probe(builtinName)
-            val ok: Boolean = t3 !== GoMapAbsent
+        val mi0 = primitiveTypeAliasSuggestions!!().iter()
+        l0@ while (mi0.next()) {
+            val builtinName: String = mi0.key
+            val suggestion: Symbol? = mi0.value
+            val t1 = symbols.probe(builtinName)
+            val ok: Boolean = t1 !== GoMapAbsent
             if (ok) {
                 if (!yield!!(suggestion)) {
                     return

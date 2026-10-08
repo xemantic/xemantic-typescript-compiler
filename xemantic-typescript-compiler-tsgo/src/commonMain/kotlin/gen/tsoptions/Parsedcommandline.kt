@@ -367,15 +367,13 @@ fun ParsedCommandLine?.wildcardDirectoryGlobs(): GoSlice<Glob?> {
     this!!.includeGlobsOnce.`do`(fun() {
         if (this!!.includeGlobs.isNil) {
             var globs: GoSlice<Glob?> = GoSlice.make(GoElem.ref<Glob?>(), 0, wildcardDirectories_1.len)
-            val m0 = wildcardDirectories_1
-            l0@ for (k1 in m0.keysSnapshot()) {
-                val e2 = m0.probe(k1)
-                if (e2 === GoMapAbsent) continue
-                val dir: String = k1
-                val recursive: Boolean = goProbeValue<Boolean>(e2) { false }
-                val t3 = com.xemantic.typescript.tsgo.glob.parse(com.xemantic.typescript.tsgo.go.fmt.sprintf("%s/%s", com.xemantic.typescript.tsgo.tspath.normalizePath(dir), com.xemantic.typescript.tsgo.core.ifElse<String>(GoElem.STRING, recursive, "**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts,json}", "*.{js,jsx,mjs,cjs,ts,tsx,mts,cts,json}")))
-                val parsed: Glob? = t3.first
-                val err: GoError? = t3.second
+            val mi0 = wildcardDirectories_1.iter()
+            l0@ while (mi0.next()) {
+                val dir: String = mi0.key
+                val recursive: Boolean = mi0.value
+                val t1 = com.xemantic.typescript.tsgo.glob.parse(com.xemantic.typescript.tsgo.go.fmt.sprintf("%s/%s", com.xemantic.typescript.tsgo.tspath.normalizePath(dir), com.xemantic.typescript.tsgo.core.ifElse<String>(GoElem.STRING, recursive, "**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts,json}", "*.{js,jsx,mjs,cjs,ts,tsx,mts,cts,json}")))
+                val parsed: Glob? = t1.first
+                val err: GoError? = t1.second
                 if (err == null) {
                     globs = globs.append1(parsed)
                 }
@@ -503,12 +501,10 @@ fun ParsedCommandLine?.possiblyMatchesFileName(fileName: String): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.ParsedCommandLine.PossiblyMatchesDirectoryName de950edc
 fun ParsedCommandLine?.possiblyMatchesDirectoryName(directoryPath: Path): Boolean {
-    val m0 = this.wildcardDirectories()
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val wildcardDir: String = k1
-        val recursive: Boolean = goProbeValue<Boolean>(e2) { false }
+    val mi0 = this.wildcardDirectories().iter()
+    l0@ while (mi0.next()) {
+        val wildcardDir: String = mi0.key
+        val recursive: Boolean = mi0.value
         val wildcardDirPath: Path = com.xemantic.typescript.tsgo.tspath.toPath(wildcardDir, this!!.getCurrentDirectory(), this!!.useCaseSensitiveFileNames())
         if (recursive) {
             if (wildcardDirPath.containsPath(directoryPath)) {

@@ -2361,11 +2361,9 @@ fun stringToToken(s: String): Kind {
 // go: github.com/microsoft/typescript-go/internal/scanner.GetViableKeywordSuggestions 422d3fc9
 fun getViableKeywordSuggestions(): GoSlice<String> {
     var result: GoSlice<String> = GoSlice.make(GoElem.STRING, 0, textToKeyword.len)
-    val m0 = textToKeyword
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val text: String = k1
+    val mi0 = textToKeyword.iter()
+    l0@ while (mi0.next()) {
+        val text: String = mi0.key
         if (text.length > 2) {
             result = result.append1(text)
         }
@@ -3079,12 +3077,10 @@ fun iterateCommentRanges(f: NodeFactory?, text: String, pos_0: Int, trailing: Bo
 // go: github.com/microsoft/typescript-go/internal/scanner.tokenToText 42f9b31c
 @kotlin.jvm.JvmField val tokenToText: GoArray<String> = (fun(): GoArray<String> {
     val result: GoArray<String> = GoArray(351, GoElem.STRING)
-    val m0 = textToToken
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val text: String = k1
-        val kind: Kind = goProbeValue<Kind>(e2) { Kind(0) }
+    val mi0 = textToToken.iter()
+    l0@ while (mi0.next()) {
+        val text: String = mi0.key
+        val kind: Kind = mi0.value
         result[kind.value] = text
     }
     return result.goCopy()

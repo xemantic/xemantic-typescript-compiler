@@ -42,11 +42,9 @@ fun nonRelativeModuleNameForTypingCache(moduleName: String): String {
 // go: github.com/microsoft/typescript-go/internal/core.NodeCoreModules e0d0bc8b
 @kotlin.jvm.JvmField val nodeCoreModules: (() -> GoMap<String, Boolean>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<String, Boolean>>(fun(): GoMap<String, Boolean> {
     val nodeCoreModules_1: GoMap<String, Boolean> = GoMap.make<String, Boolean>(GoElem.BOOL, unprefixedNodeCoreModules.len * 2 + exclusivelyPrefixedNodeCoreModules.len)
-    val m0 = unprefixedNodeCoreModules
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val unprefixed: String = k1
+    val mi0 = unprefixedNodeCoreModules.iter()
+    l0@ while (mi0.next()) {
+        val unprefixed: String = mi0.key
         nodeCoreModules_1[unprefixed] = true
         nodeCoreModules_1["node:" + unprefixed] = true
     }

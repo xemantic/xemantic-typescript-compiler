@@ -149,11 +149,9 @@ fun Checker?.getWithAlternativeContainers(container: Symbol?, symbol: Symbol?, e
     if ((meaning.value == 111551u && container!!.flags.value and leftMeaning.value == 0u) && container!!.flags.value and 788968u != 0u && this.getDeclaredTypeOfSymbolImpl(container)!!.flags.value and 1048576u != 0u) {
         this.someSymbolTableInScope(enclosingDeclaration, fun(t: SymbolTable, unused0: com.xemantic.typescript.tsgo.checker.symbolTableID, unused1: Boolean, unused2: Boolean, unused3: Node?): Boolean {
             var found: Boolean = false
-            val m4 = t
-            l0@ for (k5 in m4.keysSnapshot()) {
-                val e6 = m4.probe(k5)
-                if (e6 === GoMapAbsent) continue
-                val s: Symbol? = goProbeValue<Symbol?>(e6) { null }
+            val mi4 = t.iter()
+            l0@ while (mi4.next()) {
+                val s: Symbol? = mi4.value
                 if (s!!.flags.value and leftMeaning.value != 0u && this.getTypeOfSymbolImpl(s) === this.getDeclaredTypeOfSymbolImpl(container)) {
                     variableMatches = variableMatches.append1(s)
                     found = true
@@ -372,11 +370,9 @@ fun Checker?.getAliasForSymbolInContainer(container: Symbol?, symbol: Symbol?): 
         return quick
     }
     var candidates: GoSlice<Symbol?> = GoElem.ref<Symbol?>().nilSlice
-    val m2 = exports
-    l0@ for (k3 in m2.keysSnapshot()) {
-        val e4 = m2.probe(k3)
-        if (e4 === GoMapAbsent) continue
-        val exported: Symbol? = goProbeValue<Symbol?>(e4) { null }
+    val mi2 = exports.iter()
+    l0@ while (mi2.next()) {
+        val exported: Symbol? = mi2.value
         if (this.getSymbolIfSameReference(exported, symbol) != null) {
             candidates = candidates.append1(exported)
         }
@@ -558,11 +554,9 @@ fun Checker?.getSymbolTableAliases(symbols: SymbolTable, tableId: com.xemantic.t
         }
     }
     var aliases_1: GoSlice<Symbol?> = GoElem.ref<Symbol?>().nilSlice
-    val m1 = symbols
-    l0@ for (k2 in m1.keysSnapshot()) {
-        val e3 = m1.probe(k2)
-        if (e3 === GoMapAbsent) continue
-        val sym: Symbol? = goProbeValue<Symbol?>(e3) { null }
+    val mi1 = symbols.iter()
+    l0@ while (mi1.next()) {
+        val sym: Symbol? = mi1.value
         if (sym!!.flags.value and 2097152u != 0u) {
             aliases_1 = aliases_1.append1(sym)
         }
@@ -763,12 +757,10 @@ fun Checker?.someSymbolTableInScope(enclosingDeclaration: Node?, callback: ((Sym
                 264, 232, 265 -> {
                     var table: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>())
                     val sym_1: Symbol? = this.getSymbolOfDeclaration(location)
-                    val m0 = sym_1!!.members
-                    l2@ for (k1 in m0.keysSnapshot()) {
-                        val e2 = m0.probe(k1)
-                        if (e2 === GoMapAbsent) continue
-                        val key: String = k1
-                        val memberSymbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+                    val mi0 = sym_1!!.members.iter()
+                    l2@ while (mi0.next()) {
+                        val key: String = mi0.key
+                        val memberSymbol: Symbol? = mi0.value
                         if (memberSymbol!!.flags.value and 788968u != 0u) {
                             if (table.isNil) {
                                 table = GoMap.make<String, Symbol?>(GoElem.ref<Symbol?>())

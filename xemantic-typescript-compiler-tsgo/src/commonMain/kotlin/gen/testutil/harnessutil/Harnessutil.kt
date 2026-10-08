@@ -152,12 +152,10 @@ class HarnessOptions(
 
 // go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.SetOptionsFromTestConfig 04d3f59a
 fun setOptionsFromTestConfig(t: T?, testConfig: GoMap<String, String>, compilerOptions_1: CompilerOptions?, harnessOptions: HarnessOptions?, currentDirectory: String, allowUnknownOptions: Boolean) {
-    val m0 = testConfig
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val name: String = k1
-        val value_1: String = goProbeValue<String>(e2) { "" }
+    val mi0 = testConfig.iter()
+    l0@ while (mi0.next()) {
+        val name: String = mi0.key
+        val value_1: String = mi0.value
         if (name == "typescriptversion") {
             continue@l0
         }
@@ -594,14 +592,12 @@ fun getFileBasedTestConfigurations(t: T?, settings: GoMap<String, String>, varyB
     var optionEntries: GoSlice<GoSlice<String>> = GoElem.slice(GoElem.STRING).nilSlice
     var variationCount: Int = 1
     val nonVaryingOptions: GoMap<String, String> = GoMap.make<String, String>(GoElem.STRING)
-    val m0 = settings
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val option: String = k1
-        val value_1: String = goProbeValue<String>(e2) { "" }
-        val t3 = varyByOptions.probe(option)
-        val ok: Boolean = t3 !== GoMapAbsent
+    val mi0 = settings.iter()
+    l0@ while (mi0.next()) {
+        val option: String = mi0.key
+        val value_1: String = mi0.value
+        val t1 = varyByOptions.probe(option)
+        val ok: Boolean = t1 !== GoMapAbsent
         if (ok) {
             val entries: GoSlice<String> = splitOptionValues(t, value_1, option)
             if (entries.len > 1) {
@@ -620,9 +616,9 @@ fun getFileBasedTestConfigurations(t: T?, settings: GoMap<String, String>, varyB
     var configurations: GoSlice<NamedTestConfiguration?> = GoElem.ref<NamedTestConfiguration?>().nilSlice
     if (optionEntries.len > 0) {
         val varyingConfigurations: GoSlice<GoMap<String, String>> = computeFileBasedTestConfigurationVariations(variationCount, optionEntries)
-        val s4 = varyingConfigurations
-        l1@ for (i5 in 0 until s4.len) {
-            val varyingConfig: GoMap<String, String> = s4[i5]
+        val s2 = varyingConfigurations
+        l1@ for (i3 in 0 until s2.len) {
+            val varyingConfig: GoMap<String, String> = s2[i3]
             val description: String = getFileBasedTestConfigurationDescription(varyingConfig)
             com.xemantic.typescript.tsgo.go.maps.copy<String, String>(varyingConfig, nonVaryingOptions)
             configurations = configurations.append1(NamedTestConfiguration(name = description, config = varyingConfig))

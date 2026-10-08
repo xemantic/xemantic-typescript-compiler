@@ -220,57 +220,49 @@ fun DependencyFields?.rangeDependencies(f: ((String, String, String) -> Boolean)
     val deps: GoMap<String, String> = t0.first
     val ok: Boolean = t0.second
     if (ok) {
-        val m1 = deps
-        l0@ for (k2 in m1.keysSnapshot()) {
-            val e3 = m1.probe(k2)
-            if (e3 === GoMapAbsent) continue
-            val name: String = k2
-            val version: String = goProbeValue<String>(e3) { "" }
+        val mi1 = deps.iter()
+        l0@ while (mi1.next()) {
+            val name: String = mi1.key
+            val version: String = mi1.value
             if (!f!!(name, version, "dependencies")) {
                 return
             }
         }
     }
-    val t4 = this!!.devDependencies.getValue()
-    val devDeps: GoMap<String, String> = t4.first
-    val ok_1: Boolean = t4.second
+    val t2 = this!!.devDependencies.getValue()
+    val devDeps: GoMap<String, String> = t2.first
+    val ok_1: Boolean = t2.second
     if (ok_1) {
-        val m5 = devDeps
-        l1@ for (k6 in m5.keysSnapshot()) {
-            val e7 = m5.probe(k6)
-            if (e7 === GoMapAbsent) continue
-            val name_1: String = k6
-            val version_1: String = goProbeValue<String>(e7) { "" }
+        val mi3 = devDeps.iter()
+        l1@ while (mi3.next()) {
+            val name_1: String = mi3.key
+            val version_1: String = mi3.value
             if (!f!!(name_1, version_1, "devDependencies")) {
                 return
             }
         }
     }
-    val t8 = this!!.peerDependencies.getValue()
-    val peerDeps: GoMap<String, String> = t8.first
-    val ok_2: Boolean = t8.second
+    val t4 = this!!.peerDependencies.getValue()
+    val peerDeps: GoMap<String, String> = t4.first
+    val ok_2: Boolean = t4.second
     if (ok_2) {
-        val m9 = peerDeps
-        l2@ for (k10 in m9.keysSnapshot()) {
-            val e11 = m9.probe(k10)
-            if (e11 === GoMapAbsent) continue
-            val name_2: String = k10
-            val version_2: String = goProbeValue<String>(e11) { "" }
+        val mi5 = peerDeps.iter()
+        l2@ while (mi5.next()) {
+            val name_2: String = mi5.key
+            val version_2: String = mi5.value
             if (!f!!(name_2, version_2, "peerDependencies")) {
                 return
             }
         }
     }
-    val t12 = this!!.optionalDependencies.getValue()
-    val optDeps: GoMap<String, String> = t12.first
-    val ok_3: Boolean = t12.second
+    val t6 = this!!.optionalDependencies.getValue()
+    val optDeps: GoMap<String, String> = t6.first
+    val ok_3: Boolean = t6.second
     if (ok_3) {
-        val m13 = optDeps
-        l3@ for (k14 in m13.keysSnapshot()) {
-            val e15 = m13.probe(k14)
-            if (e15 === GoMapAbsent) continue
-            val name_3: String = k14
-            val version_3: String = goProbeValue<String>(e15) { "" }
+        val mi7 = optDeps.iter()
+        l3@ while (mi7.next()) {
+            val name_3: String = mi7.key
+            val version_3: String = mi7.value
             if (!f!!(name_3, version_3, "optionalDependencies")) {
                 return
             }
@@ -291,25 +283,19 @@ fun DependencyFields?.getRuntimeDependencyNames(): com.xemantic.typescript.tsgo.
     val optDeps: GoMap<String, String> = t2.first
     count += optDeps.len
     val names: com.xemantic.typescript.tsgo.collections.Set<String>? = com.xemantic.typescript.tsgo.collections.newSetWithSizeHint<String>(GoElem.STRING, count)
-    val m3 = deps
-    l0@ for (k4 in m3.keysSnapshot()) {
-        val e5 = m3.probe(k4)
-        if (e5 === GoMapAbsent) continue
-        val name: String = k4
+    val mi3 = deps.iter()
+    l0@ while (mi3.next()) {
+        val name: String = mi3.key
         names.add(name)
     }
-    val m6 = peerDeps
-    l1@ for (k7 in m6.keysSnapshot()) {
-        val e8 = m6.probe(k7)
-        if (e8 === GoMapAbsent) continue
-        val name_1: String = k7
+    val mi4 = peerDeps.iter()
+    l1@ while (mi4.next()) {
+        val name_1: String = mi4.key
         names.add(name_1)
     }
-    val m9 = optDeps
-    l2@ for (k10 in m9.keysSnapshot()) {
-        val e11 = m9.probe(k10)
-        if (e11 === GoMapAbsent) continue
-        val name_2: String = k10
+    val mi5 = optDeps.iter()
+    l2@ while (mi5.next()) {
+        val name_2: String = mi5.key
         names.add(name_2)
     }
     return names

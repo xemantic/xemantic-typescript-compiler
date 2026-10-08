@@ -377,29 +377,27 @@ fun convertMapFS(input: com.xemantic.typescript.tsgo.go.testing.fstest.MapFS, us
     }
     val m: MapFS? = MapFS(m = GoMap.make<String, MapFile?>(GoElem.ref<MapFile?>(), input.len), useCaseSensitiveFileNames = useCaseSensitiveFileNames, clock = clock)
     val canonicalPaths: GoMap<com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath, String> = GoMap.make<com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath, String>(GoElem.STRING, input.len)
-    val m1 = input
-    l0@ for (k2 in m1.keysSnapshot()) {
-        val e3 = m1.probe(k2)
-        if (e3 === GoMapAbsent) continue
-        var path: String = k2
+    val mi1 = input.iter()
+    l0@ while (mi1.next()) {
+        var path: String = mi1.key
         val canonical: com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath = m.getCanonicalPath(path)
-        val t4 = canonicalPaths.probe(canonical)
-        var other: String = goProbeValue<String>(t4) { "" }
-        val ok: Boolean = t4 !== GoMapAbsent
+        val t2 = canonicalPaths.probe(canonical)
+        var other: String = goProbeValue<String>(t2) { "" }
+        val ok: Boolean = t2 !== GoMapAbsent
         if (ok) {
-            val t5 = minOf(path, other)
-            val t6 = maxOf(path, other)
-            path = t5
-            other = t6
+            val t3 = minOf(path, other)
+            val t4 = maxOf(path, other)
+            path = t3
+            other = t4
             goPanic(com.xemantic.typescript.tsgo.go.fmt.sprintf("duplicate path: %q and %q have the same canonical path", path, other))
         }
         canonicalPaths[canonical] = path
     }
     val inputKeys: GoSlice<String> = com.xemantic.typescript.tsgo.go.slices.collect<String>(GoElem.STRING, (com.xemantic.typescript.tsgo.go.maps.keys<String, MapFile?>(input))!!)
     com.xemantic.typescript.tsgo.go.slices.sortFunc<String>(inputKeys, (fun(p0: String, p1: String): Int = comparePathsByParts(p0, p1))!!)
-    val s7 = inputKeys
-    l1@ for (i8 in 0 until s7.len) {
-        val p: String = s7[i8]
+    val s5 = inputKeys
+    l1@ for (i6 in 0 until s5.len) {
+        val p: String = s5[i6]
         val file: MapFile? = input[p]
         val dir: String = dirName(p)
         if (dir != "") {
@@ -478,11 +476,9 @@ fun MapFS?.removeImpl(path: String): GoError? {
     this!!.symlinks.delete(canonical)
     if (fileInfo!!.mode.isDir()) {
         canonicalString += "/"
-        val m0 = this!!.m
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val path_1: String = k1
+        val mi0 = this!!.m.iter()
+        l0@ while (mi0.next()) {
+            val path_1: String = mi0.key
             if (com.xemantic.typescript.tsgo.go.strings.hasPrefix(path_1, canonicalString)) {
                 this!!.m.delete(path_1)
                 this!!.symlinks.delete(com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath(path_1))
@@ -550,12 +546,10 @@ fun MapFS?.getFollowingSymlinksWorker(p: com.xemantic.typescript.tsgo.vfs.vfstes
     if (ok_1) {
         return this.getFollowingSymlinksWorker(target, p, target)
     }
-    val m2 = this!!.symlinks
-    l0@ for (k3 in m2.keysSnapshot()) {
-        val e4 = m2.probe(k3)
-        if (e4 === GoMapAbsent) continue
-        val other: com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath = k3
-        val target_1: com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath = goProbeValue<com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath>(e4) { com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath("") }
+    val mi2 = this!!.symlinks.iter()
+    l0@ while (mi2.next()) {
+        val other: com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath = mi2.key
+        val target_1: com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath = mi2.value
         if (other.value.length < p.value.length && other.value == com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath(p.value.substring(0, other.value.length)).value && p.value[other.value.length].code == 47) {
             return this.getFollowingSymlinksWorker(com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath(target_1.value + com.xemantic.typescript.tsgo.vfs.vfstest.canonicalPath(p.value.substring(other.value.length)).value), other, target_1)
         }

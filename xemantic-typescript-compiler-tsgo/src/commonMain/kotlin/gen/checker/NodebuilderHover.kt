@@ -489,11 +489,9 @@ fun NodeBuilderImpl?.expandModuleDecl(symbol: Symbol?): Node? {
     return withDefers({ null }) { df0 ->
         val exports: SymbolTable = this!!.ch.getExportsOfSymbol(symbol)
         var members: GoSlice<Symbol?> = GoElem.ref<Symbol?>().nilSlice
-        val m1 = exports
-        l0@ for (k2 in m1.keysSnapshot()) {
-            val e3 = m1.probe(k2)
-            if (e3 === GoMapAbsent) continue
-            val sym: Symbol? = goProbeValue<Symbol?>(e3) { null }
+        val mi1 = exports.iter()
+        l0@ while (mi1.next()) {
+            val sym: Symbol? = mi1.value
             if (!this.isNamespaceMember(sym)) {
                 continue@l0
             }
@@ -514,9 +512,9 @@ fun NodeBuilderImpl?.expandModuleDecl(symbol: Symbol?): Node? {
         var bodyStmts: GoSlice<com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl> = com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl.ELEM.nilSlice
         val emittedLocals: com.xemantic.typescript.tsgo.collections.Set<Symbol?> = com.xemantic.typescript.tsgo.collections.Set<Symbol?>(goElem_T = GoElem.ref<Symbol?>())
         var i: Int = 0
-        var first4 = true
+        var first2 = true
         l1@ while (true) {
-            if (first4) first4 = false else {
+            if (first2) first2 = false else {
                 i++
             }
             if (!(i < members.len)) break
@@ -554,9 +552,9 @@ fun NodeBuilderImpl?.expandModuleDecl(symbol: Symbol?): Node? {
             if (resolved!!.flags.value and 8208u != 0u) {
                 val t: Type? = this!!.ch.getTypeOfSymbolImpl(resolved)
                 val sigs: GoSlice<Signature?> = this!!.ch.getSignaturesOfTypeImpl(t, SignatureKindCall)
-                val s5 = sigs
-                l2@ for (i6 in 0 until s5.len) {
-                    val sig: Signature? = s5[i6]
+                val s3 = sigs
+                l2@ for (i4 in 0 until s3.len) {
+                    val sig: Signature? = s3[i4]
                     this!!.ctx!!.approximateLength = this!!.ctx!!.approximateLength + 1
                     val decl: Node? = this.signatureToSignatureDeclarationHelper(sig, Kind(263), SignatureToSignatureDeclarationOptions(name = this!!.f.newIdentifier(m!!.name)))
                     bodyStmts = bodyStmts.append1(com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl(node = decl))
@@ -573,35 +571,35 @@ fun NodeBuilderImpl?.expandModuleDecl(symbol: Symbol?): Node? {
                 bodyStmts = bodyStmts.append1(com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl(node = node))
             }
         }
-        val s7 = bodyStmts
-        l3@ for (i8 in 0 until s7.len) {
-            val i_1: Int = i8
+        val s5 = bodyStmts
+        l3@ for (i6 in 0 until s5.len) {
+            val i_1: Int = i6
             val s: com.xemantic.typescript.tsgo.checker.hoverStatement_NodeBuilderImpl_expandModuleDecl? = bodyStmts[i_1]
             if (s!!.isLocal || com.xemantic.typescript.tsgo.ast.isExportDeclaration(s!!.node)) {
                 continue@l3
             }
             if (com.xemantic.typescript.tsgo.ast.canHaveModifiers(s!!.node)) {
                 val mf: ModifierFlags = ModifierFlags(s!!.node.modifierFlags().value or 32u)
-                s!!.node = com.xemantic.typescript.tsgo.ast.replaceModifiers(this!!.f, s!!.node, this!!.f.newModifierList(com.xemantic.typescript.tsgo.ast.createModifiersFromModifierFlags(mf, run { val r9 = this!!.f; fun(p0: Kind): Node? = r9.newModifier(p0) })))
+                s!!.node = com.xemantic.typescript.tsgo.ast.replaceModifiers(this!!.f, s!!.node, this!!.f.newModifierList(com.xemantic.typescript.tsgo.ast.createModifiersFromModifierFlags(mf, run { val r7 = this!!.f; fun(p0: Kind): Node? = r7.newModifier(p0) })))
             }
         }
         val bodyStatements: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), bodyStmts.len)
-        val s10 = bodyStmts
-        l4@ for (i11 in 0 until s10.len) {
-            val i_2: Int = i11
+        val s8 = bodyStmts
+        l4@ for (i9 in 0 until s8.len) {
+            val i_2: Int = i9
             bodyStatements[i_2] = bodyStmts[i_2].node
         }
         val allExported: Boolean = bodyStatements.len > 0 && com.xemantic.typescript.tsgo.core.every<Node?>(GoElem.ref<Node?>(), bodyStatements, fun(d: Node?): Boolean {
             return com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(d, ModifierFlags(32u))
         })
         if (allExported) {
-            val s12 = bodyStatements
-            l5@ for (i13 in 0 until s12.len) {
-                val i_3: Int = i13
-                val stmt_1: Node? = s12[i13]
+            val s10 = bodyStatements
+            l5@ for (i11 in 0 until s10.len) {
+                val i_3: Int = i11
+                val stmt_1: Node? = s10[i11]
                 if (com.xemantic.typescript.tsgo.ast.canHaveModifiers(stmt_1)) {
                     val mf_1: ModifierFlags = ModifierFlags(stmt_1.modifierFlags().value and 32u.inv())
-                    bodyStatements[i_3] = com.xemantic.typescript.tsgo.ast.replaceModifiers(this!!.f, stmt_1, this!!.f.newModifierList(com.xemantic.typescript.tsgo.ast.createModifiersFromModifierFlags(mf_1, run { val r14 = this!!.f; fun(p0: Kind): Node? = r14.newModifier(p0) })))
+                    bodyStatements[i_3] = com.xemantic.typescript.tsgo.ast.replaceModifiers(this!!.f, stmt_1, this!!.f.newModifierList(com.xemantic.typescript.tsgo.ast.createModifiersFromModifierFlags(mf_1, run { val r12 = this!!.f; fun(p0: Kind): Node? = r12.newModifier(p0) })))
                 }
             }
         }

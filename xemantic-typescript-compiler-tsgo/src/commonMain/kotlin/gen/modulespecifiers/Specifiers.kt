@@ -186,12 +186,10 @@ fun getAllModulePathsWorker(info: Info, importedFileName: String, host: ModuleSp
     l1@ while (allFileNames.len != 0) {
         val directoryStart: String = com.xemantic.typescript.tsgo.tspath.ensureTrailingDirectorySeparator(directory)
         var pathsInDirectory: GoSlice<ModulePath> = ModulePath.ELEM.nilSlice
-        val m2 = allFileNames
-        l2@ for (k3 in m2.keysSnapshot()) {
-            val e4 = m2.probe(k3)
-            if (e4 === GoMapAbsent) continue
-            val fileName: String = k3
-            val p_1: ModulePath = goProbeValue<ModulePath>(e4) { ModulePath() }.goCopy()
+        val mi2 = allFileNames.iter()
+        l2@ while (mi2.next()) {
+            val fileName: String = mi2.key
+            val p_1: ModulePath = mi2.value.goCopy()
             if (com.xemantic.typescript.tsgo.go.strings.hasPrefix(fileName, directoryStart)) {
                 pathsInDirectory = pathsInDirectory.append1(p_1.goCopy())
                 allFileNames.delete(fileName)

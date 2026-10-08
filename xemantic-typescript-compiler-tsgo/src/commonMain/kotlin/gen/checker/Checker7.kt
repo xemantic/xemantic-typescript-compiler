@@ -1541,11 +1541,9 @@ fun Checker?.resolveAnonymousTypeMembers(t: Type?) {
     var indexInfos_2: GoSlice<IndexInfo?> = GoElem.ref<IndexInfo?>().nilSlice
     if (symbol === this!!.globalThisSymbol) {
         val varsOnly: SymbolTable = GoMap.make<String, Symbol?>(GoElem.ref<Symbol?>())
-        val m0 = members_2
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val p: Symbol? = goProbeValue<Symbol?>(e2) { null }
+        val mi0 = members_2.iter()
+        l0@ while (mi0.next()) {
+            val p: Symbol? = mi0.value
             if (p!!.flags.value and 418u == 0u && !(p!!.flags.value and 512u != 0u && p!!.declarations.len != 0 && com.xemantic.typescript.tsgo.core.every<Node?>(GoElem.ref<Node?>(), p!!.declarations, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isAmbientModule(p0)))) {
                 varsOnly[p!!.name] = p
             }
@@ -1613,12 +1611,10 @@ fun Checker?.instantiateSymbolTable(symbols: SymbolTable, m: TypeMapper?): Symbo
         return GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>())
     }
     val result: SymbolTable = GoMap.make<String, Symbol?>(GoElem.ref<Symbol?>(), symbols.len)
-    val m0 = symbols
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val id: String = k1
-        val symbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = symbols.iter()
+    l0@ while (mi0.next()) {
+        val id: String = mi0.key
+        val symbol: Symbol? = mi0.value
         if (this.isNamedMember(symbol, id)) {
             result[id] = this.instantiateSymbol(symbol, m)
         }
@@ -2561,11 +2557,9 @@ fun Checker?.hasCommonDeclaration(symbols: OrderedSet<Symbol?>?): Boolean {
                 }
                 return true
             }
-            val m5 = commonDeclarations.keys()
-            l2@ for (k6 in m5.keysSnapshot()) {
-                val e7 = m5.probe(k6)
-                if (e7 === GoMapAbsent) continue
-                val d_1: Node? = k6
+            val mi5 = commonDeclarations.keys().iter()
+            l2@ while (mi5.next()) {
+                val d_1: Node? = mi5.key
                 if (!com.xemantic.typescript.tsgo.go.slices.contains<Node?>(symbol!!.declarations, (d_1)!!)) {
                     commonDeclarations.delete(d_1)
                 }
@@ -2950,24 +2944,20 @@ fun Checker?.getNamedMembers(members: SymbolTable, container: Symbol?): GoSlice<
     var result: GoSlice<Symbol?> = GoSlice.make(GoElem.ref<Symbol?>(), 0, members.len)
     var containedCount: Int = 0
     if (container != null && container!!.flags.value and 96u != 0u) {
-        val m0 = members
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val id: String = k1
-            val symbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+        val mi0 = members.iter()
+        l0@ while (mi0.next()) {
+            val id: String = mi0.key
+            val symbol: Symbol? = mi0.value
             if (this.isNamedMember(symbol, id) && this.isDeclarationContainedBy(symbol, container)) {
                 result = result.append1(symbol)
             }
         }
         containedCount = result.len
     }
-    val m3 = members
-    l1@ for (k4 in m3.keysSnapshot()) {
-        val e5 = m3.probe(k4)
-        if (e5 === GoMapAbsent) continue
-        val id_1: String = k4
-        val symbol_1: Symbol? = goProbeValue<Symbol?>(e5) { null }
+    val mi1 = members.iter()
+    l1@ while (mi1.next()) {
+        val id_1: String = mi1.key
+        val symbol_1: Symbol? = mi1.value
         if (this.isNamedMember(symbol_1, id_1) && (container == null || container!!.flags.value and 96u == 0u || !this.isDeclarationContainedBy(symbol_1, container))) {
             result = result.append1(symbol_1)
         }

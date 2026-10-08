@@ -338,12 +338,10 @@ fun Program?.collectSemanticDiagnosticsOfAffectedFiles(ctx: Context?, file: Sour
     if (ctx!!.err() != null) {
         return
     }
-    val m4 = diagnosticsPerFile
-    l1@ for (k5 in m4.keysSnapshot()) {
-        val e6 = m4.probe(k5)
-        if (e6 === GoMapAbsent) continue
-        val file_2: SourceFile? = k5
-        val diagnostics: GoSlice<Diagnostic?> = goProbeValue<GoSlice<Diagnostic?>>(e6) { GoElem.ref<Diagnostic?>().nilSlice }
+    val mi4 = diagnosticsPerFile.iter()
+    l1@ while (mi4.next()) {
+        val file_2: SourceFile? = mi4.key
+        val diagnostics: GoSlice<Diagnostic?> = mi4.value
         this!!.snapshot!!.semanticDiagnosticsPerFile.store(file_2!!.path(), DiagnosticsOrBuildInfoDiagnosticsWithFileName(diagnostics = diagnostics))
     }
     if (this!!.snapshot!!.semanticDiagnosticsPerFile.size() == this!!.program!!.getSourceFiles().len && this!!.snapshot!!.checkPending && !this!!.snapshot!!.options!!.noCheck.isTrue()) {

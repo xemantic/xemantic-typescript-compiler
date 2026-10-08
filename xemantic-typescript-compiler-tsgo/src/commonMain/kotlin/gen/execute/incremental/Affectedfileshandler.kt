@@ -286,19 +286,17 @@ fun com.xemantic.typescript.tsgo.execute.incremental.affectedFilesHandler?.handl
     var typeChecker: Checker? = null
     var done: (() -> Unit)? = null
     if (affectedFile!!.declarationBase.symbol != null) {
-        val m0 = affectedFile!!.declarationBase.symbol!!.exports
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val exported: Symbol? = goProbeValue<Symbol?>(e2) { null }
+        val mi0 = affectedFile!!.declarationBase.symbol!!.exports.iter()
+        l0@ while (mi0.next()) {
+            val exported: Symbol? = mi0.value
             if (exported!!.flags.value and 128u != 0u) {
                 invalidateJsFiles = true
                 break@l0
             }
             if (typeChecker == null) {
-                val t3 = this!!.program!!.program.getTypeCheckerForFileExclusive(this!!.ctx, affectedFile)
-                typeChecker = t3.first
-                done = t3.second
+                val t1 = this!!.program!!.program.getTypeCheckerForFileExclusive(this!!.ctx, affectedFile)
+                typeChecker = t1.first
+                done = t1.second
             }
             val aliased: Symbol? = com.xemantic.typescript.tsgo.checker.skipAlias(exported, typeChecker)
             if (aliased === exported) {
@@ -317,25 +315,25 @@ fun com.xemantic.typescript.tsgo.execute.incremental.affectedFilesHandler?.handl
     if (done != null) {
         done!!()
     }
-    var rfDone4 = false
-    this!!.program!!.snapshot!!.referencedMap.getReferencedBy(affectedFile!!.path())!!(fun(y6: Path): Boolean {
-            val fileReferencingChangedFile: Path = y6
+    var rfDone2 = false
+    this!!.program!!.snapshot!!.referencedMap.getReferencedBy(affectedFile!!.path())!!(fun(y4: Path): Boolean {
+            val fileReferencingChangedFile: Path = y4
             if (this.handleDtsMayChangeOfGlobalScope(dtsMayChange, fileReferencingChangedFile, invalidateJsFiles)) {
-                rfDone4 = true
+                rfDone2 = true
                 return false
             }
-            this!!.program!!.snapshot!!.referencedMap.getReferencedBy(fileReferencingChangedFile)!!(fun(y7: Path): Boolean {
-                        val fileReferencingAffectedFile: Path = y7
+            this!!.program!!.snapshot!!.referencedMap.getReferencedBy(fileReferencingChangedFile)!!(fun(y5: Path): Boolean {
+                        val fileReferencingAffectedFile: Path = y5
                         if (this.handleDtsMayChangeOfFileAndReferences(dtsMayChange, fileReferencingAffectedFile, invalidateJsFiles)) {
-                            rfDone4 = true
+                            rfDone2 = true
                             return false
                         }
                         return true
             })
-            if (rfDone4) return false
+            if (rfDone2) return false
             return true
     })
-    if (rfDone4) return
+    if (rfDone2) return
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/incremental.affectedFilesHandler.handleDtsMayChangeOfFileAndReferences 3b09d87e
@@ -426,12 +424,10 @@ fun com.xemantic.typescript.tsgo.execute.incremental.affectedFilesHandler?.updat
     val s1 = this!!.dtsMayChange
     l0@ for (i2 in 0 until s1.len) {
         val change: com.xemantic.typescript.tsgo.execute.incremental.dtsMayChange = s1[i2]
-        val m3 = change
-        l1@ for (k4 in m3.keysSnapshot()) {
-            val e5 = m3.probe(k4)
-            if (e5 === GoMapAbsent) continue
-            val filePath_1: Path = k4
-            val emitKind: FileEmitKind = goProbeValue<FileEmitKind>(e5) { FileEmitKind(0u) }
+        val mi3 = change.iter()
+        l1@ while (mi3.next()) {
+            val filePath_1: Path = mi3.key
+            val emitKind: FileEmitKind = mi3.value
             this!!.program!!.snapshot.addFileToAffectedFilesPendingEmit(filePath_1, emitKind)
         }
     }

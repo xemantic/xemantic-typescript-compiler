@@ -1050,12 +1050,10 @@ fun NodeBuilderImpl?.createAccessFromSymbolChain(chain: GoSlice<Symbol?>, index:
                     symbolName = symbol!!.name
                 } else {
                     val results: GoMap<Symbol?, String> = GoMap.make<Symbol?, String>(GoElem.STRING, 1)
-                    val m1 = exports
-                    l0@ for (k2 in m1.keysSnapshot()) {
-                        val e3 = m1.probe(k2)
-                        if (e3 === GoMapAbsent) continue
-                        val name: String = k2
-                        val ex: Symbol? = goProbeValue<Symbol?>(e3) { null }
+                    val mi1 = exports.iter()
+                    l0@ while (mi1.next()) {
+                        val name: String = mi1.key
+                        val ex: Symbol? = mi1.value
                         if (this!!.ch.getSymbolIfSameReference(ex, symbol) != null && !isLateBoundName(name) && name != "export=") {
                             results[ex] = name
                         }
@@ -1071,9 +1069,9 @@ fun NodeBuilderImpl?.createAccessFromSymbolChain(chain: GoSlice<Symbol?>, index:
     }
     if (symbolName.length == 0) {
         var name_1: Node? = null
-        val s4 = symbol!!.declarations
-        l1@ for (i5 in 0 until s4.len) {
-            val d: Node? = s4[i5]
+        val s2 = symbol!!.declarations
+        l1@ for (i3 in 0 until s2.len) {
+            val d: Node? = s2[i3]
             name_1 = com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(d)
             if (name_1 != null) {
                 break@l1

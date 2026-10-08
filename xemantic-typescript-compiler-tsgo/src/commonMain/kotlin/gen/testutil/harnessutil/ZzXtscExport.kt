@@ -221,12 +221,10 @@ fun xtscDerive(t: T?, inputFiles: GoSlice<TestFile?>, otherFiles: GoSlice<TestFi
         val fileName_2: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(file_3!!.unitName, currentDirectory)
         testfs[fileName_2] = MapFile(data = goStringToBytes(file_3!!.content))
     }
-    val m13 = symlinks
-    l6@ for (k14 in m13.keysSnapshot()) {
-        val e15 = m13.probe(k14)
-        if (e15 === GoMapAbsent) continue
-        val src: String = k14
-        val target: String = goProbeValue<String>(e15) { "" }
+    val mi13 = symlinks.iter()
+    l6@ while (mi13.next()) {
+        val src: String = mi13.key
+        val target: String = mi13.value
         val srcFileName: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(src, currentDirectory)
         val targetFileName: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(target, currentDirectory)
         testfs[srcFileName] = com.xemantic.typescript.tsgo.vfs.vfstest.symlink(targetFileName)
@@ -235,12 +233,10 @@ fun xtscDerive(t: T?, inputFiles: GoSlice<TestFile?>, otherFiles: GoSlice<TestFi
     if (includeLibDir) {
         val lib: GoMap<String, Any?> = testLibFolderMap!!()
         com.xemantic.typescript.tsgo.go.maps.copy<String, Any?>(testfs, lib)
-        val m16 = lib
-        l7@ for (k17 in m16.keysSnapshot()) {
-            val e18 = m16.probe(k17)
-            if (e18 === GoMapAbsent) continue
-            val k: String = k17
-            val v: Any? = goProbeValue<Any?>(e18) { null }
+        val mi14 = lib.iter()
+        l7@ while (mi14.next()) {
+            val k: String = mi14.key
+            val v: Any? = mi14.value
             libDirFiles[k] = goBytesToString((v as MapFile)!!.data)
         }
     }

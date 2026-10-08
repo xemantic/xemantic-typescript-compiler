@@ -28,7 +28,6 @@ import com.xemantic.typescript.tsgo.ast.Diagnostic
 import com.xemantic.typescript.tsgo.ast.DiagnosticsCollection
 import com.xemantic.typescript.tsgo.ast.HasFileName
 import com.xemantic.typescript.tsgo.module.ModeAwareCache
-import com.xemantic.typescript.tsgo.module.ModeAwareCacheKey
 import com.xemantic.typescript.tsgo.ast.ObjectLiteralExpression
 import com.xemantic.typescript.tsgo.go.sync.Once
 import com.xemantic.typescript.tsgo.tspath.Path
@@ -90,36 +89,28 @@ fun com.xemantic.typescript.tsgo.compiler.includeProcessor?.getDiagnostics(p: Pr
             val d: com.xemantic.typescript.tsgo.compiler.processingDiagnostic? = s0[i1]
             this!!.computedDiagnostics.add(d.toDiagnostic(p))
         }
-        val m2 = p!!.processedFiles.resolvedModules
-        l1@ for (k3 in m2.keysSnapshot()) {
-            val e4 = m2.probe(k3)
-            if (e4 === GoMapAbsent) continue
-            val resolutions: ModeAwareCache<ResolvedModule?> = goProbeValue<ModeAwareCache<ResolvedModule?>>(e4) { GoMap.nil<ModeAwareCacheKey, ResolvedModule?>(GoElem.ref<ResolvedModule?>()) }
-            val m5 = resolutions
-            l2@ for (k6 in m5.keysSnapshot()) {
-                val e7 = m5.probe(k6)
-                if (e7 === GoMapAbsent) continue
-                val resolvedModule: ResolvedModule? = goProbeValue<ResolvedModule?>(e7) { null }
-                val s8 = resolvedModule!!.resolutionDiagnostics
-                l3@ for (i9 in 0 until s8.len) {
-                    val diag: Diagnostic? = s8[i9]
+        val mi2 = p!!.processedFiles.resolvedModules.iter()
+        l1@ while (mi2.next()) {
+            val resolutions: ModeAwareCache<ResolvedModule?> = mi2.value
+            val mi3 = resolutions.iter()
+            l2@ while (mi3.next()) {
+                val resolvedModule: ResolvedModule? = mi3.value
+                val s4 = resolvedModule!!.resolutionDiagnostics
+                l3@ for (i5 in 0 until s4.len) {
+                    val diag: Diagnostic? = s4[i5]
                     this!!.computedDiagnostics.add(diag)
                 }
             }
         }
-        val m10 = p!!.processedFiles.typeResolutionsInFile
-        l4@ for (k11 in m10.keysSnapshot()) {
-            val e12 = m10.probe(k11)
-            if (e12 === GoMapAbsent) continue
-            val typeResolutions: ModeAwareCache<ResolvedTypeReferenceDirective?> = goProbeValue<ModeAwareCache<ResolvedTypeReferenceDirective?>>(e12) { GoMap.nil<ModeAwareCacheKey, ResolvedTypeReferenceDirective?>(GoElem.ref<ResolvedTypeReferenceDirective?>()) }
-            val m13 = typeResolutions
-            l5@ for (k14 in m13.keysSnapshot()) {
-                val e15 = m13.probe(k14)
-                if (e15 === GoMapAbsent) continue
-                val resolvedTypeRef: ResolvedTypeReferenceDirective? = goProbeValue<ResolvedTypeReferenceDirective?>(e15) { null }
-                val s16 = resolvedTypeRef!!.resolutionDiagnostics
-                l6@ for (i17 in 0 until s16.len) {
-                    val diag_1: Diagnostic? = s16[i17]
+        val mi6 = p!!.processedFiles.typeResolutionsInFile.iter()
+        l4@ while (mi6.next()) {
+            val typeResolutions: ModeAwareCache<ResolvedTypeReferenceDirective?> = mi6.value
+            val mi7 = typeResolutions.iter()
+            l5@ while (mi7.next()) {
+                val resolvedTypeRef: ResolvedTypeReferenceDirective? = mi7.value
+                val s8 = resolvedTypeRef!!.resolutionDiagnostics
+                l6@ for (i9 in 0 until s8.len) {
+                    val diag_1: Diagnostic? = s8[i9]
                     this!!.computedDiagnostics.add(diag_1)
                 }
             }

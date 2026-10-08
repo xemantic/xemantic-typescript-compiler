@@ -1282,11 +1282,9 @@ fun parseConfig(json: OrderedMap<String, Any?>?, sourceFile: TsConfigSourceFile?
             (ownConfig!!.raw as OrderedMap<String, Any?>).set("compileOnSave", result_2!!.compileOnSave)
         }
         if (sourceFile != null) {
-            val m23 = result_2!!.extendedSourceFiles.keys()
-            l1@ for (k24 in m23.keysSnapshot()) {
-                val e25 = m23.probe(k24)
-                if (e25 === GoMapAbsent) continue
-                val extendedSourceFile: String = k24
+            val mi23 = result_2!!.extendedSourceFiles.keys().iter()
+            l1@ while (mi23.next()) {
+                val extendedSourceFile: String = mi23.key
                 sourceFile!!.extendedSourceFiles = com.xemantic.typescript.tsgo.core.insertSorted<String>(GoElem.STRING, sourceFile!!.extendedSourceFiles, extendedSourceFile, fun(p0: String, p1: String): Int = com.xemantic.typescript.tsgo.go.cmp.compare(p0, p1))
             }
         }

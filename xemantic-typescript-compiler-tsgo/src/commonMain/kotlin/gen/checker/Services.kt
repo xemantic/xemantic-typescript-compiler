@@ -84,22 +84,18 @@ fun Checker?.getSymbolsInScopeImpl(location_0: Node?, meaning: SymbolFlags): GoS
     }
     val copySymbols: ((SymbolTable, SymbolFlags) -> Unit)? = fun(source: SymbolTable, meaning_2: SymbolFlags) {
         if (meaning_2.value != 0u) {
-            val m2 = source
-            l0@ for (k3 in m2.keysSnapshot()) {
-                val e4 = m2.probe(k3)
-                if (e4 === GoMapAbsent) continue
-                val symbol_1: Symbol? = goProbeValue<Symbol?>(e4) { null }
+            val mi2 = source.iter()
+            l0@ while (mi2.next()) {
+                val symbol_1: Symbol? = mi2.value
                 copySymbol!!(symbol_1, meaning_2)
             }
         }
     }
     val copyLocallyVisibleExportSymbols: ((SymbolTable, SymbolFlags) -> Unit)? = fun(source_1: SymbolTable, meaning_3: SymbolFlags) {
         if (meaning_3.value != 0u) {
-            val m5 = source_1
-            l1@ for (k6 in m5.keysSnapshot()) {
-                val e7 = m5.probe(k6)
-                if (e7 === GoMapAbsent) continue
-                val symbol_2: Symbol? = goProbeValue<Symbol?>(e7) { null }
+            val mi3 = source_1.iter()
+            l1@ while (mi3.next()) {
+                val symbol_2: Symbol? = mi3.value
                 if (com.xemantic.typescript.tsgo.ast.getDeclarationOfKind(symbol_2, Kind(282)) == null && com.xemantic.typescript.tsgo.ast.getDeclarationOfKind(symbol_2, Kind(281)) == null && symbol_2!!.name != "default") {
                     copySymbol!!(symbol_2, meaning_3)
                 }
@@ -167,12 +163,10 @@ fun Checker?.getExportsOfModule(symbol: Symbol?): GoSlice<Symbol?> {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.ForEachExportAndPropertyOfModule 1a492637
 fun Checker?.forEachExportAndPropertyOfModule(moduleSymbol: Symbol?, cb: ((Symbol?, String) -> Unit)?) {
-    val m0 = this.getExportsOfModuleImpl(moduleSymbol)
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val key: String = k1
-        val exportedSymbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = this.getExportsOfModuleImpl(moduleSymbol).iter()
+    l0@ while (mi0.next()) {
+        val key: String = mi0.key
+        val exportedSymbol: Symbol? = mi0.value
         if (!isReservedMemberName(key)) {
             cb!!(exportedSymbol, key)
         }
@@ -189,12 +183,10 @@ fun Checker?.forEachExportAndPropertyOfModule(moduleSymbol: Symbol?, cb: ((Symbo
     if (reducedType!!.flags.value and 403701760u == 0u) {
         return
     }
-    val m3 = this.resolveStructuredTypeMembers(reducedType)!!.members
-    l1@ for (k4 in m3.keysSnapshot()) {
-        val e5 = m3.probe(k4)
-        if (e5 === GoMapAbsent) continue
-        val name: String = k4
-        val symbol: Symbol? = goProbeValue<Symbol?>(e5) { null }
+    val mi1 = this.resolveStructuredTypeMembers(reducedType)!!.members.iter()
+    l1@ while (mi1.next()) {
+        val name: String = mi1.key
+        val symbol: Symbol? = mi1.value
         if (this.isNamedMember(symbol, name)) {
             cb!!(symbol, name)
         }
@@ -447,20 +439,16 @@ fun <T> runWithoutResolvedSignatureCaching(goElem_T: GoElem<T>, c: Checker?, nod
             ancestorNode = com.xemantic.typescript.tsgo.ast.findAncestor(ancestorNode!!.parent, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isCallLikeOrFunctionLikeExpression(p0))
         }
         val result: T = fn!!()
-        val m0 = cachedResolvedSignatures
-        l1@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val signatureLinks_1: SignatureLinks? = k1
-            val resolvedSignature: Signature? = goProbeValue<Signature?>(e2) { null }
+        val mi0 = cachedResolvedSignatures.iter()
+        l1@ while (mi0.next()) {
+            val signatureLinks_1: SignatureLinks? = mi0.key
+            val resolvedSignature: Signature? = mi0.value
             signatureLinks_1!!.resolvedSignature = resolvedSignature
         }
-        val m3 = cachedTypes
-        l2@ for (k4 in m3.keysSnapshot()) {
-            val e5 = m3.probe(k4)
-            if (e5 === GoMapAbsent) continue
-            val symbolLinks_1: ValueSymbolLinks? = k4
-            val resolvedType_1: Type? = goProbeValue<Type?>(e5) { null }
+        val mi1 = cachedTypes.iter()
+        l2@ while (mi1.next()) {
+            val symbolLinks_1: ValueSymbolLinks? = mi1.key
+            val resolvedType_1: Type? = mi1.value
             symbolLinks_1!!.resolvedType = resolvedType_1
         }
         return result

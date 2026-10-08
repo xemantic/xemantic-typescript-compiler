@@ -71,14 +71,12 @@ fun getWildcardDirectories(include: GoSlice<String>, exclude: GoSlice<String>, c
                 }
             }
         }
-        val m3 = wildcardDirectories
-        l1@ for (k4 in m3.keysSnapshot()) {
-            val e5 = m3.probe(k4)
-            if (e5 === GoMapAbsent) continue
-            val path_1: String = k4
-            val s6 = recursiveKeys
-            l2@ for (i7 in 0 until s6.len) {
-                val recursiveKey: String = s6[i7]
+        val mi3 = wildcardDirectories.iter()
+        l1@ while (mi3.next()) {
+            val path_1: String = mi3.key
+            val s4 = recursiveKeys
+            l2@ for (i5 in 0 until s4.len) {
+                val recursiveKey: String = s4[i5]
                 val key_1: String = toCanonicalKey(path_1, comparePathsOptions.useCaseSensitiveFileNames)
                 if (key_1 != recursiveKey && com.xemantic.typescript.tsgo.tspath.containsPath(recursiveKey, key_1, comparePathsOptions.goCopy())) {
                     wildcardDirectories.delete(path_1)

@@ -403,11 +403,9 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.vis
         this.recordDeclarationName(node!!.variableDeclaration, catchClauseNames)
     }
     var catchClauseUnshadowedNames: com.xemantic.typescript.tsgo.collections.Set<String>? = null
-    val m0 = catchClauseNames.keys()
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val escapedName: String = k1
+    val mi0 = catchClauseNames.keys().iter()
+    l0@ while (mi0.next()) {
+        val escapedName: String = mi0.key
         if (this!!.enclosingFunctionParameterNames != null && this!!.enclosingFunctionParameterNames.has(escapedName)) {
             if (catchClauseUnshadowedNames == null) {
                 catchClauseUnshadowedNames = this!!.enclosingFunctionParameterNames.clone()

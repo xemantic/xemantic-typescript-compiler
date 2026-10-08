@@ -1272,11 +1272,9 @@ fun Binder?.bindCommonJSTypeExports(moduleSymbol: Symbol?) {
     val moduleExports: SymbolTable = moduleSymbol!!.exports
     val exportEquals: Symbol? = moduleExports["export="]
     if (exportEquals != null) {
-        val m0 = moduleExports
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val symbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+        val mi0 = moduleExports.iter()
+        l0@ while (mi0.next()) {
+            val symbol: Symbol? = mi0.value
             if (symbol!!.name != "export=" && symbol!!.flags.value and 790504u != 0u) {
                 com.xemantic.typescript.tsgo.ast.getExports(exportEquals)[symbol!!.name] = symbol
                 exportEquals!!.flags = SymbolFlags(exportEquals!!.flags.value or 1024u)

@@ -1483,12 +1483,10 @@ fun Checker?.combineSymbolTables(first: SymbolTable, second: SymbolTable): Symbo
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.mergeSymbolTable 0f85f7cb
 fun Checker?.mergeSymbolTable(target: SymbolTable, source: SymbolTable, unidirectional: Boolean, mergedParent: Symbol?) {
-    val m0 = source
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val id: String = k1
-        val sourceSymbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = source.iter()
+    l0@ while (mi0.next()) {
+        val id: String = mi0.key
+        val sourceSymbol: Symbol? = mi0.value
         val targetSymbol: Symbol? = target[id]
         var merged: Symbol? = null
         if (targetSymbol != null) {
@@ -2801,12 +2799,10 @@ fun Checker?.tryFindAmbientModuleImpl(moduleName: String, withAugmentations: Boo
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.GetAmbientModules f0755c6f
 fun Checker?.getAmbientModules(): GoSlice<Symbol?> {
     this!!.ambientModulesOnce.`do`(fun() {
-        val m0 = this!!.globals
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val sym: String = k1
-            val global: Symbol? = goProbeValue<Symbol?>(e2) { null }
+        val mi0 = this!!.globals.iter()
+        l0@ while (mi0.next()) {
+            val sym: String = mi0.key
+            val global: Symbol? = mi0.value
             if (com.xemantic.typescript.tsgo.go.strings.hasPrefix(sym, "\"") && com.xemantic.typescript.tsgo.go.strings.hasSuffix(sym, "\"")) {
                 this!!.ambientModules = this!!.ambientModules.append1(global)
             }

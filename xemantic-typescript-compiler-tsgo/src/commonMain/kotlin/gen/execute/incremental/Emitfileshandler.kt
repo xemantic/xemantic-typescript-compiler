@@ -328,29 +328,27 @@ fun com.xemantic.typescript.tsgo.execute.incremental.emitFilesHandler?.updateSna
             this!!.program!!.snapshot!!.buildInfoEmitPending.store(true)
             return true
         })
-        val m1 = this!!.deletedPendingKinds.keys()
-        l0@ for (k2 in m1.keysSnapshot()) {
-            val e3 = m1.probe(k2)
-            if (e3 === GoMapAbsent) continue
-            val file_2: Path = k2
+        val mi1 = this!!.deletedPendingKinds.keys().iter()
+        l0@ while (mi1.next()) {
+            val file_2: Path = mi1.key
             this!!.program!!.snapshot!!.affectedFilesPendingEmit.delete(file_2)
             this!!.program!!.snapshot!!.buildInfoEmitPending.store(true)
         }
         var results: GoSlice<EmitResult?> = GoElem.ref<EmitResult?>().nilSlice
-        val s4 = this!!.program!!.getSourceFiles()
-        l1@ for (i5 in 0 until s4.len) {
-            val file_3: SourceFile? = s4[i5]
-            val t6 = this!!.latestChangedDtsFiles.load(file_3!!.path())
-            val latestChangedDtsFile: String = t6.first
-            val ok: Boolean = t6.second
+        val s2 = this!!.program!!.getSourceFiles()
+        l1@ for (i3 in 0 until s2.len) {
+            val file_3: SourceFile? = s2[i3]
+            val t4 = this!!.latestChangedDtsFiles.load(file_3!!.path())
+            val latestChangedDtsFile: String = t4.first
+            val ok: Boolean = t4.second
             if (ok) {
                 this!!.program!!.snapshot!!.latestChangedDtsFile = latestChangedDtsFile
                 this!!.program!!.snapshot!!.buildInfoEmitPending.store(true)
                 this!!.program!!.snapshot!!.hasChangedDtsFile = true
             }
-            val t7 = this!!.emitUpdates.load(file_3!!.path())
-            val update: com.xemantic.typescript.tsgo.execute.incremental.emitUpdate? = t7.first
-            val ok_1: Boolean = t7.second
+            val t5 = this!!.emitUpdates.load(file_3!!.path())
+            val update: com.xemantic.typescript.tsgo.execute.incremental.emitUpdate? = t5.first
+            val ok_1: Boolean = t5.second
             if (ok_1) {
                 if (!update!!.dtsErrorsFromCache) {
                     if (update!!.pendingKind.value == 0u) {

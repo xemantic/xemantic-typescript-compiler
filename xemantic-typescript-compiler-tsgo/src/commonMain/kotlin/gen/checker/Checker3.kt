@@ -931,18 +931,16 @@ fun Checker?.checkUnusedClassMembers(node: Node?) {
 fun Checker?.checkUnusedLocalsAndParameters(node: Node?) {
     val variableParents: com.xemantic.typescript.tsgo.collections.Set<Node?> = com.xemantic.typescript.tsgo.collections.Set<Node?>(goElem_T = GoElem.ref<Node?>())
     var importClauses: GoMap<Node?, GoSlice<Node?>> = GoMap.nil<Node?, GoSlice<Node?>>(GoElem.slice(GoElem.ref<Node?>()))
-    val m0 = node.locals()
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val local: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = node.locals().iter()
+    l0@ while (mi0.next()) {
+        val local: Symbol? = mi0.value
         val referenceKinds: SymbolFlags = this!!.symbolReferenceLinks.get(local)!!.referenceKinds
         if (local!!.flags.value and 262144u != 0u && (local!!.flags.value and 3u == 0u || referenceKinds.value and 3u != 0u) || local!!.flags.value and 262144u == 0u && (referenceKinds.value != 0u || local!!.exportSymbol != null || local!!.flags.value and 134217728u != 0u)) {
             continue@l0
         }
-        val s3 = local!!.declarations
-        l1@ for (i4 in 0 until s3.len) {
-            val declaration: Node? = s3[i4]
+        val s1 = local!!.declarations
+        l1@ for (i2 in 0 until s1.len) {
+            val declaration: Node? = s1[i2]
             when {
                 (com.xemantic.typescript.tsgo.ast.isVariableDeclaration(declaration) || com.xemantic.typescript.tsgo.ast.isParameterDeclaration(declaration) || com.xemantic.typescript.tsgo.ast.isBindingElement(declaration)) -> {
                     variableParents.add(com.xemantic.typescript.tsgo.ast.getRootDeclaration(declaration)!!.parent)
@@ -964,23 +962,19 @@ fun Checker?.checkUnusedLocalsAndParameters(node: Node?) {
             }
         }
     }
-    val m5 = variableParents.keys()
-    l3@ for (k6 in m5.keysSnapshot()) {
-        val e7 = m5.probe(k6)
-        if (e7 === GoMapAbsent) continue
-        val declaration_1: Node? = k6
+    val mi3 = variableParents.keys().iter()
+    l3@ while (mi3.next()) {
+        val declaration_1: Node? = mi3.key
         if (com.xemantic.typescript.tsgo.ast.isVariableDeclarationList(declaration_1)) {
             this.reportUnusedVariables(declaration_1)
         } else {
             this.reportUnusedParameters(declaration_1)
         }
     }
-    val m8 = importClauses
-    l4@ for (k9 in m8.keysSnapshot()) {
-        val e10 = m8.probe(k9)
-        if (e10 === GoMapAbsent) continue
-        val declaration_2: Node? = k9
-        val unuseds: GoSlice<Node?> = goProbeValue<GoSlice<Node?>>(e10) { GoElem.ref<Node?>().nilSlice }
+    val mi4 = importClauses.iter()
+    l4@ while (mi4.next()) {
+        val declaration_2: Node? = mi4.key
+        val unuseds: GoSlice<Node?> = mi4.value
         this.reportUnusedImports(declaration_2, unuseds)
     }
 }

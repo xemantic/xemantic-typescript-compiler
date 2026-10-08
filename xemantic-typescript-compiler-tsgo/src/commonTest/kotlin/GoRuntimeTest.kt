@@ -176,6 +176,38 @@ class GoRuntimeTest {
         assert(m[seen[0]].x != 77)
     }
 
+    // GoMap.iter is what the lowering emits for `for k, v := range m` (docs/goport-perf.md § 6).
+    @Test
+    fun `a map iteration produces each entry once, skips deleted ones and reads current values`() {
+        val m = GoMap.make<String?, Int>(GoElem.INT)
+        for (i in 0 until 100) m["k$i"] = i
+        m[null] = -1 // a nil key is a key like any other
+        val plain = HashMap<String?, Int>()
+        val it0 = m.iter()
+        while (it0.next()) plain[it0.key] = it0.value
+        assert(plain.size == 101 && plain["k42"] == 42 && plain[null] == -1)
+        // Mutation during the iteration: every key once at most, a deleted unreached key never, an updated
+        // unreached key with its new value, a key added meanwhile at most once.
+        val seen = ArrayList<String?>()
+        val values = HashMap<String?, Int>()
+        val it = m.iter()
+        while (it.next()) {
+            val k = it.key
+            seen += k
+            values[k] = it.value
+            if (seen.size == 1) {
+                for (i in 0 until 100) if ("k$i" != k) {
+                    if (i % 2 == 0) m.delete("k$i") else m["k$i"] = 1000 + i
+                }
+                m["added"] = 7
+            }
+        }
+        assert(seen.size == seen.toSet().size)
+        assert(seen.none { it != seen[0] && it != null && it != "added" && it.removePrefix("k").toInt() % 2 == 0 })
+        assert(values.filterKeys { it != seen[0] && it != null && it != "added" }.all { (k, v) -> v == 1000 + k!!.removePrefix("k").toInt() })
+        assert(values.filterKeys { it != seen[0] && it != null && it != "added" }.size == 50 - (if (seen[0]?.let { it.startsWith("k") && it.removePrefix("k").toInt() % 2 == 1 } == true) 1 else 0))
+    }
+
     @Test
     fun `utf8 decoding matches Go including invalid sequences and surrogates`() {
         val mismatches = ArrayList<String>()

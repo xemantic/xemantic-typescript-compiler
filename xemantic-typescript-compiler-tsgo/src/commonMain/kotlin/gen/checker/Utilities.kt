@@ -29,7 +29,6 @@ import com.xemantic.typescript.tsgo.ast.FindAncestorResult
 import com.xemantic.typescript.tsgo.ast.Kind
 import com.xemantic.typescript.tsgo.diagnostics.Message
 import com.xemantic.typescript.tsgo.module.ModeAwareCache
-import com.xemantic.typescript.tsgo.module.ModeAwareCacheKey
 import com.xemantic.typescript.tsgo.ast.ModifierFlags
 import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.ast.Node
@@ -108,11 +107,9 @@ fun newDiagnosticChainForNode(chain: Diagnostic?, node: Node?, message: Message?
 
 // go: github.com/microsoft/typescript-go/internal/checker.findInMap d7f9ce50
 inline fun <K, V> findInMap(goElem_K: GoElem<K>, goElem_V: GoElem<V>, m: GoMap<K, V>, predicate: ((V) -> Boolean)): V {
-    val m0 = m
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val value_1: V = goProbeValue<V>(e2) { goElem_V.zeroValue() }
+    val mi0 = m.iter()
+    l0@ while (mi0.next()) {
+        val value_1: V = mi0.value
         if (predicate(value_1)) {
             return value_1
         }
@@ -1609,12 +1606,10 @@ fun introducesArgumentsExoticObject(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/checker.symbolsToArray ac98477d
 fun symbolsToArray(symbols: SymbolTable): GoSlice<Symbol?> {
     var result: GoSlice<Symbol?> = GoElem.ref<Symbol?>().nilSlice
-    val m0 = symbols
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val id: String = k1
-        val symbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = symbols.iter()
+    l0@ while (mi0.next()) {
+        val id: String = mi0.key
+        val symbol: Symbol? = mi0.value
         if (!isReservedMemberName(id)) {
             result = result.append1(symbol)
         }
@@ -1654,16 +1649,12 @@ fun Checker?.getPackagesMap(): GoMap<String, Boolean> {
     if (this!!.packagesMap.isNil) {
         this!!.packagesMap = GoMap.make<String, Boolean>(GoElem.BOOL)
         val resolvedModules: GoMap<Path, ModeAwareCache<ResolvedModule?>> = this!!.program!!.getResolvedModules()
-        val m0 = resolvedModules
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val resolvedModulesInFile: ModeAwareCache<ResolvedModule?> = goProbeValue<ModeAwareCache<ResolvedModule?>>(e2) { GoMap.nil<ModeAwareCacheKey, ResolvedModule?>(GoElem.ref<ResolvedModule?>()) }
-            val m3 = resolvedModulesInFile
-            l1@ for (k4 in m3.keysSnapshot()) {
-                val e5 = m3.probe(k4)
-                if (e5 === GoMapAbsent) continue
-                val module: ResolvedModule? = goProbeValue<ResolvedModule?>(e5) { null }
+        val mi0 = resolvedModules.iter()
+        l0@ while (mi0.next()) {
+            val resolvedModulesInFile: ModeAwareCache<ResolvedModule?> = mi0.value
+            val mi1 = resolvedModulesInFile.iter()
+            l1@ while (mi1.next()) {
+                val module: ResolvedModule? = mi1.value
                 if (module!!.packageId.name != "") {
                     this!!.packagesMap[module!!.packageId.name] = this!!.packagesMap[module!!.packageId.name] || module!!.extension == ".d.ts"
                 }

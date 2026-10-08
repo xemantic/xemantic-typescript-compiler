@@ -68,6 +68,9 @@ class GoMap<K, V> private constructor(
 
     private var size = 0
 
+    /** Bumped by every write ([set], [delete], [clear]): a [GoMapIter] reads its snapshot only while it is unchanged. */
+    internal var modCount = 0
+
     init {
         if (hint > 0) allocate(capacityFor(hint))
     }
@@ -124,6 +127,7 @@ class GoMap<K, V> private constructor(
     /** `m[k] = v`; panics on a nil map. */
     operator fun set(key: K, value: V) {
         if (!live) goPanic(GoPlainError("assignment to entry in nil map"))
+        modCount++
         val k = key ?: NULL_KEY
         if (mask < 0) allocate(MIN_CAPACITY)
         val h = mix(k.hashCode())
@@ -153,6 +157,7 @@ class GoMap<K, V> private constructor(
     fun delete(key: K) {
         var i = find(key)
         if (i < 0) return
+        modCount++
         // Backward-shift deletion: pull every later member of the probe run whose home is not in
         // (i, j] into the hole, so no lookup ever stops early.
         val s = slots
@@ -176,6 +181,7 @@ class GoMap<K, V> private constructor(
     /** `clear(m)`. */
     fun clear() {
         if (size == 0) return
+        modCount++
         slots.fill(null)
         size = 0
     }
@@ -189,6 +195,13 @@ class GoMap<K, V> private constructor(
             if (!body(k, r as V)) return
         }
     }
+
+    /**
+     * NOT Go API — `for k, v := range m` as the lowering emits it (`while (it.next()) { it.key; it.value }`):
+     * one copy of the table, no per-entry probe while the map is unchanged (the old form snapshotted the
+     * keys and probed each one again — a second hashing pass over every symbol table the checker merges).
+     */
+    fun iter(): GoMapIter<K, V> = GoMapIter(this, if (size == 0) EMPTY else slots.copyOf(), modCount)
 
     /** The keys present now (a snapshot, so the map may be mutated while iterating it). */
     @Suppress("UNCHECKED_CAST")
@@ -277,7 +290,7 @@ class GoMap<K, V> private constructor(
         private const val MIN_CAPACITY = 8
 
         /** Stands for a `nil` key in [slots] (where `null` means an empty slot). */
-        private val NULL_KEY = Any()
+        internal val NULL_KEY = Any()
 
         /** Fibonacci hashing: spreads `hashCode`s whose entropy is in the low bits (boxed ints, `String`). */
         private fun mix(h: Int): Int = h * -0x61c88647
@@ -303,3 +316,44 @@ object GoMapAbsent
 /** NOT Go API — the value half of `v, ok := m[k]` from a [GoMap.probe] result: the zero value when absent. */
 @Suppress("UNCHECKED_CAST")
 inline fun <V> goProbeValue(probed: Any?, zero: () -> V): V = if (probed === GoMapAbsent) zero() else probed as V
+
+/**
+ * NOT Go API — the iteration of [GoMap.iter], with Go's guarantees: every entry present when the range
+ * began is produced at most once, an entry deleted before it is reached is not produced, and a value
+ * is read as it is when its entry is reached. While the map is unchanged ([GoMap.modCount]) the
+ * snapshot answers; after any write each remaining key is looked up again.
+ */
+class GoMapIter<K, V> internal constructor(private val m: GoMap<K, V>, private val snap: Array<Any?>, private val mod: Int) {
+    private var i = -2
+    private var k: Any? = null
+    private var v: Any? = null
+
+    /** The current entry's key (valid after [next] answered true). */
+    @Suppress("UNCHECKED_CAST")
+    val key: K get() = k as K
+
+    /** The current entry's value. */
+    @Suppress("UNCHECKED_CAST")
+    val value: V get() = v as V
+
+    /** Advances to the next entry still present; false at the end. */
+    @Suppress("UNCHECKED_CAST")
+    fun next(): Boolean {
+        while (true) {
+            i += 2
+            if (i >= snap.size) return false
+            val sk = snap[i] ?: continue
+            val kk = if (sk === GoMap.NULL_KEY) null else sk
+            if (m.modCount == mod) {
+                k = kk
+                v = snap[i + 1]
+                return true
+            }
+            val r = m.probe(kk as K)
+            if (r === GoMapAbsent) continue
+            k = kk
+            v = r
+            return true
+        }
+    }
+}

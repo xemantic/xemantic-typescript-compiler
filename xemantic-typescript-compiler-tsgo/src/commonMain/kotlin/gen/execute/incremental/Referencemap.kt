@@ -77,14 +77,12 @@ fun com.xemantic.typescript.tsgo.execute.incremental.referenceMap?.getReferenced
     this!!.referenceBy.`do`(fun() {
         this!!.referencedBy = GoMap.make<Path, com.xemantic.typescript.tsgo.collections.Set<Path>?>(GoElem.ref<com.xemantic.typescript.tsgo.collections.Set<Path>?>())
         this!!.references.range(fun(key: Path, value_1: com.xemantic.typescript.tsgo.collections.Set<Path>?): Boolean {
-            val m0 = value_1.keys()
-            l0@ for (k1 in m0.keysSnapshot()) {
-                val e2 = m0.probe(k1)
-                if (e2 === GoMapAbsent) continue
-                val ref: Path = k1
-                val t3 = this!!.referencedBy.probe(ref)
-                var set: com.xemantic.typescript.tsgo.collections.Set<Path>? = goProbeValue<com.xemantic.typescript.tsgo.collections.Set<Path>?>(t3) { null }
-                val ok: Boolean = t3 !== GoMapAbsent
+            val mi0 = value_1.keys().iter()
+            l0@ while (mi0.next()) {
+                val ref: Path = mi0.key
+                val t1 = this!!.referencedBy.probe(ref)
+                var set: com.xemantic.typescript.tsgo.collections.Set<Path>? = goProbeValue<com.xemantic.typescript.tsgo.collections.Set<Path>?>(t1) { null }
+                val ok: Boolean = t1 !== GoMapAbsent
                 if (!ok) {
                     set = com.xemantic.typescript.tsgo.collections.Set<Path>(goElem_T = Path.ELEM)
                     this!!.referencedBy[ref] = set
@@ -94,9 +92,9 @@ fun com.xemantic.typescript.tsgo.execute.incremental.referenceMap?.getReferenced
             return true
         })
     })
-    val t4 = this!!.referencedBy.probe(path)
-    val refs: com.xemantic.typescript.tsgo.collections.Set<Path>? = goProbeValue<com.xemantic.typescript.tsgo.collections.Set<Path>?>(t4) { null }
-    val ok_1: Boolean = t4 !== GoMapAbsent
+    val t2 = this!!.referencedBy.probe(path)
+    val refs: com.xemantic.typescript.tsgo.collections.Set<Path>? = goProbeValue<com.xemantic.typescript.tsgo.collections.Set<Path>?>(t2) { null }
+    val ok_1: Boolean = t2 !== GoMapAbsent
     if (ok_1) {
         return com.xemantic.typescript.tsgo.go.maps.keys<Path, Unit>(refs.keys())
     }

@@ -299,11 +299,9 @@ fun Checker?.getExportsOfModuleWorker(moduleSymbol_0: Symbol?): Tuple2<SymbolTab
     var visit: ((Symbol?, Node?, Boolean) -> SymbolTable)? = null
     visit = fun(symbol: Symbol?, exportStar: Node?, isTypeOnly: Boolean): SymbolTable {
         if (!isTypeOnly && symbol != null) {
-            val m1 = symbol!!.exports
-            l0@ for (k2 in m1.keysSnapshot()) {
-                val e3 = m1.probe(k2)
-                if (e3 === GoMapAbsent) continue
-                val name: String = k2
+            val mi1 = symbol!!.exports.iter()
+            l0@ while (mi1.next()) {
+                val name: String = mi1.key
                 nonTypeOnlyNames.add(name)
             }
         }
@@ -316,25 +314,23 @@ fun Checker?.getExportsOfModuleWorker(moduleSymbol_0: Symbol?): Tuple2<SymbolTab
         if (exportStars != null) {
             val nestedSymbols: SymbolTable = GoMap.make<String, Symbol?>(GoElem.ref<Symbol?>())
             val lookupTable: GoMap<String, ExportCollision?> = GoMap.make<String, ExportCollision?>(GoElem.ref<ExportCollision?>())
-            val s4 = exportStars!!.declarations
-            l1@ for (i5 in 0 until s4.len) {
-                val node: Node? = s4[i5]
+            val s2 = exportStars!!.declarations
+            l1@ for (i3 in 0 until s2.len) {
+                val node: Node? = s2[i3]
                 val resolvedModule: Symbol? = this.resolveExternalModuleNameImpl(node, node.moduleSpecifier(), false)
                 val exportedSymbols: SymbolTable = visit!!(resolvedModule, node, isTypeOnly || node.isTypeOnly())
                 this.extendExportSymbols(nestedSymbols, exportedSymbols, lookupTable, node)
             }
-            val m6 = lookupTable
-            l2@ for (k7 in m6.keysSnapshot()) {
-                val e8 = m6.probe(k7)
-                if (e8 === GoMapAbsent) continue
-                val id: String = k7
-                val s: ExportCollision? = goProbeValue<ExportCollision?>(e8) { null }
+            val mi4 = lookupTable.iter()
+            l2@ while (mi4.next()) {
+                val id: String = mi4.key
+                val s: ExportCollision? = mi4.value
                 if (id == "export=" || s!!.exportsWithDuplicate.len == 0 || symbols[id] != null) {
                     continue@l2
                 }
-                val s9 = s!!.exportsWithDuplicate
-                l3@ for (i10 in 0 until s9.len) {
-                    val node_1: Node? = s9[i10]
+                val s5 = s!!.exportsWithDuplicate
+                l3@ for (i6 in 0 until s5.len) {
+                    val node_1: Node? = s5[i6]
                     this.addDiagnostic(createDiagnosticForNode(node_1, com.xemantic.typescript.tsgo.diagnostics.module_0_has_already_exported_a_member_named_1_Consider_explicitly_re_exporting_to_resolve_the_ambiguity, GoSlice.of(GoElem.ref<Any?>(), s!!.specifierText, id)))
                 }
             }
@@ -344,11 +340,9 @@ fun Checker?.getExportsOfModuleWorker(moduleSymbol_0: Symbol?): Tuple2<SymbolTab
             if (typeOnlyExportStarMap.isNil) {
                 typeOnlyExportStarMap = GoMap.make<String, Node?>(GoElem.ref<Node?>())
             }
-            val m11 = symbols
-            l4@ for (k12 in m11.keysSnapshot()) {
-                val e13 = m11.probe(k12)
-                if (e13 === GoMapAbsent) continue
-                val name_1: String = k12
+            val mi7 = symbols.iter()
+            l4@ while (mi7.next()) {
+                val name_1: String = mi7.key
                 typeOnlyExportStarMap[name_1] = exportStar
             }
         }
@@ -366,11 +360,9 @@ fun Checker?.getExportsOfModuleWorker(moduleSymbol_0: Symbol?): Tuple2<SymbolTab
         exports = GoMap.make<String, Symbol?>(GoElem.ref<Symbol?>())
     }
     if (originalModule != null && originalModule!!.exports.len > 1) {
-        val m14 = originalModule!!.exports
-        l5@ for (k15 in m14.keysSnapshot()) {
-            val e16 = m14.probe(k15)
-            if (e16 === GoMapAbsent) continue
-            val symbol_1: Symbol? = goProbeValue<Symbol?>(e16) { null }
+        val mi8 = originalModule!!.exports.iter()
+        l5@ while (mi8.next()) {
+            val symbol_1: Symbol? = mi8.value
             if (symbol_1!!.name == "export=" || symbol_1!!.name == "\u00FEexport") {
                 continue@l5
             }
@@ -380,11 +372,9 @@ fun Checker?.getExportsOfModuleWorker(moduleSymbol_0: Symbol?): Tuple2<SymbolTab
             }
         }
     }
-    val m17 = nonTypeOnlyNames.keys()
-    l6@ for (k18 in m17.keysSnapshot()) {
-        val e19 = m17.probe(k18)
-        if (e19 === GoMapAbsent) continue
-        val name_2: String = k18
+    val mi9 = nonTypeOnlyNames.keys().iter()
+    l6@ while (mi9.next()) {
+        val name_2: String = mi9.key
         typeOnlyExportStarMap.delete(name_2)
     }
     return Tuple2<SymbolTable, GoMap<String, Node?>>(exports, typeOnlyExportStarMap)
@@ -392,12 +382,10 @@ fun Checker?.getExportsOfModuleWorker(moduleSymbol_0: Symbol?): Tuple2<SymbolTab
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.extendExportSymbols 0fff5ff7
 fun Checker?.extendExportSymbols(target: SymbolTable, source: SymbolTable, lookupTable: GoMap<String, ExportCollision?>, exportNode: Node?) {
-    val m0 = source
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val id: String = k1
-        val sourceSymbol: Symbol? = goProbeValue<Symbol?>(e2) { null }
+    val mi0 = source.iter()
+    l0@ while (mi0.next()) {
+        val id: String = mi0.key
+        val sourceSymbol: Symbol? = mi0.value
         if (id == "default") {
             continue@l0
         }

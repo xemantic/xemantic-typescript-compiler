@@ -273,11 +273,9 @@ fun com.xemantic.typescript.tsgo.compiler.projectReferenceDtsFakingVfs?.fileExis
 fun com.xemantic.typescript.tsgo.compiler.projectReferenceDtsFakingVfs?.directoryExistsIfProjectReferenceDeclDir(dir: String): Tristate {
     val dirPath: Path = this.toPath(dir)
     val dirPathWithTrailingDirectorySeparator: Path = Path(dirPath.value + "/")
-    val m0 = this!!.dtsDirectories.keys()
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val declDirPath: Path = k1
+    val mi0 = this!!.dtsDirectories.keys().iter()
+    l0@ while (mi0.next()) {
+        val declDirPath: Path = mi0.key
         if (dirPath.value == declDirPath.value || com.xemantic.typescript.tsgo.go.strings.hasPrefix(declDirPath.value, dirPathWithTrailingDirectorySeparator.value) || com.xemantic.typescript.tsgo.go.strings.hasPrefix(dirPath.value, declDirPath.value + "/")) {
             return Tristate(2)
         }

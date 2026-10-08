@@ -379,11 +379,9 @@ fun com.xemantic.typescript.tsgo.compiler.filesParser?.start(loader: com.xemanti
                 if (task!!.elideOnDepth && currentDepth > this!!.maxDepth) {
                     return
                 }
-                val m6 = data!!.tasks
-                l1@ for (k7 in m6.keysSnapshot()) {
-                    val e8 = m6.probe(k7)
-                    if (e8 === GoMapAbsent) continue
-                    val taskByFileName: com.xemantic.typescript.tsgo.compiler.parseTask? = goProbeValue<com.xemantic.typescript.tsgo.compiler.parseTask?>(e8) { null }
+                val mi6 = data!!.tasks.iter()
+                l1@ while (mi6.next()) {
+                    val taskByFileName: com.xemantic.typescript.tsgo.compiler.parseTask? = mi6.value
                     var loadSubTasks: Boolean = startSubtasks
                     if (!taskByFileName!!.loaded) {
                         taskByFileName.load(loader)
@@ -579,24 +577,22 @@ fun com.xemantic.typescript.tsgo.compiler.filesParser?.getProcessedFiles(loader:
     collectFiles!!(loader!!.rootTasks, GoMap.make<com.xemantic.typescript.tsgo.compiler.parseTaskData?, String>(GoElem.STRING, totalFileCount))
     loader.sortLibs(libFiles)
     val allFiles: GoSlice<SourceFile?> = libFiles.appendSlice(files)
-    val m10 = redirectFilesByPath
-    l3@ for (k11 in m10.keysSnapshot()) {
-        val e12 = m10.probe(k11)
-        if (e12 === GoMapAbsent) continue
-        val redirectFile: com.xemantic.typescript.tsgo.compiler.redirectsFile? = goProbeValue<com.xemantic.typescript.tsgo.compiler.redirectsFile?>(e12) { null }
+    val mi10 = redirectFilesByPath.iter()
+    l3@ while (mi10.next()) {
+        val redirectFile: com.xemantic.typescript.tsgo.compiler.redirectsFile? = mi10.value
         redirectFile!!.index += libFiles.len
     }
     val keys: GoSlice<Path> = com.xemantic.typescript.tsgo.go.slices.collect<Path>(Path.ELEM, (loader!!.pathForLibFileResolutions.keys())!!)
     com.xemantic.typescript.tsgo.go.slices.sort<Path>(keys)
-    val s13 = keys
-    l4@ for (i14 in 0 until s13.len) {
-        val key: Path = s13[i14]
-        val t15 = loader!!.pathForLibFileResolutions.load(key)
-        val value_1: com.xemantic.typescript.tsgo.compiler.libResolution? = t15.first
+    val s11 = keys
+    l4@ for (i12 in 0 until s11.len) {
+        val key: Path = s11[i12]
+        val t13 = loader!!.pathForLibFileResolutions.load(key)
+        val value_1: com.xemantic.typescript.tsgo.compiler.libResolution? = t13.first
         resolvedModules[key] = GoMap.make<ModeAwareCacheKey, ResolvedModule?>(GoElem.ref<ResolvedModule?>()).also { it[ModeAwareCacheKey(name = value_1!!.libraryName, mode = ModuleKind(1))] = value_1!!.resolution }
-        val s16 = value_1!!.trace
-        l5@ for (i17 in 0 until s16.len) {
-            val trace_2: DiagAndArgs = s16[i17].goCopy()
+        val s14 = value_1!!.trace
+        l5@ for (i15 in 0 until s14.len) {
+            val trace_2: DiagAndArgs = s14[i15].goCopy()
             loader!!.opts.host!!.trace(trace_2.message, trace_2.args)
         }
     }

@@ -150,12 +150,10 @@ fun createDocumentPositionMapper(host: Host?, sourceMap: RawSourceMap?, mapPath:
         list = list.append1(MappedPosition(generatedPosition = mapping_1!!.generatedPosition, sourceIndex = sourceIndex, sourcePosition = mapping_1!!.sourcePosition, nameIndex = mapping_1!!.nameIndex))
         sourceMappings[sourceIndex] = list
     }
-    val m5 = sourceMappings
-    l3@ for (k6 in m5.keysSnapshot()) {
-        val e7 = m5.probe(k6)
-        if (e7 === GoMapAbsent) continue
-        val i_1: SourceIndex = k6
-        val list_1: GoSlice<MappedPosition?> = goProbeValue<GoSlice<MappedPosition?>>(e7) { GoElem.ref<MappedPosition?>().nilSlice }
+    val mi5 = sourceMappings.iter()
+    l3@ while (mi5.next()) {
+        val i_1: SourceIndex = mi5.key
+        val list_1: GoSlice<MappedPosition?> = mi5.value
         com.xemantic.typescript.tsgo.go.slices.sortFunc<MappedPosition?>(list_1, fun(a: MappedPosition?, b: MappedPosition?): Int {
             com.xemantic.typescript.tsgo.debug.assert(a!!.sourceIndex.value == b!!.sourceIndex.value, GoSlice.of(GoElem.ref<Any?>(), "All source mappings should have the same source index"))
             return a!!.sourcePosition - b!!.sourcePosition

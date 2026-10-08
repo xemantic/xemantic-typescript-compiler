@@ -213,6 +213,15 @@ class LoweringRulesTest {
     }
 
     @Test
+    fun `a map range is one table snapshot, not a key list probed again per entry`() {
+        // initializeChecker merges every file's locals into the globals: the old form hashed each key twice.
+        val init = genFunction("checker/Checker1.kt", "github.com/microsoft/typescript-go/internal/checker.Checker.initializeChecker")
+        assert(init.contains(".localsContainerBase.locals.iter()") && init.contains(".next())"))
+        val snapshots = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f -> Regex("""\.keysSnapshot\(\)""").findAll(f.readText()).count() }
+        assert(snapshots == 0)
+    }
+
+    @Test
     fun `slot identity and a prefix LastIndex allocate nothing`() {
         // core.Same: `&s1[0] == &s2[0]` compares slots without two GoElemPtr objects.
         assert(genFunction("core/Core.kt", "github.com/microsoft/typescript-go/internal/core.Same").contains("s1.sameSlot(0, s2, 0)"))

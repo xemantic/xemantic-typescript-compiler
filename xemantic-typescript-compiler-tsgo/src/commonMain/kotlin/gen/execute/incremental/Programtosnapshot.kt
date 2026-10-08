@@ -162,14 +162,12 @@ fun com.xemantic.typescript.tsgo.execute.incremental.toProgramSnapshot?.computeP
                         if (!newReferences.equals(oldReferences)) {
                             this!!.snapshot.addFileToChangeSet(file!!.path())
                         } else if (newReferences != null) {
-                            val m4 = newReferences.keys()
-                            l1@ for (k5 in m4.keysSnapshot()) {
-                                val e6 = m4.probe(k5)
-                                if (e6 === GoMapAbsent) continue
-                                val refPath: Path = k5
+                            val mi4 = newReferences.keys().iter()
+                            l1@ while (mi4.next()) {
+                                val refPath: Path = mi4.key
                                 if (this!!.program.getSourceFileByPath(refPath) == null) {
-                                    val t7 = this!!.oldProgram!!.snapshot!!.fileInfos.load(refPath)
-                                    val ok_1: Boolean = t7.second
+                                    val t5 = this!!.oldProgram!!.snapshot!!.fileInfos.load(refPath)
+                                    val ok_1: Boolean = t5.second
                                     if (ok_1) {
                                         this!!.snapshot.addFileToChangeSet(file!!.path())
                                         break@l1
@@ -182,17 +180,17 @@ fun com.xemantic.typescript.tsgo.execute.incremental.toProgramSnapshot?.computeP
                     this!!.snapshot.addFileToChangeSet(file!!.path())
                 }
                 if (!this!!.snapshot!!.changedFilesSet.has(file!!.path())) {
-                    val t8 = this!!.oldProgram!!.snapshot!!.emitDiagnosticsPerFile.load(file!!.path())
-                    val emitDiagnostics: DiagnosticsOrBuildInfoDiagnosticsWithFileName? = t8.first
-                    val ok_2: Boolean = t8.second
+                    val t6 = this!!.oldProgram!!.snapshot!!.emitDiagnosticsPerFile.load(file!!.path())
+                    val emitDiagnostics: DiagnosticsOrBuildInfoDiagnosticsWithFileName? = t6.first
+                    val ok_2: Boolean = t6.second
                     if (ok_2) {
                         this!!.snapshot!!.emitDiagnosticsPerFile.store(file!!.path(), repopulateDiagnosticsOfFile(emitDiagnostics, this!!.program, file))
                     }
                     if (canCopySemanticDiagnostics) {
                         if ((!file!!.isDeclarationFile || copyDeclarationFileDiagnostics) && (!this!!.program!!.isSourceFileDefaultLibrary(file!!.path()) || copyLibFileDiagnostics)) {
-                            val t9 = this!!.oldProgram!!.snapshot!!.semanticDiagnosticsPerFile.load(file!!.path())
-                            val diagnostics: DiagnosticsOrBuildInfoDiagnosticsWithFileName? = t9.first
-                            val ok_3: Boolean = t9.second
+                            val t7 = this!!.oldProgram!!.snapshot!!.semanticDiagnosticsPerFile.load(file!!.path())
+                            val diagnostics: DiagnosticsOrBuildInfoDiagnosticsWithFileName? = t7.first
+                            val ok_3: Boolean = t7.second
                             if (ok_3) {
                                 this!!.snapshot!!.semanticDiagnosticsPerFile.store(file!!.path(), repopulateDiagnosticsOfFile(diagnostics, this!!.program, file))
                             }
@@ -200,9 +198,9 @@ fun com.xemantic.typescript.tsgo.execute.incremental.toProgramSnapshot?.computeP
                     }
                 }
                 if (canCopyEmitSignatures) {
-                    val t10 = this!!.oldProgram!!.snapshot!!.emitSignatures.load(file!!.path())
-                    val oldEmitSignature: com.xemantic.typescript.tsgo.execute.incremental.emitSignature? = t10.first
-                    val ok_4: Boolean = t10.second
+                    val t8 = this!!.oldProgram!!.snapshot!!.emitSignatures.load(file!!.path())
+                    val oldEmitSignature: com.xemantic.typescript.tsgo.execute.incremental.emitSignature? = t8.first
+                    val ok_4: Boolean = t8.second
                     if (ok_4) {
                         this!!.snapshot!!.emitSignatures.store(file!!.path(), oldEmitSignature.getNewEmitSignature(this!!.oldProgram!!.snapshot!!.options, this!!.snapshot!!.options))
                     }
@@ -344,27 +342,25 @@ fun getReferencedFiles(program: com.xemantic.typescript.tsgo.compiler.Program?, 
         val typeRefsInFile: ModeAwareCache<ResolvedTypeReferenceDirective?> = goProbeValue<ModeAwareCache<ResolvedTypeReferenceDirective?>>(t7) { GoMap.nil<ModeAwareCacheKey, ResolvedTypeReferenceDirective?>(GoElem.ref<ResolvedTypeReferenceDirective?>()) }
         val ok: Boolean = t7 !== GoMapAbsent
         if (ok) {
-            val m8 = typeRefsInFile
-            l2@ for (k9 in m8.keysSnapshot()) {
-                val e10 = m8.probe(k9)
-                if (e10 === GoMapAbsent) continue
-                val typeRef: ResolvedTypeReferenceDirective? = goProbeValue<ResolvedTypeReferenceDirective?>(e10) { null }
+            val mi8 = typeRefsInFile.iter()
+            l2@ while (mi8.next()) {
+                val typeRef: ResolvedTypeReferenceDirective? = mi8.value
                 if (typeRef!!.resolvedFileName != "") {
                     addReferencedFileFromFileName(program, typeRef!!.resolvedFileName, referencedFiles, sourceFileDirectory)
                 }
             }
         }
-        val s11 = file!!.moduleAugmentations
-        l3@ for (i12 in 0 until s11.len) {
-            val moduleName: Node? = s11[i12]
+        val s9 = file!!.moduleAugmentations
+        l3@ for (i10 in 0 until s9.len) {
+            val moduleName: Node? = s9[i10]
             if (!com.xemantic.typescript.tsgo.ast.isStringLiteral(moduleName)) {
                 continue@l3
             }
             addReferencedFilesFromImportLiteral(file, referencedFiles, checker, moduleName)
         }
-        val s13 = checker.getAmbientModules()
-        l4@ for (i14 in 0 until s13.len) {
-            val ambientModule: Symbol? = s13[i14]
+        val s11 = checker.getAmbientModules()
+        l4@ for (i12 in 0 until s11.len) {
+            val ambientModule: Symbol? = s11[i12]
             addReferencedFilesFromSymbol(file, referencedFiles, ambientModule)
         }
         return com.xemantic.typescript.tsgo.core.ifElse<com.xemantic.typescript.tsgo.collections.Set<Path>?>(GoElem.ref<com.xemantic.typescript.tsgo.collections.Set<Path>?>(), referencedFiles.len() > 0, referencedFiles, null)

@@ -921,14 +921,12 @@ fun <K, V> diffMaps(goElem_K: GoElem<K>, goElem_V: GoElem<V>, m1: GoMap<K, V>, m
 // go: github.com/microsoft/typescript-go/internal/core.DiffMapsFunc 7129ee45
 fun <K, V1, V2> diffMapsFunc(goElem_K: GoElem<K>, goElem_V1: GoElem<V1>, goElem_V2: GoElem<V2>, m1: GoMap<K, V1>, m2: GoMap<K, V2>, equalValues: ((V1, V2) -> Boolean)?, onAdded: ((K, V2) -> Unit)?, onRemoved: ((K, V1) -> Unit)?, onChanged: ((K, V1, V2) -> Unit)?) {
     if (onAdded != null) {
-        val m0 = m2
-        l0@ for (k1 in m0.keysSnapshot()) {
-            val e2 = m0.probe(k1)
-            if (e2 === GoMapAbsent) continue
-            val k: K = k1
-            val v2: V2 = goProbeValue<V2>(e2) { goElem_V2.zeroValue() }
-            val t3 = m1.probe(k)
-            val ok: Boolean = t3 !== GoMapAbsent
+        val mi0 = m2.iter()
+        l0@ while (mi0.next()) {
+            val k: K = mi0.key
+            val v2: V2 = mi0.value
+            val t1 = m1.probe(k)
+            val ok: Boolean = t1 !== GoMapAbsent
             if (!ok) {
                 onAdded!!(k, v2)
             }
@@ -937,15 +935,13 @@ fun <K, V1, V2> diffMapsFunc(goElem_K: GoElem<K>, goElem_V1: GoElem<V1>, goElem_
     if (onChanged == null && onRemoved == null) {
         return
     }
-    val m4 = m1
-    l1@ for (k5 in m4.keysSnapshot()) {
-        val e6 = m4.probe(k5)
-        if (e6 === GoMapAbsent) continue
-        val k_1: K = k5
-        val v1: V1 = goProbeValue<V1>(e6) { goElem_V1.zeroValue() }
-        val t7 = m2.probe(k_1)
-        val v2_1: V2 = goProbeValue<V2>(t7) { goElem_V2.zeroValue() }
-        val ok_1: Boolean = t7 !== GoMapAbsent
+    val mi2 = m1.iter()
+    l1@ while (mi2.next()) {
+        val k_1: K = mi2.key
+        val v1: V1 = mi2.value
+        val t3 = m2.probe(k_1)
+        val v2_1: V2 = goProbeValue<V2>(t3) { goElem_V2.zeroValue() }
+        val ok_1: Boolean = t3 !== GoMapAbsent
         if (ok_1) {
             if (onChanged != null && !equalValues!!(v1, v2_1)) {
                 onChanged!!(k_1, v1, v2_1)

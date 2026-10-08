@@ -165,11 +165,9 @@ fun <T> Set<T>?.isSubsetOf(other: Set<T>?): Boolean {
     if (this == null) {
         return true
     }
-    val m0 = this!!.m
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val key: T = k1
+    val mi0 = this!!.m.iter()
+    l0@ while (mi0.next()) {
+        val key: T = mi0.key
         if (!other.has(key)) {
             return false
         }
@@ -182,11 +180,9 @@ fun <T> Set<T>?.intersects(other: Set<T>?): Boolean {
     if (this == null || other == null) {
         return false
     }
-    val m0 = this!!.m
-    l0@ for (k1 in m0.keysSnapshot()) {
-        val e2 = m0.probe(k1)
-        if (e2 === GoMapAbsent) continue
-        val key: T = k1
+    val mi0 = this!!.m.iter()
+    l0@ while (mi0.next()) {
+        val key: T = mi0.key
         if (other.has(key)) {
             return true
         }
