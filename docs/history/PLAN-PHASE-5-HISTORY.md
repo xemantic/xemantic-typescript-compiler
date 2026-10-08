@@ -1,3 +1,42 @@
+### Round (P18.309) — TS2729's ancestor exemption is now tsgo's `isPropertyDeclaredInAncestorClass` (the module-file base-class FP and five more cells fixed), the TS2302 walker gains five arms, and (CHK.234) LANDED under a conservative trust rule: a missing member on an INTERSECTION receiver reports TS2339 / TS2551 / TS7053 — 0 would-emit FPs across 1,100+ census reads in the profiles and libraries; the B271 additive walker retired as redundant; tally 191 -> 191, NO moved row anywhere (2026-10-06)
+
+One implementation subagent. **Where the brief / queue were wrong**: the old TS2729 collector skipped WRITE targets on the claim
+TypeScript does not flag them — tsgo does (`a = this.b = 2`, `(this.b = 2, …)`); under `useDefineForClassFields` (the default at
+an unset target) tsgo REPORTS a redeclared inherited field, so module-file bases agreed only by accident and a script-file base
+(a03) was a missing row; an OPTIONAL field declared below its read is never reported but a definite `b!` one is — we had them
+the wrong way round. (CHK.234) does NOT unblock type-fest: fixed-length-array / REQONE / paths are TYPE-level indexed reads
+(`X['splice']`) on `Except<…> & …` whose constituent comes from a mapped type — the census found zero intersection-receiver
+VALUE reads in type-fest (stays 123). **Pin that contradicted tsgo**: `AnnotatedBodyLocalReceiverTest` "refusal - an
+INTERSECTION annotation stays silent" — tsgo reports TS2339 on `ZzzCfg & ZzzOther`; re-pointed. **Walker retired**: B271's pass
+`checkEmptyDomIntersectionAccess` (the "additive half" — TS2339 on all-empty-DOM-stub intersections) did what the general rule now
+does and produced a duplicate TS2812 in `missingDomElements`; removed (its TS2812 rewrite half kept; corpus screen 0; the pass
+table loses one row). **Mechanisms**: `PropertyInitOrderChecks` — tsgo's ancestor exemption (`checker.go:11690,11704`), run
+lazily at the report site only when `useDefineForClassFields` is off, the base resolved by `getTypeFromBaseTypeExpression` (the
+resolution that gives the class its members) and looked up with `getPropertyOfType` — replacing `globals[baseName]`; static
+members refused; a class in an `extends` cycle inherits nothing; a mixin / class-expression base treated as inherited
+(conservative); write targets reported; `StaticTypeParamRefChecks` — arms for `TypeOperator`, `NamedTupleMember`, template
+literal types, `TypePredicate`, `MappedType` (its own parameter shadows the class one); new `IntersectionMemberAccess.kt` (197)
+— a member is present if ANY constituent has it (a primitive's wrapper, a constrained type parameter's constraint, a string
+index, a numeric index for numeric names, `Function` members, the `Object` prototype), three-valued with UNDECIDABLE silent
+(`any` / error, nested unions, JS literals, untrusted constituents); a constituent is trusted only if a class / interface with
+all bases trusted, a type literal, a function type or a tuple, each written member resolving in the table (a type literal's
+`set a(v)` is missing from our table — `intersectionsAndReadonlyProperties` caught it); hooks — property access after
+`checkMemberAccessMissingCore` reusing the pre-gate's receiver type (`cmamPreGateRaw`; the first cut read +7.14%
+`typeOfExpr.calls`), honouring the `in` guard, TS2551 + TS2728 related row; element access `tryEmitIntersectionIndexAccess`
+TS7053 with its chain (explicit `noImplicitAny: false` honoured; `get`/`set` receivers, numeric-index receivers — tsgo's TS7015 —
+and suggestible keys skipped). `Checker.kt` +117 (incl. -32 for the retired walker), `PropertyInitOrderChecks.kt` +22,
+`StaticTypeParamRefChecks.kt` +16. **Census** (intersection-receiver property reads): tsc profiles 286-448 each, hono 211, ky
+72, zod 50, date-fns 33, marked 7 — 0 would-emit under the final rule; without the trust predicate the first cut emitted 23 FPs
+on ky's `InternalOptions = Omit<Options, …> & {…}`. **Matrices**: m1 (TS2729 / TS2302) 29 cells, 10 -> 27 agreeing (s07 TS1331
+unrelated); m2 (intersection) 24 cells, 4 -> 19 (residue: `Brand` alias display, mapped / `Omit` constituents untrusted,
+optional chain, TS7015). **Pins**: `PropertyInitOrderAncestorTest` 11 + `IntersectionMemberAccessTest` 9, tsgo full-text;
+ablation 16 arms all RED (the self-cycle arm after a self-extend pin was added). **Gates**: full suite 22,951 / 0 / 44 (+20);
+corpus screen 8725 / 0 and `--include ''` the same 41 (byte-identical diffs); `cost_gate.py` 0 (against a rebuilt parent:
+`typeOfExpr.calls` +0.13%, `globals.lookups` / `misses` +606, `typeNode.cacheable` / `cacheHits` +1); `huge_methods.py
+--fail-over 0` 0; at-risk sweep 284 classes; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns
+1 unchanged (identity hash extended to `IntersectionMemberAccess`); library grid OURS-ONLY row sets identical to `r308` on all
+eight (orchestrator's `r309`; tally 191); warning gate with probe: probe only.
+
 ### Round (P18.308) — (INV.0) extraction: two families with ZERO widenings — TS2302 (static members referencing class type parameters) into `StaticTypeParamRefChecks` and TS2729 (property used before initialization) into `PropertyInitOrderChecks`; `Checker.kt` 191,774 -> 191,075 (-699); every receipt identical, per-pass table included (2026-10-06)
 
 One implementation subagent in the (P18.294) order; it finished. **Choice**: the (P18.303) report's "TS2507 / TS2302 run" is

@@ -1183,7 +1183,7 @@ fun Session?.handleGetSourceFile(ctx: Context?, params: GetSourceFileParams?): T
     val sourceFile: SourceFile? = program!!.getSourceFile(params!!.file.toFileName())
     if (sourceFile == null) {
         if (this!!.useBinaryResponses) {
-            return Tuple2<Any?, GoError?>(GoElem.INT.nilSlice, null)
+            return Tuple2<Any?, GoError?>(GoElem.BYTE.nilSlice, null)
         }
         return Tuple2<Any?, GoError?>(null, null)
     }

@@ -149,8 +149,10 @@ class LoweringRulesTest {
         // The (TSGO.2) compiler test harness (docs/goport-lowering.md § 1c): not on the compiler's path, counted apart.
         val harness = listOf("testrunner/", "testutil/", "execute/", "tsoptions/tsoptionstest/", "vfs/vfstest/", "vfs/iovfs/", "vfs/internal/")
         fun isHarness(f: File) = harness.any { f.relativeTo(gen).path.startsWith(it) }
-        fun census(dirs: List<String>?, harnessOnly: Boolean = false) = gen.walkTopDown()
-            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) && isHarness(it) == harnessOnly }
+        // (TSGO.3-b) the API session (gen/api/*.kt, not api/encoder): counted apart too.
+        fun isApiSession(f: File) = f.relativeTo(gen).path.let { it.startsWith("api/") && !it.startsWith("api/encoder/") }
+        fun census(dirs: List<String>?, harnessOnly: Boolean = false, apiOnly: Boolean = false) = gen.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) && isHarness(it) == harnessOnly && isApiSession(it) == apiOnly }
             .sumOf { f -> suffixCopy.findAll(f.readText()).count() }
         // The (TSGO.1) spike's 14 packages: 48 as first generated; 34 after the window rule, 33 after window parameters (2026-10-07).
         val spike = listOf("api", "ast", "binder", "collections", "core", "debug", "diagnostics", "jsnum", "json", "locale", "parser", "scanner", "stringutil", "tspath")
@@ -160,6 +162,8 @@ class LoweringRulesTest {
         // The harness slices: 7 at first generation (2026-10-08); 8 once (TSGO.3) reached the emit baselines
         // (`harnessutil` `Repeat`'s option parsing, `tsbaseline` type baselines — none on the compiler's path).
         assert(census(null, harnessOnly = true) <= 8)
+        // The API session: 1 at first generation (2026-10-08, `resolveNodeHandle`'s path tail).
+        assert(census(null, apiOnly = true) <= 1)
     }
 
     @Test

@@ -16,7 +16,7 @@ Overlay, never written into `typescript-go-repo`):
 |---|---|
 | `XtscNewSession(projectSession, snapshot)` | `NewSession` + the snapshot bookkeeping of `handleUpdateSnapshot`, for ONE caller-built snapshot |
 | `XtscMarshal(result)` | `MessagePackProtocol.WriteResponse`'s JSON payload (the session speaks JSON: no `RawBinary`) |
-| `XtscOpenProgram(config, fs)` | `project.NewConfiguredProject` + `Project.CreateProgram`: cwd = the config's directory, `UseSourceOfProjectReference`, the checker pool below, `BindSourceFiles` |
+| `XtscOpenProgram(config, fs, libPath)` | `project.NewConfiguredProject` + `Project.CreateProgram`: cwd = the config's directory, `UseSourceOfProjectReference`, the checker pool below, `BindSourceFiles`; `libPath` `""` = the bundled libs |
 | `XtscCheckerPool` | `project/checkerpool.go` reduced to one checker per category: the persistent API checker (every API query), the diagnostics checker, the query checker |
 
 The roots keep `Session`, and a kept type keeps all its methods: `HandleRequest`, every handler,
@@ -55,6 +55,9 @@ Porter rules added for the API (each general, docs/goport-lowering.md):
   `.(*S)` assertion sees the struct (`unmarshallerFor`'s `return &v`); for any other T the real pointer.
   Changes two `packagejson` call sites to the same behaviour (the JSON shim decodes a struct in place
   either way).
+- **Runtime shims**: the json shim decodes a named STRING type (a value class, `[]api.NodeHandle`) as its
+  underlying value (a named numeric type still refuses — decoding it walks `incremental`'s buildinfo reader
+  into two further gaps, see the (TSGO.3-b) note); `fmt` prints a value class as its underlying value.
 - **A composite literal's anonymous-function element is parenthesized** in its fill statement: K2's
   raw-FIR builder treats `it[a] = fun(…) = x; it[b] = fun(…) = y; …` as nested assignments and is
   EXPONENTIAL in their number (22 entries 32 s, 26 > 200 s; `api.unmarshalers` has 112 and held a
@@ -63,7 +66,7 @@ Porter rules added for the API (each general, docs/goport-lowering.md):
 ## 2. The Kotlin API
 
 ```kotlin
-val p = TsgoProject.open("/abs/path/tsconfig.json")         // fs = TsgoProject.diskFS() by default
+val p = TsgoProject.open("/abs/path/tsconfig.json")         // fs = diskFS(), libDirectory = null (bundled libs)
 val t = p.typeAtPosition("/abs/path/src/a.ts", offset)       // UTF-16 offset
 p.typeToString(t!!); p.propertiesOfType(t); p.signaturesOfType(t)
 val node = p.nodeAt(file, offset)!!                         // the touching name, as a NodeHandle
@@ -118,3 +121,9 @@ first meeting, enforced after); params are translated through it; everything els
 node handles, type strings with their raw JSON escapes, field order, omitted fields — must be equal.
 An error must be an error on both sides (digits masked). Positive control:
 `TSGO_API_INJECT=<project>:<line>`.
+
+**Measured 2026-10-08**: 201 projects (tsc's 78 sources + 200 conformance cases), **594,007 / 594,007
+requests equal**, 0 differ, 0 crash, 122 s in process (the binary records them in ~60 s). A handler PANIC is
+an error on both sides (tsgo's `SyncConn` recovers it; `TsgoProject` throws `TsgoApiException(panicked =
+true)`): tsgo's own `newTypeResponse` panics on a tuple-target type reference. Names embedding a symbol id
+(`__@iterator@<id>`, `__#<id>@#x`) bind that id like a handle.

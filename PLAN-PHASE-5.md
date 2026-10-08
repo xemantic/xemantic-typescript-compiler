@@ -25,6 +25,74 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.3-b) — THE TYPE ORACLE: tsgo's `internal/api` session is ported and runs in process behind a Kotlin facade (`TsgoProject`); 594,007 / 594,007 API requests over tsc's 78 sources and 200 conformance projects answer byte-for-byte as the tsgo 7.0.2 binary's `--api`, handles compared as a bijection (2026-10-08)
+
+**What is ported** (`docs/goport-api.md`). `internal/api` is a PARTIAL package (6,049 Go lines, 3,670 of them
+`session.go` + `proto.go`) whose roots are an overlay, `goport-extract/overlay/api/xtsc_api.go`:
+`XtscNewSession` (NewSession + `handleUpdateSnapshot`'s bookkeeping for one caller-built snapshot),
+`XtscMarshal` (the JSON payload `WriteResponse` writes), `XtscOpenProgram` (a configured project's program the
+way `project.CreateProgram` builds it) and `XtscCheckerPool` (`project/checkerpool.go` reduced to its API /
+diagnostics / query checkers). Kept with `Session`: `HandleRequest` verbatim and every handler, the
+snapshot registries, proto.go's types and `unmarshalers`. The transport (conn, protocol, transport, server,
+callbackfs, timing) is never reached. **Extractor**: `partialStubs` keeps a declaration as a SIGNATURE ONLY
+(the body is neither traversed nor extracted; the porter emits `TODO("goport: refused partial-stub …")`):
+17 declarations, 506 Go lines — the project-session lifecycle (`initialize`, `updateSnapshot`, `release`,
+`getDefaultProjectForFile`, `Close`, …), pprof, and the six handlers that need `internal/ls`. The
+extractor also resolves a symlinked `--tsgo` (an overlay keyed by a symlink silently never applies), as
+does `oracle-go/build.sh`. **Hand shims**: `project` (`Session`, `Snapshot`, `ProjectCollection`, `Project`
+with `GetProjectDiagnostics`, `FileChangeSummary`), `lsp/lsproto.DocumentUri.FileName`,
+`ls/lsconv.FileNameToDocumentURI`, empty `ls.LanguageService` and `pprof.CPUProfiler`.
+
+**The API** (`-tsgo`, `facade/TsgoProject.kt`; `-project` untouched, `-core` frozen): `TsgoProject.open(tsconfig,
+fs = diskFS(), libDirectory = null)`; typed queries `typeAtPosition`, `symbolAtPosition`, `nodeAt`,
+`typeAtLocation`, `symbolAtLocation`, `contextualType`, `resolvedSignature`, `typeToString`,
+`propertiesOfType`, `propertyOfType`, `signaturesOfType`, `isTypeAssignableTo`, `typesOfType`,
+`typeArguments`, `baseTypes`, `apparentType`, `typeOfSymbol`, `declaredTypeOfSymbol`,
+`parametersOfSignature`, `returnTypeOfSignature`, `sourceFileNames`, `semanticDiagnostics`; handles
+`TsgoType`/`TsgoSymbol`/`TsgoSignature`/`TsgoNode`; positions are UTF-16 offsets; and `request(method, json)`,
+the raw protocol, reaches every other ported proto.go method. Each call runs on a goroutine thread (1 GB
+stack); a handler panic is recovered into `TsgoApiException(panicked = true)`, as tsgo's `SyncConn` recovers it.
+
+**The gate.** `tsgo-oracle api` (oracle-go/api.go) drives the SHIPPED binary over msgpack and generates the
+request stream from its own answers: every Identifier (`getSymbolsAtLocations`, `getTypeAtLocations`),
+call-like (`getResolvedSignature`) and call argument (`getContextualType`, `getTypeAtLocation`,
+`isTypeAssignableTo`) of every non-library file; then `getTypeOfSymbol` per symbol, `typeToString` per type,
+`getPropertiesOfType` + `getSignaturesOfType` per located type, `getReturnTypeOfSignature` per signature.
+`scripts/tsgo-api-oracle.py` records tsc's 78 sources (a copy of the bench profile) and 200 single-file
+conformance cases → `build/goport/api-oracle` (18 MB gzipped, 594,007 requests). `ApiParityTest`
+(`TSGO_API=1`) replays them through `HandleRequest`; ids are bound as a tsgo↔port bijection, everything else
+(names, flags, node handles, raw JSON string tokens, field order, omitted fields) must be equal.
+
+**Receipts** (worktree, rebased on (TSGO.3-a), regenerated): **ApiParityTest 594,007 / 594,007 equal**, 0
+differ, 0 crash, 122 s (by method: getTypeOfSymbol 126,447, getContextualType 90,507, getTypeAtLocation
+90,507, isTypeAssignableTo 90,484, typeToString 75,680, getResolvedSignature 53,386, getPropertiesOfType
+24,231, getSignaturesOfType 24,231, getReturnTypeOfSignature 17,666, getSymbolsAtLocations 434 /
+getTypeAtLocations 434 batches); positive control `TSGO_API_INJECT=conf-0010:5` red (1 differ).
+**DiagParityTest 13,127 / 13,127**, **EmitParityTest 13,127 / 13,127**, **OracleParityTest bound 7,774 / 7,774**;
+`-tsgo` 106 tests / 0 failed, `-goport` 15 / 0 (gate inputs: the main checkout's `build/goport/{diag-*,oracle,
+emit-oracle,ts-submodule}` through symlinks). `huge_methods.py` 0 over (2,821 classes). Warning-clean (a
+positive control `1 as Int` file read its `w:` and was deleted).
+
+**Port defects fixed (5)**: (1) an explicitly instantiated generic function as a VALUE (`unmarshallerFor[P]`) was
+a `generic-func-value` refusal — now `funcValue` with the instantiation's dictionaries; (2) `&v` of an opaque
+type parameter flowing into an interface handed out a `GoBox` where Go's `*T` of a struct IS the struct, so
+`parsed.(*Params)` failed — `goOpaqueAddr(goElem_T, ptr)` (also `packagejson`, `OrderedMap`); (3) the json shim
+neither marshalled nor decoded value classes (`[]api.NodeHandle`) — marshal landed upstream the same day,
+decode of a named STRING type here (a named NUMERIC type stays refused: decoding it lets the incremental
+buildinfo reader past `[][]BuildInfoFileId` into two further shim gaps, `[]*BuildInfoFileInfo` and
+`*[2]BuildInfoFileId` as `any` — `incrementalConcurrentSafeAliasFollowing` crashed when tried; latent, the
+diagnostics agree because the program is rebuilt); (4) `fmt` printed a value class by `toString`
+(`%!d(Kind=…)`) — the same fix landed upstream in (TSGO.3-a); (5) **K2's raw-FIR builder is EXPONENTIAL in
+`it[a] = fun(…) = x; it[b] = fun(…) = y; …`** (22 entries 32 s, 26 > 200 s, 130 parenthesized 5.6 s): the
+112-entry `unmarshalers` held a whole-module compile for 43 minutes (killed by the orchestrator); a composite
+literal's anonymous-function element is now parenthesized (`setValue`). Not a port defect: tsgo's own
+`newTypeResponse` panics on a tuple-target type reference (`AsTupleType` of a `TypeReference`); both sides panic.
+
+**Not ported (the remaining surface)**: completions, references, signature usages, JSDoc tags, documentation
+comments (need `internal/ls` + `lsutil`/`format`/`autoimport`/`change`/`lsproto`, ~60k lines), and the
+project system (`updateSnapshot` with file changes, `release`, watching). Differences from `tsc --api`: one
+snapshot per session; the disk FS has no symlink resolution.
+
 ### Round (TSGO.3-a) — EMIT PARITY: the ported runner renders tsgo's `.js` / `.js.map` / `.sourcemap.txt` baselines byte-identical on 13,127 / 13,127 configurations, and tsc's own 78 sources emit byte-identical to the tsgo 7.0.2 binary; 4 port defects fixed, all mechanisms (2026-10-08)
 
 **The gate**, defined as tsgo's compiler runner defines it (`docs/goport-emit-oracle.md`). `runSingleConfigTest` baselines
@@ -330,45 +398,6 @@ cronstrue / mitt 0 / date-fns 1 unchanged; library grid (orchestrator's `r310` v
 `fixed-length-array.ts` rows), the rest unchanged, NO added position (tally 191 -> 179); type-fest wall 17.70 -> 17.47 s (same
 session, under tsgo's ~17 s); warning gate with probe: probe only.
 
-### Round (P18.309) — TS2729's ancestor exemption is now tsgo's `isPropertyDeclaredInAncestorClass` (the module-file base-class FP and five more cells fixed), the TS2302 walker gains five arms, and (CHK.234) LANDED under a conservative trust rule: a missing member on an INTERSECTION receiver reports TS2339 / TS2551 / TS7053 — 0 would-emit FPs across 1,100+ census reads in the profiles and libraries; the B271 additive walker retired as redundant; tally 191 -> 191, NO moved row anywhere (2026-10-06)
-
-One implementation subagent. **Where the brief / queue were wrong**: the old TS2729 collector skipped WRITE targets on the claim
-TypeScript does not flag them — tsgo does (`a = this.b = 2`, `(this.b = 2, …)`); under `useDefineForClassFields` (the default at
-an unset target) tsgo REPORTS a redeclared inherited field, so module-file bases agreed only by accident and a script-file base
-(a03) was a missing row; an OPTIONAL field declared below its read is never reported but a definite `b!` one is — we had them
-the wrong way round. (CHK.234) does NOT unblock type-fest: fixed-length-array / REQONE / paths are TYPE-level indexed reads
-(`X['splice']`) on `Except<…> & …` whose constituent comes from a mapped type — the census found zero intersection-receiver
-VALUE reads in type-fest (stays 123). **Pin that contradicted tsgo**: `AnnotatedBodyLocalReceiverTest` "refusal - an
-INTERSECTION annotation stays silent" — tsgo reports TS2339 on `ZzzCfg & ZzzOther`; re-pointed. **Walker retired**: B271's pass
-`checkEmptyDomIntersectionAccess` (the "additive half" — TS2339 on all-empty-DOM-stub intersections) did what the general rule now
-does and produced a duplicate TS2812 in `missingDomElements`; removed (its TS2812 rewrite half kept; corpus screen 0; the pass
-table loses one row). **Mechanisms**: `PropertyInitOrderChecks` — tsgo's ancestor exemption (`checker.go:11690,11704`), run
-lazily at the report site only when `useDefineForClassFields` is off, the base resolved by `getTypeFromBaseTypeExpression` (the
-resolution that gives the class its members) and looked up with `getPropertyOfType` — replacing `globals[baseName]`; static
-members refused; a class in an `extends` cycle inherits nothing; a mixin / class-expression base treated as inherited
-(conservative); write targets reported; `StaticTypeParamRefChecks` — arms for `TypeOperator`, `NamedTupleMember`, template
-literal types, `TypePredicate`, `MappedType` (its own parameter shadows the class one); new `IntersectionMemberAccess.kt` (197)
-— a member is present if ANY constituent has it (a primitive's wrapper, a constrained type parameter's constraint, a string
-index, a numeric index for numeric names, `Function` members, the `Object` prototype), three-valued with UNDECIDABLE silent
-(`any` / error, nested unions, JS literals, untrusted constituents); a constituent is trusted only if a class / interface with
-all bases trusted, a type literal, a function type or a tuple, each written member resolving in the table (a type literal's
-`set a(v)` is missing from our table — `intersectionsAndReadonlyProperties` caught it); hooks — property access after
-`checkMemberAccessMissingCore` reusing the pre-gate's receiver type (`cmamPreGateRaw`; the first cut read +7.14%
-`typeOfExpr.calls`), honouring the `in` guard, TS2551 + TS2728 related row; element access `tryEmitIntersectionIndexAccess`
-TS7053 with its chain (explicit `noImplicitAny: false` honoured; `get`/`set` receivers, numeric-index receivers — tsgo's TS7015 —
-and suggestible keys skipped). `Checker.kt` +117 (incl. -32 for the retired walker), `PropertyInitOrderChecks.kt` +22,
-`StaticTypeParamRefChecks.kt` +16. **Census** (intersection-receiver property reads): tsc profiles 286-448 each, hono 211, ky
-72, zod 50, date-fns 33, marked 7 — 0 would-emit under the final rule; without the trust predicate the first cut emitted 23 FPs
-on ky's `InternalOptions = Omit<Options, …> & {…}`. **Matrices**: m1 (TS2729 / TS2302) 29 cells, 10 -> 27 agreeing (s07 TS1331
-unrelated); m2 (intersection) 24 cells, 4 -> 19 (residue: `Brand` alias display, mapped / `Omit` constituents untrusted,
-optional chain, TS7015). **Pins**: `PropertyInitOrderAncestorTest` 11 + `IntersectionMemberAccessTest` 9, tsgo full-text;
-ablation 16 arms all RED (the self-cycle arm after a self-extend pin was added). **Gates**: full suite 22,951 / 0 / 44 (+20);
-corpus screen 8725 / 0 and `--include ''` the same 41 (byte-identical diffs); `cost_gate.py` 0 (against a rebuilt parent:
-`typeOfExpr.calls` +0.13%, `globals.lookups` / `misses` +606, `typeNode.cacheable` / `cacheHits` +1); `huge_methods.py
---fail-over 0` 0; at-risk sweep 284 classes; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns
-1 unchanged (identity hash extended to `IntersectionMemberAccess`); library grid OURS-ONLY row sets identical to `r308` on all
-eight (orchestrator's `r309`; tally 191); warning gate with probe: probe only.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -462,8 +491,10 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   pins run against `-tsgo` (`XTSC_ENGINE=tsgo`) with 0 port defects (`docs/goport-pin-census.md`).**
   **DONE 2026-10-08 ((TSGO.2-c) note): the differential covers all four suites tsgo's compiler runner runs
   (submodule + local × compiler + conformance) — 13,127 / 13,127 configurations equal, 0 crashed, 0 port defects.**
-- [ ] **(TSGO.3) program, module resolution, transformers, printer; expose `internal/api` through
-  the `Project` API (the type oracle).**
+- [x] **(TSGO.3) program, module resolution, transformers, printer; expose `internal/api` through
+  the `Project` API (the type oracle).** DONE 2026-10-08: (TSGO.3-a) emit parity 13,127/13,127; (TSGO.3-b)
+  the API session in process (`TsgoProject`), 594,007/594,007 requests equal to `tsc --api`. Remaining API
+  surface (`internal/ls`-backed handlers) in the (TSGO.3-b) note.
 - [ ] **(TSGO.4) re-base externals, KIR and the LSP onto `-tsgo`; decide `-core`'s retirement on
   measured parity.** Kotlin/Native measured separately (no escape analysis).
 
