@@ -639,12 +639,12 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
     library probes, wall/heap per engine) and a recommendation; deleting `-core` is not done autonomously.
     REPORT DONE 2026-10-08: `docs/core-sunset.md` (session note (TSGO.4-d)).
 
-- [ ] **(TSGO.5) a tsgo CLI on the port (`docs/core-sunset.md` § 6 stage 1).** Port `internal/execute` (+ the `tsc`
+- [ ] **(TSGO.5) a tsgo CLI on the port (`docs/core-sunset.md` § 6 stage 1).** **IN PROGRESS — (5-a) the `tsc` command line DONE 2026-10-08 (`TsgoMainKt`, CliParityTest 105/105 equal, type-fest skipped below an 8 GB heap; re-verified on main by the orchestrator). Remains: `--build`, `--watch`, `--pprofDir`, `--diagnostics` memory figures, a native CLI run.** Port `internal/execute` (+ the `tsc`
   command line; `--build`/incremental may follow as a sub-step) through the porter and expose a `-cli`-shaped entry on
   `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
   `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.
 
-- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** Add a `linuxX64` target to
+- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). Remains: the GraalVM image of the (5-a) CLI, a goroutine thread pool, a bounded native GC default, a native `-tsgo` CI job.** Add a `linuxX64` target to
   `-tsgo` (Kotlin/Native was deferred to after (TSGO.2) by `docs/tsgo-port-plan.md`), run its suite natively, and build the
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.
