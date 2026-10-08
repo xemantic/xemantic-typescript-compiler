@@ -28,6 +28,7 @@ package com.xemantic.typescript.tsgo
 import com.xemantic.typescript.tsgo.ast.Diagnostic
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
+import com.xemantic.typescript.tsgo.ast.localize
 import com.xemantic.typescript.tsgo.compiler.CompilerHost
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.core.TSTrue
@@ -49,7 +50,7 @@ import kotlin.system.exitProcess
 /**
  * (TSGO.2) warm CHECK throughput of the ported compiler (docs/goport-perf.md § 6).
  *
- * `CheckBenchMain <tsconfig.json> [warmup=4] [iters=8] [libcache]`
+ * `CheckBenchMain <tsconfig.json> [warmup=4] [iters=8] [libcache|nolib] [parallel|single]`
  *
  * Every iteration does what `tsc --noEmit -p <project> --singleThreaded` does after reading the
  * files: parse the tsconfig, build a `compiler.Program` (parse + bind every root, the libs, the
@@ -67,10 +68,11 @@ fun main(args: Array<String>) {
     val warmup = args.getOrNull(1)?.toInt() ?: 4
     val iters = args.getOrNull(2)?.toInt() ?: 8
     val libCache = args.getOrNull(3) == "libcache"
+    val parallel = args.getOrNull(4) == "parallel"
     var failure: Throwable? = null
     val th = Thread(null, {
         try {
-            CheckBench(File(config).absoluteFile.normalize(), warmup, iters, libCache).run()
+            CheckBench(File(config).absoluteFile.normalize(), warmup, iters, libCache, parallel).run()
         } catch (t: Throwable) {
             failure = t
         }
@@ -138,14 +140,14 @@ class LibCachingHost(private val inner: CompilerHost) : CompilerHost by inner {
     }
 }
 
-private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean) {
+private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean, val parallel: Boolean) {
 
     fun run() {
         TsgoPort.init()
         val disk = DiskFS()
         val cwd = GoString.fromUtf16(config.parentFile.path)
         val configName = GoString.fromUtf16(config.path)
-        println("project=$config warmup=$warmup iters=$iters libcache=$libCache java=${System.getProperty("java.version")}")
+        println("project=$config warmup=$warmup iters=$iters libcache=$libCache parallel=$parallel java=${System.getProperty("java.version")}")
         val totals = ArrayList<Double>()
         val cpus = ArrayList<Double>()
         val gcs = ArrayList<Double>()
@@ -164,11 +166,12 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val host = if (libCache) LibCachingHost(inner) else inner
             val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(configName, null, null, host, null)
             val t1 = System.nanoTime()
-            val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = parsed, singleThreaded = TSTrue))!!
+            val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = parsed, singleThreaded = if (parallel) com.xemantic.typescript.tsgo.core.TSFalse else TSTrue))!!
             val t2 = System.nanoTime()
             val ctx = com.xemantic.typescript.tsgo.go.context.background()
-            var n = configDiags.len
-            fun add(ds: GoSlice<Diagnostic?>) { n += ds.len }
+            val all = ArrayList<Diagnostic>()
+            fun add(ds: GoSlice<Diagnostic?>) { for (k in 0 until ds.len) all += ds[k]!! }
+            add(configDiags)
             add(program.getConfigFileParsingDiagnostics())
             add(program.getProgramDiagnostics())
             add(program.getSyntacticDiagnostics(ctx, null))
@@ -180,11 +183,18 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val alloc = (threads.currentThreadAllocatedBytes - a0) / 1e6
             val gc = (gcMs() - g0).toDouble()
             val ms = (t4 - t0) / 1e6
+            val n = all.size
+            // What the diagnostics SAY (file, span, code, message), order-independent: equal across iterations
+            // and across the single-threaded and parallel checkers.
+            val digest = all.map { d ->
+                "${d.file?.fileName()}:${d.loc.pos.value}:${d.loc.end.value}:${d.code}:" +
+                    GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))
+            }.sorted().joinToString("\n").hashCode()
             checksum = checksum * 31 + n
             val tag = if (i < warmup) "warm" else "meas"
             println(
-                "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f files=%d diags=%d"
-                    .format(ms, cpu, gc, alloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, program.getSourceFiles().len, n),
+                "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f files=%d diags=%d digest=%08x"
+                    .format(ms, cpu, gc, alloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, program.getSourceFiles().len, n, digest),
             )
             if (i >= warmup) {
                 totals += ms

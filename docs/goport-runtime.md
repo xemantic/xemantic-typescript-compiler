@@ -180,7 +180,7 @@ parse/encode path.
 | `runtime`, `testing` | `caller` (always `ok = false`), `GOOS GOARCH`; `testing()` (false); `T` (`common`, `name helper skipf`; `Common`: `helper skipf skip fatalf fatal errorf failed`) | approx (§ 10); `Skipf`/`Fatalf` end the test by throwing `TestSkipped`/`TestFailed` (Go's `Goexit`), which the Kotlin driver catches |
 | `encoding`, `encoding/binary` | `TextMarshaler TextUnmarshaler`; `ByteOrder` (`uint16`), `littleEndian` (`uint16/32/64 putUint16/32/64 appendUint32`), `bigEndian` (`uint16`), `read` | exact; `read` carries only `*[]uint16` (`vfs/internal.decodeUtf16`) and panics on anything else |
 | `context` | `Context background todo withValue` | values exact; no cancellation (`done()` null) |
-| `sync`, `sync/atomic` | `Locker`, `Mutex` (`lock unlock tryLock`) `RWMutex` (`lock unlock tryLock rLock rUnlock tryRLock rLocker`) `Once onceValue onceFunc Pool WaitGroup Map` (`load store loadOrStore loadAndDelete delete clear range`); `Bool Int32 Int64 Uint32 Uint64 Pointer` (`load store add swap compareAndSwap`) | thread-safe, contended waiters PARK (§ 9a); `WaitGroup.Go` synchronous |
+| `sync`, `sync/atomic` | `Locker`, `Mutex` (`lock unlock tryLock`) `RWMutex` (`lock unlock tryLock rLock rUnlock tryRLock rLocker`) `Once onceValue onceFunc Pool WaitGroup Map` (`load store loadOrStore loadAndDelete delete clear range`); `Bool Int32 Int64 Uint32 Uint64 Pointer` (`load store add swap compareAndSwap`) | thread-safe, contended waiters PARK (§ 9a); `WaitGroup.Go` starts a goroutine (a 1 GB-stack daemon thread, `goSpawn`) |
 | `golang.org/x/sync/errgroup` | `Group` (`go tryGo setLimit wait`), `withContext` | thread-safe first-error; `Go` runs synchronously, no context cancellation |
 | `time` | `Duration` (`nanoseconds microseconds milliseconds seconds`), `Nanosecond … Hour`; `Time` (`sub isZero unixNano unixMilli equal before after goCopy goEquals goHash`), `now since` | `Duration` exact; `Time` approx (§ 10) |
 | `os`, `runtime/debug` | `getenv` (always `""`), `setMaxStack` (no-op) | approx |
@@ -196,8 +196,8 @@ parse/encode path.
 
 The product host (the IntelliJ plugin) runs one compiler thread per project in ONE JVM, and the
 port's package variables include process-global `sync.Pool`s (parser, binder) and `sync.Map`s
-(`diagnostics.localizedMessagesCache`), so the `sync` shims are thread-safe even though the lowering
-refuses goroutines. They are built on `kotlin.concurrent.atomics` in common code, plus one `expect`/`actual` park:
+(`diagnostics.localizedMessagesCache`), so the `sync` shims are thread-safe (the lowering refuses a `go`
+statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotlin.concurrent.atomics` in common code, plus one `expect`/`actual` park:
 
 - **Blocking** (`go/sync/Park.kt`): an `expect`/`actual` park — `parkToken()` / `park(blocker)` /
   `unpark(token)` with `LockSupport` semantics (the JVM actual IS `LockSupport`: an unpark before the
@@ -215,7 +215,12 @@ refuses goroutines. They are built on `kotlin.concurrent.atomics` in common code
   `OnceValue` call (Go 1.21+ semantics).
 - `Pool`, `Map`: a `HashMap`/free list under a `Mutex`; `Map.Range` calls `f` outside the lock.
 - `WaitGroup`: atomic counter; `Wait` parks until zero (`Add` reaching zero wakes waiters); `Go` runs
-  `f` synchronously.
+  `f` in a new goroutine: `expect fun goSpawn` (JVM: a daemon platform thread with Go's 1 GB maximum
+  goroutine stack, reserved and committed as it is touched). It is what `core.parallelWorkGroup` uses,
+  i.e. a program built WITHOUT `SingleThreaded` (tsgo's default: 4 checkers, parallel parse and bind).
+  Running `f` synchronously instead DEADLOCKS there — the files parser queues children while holding a
+  mutex they take. A panic in a goroutine crashes a Go program; here the first one is kept and `Wait`
+  re-throws it. (The Kotlin/Native `actual` is not written: no native target is built.)
 - `sync/atomic` types wrap `AtomicInt`/`AtomicLong`/`AtomicBoolean`/`AtomicReference` (unsigned
   kinds wrap the signed atomic of the same width; two's-complement add is identical).
 - `errgroup.Group`: `Go` runs `f` synchronously; the first error is kept with a CAS.
@@ -294,7 +299,7 @@ Lowering rules that come with the shims:
 2. **`math.Log`/`Exp`** are a port of Go's pure-Go `log` and Kotlin's `exp`; Go on amd64 uses assembly for both. Sampled values agree with Go bit-for-bit (oracle), but the last ulp is not guaranteed. `Log2` and a FRACTIONAL `Pow` exponent inherit this; integer exponents are exact.
 3. **`strconv.Quote` / `%q`** keep every valid non-ASCII rune; Go escapes non-printable ones (`­`, unassigned code points).
 4. **`fmt` `%v` of a struct/pointer** prints Kotlin `toString()`, `%T` names only builtin kinds; map keys in `%v` are sorted by `toString()`.
-5. **`WaitGroup.Go` / `errgroup.Group.Go`** run their function synchronously (§ 9a). Mutual exclusion and blocking are real.
+5. **`errgroup.Group.Go`** runs its function synchronously (§ 9a); `WaitGroup.Go` starts a thread per goroutine (no M:N scheduling) and re-throws a goroutine's panic from `Wait` instead of crashing. Mutual exclusion and blocking are real.
 6. **`context`** has no deadlines or cancellation. **`os.Getenv`** returns `""`. **`debug.SetMaxStack`** is a no-op.
 7. **`regexp`** compiles a TRANSLATION of the RE2 source with Kotlin `Regex` (§ 9b); the residue listed there is not Go.
 8. **`language`** keeps case-normalized subtags and matches by exact tag then language subtag — not CLDR canonicalization or distance matching.

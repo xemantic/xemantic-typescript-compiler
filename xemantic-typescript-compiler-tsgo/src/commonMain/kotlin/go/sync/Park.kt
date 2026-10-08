@@ -50,6 +50,12 @@ internal expect fun park(blocker: Any)
 internal expect fun unpark(token: Any)
 
 /**
+ * Runs [f] concurrently — a goroutine (`WaitGroup.Go`, docs/goport-runtime.md § 9a). The thread
+ * gets a large stack: a goroutine's stack grows to 1 GB in Go, and the checker recurses deeply.
+ */
+internal expect fun goSpawn(f: () -> Unit)
+
+/**
  * A FIFO of parked threads, each waiting for its own condition. [await] spins briefly, then parks;
  * a woken waiter re-checks its condition and parks again if another thread got there first (no
  * hand-off, so a lock is not fair — as Go's normal mode is not).

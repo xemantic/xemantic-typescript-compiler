@@ -228,10 +228,15 @@ class Pool(var new: (() -> Any?)? = null) {
     fun goCopy(): Pool = Pool(new)
 }
 
-/** `sync.WaitGroup`: `Go` runs the function synchronously; [wait] blocks until the counter is zero. */
+/**
+ * `sync.WaitGroup`: `Go` runs the function in a new goroutine ([goSpawn]); [wait] blocks until the
+ * counter is zero. A panic in a goroutine crashes a Go program; here the first one is kept and
+ * re-thrown by [wait] (whoever waits sees it, instead of a silently missing result).
+ */
 class WaitGroup {
     private val count = AtomicInt(0)
     private val waiters = WaitQueue()
+    private val failure = kotlin.concurrent.atomics.AtomicReference<Throwable?>(null)
 
     fun add(delta: Int) {
         val v = count.addAndFetch(delta)
@@ -245,18 +250,22 @@ class WaitGroup {
 
     fun go(f: () -> Unit) {
         add(1)
-        try {
-            f()
-        } finally {
-            done()
+        goSpawn {
+            try {
+                f()
+            } catch (t: Throwable) {
+                failure.compareAndSet(null, t)
+            } finally {
+                done()
+            }
         }
     }
 
     // `wait()V` would clash with java.lang.Object.wait on the JVM.
     @kotlin.jvm.JvmName("goWait")
     fun wait() {
-        if (count.load() == 0) return
-        waiters.await(count) { count.load() == 0 }
+        if (count.load() != 0) waiters.await(count) { count.load() == 0 }
+        failure.load()?.let { throw it }
     }
 
     fun goCopy(): WaitGroup = WaitGroup().also { it.count.store(count.load()) }

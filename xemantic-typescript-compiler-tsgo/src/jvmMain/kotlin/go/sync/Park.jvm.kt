@@ -36,3 +36,10 @@ internal actual fun park(blocker: Any) {
 internal actual fun unpark(token: Any) {
     LockSupport.unpark(token as Thread)
 }
+
+internal actual fun goSpawn(f: () -> Unit) {
+    // A daemon platform thread with Go's maximum goroutine stack (reserved, committed as it is touched).
+    val t = Thread(null, f, "goroutine", 1L shl 30)
+    t.isDaemon = true
+    t.start()
+}
