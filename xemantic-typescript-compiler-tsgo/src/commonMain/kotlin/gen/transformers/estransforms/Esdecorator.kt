@@ -1480,7 +1480,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransforme
     if ((modifiers_1 == null || modifiers_1!!.nodeList.nodes.len == 0) && (com.xemantic.typescript.tsgo.ast.isMethodDeclaration(member) || com.xemantic.typescript.tsgo.ast.isPropertyDeclaration(member))) {
         ec.setEmitFlags(result.name, EmitFlags(128u))
     }
-    return result.goCopy()
+    return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.esDecoratorTransformer.appendDecorationStatement 65ea6cfa

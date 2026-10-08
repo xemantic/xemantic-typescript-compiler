@@ -372,7 +372,7 @@ fun parsePartial(text: String): Tuple2<com.xemantic.typescript.tsgo.semver.parti
         build = com.xemantic.typescript.tsgo.go.strings.split(buildStr, ".")
     }
     val result: com.xemantic.typescript.tsgo.semver.partialVersion = com.xemantic.typescript.tsgo.semver.partialVersion(version = Version(major = majorNumeric, minor = minorNumeric, patch = patchNumeric, prerelease = prerelease, build = build), majorStr = majorStr, minorStr = minorStr, patchStr = patchStr)
-    return Tuple2<com.xemantic.typescript.tsgo.semver.partialVersion, Boolean>(result.goCopy(), true)
+    return Tuple2<com.xemantic.typescript.tsgo.semver.partialVersion, Boolean>(result, true)
 }
 
 // go: github.com/microsoft/typescript-go/internal/semver.parseComparator 0a1613ca

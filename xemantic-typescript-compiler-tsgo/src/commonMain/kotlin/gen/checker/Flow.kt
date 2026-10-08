@@ -428,7 +428,7 @@ fun Checker?.getTypeAtFlowCall(f: FlowState?, flow: FlowNode?): FlowType {
                 }
             }
             if (narrowedType === t) {
-                return flowType.goCopy()
+                return flowType
             }
             return this.newFlowType(narrowedType, flowType.incomplete)
         }
@@ -483,13 +483,13 @@ fun Checker?.narrowTypeByAssertion(f: FlowState?, t: Type?, expr: Node?): Type? 
 fun Checker?.getTypeAtFlowCondition(f: FlowState?, flow: FlowNode?): FlowType {
     val flowType: FlowType = this.getTypeAtFlowNode(f, flow!!.antecedent)
     if (flowType.t!!.flags.value and 262144u != 0u) {
-        return flowType.goCopy()
+        return flowType
     }
     val assumeTrue: Boolean = flow!!.flags.value and 32u != 0u
     val nonEvolvingType: Type? = this.finalizeEvolvingArrayType(flowType.t)
     val narrowedType: Type? = this.narrowType(f, nonEvolvingType, flow!!.node, assumeTrue)
     if (narrowedType === nonEvolvingType) {
-        return flowType.goCopy()
+        return flowType
     }
     return this.newFlowType(narrowedType, flowType.incomplete)
 }
@@ -1441,7 +1441,7 @@ fun Checker?.getTypeAtFlowBranchLabel(f: FlowState?, flow: FlowNode?, antecedent
     }
     val result: FlowType = this.newFlowType(this.getUnionOrEvolvingArrayType(f, this!!.antecedentTypes.slice(antecedentStart), com.xemantic.typescript.tsgo.core.ifElse<UnionReduction>(UnionReduction.ELEM, subtypeReduction, UnionReductionSubtype, UnionReductionLiteral)), seenIncomplete)
     this!!.antecedentTypes = this!!.antecedentTypes.slice(0, antecedentStart)
-    return result.goCopy()
+    return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getUnionOrEvolvingArrayType 5d5c2ce1
@@ -1542,7 +1542,7 @@ fun Checker?.getTypeAtFlowArrayMutation(f: FlowState?, flow: FlowNode?): FlowTyp
                 }
                 return this.newFlowType(evolvedType, flowType.incomplete)
             }
-            return flowType.goCopy()
+            return flowType
         }
     }
     return FlowType()
@@ -3002,5 +3002,5 @@ fun Checker?.extendAssignmentPosition(node_0: Node?, declaration: Node?): Int {
 @kotlin.jvm.JvmField val typeofNEFacts: GoMap<String, TypeFacts> = GoMap.make<String, TypeFacts>(TypeFacts.ELEM).also { it["string"] = TypeFactsTypeofNEString; it["number"] = TypeFactsTypeofNENumber; it["bigint"] = TypeFactsTypeofNEBigInt; it["boolean"] = TypeFactsTypeofNEBoolean; it["symbol"] = TypeFactsTypeofNESymbol; it["undefined"] = TypeFactsNEUndefined; it["object"] = TypeFactsTypeofNEObject; it["function"] = TypeFactsTypeofNEFunction }
 
 // go: github.com/microsoft/typescript-go/internal/checker.nonDottedNameCacheKey 3544b06c
-@kotlin.jvm.JvmField val nonDottedNameCacheKey: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("?").goCopy()
+@kotlin.jvm.JvmField val nonDottedNameCacheKey: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("?")
 

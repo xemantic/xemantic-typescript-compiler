@@ -3094,19 +3094,19 @@ fun Checker?.getEmitResolver(): EmitResolver? {
 @kotlin.jvm.JvmField val nextCheckerID: Uint32 = Uint32()
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureKeyErased aba5016c
-@kotlin.jvm.JvmField val signatureKeyErased: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("-").goCopy()
+@kotlin.jvm.JvmField val signatureKeyErased: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("-")
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureKeyCanonical 7a1f5b5b
-@kotlin.jvm.JvmField val signatureKeyCanonical: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("*").goCopy()
+@kotlin.jvm.JvmField val signatureKeyCanonical: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("*")
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureKeyBase eec2d0f6
-@kotlin.jvm.JvmField val signatureKeyBase: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("#").goCopy()
+@kotlin.jvm.JvmField val signatureKeyBase: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("#")
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureKeyInner ec0d65b0
-@kotlin.jvm.JvmField val signatureKeyInner: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("<").goCopy()
+@kotlin.jvm.JvmField val signatureKeyInner: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128("<")
 
 // go: github.com/microsoft/typescript-go/internal/checker.SignatureKeyOuter b874a18a
-@kotlin.jvm.JvmField val signatureKeyOuter: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128(">").goCopy()
+@kotlin.jvm.JvmField val signatureKeyOuter: CacheHashKey = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128(">")
 
 // go: github.com/microsoft/typescript-go/internal/checker.intrinsicTypeKinds ac3e7f7c
 @kotlin.jvm.JvmField val intrinsicTypeKinds: GoMap<String, IntrinsicTypeKind> = GoMap.make<String, IntrinsicTypeKind>(IntrinsicTypeKind.ELEM).also { it["Uppercase"] = IntrinsicTypeKindUppercase; it["Lowercase"] = IntrinsicTypeKindLowercase; it["Capitalize"] = IntrinsicTypeKindCapitalize; it["Uncapitalize"] = IntrinsicTypeKindUncapitalize; it["NoInfer"] = IntrinsicTypeKindNoInfer }

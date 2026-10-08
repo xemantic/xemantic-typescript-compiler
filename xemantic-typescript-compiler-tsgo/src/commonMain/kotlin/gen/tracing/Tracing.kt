@@ -1049,7 +1049,7 @@ fun com.xemantic.typescript.tsgo.tracing.typeTracer?.buildTypeDescriptor(typ: Tr
     if (display != "") {
         desc.display = display
     }
-    return desc.goCopy()
+    return desc
 }
 
 // go: github.com/microsoft/typescript-go/internal/tracing.mapTypeIds e61ad13c

@@ -3146,7 +3146,7 @@ fun Checker?.getIterationTypesOfIterable(t_0: Type?, use: IterationUse, errorNod
     if (!noCache) {
         this!!.iterationTypesCache[key.goCopy()] = result.goCopy()
     }
-    return result.goCopy()
+    return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getIterationTypesOfIterableWorker 4e7b780e

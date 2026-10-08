@@ -471,8 +471,61 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                     w.line("return " + tupleOf(comps, f.results))
                 }
             }
-            else -> w.line("return " + tupleOf(rs.map { flow(it).code }, f.results))
+            else -> w.line("return " + tupleOf(rs.map { returnValue(it).code }, f.results))
         }
+    }
+
+    /** A result flowing out of `return`: an owned struct local is handed out as is ([ownedLocals]). */
+    private fun returnValue(r: Node): Ex {
+        val x = if (r.k == "ParenExpr") r.reqObj("x") else r
+        if (r.bool("copy") && r.obj("impl") == null && x.k == "Ident" && x.int("obj")?.let { it in ownedLocals() } == true) return lower(r)
+        return flow(r)
+    }
+
+    /**
+     * Struct-typed locals whose object no other reference can reach, so `return x` needs no copy
+     * (docs/goport-perf.md § 6; Go copies `x` into the result, and here nothing else could observe the
+     * difference). A local qualifies when it is not captured by a closure and its address is never
+     * taken (so neither a deferred function nor an outstanding pointer can change it after the return),
+     * and it is only ever defined or assigned from ONE value: every such flow either copies (the IR's
+     * `copy`, § 7.2) or is fresh. Excluded: type-switch bindings (bound to the interface's payload
+     * without a copy), range variables, and the targets of multi-value and comma-ok assignments (whose
+     * components are not copied).
+     */
+    fun ownedLocals(): Set<Int> {
+        fn.ownedLocals?.let { return it }
+        val single = HashSet<Int>()
+        val bad = HashSet<Int>()
+        fun ids(l: List<Node>) = l.mapNotNull { if (it.k == "Ident") it.int("obj") else null }
+        fn.root?.let { root ->
+            Program.walk(listOf(root)) { n ->
+                when (n.str("k")) {
+                    "AssignStmt" -> {
+                        val l = n.list("lhs")
+                        val r = n.list("rhs")
+                        if (l.size == 1 && r.size == 1) {
+                            if (n.str("tok") == ":=") single += ids(l)
+                        } else {
+                            bad += ids(l)
+                        }
+                    }
+                    "ValueSpec" -> {
+                        val names = n.list("names")
+                        if (names.size == 1 && n.list("values").size <= 1) single += ids(names) else bad += ids(names)
+                    }
+                    "RangeStmt" -> {
+                        n.obj("key")?.let { bad += ids(listOf(it)) }
+                        n.obj("value")?.let { bad += ids(listOf(it)) }
+                    }
+                }
+                true
+            }
+        }
+        val r = single.filterTo(HashSet()) { id ->
+            id !in bad && pc.obj(id).let { o -> o.str("k") == "var" && o.bool("local") && !o.bool("addr") && !o.bool("captured") }
+        }
+        fn.ownedLocals = r
+        return r
     }
 
     private fun tupleOf(vals: List<String>, results: List<Int>): String =

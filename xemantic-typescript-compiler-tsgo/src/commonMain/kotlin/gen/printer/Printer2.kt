@@ -3138,7 +3138,7 @@ fun Printer?.enterNode(node: Node?): com.xemantic.typescript.tsgo.printer.printe
     }
     state.commentState = this.emitCommentsBeforeNode(node)
     state.sourceMapState = this.emitSourceMapsBeforeNode(node)
-    return state.goCopy()
+    return state
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.exitNode 6b273180
@@ -3162,7 +3162,7 @@ fun Printer?.enterTokenNode(node: Node?, flags: com.xemantic.typescript.tsgo.pri
     if (flags.value and 4u == 0u) {
         state.sourceMapState = this.emitSourceMapsBeforeNode(node)
     }
-    return state.goCopy()
+    return state
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.exitTokenNode 67f1d41b
@@ -3209,7 +3209,7 @@ fun Printer?.enterToken(token: Kind, pos_0: Int, contextNode: Node?, flags: com.
     state.commentState = t1.first
     pos = t1.second
     state.sourceMapState = this.emitSourceMapsBeforeToken(token, pos, contextNode, flags)
-    return Tuple2<com.xemantic.typescript.tsgo.printer.printerState, Int>(state.goCopy(), pos)
+    return Tuple2<com.xemantic.typescript.tsgo.printer.printerState, Int>(state, pos)
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.exitToken e2a3afee

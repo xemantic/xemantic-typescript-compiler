@@ -252,7 +252,7 @@ fun compileGlobPattern(spec: String, basePath: String, usage: Usage, caseSensiti
         val part: String = s0[i1]
         p.components = p.components.append1(parseComponent(part, usage.value != 2))
     }
-    return Tuple2<com.xemantic.typescript.tsgo.vfs.vfsmatch.globPattern, Boolean>(p.goCopy(), true)
+    return Tuple2<com.xemantic.typescript.tsgo.vfs.vfsmatch.globPattern, Boolean>(p, true)
 }
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.parseComponent 97be5277

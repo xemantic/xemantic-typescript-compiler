@@ -105,7 +105,7 @@ class FS(
         if (this.enabled.load()) {
             this.getAccessibleEntriesCache.store(path, ret_1.goCopy())
         }
-        return ret_1.goCopy()
+        return ret_1
     }
 
     // go: github.com/microsoft/typescript-go/internal/vfs/cachedvfs.FS.ReadFile f12f439f

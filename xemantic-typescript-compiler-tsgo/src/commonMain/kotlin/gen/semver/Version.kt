@@ -196,7 +196,7 @@ fun tryParseVersion(text: String): Tuple2<Version, GoError?> {
     val result: Version = Version()
     val match: GoSlice<String> = versionRegexp!!.findStringSubmatch(text)
     if (match.isNil) {
-        return Tuple2<Version, GoError?>(result.goCopy(), SemverParseError(origInput = text))
+        return Tuple2<Version, GoError?>(result, SemverParseError(origInput = text))
     }
     val majorStr: String = match[1]
     val minorStr: String = match[2]
@@ -208,14 +208,14 @@ fun tryParseVersion(text: String): Tuple2<Version, GoError?> {
     result.major = t0.first
     err = t0.second
     if (err != null) {
-        return Tuple2<Version, GoError?>(result.goCopy(), err)
+        return Tuple2<Version, GoError?>(result, err)
     }
     if (minorStr != "") {
         val t1 = getUintComponent(minorStr)
         result.minor = t1.first
         err = t1.second
         if (err != null) {
-            return Tuple2<Version, GoError?>(result.goCopy(), err)
+            return Tuple2<Version, GoError?>(result, err)
         }
     }
     if (patchStr != "") {
@@ -223,22 +223,22 @@ fun tryParseVersion(text: String): Tuple2<Version, GoError?> {
         result.patch = t2.first
         err = t2.second
         if (err != null) {
-            return Tuple2<Version, GoError?>(result.goCopy(), err)
+            return Tuple2<Version, GoError?>(result, err)
         }
     }
     if (prereleaseStr != "") {
         if (!prereleaseRegexp!!.matchString(prereleaseStr)) {
-            return Tuple2<Version, GoError?>(result.goCopy(), SemverParseError(origInput = text))
+            return Tuple2<Version, GoError?>(result, SemverParseError(origInput = text))
         }
         result.prerelease = com.xemantic.typescript.tsgo.go.strings.split(prereleaseStr, ".")
     }
     if (buildStr != "") {
         if (!buildRegExp!!.matchString(buildStr)) {
-            return Tuple2<Version, GoError?>(result.goCopy(), SemverParseError(origInput = text))
+            return Tuple2<Version, GoError?>(result, SemverParseError(origInput = text))
         }
         result.build = com.xemantic.typescript.tsgo.go.strings.split(buildStr, ".")
     }
-    return Tuple2<Version, GoError?>(result.goCopy(), null)
+    return Tuple2<Version, GoError?>(result, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/semver.MustParse 24f2c208

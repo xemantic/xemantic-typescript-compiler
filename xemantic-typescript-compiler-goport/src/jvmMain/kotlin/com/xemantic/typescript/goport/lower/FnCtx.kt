@@ -101,6 +101,8 @@ class FnCtx(val fc: FileCtx, val qname: String, val tm: TypeMapper) {
     var root: Node? = null
     /** Locals the substring-elimination rule lowers as string windows, once computed. */
     var viewable: Set<Int>? = null
+    /** Struct locals `return x` may hand out without a copy ([Lowering.ownedLocals]), once computed. */
+    var ownedLocals: Set<Int>? = null
     /** Declared string windows: Go object id → its (base, offset, length) locals. */
     val views = HashMap<Int, View>()
 

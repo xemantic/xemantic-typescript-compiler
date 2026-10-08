@@ -195,6 +195,32 @@ class LoweringRulesTest {
         assert(!genFunction("parser/Parser1.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.parseList").contains("inline fun"))
     }
 
+    // ---- the check-path rules of docs/goport-perf.md § 6
+
+    @Test
+    fun `a struct copy is elided only where no other reference can reach the object`() {
+        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        // `return CacheHashKey(b.h.Sum128())`: a conversion of a call's (fresh) result is fresh.
+        assert(genFunction("checker/Checker6.kt", "$checker.keyBuilder.hash").contains("return this!!.h.sum128()\n"))
+        // `return flowType` in getTypeAtFlowCall: a local defined once from a single value, never captured
+        // nor address-taken, is handed out as is.
+        val call = genFunction("checker/Flow.kt", "$checker.Checker.getTypeAtFlowCall")
+        assert(call.contains("return flowType\n") && !call.contains("return flowType.goCopy()"))
+        // getTypeAtFlowNode's `t` calls a pointer-receiver method (`t.IsNil()`): its address is taken, so it
+        // is still copied out — and so is every field or element read (`f.sharedFlows[i].flowType`).
+        val node = genFunction("checker/Flow.kt", "$checker.Checker.getTypeAtFlowNode")
+        assert(node.contains("return t.goCopy()") && node.contains("return this!!.sharedFlows[i].flowType.goCopy()"))
+    }
+
+    @Test
+    fun `slot identity and a prefix LastIndex allocate nothing`() {
+        // core.Same: `&s1[0] == &s2[0]` compares slots without two GoElemPtr objects.
+        assert(genFunction("core/Core.kt", "github.com/microsoft/typescript-go/internal/core.Same").contains("s1.sameSlot(0, s2, 0)"))
+        // parseJSDocComment's indent: `strings.LastIndex(p.sourceText[:start], "\n")`, once a prefix copy per JSDoc comment.
+        val jsdoc = genFunction("parser/Jsdoc.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.parseJSDocComment")
+        assert(jsdoc.contains("lastIndexIn(this!!.sourceText, 0, start, \"\\n\")") && !jsdoc.contains("substring(0, start)"))
+    }
+
     @Test
     fun `a string parameter used only as a view gets a window overload and a sliced argument is not copied`() {
         val parser = "github.com/microsoft/typescript-go/internal/parser"

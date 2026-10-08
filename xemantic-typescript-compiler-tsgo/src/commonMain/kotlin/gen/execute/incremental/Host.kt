@@ -82,7 +82,7 @@ fun getMTime(host: CompilerHost?, fileName: String): Time {
     if (stat != null) {
         mTime = stat!!.modTime()
     }
-    return mTime.goCopy()
+    return mTime
 }
 
 

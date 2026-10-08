@@ -1551,7 +1551,7 @@ class keyBuilder(
 
 // go: github.com/microsoft/typescript-go/internal/checker.keyBuilder.hash 4bf1c894
 fun com.xemantic.typescript.tsgo.checker.keyBuilder?.hash(): CacheHashKey {
-    return this!!.h.sum128().goCopy()
+    return this!!.h.sum128()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.keyBuilder.writeByte ebf03d0a

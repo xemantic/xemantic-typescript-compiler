@@ -1793,7 +1793,7 @@ fun Checker?.computeConstantEnumMemberValue(member: Node?): Result {
             this.checkTypeAssignableTo(this.checkExpression(initializer), this!!.numberType, initializer, com.xemantic.typescript.tsgo.diagnostics.type_0_is_not_assignable_to_type_1_as_required_for_computed_enum_member_values)
         }
     }
-    return result.goCopy()
+    return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.evaluateEntity 4ff6ae8a
@@ -1863,7 +1863,7 @@ fun Checker?.evaluateEnumMember(expr: Node?, symbol: Symbol?, location: Node?): 
     if (location!!.parent !== declaration!!.parent) {
         return com.xemantic.typescript.tsgo.evaluator.newResult(value_1.value, value_1.isSyntacticallyString, value_1.resolvedOtherFiles, true)
     }
-    return value_1.goCopy()
+    return value_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getDeclaredTypeOfAlias fc1bbe3a

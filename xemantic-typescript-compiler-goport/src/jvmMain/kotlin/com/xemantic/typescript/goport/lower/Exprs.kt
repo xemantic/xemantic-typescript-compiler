@@ -113,8 +113,25 @@ open class ExprLowering(val fn: FnCtx) {
         }
         val v = lower(e)
         e.obj("impl")?.let { im -> if (im.str("k") == "iface") im.int("from")?.let { tm.boxOf(it) }?.let { return Ex.primary("$it(${v.code})") } }
-        if (e.bool("copy") && tm.hasGoCopy(ty(e))) return Ex.primary("${v.at(PRIMARY)}.goCopy()")
+        if (e.bool("copy") && tm.hasGoCopy(ty(e)) && !freshValue(e)) return Ex.primary("${v.at(PRIMARY)}.goCopy()")
         return v
+    }
+
+    /**
+     * Whether [n] evaluates to a struct object nothing else references — what the IR's `copy` already
+     * assumes of a composite literal and of a call's result (docs/goport-ir.md § 7.2) — extended through
+     * conversions: `CacheHashKey(b.h.Sum128())` converts a fresh value, so its `copy` flag (a conversion
+     * is never FRESH to the extractor) would only duplicate it (docs/goport-perf.md § 6).
+     */
+    fun freshValue(n: Node): Boolean = when (n.k) {
+        "ParenExpr" -> freshValue(n.reqObj("x"))
+        "CompositeLit" -> true
+        "CallExpr" -> when (n.str("call")) {
+            "func", "method", "methodexpr", "dynamic" -> true
+            "conv" -> n.list("args").singleOrNull()?.let { freshValue(it) } == true
+            else -> false
+        }
+        else -> false
     }
 
     /** [e] as its UNDERLYING representation: a value class is unwrapped (`.value`). */
