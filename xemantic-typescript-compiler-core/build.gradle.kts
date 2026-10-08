@@ -197,6 +197,14 @@ kotlin {
             }
         }
 
+        // TEST SCOPE ONLY ((TSGO.2), docs/goport-pin-census.md): `XTSC_ENGINE=tsgo` runs the hand-written
+        // `diagnose(...)` pins against the PORTED tsgo compiler (EngineSwitch.jvm.kt). Main never depends on -tsgo.
+        jvmTest {
+            dependencies {
+                implementation(project(":xemantic-typescript-compiler-tsgo"))
+            }
+        }
+
     }
 
 }
@@ -2360,6 +2368,13 @@ tasks.matching { it.name.startsWith("compile") && "Test" in it.name && "Kotlin" 
 // this module because the checkout is shared — see typeScriptRepoDir above.
 tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
     workingDir = rootProject.projectDir
+    // The diagnose() engine switch ((TSGO.2), docs/goport-pin-census.md): environment variables, declared as
+    // inputs so a change of engine re-runs the task instead of answering UP-TO-DATE. The ported compiler
+    // holds the bundled libs' ASTs (~100 MB) beside each Program: opt-in heap, the default run is unchanged.
+    for (v in listOf("XTSC_ENGINE", "XTSC_PIN_DUMP")) {
+        inputs.property(v, providers.environmentVariable(v).orElse(""))
+    }
+    providers.environmentVariable("XTSC_TEST_HEAP").orNull?.let { maxHeapSize = it }
 }
 
 // ---------------------------------------------------------------------------

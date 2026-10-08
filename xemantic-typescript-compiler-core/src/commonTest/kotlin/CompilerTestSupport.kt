@@ -79,11 +79,10 @@ internal fun diagnose(
     @Language("typescript") source: String,
     directives: String = "// @strict: true",
     fileName: String = "t.ts",
-): List<Diagnostic> =
-    TypeScriptCompiler().compile(
-        (if (directives.isEmpty()) "" else directives + "\n") + source.trimIndent(),
-        fileName,
-    ).diagnostics
+): List<Diagnostic> {
+    val text = (if (directives.isEmpty()) "" else directives + "\n") + source.trimIndent()
+    return engineDiagnose(text, fileName) ?: TypeScriptCompiler().compile(text, fileName).diagnostics
+}
 
 /**
  * Compiles [source] EXACTLY as given, bypassing the `// @directive` header format.
