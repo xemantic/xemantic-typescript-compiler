@@ -1,3 +1,6 @@
+**(P18.309) — TS2729 ANCESTOR EXEMPTION AS tsgo (module-file base-class FP fixed) + (CHK.234) MISSING MEMBERS ON INTERSECTION RECEIVERS NOW REPORT, under a trust rule with 0 false positives across 1,100+ census reads — tally unchanged at 191 (type-fest's rows are type-level, a different path); +20 PINS, 22,951 / 0 / 44 (2026-10-06).**
+Screen 0; grid 8x0; libraries unchanged.
+
 
 
 **(P18.308) — (INV.0) EXTRACTION: TS2302 AND TS2729 MOVE OUT OF `Checker.kt` (699 LINES, ZERO WIDENINGS), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 191,075; +15 PINS, 22,931 / 0 / 44 (2026-10-06).**

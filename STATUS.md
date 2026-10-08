@@ -1,5 +1,13 @@
 # Status
 
+**(TSGO.3-a) DONE — emit parity (2026-10-08):** the ported compiler's emit is byte-identical to tsgo 7.0.2 on
+every configuration its compiler runner baselines: `EmitParityTest` (`TSGO_EMIT=1`, a FAILING gate with a positive
+control) reads **13,127 / 13,127** equal across `.js` (incl. `.d.ts`), `.js.map` and `.sourcemap.txt`, and tsc's
+78 sources emit `diff -r`-identical to the tsgo binary (8.8 MB, 65 diagnostics both sides). Four port defects
+fixed in shims (one a real emit bug: `fmt` mis-printed named ints, so >26 temporaries emitted `var _%!d(…)`).
+Re-verified on `d5d569c4f`: diag 13,127 / 13,127, bound oracle 7,774 / 7,774, `-tsgo` 99 / 0, `-goport` 15 / 0,
+0 methods over 8,000 bytecodes. `docs/goport-emit-oracle.md`. Next: (TSGO.3-b), the type oracle.
+
 **(TSGO.2) DONE — ported checker (2026-10-08):** the 42-package `internal/compiler` closure plus tsgo's own test
 harness (ported, 0 overrides) runs in `-tsgo`. `DiagParityTest` (a FAILING gate) covers all four suites tsgo's
 compiler runner runs (submodule + local x compiler + conformance): **13,127 / 13,127** configurations equal to tsgo,
@@ -120,6 +128,3 @@ Screen 0; grid 8x0; mitt and date-fns hold.
 
 **(P18.310) — (LIBS.3): `Omit` / `Pick` MATERIALIZATION COMPLETED + TYPE-LEVEL `X['k']` TS2339 — type-fest fixed-length-array closed, TALLY 191 -> 179, NO ADDED POSITION; the builder stalled and the orchestrator's gates caught 6 stale hover pins (re-pointed to tsgo's hover) and a false positive on tsc's own `scriptInfo.ts` (fixed); +14 PINS, 22,965 / 0 / 44 (2026-10-06).**
 Screen 0; grid 8x0; mitt and date-fns hold.
-
-**(P18.309) — TS2729 ANCESTOR EXEMPTION AS tsgo (module-file base-class FP fixed) + (CHK.234) MISSING MEMBERS ON INTERSECTION RECEIVERS NOW REPORT, under a trust rule with 0 false positives across 1,100+ census reads — tally unchanged at 191 (type-fest's rows are type-level, a different path); +20 PINS, 22,951 / 0 / 44 (2026-10-06).**
-Screen 0; grid 8x0; libraries unchanged.
