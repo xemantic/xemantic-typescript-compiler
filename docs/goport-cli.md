@@ -74,6 +74,12 @@ Porter, override and shim changes (each general):
   `ModeSymlink`, as Go's `ReadDir` (lstat) does — `vfs/internal.Common` then stats it and records it in
   `Entries.Symlinks`.
 
+Every new platform shim has a Kotlin/Native `actual` too ((TSGO.6)'s `linuxX64`, opt-in): POSIX
+`open`/`write`/`mkdir`/`unlink`/`rmdir`/`utime`/`readlink(/proc/self/exe)`, `lstat` for the symlink kind,
+`realpath(3)`, zlib's `inflate` for gzip, `GC.collect()` ("Memory used" reads 0 natively). They COMPILE
+(`compileKotlinLinuxX64`); the CLI has not been run natively yet — the native executable is (TSGO.6)'s
+`NativeCheckMain`, and a native `tsc` entry plus a native arm of this gate are (TSGO.6)/(TSGO.7) work.
+
 ## 2. Not ported / divergences
 
 - `--build` (project references, `internal/execute/build`) and `--watch` — partial stubs, exit status 5.
