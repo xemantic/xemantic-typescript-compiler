@@ -25,32 +25,32 @@
 
 package com.xemantic.typescript.compiler.externals
 
-import com.xemantic.typescript.compiler.ClassDeclaration
-import com.xemantic.typescript.compiler.EnumDeclaration
-import com.xemantic.typescript.compiler.ExportAssignment
-import com.xemantic.typescript.compiler.ExportDeclaration
-import com.xemantic.typescript.compiler.Expression
-import com.xemantic.typescript.compiler.ExternalModuleReference
-import com.xemantic.typescript.compiler.FunctionDeclaration
-import com.xemantic.typescript.compiler.Identifier
-import com.xemantic.typescript.compiler.ImportClause
-import com.xemantic.typescript.compiler.ImportDeclaration
-import com.xemantic.typescript.compiler.ImportEqualsDeclaration
-import com.xemantic.typescript.compiler.InterfaceDeclaration
-import com.xemantic.typescript.compiler.ModifierFlag
-import com.xemantic.typescript.compiler.ModuleDeclaration
-import com.xemantic.typescript.compiler.NamedExports
-import com.xemantic.typescript.compiler.NamedImports
-import com.xemantic.typescript.compiler.NamespaceExport
-import com.xemantic.typescript.compiler.NamespaceImport
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.NodeBase
-import com.xemantic.typescript.compiler.PropertyAccessExpression
-import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.Statement
-import com.xemantic.typescript.compiler.StringLiteralNode
-import com.xemantic.typescript.compiler.TypeAliasDeclaration
-import com.xemantic.typescript.compiler.VariableStatement
+import com.xemantic.typescript.compiler.externals.ts.ClassDeclaration
+import com.xemantic.typescript.compiler.externals.ts.EnumDeclaration
+import com.xemantic.typescript.compiler.externals.ts.ExportAssignment
+import com.xemantic.typescript.compiler.externals.ts.ExportDeclaration
+import com.xemantic.typescript.compiler.externals.ts.Expression
+import com.xemantic.typescript.compiler.externals.ts.ExternalModuleReference
+import com.xemantic.typescript.compiler.externals.ts.FunctionDeclaration
+import com.xemantic.typescript.compiler.externals.ts.Identifier
+import com.xemantic.typescript.compiler.externals.ts.ImportClause
+import com.xemantic.typescript.compiler.externals.ts.ImportDeclaration
+import com.xemantic.typescript.compiler.externals.ts.ImportEqualsDeclaration
+import com.xemantic.typescript.compiler.externals.ts.InterfaceDeclaration
+import com.xemantic.typescript.compiler.externals.ts.ModifierFlag
+import com.xemantic.typescript.compiler.externals.ts.ModuleDeclaration
+import com.xemantic.typescript.compiler.externals.ts.NamedExports
+import com.xemantic.typescript.compiler.externals.ts.NamedImports
+import com.xemantic.typescript.compiler.externals.ts.NamespaceExport
+import com.xemantic.typescript.compiler.externals.ts.NamespaceImport
+import com.xemantic.typescript.compiler.externals.ts.Node
+import com.xemantic.typescript.compiler.externals.ts.NodeBase
+import com.xemantic.typescript.compiler.externals.ts.PropertyAccessExpression
+import com.xemantic.typescript.compiler.externals.ts.SourceFile
+import com.xemantic.typescript.compiler.externals.ts.Statement
+import com.xemantic.typescript.compiler.externals.ts.StringLiteralNode
+import com.xemantic.typescript.compiler.externals.ts.TypeAliasDeclaration
+import com.xemantic.typescript.compiler.externals.ts.VariableStatement
 
 /**
  * (EXT.16) The npm MODULE a generation is wired to: the package's name (what a

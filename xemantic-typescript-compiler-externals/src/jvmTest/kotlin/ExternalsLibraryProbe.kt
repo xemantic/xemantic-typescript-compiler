@@ -25,8 +25,6 @@
 
 package com.xemantic.typescript.compiler.externals
 
-import com.xemantic.typescript.compiler.DiagnosticCategory
-import com.xemantic.typescript.compiler.SourceFileEntry
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.readText

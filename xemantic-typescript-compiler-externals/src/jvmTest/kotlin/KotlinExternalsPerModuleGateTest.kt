@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**

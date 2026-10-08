@@ -35,10 +35,10 @@ package com.xemantic.typescript.compiler.externals
  * to `$XTSC_EXTERNALS_DUMP/<sha-256 of the descriptor>.kt` when that
  * environment variable is set and does nothing otherwise, so a whole test
  * run over one engine is a directory of outputs a run over another engine
- * can be diffed against file by file — the A/B the tsgo re-base was graded
+ * can be diffed against file by file (the diagnostics beside it, `<key>.diag`) — the A/B the tsgo re-base was graded
  * with.
  */
-internal expect fun recordGeneration(descriptor: String, kotlin: String)
+internal expect fun recordGeneration(descriptor: String, kotlin: String, diagnostics: List<ExternalsDiagnostic>)
 
 /** The descriptor [recordGeneration] keys by: every input that decides an output. */
 internal fun generationDescriptor(files: List<Pair<String, String>>, wiring: ModuleWiring?, extra: String = ""): String =

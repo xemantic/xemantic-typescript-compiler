@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**
@@ -361,7 +360,7 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
             "    /* xtsc: skipped heritage clause extends Date */\n" in rendered
         val statics = "        public fun wrapAsLocalDate(jsDate: Any? /* xtsc: unmapped Date */): TomlDate\n" in rendered
         val errorHeader = "public open external class TomlError(message: String, options: Any? " +
-            "/* xtsc: unmapped ErrorOptions & { toml: string; ptr: number; } */) {\n" +
+            "/* xtsc: unmapped TomlErrorOptions */) {\n" +
             "    /* xtsc: skipped heritage clause extends Error */\n" +
             "    public var line: Double\n" in rendered
         // `#private;` is class-private: omitted like a `private` member, and

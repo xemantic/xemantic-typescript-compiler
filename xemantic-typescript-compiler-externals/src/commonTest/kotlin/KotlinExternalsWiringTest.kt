@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**
@@ -744,7 +743,8 @@ class KotlinExternalsWiringTest {
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
         assert(rendered == expected)
-        assert(errorCodes.isEmpty())
+        // (TSGO.4-b) An enum merges with nothing but a namespace or an enum: tsgo 7.0.2 reports TS2567 at `enum K` and at `let K`.
+        assert(errorCodes == listOf(2567, 2567))
     }
 
     @Test
@@ -1007,7 +1007,8 @@ class KotlinExternalsWiringTest {
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
         assert(rendered == expected)
-        assert(errorCodes.isEmpty())
+        // (TSGO.4-b) A `const X` and a `function X` in one namespace are duplicates: tsgo 7.0.2 reports TS2300 at the interface, the const and the function.
+        assert(errorCodes == listOf(2300, 2300, 2300))
     }
 
     @Test
@@ -1061,7 +1062,8 @@ class KotlinExternalsWiringTest {
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
         assert(rendered == expected)
-        assert(errorCodes.isEmpty())
+        // (TSGO.4-b) `namespace A { export const z }` is an INSTANTIATED namespace, which a `const A` duplicates: tsgo 7.0.2 reports TS2300 at all three declarations of `A`.
+        assert(errorCodes == listOf(2300, 2300, 2300))
     }
 
     @Test

@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**
@@ -108,7 +107,7 @@ export default function mitt<Events extends Record<EventType, unknown>>(all?: Ev
         // "consumers bind the module's default" marker IS the wiring now.
         val header = rendered.startsWith("@file:JsModule(\"mitt\")\n\n")
         val defaultBinding =
-            "/* xtsc: constraint on Events: any not carried */\n@JsName(\"default\")\npublic external fun <Events> mitt(" in rendered
+            "/* xtsc: constraint on Events: Record<EventType, unknown> not carried */\n@JsName(\"default\")\npublic external fun <Events> mitt(" in rendered
         val noDefaultMarker = "consumers bind the module's default" !in rendered
         val everythingReachable = "not exported by the package entry" !in rendered
         assert(handler)

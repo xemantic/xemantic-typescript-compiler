@@ -33,8 +33,8 @@ base {
 }
 
 // THE KOTLIN EXTERNALS GENERATOR (owner directive 2026-09-01, Phase 18):
-// consumes the CHECKED program — the same `CheckedNodeSink`/`CheckedLens`
-// facts interface the KIR backend consumes — and emits Kotlin `external`
+// consumes the CHECKED program — since (TSGO.4-b) the tsgo port's own checker,
+// asked after the check — and emits Kotlin `external`
 // declarations whose types are the checker's answers. This is the gap Dukat
 // and Karakum never closed: both translate `.d.ts` SYNTAX, so everything whose
 // answer is not in the syntax (overload selection, generic instantiation,
@@ -55,7 +55,9 @@ kotlin {
 
         commonMain {
             dependencies {
-                api(project(":xemantic-typescript-compiler-core"))
+                // (TSGO.4-b) The engine is the tsgo port: the generator's
+                // semantic layer reads tsgo's own checker, after the check.
+                implementation(project(":xemantic-typescript-compiler-tsgo"))
             }
         }
 
@@ -119,7 +121,11 @@ tasks.named<Test>("jvmTest") {
     // (TSGO.4-b) The probes and the engine bench are selected by environment
     // variables; make them test inputs, or a probe run after a plain run is
     // UP-TO-DATE and measures nothing. `XTSC_TEST_HEAP` raises the worker's
-    // heap for a large probe (the `-tsgo` module's `TSGO_TEST_HEAP` twin).
+    // heap for a large probe (the `-tsgo` module's `TSGO_TEST_HEAP` twin). The
+    // default is 2 GB: every generation builds a tsgo program over the bundled
+    // TypeScript 7 libraries (the DOM's among them), which the Gradle default
+    // of 512 MB cannot hold beside the Kotlin compile gates.
+    maxHeapSize = "2g"
     for (v in listOf(
         "XTSC_EXTERNALS_PROBE_FILES", "XTSC_EXTERNALS_PROBE_ROOT", "XTSC_EXTERNALS_PROBE_OUT",
         "XTSC_EXTERNALS_PROBE_MODULE", "XTSC_EXTERNALS_PROBE_MODULES", "XTSC_EXTERNALS_PROBE_MODULE_FILTER",

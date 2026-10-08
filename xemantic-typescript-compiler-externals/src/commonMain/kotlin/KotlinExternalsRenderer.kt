@@ -25,17 +25,17 @@
 
 package com.xemantic.typescript.compiler.externals
 
-import com.xemantic.typescript.compiler.CheckedLens
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.NodeBase
-import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.Symbol
-import com.xemantic.typescript.compiler.SymbolFlags
-import com.xemantic.typescript.compiler.Type
-import com.xemantic.typescript.compiler.TypeFlags
-import com.xemantic.typescript.compiler.booleanType
-import com.xemantic.typescript.compiler.numberType
-import com.xemantic.typescript.compiler.stringType
+import com.xemantic.typescript.compiler.externals.ts.CheckedLens
+import com.xemantic.typescript.compiler.externals.ts.Node
+import com.xemantic.typescript.compiler.externals.ts.NodeBase
+import com.xemantic.typescript.compiler.externals.ts.SourceFile
+import com.xemantic.typescript.compiler.externals.ts.Symbol
+import com.xemantic.typescript.compiler.externals.ts.SymbolFlags
+import com.xemantic.typescript.compiler.externals.ts.Type
+import com.xemantic.typescript.compiler.externals.ts.TypeFlags
+import com.xemantic.typescript.compiler.externals.ts.booleanType
+import com.xemantic.typescript.compiler.externals.ts.numberType
+import com.xemantic.typescript.compiler.externals.ts.stringType
 
 /**
  * One rendered top-level declaration — a generated interface, or the loud

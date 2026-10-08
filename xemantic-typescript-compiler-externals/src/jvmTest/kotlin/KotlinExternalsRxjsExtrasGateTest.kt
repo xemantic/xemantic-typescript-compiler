@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**
@@ -1726,7 +1725,12 @@ export { zipWith } from './internal/operators/zipWith';
         assert(check.successful)
         // (EXT.16) The entry's two `/// <reference path>` lines name entries
         // this fixture does not carry: TS6053 twice, and nothing else.
-        assert(errorCodes == listOf(6053, 6053))
+        // (TSGO.4-b) And TS2307 for every re-export of a file the fixture does
+        // not carry (152 rows, none naming a carried file — measured), which
+        // tsgo reports and the former checker did not.
+        assert(errorCodes.count { it == 6053 } == 2)
+        assert(errorCodes.count { it == 2307 } == 152)
+        assert(errorCodes.all { it == 6053 || it == 2307 })
     }
 
     @Test
@@ -1767,15 +1771,15 @@ export { zipWith } from './internal/operators/zipWith';
         // it, at its position.
         val firstBlock = "/* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, D> first(predicate: Any?, defaultValue: D) */\n" +
             "\n" +
-            "public external fun <T> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
+            "public external fun <T> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */): Any? /* xtsc: unmapped OperatorFunction<T, TruthyTypesOf<T>> */\n" +
             "\n" +
-            "public external fun <T, D> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */ = definedExternally, defaultValue: D = definedExternally): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
+            "public external fun <T, D> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */ = definedExternally, defaultValue: D = definedExternally): Any? /* xtsc: unmapped OperatorFunction<T, D | TruthyTypesOf<T>> */\n" +
             "\n" +
-            "/* xtsc: constraint on S: any not carried */\n" +
+            "/* xtsc: constraint on S: T not carried */\n" +
             "public external fun <T, S> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: S? = definedExternally): OperatorFunction<T, S>\n" +
             "\n" +
-            "/* xtsc: constraint on S: any not carried */\n" +
-            "public external fun <T, S, D> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: D): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
+            "/* xtsc: constraint on S: T not carried */\n" +
+            "public external fun <T, S, D> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: D): Any? /* xtsc: unmapped OperatorFunction<T, D | S> */\n" +
             "\n" +
             "/* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, S> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: S?) */\n"
         val first = firstBlock in rendered
@@ -1831,8 +1835,8 @@ export { zipWith } from './internal/operators/zipWith';
         // one the source declares and one both references spell with the ellipsis. The element
         // still renders `any` because `ObservableInputTuple<A>` is unmappable here (B58.1),
         // which is what the enclosing `xtsc: unmapped` marker exists to announce.
-        val operatorZipInternal = "/* xtsc: function zip is not exported by the package entry - an internal path a consumer cannot bind */\npublic external fun <T, A, R> zip(otherInputsAndProject: Any? /* xtsc: unmapped [...any] */, project: Any? /* xtsc: unmapped (...values: Cons<T, A>) => any */): OperatorFunction<T, R>\n" in rendered
-        val observableZipBound = "/* xtsc: constraint on A: readonly unknown[] not carried */\npublic external fun <A> zip(sources: Any? /* xtsc: unmapped [...any] */): Observable<A>\n" in rendered
+        val operatorZipInternal = "/* xtsc: function zip is not exported by the package entry - an internal path a consumer cannot bind */\npublic external fun <T, A, R> zip(otherInputsAndProject: Any? /* xtsc: unmapped [...ObservableInputTuple<A>] */, project: Any? /* xtsc: unmapped (arg: T, ...rest: A) => R */): OperatorFunction<T, R>\n" in rendered
+        val observableZipBound = "/* xtsc: constraint on A: readonly unknown[] not carried */\npublic external fun <A> zip(sources: Any? /* xtsc: unmapped [...ObservableInputTuple<A>] */): Observable<A>\n" in rendered
         val internalPaths = Regex("not exported by the package entry").findAll(rendered).count() == 10
         val fiveJsNames = Regex("^@JsName\\(", RegexOption.MULTILINE).findAll(rendered).count() == 5
         assert(header)
@@ -1864,7 +1868,7 @@ export { zipWith } from './internal/operators/zipWith';
         // The tuple-typed sources, the construct signatures behind the
         // companion values and the `typeof` re-routes keep their markers;
         // nothing collapsed silently into a plain `Any?` parameter.
-        val tupleSources = "public external fun <A> zip(sources: Any? /* xtsc: unmapped [...any] */): Observable<A>\n" in rendered
+        val tupleSources = "public external fun <A> zip(sources: Any? /* xtsc: unmapped [...ObservableInputTuple<A>] */): Observable<A>\n" in rendered
         val constructSignature = "public external interface AjaxErrorCtor {\n    /* xtsc: skipped construct signature */\n}\n" in rendered
         val booleanConstructor = "predicate: Any? /* xtsc: unmapped BooleanConstructor */" in rendered
         // (EXT.12) The `null`-predicate `first` is the collapse's loser and

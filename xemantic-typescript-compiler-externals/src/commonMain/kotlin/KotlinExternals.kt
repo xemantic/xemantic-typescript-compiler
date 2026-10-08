@@ -25,72 +25,65 @@
 
 package com.xemantic.typescript.compiler.externals
 
-import com.xemantic.typescript.compiler.Binder
-import com.xemantic.typescript.compiler.CheckedLens
-import com.xemantic.typescript.compiler.CheckedNodeSink
-import com.xemantic.typescript.compiler.Checker
-import com.xemantic.typescript.compiler.ClassDeclaration
-import com.xemantic.typescript.compiler.ClassExpression
-import com.xemantic.typescript.compiler.ClassStaticBlockDeclaration
-import com.xemantic.typescript.compiler.CompilerOptions
-import com.xemantic.typescript.compiler.Constructor
-import com.xemantic.typescript.compiler.Diagnostic
-import com.xemantic.typescript.compiler.DiagnosticCategory
-import com.xemantic.typescript.compiler.EnumDeclaration
-import com.xemantic.typescript.compiler.ExportAssignment
-import com.xemantic.typescript.compiler.ExportDeclaration
-import com.xemantic.typescript.compiler.ArrayType
-import com.xemantic.typescript.compiler.BigIntLiteralNode
-import com.xemantic.typescript.compiler.Expression
-import com.xemantic.typescript.compiler.FunctionDeclaration
-import com.xemantic.typescript.compiler.FunctionType
-import com.xemantic.typescript.compiler.GetAccessor
-import com.xemantic.typescript.compiler.HeritageClause
-import com.xemantic.typescript.compiler.ExternalModuleReference
-import com.xemantic.typescript.compiler.Identifier
-import com.xemantic.typescript.compiler.ImportDeclaration
-import com.xemantic.typescript.compiler.ImportEqualsDeclaration
-import com.xemantic.typescript.compiler.IndexSignature
-import com.xemantic.typescript.compiler.InterfaceDeclaration
-import com.xemantic.typescript.compiler.KeywordTypeNode
-import com.xemantic.typescript.compiler.LiteralType
-import com.xemantic.typescript.compiler.MethodDeclaration
-import com.xemantic.typescript.compiler.ModifierFlag
-import com.xemantic.typescript.compiler.ModuleBlock
-import com.xemantic.typescript.compiler.ModuleDeclaration
-import com.xemantic.typescript.compiler.NamedExports
-import com.xemantic.typescript.compiler.NamespaceImport
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.NodeBase
-import com.xemantic.typescript.compiler.NumericLiteralNode
-import com.xemantic.typescript.compiler.Parameter
-import com.xemantic.typescript.compiler.ParenthesizedType
-import com.xemantic.typescript.compiler.Parser
-import com.xemantic.typescript.compiler.PrefixUnaryExpression
-import com.xemantic.typescript.compiler.PropertyAccessExpression
-import com.xemantic.typescript.compiler.PropertyDeclaration
-import com.xemantic.typescript.compiler.QualifiedName
-import com.xemantic.typescript.compiler.SemicolonClassElement
-import com.xemantic.typescript.compiler.SetAccessor
-import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.SourceFileEntry
-import com.xemantic.typescript.compiler.Statement
-import com.xemantic.typescript.compiler.StringLiteralNode
-import com.xemantic.typescript.compiler.SyntaxKind
-import com.xemantic.typescript.compiler.Type
-import com.xemantic.typescript.compiler.TypeAliasDeclaration
-import com.xemantic.typescript.compiler.TypeNode
-import com.xemantic.typescript.compiler.TypeOperator
-import com.xemantic.typescript.compiler.TypeFlags
-import com.xemantic.typescript.compiler.TypeParameter
-import com.xemantic.typescript.compiler.TypeQuery
-import com.xemantic.typescript.compiler.TypeReference
-import com.xemantic.typescript.compiler.UnionType
-import com.xemantic.typescript.compiler.VariableDeclaration
-import com.xemantic.typescript.compiler.VariableStatement
-import com.xemantic.typescript.compiler.anyType
-import com.xemantic.typescript.compiler.computeParserFlags
-import com.xemantic.typescript.compiler.runWithDeepStack
+import com.xemantic.typescript.compiler.externals.ts.CheckedLens
+import com.xemantic.typescript.compiler.externals.ts.ClassDeclaration
+import com.xemantic.typescript.compiler.externals.ts.ClassExpression
+import com.xemantic.typescript.compiler.externals.ts.ClassStaticBlockDeclaration
+import com.xemantic.typescript.compiler.externals.ts.Constructor
+import com.xemantic.typescript.compiler.externals.ts.EnumDeclaration
+import com.xemantic.typescript.compiler.externals.ts.ExportAssignment
+import com.xemantic.typescript.compiler.externals.ts.ExportDeclaration
+import com.xemantic.typescript.compiler.externals.ts.ArrayType
+import com.xemantic.typescript.compiler.externals.ts.BigIntLiteralNode
+import com.xemantic.typescript.compiler.externals.ts.Expression
+import com.xemantic.typescript.compiler.externals.ts.FunctionDeclaration
+import com.xemantic.typescript.compiler.externals.ts.FunctionType
+import com.xemantic.typescript.compiler.externals.ts.GetAccessor
+import com.xemantic.typescript.compiler.externals.ts.HeritageClause
+import com.xemantic.typescript.compiler.externals.ts.ExternalModuleReference
+import com.xemantic.typescript.compiler.externals.ts.Identifier
+import com.xemantic.typescript.compiler.externals.ts.ImportDeclaration
+import com.xemantic.typescript.compiler.externals.ts.ImportEqualsDeclaration
+import com.xemantic.typescript.compiler.externals.ts.IndexSignature
+import com.xemantic.typescript.compiler.externals.ts.InterfaceDeclaration
+import com.xemantic.typescript.compiler.externals.ts.KeywordTypeNode
+import com.xemantic.typescript.compiler.externals.ts.LiteralType
+import com.xemantic.typescript.compiler.externals.ts.MethodDeclaration
+import com.xemantic.typescript.compiler.externals.ts.ModifierFlag
+import com.xemantic.typescript.compiler.externals.ts.ModuleBlock
+import com.xemantic.typescript.compiler.externals.ts.ModuleDeclaration
+import com.xemantic.typescript.compiler.externals.ts.NamedExports
+import com.xemantic.typescript.compiler.externals.ts.NamespaceImport
+import com.xemantic.typescript.compiler.externals.ts.Node
+import com.xemantic.typescript.compiler.externals.ts.NodeBase
+import com.xemantic.typescript.compiler.externals.ts.NumericLiteralNode
+import com.xemantic.typescript.compiler.externals.ts.Parameter
+import com.xemantic.typescript.compiler.externals.ts.ParenthesizedType
+import com.xemantic.typescript.compiler.externals.ts.PrefixUnaryExpression
+import com.xemantic.typescript.compiler.externals.ts.PropertyAccessExpression
+import com.xemantic.typescript.compiler.externals.ts.PropertyDeclaration
+import com.xemantic.typescript.compiler.externals.ts.QualifiedName
+import com.xemantic.typescript.compiler.externals.ts.SemicolonClassElement
+import com.xemantic.typescript.compiler.externals.ts.SetAccessor
+import com.xemantic.typescript.compiler.externals.ts.SourceFile
+import com.xemantic.typescript.compiler.externals.ts.Statement
+import com.xemantic.typescript.compiler.externals.ts.StringLiteralNode
+import com.xemantic.typescript.compiler.externals.ts.SyntaxKind
+import com.xemantic.typescript.compiler.externals.ts.Type
+import com.xemantic.typescript.compiler.externals.ts.TypeAliasDeclaration
+import com.xemantic.typescript.compiler.externals.ts.TypeNode
+import com.xemantic.typescript.compiler.externals.ts.TypeOperator
+import com.xemantic.typescript.compiler.externals.ts.TypeFlags
+import com.xemantic.typescript.compiler.externals.ts.TypeParameter
+import com.xemantic.typescript.compiler.externals.ts.TypeQuery
+import com.xemantic.typescript.compiler.externals.ts.Tree
+import com.xemantic.typescript.compiler.externals.ts.TypeReference
+import com.xemantic.typescript.compiler.externals.ts.UnionType
+import com.xemantic.typescript.compiler.externals.ts.VariableDeclaration
+import com.xemantic.typescript.compiler.externals.ts.VariableStatement
+import com.xemantic.typescript.compiler.externals.ts.OtherNode
+import com.xemantic.typescript.compiler.externals.ts.anyType
+import com.xemantic.typescript.compiler.externals.ts.onDeepStack
 
 /**
  * Kotlin `external` declarations generated from a CHECKED TypeScript program.
@@ -104,25 +97,28 @@ import com.xemantic.typescript.compiler.runWithDeepStack
  * `Species` there and as `String` here, because the type was resolved by the
  * same engine that type-checked the program.
  *
+ * (TSGO.4-b) That engine is tsgo — the TypeScript 7 checker, ported to Kotlin
+ * (`xemantic-typescript-compiler-tsgo`) — so a resolved type here is the type
+ * the TypeScript compiler itself computes, by its own algorithm.
+ *
  * ## Error policy
  *
  * A program with checker ERRORS is still rendered — refusing would make the
- * generator unusable on any program this checker is not yet perfect on — and
- * the diagnostics are exposed on [diagnostics]/[errors] so a caller can decide
- * for itself whether to trust the output.
+ * generator unusable on a declaration set with a single unresolved import —
+ * and the diagnostics are exposed on [diagnostics]/[errors] so a caller can
+ * decide for itself whether to trust the output.
  *
  * ## Collection model
  *
- * Facts are collected DURING the [CheckedNodeSink] callback into immutable
- * model values carrying only strings — no AST node, [com.xemantic.typescript.compiler.Type]
- * or [com.xemantic.typescript.compiler.Symbol] is retained, and nothing is
- * keyed by a node — which is what keeps this module entirely in `commonMain`
- * (the kir `CheckedFacts` alternative keys by node identity via
- * `IdentityHashMap`, which is `java.*` and forces `jvmMain`). The one identity
- * question left — "was this node visited before?" (the spine may walk a tree
- * more than once) — is answered by a linear `===` scan, the same pattern
- * `CheckedFacts.file` uses, which is safe where a `HashMap` keyed by a data-class
- * node would deep-recurse `hashCode()` over the whole subtree.
+ * The program is checked FIRST, and the generator then walks its declarations
+ * asking tsgo's checker for what it needs ([com.xemantic.typescript.compiler.externals.ts.CheckedLens]):
+ * tsgo keeps no walk-scoped state a later question would miss, so a question
+ * asked after the check is exact. Facts are collected into immutable model
+ * values carrying only strings — no AST node, type or symbol is retained by
+ * the model, and nothing is keyed by a node — which is what keeps this module
+ * in `commonMain`. The one identity question left — "was this declaration
+ * collected already?" (every declaration of a dotted namespace chain is one
+ * view node) — is answered by a linear `===` scan.
  */
 public class KotlinExternals internal constructor(
     /** The generated Kotlin source: `public external interface` declarations. */
@@ -138,49 +134,68 @@ public class KotlinExternals internal constructor(
      * TYPE MAPPING, and the `external` modifier is outside it.
      */
     public val compileCheckSource: String,
-    /** Everything the parser and checker reported, in that order. */
-    public val diagnostics: List<Diagnostic>,
+    /** Everything the parser, binder and checker reported for the generated files, then the global diagnostics. */
+    public val diagnostics: List<ExternalsDiagnostic>,
 ) {
 
     /** The diagnostics that are errors — the caller's reason to distrust [kotlin]. */
-    public val errors: List<Diagnostic>
+    public val errors: List<ExternalsDiagnostic>
         get() = diagnostics.filter { it.category == DiagnosticCategory.Error }
 
+}
+
+/** One TypeScript source file of a generation: its name (path-shaped for a package) and its text. */
+public data class SourceFileEntry(
+    val fileName: String,
+    val content: String,
+)
+
+/** A diagnostic's category, tsgo's `diagnostics.Category`. */
+public enum class DiagnosticCategory { Warning, Error, Suggestion, Message }
+
+/**
+ * One diagnostic tsgo reported for the program a generation checked. [line]
+ * and [character] are 1-based (UTF-16 columns), null for a diagnostic with
+ * no file; [fileName] is the name the caller gave the file.
+ */
+public class ExternalsDiagnostic(
+    public val fileName: String?,
+    public val line: Int?,
+    public val character: Int?,
+    public val category: DiagnosticCategory,
+    public val code: Int,
+    public val message: String,
+) {
+    override fun toString(): String = "${fileName ?: "-"}:${line ?: 0}:${character ?: 0} $category TS$code $message"
 }
 
 /**
  * Parses, binds and checks [source], and renders Kotlin `external` declarations
  * for every exported interface it declares.
  *
- * The shape of the front half is `kir`'s `checkTypeScript`, and both of its
- * non-obvious choices are inherited deliberately: `useRealLibs` because an
- * unknown name degrades to `any` SILENTLY (so the failure would be a wrong
- * declaration rather than a diagnostic), and [runWithDeepStack] because the
- * checker recurses deeply on ordinary input and `Checker`'s `init` block IS the
- * check — the sink has already fired by the time the constructor returns.
+ * The program is tsgo's: the bundled TypeScript 7 libraries and default
+ * compiler options, checked on a thread with tsgo's goroutine stack, because
+ * the checker recurses deeply on ordinary input.
  */
 public fun generateKotlinExternals(
     fileName: String,
     source: String,
-    options: CompilerOptions = CompilerOptions(useRealLibs = true),
     module: ModuleWiring? = null,
 ): KotlinExternals =
-    generateKotlinExternals(files = listOf(SourceFileEntry(fileName, source)), options = options, module = module)
+    generateKotlinExternals(files = listOf(SourceFileEntry(fileName, source)), module = module)
 
 /**
  * (EXT.7) The MULTI-FILE entry point: one program over every [files] entry —
- * a package's whole `dist` declaration set, say — bound by ONE [Binder] (a program's
- * binder results must share one binder's tables, exactly as
- * `TypeScriptCompiler`'s multi-file site does) and checked by ONE [Checker],
- * so an import between the files resolves and a member typed by ANOTHER
- * file's exported interface renders by NAME under the same positive-identity
+ * a package's whole `dist` declaration set, say — checked by ONE checker, so
+ * an import between the files resolves and a member typed by ANOTHER file's
+ * exported interface renders by NAME under the same positive-identity
  * evidence a same-file reference gets.
  *
  * Give the files PATH-shaped names (`/pkg/dist/index.d.ts`), the shape every
  * published package has: the checker resolves a relative specifier against
- * the importer's directory (measured, a flat name happens to resolve too, but
- * that is not a contract to lean on). A `.js` specifier resolves to its
- * `.d.ts`/`.ts` sibling, the checker's own rule.
+ * the importer's directory. A name that is not absolute (`t.ts`) is checked
+ * as `/t.ts`. A `.js` specifier resolves to its `.d.ts`/`.ts` sibling, the
+ * checker's own rule.
  *
  * The output is ONE Kotlin source in walk order — the files' order, then
  * declaration order within each — which is what a consumer of the package
@@ -215,16 +230,15 @@ public fun generateKotlinExternals(
  */
 public fun generateKotlinExternals(
     files: List<SourceFileEntry>,
-    options: CompilerOptions = CompilerOptions(useRealLibs = true),
     module: ModuleWiring? = null,
-): KotlinExternals {
-    val run = runGeneration(files, options, module, generatedModules = emptySet())
+): KotlinExternals = withProgram(files) { program ->
+    val run = runGeneration(program, module, generatedModules = emptySet())
     val declarations = run.collector.finish()
-    return KotlinExternals(
+    KotlinExternals(
         kotlin = renderKotlinExternals(declarations, external = true, header = run.header),
         compileCheckSource = renderKotlinExternals(declarations, external = false, header = run.header),
-        diagnostics = run.diagnostics,
-    ).also { recordGeneration(generationDescriptor(files.map { it.fileName to it.content }, module), it.kotlin) }
+        diagnostics = program.diagnostics,
+    ).also { recordGeneration(generationDescriptor(files.map { it.fileName to it.content }, module), it.kotlin, it.diagnostics) }
 }
 
 /**
@@ -244,12 +258,13 @@ public fun generateKotlinExternals(
  * type parameters and their own bases — because Kotlin's `override`, `open`
  * and heritage-clash rules are decided over the whole chain and TypeScript
  * has no counterpart for any of them. Those declarations are a product of
- * the check, so the set is generated twice: pass 1 collects every module's
- * frozen tree and lifts it into that module's Kotlin package
+ * the collection, so the set is collected twice: pass 1 collects every
+ * module's frozen tree and lifts it into that module's Kotlin package
  * ([liftIntoPackage]); pass 2 re-runs each generation with the OTHER
- * modules' lifted trees in hand and renders it. Only the string-only models
- * cross between the passes — no AST, no checker and no collector is
- * retained, which is what keeps a 51-module set inside an ordinary heap.
+ * modules' lifted trees in hand and renders it. (TSGO.4-b) Both passes, and
+ * every module, read ONE checked program: the collection asks the checker
+ * after the check, so the program no longer has to be rebuilt per
+ * generation; only the string-only models cross between the passes.
  *
  * Between the passes the `open` attribution is computed ONCE over the whole
  * lifted set ([openedAcrossModules]) and restated per generation
@@ -266,8 +281,7 @@ public fun generateKotlinExternals(
 public fun generateKotlinExternalsPerModule(
     files: List<SourceFileEntry>,
     modules: List<ModuleWiring>,
-    options: CompilerOptions = CompilerOptions(useRealLibs = true),
-): Map<String, KotlinExternals> {
+): Map<String, KotlinExternals> = withProgram(files) { program ->
     val generated = modules.map { it.moduleName }.toSet()
     // Pass 1: every module's frozen tree, and the same tree lifted into its
     // own Kotlin package. A module with no package of its own is generated
@@ -275,7 +289,7 @@ public fun generateKotlinExternalsPerModule(
     val frozen = LinkedHashMap<String, List<ExternalDeclaration>>()
     val lifted = LinkedHashMap<String, ForeignPackage>()
     for (wiring in modules) {
-        val tree = runGeneration(files, options, wiring, generated).collector.frozenDeclarations()
+        val tree = runGeneration(program, wiring, generated).collector.frozenDeclarations()
         frozen[wiring.moduleName] = tree
         packageSegmentsOf(wiring)?.let { segments ->
             lifted[wiring.moduleName] = ForeignPackage(segments, liftIntoPackage(tree, segments))
@@ -290,7 +304,7 @@ public fun generateKotlinExternalsPerModule(
         val extraOpen =
             if (own == null) emptyMap()
             else translateOpened(frozen.getValue(wiring.moduleName), own.declarations, openedAcross)
-        val run = runGeneration(files, options, wiring, generated)
+        val run = runGeneration(program, wiring, generated)
         // The REDUCE reads the same tables the renderer will: its heritage
         // pruning decides the model the renderer then renders, and pruning
         // with one table and rendering with another is a divergence nothing
@@ -301,13 +315,13 @@ public fun generateKotlinExternalsPerModule(
         result[wiring.moduleName] = KotlinExternals(
             kotlin = renderKotlinExternals(declarations, true, run.header, foreign, extraOpen),
             compileCheckSource = renderKotlinExternals(declarations, false, run.header, foreign, extraOpen),
-            diagnostics = run.diagnostics,
+            diagnostics = program.diagnostics,
         ).also {
             val set = "per-module:" + modules.joinToString(",") { m -> "${m.moduleName}|${m.entryFileName}|${m.packageRoot}" }
-            recordGeneration(generationDescriptor(files.map { f -> f.fileName to f.content }, wiring, set), it.kotlin)
+            recordGeneration(generationDescriptor(files.map { f -> f.fileName to f.content }, wiring, set), it.kotlin, it.diagnostics)
         }
     }
-    return result
+    result
 }
 
 /** (EXT.24) The Kotlin package a wiring's generation renders into, as identifier segments; null where the specifier maps to none. */
@@ -315,58 +329,65 @@ private fun packageSegmentsOf(wiring: ModuleWiring): List<String>? =
     (kotlinPackageNameFor(wiring.moduleName, wiring.packageRoot) as? KotlinPackageName.Derived)
         ?.spelling?.split('.')?.map { it.trim('`') }
 
-/** (EXT.24) One generation's check, before any reduction or rendering. */
+/**
+ * (TSGO.4-b) Checks [files] as ONE tsgo program and runs [body] over it, on a
+ * thread with tsgo's stack — the generation's whole lifetime, since every
+ * collection asks the checker.
+ */
+private fun <R> withProgram(files: List<SourceFileEntry>, body: (Tree) -> R): R = onDeepStack {
+    val program = Tree(files.map { it.fileName to it.content })
+    try {
+        body(program)
+    } finally {
+        program.release()
+    }
+}
+
+/** (EXT.24) One generation's collection, before any reduction or rendering. */
 private class GenerationRun(
     val collector: ExternalsCollector,
     val header: ModuleHeader?,
-    val diagnostics: List<Diagnostic>,
 )
 
 /**
- * (EXT.24) Parses, binds and checks [files] for ONE wiring — the front half
+ * (EXT.24) Collects [program]'s declarations for ONE wiring — the front half
  * every entry point shares. [generatedModules] names the specifiers whose
  * generations exist beside this one; empty means this generation is alone
  * and a cross-module heritage base stays the (EXT.21b) marker.
+ *
+ * (TSGO.4-b) The collector is driven by a walk of the checked program —
+ * every file in order, each statement list in source order, a namespace
+ * before its body — which is the order the checker's own walk handed it the
+ * same declarations in, and the order its first-wins name rules decide by.
  */
 private fun runGeneration(
-    files: List<SourceFileEntry>,
-    options: CompilerOptions,
+    program: Tree,
     module: ModuleWiring?,
     generatedModules: Set<String>,
 ): GenerationRun {
-    val parseDiagnostics = mutableListOf<Diagnostic>()
-    val sourceFiles = files.map { file ->
-        val flags = computeParserFlags(file.fileName, file.content, options)
-        val parser = Parser(
-            file.content,
-            file.fileName,
-            forceJsx = flags.forceJsx,
-            topLevelAwait = flags.topLevelAwait,
-            needsJsxFlag = flags.needsJsxFlag,
-            noImplicitAny = flags.noImplicitAny,
-        )
-        val sourceFile = parser.parse()
-        parseDiagnostics += parser.getDiagnostics()
-        sourceFile
-    }
-    val binder = Binder(options)
-    val binderResults = sourceFiles.map { binder.bind(it) }
+    val sourceFiles = program.sourceFiles
     val plan = module?.let { ExportPlan(sourceFiles, it) }
     val collector = ExternalsCollector(Surface(sourceFiles, plan), plan, generatedModules)
-    val checker = runWithDeepStack {
-        Checker(
-            options,
-            binderResults,
-            isMultiFileSource = true,
-            checkedSink = collector,
-        )
+    fun walk(statements: List<Statement>) {
+        for (statement in statements) {
+            when (statement) {
+                is VariableStatement ->
+                    for (declaration in statement.declarationList.declarations) collector.declaration(declaration, program.lens)
+                is ModuleDeclaration -> {
+                    collector.declaration(statement, program.lens)
+                    (statement.body as? ModuleBlock)?.let { walk(it.statements) }
+                }
+                else -> collector.declaration(statement, program.lens)
+            }
+        }
     }
+    for (sourceFile in sourceFiles) walk(sourceFile.statements)
     val header = plan?.let {
         // (EXT.21) The package is derived from the SPECIFIER the wiring names,
         // under the wiring's optional root prefix.
         ModuleHeader(it.moduleName, it.umd, kotlinPackageNameFor(it.moduleName, module.packageRoot))
     }
-    return GenerationRun(collector, header, parseDiagnostics + checker.getDiagnostics())
+    return GenerationRun(collector, header)
 }
 
 /**
@@ -781,12 +802,11 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
 }
 
 /**
- * Collects exported interfaces as the checker walks past their declarations.
+ * Collects exported declarations as the generation walks past them
+ * ([runGeneration]).
  *
- * Everything the lens is asked happens INSIDE [declaration] — a [CheckedLens]
- * is valid only for the duration of the callback that received it, so member
- * types are resolved and mapped to Kotlin TEXT on the spot, and the model
- * retains no checker object at all.
+ * Member types are resolved through the [CheckedLens] and mapped to Kotlin
+ * TEXT on the spot, so the model retains no checker object at all.
  *
  * (EXT.13) Declarations are collected into a tree of SCOPES ([ScopeBuilder]):
  * the module surface at the root, one builder per nested namespace, created
@@ -812,7 +832,7 @@ private class ExternalsCollector(
      * supertype` plus 27 `inherits conflicting members`).
      */
     private val generatedModules: Set<String> = emptySet(),
-) : CheckedNodeSink {
+) {
 
     /**
      * One collected entry: the declaration, the file it came from (the
@@ -3276,9 +3296,7 @@ private class ExternalsCollector(
      */
     private val seen = mutableListOf<Node>()
 
-    override fun expression(node: Expression, lens: CheckedLens) {}
-
-    override fun declaration(node: Node, lens: CheckedLens) {
+    fun declaration(node: Node, lens: CheckedLens) {
         // (EXT.4) Membership, not modifiers, for EVERY kind: the sink fires
         // for NESTED declarations too (a namespace body, a function body), and
         // only the pre-scanned surface is generated — (EXT.13) each entry at
@@ -3687,6 +3705,9 @@ private class ExternalsCollector(
                 // (EXT.15) With the index signature rendered the `when` is
                 // exhaustive over every class element kind.
                 is ClassStaticBlockDeclaration -> {}
+                // (TSGO.4-b) A class member kind with no Kotlin shape, named
+                // by tsgo's own kind name.
+                is OtherNode -> target.add(SkippedMember(member.kindName))
             }
         }
         dedupeOverloads(members)
@@ -3786,7 +3807,7 @@ private class ExternalsCollector(
             scope = scopeOf(emptySet(), site, lens),
         ) ?: return SkippedDeclaration(
             "type alias $name with unmappable body " +
-                commentSafe(lens.render(lens.typeOfTypeNode(node.type)))
+                commentSafe(lens.renderAliasBody(lens.typeOfTypeNode(node.type)))
         )
         return ExternalTypeAlias(name, emptyList(), drainedMarkers(), mapped)
     }
@@ -4004,6 +4025,9 @@ private class ExternalsCollector(
                 // A stray `;` between members is pure syntax — there is
                 // nothing to generate and nothing to mark.
                 is SemicolonClassElement -> {}
+                // A member kind with no Kotlin shape here, named by tsgo's
+                // own kind name.
+                is OtherNode -> members.add(SkippedMember(member.kindName))
                 else -> members.add(
                     SkippedMember(member::class.simpleName ?: "member")
                 )

@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**
@@ -1381,7 +1380,12 @@ export { zipWith } from './internal/operators/zipWith';
         // (EXT.16) The entry's two `/// <reference path="…/index.d.ts" />`
         // lines name the `operators` and `testing` entries, which this
         // fixture does not carry: TS6053 twice, and nothing else.
-        assert(errorCodes == listOf(6053, 6053))
+        // (TSGO.4-b) And TS2307 for every re-export of a file the fixture does
+        // not carry (156 rows, none naming a carried file — measured), which
+        // tsgo reports and the former checker did not.
+        assert(errorCodes.count { it == 6053 } == 2)
+        assert(errorCodes.count { it == 2307 } == 156)
+        assert(errorCodes.all { it == 6053 || it == 2307 })
     }
 
     @Test
@@ -1482,8 +1486,8 @@ export { zipWith } from './internal/operators/zipWith';
         // an OPTIONAL parameter inside a function type (arity), and a
         // `Promise<T>` (no classpath in the gate, not a built-in).
         val distinctUnion = "public open external class Subscriber<T>(destination: Any? /* xtsc: unmapped Observer<any> | Subscriber<any> */ = definedExternally) : Subscription, Observer<T> {\n" in rendered
-        val optionalInFunctionType = "public fun <T> create(next: Any? /* xtsc: unmapped (x?: T | undefined) => void */ = definedExternally, error: Any? /* xtsc: unmapped (e?: any | undefined) => void */ = definedExternally, complete: (() -> Unit)? = definedExternally): Subscriber<T>\n" in rendered
-        val promise = "    public fun toPromise(): Any? /* xtsc: unmapped Promise<any> */\n" in rendered
+        val optionalInFunctionType = "public fun <T> create(next: Any? /* xtsc: unmapped (x?: T | undefined) => void */ = definedExternally, error: Any? /* xtsc: unmapped (e?: any) => void */ = definedExternally, complete: (() -> Unit)? = definedExternally): Subscriber<T>\n" in rendered
+        val promise = "    public fun toPromise(): Any? /* xtsc: unmapped Promise<T | undefined> */\n" in rendered
         assert(distinctUnion)
         assert(optionalInFunctionType)
         assert(promise)

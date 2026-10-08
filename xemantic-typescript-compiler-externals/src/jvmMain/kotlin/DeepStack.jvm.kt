@@ -23,18 +23,13 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-package com.xemantic.typescript.compiler.externals
+package com.xemantic.typescript.compiler.externals.ts
 
-import java.nio.file.Files
-import java.nio.file.Path
-import java.security.MessageDigest
-
-internal actual fun recordGeneration(descriptor: String, kotlin: String, diagnostics: List<ExternalsDiagnostic>) {
-    val dir = System.getenv("XTSC_EXTERNALS_DUMP")?.takeIf { it.isNotEmpty() } ?: return
-    val digest = MessageDigest.getInstance("SHA-256").digest(descriptor.toByteArray(Charsets.UTF_8))
-    val key = digest.joinToString("") { "%02x".format(it) }.take(24)
-    val target = Path.of(dir)
-    Files.createDirectories(target)
-    Files.writeString(target.resolve("$key.kt"), kotlin)
-    Files.writeString(target.resolve("$key.diag"), diagnostics.joinToString("") { "$it\n" })
+/** A thread with tsgo's goroutine stack (1 GB), joined; [block]'s failure is rethrown on the caller. */
+internal actual fun <R> onDeepStack(block: () -> R): R {
+    var result: Result<R>? = null
+    val thread = Thread(null, { result = runCatching(block) }, "xtsc-externals-tsgo", 1L shl 30)
+    thread.start()
+    thread.join()
+    return result!!.getOrThrow()
 }

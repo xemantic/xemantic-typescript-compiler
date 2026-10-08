@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**
@@ -938,7 +937,7 @@ class KotlinExternalsGeneratorTest {
     private fun generateFiles(vararg files: Pair<String, String>): KotlinExternals =
         generateKotlinExternals(
             files.map { (name, source) ->
-                com.xemantic.typescript.compiler.SourceFileEntry(name, source.trimIndent())
+                SourceFileEntry(name, source.trimIndent())
             }
         )
 
@@ -1556,7 +1555,7 @@ class KotlinExternalsGeneratorTest {
             }
 
             public external interface Local {
-                public var h: Any? /* xtsc: unmapped (event: string) => void */
+                public var h: Any? /* xtsc: unmapped Handler<string> */
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin
@@ -2219,7 +2218,8 @@ class KotlinExternalsGeneratorTest {
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
         assert(rendered == expected)
-        assert(errorCodes.isEmpty())
+        // (TSGO.4-b) A constructor cannot declare `this`: tsgo 7.0.2 reports TS2681 there.
+        assert(errorCodes == listOf(2681))
     }
 
     // --- (EXT.11b) nullable unions, any/unknown, arrays, literals ----------
@@ -2408,9 +2408,9 @@ class KotlinExternalsGeneratorTest {
         val expected = """
             public external interface Degraded {
                 public var u: Any? /* xtsc: unmapped Missing - resolved to any */
-                public var v: Any? /* xtsc: unmapped any[] */
-                public var w: Any? /* xtsc: unmapped Record<string, number> - resolved to any */
-                public var x: Any? /* xtsc: unmapped Array<string, number> */
+                public var v: Any? /* xtsc: unmapped Missing[] */
+                public var w: Any? /* xtsc: unmapped Record<string, number> */
+                public var x: Any? /* xtsc: unmapped Array<string, number> - resolved to any */
                 public var p: Any? /* xtsc: unmapped Promise<string> */
                 public fun run(): Any? /* xtsc: unmapped Promise<void> */
                 public var spread: Any? /* xtsc: unmapped (...args: any[]) => any */
@@ -2511,13 +2511,13 @@ class KotlinExternalsGeneratorTest {
             public external interface Uses {
                 public var a: Any? /* xtsc: unmapped Array<string> - not the lib Array */
                 public var b: Array<String>
-                public var c: Any? /* xtsc: unmapped Array<string, number> - not the lib Array */
+                public var c: Any? /* xtsc: unmapped Array<string, number> - resolved to any */
             }
 
             public external fun f(pair: Any? /* xtsc: unmapped rest [string, number] */): Unit
 
             /* xtsc: constraint on T: unknown[] not carried */
-            public external fun <T> g(xs: Any? /* xtsc: unmapped rest any */): Unit
+            public external fun <T> g(xs: Any? /* xtsc: unmapped rest T */): Unit
 
             public external fun h(xs: Any? /* xtsc: unmapped (string | number)[] */): Unit
         """.trimIndent() + "\n"
@@ -4410,7 +4410,7 @@ class KotlinExternalsGeneratorTest {
             }
 
             public external interface Pair<A, B> {
-                /* xtsc: default for B: any not carried */
+                /* xtsc: default for B: A not carried */
                 public var a: A
                 public var b: B
             }
@@ -4426,7 +4426,7 @@ class KotlinExternalsGeneratorTest {
             }
 
             public open external class Server<Request, Response> {
-                /* xtsc: default for Request: Holder not carried */
+                /* xtsc: default for Request: any not carried */
                 /* xtsc: default for Response: string not carried */
                 public var r: Request
             }
@@ -4437,7 +4437,7 @@ class KotlinExternalsGeneratorTest {
                 public var t: T
             }
 
-            public external val plain: Any? /* xtsc: unmapped Plain<T> */
+            public external val plain: Any? /* xtsc: unmapped Plain - resolved to any */
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         assert(rendered == expected)
@@ -4680,7 +4680,7 @@ class KotlinExternalsGeneratorTest {
             }
 
             public open external class Socket {
-                public fun ref(): Any? /* xtsc: unmapped any */
+                public fun ref(): Any? /* xtsc: unmapped this */
             }
 
             public typealias Family = String
@@ -4785,7 +4785,7 @@ class KotlinExternalsGeneratorTest {
 
             public external interface EventEmitter<T> {
                 /* xtsc: default for T: any not carried */
-                public fun <K> on(eventName: String, listener: () -> Unit): Any? /* xtsc: unmapped any */
+                public fun <K> on(eventName: String, listener: () -> Unit): Any? /* xtsc: unmapped this */
             }
 
             /* xtsc: module "stream" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
@@ -4797,9 +4797,9 @@ class KotlinExternalsGeneratorTest {
 
                 public open class Readable(opts: ReadableOptions? = definedExternally) : EventEmitter<Any?> {
                     /* xtsc: on(String, () -> Unit) implements the inherited <K> on(String, () -> Unit) - rendered in the inherited shape, a generic and a non-generic function of one parameter list are one Kotlin signature */
-                    public override fun <K> on(eventName: String, listener: () -> Unit): Any? /* xtsc: unmapped any */
+                    public override fun <K> on(eventName: String, listener: () -> Unit): Any? /* xtsc: unmapped this */
                     /* xtsc: skipped overload of on collapsing to a duplicate signature - kept on(event: String, listener: () -> Unit) */
-                    public open fun on(event: Any? /* xtsc: unmapped string | symbol */, listener: Any? /* xtsc: unmapped (...args: any[]) => void */): Any? /* xtsc: unmapped any */
+                    public open fun on(event: Any? /* xtsc: unmapped string | symbol */, listener: Any? /* xtsc: unmapped (...args: any[]) => void */): Any? /* xtsc: unmapped this */
                 }
             }
 
@@ -4809,7 +4809,7 @@ class KotlinExternalsGeneratorTest {
 
             public open external class ReadStream(opts: Stream.ReadableOptions? = definedExternally) : Stream.Readable {
                 /* xtsc: <K> on(K, Any?) implements the inherited on(Any?, Any?) - rendered in the inherited shape, a generic and a non-generic function of one parameter list are one Kotlin signature */
-                public override fun on(event: Any? /* xtsc: unmapped string | symbol */, listener: Any? /* xtsc: unmapped (...args: any[]) => void */): Any? /* xtsc: unmapped any */
+                public override fun on(event: Any? /* xtsc: unmapped string | symbol */, listener: Any? /* xtsc: unmapped (...args: any[]) => void */): Any? /* xtsc: unmapped this */
                 /* xtsc: skipped overload on(Any?, Any?) collapsing to the inherited on(Any?, Any?) already rendered */
             }
 
