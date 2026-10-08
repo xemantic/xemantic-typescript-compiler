@@ -461,7 +461,7 @@ fun parseCompilerOptions(key: String, value_1: Any?, allOptions: CompilerOptions
 fun parseCompilerOptionsImpl(key_0: String, value_1: Any?, allOptions: CompilerOptions?): Boolean {
     var key: String = key_0
     var foundKey: Boolean = false
-    val option: CommandLineOption? = commandLineCompilerOptionsMap.get(key)
+    val option: CommandLineOption? = commandLineCompilerOptionsMap.getOption(key)
     if (option != null) {
         key = option!!.name
     }
@@ -1067,7 +1067,7 @@ fun convertToOptionsWithAbsolutePaths(optionsBase: OrderedMap<String, Any?>?, op
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.ConvertOptionToAbsolutePath 71ddad65
 fun convertOptionToAbsolutePath(o: String, v: Any?, optionMap: CommandLineOptionNameMap, cwd: String): Tuple2<Any?, Boolean> {
-    val option: CommandLineOption? = optionMap.get(o)
+    val option: CommandLineOption? = optionMap.getOption(o)
     if (option == null) {
         return Tuple2<Any?, Boolean>(null, false)
     }

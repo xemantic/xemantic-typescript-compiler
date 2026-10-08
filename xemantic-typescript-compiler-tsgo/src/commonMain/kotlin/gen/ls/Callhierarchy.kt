@@ -187,7 +187,69 @@ fun getSymbolOfCallHierarchyDeclaration(c: Checker?, node: Node?): Symbol? {
 
 // go: github.com/microsoft/typescript-go/internal/ls.getCallHierarchyItemName 6fe9e787
 fun getCallHierarchyItemName(program: Program?, node: Node?): Tuple3<String, Int, Int> {
-    TODO("goport: refused defer-named-results: github.com/microsoft/typescript-go/internal/ls.getCallHierarchyItemName")
+    var text: String = ""
+    var pos: Int = 0
+    var end: Int = 0
+    return withDefers({ Tuple3<String, Int, Int>(text, pos, end) }) { df0 ->
+        if (com.xemantic.typescript.tsgo.ast.isSourceFile(node)) {
+            val sourceFile: SourceFile? = node.asSourceFile()
+            return Tuple3<String, Int, Int>(sourceFile!!.fileName(), 0, 0)
+        }
+        if ((com.xemantic.typescript.tsgo.ast.isFunctionDeclaration(node) || com.xemantic.typescript.tsgo.ast.isClassDeclaration(node)) && node.name() == null) {
+            val modifiers: ModifierList? = node.modifiers()
+            if (modifiers != null) {
+                val s1 = modifiers!!.nodeList.nodes
+                l0@ for (i2 in 0 until s1.len) {
+                    val mod: Node? = s1[i2]
+                    if (mod!!.kind.value == 89) {
+                        val sourceFile_1: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
+                        val start: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile_1!!.text(), mod!!.pos())
+                        return Tuple3<String, Int, Int>("default", start, mod!!.end())
+                    }
+                }
+            }
+        }
+        if (com.xemantic.typescript.tsgo.ast.isClassStaticBlockDeclaration(node)) {
+            val sourceFile_2: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
+            val pos_1: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile_2!!.text(), moveRangePastModifiers(node).pos())
+            val end_1: Int = pos_1 + 6
+            val t3 = program.getTypeCheckerForFile(com.xemantic.typescript.tsgo.go.context.background(), sourceFile_2)
+            val c: Checker? = t3.first
+            val done: (() -> Unit)? = t3.second
+            val df4 = done
+            df0.defer { df4!!() }
+            val symbol: Symbol? = c!!.getSymbolAtLocation(node!!.parent)
+            var prefix: String = ""
+            if (symbol != null) {
+                prefix = c.symbolToString(symbol) + " "
+            }
+            return Tuple3<String, Int, Int>(prefix + "static {}", pos_1, end_1)
+        }
+        var declName: Node? = null
+        if (isAssignedExpression(node)) {
+            declName = node!!.parent.name()
+        } else {
+            declName = com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(node)
+        }
+        if (declName == null || !com.xemantic.typescript.tsgo.ast.nodeIsPresent(declName)) {
+            val sourceFile_3: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
+            when {
+                (com.xemantic.typescript.tsgo.ast.isFunctionDeclaration(node) || com.xemantic.typescript.tsgo.ast.isFunctionExpression(node)) -> {
+                    val kwPos: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile_3!!.text(), moveRangePastModifiers(node).pos())
+                    return Tuple3<String, Int, Int>("(anonymous)", kwPos, kwPos + 8)
+                }
+                (com.xemantic.typescript.tsgo.ast.isClassDeclaration(node) || com.xemantic.typescript.tsgo.ast.isClassExpression(node)) -> {
+                    val kwPos_1: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile_3!!.text(), moveRangePastModifiers(node).pos())
+                    return Tuple3<String, Int, Int>("(anonymous)", kwPos_1, kwPos_1 + 5)
+                }
+            }
+            com.xemantic.typescript.tsgo.debug.assert(declName != null, GoSlice.of(GoElem.ref<Any?>(), "Expected call hierarchy item to have a name"))
+        }
+        text = getTextOfCallHierarchyName(program, node, declName, node)
+        val sourceFile_4: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
+        val namePos: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile_4!!.text(), declName!!.pos())
+        return Tuple3<String, Int, Int>(text, namePos, declName!!.end())
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.getTextOfCallHierarchyName 735d01ed
@@ -408,7 +470,76 @@ fun findImplementationOrAllInitialDeclarations(c: Checker?, node: Node?): Any? {
 
 // go: github.com/microsoft/typescript-go/internal/ls.resolveCallHierarchyDeclaration 04e535c8
 fun resolveCallHierarchyDeclaration(program: Program?, location_0: Node?): Any? {
-    TODO("goport: refused defer-named-results: github.com/microsoft/typescript-go/internal/ls.resolveCallHierarchyDeclaration")
+    var location: Node? = location_0
+    var result: Any? = null
+    return withDefers({ result }) { df1 ->
+        val t2 = program.getTypeChecker(com.xemantic.typescript.tsgo.go.context.background())
+        val c: Checker? = t2.first
+        val done: (() -> Unit)? = t2.second
+        val df3 = done
+        df1.defer { df3!!() }
+        var followingSymbol: Boolean = false
+        l0@ while (location != null) {
+            if (isValidCallHierarchyDeclaration(location)) {
+                return findImplementationOrAllInitialDeclarations(c, location)
+            }
+            if (isPossibleCallHierarchyDeclaration(location)) {
+                val ancestor: Node? = com.xemantic.typescript.tsgo.ast.findAncestor(location, fun(p0: Node?): Boolean = isValidCallHierarchyDeclaration(p0))
+                if (ancestor != null) {
+                    return findImplementationOrAllInitialDeclarations(c, ancestor)
+                }
+            }
+            if (com.xemantic.typescript.tsgo.ast.isDeclarationName(location)) {
+                if (isValidCallHierarchyDeclaration(location!!.parent)) {
+                    return findImplementationOrAllInitialDeclarations(c, location!!.parent)
+                }
+                if (isPossibleCallHierarchyDeclaration(location!!.parent)) {
+                    val ancestor_1: Node? = com.xemantic.typescript.tsgo.ast.findAncestor(location!!.parent, fun(p0: Node?): Boolean = isValidCallHierarchyDeclaration(p0))
+                    if (ancestor_1 != null) {
+                        return findImplementationOrAllInitialDeclarations(c, ancestor_1)
+                    }
+                }
+                if (isVariableLike(location!!.parent)) {
+                    val initializer: Node? = location!!.parent.initializer()
+                    if (initializer != null && isAssignedExpression(initializer)) {
+                        return initializer
+                    }
+                }
+                return null
+            }
+            if (com.xemantic.typescript.tsgo.ast.isConstructorDeclaration(location)) {
+                if (isValidCallHierarchyDeclaration(location!!.parent)) {
+                    return location!!.parent
+                }
+                return null
+            }
+            if (location!!.kind.value == 125 && com.xemantic.typescript.tsgo.ast.isClassStaticBlockDeclaration(location!!.parent)) {
+                location = location!!.parent
+                continue@l0
+            }
+            if (com.xemantic.typescript.tsgo.ast.isVariableDeclaration(location)) {
+                val initializer_1: Node? = location.initializer()
+                if (initializer_1 != null && isAssignedExpression(initializer_1)) {
+                    return initializer_1
+                }
+            }
+            if (!followingSymbol) {
+                var symbol: Symbol? = c!!.getSymbolAtLocation(location)
+                if (symbol != null) {
+                    if (symbol!!.flags.value and 2097152u != 0u) {
+                        symbol = c!!.getAliasedSymbol(symbol)
+                    }
+                    if (symbol!!.valueDeclaration != null) {
+                        followingSymbol = true
+                        location = symbol!!.valueDeclaration
+                        continue@l0
+                    }
+                }
+            }
+            return null
+        }
+        return null
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.LanguageService.createCallHierarchyItem c70a6f88

@@ -40,6 +40,9 @@ var partialClosure = map[string][]string{
 	"api": {"XtscNewSession", "XtscMarshal", "XtscOpenProgram",
 		// (TSGO.4-a) the language service behind the language server's handlers (docs/goport-ls.md)
 		"XtscResolveClientCapabilities", "XtscUserPreferences", "XtscLanguageService"},
+	// (TSGO.5) the command line (docs/goport-cli.md): the overlay's runMain keeps CommandLine and
+	// what it reaches; --build and --watch are stubs (partialStubs).
+	"execute": {"XtscCommandLine"},
 }
 
 // partialStubs: methods ("Recv.Name") or functions of a partial package kept as a SIGNATURE ONLY — the
@@ -55,6 +58,15 @@ var partialStubs = map[string][]string{
 		"Session.toFileChangeSummary", "computeSnapshotChanges",
 		// runtime/pprof
 		"Session.handleStartCPUProfile", "Session.handleStopCPUProfile", "Session.handleSaveHeapProfile",
+	},
+	// (TSGO.5) `tsc --build` (internal/execute/build: the orchestrator's goroutine/channel task graph) and
+	// `tsc --watch` (internal/execute/watchmanager + internal/fswatch: OS file-system notifications) are not
+	// ported yet: their entry points and the Watcher's methods are signatures only.
+	"execute": {
+		"tscBuildCompilation", "createWatcher",
+		"Watcher.start", "Watcher.computeDesiredWatches", "Watcher.reconcileWatches", "Watcher.comparePathsOptions",
+		"Watcher.DoCycle", "Watcher.isRelevantChange", "Watcher.doBuild", "Watcher.evictChangedSourceFiles",
+		"Watcher.compileAndEmit", "Watcher.recheckTsConfig", "Watcher.parseConfigFile",
 	},
 }
 

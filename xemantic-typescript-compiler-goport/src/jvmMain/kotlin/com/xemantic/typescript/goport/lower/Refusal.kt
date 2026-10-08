@@ -90,7 +90,8 @@ class ShimIndex(
                     top.getOrPut(pkg) { HashSet() }
                     var current: String? = null
                     for (l in lines) {
-                        if (l.isNotEmpty() && !l[0].isWhitespace() && !l.startsWith("}") && !l.startsWith("@") && !l.startsWith("//") && !l.startsWith("/*") && !l.startsWith(" *")) current = null
+                        // A column-0 `) {` closes a multi-line primary constructor (`class GoMap<K, V> private constructor(…`): still the class.
+                        if (l.isNotEmpty() && !l[0].isWhitespace() && !l.startsWith("}") && !l.startsWith(")") && !l.startsWith("@") && !l.startsWith("//") && !l.startsWith("/*") && !l.startsWith(" *")) current = null
                         val m = decl.find(l) ?: continue
                         val indent = m.groupValues[1]
                         val kind = m.groupValues[2]

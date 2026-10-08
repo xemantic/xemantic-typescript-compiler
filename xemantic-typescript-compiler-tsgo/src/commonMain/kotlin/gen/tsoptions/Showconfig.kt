@@ -230,7 +230,7 @@ fun serializeCompilerOptions(options: CompilerOptions?, configFilePath: String, 
         if (!field_1.isExported()) {
             continue@l0
         }
-        val optionDecl: CommandLineOption? = commandLineCompilerOptionsMap.get(field_1.name)
+        val optionDecl: CommandLineOption? = commandLineCompilerOptionsMap.getOption(field_1.name)
         if (optionDecl == null) {
             continue@l0
         }
@@ -374,7 +374,7 @@ fun addImpliedOptions(optionMap: OrderedMap<String, Any?>?, options: CompilerOpt
     val s4 = impliedOptions
     l1@ for (i5 in 0 until s4.len) {
         val entry: com.xemantic.typescript.tsgo.tsoptions.impliedOption = s4[i5].goCopy()
-        val optionDecl: CommandLineOption? = commandLineCompilerOptionsMap.get(entry.name)
+        val optionDecl: CommandLineOption? = commandLineCompilerOptionsMap.getOption(entry.name)
         if (optionDecl == null) {
             continue@l1
         }
@@ -402,7 +402,7 @@ fun anyDependencyProvided(dependencies: GoSlice<String>, provided: GoMap<String,
     val s0 = dependencies
     l0@ for (i1 in 0 until s0.len) {
         val dep: String = s0[i1]
-        val depDecl: CommandLineOption? = commandLineCompilerOptionsMap.get(dep)
+        val depDecl: CommandLineOption? = commandLineCompilerOptionsMap.getOption(dep)
         if (depDecl != null && provided[depDecl!!.name]) {
             return true
         }

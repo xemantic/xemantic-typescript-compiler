@@ -31,15 +31,40 @@ import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.Tuple2
 
 /**
- * `gzip.Reader` (STUB). Reached only from `diagnostics` loading localized message bundles, which
- * the parser/encoder path does not need.
+ * `gzip.Reader`: reached from `diagnostics` loading a localized message bundle (`tsc --locale de`, (TSGO.5)).
+ * The whole compressed stream is read from the source on the first [read] and decompressed by the platform
+ * (`actual`: java.util.zip on the JVM); then the decompressed bytes are served.
  */
-class Reader : IoReader {
-    override fun read(p: GoSlice<Int>): Tuple2<Int, GoError?> = TODO("shim: gzip.Reader.Read")
+class Reader internal constructor(private val source: IoReader?) : IoReader {
+    private var data: ByteArray? = null
+    private var offset = 0
 
-    fun close(): GoError? = TODO("shim: gzip.Reader.Close")
+    override fun read(p: GoSlice<Int>): Tuple2<Int, GoError?> {
+        val d = data ?: inflate().also { data = it }
+            ?: return Tuple2(0, com.xemantic.typescript.tsgo.runtime.GoPlainError("gzip: invalid header"))
+        if (offset >= d.size) return Tuple2(0, com.xemantic.typescript.tsgo.go.io.EOF)
+        val n = minOf(p.len, d.size - offset)
+        for (i in 0 until n) p[i] = d[offset + i].toInt() and 0xFF
+        offset += n
+        return Tuple2(n, null)
+    }
+
+    private fun inflate(): ByteArray? {
+        val raw = ArrayList<Byte>()
+        val buf = GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE, 1 shl 16)
+        while (true) {
+            val (n, err) = source!!.read(buf)
+            for (i in 0 until n) raw += buf[i].toByte()
+            if (err != null) break
+        }
+        return platformGunzip(raw.toByteArray())
+    }
+
+    fun close(): GoError? = null
 }
 
-/** `gzip.NewReader(r)` (STUB). */
-@Suppress("UNUSED_PARAMETER")
-fun newReader(r: IoReader?): Tuple2<Reader?, GoError?> = TODO("shim: gzip.NewReader")
+/** `gzip.NewReader(r)`. Go reads the header here; the port reports a bad stream on the first Read. */
+fun newReader(r: IoReader?): Tuple2<Reader?, GoError?> = Tuple2(Reader(r), null)
+
+/** The decompressed content of a gzip stream; null when [gz] is not one. */
+internal expect fun platformGunzip(gz: ByteArray): ByteArray?

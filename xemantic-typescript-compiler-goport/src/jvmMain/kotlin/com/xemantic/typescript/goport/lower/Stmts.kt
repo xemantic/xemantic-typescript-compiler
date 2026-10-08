@@ -166,10 +166,16 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             ensureTerminated(bodyNode, results)
             return
         }
-        if (fn.frame.namedResults != null) refuse("defer-named-results")
+        val named = fn.frame.namedResults
+        // NAMED results are lowered like unnamed ones when no deferred call of this function mentions
+        // them (osvfs.osFS.ReadFile: `defer readSema.Acquire()()`): a defer then can neither read a result
+        // before the return assigns it nor change it after, so returning the evaluated value is Go's
+        // answer; a recovered panic returns the result variables' CURRENT values, as Go does.
+        if (named != null && deferMentions(bodyNode, named.toSet())) refuse("defer-named-results")
         val frameName = fn.fresh("df")
         fn.frame.deferFrame = frameName
-        val zero = when (results.size) {
+        val zero = if (named != null) tupleOf(named.map { lower(identOf(it)).code }, results)
+        else when (results.size) {
             0 -> "Unit"
             1 -> tm.zero(results[0])
             else -> "${tm.tupleKt(results)}(${results.joinToString(", ") { tm.zero(it) }})"
@@ -189,6 +195,43 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         if (last != null && last.k == "ReturnStmt") return
         if (last != null && last.k == "ExprStmt" && last.reqObj("x").str("builtin") == "panic") return
         w.line("goUnreachable()")
+    }
+
+    /** Whether any `defer` of THIS function (its call and arguments) or any func literal of its body mentions one of [objs]. */
+    private fun deferMentions(body: Node, objs: Set<Int>): Boolean {
+        var found = false
+        fun mentions(n: Any?) {
+            when (n) {
+                is kotlinx.serialization.json.JsonObject -> {
+                    if (found) return
+                    if (n.str("k") == "Ident" && n.int("obj") in objs) {
+                        found = true
+                        return
+                    }
+                    for (v in n.values) mentions(v)
+                }
+                is kotlinx.serialization.json.JsonArray -> for (v in n) mentions(v)
+                else -> {}
+            }
+        }
+        fun walk(n: Any?) {
+            when (n) {
+                is kotlinx.serialization.json.JsonObject -> {
+                    if (found) return
+                    // Any func literal of the body counts: it may be deferred through a variable
+                    // (`cleanup := func() { err = … }; defer cleanup()`).
+                    if (n.str("k") == "FuncLit" || n.str("k") == "DeferStmt") {
+                        mentions(n)
+                        return
+                    }
+                    for (v in n.values) walk(v)
+                }
+                is kotlinx.serialization.json.JsonArray -> for (v in n) walk(v)
+                else -> {}
+            }
+        }
+        walk(body)
+        return found
     }
 
     fun hasOwnDefer(body: Node): Boolean {

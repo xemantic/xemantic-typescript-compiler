@@ -308,7 +308,7 @@ fun parseOwnConfigOfJsonSourceFile(sourceFile: SourceFile?, host: ParseConfigHos
             } else if (keyText != "" && extraKeyDiagnostics(parentOption!!.name) != null) {
                 val unknownNameDiag: Message? = extraKeyDiagnostics(parentOption!!.name)
                 if (!parentOption!!.elementOptions.isNil) {
-                    val possibleOption: CommandLineOption? = parentOption!!.elementOptions.get(keyText)
+                    val possibleOption: CommandLineOption? = parentOption!!.elementOptions.getOption(keyText)
                     if (possibleOption != null && possibleOption!!.name != keyText) {
                         propertySetErrors = propertySetErrors.append1(createDiagnosticForNodeInSourceFileOrCompilerDiagnostic(sourceFile, propertyAssignment!!.name(), extraKeyDidYouMeanDiagnostics(parentOption!!.name), GoSlice.of(GoElem.ref<Any?>(), keyText, possibleOption!!.name)))
                     } else {
@@ -698,7 +698,7 @@ class tsConfigOptions(
 typealias CommandLineOptionNameMap = GoMap<String, CommandLineOption?>
 
 // go: github.com/microsoft/typescript-go/internal/tsoptions.CommandLineOptionNameMap.Get 4adf5254
-fun CommandLineOptionNameMap.get(name: String): CommandLineOption? {
+fun CommandLineOptionNameMap.getOption(name: String): CommandLineOption? {
     val t0 = this.probe(name)
     var opt: CommandLineOption? = goProbeValue<CommandLineOption?>(t0) { null }
     val ok: Boolean = t0 !== GoMapAbsent
@@ -748,7 +748,7 @@ fun <O : com.xemantic.typescript.tsgo.tsoptions.optionParser?> convertOptionsFro
     jsonMap.entries()!!(fun(y2: String, y3: Any?): Boolean {
             val key: String = y2
             val value_1: Any? = y3
-            val opt: CommandLineOption? = optionsNameMap.get(key)
+            val opt: CommandLineOption? = optionsNameMap.getOption(key)
             if (opt != null && opt!!.name != key) {
                 errors = errors.append1(createDiagnosticForNodeInSourceFileOrCompilerDiagnostic(null, null, result!!.unknownDidYouMeanDiagnostic(), GoSlice.of(GoElem.ref<Any?>(), key, opt!!.name)))
                 return true
@@ -903,7 +903,7 @@ fun convertObjectLiteralExpressionToJson(sourceFile: SourceFile?, returnValue: B
         val keyText: String = textOfKey
         var option: CommandLineOption? = null
         if (keyText != "" && objectOption != null && !objectOption!!.elementOptions.isNil) {
-            option = objectOption!!.elementOptions.get(keyText)
+            option = objectOption!!.elementOptions.getOption(keyText)
             if (option != null && option!!.name != keyText) {
                 option = null
             }

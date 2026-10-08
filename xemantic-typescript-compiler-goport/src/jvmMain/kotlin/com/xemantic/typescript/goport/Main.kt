@@ -174,6 +174,7 @@ fun main(argv: Array<String>) {
     prog.computeWindowFuncs(overrides.keys)
     val pinned = RenameTable.load(args.refuse).let { t -> t.entries() }
     val report = Report()
+    for (m0 in prog.shadowedAliasMethods) report.collision("$m0 — add a rename to renames.txt")
 
     if (args.out.exists()) args.out.deleteRecursively()
     args.out.mkdirs()

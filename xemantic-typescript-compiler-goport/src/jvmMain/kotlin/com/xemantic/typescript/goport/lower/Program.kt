@@ -62,6 +62,16 @@ class Program(
     /** Named types lowered as Kotlin typealiases: `type X Y` over a named struct, and named slice/map/func types. */
     val aliasTypes = HashSet<String>()
 
+    /** For a named MAP or SLICE type lowered as a typealias: the runtime class it aliases (`GoMap` / `GoSlice`). */
+    val aliasRuntimeClass = HashMap<String, String>()
+
+    /**
+     * Methods of a [aliasRuntimeClass] type whose Kotlin name is a MEMBER of that runtime class: the extension
+     * would be SHADOWED — `m.get(k)` calls `GoMap.get`, not the ported `CommandLineOptionNameMap.Get` (its
+     * lower-case fallback silently lost, (TSGO.5)). Main refuses the build until renames.txt names each one.
+     */
+    val shadowedAliasMethods = ArrayList<String>()
+
     /** Struct aliases (`type MutableNode Node`): a typealias to the class, never a copy. */
     val structAliases = HashSet<String>()
 
@@ -243,6 +253,14 @@ class Program(
         extensionMethods += nilSafeMethods
         extensionMethods += valuePtrMethods
         for ((typeKey, ms) in methodsByType) if (typeKey in aliasTypes) ms.forEach { extensionMethods += it.second.str("qname")!! }
+        for ((typeKey, ms) in methodsByType) {
+            val cls = aliasRuntimeClass[typeKey] ?: continue
+            for ((_, d) in ms) {
+                val q = d.str("qname")!!
+                val kn = methodName(q, d.str("name")!!).trim('`')
+                if (shims.classHas(Naming.RUNTIME, cls, kn)) shadowedAliasMethods += "$q: lowered as '$kn', a member of $cls that the extension cannot override"
+            }
+        }
         // Go calls a pointer-receiver method on a nil pointer and only panics where the body
         // dereferences it (`f.UpdateX(node, …)` with a nil factory returns `node` unchanged). An
         // extension on `T?` keeps that: the call never asserts, the body's `this!!.f` panics where
@@ -558,7 +576,14 @@ class Program(
                                 }
                             } else if (u !is com.xemantic.typescript.goport.types.StructType && u !is com.xemantic.typescript.goport.types.InterfaceType &&
                                 u !is com.xemantic.typescript.goport.types.BasicType
-                            ) aliasTypes += q
+                            ) {
+                                aliasTypes += q
+                                when (u) {
+                                    is com.xemantic.typescript.goport.types.MapType -> aliasRuntimeClass[q] = "GoMap"
+                                    is com.xemantic.typescript.goport.types.SliceType -> aliasRuntimeClass[q] = "GoSlice"
+                                    else -> {}
+                                }
+                            }
                         }
                     }
                     "ValueSpec" -> {

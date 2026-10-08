@@ -342,7 +342,7 @@ fun <File> fromMapWithClock(goElem_File: GoElem<File>, m: GoMap<String, File>, u
             }
             x2 is MapFile -> {
                 val f_3: MapFile? = x2 as MapFile
-                val fCopy: MapFile = f_3!!
+                val fCopy: MapFile = f_3!!.goCopy()
                 fCopy.modTime = clock!!.now()
                 file = fCopy
             }
@@ -356,7 +356,7 @@ fun <File> fromMapWithClock(goElem_File: GoElem<File>, m: GoMap<String, File>, u
             checkPath!!(target)
             val t3 = com.xemantic.typescript.tsgo.go.strings.cutPrefix(target, "/")
             target = t3.first
-            val fileCopy: MapFile = file!!
+            val fileCopy: MapFile = file!!.goCopy()
             fileCopy.data = goStringToBytes(target)
             file = fileCopy
         }
@@ -407,7 +407,7 @@ fun convertMapFS(input: com.xemantic.typescript.tsgo.go.testing.fstest.MapFS, us
                 goPanic(com.xemantic.typescript.tsgo.go.fmt.sprintf("failed to create intermediate directories for %q: %v", p, err))
             }
         }
-        m.setEntry(p, m.getCanonicalPath(p), file!!)
+        m.setEntry(p, m.getCanonicalPath(p), file!!.goCopy())
     }
     return m
 }

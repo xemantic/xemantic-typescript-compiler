@@ -42,3 +42,24 @@ const val GOARCH: String = "amd64"
 /** `runtime.GOMAXPROCS(n)`: the port runs goroutines on threads; it reports a fixed 4 and ignores [n] ((TSGO.4-a): sizes autoimport's checker pool). */
 @Suppress("UNUSED_PARAMETER")
 fun gomaxprocs(n: Int): Int = 4
+
+/**
+ * `runtime.MemStats`, the two fields tsgo reads (`tsc --diagnostics`' "Memory used" and "Memory allocs",
+ * (TSGO.5)): [alloc] is the host heap in use; [mallocs] is not observable on every host and stays 0.
+ */
+class MemStats(var alloc: ULong = 0uL, var mallocs: ULong = 0uL) {
+    fun goCopy(): MemStats = MemStats(alloc, mallocs)
+}
+
+/** `runtime.GC()`: a hint to the host collector. */
+fun gc() = platformGc()
+
+/** `runtime.ReadMemStats(m)`. */
+fun readMemStats(m: MemStats?) {
+    m!!.alloc = platformHeapInUse().toULong()
+    m.mallocs = 0uL
+}
+
+internal expect fun platformGc()
+
+internal expect fun platformHeapInUse(): Long

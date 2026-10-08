@@ -151,12 +151,14 @@ class LoweringRulesTest {
     @Test
     fun `the census of copying single-bound string slices in gen does not grow`() {
         // The (TSGO.2) compiler test harness (docs/goport-lowering.md § 1c): not on the compiler's path, counted apart.
-        val harness = listOf("testrunner/", "testutil/", "execute/", "tsoptions/tsoptionstest/", "vfs/vfstest/", "vfs/iovfs/", "vfs/internal/")
+        val harness = listOf("testrunner/", "testutil/", "execute/incremental/", "tsoptions/tsoptionstest/", "vfs/vfstest/", "vfs/iovfs/", "vfs/internal/")
         fun isHarness(f: File) = harness.any { f.relativeTo(gen).path.startsWith(it) }
+        // (TSGO.5) the command line (execute, execute/tsc, vfs/osvfs): counted apart too.
+        fun isCli(f: File) = f.relativeTo(gen).path.let { (it.startsWith("execute/") && !it.startsWith("execute/incremental/")) || it.startsWith("vfs/osvfs/") }
         // (TSGO.3-b) the API session (gen/api/*.kt, not api/encoder): counted apart too.
         fun isApiSession(f: File) = f.relativeTo(gen).path.let { it.startsWith("api/") && !it.startsWith("api/encoder/") }
-        fun census(dirs: List<String>?, harnessOnly: Boolean = false, apiOnly: Boolean = false, lsOnly: Boolean = false) = gen.walkTopDown()
-            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) && isHarness(it) == harnessOnly && isApiSession(it) == apiOnly && isLanguageService(it) == lsOnly }
+        fun census(dirs: List<String>?, harnessOnly: Boolean = false, apiOnly: Boolean = false, lsOnly: Boolean = false, cliOnly: Boolean = false) = gen.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".kt") && (dirs == null || it.relativeTo(gen).path.substringBefore('/') in dirs) && isHarness(it) == harnessOnly && isApiSession(it) == apiOnly && isLanguageService(it) == lsOnly && isCli(it) == cliOnly }
             .sumOf { f -> suffixCopy.findAll(f.readText()).count() }
         // The (TSGO.1) spike's 14 packages: 48 as first generated; 34 after the window rule, 33 after window parameters (2026-10-07).
         val spike = listOf("api", "ast", "binder", "collections", "core", "debug", "diagnostics", "jsnum", "json", "locale", "parser", "scanner", "stringutil", "tspath")
@@ -170,6 +172,8 @@ class LoweringRulesTest {
         assert(census(null, apiOnly = true) <= 1)
         // (TSGO.4-a) the language service (ls, lsp, format, project/*, vfs/wrapvfs, jsonrpc): 54 at first generation (2026-10-08).
         assert(census(null, lsOnly = true) <= 54)
+        // (TSGO.5) the command line: 1 at first generation (2026-10-08, `--help`'s description wrapping).
+        assert(census(null, cliOnly = true) <= 1)
     }
 
     @Test
@@ -199,7 +203,8 @@ class LoweringRulesTest {
         // Every inline function is small: the body is copied into each caller (JIT.1 counts it).
         val inline = Regex("""// go: (\S+) [0-9a-f]+\n(?:@[^\n]*\n)?inline fun """)
         val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") && !isLanguageService(it) }.flatMap { f -> inline.findAll(f.readText()).map { it.groupValues[1] } }.toList()
-        assert(all.size in 20..60)
+        // 61 since (TSGO.5) (`execute/tsc.WriteConfigFile`, `tsc --init`).
+        assert(all.size in 20..64)
         // (TSGO.4-a) the language service's: 9 at first generation (2026-10-08).
         val ls = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") && isLanguageService(it) }.sumOf { f -> inline.findAll(f.readText()).count() }
         assert(ls <= 9)

@@ -125,3 +125,12 @@ fun ext(path: String): String {
 
 /** `filepath.IsAbs(path)`. */
 fun isAbs(path: String): Boolean = path.startsWith("/")
+
+/**
+ * `filepath.Abs(path)` for an ABSOLUTE path (its `Clean`) — the only kind tsgo passes ((TSGO.5): `vfs/osvfs`
+ * after `nativepath.Realpath`). A relative one would need the process's working directory, which the port
+ * never consults (a command line passes its own current directory explicitly): an error.
+ */
+fun abs(path: String): com.xemantic.typescript.tsgo.runtime.Tuple2<String, com.xemantic.typescript.tsgo.runtime.GoError?> =
+    if (isAbs(path)) com.xemantic.typescript.tsgo.runtime.Tuple2(clean(path), null)
+    else com.xemantic.typescript.tsgo.runtime.Tuple2("", com.xemantic.typescript.tsgo.runtime.GoPlainError("filepath.Abs: relative path $path"))

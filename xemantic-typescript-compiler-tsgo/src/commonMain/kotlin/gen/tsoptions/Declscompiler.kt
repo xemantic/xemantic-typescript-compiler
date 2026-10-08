@@ -64,7 +64,7 @@ inline fun forEachCompilerOptionValue(options: CompilerOptions?, declFilter: ((C
         if (!field_1.isExported()) {
             continue@l0
         }
-        val optionDeclaration: CommandLineOption? = commandLineCompilerOptionsMap.get(field_1.name)
+        val optionDeclaration: CommandLineOption? = commandLineCompilerOptionsMap.getOption(field_1.name)
         if (optionDeclaration != null && declFilter(optionDeclaration)) {
             if (fn(optionDeclaration, optionsValue.field(i), i)) {
                 return true

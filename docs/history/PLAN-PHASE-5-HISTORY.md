@@ -1,3 +1,28 @@
+### Round (TSGO.1-a) — the tsgo port spike, day 1: extractor, runtime, oracle, porter, binder — 7,774/7,774 BOUND encoded ASTs byte-identical to the tsgo binary; speed is the one open gate criterion (2026-10-07)
+
+Orchestrated as parallel subagents against a written contract (`docs/goport-design.md`), Gradle box-serialized through one `flock`.
+**Landed** (one commit each): `goport-extract` (Go, `go/packages`+`go/types` → deterministic typed JSON IR, `docs/goport-ir.md`, census
+`docs/goport-closure-stats.md`); `-tsgo` module with the Go runtime + shims for the 257 external symbols the closure reaches, oracle-tested
+against real go1.27.1 vectors (`docs/goport-runtime.md`); the oracle (`scripts/tsgo-oracle.py` over `tsc --api` getSourceFile, 7,774 files:
+conformance 6,573, tsc 78, cronstrue, marked, type-fest, hono, rxjs; `oracle-go` in-process encoder/dump via `go build -overlay`, cross-checked
+7,774/7,774 against the binary); the Kotlin porter `-goport` + the generated, checked-in port (81.6k lines, warning-clean); exact xxh3-128,
+RE2→Java regexp translation, real `sync`/`atomic` on `kotlin.concurrent.atomics`; the binder. **Gate (§ 4.1) now**: encoded-AST byte equality
+**7,774/7,774 BOUND** (the binary's own bytes, the port's own hash — `TSGO_ORACLE=bound` OracleParityTest fails on any miss, `TsgoPinTest` gates
+5 fixtures on every build); mechanical share **99.0%** (43,948/44,395 Go lines); overrides **1** (`ast.getCombinedFlags`, `|=` on a
+`~uint32` type parameter); `huge_methods.py --fail-over 0` **0** (switch-splitting rule); warning-clean. **Open: parse speed** — as generated
+**134x** slower than `-core`'s Parser because Go's free string slice lowered to a copying `substring` (quadratic scanner); 7 sites fixed by
+hand in a scratch copy read **1.50x** on a loaded box; as porter RULES (string-slice windows `1c9db2fe5`, one-probe map read `73acaf4ea`) it
+reads **1.26-1.35x** (ABBA, 4 pairs each, all core-faster, max pair 1.52 in one quieter re-run, 1.36 in the last). Two more rules landed and
+were measured as NO gain (inline func-typed params `69898f30c` — the cost is the per-char `String` loop, not the dispatch; window-parameter
+overloads `269d35f0d`, the last parse-path copy) — kept as correct and cheap. **VERDICT: GO** — every § 4.1 criterion met on day 1. Remaining
+perf is REPRESENTATION work (per-char String loop, per-node Arena/GoSlice + embedded-struct object chains), recorded in `docs/goport-perf.md`.
+**Surprises**: (1) the API binary BINDS before encoding — 4,024 files carry binder-set flags — so the binder (3.6k lines) joined the spike
+rather than masking bits; (2) Go pointer-receiver methods are called on nil pointers, so they lower to extensions on `T?` (146 crashes); (3)
+generic zero values need a per-type-parameter element kind (`getSpellingSuggestion[string]` returned null); (4) a test env var that is not a
+declared Gradle input leaves the task UP-TO-DATE and measures nothing; (5) the sync shims were first single-threaded — wrong for the IntelliJ
+host running several projects per JVM — fixed before the checker port needs them (contended locks still spin: a platform park is needed
+before (TSGO.2) holds locks long).
+
 ### Round (P18.313) — (LIBS.4) round 2: a `for … of this.<member>` loop variable is typed (zod), seven hono object-literal / array-literal mechanisms, and an object-literal ternary arm narrowed by a type guard (a false positive on tsc's own `server/scriptVersionCache.ts` the first fix exposed) — tally 162 -> 152, NO added position; the builder's session ended before pins and gates and the round was finished from its tree (2026-10-07)
 
 **Where it stood**: the builder had left an un-gated tree (fixes done, census print removed, no pins, no ablation, no grid). Finished

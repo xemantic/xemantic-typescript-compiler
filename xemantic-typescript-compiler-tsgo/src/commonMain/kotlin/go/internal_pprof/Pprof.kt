@@ -31,3 +31,16 @@ package com.xemantic.typescript.tsgo.pprof
 
 /** `pprof.CPUProfiler`: the zero value the API `Session` holds. */
 class CPUProfiler
+
+/**
+ * `pprof.BeginProfiling(dir, logWriter)` for `tsc --pprofDir` ((TSGO.5), docs/goport-cli.md): the port writes
+ * no Go profiles (a JVM is profiled with JFR), so the session records nothing and [ProfileSession.stop]
+ * reports nothing — a stated divergence from tsgo, which prints the two profile paths.
+ */
+@Suppress("UNUSED_PARAMETER")
+fun beginProfiling(profileDir: String, logWriter: com.xemantic.typescript.tsgo.go.io.Writer?): ProfileSession? = ProfileSession()
+
+/** `*pprof.ProfileSession`: see [beginProfiling]. */
+class ProfileSession {
+    fun stop() {}
+}

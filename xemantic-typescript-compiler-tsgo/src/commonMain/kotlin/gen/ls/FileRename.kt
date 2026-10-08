@@ -68,8 +68,8 @@ import com.xemantic.typescript.tsgo.ls.change.replaceRangeWithText
 import com.xemantic.typescript.tsgo.ls.lsconv.positionToLineAndCharacter
 import com.xemantic.typescript.tsgo.ls.lsconv.toLSPRange
 import com.xemantic.typescript.tsgo.tsoptions.elements
-import com.xemantic.typescript.tsgo.tsoptions.get
 import com.xemantic.typescript.tsgo.tsoptions.getMatchedIncludeSpec
+import com.xemantic.typescript.tsgo.tsoptions.getOption
 
 // go: github.com/microsoft/typescript-go/internal/ls.pathUpdater d9542c85
 typealias pathUpdater = ((String) -> Tuple2<String, Boolean>)?
@@ -194,7 +194,7 @@ fun LanguageService?.updateTsconfigFiles(program: Program?, changeTracker: Track
                     return
                 }
                 forEachObjectProperty(property!!.initializer.asObjectLiteralExpression(), fun(property_1: PropertyAssignment?, propertyName_1: String) {
-                    val option: CommandLineOption? = com.xemantic.typescript.tsgo.tsoptions.commandLineCompilerOptionsMap.get(propertyName_1)
+                    val option: CommandLineOption? = com.xemantic.typescript.tsgo.tsoptions.commandLineCompilerOptionsMap.getOption(propertyName_1)
                     if (option != null) {
                         val elementOption: CommandLineOption? = option.elements()
                         if (option!!.isFilePath || (option!!.kind.value == "list" && elementOption != null && elementOption!!.isFilePath)) {

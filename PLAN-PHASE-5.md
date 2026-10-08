@@ -25,6 +25,56 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.5) — A tsgo CLI ON THE PORT: `internal/execute` + `internal/execute/tsc` + `vfs/osvfs` ported mechanically; `com.xemantic.typescript.tsgo.cli.TsgoMainKt` is `tsc` 7.0.2 on the JVM; 105 / 105 command-line cases print, exit and emit byte-identical to the tsgo binary (the 8 tsc profiles both arms, the census libraries, cronstrue, marked, 20 type-oracle projects, 37 flag/config shapes), type-fest skipped below an 8 GB heap; `--build`/`--watch` not ported (2026-10-08)
+
+**What is ported** (`docs/goport-cli.md`). The extractor's closure gains `execute/tsc` and `vfs/osvfs` (whole) and
+`execute` as a partial package rooted at a new overlay, `goport-extract/overlay/execute/xtsc_cli.go`: `xtscSystem`
+(cmd/tsgo/sys.go's `osSys` with its process ends injected) and `XtscCommandLine` (runMain's compiler branch →
+`execute.CommandLine`). Partial stubs: `tscBuildCompilation` (`--build`) and `createWatcher` + every `Watcher`
+method (`--watch`); `TsgoCli.run` (commonMain facade) answers a stub with a one-line error and exit 5. The
+shipped entry is `TsgoMain.kt` (jvmMain): `java -cp <tsgo jar + stdlib> com.xemantic.typescript.tsgo.cli.TsgoMainKt
+<tsc args>`; `XTSC_TSGO_LIB_DIR` reads a lib directory as the npm binary does (bundled libs otherwise).
+
+**Port defects found by the gate and fixed, each general**: (1) a method of a named MAP type named like a
+`GoMap` member was SHADOWED — `CommandLineOptionNameMap.Get` resolved to `GoMap.get` and lost its lower-case
+fallback (`--showConfig` printed `"compilerOptions": {}`, `--incremental` wrote a `.tsbuildinfo` without
+`"options"`); the porter now refuses such a method as a NAME COLLISION and `renames.txt` names it `getOption`.
+Finding it needed the shim scanner fixed: a column-0 `) {` (a multi-line primary constructor) ended the class, so
+`GoMap`/`GoSlice` had NO indexed members — with them indexed, `vfstest` copies `fstest.MapFile` values as Go does.
+(2) `json` into `map[Key]string`: a GoMap does not carry its key type, so `--locale de` printed English —
+`diagnostics.loadLocaleData` override (decode `map[string]string`, re-key). (3) `compress/gzip` was a stub (the
+locale bundles are gzipped): a real reader over `java.util.zip`. Porter rule: NAMED results with `defer` lower like
+unnamed ones when no deferred call and no func literal mentions a result (`osvfs.osFS.ReadFile`; it also lowered
+the two refused `ls` call-hierarchy functions). Overrides `core.LimitedSemaphore`/`NewLimitedSemaphore`
+(`chan struct{}` as a semaphore → `go.sync.CountingSemaphore`). Shims: `os` file writing/stat/`Executable`/cache
+dirs, `filepath.Abs`, `runtime.MemStats`/`GC`, `pprof.BeginProfiling` (no profile: stated divergence), stand-ins
+`nativepath` (realpath, lstat), `watchmanager.WatchManager`, `fswatch.EventKind`; `os.DirFS` converts byte-string
+names to host paths and reports a symbolic link as `ModeSymlink` (Go's lstat ReadDir).
+
+**The gate.** `scripts/tsgo-cli-oracle.py` runs the SHIPPED binary per case (fresh process, piped stdout, fixed
+env; an emit case in a scratch COPY, node_modules linked) → `build/goport/cli-oracle` (106 cases; REFUSES fewer
+than 8 tsc profiles; fails when the binary is killed). `CliParityTest` (`TSGO_CLI=1`, 4 GB heap) runs each through
+`TsgoCli.run` in process and compares stdout BYTES, exit status and the created/changed file set + sha256.
+**Receipts**: CliParityTest **105 equal / 0 differ / 1 skipped** (`lib-typefest-noemit`: tsgo holds ~3.5 GB live
+there, `--extendedDiagnostics` 10.6 M symbols / 5.1 M types; the port needs ~8 GB — run with TSGO_TEST_HEAP=8g on a
+box that has it; the shipped binary itself was OOM-killed on this box until `--singleThreaded`), 130 s; positive
+control `TSGO_CLI_INJECT=profile-project-noemit` red (1 differ). Profiles: all 8 × noEmit (65/126 rows) and emit
+(78-312 files) byte-identical incl. their tsconfig's `"pretty": true` (colours, code frames, summary). TsgoCliTest
+6/0 (incl. the real `main` in a child JVM). Kept green on the final gen (oracle inputs SYMLINKED from the main tree's build/goport — the API/LS oracles are the tsgo binary's, the diag/emit ones `oracle-go`'s, which this round's overlay does not touch): DiagParityTest 13,127 / 13,127, EmitParityTest 13,127 / 13,127, OracleParityTest bound 7,774 / 7,774, ApiParityTest 594,007 / 594,007, LsParityTest 21,614 / 21,614; `-tsgo` 117 tests / 0 failed, `-goport` 15 / 0 (two census bands widened for the new code: the inline-function band 20..60 → 20..64 at 61 with `tsc.WriteConfigFile`, and a CLI string-slice census ≤ 1 split out of the harness one), `-lsp` 38 / 0. `huge_methods.py --fail-over 0` = 0 (4,850 classes). Warning-clean (positive control `1 as Int` read its `w:`, deleted).
+
+**Incident (fixed, data restored)**: the first CliParityTest deleted its previous work copies with Kotlin's
+`File.deleteRecursively()`, which FOLLOWS a directory symlink — it emptied the original `node_modules` of the 8
+tsc profiles (`build/bench/tsc-*`) and of the census libraries mitt and ky. Restored: mitt/ky from
+`build/scratch-p18265-census/_deps/<lib>/node_modules` (their install source; tsgo's rows re-recorded identical to
+the pre-incident recording), the profiles' `node_modules/@types/` recreated EMPTY (what every sibling profile copy
+holds; the profiles set `"types": []`, and all 8 profiles' tsgo rows are unchanged). The test now deletes with a
+non-following walk; CLAUDE.md carries the trap.
+
+**Remains** (sub-steps of (TSGO.5)): `--build` (`internal/execute/build`: goroutines + channels; port with a
+`go`/`chan` lowering or an orchestrator override), `--watch` (`watchmanager` + `fswatch`: OS notifications — a JVM
+`WatchService` backend), `--pprofDir`; `--diagnostics`' "Memory allocs" (0 on the JVM). Gate extensions: an
+8 GB arm for type-fest; `--diagnostics` rows modulo values.
+
 ### Round (TSGO.4-d) — THE `-core` SUNSET REPORT: `docs/core-sunset.md`, measured; on 18 real projects the port reports 616 / 616 rows identical to tsgo 7.0.2 where `-core` has 153 false positives and 184 misses; warm on tsc's sources the port checks in 2.7 s vs 7.6 s and checks+emits in 4.0 s vs 8.9 s at ~1.6x the memory; the deletion is an OWNER decision (2026-10-08)
 
 **What it is**: a report, no `-core` change and no dependency change. **Census**: `-externals`, `-lsp`, `-api`, `-client`,
@@ -469,31 +519,6 @@ widening value equality to every comparable struct made `map[*Node]` lookups str
    text, then run the ~11k `diagnose` pins against `-tsgo` (`XTSC_ENGINE=tsgo`).
 3. The other three baseline layers beyond the conformance submodule.
 4. Perf: `GoSlice.addr` allocates per `core.Same`, and there is no per-file lib cache.
-
-### Round (TSGO.1-a) — the tsgo port spike, day 1: extractor, runtime, oracle, porter, binder — 7,774/7,774 BOUND encoded ASTs byte-identical to the tsgo binary; speed is the one open gate criterion (2026-10-07)
-
-Orchestrated as parallel subagents against a written contract (`docs/goport-design.md`), Gradle box-serialized through one `flock`.
-**Landed** (one commit each): `goport-extract` (Go, `go/packages`+`go/types` → deterministic typed JSON IR, `docs/goport-ir.md`, census
-`docs/goport-closure-stats.md`); `-tsgo` module with the Go runtime + shims for the 257 external symbols the closure reaches, oracle-tested
-against real go1.27.1 vectors (`docs/goport-runtime.md`); the oracle (`scripts/tsgo-oracle.py` over `tsc --api` getSourceFile, 7,774 files:
-conformance 6,573, tsc 78, cronstrue, marked, type-fest, hono, rxjs; `oracle-go` in-process encoder/dump via `go build -overlay`, cross-checked
-7,774/7,774 against the binary); the Kotlin porter `-goport` + the generated, checked-in port (81.6k lines, warning-clean); exact xxh3-128,
-RE2→Java regexp translation, real `sync`/`atomic` on `kotlin.concurrent.atomics`; the binder. **Gate (§ 4.1) now**: encoded-AST byte equality
-**7,774/7,774 BOUND** (the binary's own bytes, the port's own hash — `TSGO_ORACLE=bound` OracleParityTest fails on any miss, `TsgoPinTest` gates
-5 fixtures on every build); mechanical share **99.0%** (43,948/44,395 Go lines); overrides **1** (`ast.getCombinedFlags`, `|=` on a
-`~uint32` type parameter); `huge_methods.py --fail-over 0` **0** (switch-splitting rule); warning-clean. **Open: parse speed** — as generated
-**134x** slower than `-core`'s Parser because Go's free string slice lowered to a copying `substring` (quadratic scanner); 7 sites fixed by
-hand in a scratch copy read **1.50x** on a loaded box; as porter RULES (string-slice windows `1c9db2fe5`, one-probe map read `73acaf4ea`) it
-reads **1.26-1.35x** (ABBA, 4 pairs each, all core-faster, max pair 1.52 in one quieter re-run, 1.36 in the last). Two more rules landed and
-were measured as NO gain (inline func-typed params `69898f30c` — the cost is the per-char `String` loop, not the dispatch; window-parameter
-overloads `269d35f0d`, the last parse-path copy) — kept as correct and cheap. **VERDICT: GO** — every § 4.1 criterion met on day 1. Remaining
-perf is REPRESENTATION work (per-char String loop, per-node Arena/GoSlice + embedded-struct object chains), recorded in `docs/goport-perf.md`.
-**Surprises**: (1) the API binary BINDS before encoding — 4,024 files carry binder-set flags — so the binder (3.6k lines) joined the spike
-rather than masking bits; (2) Go pointer-receiver methods are called on nil pointers, so they lower to extensions on `T?` (146 crashes); (3)
-generic zero values need a per-type-parameter element kind (`getSpellingSuggestion[string]` returned null); (4) a test env var that is not a
-declared Gradle input leaves the task UP-TO-DATE and measures nothing; (5) the sync shims were first single-threaded — wrong for the IntelliJ
-host running several projects per JVM — fixed before the checker port needs them (contended locks still spin: a platform park is needed
-before (TSGO.2) holds locks long).
 
 ## QUEUE
 

@@ -25,6 +25,7 @@ package com.xemantic.typescript.tsgo.testutil.baseline
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.github_com.peter_evans.patience.DiffLine
+import com.xemantic.typescript.tsgo.go.io.fs.FileMode
 import com.xemantic.typescript.tsgo.go.regexp.Regexp
 import com.xemantic.typescript.tsgo.go.testing.T
 import com.xemantic.typescript.tsgo.go.github_com.peter_evans.patience.UnifiedDiffOptions

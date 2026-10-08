@@ -52,6 +52,9 @@ var defaultClosure = []string{
 	// (TSGO.4-a) the language service (docs/goport-ls.md): `go list -deps ./internal/ls` minus the above.
 	"jsonrpc", "lsp/lsproto", "ls/lsutil", "format", "ls/lsconv", "ls/change", "project/dirty",
 	"project/logging", "vfs/wrapvfs", "ls/autoimport", "ls",
+	// (TSGO.5) the command line (docs/goport-cli.md): tsc's reporters, help, --init, statistics, and
+	// the OS file system the shipped binary reads (cmd/tsgo/sys.go); internal/execute itself is partial.
+	"execute/tsc", "vfs/osvfs",
 }
 
 // overlayFiles are ADDED to tsgo packages through go/packages' Overlay (never written into
@@ -64,6 +67,7 @@ var overlayFiles = map[string]string{
 	"internal/testutil/tsbaseline/zz_xtsc_export.go":  "../oracle-go/overlay/tsbaseline/xtsc_export.go",
 	"internal/api/zz_xtsc_api.go":                     "overlay/api/xtsc_api.go",
 	"internal/api/zz_xtsc_ls.go":                      "overlay/api/xtsc_ls.go",
+	"internal/execute/zz_xtsc_cli.go":                 "overlay/execute/xtsc_cli.go",
 }
 
 // overlaySrc holds the overlay files' contents by their virtual path (they exist on no disk).

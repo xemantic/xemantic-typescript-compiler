@@ -15,3 +15,8 @@ github.com/microsoft/typescript-go/internal/collections.OrderedMap.clone cloneIm
 
 # binder: exported BindSourceFile (bound-check wrapper) and unexported bindSourceFile (the worker).
 github.com/microsoft/typescript-go/internal/binder.bindSourceFile bindSourceFileImpl
+
+# A method of a named MAP/SLICE type is an extension on a GoMap/GoSlice typealias; one named like a member of
+# that runtime class is SHADOWED by it ((TSGO.5): `m.Get(name)` resolved to GoMap.get and lost the lower-case
+# fallback, so --showConfig printed no compilerOptions). The porter refuses the build until it is renamed.
+github.com/microsoft/typescript-go/internal/tsoptions.CommandLineOptionNameMap.Get getOption
