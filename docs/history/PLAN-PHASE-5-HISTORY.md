@@ -1,3 +1,61 @@
+### Round (P18.307) — (LIBS.3) round 14: the last two held-back fixes LANDED — bare `infer` and the empty mapped type — with the `as`-over-tuple mapped type and nine supporting fixes; type-fest 141 -> 123, tally 209 -> 191, NO added position; a +10 s type-fest regression the round itself caused was traced to UNCACHED conditional-alias results and fixed (type-fest 15.4 -> 15.9 s, under tsgo's 17.1 s) (2026-10-06)
+
+One implementation subagent. **Where the brief / queue were wrong**: the "+128" figure was stale — on today's parent (b)+(c)
+alone read type-fest 141 -> 163 (29 added: conditional-keys 15, words 13, extends-strict 1), and remove-prefix / remove-suffix
+no longer appear; the roots were elsewhere: conditional-keys — `Record<string, X>` is `any` here ((CHK.135)(a)), so the
+mapped type bailed to `any` and `keyof` of it answered `keyof any`'s CLOSED `string | number | symbol`; words — a template
+`infer` pattern with a UNION span (`${infer R}${Whitespace}`) was unmodelled; extends-strict — a default import from a BARE
+package (`import tag from 'tagged-tag'`) resolved to nothing, and a `unique symbol`-keyed type-literal member is dropped so
+`Tagged<string, …>` looked like `{}`. (b) alone cost **+10 s** on type-fest (15.3 -> 27 s, over tsgo): conditional-bodied
+alias results were never written to the alias-substitution cache because the write was coupled to the DISPLAY gate;
+literal type arguments were keyed by id though literal types are not interned, so every `Words<'…'>` missed; and the round's
+own `isEmptyObjectTypeLiteral` forced (P18.305)'s lazy tuple tables (3 RED in `LazyTupleMembersTest`, caught by the at-risk
+sweep). FixedLengthArray: the `as`-over-tuple mapped type now yields an object as in tsgo, but its rows wait on TS2339 /
+TS7053 for an INTERSECTION receiver (queued). **Mechanisms**: (b) `ConditionalInferPatterns.isPattern` accepts a bare
+`InferType`; (c) `emptyMappedObject`, gated by `mappedConstraintIsGeneric` (ungated it added a TS7053 at
+`deprecations.ts` 88 / 109 on two profiles — a constraint reading an unbound type parameter must stay deferred); `keyof` an
+unenumerable mapped type literal answers `any`, not the closed union; a union span in a template `infer` pattern
+distributes (capped at 64); a type literal with a dropped `unique symbol` member is flagged so `Relater` refuses a primitive
+source against it and `isEmptyObjectTypeLiteral` does not read it as `{}`; a bare-package default import resolves through
+`resolveImportTargetFallback`; an `as` clause dropping a non-literal key (`number`) whose remapped name is `never`;
+`X & {}` -> `X` for an object `X`; the alias cache stores conditional-bodied results and keys literal / `{}` arguments by
+VALUE (`aliasCacheKeyPart`); new count-only `AliasSubstitutionCensus.kt`. `Checker.kt` +93, `TemplateLiteralTypes.kt` +33,
+`Relater.kt` +9, `Type.kt` +6, `ConditionalInferPatterns.kt` +3, `NameResolver.kt` ±3. **Matrix** (`pin`, 9 files): tsgo 14 rows,
+ours before 2 (one an FP), after 14 identical head lines (the `{readonly [tag2]: 1}` display prints `{}`). **Pins**:
+`BareInferEmptyMappedLandingTest` 12, tsgo-verified; ablation 11 arms 1 / 1 / 1 / 1 / 1 / 2 / 1 / 1 / 1 / 1 / 2 RED (a3's control
+re-shaped to tsc's own `createBinder` loop after a first 0 RED). **Gates**: full suite 22,916 / 0 / 44 (+12); corpus screen
+8725 / 0 and `--include ''` the same 41 (byte-identical diffs); `cost_gate.py` 0 (`typeNode.bypassed` -12); `huge_methods.py
+--fail-over 0` 0; at-risk sweep 229 classes / 3,197 tests; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue /
+mitt 0 / date-fns 1 unchanged (identity hash extended to `AliasSubstitutionCensus`, `Type$Object`); library grid on the final
+classes (orchestrator's `r307o` vs `r306`): type-fest 141 -> 123 (except 6 / 18, exclusify-union 67, apply-default-options 57,
+require-at-least-one x4, readonly-keys-of-union x2, optional-keys-of x4, readonly-deep x3, empty-object 13), the rest unchanged,
+NO added position (tally 209 -> 191); both ways: fixes alone 131 with 0 added; type-fest wall measured by the orchestrator,
+same session: 15.37 -> 15.94 s (RSS 1.88 -> 2.01 GB), under tsgo's 17.1 s; warning gate with probe: probe only.
+
+### Round (P18.306) — (LIBS.3) round 13: `NoInfer<T>` EVALUATION LANDED, with the held-back alias-constraint fix and five fixes for the rows they exposed — type-fest 170 -> 141, tally 238 -> 209, NO added position; type-fest wall 11.1 -> 15.6 s, accepted because tsgo itself takes 17.1 s on the same project; the builder stalled at the end and the orchestrator finished the round (2026-10-05)
+
+One implementation subagent; it stalled (27 min, no process) while attributing a type-fest wall regression, was stopped, and the
+orchestrator finished: the tree was consistent (source 19:55, class 19:57 = the builder's frozen copy, md5 54e47491).
+**Mechanisms**: `NoInfer<X>` evaluates to `X` (intrinsic alias, non-`any` argument); an alias's type-parameter CONSTRAINT is
+resolved with the alias's OWN parameters bound to its arguments (`typeOfNodeBinding`), not the caller's — the (P18.302) leak
+— with an own-constraint RE-ENTRY cycle-break (`ownConstraintInProgress`) because applying it overflowed the stack on two
+corpus cases of the `Shared<I, D extends Shared<I, D>>` shape CLAUDE.md warns about (`reactReduxLike…`,
+`circularlyConstrainedMapped…`, TS2589 at (0,0)); and five fixes for the rows those two exposed: (A) `any -> never` is false
+inside a conditional (`IsNever<any>`; all-extend / some-extend gone), (B) a homomorphic mapped type distributes over an
+intersection-of-union through its distributed view, (C) an `IsEqual`-shaped conditional over a WASHED (non-genuine) `any`
+answers `any` (`GenericSignatureConditionals.washed`, using `genuineAny`, now `internal`) — this also closed array-slice
+without bare `infer`, (D) an array target is excluded from the merged-contradiction rule, (E) an `Object`-prototype member
+re-declared in a merged acceptance is related against `Object`'s declaration. `Checker.kt` +42, `GenericSignatureConditionals.kt`
++28, `Relater.kt` +10. **Measured, arm by arm** (type-fest, `-Xmx5g`): parent 11.1 s / 1.7 GB; `NoInfer` alone 33.7 s / 3.3 GB;
+fixes alone 11.6 s / 1.7 GB, type-fest 167, 0 added; final 15.6 s / 1.9 GB, type-fest 141, 0 added. tsgo 7.0.2 on the same
+project: 17.1 s — so the remaining +4.5 s is the deep alias evaluation tsgo also does, accepted. **Pins**:
+`NoInferAliasConstraintLandingTest` 10, tsgo-verified; ablation 9 arms 1 / 1 / 1 / 1 / 2 / 1 / 1 / 1 / 1 RED. **Gates**: full suite
+22,904 / 0 / 44 (+10); corpus screen 8725 / 0 and `--include ''` the same 41 (byte-identical diffs); `cost_gate.py` 0
+(`typeNode.bypassed` +0.70%, `typeNode.cacheable` -0.17%); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 +
+chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged; library grid on the final classes (orchestrator's
+`r306` vs `r305`): type-fest 170 -> 141, the rest unchanged, NO added position (tally 238 -> 209); warning gate with probe:
+probe only. Still held back: bare `infer` + empty mapped (re-measure on top of this round before the next attempt).
+
 ### Round (P18.305) — (CHK.233) CLOSED: lazy tuple members — a tuple's element symbols and number index are built on first read, and the three readers that forced the table at every level (`tupleSlotIsOptional`, `length`, `MemberResolver`) answer without it; type-fest 15.0 -> 10.5 s / RSS 3.12 -> 1.52 GB, the slow fixture 6.3 -> 3.2 s and no longer OOM at `-Xmx512m`; diagnostics byte-identical everywhere (2026-10-05)
 
 One implementation subagent. **Where the brief / queue were wrong**: `symbolTypes` was only part of the retention — the heap

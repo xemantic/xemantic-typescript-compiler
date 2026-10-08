@@ -25,6 +25,62 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.2-c) — the diagnostics differential covers ALL FOUR suites tsgo's compiler runner runs: 13,127 / 13,127 configurations equal, 0 crashed, 0 port defects; (TSGO.2)'s oracle is complete (2026-10-08)
+
+**The four layers, as tsgo's runner defines them** (`internal/testrunner/compiler_runner_test.go`): `TestSubmodule`
+and `TestLocal`, each over a `compiler` and a `conformance` `CompilerBaselineRunner`. Submodule cases are
+`_submodules/TypeScript/tests/cases/{compiler,conformance}`, baselined in `reference/submodule/<suite>/`, with each
+`.diff` recorded in `submodule`/`submoduleAccepted`/`submoduleTriaged`. Local cases are tsgo's own
+`testdata/tests/cases/{compiler,conformance}`, baselined in `reference/<suite>/`. Before this round the oracle covered
+the submodule compiler suite plus the 36 conformance cases in `typescript-repo`'s SPARSE working tree. The git objects
+hold the whole `4d4f005c` tree, so the materializer now `git archive`s `tests/cases` into `build/goport/ts-submodule`
+and reaches all four suites through one root, `build/goport/diag-src` (symlinks; a `local/` prefix marks tsgo's
+own cases).
+
+**What changed:** `scripts/tsgo-diag-cases.py` (enumeration over four suites, the runner's no-duplicate-basename
+invariant asserted), `scripts/tsgo-diag-oracle.py` (layer `local`, baselines root), `oracle-go/diags.go` (`suiteOf`
+strips `local/`; `-runner` finds a local baseline under `reference/<suite>/`), and `DiagParityTest` (reads raw cases
+from `diag-src`). The generated port, the porter and the runtime are unchanged.
+
+**Population:** 12,760 cases → 15,249 configurations → **13,127 materialized**, with 0 fatal. Per suite (ok / skipped):
+
+| suite | cases | ok | skipped |
+|---|---|---|---|
+| submodule `compiler/` | 6,537 | 6,282 | 987 |
+| submodule `conformance/` | 5,907 | 6,515 | 1,176 |
+| local `compiler/` | 297 | 305 | 3 |
+| local `conformance/` | 19 | 25 | 1 |
+
+All skips are tsgo's own: `skippedTests` covers 45 files, and `SkipUnsupportedCompilerOptions` covers 2,122
+configurations (2,118 submodule, 4 local).
+
+Baseline layer of the 13,127 configurations:
+
+| layer | configurations |
+|---|---|
+| none | 12,074 |
+| `submoduleAccepted` | 418 |
+| `submodule` | 234 |
+| `submoduleTriaged` | 71 |
+| `local` | 330 |
+
+**Receipts:**
+- **Oracle against tsgo's committed baselines** (`-runner`): **13,127 / 13,127 byte-identical**, local included.
+- **Check-only vs runner list:** 13,054 equal and 73 not. The 73 are 69 `submoduleTriaged` (55 TS-1, 14 same-count), 3 TS-1
+  with no diff layer, and 1 local TS-1. tsgo's order dependence, recorded by tsgo; the check-only list is the
+  oracle.
+- **`DiagParityTest`** (ported harness, raw case text, `case.json` cross-check first): **13,127 configurations, equal
+  13,127, differ 0, missing 0** (84 s). `tsgo-diag-compare.py` independently agrees: 13,127 equal.
+- **Positive control:** `TSGO_DIAG_INJECT` on a `local/` case reads `1 of 330 not equal`, red.
+- **Bound AST oracle:** 7,774 / 7,774.
+- **Test suites:** `-tsgo` 95 / 0, `-goport` 12 / 0.
+
+**Port defects found: none.** The 6,809 newly covered configurations passed on the first run, so every lowering rule
+from (TSGO.2-a/b) generalized. A submoduleTriaged configuration would have been graded against tsgo's ACTUAL output
+in any case (we port tsgo, so a triaged tsgo bug is not a port defect); all 71 are equal.
+
+**Open after (TSGO.2):** perf (`GoSlice.addr` per `core.Same`, no per-file lib cache); (TSGO.3).
+
 ### Round (TSGO.2-b) — the diagnostics differential is a GATE, tsgo's test harness is PORTED, and `-core`'s 10.7k `diagnose` pins run against `-tsgo`: 0 port defects (2026-10-08)
 
 **What landed** (c7e70a9ff, 8c0858ec0, and this commit). (1) `DiagParityTest` grades itself against
@@ -284,64 +340,6 @@ mitt 0 / date-fns 1 unchanged (identity hash extended to both collaborators); li
 `r307o` on all eight (orchestrator's `r308`); warning gate with probe: probe only. Ledger row 26. Next candidates: TS2507
 `checkNonConstructorExtends` (5 cold widenings) and `checkSuperBeforeThis` (3 small widenings).
 
-### Round (P18.307) — (LIBS.3) round 14: the last two held-back fixes LANDED — bare `infer` and the empty mapped type — with the `as`-over-tuple mapped type and nine supporting fixes; type-fest 141 -> 123, tally 209 -> 191, NO added position; a +10 s type-fest regression the round itself caused was traced to UNCACHED conditional-alias results and fixed (type-fest 15.4 -> 15.9 s, under tsgo's 17.1 s) (2026-10-06)
-
-One implementation subagent. **Where the brief / queue were wrong**: the "+128" figure was stale — on today's parent (b)+(c)
-alone read type-fest 141 -> 163 (29 added: conditional-keys 15, words 13, extends-strict 1), and remove-prefix / remove-suffix
-no longer appear; the roots were elsewhere: conditional-keys — `Record<string, X>` is `any` here ((CHK.135)(a)), so the
-mapped type bailed to `any` and `keyof` of it answered `keyof any`'s CLOSED `string | number | symbol`; words — a template
-`infer` pattern with a UNION span (`${infer R}${Whitespace}`) was unmodelled; extends-strict — a default import from a BARE
-package (`import tag from 'tagged-tag'`) resolved to nothing, and a `unique symbol`-keyed type-literal member is dropped so
-`Tagged<string, …>` looked like `{}`. (b) alone cost **+10 s** on type-fest (15.3 -> 27 s, over tsgo): conditional-bodied
-alias results were never written to the alias-substitution cache because the write was coupled to the DISPLAY gate;
-literal type arguments were keyed by id though literal types are not interned, so every `Words<'…'>` missed; and the round's
-own `isEmptyObjectTypeLiteral` forced (P18.305)'s lazy tuple tables (3 RED in `LazyTupleMembersTest`, caught by the at-risk
-sweep). FixedLengthArray: the `as`-over-tuple mapped type now yields an object as in tsgo, but its rows wait on TS2339 /
-TS7053 for an INTERSECTION receiver (queued). **Mechanisms**: (b) `ConditionalInferPatterns.isPattern` accepts a bare
-`InferType`; (c) `emptyMappedObject`, gated by `mappedConstraintIsGeneric` (ungated it added a TS7053 at
-`deprecations.ts` 88 / 109 on two profiles — a constraint reading an unbound type parameter must stay deferred); `keyof` an
-unenumerable mapped type literal answers `any`, not the closed union; a union span in a template `infer` pattern
-distributes (capped at 64); a type literal with a dropped `unique symbol` member is flagged so `Relater` refuses a primitive
-source against it and `isEmptyObjectTypeLiteral` does not read it as `{}`; a bare-package default import resolves through
-`resolveImportTargetFallback`; an `as` clause dropping a non-literal key (`number`) whose remapped name is `never`;
-`X & {}` -> `X` for an object `X`; the alias cache stores conditional-bodied results and keys literal / `{}` arguments by
-VALUE (`aliasCacheKeyPart`); new count-only `AliasSubstitutionCensus.kt`. `Checker.kt` +93, `TemplateLiteralTypes.kt` +33,
-`Relater.kt` +9, `Type.kt` +6, `ConditionalInferPatterns.kt` +3, `NameResolver.kt` ±3. **Matrix** (`pin`, 9 files): tsgo 14 rows,
-ours before 2 (one an FP), after 14 identical head lines (the `{readonly [tag2]: 1}` display prints `{}`). **Pins**:
-`BareInferEmptyMappedLandingTest` 12, tsgo-verified; ablation 11 arms 1 / 1 / 1 / 1 / 1 / 2 / 1 / 1 / 1 / 1 / 2 RED (a3's control
-re-shaped to tsc's own `createBinder` loop after a first 0 RED). **Gates**: full suite 22,916 / 0 / 44 (+12); corpus screen
-8725 / 0 and `--include ''` the same 41 (byte-identical diffs); `cost_gate.py` 0 (`typeNode.bypassed` -12); `huge_methods.py
---fail-over 0` 0; at-risk sweep 229 classes / 3,197 tests; grid 8 x added=0 removed=0 + chain OK, rxjs / marked / cronstrue /
-mitt 0 / date-fns 1 unchanged (identity hash extended to `AliasSubstitutionCensus`, `Type$Object`); library grid on the final
-classes (orchestrator's `r307o` vs `r306`): type-fest 141 -> 123 (except 6 / 18, exclusify-union 67, apply-default-options 57,
-require-at-least-one x4, readonly-keys-of-union x2, optional-keys-of x4, readonly-deep x3, empty-object 13), the rest unchanged,
-NO added position (tally 209 -> 191); both ways: fixes alone 131 with 0 added; type-fest wall measured by the orchestrator,
-same session: 15.37 -> 15.94 s (RSS 1.88 -> 2.01 GB), under tsgo's 17.1 s; warning gate with probe: probe only.
-
-### Round (P18.306) — (LIBS.3) round 13: `NoInfer<T>` EVALUATION LANDED, with the held-back alias-constraint fix and five fixes for the rows they exposed — type-fest 170 -> 141, tally 238 -> 209, NO added position; type-fest wall 11.1 -> 15.6 s, accepted because tsgo itself takes 17.1 s on the same project; the builder stalled at the end and the orchestrator finished the round (2026-10-05)
-
-One implementation subagent; it stalled (27 min, no process) while attributing a type-fest wall regression, was stopped, and the
-orchestrator finished: the tree was consistent (source 19:55, class 19:57 = the builder's frozen copy, md5 54e47491).
-**Mechanisms**: `NoInfer<X>` evaluates to `X` (intrinsic alias, non-`any` argument); an alias's type-parameter CONSTRAINT is
-resolved with the alias's OWN parameters bound to its arguments (`typeOfNodeBinding`), not the caller's — the (P18.302) leak
-— with an own-constraint RE-ENTRY cycle-break (`ownConstraintInProgress`) because applying it overflowed the stack on two
-corpus cases of the `Shared<I, D extends Shared<I, D>>` shape CLAUDE.md warns about (`reactReduxLike…`,
-`circularlyConstrainedMapped…`, TS2589 at (0,0)); and five fixes for the rows those two exposed: (A) `any -> never` is false
-inside a conditional (`IsNever<any>`; all-extend / some-extend gone), (B) a homomorphic mapped type distributes over an
-intersection-of-union through its distributed view, (C) an `IsEqual`-shaped conditional over a WASHED (non-genuine) `any`
-answers `any` (`GenericSignatureConditionals.washed`, using `genuineAny`, now `internal`) — this also closed array-slice
-without bare `infer`, (D) an array target is excluded from the merged-contradiction rule, (E) an `Object`-prototype member
-re-declared in a merged acceptance is related against `Object`'s declaration. `Checker.kt` +42, `GenericSignatureConditionals.kt`
-+28, `Relater.kt` +10. **Measured, arm by arm** (type-fest, `-Xmx5g`): parent 11.1 s / 1.7 GB; `NoInfer` alone 33.7 s / 3.3 GB;
-fixes alone 11.6 s / 1.7 GB, type-fest 167, 0 added; final 15.6 s / 1.9 GB, type-fest 141, 0 added. tsgo 7.0.2 on the same
-project: 17.1 s — so the remaining +4.5 s is the deep alias evaluation tsgo also does, accepted. **Pins**:
-`NoInferAliasConstraintLandingTest` 10, tsgo-verified; ablation 9 arms 1 / 1 / 1 / 1 / 2 / 1 / 1 / 1 / 1 RED. **Gates**: full suite
-22,904 / 0 / 44 (+10); corpus screen 8725 / 0 and `--include ''` the same 41 (byte-identical diffs); `cost_gate.py` 0
-(`typeNode.bypassed` +0.70%, `typeNode.cacheable` -0.17%); `huge_methods.py --fail-over 0` 0; grid 8 x added=0 removed=0 +
-chain OK, rxjs / marked / cronstrue / mitt 0 / date-fns 1 unchanged; library grid on the final classes (orchestrator's
-`r306` vs `r305`): type-fest 170 -> 141, the rest unchanged, NO added position (tally 238 -> 209); warning gate with probe:
-probe only. Still held back: bare `infer` + empty mapped (re-measure on top of this round before the next attempt).
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -428,12 +426,13 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   lowering class failed. (TSGO.0) decided 2026-10-07 — this is the HEAD of the queue.
   **DONE 2026-10-07 — GATE: GO ((TSGO.1-a) note, `docs/tsgo-port-plan.md` § 4.1 RESULT): 7,774/7,774 BOUND
   byte-identical, mechanical 99.0%, 1 override, parse ~1.28x `-core` warm, 0 huge methods, warning-clean.**
-- [ ] **(TSGO.2) binder + checker through the porter (after a GO on (TSGO.1)).** ~64k Go. Oracle:
+- [x] **(TSGO.2) binder + checker through the porter (after a GO on (TSGO.1)).** ~64k Go. Oracle:
   diagnostics differential against tsgo over all four baseline layers, and the ~2,800
   hand-written pins run against BOTH engines. **IN PROGRESS — (TSGO.2-a/b): the checker closure compiles; the
   conformance differential is a failing gate at 6,318 / 6,318 through the PORTED test harness; the 10.7k `diagnose`
-  pins run against `-tsgo` (`XTSC_ENGINE=tsgo`) with 0 port defects (`docs/goport-pin-census.md`). Next: the
-  remaining baseline layers.**
+  pins run against `-tsgo` (`XTSC_ENGINE=tsgo`) with 0 port defects (`docs/goport-pin-census.md`).**
+  **DONE 2026-10-08 ((TSGO.2-c) note): the differential covers all four suites tsgo's compiler runner runs
+  (submodule + local × compiler + conformance) — 13,127 / 13,127 configurations equal, 0 crashed, 0 port defects.**
 - [ ] **(TSGO.3) program, module resolution, transformers, printer; expose `internal/api` through
   the `Project` API (the type oracle).**
 - [ ] **(TSGO.4) re-base externals, KIR and the LSP onto `-tsgo`; decide `-core`'s retirement on
