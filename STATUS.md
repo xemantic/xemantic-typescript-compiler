@@ -150,12 +150,3 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
-
-**(P18.313) — (LIBS.4) ROUND 2: a `for … of this.<member>` loop variable is typed, seven hono object/array-literal mechanisms, and an object-literal ternary arm narrowed by a type guard (a tsc-source false positive the first fix exposed, caught by the grid) — hono 27 -> 18, zod 14 -> 13, TALLY 162 -> 152, NO ADDED POSITION; +14 PINS, 22,999 / 0 / 44 (2026-10-07). The same day (TSGO.0) was DECIDED (D1 latest Go, D2 AGPL, D3 `-core` frozen): the queue head is now the (TSGO.1) port spike.**
-Screen 0; grid 8x0; rxjs / marked / cronstrue / mitt / date-fns unchanged.
-
-**(P18.312) — (INV.0) EXTRACTION: THE `in`-RHS TYPE-PARAMETER CHECKS AND THE TYPE-AS-NAMESPACE FAMILY MOVE OUT OF `Checker.kt` (730 LINES), BEHAVIOUR IDENTICAL BY EVERY RECEIPT INCLUDING THE PER-PASS TABLE; `Checker.kt` IS NOW 190,700; +11 PINS, 22,985 / 0 / 44 (2026-10-06).**
-Screen 0; grid 8x0; libraries unchanged.
-
-**(P18.311) — (LIBS.4) REAL-LIBRARY FALSE-POSITIVE SWEEP: eight mechanisms on application code (bigint arithmetic with `any`, a negative `instanceof` narrowing to `never`, shadowed readonly receivers, `extends Map` without type arguments, `this[key] =` assignments, …) — zod 21 -> 14, ky 9 -> 5, immer 5 -> 1, TALLY 179 -> 162, NO ADDED POSITION; +9 PINS, 22,974 / 0 / 44 (2026-10-06).**
-Screen 0; grid 8x0; mitt and date-fns hold.
