@@ -23,7 +23,7 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.native.runtime.NativeRuntimeApi::class)
 
 package com.xemantic.typescript.tsgo
 
@@ -33,6 +33,7 @@ import com.xemantic.typescript.tsgo.core.TSFalse
 import com.xemantic.typescript.tsgo.core.TSTrue
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
+import kotlinx.cinterop.toKString
 import kotlin.system.exitProcess
 import kotlin.time.TimeSource
 
@@ -52,6 +53,7 @@ fun nativeCheckMain(args: Array<String>) {
     }
     val parallel = args.getOrNull(1) == "parallel"
     val iters = args.getOrNull(2)?.toInt() ?: 1
+    configureGc()
     val count = onGoStack {
         TsgoProject.init()
         var last = 0
@@ -69,7 +71,28 @@ fun nativeCheckMain(args: Array<String>) {
     exitProcess(if (count == 0) 0 else 1)
 }
 
+/**
+ * Kotlin/Native's GC tuning, from the environment while it is being measured: `TSGO_GC_TARGET_MB`
+ * (the initial target heap), `TSGO_GC_PAUSE=0` (do not stall allocating threads when the target heap
+ * overflows), `TSGO_GC_AUTOTUNE=0`.
+ */
+private fun configureGc() {
+    val gc = kotlin.native.runtime.GC
+    platform.posix.getenv("TSGO_GC_TARGET_MB")?.toKString()?.toLongOrNull()?.let { gc.targetHeapBytes = it shl 20 }
+    if (platform.posix.getenv("TSGO_GC_PAUSE")?.toKString() == "0") gc.pauseOnTargetHeapOverflow = false
+    if (platform.posix.getenv("TSGO_GC_AUTOTUNE")?.toKString() == "0") gc.autotune = false
+    platform.posix.fprintf(
+        platform.posix.stderr,
+        "gc: targetHeapBytes=${gc.targetHeapBytes} pauseOnTargetHeapOverflow=${gc.pauseOnTargetHeapOverflow} autotune=${gc.autotune}\n",
+    )
+}
+
+private fun phase(name: String, mark: TimeSource.Monotonic.ValueTimeMark) {
+    platform.posix.fprintf(platform.posix.stderr, "phase: $name ms=${mark.elapsedNow().inWholeMilliseconds}\n")
+}
+
 private fun check(config: String, parallel: Boolean): List<String> {
+    var mark = TimeSource.Monotonic.markNow()
     val configName = com.xemantic.typescript.tsgo.tspath.normalizePath(GoString.fromUtf16(config))
     val cwd = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(configName)
     val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(TsgoProject.diskFS())
@@ -80,16 +103,23 @@ private fun check(config: String, parallel: Boolean): List<String> {
         for (k in 0 until ds.len) all += ds[k]!!
     }
     add(configDiags)
+    phase("config", mark)
     if (parsed != null) {
+        mark = TimeSource.Monotonic.markNow()
         val program = com.xemantic.typescript.tsgo.compiler.newProgram(
             ProgramOptions(host = host, config = parsed, singleThreaded = if (parallel) TSFalse else TSTrue),
         )!!
+        phase("program (parse+resolve, ${program.getSourceFiles().len} files)", mark)
+        mark = TimeSource.Monotonic.markNow()
         val ctx = com.xemantic.typescript.tsgo.go.context.background()
         add(program.getConfigFileParsingDiagnostics())
         add(program.getProgramDiagnostics())
         add(program.getSyntacticDiagnostics(ctx, null))
         add(program.getGlobalDiagnostics(ctx))
+        phase("syntactic+global (bind)", mark)
+        mark = TimeSource.Monotonic.markNow()
         add(program.getSemanticDiagnostics(ctx, null))
+        phase("semantic (check)", mark)
     }
     // tsgo's own non-pretty writer (`tsc --noEmit -p` without a TTY), paths relative to the project.
     val out = com.xemantic.typescript.tsgo.go.strings.Builder()

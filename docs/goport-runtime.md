@@ -229,16 +229,24 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
   i.e. a program built WITHOUT `SingleThreaded` (tsgo's default: 4 checkers, parallel parse and bind).
   Running `f` synchronously instead DEADLOCKS there — the files parser queues children while holding a
   mutex they take. A panic in a goroutine crashes a Go program; here the first one is kept and `Wait`
-  re-throws it. (The Kotlin/Native `actual` is not written: no native target is built.)
+  re-throws it. (Kotlin/Native: one detached pthread per goroutine with a 1 GB stack, see below.)
 - `sync/atomic` types wrap `AtomicInt`/`AtomicLong`/`AtomicBoolean`/`AtomicReference` (unsigned
   kinds wrap the signed atomic of the same width; two's-complement add is identical).
 - `errgroup.Group`: `Go` runs `f` synchronously; the first error is kept with a CAS.
 
-**Kotlin/Native design** (no native target is built today): the `actual`s would be a per-thread
-`pthread_mutex` + `pthread_cond` pair (the token is a small per-thread object created lazily in a
-`@ThreadLocal`; `park` waits on the cond until a permit flag is set, `unpark` sets it and signals) —
-the `WaitQueue` protocol above needs nothing else. A spin-then-`sched_yield()` `park` would also be
-correct (the protocol tolerates spurious returns) but burns CPU.
+**Kotlin/Native** (`nativeMain`, built since (TSGO.6) behind `-PenableNativeTargets=true`):
+- `park`/`unpark` (`go/sync/Park.native.kt`): a per-thread token (`@ThreadLocal`, created lazily) holding
+  a `pthread_mutex` + `pthread_cond` and a PERMIT flag read and written under the mutex — `park` waits
+  until the permit is set and consumes it, `unpark` sets it and signals; an `unpark` before the `park`
+  is a permit, as with `LockSupport`. The pthread objects are freed by a `Cleaner` when the token is
+  collected, NOT at thread exit: an unparker may still hold the token of a thread that has finished.
+- `goSpawn`: a DETACHED pthread with Go's 1 GB maximum goroutine stack (virtual, committed as touched),
+  256 MB if that reservation is refused; one thread per goroutine (no idle-thread pool yet — the JVM
+  reuses idle threads for 30 s). The routine is a `staticCFunction` taking a `StableRef` to the
+  closure; a throwable escaping it is printed, never propagated (every caller catches inside `f`).
+  `onGoStack` (the facade's deep-stack entry) needs nothing else: it spawns through `goSpawn` and parks.
+- `go/os` (`Os.native.kt`): POSIX `stat` (following links, as `java.io.File` does) / `opendir` +
+  `readdir` / `open` + `read`.
 
 Pins: `commonTest/SyncSemanticsTest` (misuse panics, Once/OnceValue panic semantics) and
 `jvmTest/SyncConcurrencyTest` (8 threads; contended `Mutex`/`WaitGroup` waiters measured to use
@@ -305,7 +313,7 @@ Lowering rules that come with the shims:
 ## 10. Approximations — where Kotlin is NOT Go
 
 1. **Slice capacity after growth** omits Go's malloc size-class rounding (`roundupsize`), so a grown cap can be SMALLER than Go's; whether a later `append` reallocates (and so aliases) can differ. Only code whose result depends on append aliasing can observe it.
-2. **`math.Log`/`Exp`** are a port of Go's pure-Go `log` and Kotlin's `exp`; Go on amd64 uses assembly for both. Sampled values agree with Go bit-for-bit (oracle), but the last ulp is not guaranteed. `Log2` and a FRACTIONAL `Pow` exponent inherit this; integer exponents are exact.
+2. **`math.Log`/`Exp`** are ports of Go's pure-Go `log` and `exp` (the platform `exp` was dropped at (TSGO.6): glibc's, i.e. Kotlin/Native's, differed from Go in the last ulp on `Pow(7, 1.5)`); Go on amd64 uses assembly for both. Sampled values agree with Go bit-for-bit (oracle), but the last ulp is not guaranteed. `Log2` and a FRACTIONAL `Pow` exponent inherit this; integer exponents are exact.
 3. **`strconv.Quote` / `%q`** keep every valid non-ASCII rune; Go escapes non-printable ones (`­`, unassigned code points).
 4. **`fmt` `%v` of a struct/pointer** prints Kotlin `toString()`, `%T` names only builtin kinds; map keys in `%v` are sorted by `toString()`.
 5. **`errgroup.Group.Go`** runs its function synchronously (§ 9a); `WaitGroup.Go` starts a thread per goroutine (no M:N scheduling) and re-throws a goroutine's panic from `Wait` instead of crashing. Mutual exclusion and blocking are real.

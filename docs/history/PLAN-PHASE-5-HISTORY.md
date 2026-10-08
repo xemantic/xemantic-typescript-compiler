@@ -1,3 +1,40 @@
+### Round (TSGO.2-a) — the ported CHECKER: the 42-package `internal/compiler` closure lowers and compiles, and its diagnostics equal tsgo's on 6,318 / 6,318 conformance configurations (2026-10-07)
+
+**What landed** (one lowering agent; commits 643546ddb, b92728e60, 934160a6d, 8961a3c0e, ddea91894,
+fce87c55b, 19c39e2bd). The extractor and porter now cover every package `go list -deps ./internal/compiler`
+names, plus `bundled`: 181,376 Go lines with no IR holes. `gen/` is 306 files / ~223k Kotlin lines (22 MB).
+**146,556 / 146,763 Go lines (99.9%) lower mechanically.** There are **4 overrides**, all generics over a
+basic-type-set type parameter: `ast.getCombinedFlags`, `checker.hashWrite32/64`, `tsoptions.floatOrInt32ToFlag`.
+Four declarations are refused, and none of them is on the compiler's path: parallel BFS, `LimitedSemaphore`,
+`ThrottleGroup` and an encoder sentinel. `reflect`/json is CODEGEN, not overrides: the porter emits
+`GoReflectStruct`/`GoJsonStruct` from struct tags and `GoBasicValue` for value classes. `go:embed` becomes
+byte-string constants. A cold `compileKotlinJvm` of `-tsgo` takes ~1 min, with the Kotlin daemon peaking at ~6.1 GB RSS.
+
+**Receipts (re-run by the orchestrator, not quoted from the agent):**
+- `TSGO_DIAG=1 TSGO_ORACLE=bound` `-tsgo` + `-goport` jvmTest: **103 tests, 0 failures**.
+- Bound AST oracle: **7,774 / 7,774** byte-identical.
+- `DiagParityTest` wrote 6,318 configurations in 52 s, and `scripts/tsgo-diag-compare.py build/goport/diag-kotlin`
+  graded them **6,318 equal**. "Equal" covers file, offsets, code, category, flattened text, related information and phase.
+- `CheckerSmokeTest` reports `const x: number = "s"` as TS2322.
+
+The path ran 5,972 → 6,220 → 6,291 → 6,318. Every step was a lowering RULE, never a per-case patch:
+- `&s[0] == &t[0]` compares slots, not elements (`core.Same`, ~250 configurations);
+- value equality for struct-alias map keys and for `comparable` type arguments;
+- a typed nil in a type switch;
+- method/function name shadowing;
+- json for pointer fields.
+
+**Trap recorded in CLAUDE.md by the agent:** a generated struct class also stands for Go's POINTER, so
+widening value equality to every comparable struct made `map[*Node]` lookups structural and SIGKILLed the test JVM.
+
+**Open in (TSGO.2):**
+1. `DiagParityTest` only WRITES the outputs, and grading is a separate script. Make the comparison fail the test,
+   because a measurement that cannot fail is not a gate.
+2. Port tsgo's harness functions (`makeUnitsFromTest`, `SetOptionsFromTestConfig`) so the driver reads raw case
+   text, then run the ~11k `diagnose` pins against `-tsgo` (`XTSC_ENGINE=tsgo`).
+3. The other three baseline layers beyond the conformance submodule.
+4. Perf: `GoSlice.addr` allocates per `core.Same`, and there is no per-file lib cache.
+
 ### Round (TSGO.1-a) — the tsgo port spike, day 1: extractor, runtime, oracle, porter, binder — 7,774/7,774 BOUND encoded ASTs byte-identical to the tsgo binary; speed is the one open gate criterion (2026-10-07)
 
 Orchestrated as parallel subagents against a written contract (`docs/goport-design.md`), Gradle box-serialized through one `flock`.

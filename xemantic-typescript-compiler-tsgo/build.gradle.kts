@@ -58,6 +58,8 @@ kotlin {
         linuxX64 {
             binaries.executable {
                 entryPoint = "com.xemantic.typescript.tsgo.nativeCheckMain"
+                // `-PtsgoNativeGcLogs=true`: the runtime's GC epochs on stderr (how (TSGO.6) found the stalls).
+                if (project.findProperty("tsgoNativeGcLogs") == "true") freeCompilerArgs += "-Xruntime-logs=gc=info"
             }
         }
     }
