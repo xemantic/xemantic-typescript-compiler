@@ -1,10 +1,13 @@
 # Status
 
-**(TSGO.2) ported checker (2026-10-08):** the 42-package `internal/compiler` closure plus tsgo's own test harness
-(ported, 0 overrides) runs in `-tsgo`; `DiagParityTest` is a FAILING gate at **6,318 / 6,318** conformance
-configurations equal to tsgo; bound AST oracle 7,774 / 7,774; `-tsgo`+`-goport` jvmTest 106 / 0; core default
-engine 21,248 / 0. `XTSC_ENGINE=tsgo` runs -core's 10.7k `diagnose` pins on the port: **0 port defects**, 1,065
-pins assert -core behaviour tsgo does not share (`docs/goport-pin-census.md`).
+**(TSGO.2) DONE — ported checker (2026-10-08):** the 42-package `internal/compiler` closure plus tsgo's own test
+harness (ported, 0 overrides) runs in `-tsgo`. `DiagParityTest` (a FAILING gate) covers all four suites tsgo's
+compiler runner runs (submodule + local x compiler + conformance): **13,127 / 13,127** configurations equal to tsgo,
+0 port defects; bound AST oracle 7,774 / 7,774; `-tsgo` 98 / 0, `-goport` 15 / 0; 0 `-tsgo` methods over 8,000
+bytecodes (2,554 classes). `XTSC_ENGINE=tsgo` runs -core's 10.7k `diagnose` pins on the port: 0 port defects, 1,065
+pins assert -core behaviour tsgo does not share (`docs/goport-pin-census.md`). Perf (`docs/goport-perf.md` § 6):
+tsc's 78 sources check in ~2.1-2.5 s warm with tsgo's default parallel Program (tsgo 1.8 s, -core 7.5 s) at
+2.6 GB allocated per check (from 5.8). Next: (TSGO.3).
 
 **(TSGO.1) tsgo-to-Kotlin port spike (2026-10-07):** encoded-AST byte equality vs the tsgo binary
 **7,774 / 7,774** (bound, real hash); mechanically lowered **99.0%** of 44,395 Go lines; overrides **1**; methods over
