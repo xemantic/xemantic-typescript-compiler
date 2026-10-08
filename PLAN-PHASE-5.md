@@ -25,6 +25,28 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.4-d) — THE `-core` SUNSET REPORT: `docs/core-sunset.md`, measured; on 18 real projects the port reports 616 / 616 rows identical to tsgo 7.0.2 where `-core` has 153 false positives and 184 misses; warm on tsc's sources the port checks in 2.7 s vs 7.6 s and checks+emits in 4.0 s vs 8.9 s at ~1.6x the memory; the deletion is an OWNER decision (2026-10-08)
+
+**What it is**: a report, no `-core` change and no dependency change. **Census**: `-externals`, `-lsp`, `-api`, `-client`,
+`-goport` take nothing from `-core`; `-kir` (lowering over `-core`'s AST + value model), `-project` (published, IntelliJ
+plugin, the whole incremental language service), `-daemon` and `-cli` (both `runCli`; the GraalVM image is `-cli`'s) still do;
+371 of 483 scripts mention `-core`, the live ones are the launcher, the bench series, `cost_gate.py`, the grid and `native.yml`.
+**Parity (measured here, one run per arm)**: `SunsetProbeMain rows` (new, `-tsgo` jvmTest: tsc's `--noEmit` path —
+`GetDiagnosticsOfAnyProgram` + `SortAndDeduplicateDiagnostics`; without the CLI's short-circuit cronstrue read an extra TS2550 and
+marked/ky an emit-only TS5096/TS5011) vs the tsgo binary vs `-core`'s CLI over the 8 tsc profiles, the 8 (P18.265) census libraries,
+cronstrue and marked: port **616 / 616** incl. head message; `-core` 585 = 153 only + 184 missing — the library half reproduces
+the (P18.313) tally 152 exactly, and every tsc profile MISSES 19 rows (33 on harness: TS2591, TS18048, …), i.e. the v1 "zero false
+positives" exit never counted false negatives. **Cost** (one JVM per arm, ABBA, two processes per arm, `-Xmx3g` because two idle
+daemons held ~10 GB): check 2,659/2,686 vs 7,711/7,433 ms; check+emit 3,971/4,080 vs 8,671/9,095 ms; port single-threaded 3,940
+(one process); tsgo binary 1.79-1.82 s / 2.60-2.68 s; RSS 3.5 vs 1.8-2.2 GB, the port ~1 s/iteration in GC at that heap. Cold
+one-shot: compiler profile 10.3 vs 29.2 s, type-fest 35.1 vs 16.5 s (the port's worst case, heap-starved; tsgo 17.7 s). Build:
+`compileKotlinJvm --rerun` 100 s (-tsgo, 4,785 classes, 18.3 MB jar) vs 104 s (-core, 984 classes, 7.1 MB), full rebuilds, one draw.
+**The unmeasured blocker**: `-tsgo` declares `jvm()` only (two `expect`/`actual`s, `go/os` and `go/sync/Park`, have JVM actuals
+only) and no GraalVM image of the port has been built. **Recommendation**: retire `-core` in five stages (tsgo CLI → native →
+move consumers incl. KIR's lowering → `-project` → delete), deletion gated on the native stage; the owner decisions are listed in
+the report's § 7 and on the queue item. Probe gates: warning-clean (positive-control probe file read its `w:`, then deleted);
+`SunsetProbeMain` largest method 765 bytecodes.
+
 ### Round (TSGO.4-a) — THE LANGUAGE SERVICE: tsgo's `internal/ls` (+ `lsp/lsproto`, `ls/lsutil`, `ls/lsconv`, `ls/change`, `ls/autoimport`, `format`, ~62k Go lines) is ported mechanically and answers in process behind `TsgoLanguageService`; 21,614 / 21,614 LSP requests over tsc's 78 sources and 200 conformance projects equal the tsgo 7.0.2 language server's (`tsc --lsp`); `-lsp` re-based onto it (2026-10-08)
 
 **What is ported** (`docs/goport-ls.md`). The extractor's default closure gains `jsonrpc`, `lsp/lsproto`, `ls/lsutil`, `format`,
@@ -473,34 +495,6 @@ declared Gradle input leaves the task UP-TO-DATE and measures nothing; (5) the s
 host running several projects per JVM — fixed before the checker port needs them (contended locks still spin: a platform park is needed
 before (TSGO.2) holds locks long).
 
-### Round (P18.313) — (LIBS.4) round 2: a `for … of this.<member>` loop variable is typed (zod), seven hono object-literal / array-literal mechanisms, and an object-literal ternary arm narrowed by a type guard (a false positive on tsc's own `server/scriptVersionCache.ts` the first fix exposed) — tally 162 -> 152, NO added position; the builder's session ended before pins and gates and the round was finished from its tree (2026-10-07)
-
-**Where it stood**: the builder had left an un-gated tree (fixes done, census print removed, no pins, no ablation, no grid). Finished
-here: 14 pins written from tsgo 7.0.2's output on the same fixtures, nine ablation arms, every gate. **Mechanisms** (all `Checker.kt`
-unless noted): (1) `withCtaFrameThis` — a loop HEAD is typed at `ctaSpineEnter`, outside the statement anchor, so `this` and the
-type-parameter scope were unset and `for (const c of this.items)` typed `c` as `any` (census: 18 newly typed loop variables across the
-libraries, 0 rows moved there); (2) `arithNumberFromTwoAnys` — B283's number-vs-bigint no-overlap refuses an arithmetic side whose
-`number` is tsgo's two-`any` rule over an operand this checker could not resolve (zod `v3/types.ts:1680`); a WRITTEN `any` keeps the row;
-(3) `arrayLiteralFitsFixedTuple` — a ternary arm fitting a fixed tuple member (`cond ? [a, b] : []` against `[A, B] | []`, hono
-`jsx/dom/css.ts:89`); (4) a conditional of array literals written into a tuple-typed slot / array element is round 459's undecidable
-pair (`trie.ts:29`, `utils/url.ts:65`); (5) `isArrayLiteralContext` — a UNION with an array constituent is an array-literal context at
-nine literal-retry sites incl. `Relater.kt` (`language.ts:52`); (6) the nested weak-type check skips an EMPTY source object, as tsgo's
-`isWeakType` gate (`language.ts:298`, `secure-headers.ts:109`); an enum member keeps its TS2559; (7) the fresh object-literal return retry
-also takes an INTERSECTION target and an async function's AWAITED `Promise<T>` (`proxy/index.ts:84`, `lambda-edge/handler.ts:174`);
-(8) `spreadIsLossyUnion` — a spread of a union whose constituents disagree on required members is suppression-only (tsgo distributes it,
-we keep only guaranteed members; `aws-lambda/handler.ts:390`); (9) **found by the grid, not the builder**: (1) made `child` precise in
-tsc's `return child.isLeaf() ? { position, leaf: child } : …` and the conditional-return branch check does not narrow an object
-literal's MEMBER values — a PRE-EXISTING gap (the parent binary reports the same shape with a parameter `child`), now closed by
-`objectLiteralRelatesWithNarrowedValues`, the object twin of round 467's array retry (monotone: some value narrowed, every member a target
-member that relates, every required member written). **Residue**: `groups[0] = [1, 2]` against `[string, string][]` — tsgo reports two
-element rows, we now report none (was one TS2741 at the wrong anchor); recorded in the test KDoc, not pinned. **Pins**:
-`RealLibraryFalsePositiveSweep2Test` 14; ablation one arm per mechanism, RED 1 / 2 / 2 / 1 / 1 / 1 / 1 / 1 / 1. **Gates**: full suite
-**22,999 / 0 / 44** (+14); corpus screen 8725 / 0 (with `--include ''` 41 / 41, the same set on both binaries); `huge_methods.py
---fail-over 0` 0; `cost_gate.py` pass (max +0.71% `typeNode.bypassed`, the newly typed loop variables); grid 8 x added=0 removed=0 + chain
-OK (the first final build read +1 on harness and server — mechanism (9)); rxjs / marked 0, cronstrue 1, mitt 0, date-fns 1 unchanged;
-library grid `f313` vs `b313`: hono 27 -> 18, zod 14 -> 13, others unchanged, **0 added positions**; warning gate with probe: probe
-only. `Checker.kt` 190,700 -> 190,911 (+211). This is the last `-core` parity round: (TSGO.0) decided the same day, `-core` frozen (D3).
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -611,6 +605,16 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
     corpus/run tests and `kir-bench.sh`'s equivalence gate unchanged.
   - (4-d) **`-core` sunset — measured, then an OWNER decision**: a parity/cost report (pins, 8-profile grid,
     library probes, wall/heap per engine) and a recommendation; deleting `-core` is not done autonomously.
+    REPORT DONE 2026-10-08: `docs/core-sunset.md` (session note (TSGO.4-d)).
+  - (4-e) BLOCKED-PENDING-USER: **delete `-core`** — proposal: retire it, but stage the deletion behind the measurements
+    `docs/core-sunset.md` § 6 names: (1) port tsgo's CLI (`internal/execute`) and gate it on a CLI-output differential against
+    the tsgo binary; (2) give `-tsgo` a `linuxX64` target and build the GraalVM image of that CLI — the one unmeasured blocker,
+    and the go/no-go of the retirement; (3) move `-daemon`, `scripts/xtsc`, the bench series and KIR's lowering onto the port,
+    re-point the 9,617 language pins and drop the 1,065 divergence + 152 internals pins; (4) decide `-project`'s fate (facade
+    over the port vs a new tsgo-shaped API — it is published and the IntelliJ plugin uses it); (5) then delete `-core`, its CI
+    job and corpus generator. The owner decides: retire at all; `-project` compatibility; which artifact carries the
+    `xemantic-typescript-compiler` coordinates; whether a JVM-only interval is acceptable before Kotlin/Native is measured;
+    the memory budget (~1.6x `-core`'s heap for ~2.5x its speed and exact tsgo parity).
   Kotlin/Native for `-tsgo` is a separate later measurement.
 
 - [x] **(CHK.134) CLOSED 2026-09-12 ((P18.81) note: (2) `bind` — `Checker.bindType`, the two real overloads built per call, `OmitThisParameter` as the receiver itself when its `this` is absent/`unknown`/`any`; residues: a union receiver, an optional-chain receiver, a spread partial, the bare `f.bind` display, a class value displayed without `typeof`). (1) `call`/`apply` LANDED 2026-09-12 ((P18.80) note) — `functionObjectMemberType` /

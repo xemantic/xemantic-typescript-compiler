@@ -1,3 +1,31 @@
+### Round (P18.313) — (LIBS.4) round 2: a `for … of this.<member>` loop variable is typed (zod), seven hono object-literal / array-literal mechanisms, and an object-literal ternary arm narrowed by a type guard (a false positive on tsc's own `server/scriptVersionCache.ts` the first fix exposed) — tally 162 -> 152, NO added position; the builder's session ended before pins and gates and the round was finished from its tree (2026-10-07)
+
+**Where it stood**: the builder had left an un-gated tree (fixes done, census print removed, no pins, no ablation, no grid). Finished
+here: 14 pins written from tsgo 7.0.2's output on the same fixtures, nine ablation arms, every gate. **Mechanisms** (all `Checker.kt`
+unless noted): (1) `withCtaFrameThis` — a loop HEAD is typed at `ctaSpineEnter`, outside the statement anchor, so `this` and the
+type-parameter scope were unset and `for (const c of this.items)` typed `c` as `any` (census: 18 newly typed loop variables across the
+libraries, 0 rows moved there); (2) `arithNumberFromTwoAnys` — B283's number-vs-bigint no-overlap refuses an arithmetic side whose
+`number` is tsgo's two-`any` rule over an operand this checker could not resolve (zod `v3/types.ts:1680`); a WRITTEN `any` keeps the row;
+(3) `arrayLiteralFitsFixedTuple` — a ternary arm fitting a fixed tuple member (`cond ? [a, b] : []` against `[A, B] | []`, hono
+`jsx/dom/css.ts:89`); (4) a conditional of array literals written into a tuple-typed slot / array element is round 459's undecidable
+pair (`trie.ts:29`, `utils/url.ts:65`); (5) `isArrayLiteralContext` — a UNION with an array constituent is an array-literal context at
+nine literal-retry sites incl. `Relater.kt` (`language.ts:52`); (6) the nested weak-type check skips an EMPTY source object, as tsgo's
+`isWeakType` gate (`language.ts:298`, `secure-headers.ts:109`); an enum member keeps its TS2559; (7) the fresh object-literal return retry
+also takes an INTERSECTION target and an async function's AWAITED `Promise<T>` (`proxy/index.ts:84`, `lambda-edge/handler.ts:174`);
+(8) `spreadIsLossyUnion` — a spread of a union whose constituents disagree on required members is suppression-only (tsgo distributes it,
+we keep only guaranteed members; `aws-lambda/handler.ts:390`); (9) **found by the grid, not the builder**: (1) made `child` precise in
+tsc's `return child.isLeaf() ? { position, leaf: child } : …` and the conditional-return branch check does not narrow an object
+literal's MEMBER values — a PRE-EXISTING gap (the parent binary reports the same shape with a parameter `child`), now closed by
+`objectLiteralRelatesWithNarrowedValues`, the object twin of round 467's array retry (monotone: some value narrowed, every member a target
+member that relates, every required member written). **Residue**: `groups[0] = [1, 2]` against `[string, string][]` — tsgo reports two
+element rows, we now report none (was one TS2741 at the wrong anchor); recorded in the test KDoc, not pinned. **Pins**:
+`RealLibraryFalsePositiveSweep2Test` 14; ablation one arm per mechanism, RED 1 / 2 / 2 / 1 / 1 / 1 / 1 / 1 / 1. **Gates**: full suite
+**22,999 / 0 / 44** (+14); corpus screen 8725 / 0 (with `--include ''` 41 / 41, the same set on both binaries); `huge_methods.py
+--fail-over 0` 0; `cost_gate.py` pass (max +0.71% `typeNode.bypassed`, the newly typed loop variables); grid 8 x added=0 removed=0 + chain
+OK (the first final build read +1 on harness and server — mechanism (9)); rxjs / marked 0, cronstrue 1, mitt 0, date-fns 1 unchanged;
+library grid `f313` vs `b313`: hono 27 -> 18, zod 14 -> 13, others unchanged, **0 added positions**; warning gate with probe: probe
+only. `Checker.kt` 190,700 -> 190,911 (+211). This is the last `-core` parity round: (TSGO.0) decided the same day, `-core` frozen (D3).
+
 ### Round (P18.312) — (INV.0) extraction: two families — the `in`-RHS primitive / unconstrained type-parameter checks (TS2322 + TS2208 related, the `= undefined` default, `Object.keys` TS2769) into `InRhsPrimitiveTypeParamChecks` and the type-used-as-namespace family (TS2702 / TS2713 / TS2339 / TS2749) into `TypeAsNamespaceChecks`; `Checker.kt` 191,430 -> 190,700 (-730); every receipt identical, per-pass table included (2026-10-06)
 
 One implementation subagent in the (P18.294) order; it finished. **Choice**: the census found two cleaner families than the brief
