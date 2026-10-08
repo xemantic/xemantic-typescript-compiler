@@ -1,4 +1,8 @@
 **(P18.309) — TS2729 ANCESTOR EXEMPTION AS tsgo (module-file base-class FP fixed) + (CHK.234) MISSING MEMBERS ON INTERSECTION RECEIVERS NOW REPORT, under a trust rule with 0 false positives across 1,100+ census reads — tally unchanged at 191 (type-fest's rows are type-level, a different path); +20 PINS, 22,951 / 0 / 44 (2026-10-06).**
+
+**(P18.310) — (LIBS.3): `Omit` / `Pick` MATERIALIZATION COMPLETED + TYPE-LEVEL `X['k']` TS2339 — type-fest fixed-length-array closed, TALLY 191 -> 179, NO ADDED POSITION; the builder stalled and the orchestrator's gates caught 6 stale hover pins (re-pointed to tsgo's hover) and a false positive on tsc's own `scriptInfo.ts` (fixed); +14 PINS, 22,965 / 0 / 44 (2026-10-06).**
+Screen 0; grid 8x0; mitt and date-fns hold.
+
 Screen 0; grid 8x0; libraries unchanged.
 
 

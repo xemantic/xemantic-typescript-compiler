@@ -1,5 +1,15 @@
 # Status
 
+**(TSGO.3) DONE — type oracle + emit (2026-10-08):** tsgo's `internal/api` session runs in process behind the
+Kotlin facade `TsgoProject` (`-tsgo` `facade/`; `-core`/`-project` untouched): typeAtPosition, symbolAtPosition,
+resolvedSignature, contextualType, isTypeAssignableTo, propertiesOfType, typeToString, … plus `request(method, json)`
+for the rest of `proto.go`. `ApiParityTest` (`TSGO_API=1`, failing gate, positive control) replays **594,007 /
+594,007** requests recorded from `tsc --api` over tsc's 78 sources + 200 conformance cases, 0 differ, 0 crash.
+Re-verified on `3fd973259` from a fresh main-tree recording: also emit 13,127 / 13,127, diag 13,127 / 13,127,
+bound AST 7,774 / 7,774, `-tsgo` 106 / 0, `-goport` 15 / 0, 0 methods over 8,000 bytecodes. Not yet ported: the
+`internal/ls`-backed handlers (completions, references, JSDoc, …) and the live project system (17 stubs).
+`docs/goport-api.md`. Next: (TSGO.4).
+
 **(TSGO.3-a) DONE — emit parity (2026-10-08):** the ported compiler's emit is byte-identical to tsgo 7.0.2 on
 every configuration its compiler runner baselines: `EmitParityTest` (`TSGO_EMIT=1`, a FAILING gate with a positive
 control) reads **13,127 / 13,127** equal across `.js` (incl. `.d.ts`), `.js.map` and `.sourcemap.txt`, and tsc's
@@ -124,7 +134,4 @@ Screen 0; grid 8x0; rxjs / marked / cronstrue / mitt / date-fns unchanged.
 Screen 0; grid 8x0; libraries unchanged.
 
 **(P18.311) — (LIBS.4) REAL-LIBRARY FALSE-POSITIVE SWEEP: eight mechanisms on application code (bigint arithmetic with `any`, a negative `instanceof` narrowing to `never`, shadowed readonly receivers, `extends Map` without type arguments, `this[key] =` assignments, …) — zod 21 -> 14, ky 9 -> 5, immer 5 -> 1, TALLY 179 -> 162, NO ADDED POSITION; +9 PINS, 22,974 / 0 / 44 (2026-10-06).**
-Screen 0; grid 8x0; mitt and date-fns hold.
-
-**(P18.310) — (LIBS.3): `Omit` / `Pick` MATERIALIZATION COMPLETED + TYPE-LEVEL `X['k']` TS2339 — type-fest fixed-length-array closed, TALLY 191 -> 179, NO ADDED POSITION; the builder stalled and the orchestrator's gates caught 6 stale hover pins (re-pointed to tsgo's hover) and a false positive on tsc's own `scriptInfo.ts` (fixed); +14 PINS, 22,965 / 0 / 44 (2026-10-06).**
 Screen 0; grid 8x0; mitt and date-fns hold.
