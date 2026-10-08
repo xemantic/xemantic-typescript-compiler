@@ -30,6 +30,8 @@ import com.xemantic.typescript.compiler.DiagnosticCategory
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.SystemVfs
+import com.xemantic.typescript.tsgo.TsgoProject
+import com.xemantic.typescript.tsgo.runtime.GoString
 
 /**
  * A whole checked PROGRAM: every file the crawl reached, and one fact table.
@@ -75,6 +77,28 @@ public class CheckedProject internal constructor(
  * this one is for; the check is the whole of what it needs.
  */
 public fun checkTypeScriptProject(projectPath: String): CheckedProject {
+    if (kirUsesCoreChecker) return checkTypeScriptProjectWithCore(projectPath)
+    val path = java.io.File(projectPath).absoluteFile.normalize()
+    val config = if (path.isDirectory) java.io.File(path, "tsconfig.json").path else path.path
+    return TsgoPrograms.onDeepStack {
+        val opened = TsgoPrograms.open(config, TsgoProject.diskFS())
+        val diagnostics = TsgoPrograms.diagnostics(opened) { it }
+        val program = opened.program
+        val sources = program.getSourceFiles()
+        val maps = (0 until sources.len).mapNotNull { i ->
+            val file = sources[i] ?: return@mapNotNull null
+            if (!TsgoPrograms.isProgramFile(program, file)) return@mapNotNull null
+            val name = GoString.toUtf16(file.fileName)
+            FileNodeMap(parseForLowering(name, GoString.toUtf16(file.text)), file)
+        }
+        val facts = CheckedFacts()
+        val edges = buildFacts(opened, maps, facts)
+        CheckedProject(maps.map { it.core }, facts, diagnostics, edges)
+    }
+}
+
+/** `-core`'s own project check (`XTSC_KIR_ENGINE=core`), as before (TSGO.4-c). */
+internal fun checkTypeScriptProjectWithCore(projectPath: String): CheckedProject {
     val facts = CheckedFacts()
     val result = ProjectCompiler(SystemVfs).build(projectPath, noEmit = true, checkedSink = facts)
     // The sink sees exactly the files the spine walks, which is the program's

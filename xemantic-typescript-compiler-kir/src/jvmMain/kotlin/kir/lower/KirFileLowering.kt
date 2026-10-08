@@ -393,7 +393,12 @@ internal class KirFileLowering(
         val structural = declaration is InterfaceDeclaration ||
             declaration is TypeAliasDeclaration ||
             declaration is TypeLiteral ||
-            declaration is ObjectLiteralExpression
+            declaration is ObjectLiteralExpression ||
+            // (TSGO.4-c) A module's NAMESPACE OBJECT (`typeof import("./m")`):
+            // `-core` typed a namespace import `any`, tsgo types it as the
+            // module, and what the lowering builds for it is a `JsObject`
+            // subclass (`namespaceObjectFor`) — a property bag by construction.
+            declaration is SourceFile
         return structural && tables.isProgramNode(declaration)
     }
 
@@ -3051,14 +3056,37 @@ internal class KirFileLowering(
         val symbol = facts.nameAt(node) ?: return null
         val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
         if (declaration !is ClassDeclaration || declaration in classes) return null
-        refuse(
-            tsFile, node,
-            "a `class` declared inside a function body or a block is out of the spike " +
-                "subset: '${node.text}' reaches no declaration table, and its identity is " +
-                "per INVOCATION rather than per file, so the lazy static a top-level class " +
-                "value uses is the wrong carrier for it"
-        )
+        refuseNestedClass(node, node.text)
     }
+
+    /**
+     * The class a NESTED declaration names: a program `class` (or a member of
+     * one) that no declaration table holds, because the declare pass walks a
+     * file's top-level statements only.
+     *
+     * (TSGO.4-c) `-core`'s binder never bound such a class, so the lowering met
+     * it only as a NAME, at [nestedDeclarationRefusal]. tsgo binds it, so it now
+     * also arrives as a TYPE (`typeof P`, an erasure) and as a call's
+     * DECLARATION (`p.describe()`) — both earlier than the name, and both must
+     * refuse with the same reason rather than a generic "cannot map".
+     */
+    private fun nestedClassOf(declaration: Node?): ClassDeclaration? {
+        val owner = when (declaration) {
+            is ClassDeclaration -> declaration
+            is MethodDeclaration, is PropertyDeclaration, is Constructor, is GetAccessor, is SetAccessor ->
+                (declaration as? com.xemantic.typescript.compiler.NodeBase)?.parent as? ClassDeclaration
+            else -> null
+        } ?: return null
+        return owner.takeIf { it !in classes && tables.isProgramNode(it) }
+    }
+
+    private fun refuseNestedClass(node: Node, name: String): Nothing = refuse(
+        tsFile, node,
+        "a `class` declared inside a function body or a block is out of the spike " +
+            "subset: '$name' reaches no declaration table, and its identity is " +
+            "per INVOCATION rather than per file, so the lazy static a top-level class " +
+            "value uses is the wrong carrier for it"
+    )
 
     /**
      * The MODULE-level field a free name refers to, or null.
@@ -4686,6 +4714,7 @@ internal class KirFileLowering(
                 return lowerDynamicCall(node)
             }
         }
+        nestedClassOf(declaration)?.let { refuseNestedClass(node, it.name?.text ?: "?") }
         refuse(
             tsFile, node,
             "cannot lower this call — " + when {
@@ -7035,6 +7064,10 @@ internal class KirFileLowering(
         scope.irCall(irBuiltIns.booleanNotSymbol).apply { arguments[0] = value }
 
     private fun erase(node: Node, type: Type): IrType = types.map(type)
+        ?: (type as? Type.Object)?.symbol
+            ?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
+            ?.let { nestedClassOf(it) }
+            ?.let { refuseNestedClass(node, it.name?.text ?: "?") }
         ?: refuse(
             tsFile, node,
             "cannot map the type '${facts.render(type)}' (${type::class.simpleName}" +

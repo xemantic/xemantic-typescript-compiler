@@ -34,6 +34,7 @@ import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.computeParserFlags
 import com.xemantic.typescript.compiler.runWithDeepStack
+import com.xemantic.typescript.tsgo.compiler.getTypeChecker
 
 /**
  * A checked TypeScript file, with every fact the backend will need already
@@ -57,22 +58,92 @@ public class CheckedTypeScript internal constructor(
 }
 
 /**
- * Parses, binds and checks [source], collecting backend facts as it goes.
+ * Which checker answers the KIR front end's questions.
  *
- * `useRealLibs` by default because a program that says `console.log` needs a
- * `console` to resolve to, and the embedded lib does not declare one — an
- * unknown name degrades to `any`, which is SILENT, so the failure would be a
- * wrong lowering rather than a diagnostic.
+ * (TSGO.4-c) The PORTED tsgo checker by default; `XTSC_KIR_ENGINE=core` keeps
+ * `-core`'s, for an A/B of the two front ends (the `-core` sunset report,
+ * (TSGO.4-d)) — the lowering and everything after it are the same either way.
+ */
+internal val kirUsesCoreChecker: Boolean
+    get() = System.getenv("XTSC_KIR_ENGINE") == "core"
+
+/**
+ * Parses and checks [source], collecting backend facts.
  *
- * [runWithDeepStack] is not optional: the checker recurses deeply enough on
- * ordinary input that the default JVM stack is not the budget it is written
- * against, and `Checker`'s own `init` block IS the check — so the sink has
- * already fired by the time the constructor returns.
+ * (TSGO.4-c) The checker is the ported tsgo one: the file is checked as the
+ * only file of a synthesized project (`files: [<it>]`, TypeScript 7's default
+ * options and bundled libraries), and every fact is asked of tsgo's checker
+ * after the check — see `TsgoFacts.kt`. `-core`'s parser still produces the
+ * [CheckedTypeScript.sourceFile] the lowering walks.
+ *
+ * [options] is honoured for `strict` written false and for
+ * `useDefineForClassFields`; the KIR has never been driven with anything else,
+ * and the rest of `-core`'s option model has no single tsconfig spelling.
  */
 public fun checkTypeScript(
     fileName: String,
     source: String,
     options: CompilerOptions = CompilerOptions(useRealLibs = true),
+): CheckedTypeScript {
+    if (kirUsesCoreChecker) return checkTypeScriptWithCore(fileName, source, options)
+    val absolute = if (fileName.startsWith("/")) fileName else "$SYNTHETIC_ROOT/$fileName"
+    val compilerOptions = buildList {
+        if (options.strictExplicitlyFalse) add("\"strict\": false")
+        options.useDefineForClassFields?.let { add("\"useDefineForClassFields\": $it") }
+    }.joinToString(", ")
+    val config = "$SYNTHETIC_ROOT/tsconfig.json"
+    val fs = InMemoryFS(
+        mapOf(
+            absolute to source,
+            config to "{ \"compilerOptions\": { $compilerOptions }, \"files\": [${jsonString(absolute)}] }",
+        )
+    )
+    return TsgoPrograms.onDeepStack {
+        val opened = TsgoPrograms.open(config, fs)
+        val diagnostics = TsgoPrograms.diagnostics(opened) { if (it == absolute) fileName else it }
+        val tsgoFile = opened.program.getSourceFile(com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(absolute))
+            ?: error("tsgo did not load '$absolute'")
+        val coreFile = parseForLowering(fileName, source)
+        val facts = CheckedFacts()
+        buildFacts(opened, listOf(FileNodeMap(coreFile, tsgoFile)), facts)
+        CheckedTypeScript(coreFile, facts, diagnostics)
+    }
+}
+
+/** The directory a single-file compile's synthesized project lives in. */
+private const val SYNTHETIC_ROOT = "/xtsc-kir"
+
+private fun jsonString(text: String): String =
+    "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+/**
+ * Asks tsgo's query checker every fact, after the check.
+ *
+ * The checker is the pool's QUERY checker (`XtscCheckerPool` index 2), the one
+ * the diagnostics above ran on too, so every answer comes from the checker
+ * that checked the program.
+ */
+internal fun buildFacts(
+    opened: TsgoProgram,
+    maps: List<FileNodeMap>,
+    facts: CheckedFacts,
+): List<Pair<String, String>> {
+    val ctx = com.xemantic.typescript.tsgo.go.context.background()
+    val (checker, done) = opened.program.getTypeChecker(ctx)
+    try {
+        val builder = TsgoFactsBuilder(checker!!, maps, facts)
+        builder.build()
+        return builder.importEdges()
+    } finally {
+        done?.invoke()
+    }
+}
+
+/** `-core`'s own checker (`XTSC_KIR_ENGINE=core`), as the KIR front end was before (TSGO.4-c). */
+internal fun checkTypeScriptWithCore(
+    fileName: String,
+    source: String,
+    options: CompilerOptions,
 ): CheckedTypeScript {
     val flags = computeParserFlags(fileName, source, options)
     val parser = Parser(

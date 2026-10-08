@@ -808,21 +808,21 @@ class KirNamespaceImportTest {
     }
 
     /**
-     * An UNKNOWABLE export set is REFUSED, not answered from the locals table.
+     * A barrel chain of ANY depth resolves (TSGO.4-c).
      *
-     * The only honest answer a backend can give there is a loud one: a short
-     * namespace object is the silent wrong answer this round exists to remove,
-     * so the refusal is the mechanism and not a shortfall.
+     * This was the one UNKNOWABLE export set the harness could reach — a chain
+     * past `-core`'s walk-depth bound, refused loudly rather than answered
+     * short. tsgo's `getExportsOfModule` follows a star chain to the end, so
+     * the set is knowable and the refusal is gone; the VALUE behind it is
+     * audited here: `ns.deep` is the leaf's `"D"`, as JavaScript answers.
      *
-     * The fixture is a barrel chain PAST the walk's depth bound, because that
-     * is the one unknowable case this harness can reach: a bare specifier and a
-     * missing target are both TS2307 and an `export =` target is TS2498, so the
-     * checker stops all three before any backend sees them. A bare specifier
-     * that RESOLVES (a package with types) is the case a real library hits, and
-     * it needs a `node_modules`, which this harness has none of.
+     * The refusal itself survives for an `export =` module, whose "exports"
+     * are a value's members (`TsgoFactsBuilder.namespaceExports`); a bare
+     * specifier and a missing target are TS2307, and an `export =` target of
+     * `import * as` is TS2498, so no backend sees those.
      */
     @Test
-    fun `a barrel chain past the depth bound is refused, loudly`() {
+    fun `a barrel chain of any depth resolves to the leaf export`() {
         val hops = 70
         val files = mutableListOf<Pair<String, String>>()
         files += "leaf.ts" to "export const deep: string = \"D\";"
@@ -834,8 +834,9 @@ class KirNamespaceImportTest {
             console.log(ns.deep)
         """
         val lowered = lower(*files.toTypedArray())
-        assert(!lowered.compiled)
-        assert(lowered.report.contains("export set is not knowable"))
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "D\n")
     }
 
     // ---- the residue this class recorded, now closed -----------------------

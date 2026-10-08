@@ -56,6 +56,11 @@ kotlin {
         jvmMain {
             dependencies {
                 api(project(":xemantic-typescript-compiler-core"))
+                // (TSGO.4-c) THE CHECKER: the ported tsgo answers every type,
+                // symbol and signature question the lowering asks. `-core`
+                // still supplies the SYNTAX the lowering walks (its parser and
+                // AST) and the value classes `CheckedFacts` hands out.
+                implementation(project(":xemantic-typescript-compiler-tsgo"))
                 // The Kotlin compiler itself: we construct its IR, then drive
                 // its JVM pipeline phases in-process. `compileOnly` is NOT an
                 // option — this is a runtime dependency of the backend.

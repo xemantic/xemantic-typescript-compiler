@@ -36,7 +36,10 @@ console.log(coalesce("v"));
 console.log(coalesce(null));
 console.log(coalesce(undefined));
 console.log(keepsFalsy(""));
-console.log("" || "fallback");
+// A literal `""` on the left of `||` is TS2873 in TypeScript 7 ("always falsy"),
+// so the empty string arrives through a `string`-typed binding.
+const emptyText: string = "";
+console.log(emptyText || "fallback");
 console.log(keepsZero(0));
 console.log(keepsZero(undefined));
 console.log(shortCircuits());

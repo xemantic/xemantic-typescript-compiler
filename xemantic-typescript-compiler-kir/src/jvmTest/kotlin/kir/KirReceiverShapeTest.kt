@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler.kir
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.typescript.compiler.CompilerOptions
 import com.xemantic.typescript.compiler.kir.emit.GeneratedProgramClasspath
 import com.xemantic.typescript.compiler.kir.emit.runGeneratedProgram
 import java.io.File
@@ -69,13 +70,17 @@ class KirReceiverShapeTest {
      */
     private class Lowered(val dynamicOps: Int, val stdout: String, val exitCode: Int)
 
-    private fun lower(source: String): Lowered {
+    private fun lower(
+        source: String,
+        options: CompilerOptions = CompilerOptions(useRealLibs = true),
+    ): Lowered {
         val output = Files.createTempDirectory("xtsc-kir-shape")
         try {
             val compilation = compileTypeScriptToJvm(
                 fileName = "shape.ts",
                 source = source.trimIndent(),
                 outputDirectory = output,
+                options = options,
             )
             if (!compilation.successful) throw AssertionError("did not compile\n$compilation")
             val run = runGeneratedProgram(
@@ -352,6 +357,11 @@ class KirReceiverShapeTest {
         // The ORDER, and it is measured rather than chosen: tsgo 7.0.2 emits
         // `this.x = x` ABOVE `this.a = this.x + 1`, so this prints 6. The other
         // order compiles, runs, and quietly prints 1.
+        //
+        // Under `useDefineForClassFields: false` — TypeScript 7's default (a
+        // target past ES2022) DEFINES fields, and there tsgo rejects this very
+        // program with TS2729 "Property 'x' is used before its
+        // initialization", measured; (TSGO.4-c) is what made the KIR see it.
         assert(
             lower(
                 """
@@ -361,7 +371,8 @@ class KirReceiverShapeTest {
                     }
                 }
                 console.log(new C(5).a);
-                """
+                """,
+                CompilerOptions(useRealLibs = true, useDefineForClassFields = false),
             ).stdout == "6\n"
         )
     }

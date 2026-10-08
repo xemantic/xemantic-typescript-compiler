@@ -136,8 +136,9 @@ class KirEqualitySemanticsTest {
     fun `booleans compare as themselves and never as numbers under strict equality`() {
         val stdout = compileAndRun(
             """
-            const yes: boolean = true
-            const no: boolean = false
+            function flag(value: boolean): boolean { return value }
+            const yes: boolean = flag(true)
+            const no: boolean = flag(false)
             const dynamic: any = true
             console.log(String(yes === yes))
             console.log(String(yes === no))
@@ -207,7 +208,7 @@ class KirEqualitySemanticsTest {
                 default: return 'other'
               }
             }
-            function name(value: string): string {
+            function label(value: string): string {
               switch (value) {
                 case 'a': return 'A'
                 default: return 'other'
@@ -216,8 +217,8 @@ class KirEqualitySemanticsTest {
             console.log(pick(1))
             console.log(pick(2))
             console.log(pick(0 / 0))
-            console.log(name('a'))
-            console.log(name('b'))
+            console.log(label('a'))
+            console.log(label('b'))
             """.trimIndent()
         )
         assert(stdout == "one\ntwo\nother\nA\nother\n")

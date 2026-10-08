@@ -171,6 +171,39 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
     /** The checker's rendering of [type], if it was ever asked about. */
     public fun render(type: Type): String = renderings[type.id] ?: type.toString()
 
+    // ---- (TSGO.4-c) the writers the tsgo front end fills the tables through ----
+    //
+    // The `-core` checker fills them from inside its own walk (the sink
+    // callbacks below); the ported tsgo checker answers post hoc, so
+    // `TsgoFacts` walks the program once and writes every answer here. The
+    // tables, their keys and what a consumer reads are the same either way.
+
+    internal fun putFile(node: SourceFile) = file(node)
+
+    internal fun putType(node: Expression, type: Type) { expressionTypes[node] = type }
+
+    internal fun putCall(node: CallExpression, fact: CallFact) { calls[node] = fact }
+
+    internal fun putConstruction(node: NewExpression, signature: Signature?) {
+        constructions[node] = signature
+    }
+
+    internal fun putMember(node: PropertyAccessExpression, symbol: Symbol) { members[node] = symbol }
+
+    internal fun putName(node: Identifier, symbol: Symbol) { names[node] = symbol }
+
+    internal fun putNamespaceExports(node: Identifier, exports: Map<String, Symbol>) {
+        namespaceExports[node] = exports
+    }
+
+    internal fun putParameterType(node: Parameter, type: Type) { parameterTypes[node] = type }
+
+    internal fun putSignature(node: Node, signature: Signature) { declaredSignatures[node] = signature }
+
+    internal fun putMemberType(node: Node, type: Type) { declaredMemberTypes[node] = type }
+
+    internal fun putRendering(type: Type, text: String) { renderings[type.id] = text }
+
     override fun expression(node: Expression, lens: CheckedLens) {
         if (node !in expressionTypes) remember(lens.typeOf(node), lens).also {
             expressionTypes[node] = it
