@@ -1,8 +1,10 @@
 # Status
 
-**(TSGO.2) ported checker (2026-10-07):** the 42-package `internal/compiler` closure (181k Go lines, 99.9% mechanical,
-4 overrides) compiles in `-tsgo`; diagnostics differential against tsgo **6,318 / 6,318** conformance configurations
-equal; bound AST oracle still 7,774 / 7,774; `-tsgo`+`-goport` jvmTest 103 / 0.
+**(TSGO.2) ported checker (2026-10-08):** the 42-package `internal/compiler` closure plus tsgo's own test harness
+(ported, 0 overrides) runs in `-tsgo`; `DiagParityTest` is a FAILING gate at **6,318 / 6,318** conformance
+configurations equal to tsgo; bound AST oracle 7,774 / 7,774; `-tsgo`+`-goport` jvmTest 106 / 0; core default
+engine 21,248 / 0. `XTSC_ENGINE=tsgo` runs -core's 10.7k `diagnose` pins on the port: **0 port defects**, 1,065
+pins assert -core behaviour tsgo does not share (`docs/goport-pin-census.md`).
 
 **(TSGO.1) tsgo-to-Kotlin port spike (2026-10-07):** encoded-AST byte equality vs the tsgo binary
 **7,774 / 7,774** (bound, real hash); mechanically lowered **99.0%** of 44,395 Go lines; overrides **1**; methods over
