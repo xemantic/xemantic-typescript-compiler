@@ -208,3 +208,105 @@ python3 scripts/huge_methods.py --classes xemantic-typescript-compiler-tsgo/buil
 ```
 
 Requires `build/goport/oracle/manifest.json` (names tsc's 78 sources). Do not watch a run.
+
+## 6. The CHECK path (TSGO.2): warm rebuilds of a whole program (2026-10-08)
+
+The sections above gate the PARSER. This one measures what a host pays for a check: tsconfig,
+`compiler.NewProgram` (parse and bind every file, the libs, module resolution) and every
+diagnostic phase, rebuilt from scratch per iteration in one warm JVM.
+
+**Harnesses** (`-tsgo/src/jvmTest/kotlin/`):
+
+- `CheckBenchMain <tsconfig.json> [warmup] [iters] [libcache|nolib] [single|parallel]` — one
+  project. File CONTENTS are read once and served from memory; `libcache` shares parsed bundled libs
+  across iterations (tsgo's harness and language server do; worth ~2% here, 65 MB of allocation).
+  Per iteration it prints wall, the bench thread's CPU and allocation (`ThreadMXBean`), GC pause
+  time, the phases, the diagnostic count and an order-independent DIGEST of what the diagnostics say
+  (file, span, code, message) — equal across iterations and between `single` and `parallel`.
+- `CaseBenchMain <repoRoot> [stride] [warmup] [iters]` — the many-small-programs complement: every
+  `stride`-th configuration of the diagnostics oracle (`build/goport/diag-oracle`), compiled
+  check-only through the ported test harness as `DiagParityTest` does (1,313 configurations at
+  stride 10).
+
+Measured on tsc's 78 sources (`build/bench/tsc-project-*`, `lib: es2020`, 123 program files, 65
+diagnostics — tsgo 7.0.2 reports the same 65), JDK 26 (Zulu), `-Xms2g -Xmx6g -XX:+UseParallelGC`,
+6 warm-up + 10 measured iterations per process. **The box was shared and loaded** (load 2-13 from
+other agents' builds), so WALL swings ±20% between processes; the bench thread's CPU time and its
+allocation are the stable instruments and every rule below was decided on them (ABBA, ≥ 2 processes
+per arm).
+
+| | wall (median of process medians) | bench-thread CPU | allocated / check |
+|---|---|---|---|
+| port at `c39fec70a` (start of this pass), single-threaded | 4,329 / 4,557 ms | 3,878 / 4,089 ms | **5.8 GB** |
+| port after this pass, single-threaded | 4,143 / 3,521 ms | 3,477 / 3,216 ms | **2.6 GB** |
+| port after this pass, **parallel** (tsgo's default: 4 checkers) | **2,069 / 2,491 ms** | — | — |
+| tsgo 7.0.2 `tsc --noEmit -p` (process wall, default 4 checkers) | 1,747-1,868 ms | | |
+| tsgo 7.0.2 `--singleThreaded` (process wall) | 3,159-3,915 ms (internal "Total" 3.06 s on a quiet box) | | |
+| `-core` (`BenchMain`, warm, its own checker: 46 diagnostics) | 7,650 / 7,541 ms | | |
+
+(Two interleaved rounds, `build/perf/final.sh` in the worktree that took them; the pairs are round
+0 / round 1.) So the ported checker is **~1.1-1.2x tsgo single-threaded and ~1.15-1.4x tsgo's
+default**, and **2-3.6x faster than `-core`** on the same project.
+
+### 6.1 What moved it (each a rule or runtime change, gated on every commit)
+
+| change | measured | where |
+|---|---|---|
+| `xxh3.Hasher` buffers lazily and takes words without a byte slice; `hashWrite32/64` overrides use it | 4,300 → 3,955 ms wall (ABBA) | the checker's cache keys: a new `Hasher` (a 1,088-char buffer + 8 accumulators) per key |
+| `&a[i] == &b[j]` → `sameSlot` | (folded into the row above) | `core.Same` |
+| GoMap: open addressing instead of `HashMap` | CPU −4.2% | `LinkStore.Get`, the hottest map read: one array read per identity hit |
+| `strings.LastIndex(s[:k], …)` fusion | allocation 3.49 → 2.85 GB | `parseJSDocComment`'s indent: a prefix copy per JSDoc comment, ~900 MB per parse of tsc's sources |
+| `GoElem.nilSlice` eager (was a synchronized `lazy`) | ~1.6% of samples | every nil-slice read |
+| short `Hasher` inputs hashed from a byte buffer; `core.Arena.New` override (a fresh zero) | CPU −2.9%, allocation 2.86 → 2.57 GB | |
+| copy elision: a fresh conversion; `return x` of an owned struct local | allocation −1.7%, CPU within noise | |
+| map range → `GoMap.iter` (one table copy, no probe per entry) | cases CPU −4.8%, tsc −1.6% | `initializeChecker`'s merge of every file's locals |
+| **`WaitGroup.Go` starts a goroutine** (it ran synchronously) | parallel 2.07-2.49 s against 3.5-4.1 s single | tsgo's default program DEADLOCKED before (the files parser queues children under a mutex they take) |
+| goroutines reuse idle threads (cached pool) | within noise | |
+
+Measured and NOT kept: a struct map key read without a copy (`m[key.goCopy()]` on lookups) — C2's
+escape analysis already removed those copies (no change in allocation or CPU); a per-map
+last-key cache — 26% of lookups repeat the previous key, but those are L1 hits already.
+
+### 6.2 Where the time goes now (JFR, single-threaded, self time charged to the nearest ported frame)
+
+Flat: `LinkStore.Get` 10% (map lookups keyed by node/symbol identity: memory latency — Go pays the
+same lookups with fewer cache misses), `getSourceFileOfNode` 3% (parent-chain walks), the rest
+≤ 2.5% each across ~200 checker functions. GC pauses are 10-20% of wall at 2.6 GB/check; the
+allocation left is dominated by:
+
+1. **`parseJSDocComment`'s `p.sourceText = p.sourceText[:end-2]`** — ~19% of all bytes: Go's O(1)
+   string slice is a copy of the file prefix per JSDoc comment. NOT fixable by a lowering rule: the
+   scanner reads `len(s.text)` and takes suffixes of its text (`IndexByte(s.text[s.pos:], quote)`),
+   so handing it the whole text with a smaller end changes tokens in edge cases (an unterminated
+   string inside a JSDoc type). The fix is a representation change (a string view type for byte
+   strings) or overriding the scanner's text bounds as a whole.
+2. GoSlice headers (~19% of bytes, diffuse: every `append`/sub-slice allocates a header where Go
+   copies a value) and struct value copies (`FlowType`, `Uint128` keys stored in maps).
+
+In the many-small-programs harness (`CaseBenchMain`), per-program checker set-up dominates:
+`newChecker`/`initializeChecker` merging the lib globals and `getNamedMembers` sorting large lib
+interfaces' members (`compareNodes` → `getSourceFileOfNode` per comparison; the comparator's `Int`
+result is boxed through `Function2`) — the same algorithm Go runs per checker.
+
+### 6.3 Remaining levers, ranked
+
+1. **The JSDoc prefix copy** (above): ~19% of allocation on a TypeScript project with doc comments.
+2. **GC configuration of the host**: a larger young generation (`-Xmn4g` with `-Xmx6g`) let more of
+   an iteration's garbage die young (single-threaded 3.72 → 3.39 s in one sweep; noisy).
+3. **Parallel memory**: type-fest's parallel check runs out of a 6 GB heap (tsgo itself uses 5 GB
+   there; single-threaded it fits) — JVM object overhead times four checkers.
+4. Map lookups keyed by identity (`LinkStore`): only a per-object link slot would beat the hash
+   probe, and it would have to be thread-safe across checkers.
+
+### 6.4 Reproduce
+
+```bash
+# classpath: -tsgo's jvmTestRuntimeClasspath (the init script of scripts/tsgo-parse-bench.sh prints it)
+java -Xms2g -Xmx6g -XX:+UseParallelGC -cp <cp> com.xemantic.typescript.tsgo.CheckBenchMainKt \
+  build/bench/tsc-project-*/tsconfig.json 6 10 nolib single      # or: parallel
+java -Xms2g -Xmx6g -XX:+UseParallelGC -cp <cp> com.xemantic.typescript.tsgo.CaseBenchMainKt . 10 3 4
+tools/tsgo-7.0.2/lib/tsc --noEmit -p build/bench/tsc-project-*/tsconfig.json [--singleThreaded] --extendedDiagnostics
+# profile: -XX:FlightRecorderOptions:stackdepth=1024 -XX:StartFlightRecording=filename=x.jfr,settings=profile,delay=30s,duration=45s
+jfr print --events jdk.ExecutionSample --stack-depth 2048 x.jfr > samples.txt
+python3 scripts/tsgo_parse_profile.py samples.txt check-bench-deep-stack 2048
+```

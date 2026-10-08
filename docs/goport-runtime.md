@@ -40,7 +40,7 @@ DISTINCT zero objects and value copies; the runtime itself copies on growth, `co
 | `make([]T, n, c)` | `GoSlice.make(elem, n, c)` or `goMakeSlice(elem, n, c)` |
 | `[]T{a, b}` | `GoSlice.of(elem, a, b)` (stores the given objects; the lowering copies struct values first) |
 | nil `[]T` | `elem.nilSlice` / `GoSlice.nil(elem)` |
-| `&s[i]` | `s.addr(i)` → `GoPtr<T>` equal to any pointer to the same slot |
+| `&s[i]` | `s.addr(i)` → `GoPtr<T>` equal to any pointer to the same slot; `&a[i] == &b[j]` → `a.sameSlot(i, b, j)` (NOT Go: no pointer objects) |
 | `for i, v := range s` | `for (i in 0 until s.len) { val v = s[i] … }` (Go evaluates `s` once: bind it to a `val` first), or `s.forEachIndexed { i, v -> }` |
 | `f(s...)` into a Kotlin vararg | `f(*s.toArray())` |
 | `[N]T` | `GoArray(n, elem)`: `a[i]`, `a.slice(lo, hi)` (shares storage, as `a[:]`), `a.goCopy()`, `a.goEquals(b)`, `a.goHash()` |
@@ -59,12 +59,20 @@ Equality is identity.
 | `m[k]` | `m[k]` (zero value when absent) |
 | `v, ok := m[k]` | `val (v, ok) = m.lookup(k)`; `_, ok :=` → `m.contains(k)` |
 | `m[k] = v`, `delete(m, k)`, `len(m)`, `clear(m)` | `m[k] = v`, `m.delete(k)`, `m.len`, `m.clear()` / `goClear(m)` |
-| `for k, v := range m` | `m.range { k, v -> …; true }` (return `false` = `break`); tolerates mutation: a key deleted before it is reached is skipped |
+| `for k, v := range m` | the lowering: `val it = m.iter(); while (it.next()) { it.key; it.value }` — one copy of the table, read from the copy while the map is unchanged (`modCount`), each remaining key looked up again after any write: an entry is produced at most once, a deleted unreached one never, a value as it is when reached. Hand-written code: `m.range { k, v -> …; true }` (return `false` = `break`) |
 | `maps.Clone(m)` | `m.goClone()` (struct values copied) |
 
 Keys use Kotlin `equals`/`hashCode`: identity for generated classes (= Go pointer keys), value
 equality for byte strings, boxed numbers and value classes. A struct VALUE key must be wrapped by
 the lowering (design § 3). Iteration order is unspecified (as in Go).
+
+The table is open addressing, not `HashMap` (docs/goport-perf.md § 6): linear probing over ONE array
+of interleaved keys and values plus an array of mixed hashes (Fibonacci, so boxed ints and strings
+spread), load at most 1/2, backward-shift deletion (no tombstones). A hit on an identity key — the
+checker's link stores, keyed by node and symbol — is one array read and a reference compare; the
+hash array is read only when the reference differs, so `equals` runs only on a full hash match. A
+`nil` key is stored as a sentinel. Concurrent READS are safe (a lookup writes nothing); writes need
+the caller's lock, as in Go.
 
 ## 4. Pointers — `GoPtr<T>`
 
@@ -186,7 +194,7 @@ parse/encode path.
 | `os`, `runtime/debug` | `getenv` (always `""`), `setMaxStack` (no-op) | approx |
 | `regexp` | `Regexp` (`replaceAllStringFunc replaceAllString replaceAllLiteralString matchString findString findStringSubmatch findAllString findAllStringSubmatch split string`), `mustCompile compile quoteMeta`; NOT Go: `translateRe2(expr)` | RE2 syntax translated (§ 9b) †; `ReplaceAllString` uses Go's `$` template rules; `split`/`findAllString` use Go's `allMatches` (an empty match right after a match is skipped) † |
 | `golang.org/x/text/language` | `Tag` (zero `Tag()` = `und`; `string goCopy goEquals goHash`) `und english parse mustParse Matcher newMatcher Confidence No Low High Exact` | approx |
-| `github.com/zeebo/xxh3` | `hashString128 hash128 hashString hash`; `Uint128(hi, lo)` + `bytes goCopy goEquals goHash`; `Hasher` (`write writeString sum64 sum128 sum reset blockSize size goCopy`), `new` | exact † (lengths 0..300, block edges, 64 KiB, 1 MiB; v1.1.0's scalar path; the `Hasher` over 290 chunkings across the 1088-byte buffer and 1024-byte block edges, including a `Sum64` mid-stream). Seeded variants not ported |
+| `github.com/zeebo/xxh3` | `hashString128 hash128 hashString hash`; `Uint128(hi, lo)` + `bytes goCopy goEquals goHash`; `Hasher` (`write writeString sum64 sum128 sum reset blockSize size goCopy`; NOT Go: `writeU8 writeU32le writeU64le`, the checker's `hashWrite32/64` overrides — a byte buffer grown on demand, a short input hashed straight from it), `new` | exact † (lengths 0..300, block edges, 64 KiB, 1 MiB; v1.1.0's scalar path; the `Hasher` over 290 chunkings across the 1088-byte buffer and 1024-byte block edges, including a `Sum64` mid-stream). Seeded variants not ported |
 | `github.com/go-json-experiment/json` | `Options deterministic`, `Marshaler MarshalerTo Unmarshaler UnmarshalerFrom` (typealiases of `encoding/json/v2`'s), `Decoder Encoder` (aliases of `jsontext`'s), `marshal marshalWrite marshalEncode unmarshal unmarshalRead unmarshalDecode`, `SemanticError`; NOT Go: `GoJsonStruct`/`JsonField` (§ 9c) | exact † for the representations in § 9c (values AND whether Go errs; layouts; string escaping); approx § 10 |
 | `…/json/jsontext` (+ alias package `encoding/json/jsontext`) | options `allowInvalidUTF8 allowDuplicateNames withIndent withIndentPrefix`; `Kind` (`string`), `Token` (zero `Token()`; `kind string bool float int goCopy`), token values `beginObject endObject beginArray endArray `` `null` `` `` `true` `` `` `false` ``, constructors `bool string float int uint`; `Value`; `Decoder` (`peekKind readToken readValue skipValue inputOffset stackDepth`), `Encoder` (`writeToken writeValue outputOffset stackDepth`), `newDecoder newEncoder`, `SyntacticError`, vars `errUnexpectedEOF errInvalidUTF8 errDuplicateName errNonStringName`; NOT Go: `newDecoderString(s, opts…)` | exact † (the token stream with `PeekKind`, incl. RFC 8259 number/escape/surrogate/UTF-8/duplicate-name validation; error MESSAGES approx) |
 | `encoding/json/v2` | `Marshaler MarshalerTo Unmarshaler UnmarshalerFrom` (`marshalJSON(): Tuple2<GoSlice<Int>, GoError?>`, `marshalJSONTo(enc: Encoder?)`, `unmarshalJSON(data: GoSlice<Int>)`, `unmarshalJSONFrom(dec: Decoder?)`) | interfaces only |
@@ -308,7 +316,7 @@ Lowering rules that come with the shims:
 10. **`int` is 32-bit** (design § 3 assumption): `strconv.Atoi` parses with Go's 64-bit `int` then truncates; `IntSize` reports 64.
 11. **`slices.SortStableFunc`** uses Kotlin's stable sort, not Go's insertion+symMerge — identical for any consistent comparator, possibly different for an inconsistent one.
 12. **`strings.Builder.Cap`** returns the length (capacity is not observable in common Kotlin).
-13. **`GoMap.range` snapshots the keys**: an entry ADDED during iteration is never produced (Go: may or may not be).
+13. **A map range snapshots the table** (`GoMap.iter`, `GoMap.range`): an entry ADDED during iteration is never produced (Go: may or may not be).
 14. **`json` without reflection** (§ 9c): a target's Go type is read from its pointer's CURRENT value, so a `*T` pointer whose value is `nil` decodes as `any`, a value class (named non-struct type) is not supported, and a `GoJsonStruct` is not zeroed by JSON `null`. `Marshal` always sorts map keys (v2 sorts only under `Deterministic(true)`; unsorted is Go's random order, of which sorted is one). A `float32` is formatted as a `float64`. Error MESSAGES (`SyntacticError`, `SemanticError`) follow Go's wording without its JSON-pointer/offset context; whether an error occurs, and every decoded value, are exact (†).
 15. **`time.Time`** carries Unix nanoseconds plus a monotonic reading; no calendar, zone or formatting; Go's zero `Time` (year 1) is approximated by `isZero()` and a clamped wall clock.
 16. **`runtime.Caller`** always answers `ok = false`; `testing.Testing()` is false; `filepath` is UNIX-only.

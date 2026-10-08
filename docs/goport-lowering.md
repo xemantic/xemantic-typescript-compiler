@@ -325,6 +325,27 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   `fstest.MapFS.open`) is imported at the call site (`ShimIndex.isExtension`), as ported extension
   methods already are.
 
+Check-path performance rules (docs/goport-perf.md § 6; each changes no answer, all pinned in
+`LoweringRulesTest`):
+
+- **Slot identity**: `&a[i] == &b[j]` (`core.Same`) → `a.sameSlot(i, b, j)` — the same panics, no
+  `GoElemPtr` objects.
+- **`strings.LastIndex` / `LastIndexByte`** join the substring-elimination fusions (`lastIndexAt/In`):
+  `parseJSDocComment`'s indent copied the file prefix per JSDoc comment.
+- **A conversion of a FRESH value is fresh** (`Exprs.freshValue`): `return CacheHashKey(b.h.Sum128())`
+  no longer copies the struct it just made. The IR's `copy` treats every conversion as non-fresh.
+- **`return x` of an owned struct local** (`Lowering.ownedLocals`): a `var` never captured nor
+  address-taken, only ever defined or assigned from ONE value (each such flow copies or is fresh), is
+  handed out without a copy. Type-switch bindings, range variables and multi-value / comma-ok targets
+  are excluded (their components are not copied in). A pointer-receiver method call takes the
+  address (`autoAddr`), so `getTypeAtFlowNode`'s `t` keeps its copy.
+- **`for k, v := range m`** → `val it = m.iter(); while (it.next()) { it.key; it.value }`: one copy
+  of the table instead of a key list plus a probe per entry (`GoMapIter`, docs/goport-runtime.md § 3).
+
+Override for performance (the fifth): `core.Arena.New` returns a fresh zero `T` (the slab bought
+nothing on the JVM, where every struct is its own object; the override's header argues it is
+unobservable).
+
 Pins: `-goport/src/jvmTest/.../LoweringRulesTest.kt` (naming, byte-string literals, constant edges);
 the end-to-end gates are `-tsgo/src/jvmTest/kotlin/OracleParityTest.kt` (corpus, opt-in) and
 `TsgoPinTest.kt` (always on).

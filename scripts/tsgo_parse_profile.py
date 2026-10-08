@@ -2,7 +2,7 @@
 """Aggregate a JFR CPU profile of ParseBenchMain's tsgo arm (docs/goport-perf.md).
 
     jfr print --events jdk.ExecutionSample --stack-depth 512 tsgo.jfr > samples.txt
-    python3 scripts/tsgo_parse_profile.py samples.txt [thread]
+    python3 scripts/tsgo_parse_profile.py samples.txt [thread] [stack-depth]
 
 Only samples on the `parse-bench-deep-stack` thread count. Prints: self time by leaf
 frame:line; self time charged to the nearest com.xemantic frame (a stdlib leaf belongs to its
@@ -58,4 +58,6 @@ def main(path, cap=512, thread='parse-bench-deep-stack'):
 
 if __name__ == '__main__':
     # optional 2nd argument: the bench thread (CheckBenchMain's is check-bench-deep-stack)
-    main(sys.argv[1], thread=sys.argv[2] if len(sys.argv) > 2 else 'parse-bench-deep-stack')
+    # optional 3rd: the --stack-depth the dump was printed with (the check path recurses past 512)
+    main(sys.argv[1], thread=sys.argv[2] if len(sys.argv) > 2 else 'parse-bench-deep-stack',
+         cap=int(sys.argv[3]) if len(sys.argv) > 3 else 512)
