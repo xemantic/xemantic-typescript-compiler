@@ -27,6 +27,7 @@ package com.xemantic.typescript.tsgo
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hash
+import com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.Hasher
 import com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hash128
 import com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString
 import com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hashString128
@@ -73,6 +74,31 @@ class Xxh3OracleTest {
             val b = goStringToBytes(gen(v.n))
             val h = hash128(b)
             if (h.hi != v.hi || h.lo != v.lo || hash(b) != v.h64) mismatches += v.n
+        }
+        assert(mismatches.isEmpty())
+    }
+
+    // The streaming Hasher fed one byte at a time (its byte-buffer short path, docs/goport-perf.md § 6)
+    // and four at a time (writeU32le, what the checker's hashWrite32 uses) equals Go's one-shot hash.
+    @Test
+    fun `a Hasher fed byte by byte or word by word matches Go at every length`() {
+        val mismatches = ArrayList<String>()
+        for (v in LENGTHS) {
+            if (v.n > 4096) continue
+            val s = gen(v.n)
+            val h = Hasher()
+            for (i in 0 until v.n) h.writeU8(s[i].code)
+            val r = h.sum128()
+            if (r.hi != v.hi || r.lo != v.lo || h.sum64() != v.h64) mismatches += "u8 n=${v.n}"
+            val w = Hasher()
+            var i = 0
+            while (i + 4 <= v.n) {
+                w.writeU32le(s[i].code or (s[i + 1].code shl 8) or (s[i + 2].code shl 16) or (s[i + 3].code shl 24))
+                i += 4
+            }
+            while (i < v.n) w.writeU8(s[i++].code)
+            val q = w.sum128()
+            if (q.hi != v.hi || q.lo != v.lo) mismatches += "u32 n=${v.n}"
         }
         assert(mismatches.isEmpty())
     }

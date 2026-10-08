@@ -95,14 +95,15 @@ fun hashString128(s: String): Uint128 {
  * written. Go's zero value is usable (it resets itself on first use); so is `Hasher()`.
  */
 class Hasher {
-    // Allocated on demand (NOT Go's layout, same states): the checker's key builder makes a Hasher per
-    // cache key and writes a few dozen bytes, so a full 1,088-char buffer and the accumulators per key
-    // were most of its cost (docs/goport-perf.md § 6). `acc` is needed only once a block is folded.
+    // NOT Go's layout, same states (docs/goport-perf.md § 6): the checker's key builder makes a Hasher
+    // per cache key and writes a few dozen bytes, so the buffer is a ByteArray grown on demand, `acc` is
+    // allocated only once a block is folded, and a short input is hashed straight from the buffer
+    // ([hashBytes128]) with no intermediate String.
     private var acc: LongArray? = null
     private var blk = 0L
     private var len = 0
     private var keyed = false
-    private var buf: CharArray = EMPTY_BUF
+    private var buf: ByteArray = EMPTY_BUF
 
     /** `h.Reset()`. */
     fun reset() {
@@ -120,7 +121,7 @@ class Hasher {
         val n = b.len
         if (n <= STRIPE) {
             ensureKey()
-            for (i in 0 until n) put(b[i].toChar())
+            for (i in 0 until n) put(b[i])
         } else {
             update(goBytesToString(b))
         }
@@ -136,16 +137,16 @@ class Hasher {
     /** NOT Go API — `h.Write([]byte{b})` without the slice. */
     fun writeU8(b: Int) {
         ensureKey()
-        put((b and 0xFF).toChar())
+        put(b)
     }
 
-    /** NOT Go API — the 4 little-endian bytes of [v] (`binary.LittleEndian.PutUint32` + `Write`). */
+    /** NOT Go API — the 4 little-endian bytes of [v] (what `hashWrite32` writes). */
     fun writeU32le(v: Int) {
         ensureKey()
-        put((v and 0xFF).toChar())
-        put(((v ushr 8) and 0xFF).toChar())
-        put(((v ushr 16) and 0xFF).toChar())
-        put(((v ushr 24) and 0xFF).toChar())
+        put(v)
+        put(v ushr 8)
+        put(v ushr 16)
+        put(v ushr 24)
     }
 
     /** NOT Go API — the 8 little-endian bytes of [v]. */
@@ -170,16 +171,16 @@ class Hasher {
         buf = buf.copyOf(minOf(n, BUF_SIZE))
     }
 
-    /** One byte of input: the per-char step of [update]. */
-    private fun put(c: Char) {
+    /** One byte of input (the low 8 bits of [b]): the per-byte step of [update]. */
+    private fun put(b: Int) {
         if (len >= BUF_SIZE) foldFullBuffer()
         if (len >= buf.size) ensureBuf(len + 1)
-        buf[len++] = c
+        buf[len++] = b.toByte()
     }
 
     /** A full buffer folds its first block when more input arrives; the last stripe stays. */
     private fun foldFullBuffer() {
-        accumBlock(accs(), buf.concatToString(0, BLOCK), 0)
+        accumBlock(accs(), latin1(buf, BLOCK), 0)
         blk++
         len = STRIPE
         buf.copyInto(buf, 0, BLOCK, BLOCK + STRIPE)
@@ -199,7 +200,7 @@ class Hasher {
             if (len < BUF_SIZE) {
                 val k = minOf(BUF_SIZE - len, n - p)
                 ensureBuf(len + k)
-                for (i in 0 until k) buf[len + i] = s[p + i]
+                for (i in 0 until k) buf[len + i] = s[p + i].code.toByte()
                 len += k
                 p += k
                 continue
@@ -211,7 +212,7 @@ class Hasher {
     /** `h.Sum64()`. */
     fun sum64(): ULong {
         ensureKey()
-        val data = buf.concatToString(0, len)
+        val data = latin1(buf, len)
         if (blk == 0L) return hashAny(data).toULong()
         val l = blk * BLOCK + len
         var a = l * PRIME64_1
@@ -227,8 +228,8 @@ class Hasher {
     /** `h.Sum128()`. */
     fun sum128(): Uint128 {
         ensureKey()
-        val data = buf.concatToString(0, len)
-        if (blk == 0L) return hashString128(data)
+        if (blk == 0L) return if (len <= 240) hashBytes128(buf, len) else hashString128(latin1(buf, len))
+        val data = latin1(buf, len)
         val l = blk * BLOCK + len
         var lo = l * PRIME64_1
         var hi = (l * PRIME64_2).inv()
@@ -265,7 +266,107 @@ class Hasher {
     }
 }
 
-private val EMPTY_BUF = CharArray(0)
+private val EMPTY_BUF = ByteArray(0)
+
+/** The first [n] bytes of [b] as a Go byte string (the long-input paths, which take a String). */
+private fun latin1(b: ByteArray, n: Int): String {
+    val cs = CharArray(n)
+    for (i in 0 until n) cs[i] = (b[i].toInt() and 0xFF).toChar()
+    return cs.concatToString()
+}
+
+// ---- hash128.go over a byte buffer, inputs of at most 240 bytes (the Hasher's short keys) ----
+// The same function as [hashAny128]'s three short paths, reading a ByteArray instead of a String.
+
+private fun readU8(b: ByteArray, o: Int): Long = (b[o].toInt() and 0xFF).toLong()
+
+private fun readU16(b: ByteArray, o: Int): Long = readU8(b, o) or (readU8(b, o + 1) shl 8)
+
+private fun readU32(b: ByteArray, o: Int): Long =
+    readU8(b, o) or (readU8(b, o + 1) shl 8) or (readU8(b, o + 2) shl 16) or (readU8(b, o + 3) shl 24)
+
+private fun readU64(b: ByteArray, o: Int): Long = readU32(b, o) or (readU32(b, o + 4) shl 32)
+
+private fun hashBytes128(s: ByteArray, l: Int): Uint128 {
+    val ll = l.toLong()
+    if (l <= 16) {
+        var lo: Long
+        when {
+            l > 8 -> {
+                val bitflipl = K[32] xor K[40]
+                val bitfliph = K[48] xor K[56]
+                val inputLo = readU64(s, 0)
+                var inputHi = readU64(s, l - 8)
+                val x = inputLo xor inputHi xor bitflipl
+                var mh = mulHi(x, PRIME64_1)
+                var ml = x * PRIME64_1
+                ml += (ll - 1) shl 54
+                inputHi = inputHi xor bitfliph
+                mh += inputHi + (inputHi and 0xFFFFFFFFL) * (PRIME32_2 - 1)
+                ml = ml xor reverseBytes64(mh)
+                var hi = mulHi(ml, PRIME64_2)
+                lo = ml * PRIME64_2
+                hi += mh * PRIME64_2
+                return Uint128(xxh3Avalanche(hi).toULong(), xxh3Avalanche(lo).toULong())
+            }
+            l > 3 -> {
+                val bitflip = K[16] xor K[24]
+                val inputLo = readU32(s, 0)
+                val inputHi = readU32(s, l - 4)
+                val input64 = inputLo + (inputHi shl 32)
+                val keyed = input64 xor bitflip
+                val m = PRIME64_1 + (ll shl 2)
+                var hi = mulHi(keyed, m)
+                lo = keyed * m
+                hi += lo shl 1
+                lo = lo xor (hi ushr 3)
+                lo = lo xor (lo ushr 35)
+                lo *= RRMXMX_MUL
+                lo = lo xor (lo ushr 28)
+                return Uint128(xxh3Avalanche(hi).toULong(), lo.toULong())
+            }
+            l == 3 -> lo = (readU16(s, 0) shl 16) + readU8(s, 2) + (3L shl 8)
+            l == 2 -> lo = ((readU16(s, 0) * ((1L shl 24) + 1)) ushr 8) + (2L shl 8)
+            l == 1 -> lo = readU8(s, 0) * ((1L shl 24) + (1L shl 16) + 1) + (1L shl 8)
+            else -> return Uint128(0x99aa06d3014798d8uL, 0x6001c324468d497fuL)
+        }
+        var hi = (reverseBytes32(lo.toInt()).rotateLeft(13).toLong()) and 0xFFFFFFFFL
+        lo = lo xor (k32(0) xor k32(4))
+        hi = hi xor (k32(8) xor k32(12))
+        return Uint128(xxh64AvalancheSmall(hi).toULong(), xxh64AvalancheSmall(lo).toULong())
+    }
+    val r = LongArray(2)
+    r[0] = 0L
+    r[1] = ll * PRIME64_1
+    if (l <= 128) {
+        if (l > 32) {
+            if (l > 64) {
+                if (l > 96) {
+                    round128(r, readU64(s, 6 * 8), readU64(s, 7 * 8), readU64(s, l - 8 * 8), readU64(s, l - 7 * 8), K[112], K[120], K[96], K[104])
+                }
+                round128(r, readU64(s, 4 * 8), readU64(s, 5 * 8), readU64(s, l - 6 * 8), readU64(s, l - 5 * 8), K[80], K[88], K[64], K[72])
+            }
+            round128(r, readU64(s, 2 * 8), readU64(s, 3 * 8), readU64(s, l - 4 * 8), readU64(s, l - 3 * 8), K[48], K[56], K[32], K[40])
+        }
+        round128(r, readU64(s, 0), readU64(s, 8), readU64(s, l - 2 * 8), readU64(s, l - 8), K[16], K[24], K[0], K[8])
+    } else {
+        for (g in 0 until 4) {
+            val o = 32 * g
+            round128(r, readU64(s, o), readU64(s, o + 8), readU64(s, o + 16), readU64(s, o + 24), K[o + 16], K[o + 24], K[o], K[o + 8])
+        }
+        r[0] = xxh3Avalanche(r[0])
+        r[1] = xxh3Avalanche(r[1])
+        val top = l and 31.inv()
+        var i = 4 * 32
+        while (i < top) {
+            round128(r, readU64(s, i), readU64(s, i + 8), readU64(s, i + 16), readU64(s, i + 24), K[i - 109], K[i - 101], K[i - 125], K[i - 117])
+            i += 32
+        }
+        round128(r, readU64(s, l - 16), readU64(s, l - 8), readU64(s, l - 32), readU64(s, l - 24), K[119], K[127], K[103], K[111])
+    }
+    finish128(r, ll)
+    return Uint128(r[0].toULong(), r[1].toULong())
+}
 /** `xxh3.New()`. */
 fun new(): Hasher = Hasher()
 
