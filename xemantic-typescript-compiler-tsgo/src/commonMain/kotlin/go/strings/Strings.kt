@@ -555,6 +555,32 @@ fun indexIn(s: String, from: Int, to: Int, substr: String): Int {
     return indexRange(s, from, to, substr)
 }
 
+/** `strings.LastIndex(s[from:], substr)`. */
+fun lastIndexAt(s: String, from: Int, substr: String): Int {
+    checkFrom(s, from)
+    if (substr.isEmpty()) return s.length - from
+    val r = s.lastIndexOf(substr)
+    return if (r < from) -1 else r - from
+}
+
+/** `strings.LastIndex(s[from:to], substr)`, scanning only the window. */
+fun lastIndexIn(s: String, from: Int, to: Int, substr: String): Int {
+    checkIn(s, from, to)
+    if (substr.isEmpty()) return to - from
+    val r = s.lastIndexOf(substr, to - substr.length)
+    return if (r < from) -1 else r - from
+}
+
+/** `strings.LastIndexByte(s[from:], c)`. */
+fun lastIndexByteAt(s: String, from: Int, c: Int): Int = lastIndexByteIn(s, from, s.length, c)
+
+/** `strings.LastIndexByte(s[from:to], c)`. */
+fun lastIndexByteIn(s: String, from: Int, to: Int, c: Int): Int {
+    checkIn(s, from, to)
+    val r = s.lastIndexOf((c and 0xFF).toChar(), to - 1)
+    return if (r < from) -1 else r - from
+}
+
 /** `strings.Contains(s[from:], substr)`. */
 fun containsAt(s: String, from: Int, substr: String): Boolean = indexAt(s, from, substr) >= 0
 

@@ -87,7 +87,7 @@ fun getIncludeBasePath(absolute: String): String {
             return com.xemantic.typescript.tsgo.tspath.removeTrailingDirectorySeparator(com.xemantic.typescript.tsgo.tspath.getDirectoryPath(absolute))
         }
     }
-    return absolute.substring(0, maxOf(com.xemantic.typescript.tsgo.go.strings.lastIndex(absolute.substring(0, wildcardOffset), "/"), 0))
+    return absolute.substring(0, maxOf(com.xemantic.typescript.tsgo.go.strings.lastIndexIn(absolute, 0, wildcardOffset, "/"), 0))
 }
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.getBasePaths 35bcc9f7

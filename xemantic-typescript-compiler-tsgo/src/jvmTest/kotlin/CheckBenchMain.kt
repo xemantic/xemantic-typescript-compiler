@@ -26,6 +26,9 @@
 package com.xemantic.typescript.tsgo
 
 import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
+import com.xemantic.typescript.tsgo.compiler.CompilerHost
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.core.TSTrue
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
@@ -112,6 +115,29 @@ class DiskFS : FS {
     override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = error("read-only")
 }
 
+/** Shares parsed bundled-lib files across programs (what tsgo's harness and language server do), keyed as Go does. */
+class LibCachingHost(private val inner: CompilerHost) : CompilerHost by inner {
+    override fun getSourceFile(p0: SourceFileParseOptions): SourceFile? {
+        if (!p0.fileName.startsWith("bundled:")) return inner.getSourceFile(p0)
+        val read = inner.fs()!!.readFile(p0.fileName)
+        if (!read.second) return null
+        val kind = com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(p0.fileName)
+        return cache.getOrPut(Key(p0.goCopy(), read.first, kind.value)) {
+            com.xemantic.typescript.tsgo.parser.parseSourceFile(p0, read.first, kind)!!
+        }
+    }
+
+    /** Go compares the options struct by value. */
+    class Key(val opts: SourceFileParseOptions, val text: String, val kind: Int) {
+        override fun equals(other: Any?): Boolean = other is Key && kind == other.kind && text == other.text && opts.goEquals(other.opts)
+        override fun hashCode(): Int = opts.goHash() * 31 + text.hashCode() * 7 + kind
+    }
+
+    companion object {
+        val cache = ConcurrentHashMap<Key, SourceFile>()
+    }
+}
+
 private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean) {
 
     fun run() {
@@ -121,12 +147,21 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
         val configName = GoString.fromUtf16(config.path)
         println("project=$config warmup=$warmup iters=$iters libcache=$libCache java=${System.getProperty("java.version")}")
         val totals = ArrayList<Double>()
+        val cpus = ArrayList<Double>()
+        val gcs = ArrayList<Double>()
+        val allocs = ArrayList<Double>()
+        val threads = java.lang.management.ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
+        val gcBeans = java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()
+        fun gcMs() = gcBeans.sumOf { it.collectionTime.coerceAtLeast(0) }
         var checksum = 0L
         for (i in 0 until warmup + iters) {
+            val c0 = threads.currentThreadCpuTime
+            val a0 = threads.currentThreadAllocatedBytes
+            val g0 = gcMs()
             val t0 = System.nanoTime()
             val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(disk)
             val inner = com.xemantic.typescript.tsgo.compiler.newCompilerHost(cwd, fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)!!
-            val host = if (libCache) DiagParityTest.CachedHost(inner) else inner
+            val host = if (libCache) LibCachingHost(inner) else inner
             val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(configName, null, null, host, null)
             val t1 = System.nanoTime()
             val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = parsed, singleThreaded = TSTrue))!!
@@ -141,17 +176,30 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val t3 = System.nanoTime()
             add(program.getSemanticDiagnostics(ctx, null))
             val t4 = System.nanoTime()
+            val cpu = (threads.currentThreadCpuTime - c0) / 1e6
+            val alloc = (threads.currentThreadAllocatedBytes - a0) / 1e6
+            val gc = (gcMs() - g0).toDouble()
             val ms = (t4 - t0) / 1e6
             checksum = checksum * 31 + n
             val tag = if (i < warmup) "warm" else "meas"
             println(
-                "iter ${i + 1} $tag total_ms=%.1f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f files=%d diags=%d"
-                    .format(ms, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, program.getSourceFiles().len, n),
+                "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f files=%d diags=%d"
+                    .format(ms, cpu, gc, alloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, program.getSourceFiles().len, n),
             )
-            if (i >= warmup) totals += ms
+            if (i >= warmup) {
+                totals += ms
+                cpus += cpu
+                gcs += gc
+                allocs += alloc
+            }
         }
-        val s = totals.sorted()
-        val median = if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2
-        println("RESULT median_ms=%.1f min_ms=%.1f max_ms=%.1f checksum=$checksum".format(median, s.min(), s.max()))
+        fun median(xs: List<Double>): Double {
+            val s = xs.sorted()
+            return if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2
+        }
+        println(
+            "RESULT median_ms=%.1f min_ms=%.1f max_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f checksum=$checksum"
+                .format(median(totals), totals.min(), totals.max(), median(cpus), median(gcs), median(allocs)),
+        )
     }
 }

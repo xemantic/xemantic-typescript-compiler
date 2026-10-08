@@ -37,6 +37,10 @@ import com.xemantic.typescript.tsgo.go.strings.indexByteAt
 import com.xemantic.typescript.tsgo.go.strings.indexByteIn
 import com.xemantic.typescript.tsgo.go.strings.indexIn
 import com.xemantic.typescript.tsgo.go.strings.indexRuneAt
+import com.xemantic.typescript.tsgo.go.strings.lastIndexAt
+import com.xemantic.typescript.tsgo.go.strings.lastIndexByteAt
+import com.xemantic.typescript.tsgo.go.strings.lastIndexByteIn
+import com.xemantic.typescript.tsgo.go.strings.lastIndexIn
 import com.xemantic.typescript.tsgo.runtime.GoPanic
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.goStrEqAt
@@ -100,6 +104,21 @@ class WindowShimTest {
         assert(!hasSuffixAt(s, 15, "/z"))
         assert(containsIn(s, 0, 3, "c"))
         assert(!containsIn(s, 0, 2, "c"))
+    }
+
+    // Go: `LastIndex(s[:9], "*/")`, `LastIndex(s[:8], "*/")`, `LastIndex(s[5:], "*/")`, `LastIndex(s[5:9], "")`,
+    // `LastIndex(s[14:], "*/")` → 5 5 8 4 -1; `LastIndexByte(s[:9], '*')`, `LastIndexByte(s[2:5], 'a')`,
+    // `LastIndexByte(s[3:], 'z')` → 8 -1 12.
+    @Test
+    fun `lastIndex windows never look past the window end nor before its start`() {
+        assert(lastIndexIn(s, 0, 9, "*/") == 5)
+        assert(lastIndexIn(s, 0, 8, "*/") == 5)
+        assert(lastIndexAt(s, 5, "*/") == 8)
+        assert(lastIndexIn(s, 5, 9, "") == 4)
+        assert(lastIndexAt(s, 14, "*/") == -1)
+        assert(lastIndexByteIn(s, 0, 9, '*'.code) == 8)
+        assert(lastIndexByteIn(s, 2, 5, 'a'.code) == -1)
+        assert(lastIndexByteAt(s, 3, 'z'.code) == 12)
     }
 
     // Go: `s[3:5] == "/*"`, `s[3:] == "/**/x*/yé*/z"`, `s[16:] == ""` → true true true.

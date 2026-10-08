@@ -54,8 +54,8 @@ class GoElem<T>(
         return if (v == null) v else c(v)
     }
 
-    /** The shared nil slice of this element kind. */
-    val nilSlice: GoSlice<T> by lazy { GoSlice(EMPTY_ARRAY, 0, 0, 0, this, true) }
+    /** The shared nil slice of this element kind (eager: a `lazy` read was ~1.6% of a check, docs/goport-perf.md § 6). */
+    val nilSlice: GoSlice<T> = GoSlice(EMPTY_ARRAY, 0, 0, 0, this, true)
 
     companion object {
         internal val EMPTY_ARRAY: Array<Any?> = arrayOfNulls(0)

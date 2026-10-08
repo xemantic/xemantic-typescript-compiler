@@ -125,7 +125,7 @@ class wildcardDirectoryMatch(
 fun getWildcardDirectoryFromSpec(spec: String, useCaseSensitiveFileNames: Boolean): com.xemantic.typescript.tsgo.tsoptions.wildcardDirectoryMatch? {
     val firstWildcard: Int = com.xemantic.typescript.tsgo.go.strings.indexAny(spec, "*?")
     if (firstWildcard != -1) {
-        val lastSepBeforeWildcard: Int = com.xemantic.typescript.tsgo.go.strings.lastIndexByte(spec.substring(0, firstWildcard), 47)
+        val lastSepBeforeWildcard: Int = com.xemantic.typescript.tsgo.go.strings.lastIndexByteIn(spec, 0, firstWildcard, 47)
         if (lastSepBeforeWildcard != -1) {
             val path: String = spec.substring(0, lastSepBeforeWildcard)
             val lastDirectorySeparatorIndex: Int = com.xemantic.typescript.tsgo.go.strings.lastIndexByte(spec, 47)

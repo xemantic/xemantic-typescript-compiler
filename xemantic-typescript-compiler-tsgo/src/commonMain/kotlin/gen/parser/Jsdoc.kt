@@ -275,7 +275,7 @@ fun Parser?.parseJSDocComment(parent: Node?, start: Int, end_0: Int, fullStart: 
     val saveDiagnosticsLength: Int = this!!.diagnostics.len
     val saveHasParseError: Boolean = this!!.hasParseError
     val saveHasAwaitIdentifier: Boolean = this!!.statementHasAwaitIdentifier
-    val initialIndent: Int = start + 4 - (com.xemantic.typescript.tsgo.go.strings.lastIndex(this!!.sourceText.substring(0, start), "\n") + 1)
+    val initialIndent: Int = start + 4 - (com.xemantic.typescript.tsgo.go.strings.lastIndexIn(this!!.sourceText, 0, start, "\n") + 1)
     this!!.sourceText = this!!.sourceText.substring(0, end - 2)
     this!!.scanner.setText(this!!.sourceText)
     this!!.scanner.resetPos(start + 3)

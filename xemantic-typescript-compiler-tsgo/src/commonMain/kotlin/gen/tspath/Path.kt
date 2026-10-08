@@ -461,7 +461,7 @@ fun getNormalizedAbsolutePath(fileName_0: String, currentDirectory: String): Str
                 }
             } else if (!changed) {
                 if (normalizedUpTo - 1 >= 0) {
-                    normalized = fileName.substring(0, maxOf(rootLength, com.xemantic.typescript.tsgo.go.strings.lastIndexByte(fileName.substring(0, normalizedUpTo - 1), 47)))
+                    normalized = fileName.substring(0, maxOf(rootLength, com.xemantic.typescript.tsgo.go.strings.lastIndexByteIn(fileName, 0, normalizedUpTo - 1, 47)))
                 } else {
                     normalized = fileName.substring(0, normalizedUpTo)
                 }

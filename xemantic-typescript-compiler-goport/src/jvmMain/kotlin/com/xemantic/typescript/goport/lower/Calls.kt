@@ -433,6 +433,9 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             "strings.IndexRune" to Fusion(STRINGS, "indexRune", false),
             "strings.IndexAny" to Fusion(STRINGS, "indexAny", false),
             "strings.ContainsAny" to Fusion(STRINGS, "containsAny", false),
+            // `strings.LastIndex(s[:k], "\n")` (parser.parseJSDocComment's indent): a prefix copy per call.
+            "strings.LastIndex" to Fusion(STRINGS, "lastIndex", true),
+            "strings.LastIndexByte" to Fusion(STRINGS, "lastIndexByte", true),
         )
     }
 
