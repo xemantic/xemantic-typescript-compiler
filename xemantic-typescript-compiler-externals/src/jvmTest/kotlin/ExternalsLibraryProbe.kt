@@ -214,6 +214,45 @@ class ExternalsLibraryProbe {
     }
 
     /**
+     * (TSGO.4-b) The ENGINE COST of a per-module set: wall time and peak heap of
+     * `generateKotlinExternalsPerModule` over the probe's files, repeated
+     * `XTSC_EXTERNALS_BENCH` times in one JVM (the first is the cold run). Gated
+     * on that variable plus the probe's `XTSC_EXTERNALS_PROBE_FILES`/`_ROOT` and
+     * `XTSC_EXTERNALS_PROBE_MODULES`; prints one `BENCH` line per run. Peak heap
+     * is the sum of the heap pools' peak usage, reset after a `System.gc()`
+     * before each run — what ONE generation holds at its highest, which is what
+     * an embedder sizes a heap by.
+     */
+    @Test
+    fun `bench the per-module set when XTSC_EXTERNALS_BENCH is set`() {
+        val runs = System.getenv("XTSC_EXTERNALS_BENCH")?.toIntOrNull() ?: return
+        val packageRoot = System.getenv("XTSC_EXTERNALS_PROBE_MODULES") ?: return
+        val fileList = System.getenv("XTSC_EXTERNALS_PROBE_FILES") ?: return
+        val root = System.getenv("XTSC_EXTERNALS_PROBE_ROOT")?.trimEnd('/')
+        fun entryName(path: String): String {
+            val name = if (root != null && path.startsWith(root)) path.removePrefix(root) else path
+            return if (name.startsWith("/")) name else "/$name"
+        }
+        val files = fileList.split(':').filter { it.isNotBlank() }.map { path ->
+            SourceFileEntry(entryName(path), Path.of(path).readText())
+        }
+        val prefix = packageRoot.takeUnless { it == "-" }
+        val wirings = declaringBlocks(files).map { (specifier, fileName) -> ModuleWiring(specifier, fileName, prefix) }
+        val pools = java.lang.management.ManagementFactory.getMemoryPoolMXBeans()
+            .filter { it.type == java.lang.management.MemoryType.HEAP }
+        repeat(runs) { run ->
+            System.gc()
+            pools.forEach { it.resetPeakUsage() }
+            val started = System.nanoTime()
+            val set = generateKotlinExternalsPerModule(files, wirings)
+            val elapsed = (System.nanoTime() - started) / 1_000_000
+            val peak = pools.sumOf { it.peakUsage.used } / (1024 * 1024)
+            val lines = set.values.sumOf { it.kotlin.lines().size }
+            println("BENCH run=${run + 1} modules=${set.size} lines=$lines wall_ms=$elapsed peak_heap_mb=$peak")
+        }
+    }
+
+    /**
      * (EXT.21b) Every top-level `declare module "m" { … }` block that
      * DECLARES something, as (specifier, file) — the 55 `node:x` twins whose
      * body is one `export * from` re-export declare nothing and get no

@@ -224,7 +224,7 @@ public fun generateKotlinExternals(
         kotlin = renderKotlinExternals(declarations, external = true, header = run.header),
         compileCheckSource = renderKotlinExternals(declarations, external = false, header = run.header),
         diagnostics = run.diagnostics,
-    )
+    ).also { recordGeneration(generationDescriptor(files.map { it.fileName to it.content }, module), it.kotlin) }
 }
 
 /**
@@ -302,7 +302,10 @@ public fun generateKotlinExternalsPerModule(
             kotlin = renderKotlinExternals(declarations, true, run.header, foreign, extraOpen),
             compileCheckSource = renderKotlinExternals(declarations, false, run.header, foreign, extraOpen),
             diagnostics = run.diagnostics,
-        )
+        ).also {
+            val set = "per-module:" + modules.joinToString(",") { m -> "${m.moduleName}|${m.entryFileName}|${m.packageRoot}" }
+            recordGeneration(generationDescriptor(files.map { f -> f.fileName to f.content }, wiring, set), it.kotlin)
+        }
     }
     return result
 }

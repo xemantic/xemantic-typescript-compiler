@@ -116,4 +116,16 @@ tasks.named<Test>("jvmTest") {
     doFirst {
         environment("XTSC_KOTLIN_STDLIB_JS", klib.get())
     }
+    // (TSGO.4-b) The probes and the engine bench are selected by environment
+    // variables; make them test inputs, or a probe run after a plain run is
+    // UP-TO-DATE and measures nothing. `XTSC_TEST_HEAP` raises the worker's
+    // heap for a large probe (the `-tsgo` module's `TSGO_TEST_HEAP` twin).
+    for (v in listOf(
+        "XTSC_EXTERNALS_PROBE_FILES", "XTSC_EXTERNALS_PROBE_ROOT", "XTSC_EXTERNALS_PROBE_OUT",
+        "XTSC_EXTERNALS_PROBE_MODULE", "XTSC_EXTERNALS_PROBE_MODULES", "XTSC_EXTERNALS_PROBE_MODULE_FILTER",
+        "XTSC_EXTERNALS_BENCH", "XTSC_EXTERNALS_DUMP", "XTSC_TYPESCRIPT_DTS",
+    )) {
+        inputs.property(v, providers.environmentVariable(v).orElse(""))
+    }
+    providers.environmentVariable("XTSC_TEST_HEAP").orNull?.let { maxHeapSize = it }
 }
