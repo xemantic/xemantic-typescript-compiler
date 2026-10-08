@@ -284,6 +284,11 @@ class PackageEmitter(
             report.refused(pc.pkg, qname, lines, Refusal("pinned:$reason"), stub = true)
             return "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: refused pinned:$reason: $qname\")\n}\n"
         }
+        // goport-extract partialStubs: the body was not extracted (docs/goport-ir.md § 1, partial packages).
+        if (d.bool("stubbed")) {
+            report.refused(pc.pkg, qname, lines, Refusal("partial-stub"), stub = true)
+            return "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: refused partial-stub (body not extracted): $qname\")\n}\n"
+        }
         val body = d.obj("body") ?: return "${traceLine(qname, d.str("hash"))}\n$sigText {\n    TODO(\"goport: external body: $qname\")\n}\n"
         // (JIT.1) a huge top-level switch: a dispatcher plus parts, each under the JIT limit.
         val paramObjs = params.flatMap { f -> f.list("names").mapNotNull { it.int("obj") } }.toSet()

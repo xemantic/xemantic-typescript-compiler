@@ -109,7 +109,7 @@ open class ExprLowering(val fn: FnCtx) {
         // — hand out a real pointer to the location.
         if (e.obj("impl")?.str("k") == "iface" && e.k == "UnaryExpr" && e.str("op") == "&") {
             val pt = types.under(ty(e)) as? PointerType
-            if (pt != null && tm.opaqueTP(pt.elem)) return addressOf(e.reqObj("x"), realPointer = true)
+            if (pt != null && tm.opaqueTP(pt.elem)) return Ex.primary("goOpaqueAddr(${tm.elem(pt.elem)}, ${addressOf(e.reqObj("x"), realPointer = true).code})")
         }
         val v = lower(e)
         e.obj("impl")?.let { im -> if (im.str("k") == "iface") im.int("from")?.let { tm.boxOf(it) }?.let { return Ex.primary("$it(${v.code})") } }
@@ -228,10 +228,10 @@ open class ExprLowering(val fn: FnCtx) {
     }
 
     /** A package-level function used as a VALUE: an anonymous function of the Go signature. */
-    fun funcValue(o: Node, e: Node): Ex {
+    fun funcValue(o: Node, e: Node, instFrom: Node = e): Ex {
         val sig = types.unalias(ty(e)) as? SignatureType ?: refuse("func-value-type")
         val ref = funcRef(o)
-        val targs = e.obj("inst")?.ints("targs")?.takeIf { it.isNotEmpty() }?.joinToString(", ", "<", ">") { tm.kt(it) } ?: ""
+        val targs = (e.obj("inst") ?: instFrom.obj("inst"))?.ints("targs")?.takeIf { it.isNotEmpty() }?.joinToString(", ", "<", ">") { tm.kt(it) } ?: ""
         val shim = o.str("pkg") !in prog.ported
         val dict = (this as? CallLowering)?.dictArgs(e) ?: emptyList()
         return Ex.primary(wrapperFun(sig) { args0 ->
@@ -621,7 +621,14 @@ open class ExprLowering(val fn: FnCtx) {
             "string" -> viewOf(x)?.let { v -> Ex.primary("goViewByte(${v.base}, ${v.off}, ${v.len}, ${intIndex(e.reqObj("index")).code})") }
                 ?: Ex.primary("${raw(x).at(PRIMARY)}[${intIndex(e.reqObj("index")).code}].code")
             "map" -> Ex.primary("${raw(x).at(PRIMARY)}[${flow(e.reqObj("index")).code}]")
-            "instantiate" -> refuse("generic-func-value")
+            // `f[T]` as a VALUE (`unmarshallerFor[P]` in a map literal): the instantiated function, like an
+            // implicitly instantiated generic function value (funcValue), with T's dictionaries bound.
+            "instantiate" -> {
+                val ident = when (x.k) { "Ident" -> x; "SelectorExpr" -> x.reqObj("sel"); else -> refuse("generic-func-value") }
+                val o = pc.obj(ident.int("obj") ?: refuse("generic-func-value"))
+                if (o.str("k") != "func") refuse("generic-func-value")
+                funcValue(o, e, ident)
+            }
             else -> refuse("index-kind", e.str("ik") ?: "?")
         }
     }
@@ -719,6 +726,14 @@ open class ExprLowering(val fn: FnCtx) {
         return ok
     }
 
+    /**
+     * A composite literal's element as the right side of a fill statement. An anonymous function with an
+     * expression body is parenthesized: K2's raw-FIR builder treats `it[a] = fun(…) = x; it[b] = fun(…) = y; …`
+     * as nested assignments and is EXPONENTIAL in their number (measured: 22 entries 32 s, 26 entries > 200 s;
+     * parenthesized, 130 entries 5.6 s) — `api.unmarshalers` (TSGO.3-b) held a whole-module compile for 43 min.
+     */
+    private fun setValue(v: String): String = if (v.startsWith("fun(")) "($v)" else v
+
     /** `make.also { …sets… }`, the sets split into hoisted fill helpers when there are many. */
     private fun filled(make: String, receiverType: String, sets: List<String>, elts: List<Node>): String {
         if (sets.isEmpty()) return make
@@ -788,7 +803,7 @@ open class ExprLowering(val fn: FnCtx) {
                             i = Literals.intValue(el.reqObj("key").obj("c") ?: refuse("index-key-not-const")).toLong()
                             v = flow(el.reqObj("value")).code
                         } else v = flow(el).code
-                        val s = "it[$i] = $v"
+                        val s = "it[$i] = ${setValue(v)}"
                         i++
                         if (i > max) max = i
                         s
@@ -801,7 +816,7 @@ open class ExprLowering(val fn: FnCtx) {
             }
             is MapType -> {
                 val sets = elts.map { el ->
-                    "it[${flow(el.reqObj("key")).code}] = ${flow(el.reqObj("value")).code}"
+                    "it[${flow(el.reqObj("key")).code}] = ${setValue(flow(el.reqObj("value")).code)}"
                 }
                 val make = "GoMap.make<${tm.kt(u.keyType)}, ${tm.kt(u.elem)}>(${tm.elem(u.elem)})"
                 wrap(Ex.primary(filled(make, "GoMap<${tm.kt(u.keyType)}, ${tm.kt(u.elem)}>", sets, elts)), t)

@@ -35,7 +35,33 @@ var partialClosure = map[string][]string{
 	"testutil/harnessutil":    {"XtscDerive", "XtscCompileCheckOnly", "SkipUnsupportedCompilerOptions"},
 	"tsoptions/tsoptionstest": {"NewVFSParseConfigHost"},
 	"testutil":                {"TestProgramIsSingleThreaded"},
+	// (TSGO.3-b) the API session in-process (docs/goport-api.md): the overlay's entry points keep
+	// Session, whose methods (HandleRequest and every handler) are kept with it.
+	"api": {"XtscNewSession", "XtscMarshal", "XtscOpenProgram"},
 }
+
+// partialStubs: methods ("Recv.Name") or functions of a partial package kept as a SIGNATURE ONLY — the
+// body is neither traversed for reachability nor extracted (an empty block stands in), so what only
+// it reaches stays out of the closure; the porter emits the stub (refuse.txt pins each one). These
+// are the API session's handlers that need tsgo's project system or language service, which the
+// in-process session replaces (the caller builds the snapshot) or does not port yet.
+var partialStubs = map[string][]string{
+	"api": {
+		// the project-session lifecycle: replaced by XtscNewSession's caller-built snapshot
+		"Session.handleInitialize", "Session.handleUpdateSnapshot", "Session.handleRelease",
+		"Session.handleGetDefaultProjectForFile", "Session.Close", "Session.releaseOpenRefs",
+		"Session.toFileChangeSummary", "computeSnapshotChanges", "Session.setupLanguageService",
+		// runtime/pprof
+		"Session.handleStartCPUProfile", "Session.handleStopCPUProfile", "Session.handleSaveHeapProfile",
+		// internal/ls (not ported yet)
+		"Session.handleGetCompletionsAtPosition", "Session.handleGetReferencesToSymbolInFile",
+		"Session.handleGetReferencedSymbolsForNode", "Session.handleGetSignatureUsages",
+		"Session.handleGetJSDocTags", "Session.handleGetDocumentationComment",
+	},
+}
+
+// stubbedBodies are the bodies partialStubs drops (filled by computePartial).
+var stubbedBodies = map[*ast.BlockStmt]bool{}
 
 // keptDecls is the result: for each partial package, the set of its top-level declarations to extract.
 type keptDecls map[string]map[ast.Decl]bool
@@ -107,11 +133,41 @@ func computePartial(loaded []*packages.Package, partial map[string][]string) kep
 			keep(pd, declAt(pd, o.Pos()))
 		}
 	}
+	for path, stubs := range partialStubs {
+		pd := byPath[tsgoModule+"/internal/"+path]
+		if pd == nil {
+			continue
+		}
+		for _, name := range stubs {
+			found := false
+			for _, d := range pd.decls {
+				fd, ok := d.(*ast.FuncDecl)
+				if !ok || fd.Body == nil {
+					continue
+				}
+				q := fd.Name.Name
+				if fd.Recv != nil && len(fd.Recv.List) > 0 {
+					q = recvBaseName(fd.Recv.List[0].Type) + "." + q
+				}
+				if q == name {
+					stubbedBodies[fd.Body] = true
+					found = true
+				}
+			}
+			if !found {
+				fmt.Fprintf(os.Stderr, "partial package %s has no stub %s\n", path, name)
+				os.Exit(2)
+			}
+		}
+	}
 	for len(queue) > 0 {
 		it := queue[0]
 		queue = queue[1:]
 		info := it.pd.pkg.TypesInfo
 		ast.Inspect(it.d, func(n ast.Node) bool {
+			if b, ok := n.(*ast.BlockStmt); ok && stubbedBodies[b] {
+				return false
+			}
 			var o types.Object
 			switch x := n.(type) {
 			case *ast.Ident:
@@ -160,6 +216,11 @@ func computePartial(loaded []*packages.Package, partial map[string][]string) kep
 func inKeptDecl(kept map[ast.Decl]bool, pkg *packages.Package, pos token.Pos) bool {
 	if kept == nil {
 		return true
+	}
+	for b := range stubbedBodies {
+		if b.Pos() <= pos && pos < b.End() {
+			return false
+		}
 	}
 	for d := range kept {
 		if d.Pos() <= pos && pos < d.End() {

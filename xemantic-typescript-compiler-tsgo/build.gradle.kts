@@ -78,6 +78,7 @@ tasks.withType<Test>().configureEach {
         "TSGO_ORACLE", "TSGO_ORACLE_LIMIT", "TSGO_ORACLE_SOURCE", "TSGO_ORACLE_REAL_HASH", "TSGO_ORACLE_DIAGS",
         "TSGO_DIAG", "TSGO_DIAG_LIMIT", "TSGO_DIAG_FILTER", "TSGO_DIAG_INJECT", "TSGO_SNIPPET",
         "TSGO_EMIT", "TSGO_EMIT_LIMIT", "TSGO_EMIT_FILTER", "TSGO_EMIT_INJECT", "TSGO_EMIT_THREADS",
+        "TSGO_API", "TSGO_API_LIMIT", "TSGO_API_FILTER", "TSGO_API_INJECT",
     )) {
         inputs.property(v, providers.environmentVariable(v).orElse(""))
     }

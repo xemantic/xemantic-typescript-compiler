@@ -67,3 +67,11 @@ class GoFieldPtr<T>(
 
 /** `new(T)` for a non-struct `T`. */
 fun <T> goNew(elem: GoElem<T>): GoPtr<T> = GoBox(elem.zeroValue())
+
+/**
+ * `&x` of an opaque type parameter T flowing into an interface (the lowering's real pointer [p]): when T is
+ * instantiated with a struct or an array ([elem] copies values), Go's `*T` is the reference itself
+ * (docs/goport-design.md § 3), so a `.(*S)` assertion on the interface sees the struct; for any other T
+ * it is the pointer. `api.unmarshallerFor[P]`'s `return &v` is the case ((TSGO.3-b)).
+ */
+fun <T> goOpaqueAddr(elem: GoElem<T>, p: GoPtr<T>): Any? = if (elem.copy != null) p.value else p

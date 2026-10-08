@@ -251,6 +251,9 @@ internal fun marshalValue(enc: Encoder, v: Any?): GoError? {
             return enc.writeToken(com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endObject)
         }
         is GoPtr<*> -> return marshalValue(enc, v.value)
+        // A named basic type (a value class: `[]api.NodeHandle`, `[]checker.ElementFlags`) marshals as its
+        // underlying value ((TSGO.3-b); one with a marshaler method was dispatched above).
+        is com.xemantic.typescript.tsgo.runtime.GoBasicValue -> return marshalValue(enc, v.goRaw)
         else -> return SemanticError("cannot marshal from Go " + goTypeName(v))
     }
 }
@@ -268,6 +271,7 @@ private fun isZeroValue(v: Any?): Boolean = when (v) {
     is Double -> v == 0.0 && 1.0 / v > 0
     is GoSlice<*> -> v.isNil
     is GoMap<*, *> -> v.isNil
+    is com.xemantic.typescript.tsgo.runtime.GoBasicValue -> isZeroValue(v.goRaw)
     else -> false
 }
 
@@ -352,6 +356,12 @@ private fun decodeShaped(dec: Decoder, cur: Any?): Tuple2<Any?, GoError?> {
         null -> return decodeAny(dec)
         is GoMap<*, *> -> return decodeMap(dec, cur)
         is GoSlice<*> -> return decodeSlice(dec, cur)
+        // A named basic type (a value class: an element of `[]api.NodeHandle`) decodes as its underlying
+        // value, rewrapped ((TSGO.3-b)).
+        is com.xemantic.typescript.tsgo.runtime.GoBasicValue -> {
+            val (v, e) = decodeShaped(dec, cur.goRaw)
+            return Tuple2(if (e == null && v != null) cur.goWithRaw(v) else cur, e)
+        }
         else -> {}
     }
     val (raw, e) = dec.readValueText()

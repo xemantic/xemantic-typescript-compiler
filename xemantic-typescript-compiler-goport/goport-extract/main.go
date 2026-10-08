@@ -59,6 +59,7 @@ var overlayFiles = map[string]string{
 	"internal/testutil/harnessutil/zz_xtsc_export.go": "../oracle-go/overlay/harnessutil/xtsc_export.go",
 	"internal/testrunner/zz_xtsc_port.go":             "overlay/testrunner/xtsc_port.go",
 	"internal/testutil/tsbaseline/zz_xtsc_export.go":  "../oracle-go/overlay/tsbaseline/xtsc_export.go",
+	"internal/api/zz_xtsc_api.go":                     "overlay/api/xtsc_api.go",
 }
 
 // overlaySrc holds the overlay files' contents by their virtual path (they exist on no disk).
@@ -94,6 +95,11 @@ func main() {
 	statsFile := flag.String("stats", "", "write the closure census (markdown) to this file")
 	check := flag.Bool("check", false, "report IR holes (expressions without a type, identifiers without an object); exit 1 if any")
 	flag.Parse()
+	// go/packages reports REAL paths, so an overlay keyed by a symlinked tsgo path (a worktree that
+	// links typescript-go-repo) would silently never apply: resolve the link first.
+	if r, err := filepath.EvalSymlinks(*tsgoDir); err == nil {
+		*tsgoDir = r
+	}
 
 	pkgs := flag.Args()
 	partial := map[string][]string{}

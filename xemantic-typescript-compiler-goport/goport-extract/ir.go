@@ -329,7 +329,10 @@ func (p *px) decl(d ast.Decl, gen bool) *O {
 		}
 		n.S("type", ft)
 		p.sigStack = append(p.sigStack, sig)
-		if d.Body != nil {
+		if d.Body != nil && stubbedBodies[d.Body] {
+			// partial.go partialStubs: signature only (the porter emits the stub).
+			n.S("body", p.stmt(&ast.BlockStmt{Lbrace: d.Body.Lbrace, Rbrace: d.Body.Rbrace})).S("stubbed", true)
+		} else if d.Body != nil {
 			n.S("body", p.stmt(d.Body))
 		} else {
 			n.S("external", true) // assembly / linkname: no Go body

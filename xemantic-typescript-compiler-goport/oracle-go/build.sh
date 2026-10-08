@@ -10,7 +10,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-tsgo="$root/typescript-go-repo"
+tsgo="$(cd "$root/typescript-go-repo" 2>/dev/null && pwd -P || echo "$root/typescript-go-repo")"  # real path: an overlay keyed by a symlink never applies
 go="$root/tools/go/bin/go"
 out="${1:-$root/build/goport/bin/tsgo-oracle}"
 [[ -x "$go" ]] || { echo "build.sh: no Go toolchain at $go (see docs/tsgo-port-plan.md D1)" >&2; exit 2; }
@@ -28,12 +28,14 @@ cat > "$work/overlay.json" <<JSON
   "$tsgo/cmd/xtsc-oracle/diags.go": "$here/diags.go",
   "$tsgo/cmd/xtsc-oracle/emit.go": "$here/emit.go",
   "$tsgo/internal/testutil/tsbaseline/zz_xtsc_export.go": "$here/overlay/tsbaseline/xtsc_export.go",
+  "$tsgo/cmd/xtsc-oracle/api.go": "$here/api.go",
+  "$tsgo/internal/api/zz_xtsc_api.go": "$here/../goport-extract/overlay/api/xtsc_api.go",
   "$tsgo/internal/testrunner/zz_xtsc_export.go": "$here/overlay/testrunner/xtsc_export.go",
   "$tsgo/internal/testutil/harnessutil/zz_xtsc_export.go": "$here/overlay/harnessutil/xtsc_export.go",
   "$tsgo/internal/repo/zz_xtsc_submodule.go": "$here/overlay/repo/xtsc_submodule.go"
 }}
 JSON
-for f in internal/testutil/tsbaseline/zz_xtsc_export.go internal/testrunner/zz_xtsc_export.go internal/testutil/harnessutil/zz_xtsc_export.go internal/repo/zz_xtsc_submodule.go; do
+for f in internal/testutil/tsbaseline/zz_xtsc_export.go internal/testrunner/zz_xtsc_export.go internal/testutil/harnessutil/zz_xtsc_export.go internal/repo/zz_xtsc_submodule.go internal/api/zz_xtsc_api.go; do
   [[ ! -e "$tsgo/$f" ]] || { echo "build.sh: $tsgo/$f exists on disk; the overlay must only ADD files" >&2; exit 2; }
 done
 cd "$tsgo"

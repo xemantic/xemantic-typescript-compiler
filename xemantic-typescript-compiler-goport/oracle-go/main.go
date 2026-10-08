@@ -17,6 +17,8 @@
 //	    a line-per-node rendering of an encoded AST, stable for `diff`.
 //	materialize / diags
 //	    the (TSGO.2) diagnostics oracle: see diags.go and docs/goport-diag-oracle.md.
+//	api -tsc <tsc> -out <file.jsonl> <tsconfig.json>
+//	    the (TSGO.3-b) type-oracle recording: see api.go and docs/goport-api.md.
 package main
 
 import (
@@ -59,6 +61,8 @@ func main() {
 		err = cmdDiags(os.Args[2:])
 	case "emit":
 		err = cmdEmit(os.Args[2:])
+	case "api":
+		err = cmdAPI(os.Args[2:])
 	default:
 		usage()
 	}
@@ -69,7 +73,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tsgo-oracle encode|crosscheck|dump|materialize|diags|emit ... (see docs/goport-oracle.md, docs/goport-diag-oracle.md, docs/goport-emit-oracle.md)")
+	fmt.Fprintln(os.Stderr, "usage: tsgo-oracle encode|crosscheck|dump|materialize|diags|emit|api ... (see docs/goport-oracle.md, docs/goport-diag-oracle.md, docs/goport-emit-oracle.md, docs/goport-api.md)")
 	os.Exit(2)
 }
 
@@ -284,9 +288,9 @@ func onlyFlagBytesDiffer(a, b []byte) bool {
 // ---------------------------------------------------------------- dump
 
 type decoded struct {
-	b                                       []byte
+	b                                             []byte
 	strOff, strData, extData, structData, nodeOff uint32
-	nodeCount                               int
+	nodeCount                                     int
 }
 
 func (d *decoded) u32(off uint32) uint32 {

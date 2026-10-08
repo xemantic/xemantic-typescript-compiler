@@ -43,7 +43,7 @@ class OrderedMap<K, V>(
     @kotlin.jvm.JvmField var blank0: com.xemantic.typescript.tsgo.collections.noCopy = com.xemantic.typescript.tsgo.collections.noCopy(),
     @kotlin.jvm.JvmField var keys: GoSlice<K> = goElem_K.nilSlice,
     @kotlin.jvm.JvmField var mp: GoMap<K, V> = GoMap.nil<K, V>(goElem_V),
-) : MarshalerTo, UnmarshalerFrom {
+) : UnmarshalerFrom, MarshalerTo {
 
     fun goCopy(): OrderedMap<K, V> = OrderedMap(goElem_K = goElem_K, goElem_V = goElem_V, blank0 = blank0, keys = keys, mp = mp)
 
@@ -101,11 +101,11 @@ class OrderedMap<K, V>(
         l0@ while (dec!!.peekKind().value != 125) {
             val key: GoBox<K> = GoBox(goElem_K.zeroValue())
             val value_1: GoBox<V> = GoBox(goElem_V.zeroValue())
-            val err_1: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, key, GoElem.ref<Options?>().nilSlice)
+            val err_1: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, goOpaqueAddr(goElem_K, key), GoElem.ref<Options?>().nilSlice)
             if (err_1 != null) {
                 return err_1
             }
-            val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, value_1, GoElem.ref<Options?>().nilSlice)
+            val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, goOpaqueAddr(goElem_V, value_1), GoElem.ref<Options?>().nilSlice)
             if (err_2 != null) {
                 return err_2
             }

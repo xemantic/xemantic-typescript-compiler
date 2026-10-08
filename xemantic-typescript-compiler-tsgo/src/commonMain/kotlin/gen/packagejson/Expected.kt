@@ -55,7 +55,7 @@ class Expected<T>(
             this.goSet(Expected<T>(goElem_T = goElem_T, `null` = true, actualJSONType = "null"))
             return null
         }
-        if (com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o0 = this; GoFieldPtr(o0, 3, { o0.value }, { o0.value = it }) }, GoElem.ref<Options?>().nilSlice) == null) {
+        if (com.xemantic.typescript.tsgo.json.unmarshal(data, goOpaqueAddr(goElem_T, run { val o0 = this; GoFieldPtr(o0, 3, { o0.value }, { o0.value = it }) }), GoElem.ref<Options?>().nilSlice) == null) {
             this.valid = true
         }
         when (data[0]) {
