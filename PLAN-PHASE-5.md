@@ -592,7 +592,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   the `Project` API (the type oracle).** DONE 2026-10-08: (TSGO.3-a) emit parity 13,127/13,127; (TSGO.3-b)
   the API session in process (`TsgoProject`), 594,007/594,007 requests equal to `tsc --api`. Remaining API
   surface (`internal/ls`-backed handlers) in the (TSGO.3-b) note.
-- [ ] **(TSGO.4) re-base externals, KIR and the LSP onto `-tsgo`; decide `-core`'s retirement on
+- [x] **(TSGO.4) DONE 2026-10-08 — (4-a)-(4-c) re-verified by the orchestrator (STATUS), (4-d) report `docs/core-sunset.md`; the deletion moved to (TSGO.8).** **(TSGO.4) re-base externals, KIR and the LSP onto `-tsgo`; decide `-core`'s retirement on
   measured parity.** Kotlin/Native measured separately (no escape analysis).
   DECOMPOSED 2026-10-08 (orchestrator):
   - (4-a) **language service**: port tsgo's `internal/ls` (+ what it reaches) through the porter, wire the 17
@@ -606,7 +606,23 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   - (4-d) **`-core` sunset — measured, then an OWNER decision**: a parity/cost report (pins, 8-profile grid,
     library probes, wall/heap per engine) and a recommendation; deleting `-core` is not done autonomously.
     REPORT DONE 2026-10-08: `docs/core-sunset.md` (session note (TSGO.4-d)).
-  - (4-e) BLOCKED-PENDING-USER: **delete `-core`** — proposal: retire it, but stage the deletion behind the measurements
+
+- [ ] **(TSGO.5) a tsgo CLI on the port (`docs/core-sunset.md` § 6 stage 1).** Port `internal/execute` (+ the `tsc`
+  command line; `--build`/incremental may follow as a sub-step) through the porter and expose a `-cli`-shaped entry on
+  `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
+  `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.
+
+- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** Add a `linuxX64` target to
+  `-tsgo` (Kotlin/Native was deferred to after (TSGO.2) by `docs/tsgo-port-plan.md`), run its suite natively, and build the
+  GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
+  under the memory protocol in CLAUDE.md.
+
+- [ ] **(TSGO.7) move the remaining consumers onto the port (§ 6 stage 3).** `-daemon` and `scripts/xtsc` onto the (TSGO.5)
+  CLI; the bench series (`bench.yml`, `bench-3way.sh`, `jvm-bench.yml`) onto the port; KIR's lowering onto tsgo's AST (the
+  `KirFileLowering` rewrite). Each consumer its own sub-step with its existing gate.
+
+- [ ] **(TSGO.8) delete `-core` (§ 6 stages 4-5).**
+  BLOCKED-PENDING-USER: **delete `-core`** — proposal: retire it, but stage the deletion behind the measurements
     `docs/core-sunset.md` § 6 names: (1) port tsgo's CLI (`internal/execute`) and gate it on a CLI-output differential against
     the tsgo binary; (2) give `-tsgo` a `linuxX64` target and build the GraalVM image of that CLI — the one unmeasured blocker,
     and the go/no-go of the retirement; (3) move `-daemon`, `scripts/xtsc`, the bench series and KIR's lowering onto the port,
@@ -615,7 +631,6 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
     job and corpus generator. The owner decides: retire at all; `-project` compatibility; which artifact carries the
     `xemantic-typescript-compiler` coordinates; whether a JVM-only interval is acceptable before Kotlin/Native is measured;
     the memory budget (~1.6x `-core`'s heap for ~2.5x its speed and exact tsgo parity).
-  Kotlin/Native for `-tsgo` is a separate later measurement.
 
 - [x] **(CHK.134) CLOSED 2026-09-12 ((P18.81) note: (2) `bind` — `Checker.bindType`, the two real overloads built per call, `OmitThisParameter` as the receiver itself when its `this` is absent/`unknown`/`any`; residues: a union receiver, an optional-chain receiver, a spread partial, the bare `f.bind` display, a class value displayed without `typeof`). (1) `call`/`apply` LANDED 2026-09-12 ((P18.80) note) — `functionObjectMemberType` /
   `bindCallApplyType` BUILD the member from the receiver's last signature (no inference: each of `T`/`A`/`R` has one
