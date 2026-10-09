@@ -108,6 +108,12 @@ func main() {
 	if r, err := filepath.EvalSymlinks(*tsgoDir); err == nil {
 		*tsgoDir = r
 	}
+	// The overlay is keyed by ABSOLUTE path (go/packages reports absolute file names), so a relative
+	// --tsgo (`--tsgo ../../typescript-go-repo`, the recipe in docs/goport-lowering.md) silently
+	// applied no overlay and failed later with "partial package … has no root …".
+	if a, err := filepath.Abs(*tsgoDir); err == nil {
+		*tsgoDir = a
+	}
 
 	pkgs := flag.Args()
 	partial := map[string][]string{}
