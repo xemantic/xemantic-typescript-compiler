@@ -673,13 +673,13 @@ class UnionOfUnionKey(
     @kotlin.jvm.JvmField var a: CacheHashKey = CacheHashKey(),
 ) {
 
-    fun goCopy(): UnionOfUnionKey = UnionOfUnionKey(id1 = id1, id2 = id2, r = r, a = a.goCopy())
+    fun goCopy(): UnionOfUnionKey = UnionOfUnionKey(id1 = id1, id2 = id2, r = r, a = a)
 
     fun goSet(o: UnionOfUnionKey) {
         id1 = o.id1
         id2 = o.id2
         r = o.r
-        a = o.a.goCopy()
+        a = o.a
     }
 
     fun goEquals(o: UnionOfUnionKey): Boolean = id1 == o.id1 && id2 == o.id2 && r == o.r && a.goEquals(o.a)
@@ -701,11 +701,11 @@ class CachedSignatureKey(
     @kotlin.jvm.JvmField var key: CacheHashKey = CacheHashKey(),
 ) {
 
-    fun goCopy(): CachedSignatureKey = CachedSignatureKey(sig = sig, key = key.goCopy())
+    fun goCopy(): CachedSignatureKey = CachedSignatureKey(sig = sig, key = key)
 
     fun goSet(o: CachedSignatureKey) {
         sig = o.sig
-        key = o.key.goCopy()
+        key = o.key
     }
 
     fun goEquals(o: CachedSignatureKey): Boolean = sig === o.sig && key.goEquals(o.key)
@@ -969,11 +969,11 @@ class FlowLoopKey(
     @kotlin.jvm.JvmField var refKey: CacheHashKey = CacheHashKey(),
 ) {
 
-    fun goCopy(): FlowLoopKey = FlowLoopKey(flowNode = flowNode, refKey = refKey.goCopy())
+    fun goCopy(): FlowLoopKey = FlowLoopKey(flowNode = flowNode, refKey = refKey)
 
     fun goSet(o: FlowLoopKey) {
         flowNode = o.flowNode
-        refKey = o.refKey.goCopy()
+        refKey = o.refKey
     }
 
     fun goEquals(o: FlowLoopKey): Boolean = flowNode === o.flowNode && refKey.goEquals(o.refKey)

@@ -236,8 +236,14 @@ fun <T : Comparable<T>> isSorted(x: GoSlice<T>): Boolean {
 fun <T : Comparable<T>> binarySearch(x: GoSlice<T>, target: T): Tuple2<Int, Boolean> =
     binarySearchFunc(x, target) { a, b -> cmpCompare(a, b) }
 
-/** `slices.BinarySearchFunc(x, target, cmp)` → (index, found). */
-fun <E, T> binarySearchFunc(x: GoSlice<E>, target: T, cmp: (E, T) -> Int): Tuple2<Int, Boolean> {
+/**
+ * `slices.BinarySearchFunc(x, target, cmp)` → (index, found). `inline`: every call site gets its own
+ * copy of the loop, so its comparator call is monomorphic — C2 inlines it, and neither the comparator's
+ * boxed `Int` nor the result tuple is allocated. Through one shared method the comparator site was
+ * megamorphic (the checker's `containsType`/`addTypeToUnion` and the AST's `indexOfNode` all search
+ * through it) and boxed every comparison result (docs/goport-perf.md § 7).
+ */
+inline fun <E, T> binarySearchFunc(x: GoSlice<E>, target: T, cmp: (E, T) -> Int): Tuple2<Int, Boolean> {
     val n = x.len
     var i = 0
     var j = n

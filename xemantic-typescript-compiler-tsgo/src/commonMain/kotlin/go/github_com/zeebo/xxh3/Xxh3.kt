@@ -44,8 +44,10 @@ import com.xemantic.typescript.tsgo.runtime.goBytesToString
 /**
  * `xxh3.Uint128`: the value is `hi << 64 | lo`.
  */
-class Uint128(var hi: ULong = 0uL, var lo: ULong = 0uL) {
-    fun goCopy(): Uint128 = Uint128(hi, lo)
+class Uint128(val hi: ULong = 0uL, val lo: ULong = 0uL) {
+    // IMMUTABLE, so no `goCopy()`: tsgo never writes a field of a Uint128 (the `val`s make the compiler
+    // check that), sharing one is unobservable, and without the member the porter emits no copy at
+    // all — it was ~4% of a check's allocation (docs/goport-perf.md § 7).
 
     /** Go struct `==`. */
     fun goEquals(other: Uint128): Boolean = hi == other.hi && lo == other.lo

@@ -3024,7 +3024,7 @@ fun Checker?.instantiateTypeWithAlias(t: Type?, m: TypeMapper?, alias: TypeAlias
     b.writeAlias(alias)
     val key: CacheHashKey = b.hash()
     val cache: GoMap<CacheHashKey, Type?> = this!!.activeTypeMappersCaches[com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, index != -1, index, this!!.activeTypeMappersCaches.len - 1)]
-    val t0 = cache.probe(key.goCopy())
+    val t0 = cache.probe(key)
     val cachedType: Type? = goProbeValue<Type?>(t0) { null }
     val ok: Boolean = t0 !== GoMapAbsent
     if (ok) {
@@ -3037,7 +3037,7 @@ fun Checker?.instantiateTypeWithAlias(t: Type?, m: TypeMapper?, alias: TypeAlias
     if (index == -1) {
         this.popActiveMapper()
     } else {
-        cache[key.goCopy()] = result
+        cache[key] = result
     }
     this!!.instantiationDepth = this!!.instantiationDepth - 1u
     return result
@@ -3275,7 +3275,7 @@ fun Checker?.getObjectTypeInstantiation(t: Type?, m: TypeMapper?, alias: TypeAli
         data!!.instantiations = GoMap.make<CacheHashKey, Type?>(GoElem.ref<Type?>())
         data!!.instantiations[getTypeInstantiationKey(typeParameters, target!!.alias, false)] = target
     }
-    var result: Type? = data!!.instantiations[key.goCopy()]
+    var result: Type? = data!!.instantiations[key]
     if (result == null) {
         var newMapper: TypeMapper? = newTypeMapper(typeParameters, typeArguments)
         if (target!!.objectFlags.value and 33554432u != 0u && m != null) {
@@ -3292,7 +3292,7 @@ fun Checker?.getObjectTypeInstantiation(t: Type?, m: TypeMapper?, alias: TypeAli
                 result = this.instantiateAnonymousType(target, newMapper, newAlias)
             }
         }
-        data!!.instantiations[key.goCopy()] = result
+        data!!.instantiations[key] = result
         if (result!!.flags.value and 403963917u != 0u && result!!.objectFlags.value and 524288u == 0u) {
             val resultCouldContainObjectFlags: Boolean = com.xemantic.typescript.tsgo.core.some<Type?>(GoElem.ref<Type?>(), typeArguments, (this!!.couldContainTypeVariables)!!)
             if (result!!.objectFlags.value and 524288u == 0u) {
@@ -3401,7 +3401,7 @@ fun Checker?.getConditionalTypeInstantiation(t: Type?, mapper: TypeMapper?, forC
     if (root!!.outerTypeParameters.len != 0) {
         val typeArguments: GoSlice<Type?> = com.xemantic.typescript.tsgo.core.map<Type?, Type?>(GoElem.ref<Type?>(), GoElem.ref<Type?>(), root!!.outerTypeParameters, (run { val r0 = mapper!!; fun(p0: Type?): Type? = r0.map(p0) })!!)
         val key: CacheHashKey = getConditionalTypeKey(typeArguments, alias, forConstraint)
-        var result: Type? = root!!.instantiations[key.goCopy()]
+        var result: Type? = root!!.instantiations[key]
         if (result == null) {
             val newMapper: TypeMapper? = newTypeMapper(root!!.outerTypeParameters, typeArguments)
             val checkType: Type? = root!!.checkType
@@ -3416,7 +3416,7 @@ fun Checker?.getConditionalTypeInstantiation(t: Type?, mapper: TypeMapper?, forC
             } else {
                 result = this.getConditionalType(root, newMapper, forConstraint, alias)
             }
-            root!!.instantiations[key.goCopy()] = result
+            root!!.instantiations[key] = result
         }
         return result
     }

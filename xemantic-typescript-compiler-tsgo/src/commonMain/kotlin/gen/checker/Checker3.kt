@@ -2758,7 +2758,7 @@ fun Checker?.getOptionalCallSignature(signature: Signature?, callChainFlags: Sig
     if (signature!!.flags.value and 48u == callChainFlags.value) {
         return signature
     }
-    val key: CachedSignatureKey = CachedSignatureKey(sig = signature, key = com.xemantic.typescript.tsgo.core.ifElse<CacheHashKey>(GoElem<CacheHashKey>({ CacheHashKey() }, { it.goCopy() }), callChainFlags.value == 16u, signatureKeyInner.goCopy(), signatureKeyOuter.goCopy()))
+    val key: CachedSignatureKey = CachedSignatureKey(sig = signature, key = com.xemantic.typescript.tsgo.core.ifElse<CacheHashKey>(GoElem<CacheHashKey>({ CacheHashKey() }), callChainFlags.value == 16u, signatureKeyInner, signatureKeyOuter))
     val cached: Signature? = this!!.cachedSignatures[key.goCopy()]
     if (cached != null) {
         return cached

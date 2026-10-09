@@ -233,11 +233,11 @@ class DuplicateSourceFile(
     @get:kotlin.jvm.JvmName("goGet_scriptKind") @set:kotlin.jvm.JvmName("goSet_scriptKind") var scriptKind: ScriptKind = ScriptKind(0),
 ) {
 
-    fun goCopy(): DuplicateSourceFile = DuplicateSourceFile(parseOptions = parseOptions.goCopy(), hash = hash.goCopy(), scriptKind = scriptKind)
+    fun goCopy(): DuplicateSourceFile = DuplicateSourceFile(parseOptions = parseOptions.goCopy(), hash = hash, scriptKind = scriptKind)
 
     fun goSet(o: DuplicateSourceFile) {
         parseOptions = o.parseOptions.goCopy()
-        hash = o.hash.goCopy()
+        hash = o.hash
         scriptKind = o.scriptKind
     }
 

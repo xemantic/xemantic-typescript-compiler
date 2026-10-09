@@ -57,6 +57,15 @@ class GoElem<T>(
     /** The shared nil slice of this element kind (eager: a `lazy` read was ~1.6% of a check, docs/goport-perf.md § 6). */
     val nilSlice: GoSlice<T> = GoSlice(EMPTY_ARRAY, 0, 0, 0, this, true)
 
+    /**
+     * The shared nil map of this value kind, made on first use. A nil map is immutable (reads answer the
+     * zero value, writes panic) and Go compares maps only to `nil`, so one object serves every nil map of
+     * this kind: `GoMap.nil` used to allocate one per call — per `ast.Node.Locals()` read of a container
+     * without locals, per `Symbol` (docs/goport-perf.md § 7). A racing first use makes two, both correct.
+     */
+    @kotlin.concurrent.Volatile
+    internal var nilMapCache: GoMap<*, T>? = null
+
     companion object {
         internal val EMPTY_ARRAY: Array<Any?> = arrayOfNulls(0)
 

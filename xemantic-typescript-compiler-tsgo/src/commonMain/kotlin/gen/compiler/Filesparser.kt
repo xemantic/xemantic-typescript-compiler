@@ -464,7 +464,7 @@ fun com.xemantic.typescript.tsgo.compiler.filesParser?.getProcessedFiles(loader:
                         recordedDuplicates[data] = dups
                     }
                     if (dups.addIfAbsent(task!!.normalizedFilePath)) {
-                        duplicateSourceFiles = duplicateSourceFiles.append1(DuplicateSourceFile(parseOptions = task!!.file.parseOptions(), hash = task!!.file!!.hash.goCopy(), scriptKind = task!!.file!!.scriptKind))
+                        duplicateSourceFiles = duplicateSourceFiles.append1(DuplicateSourceFile(parseOptions = task!!.file.parseOptions(), hash = task!!.file!!.hash, scriptKind = task!!.file!!.scriptKind))
                     }
                 }
                 if (!loader!!.opts.config.compilerOptions()!!.forceConsistentCasingInFileNames.isFalse()) {
@@ -506,7 +506,7 @@ fun com.xemantic.typescript.tsgo.compiler.filesParser?.getProcessedFiles(loader:
                 val exists: Boolean = t9 !== GoMapAbsent
                 if (exists) {
                     if (file != null) {
-                        duplicateSourceFiles = duplicateSourceFiles.append1(DuplicateSourceFile(parseOptions = file.parseOptions(), hash = file!!.hash.goCopy(), scriptKind = file!!.scriptKind))
+                        duplicateSourceFiles = duplicateSourceFiles.append1(DuplicateSourceFile(parseOptions = file.parseOptions(), hash = file!!.hash, scriptKind = file!!.scriptKind))
                     }
                     redirectTargetsMap[packageIdFile!!.path()] = redirectTargetsMap[packageIdFile!!.path()].append1(task!!.normalizedFilePath)
                     if (redirectFilesByPath.isNil) {

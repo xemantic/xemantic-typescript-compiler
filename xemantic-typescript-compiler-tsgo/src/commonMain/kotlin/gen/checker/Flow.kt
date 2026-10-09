@@ -153,14 +153,14 @@ class FlowState(
     @kotlin.jvm.JvmField var next: FlowState? = null,
 ) {
 
-    fun goCopy(): FlowState = FlowState(reference = reference, declaredType = declaredType, initialType = initialType, flowContainer = flowContainer, refKey = refKey.goCopy(), depth = depth, sharedFlowStart = sharedFlowStart, reduceLabels = reduceLabels, next = next)
+    fun goCopy(): FlowState = FlowState(reference = reference, declaredType = declaredType, initialType = initialType, flowContainer = flowContainer, refKey = refKey, depth = depth, sharedFlowStart = sharedFlowStart, reduceLabels = reduceLabels, next = next)
 
     fun goSet(o: FlowState) {
         reference = o.reference
         declaredType = o.declaredType
         initialType = o.initialType
         flowContainer = o.flowContainer
-        refKey = o.refKey.goCopy()
+        refKey = o.refKey
         depth = o.depth
         sharedFlowStart = o.sharedFlowStart
         reduceLabels = o.reduceLabels
@@ -1464,7 +1464,7 @@ fun Checker?.getTypeAtFlowLoopLabel(f: FlowState?, flow: FlowNode?): FlowType {
     if (f!!.refKey.goEquals(nonDottedNameCacheKey)) {
         return FlowType(t = f!!.declaredType)
     }
-    val key: FlowLoopKey = FlowLoopKey(flowNode = flow, refKey = f!!.refKey.goCopy())
+    val key: FlowLoopKey = FlowLoopKey(flowNode = flow, refKey = f!!.refKey)
     val cached: Type? = this!!.flowLoopCache[key.goCopy()]
     if (cached != null) {
         return FlowType(t = cached)
@@ -1787,7 +1787,7 @@ fun Checker?.getFlowReferenceKey(f: FlowState?): CacheHashKey {
     if (this.writeFlowCacheKey(b, f!!.reference, f!!.declaredType, f!!.initialType, f!!.flowContainer)) {
         return b.hash()
     }
-    return nonDottedNameCacheKey.goCopy()
+    return nonDottedNameCacheKey
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.writeFlowCacheKey 76331012

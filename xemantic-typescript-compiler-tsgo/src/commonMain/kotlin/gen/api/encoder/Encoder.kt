@@ -156,7 +156,7 @@ const val ProtocolVersion: Int = 5
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.SourceFileHash f40d2b95
 fun sourceFileHash(sourceFile: SourceFile?): String {
-    val h: Uint128 = sourceFile!!.hash.goCopy()
+    val h: Uint128 = sourceFile!!.hash
     return com.xemantic.typescript.tsgo.go.fmt.sprintf("%016x%016x", h.hi, h.lo)
 }
 
@@ -436,7 +436,7 @@ fun encodeTree(rootNode: Node?, sourceFile: SourceFile?): Tuple3<GoSlice<Int>, N
     var hash: Uint128 = Uint128()
     var parseOpts: UInt = 0u
     if (rootNode!!.kind.value == 307) {
-        hash = sourceFile!!.hash.goCopy()
+        hash = sourceFile!!.hash
         parseOpts = encodeParseOptions(sourceFile.parseOptions().externalModuleIndicatorOptions.goCopy())
         val sf_1: SourceFile? = rootNode.asSourceFile()
         val importsOffset: UInt = encodeNodeIndexArray(sf_1!!.imports(), nodeIndexMap, structuredData)

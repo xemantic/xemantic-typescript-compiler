@@ -1316,11 +1316,11 @@ fun Checker?.getTypeFromTypeAliasReference(node: Node?, symbol: Symbol?): Type? 
     if (symbol!!.checkFlags.value and 1048576u != 0u) {
         val alias: TypeAlias? = TypeAlias(symbol = symbol, typeArguments = com.xemantic.typescript.tsgo.core.map<Node?, Type?>(GoElem.ref<Node?>(), GoElem.ref<Type?>(), typeArguments, (run { val r0 = this; fun(p0: Node?): Type? = r0.getTypeFromTypeNodeImpl(p0) })!!))
         val key: CacheHashKey = getAliasKey(alias)
-        var errorType: Type? = this!!.errorTypes[key.goCopy()]
+        var errorType: Type? = this!!.errorTypes[key]
         if (errorType == null) {
             errorType = this.newIntrinsicType(TypeFlagsAny, "error")
             errorType!!.alias = alias
-            this!!.errorTypes[key.goCopy()] = errorType
+            this!!.errorTypes[key] = errorType
         }
         return errorType
     }
@@ -1385,11 +1385,11 @@ fun Checker?.getTypeAliasInstantiation(symbol: Symbol?, typeArguments: GoSlice<T
     val links: TypeAliasLinks? = this!!.typeAliasLinks.get(symbol)
     val typeParameters: GoSlice<Type?> = links!!.typeParameters
     val key: CacheHashKey = getTypeAliasInstantiationKey(typeArguments, alias)
-    var instantiation: Type? = links!!.instantiations[key.goCopy()]
+    var instantiation: Type? = links!!.instantiations[key]
     if (instantiation == null) {
         val mapper: TypeMapper? = newTypeMapper(typeParameters, this.fillMissingTypeArgumentsImpl(typeArguments, typeParameters, this.getMinTypeArgumentCountImpl(typeParameters), com.xemantic.typescript.tsgo.ast.isInJSFile(symbol!!.valueDeclaration)))
         instantiation = this.instantiateTypeWithAlias(t, mapper, alias)
-        links!!.instantiations[key.goCopy()] = instantiation
+        links!!.instantiations[key] = instantiation
     }
     return instantiation
 }
@@ -2518,10 +2518,10 @@ fun Checker?.getTupleTargetType(elementInfos: GoSlice<TupleElementInfo>, readonl
         return this!!.globalArrayType
     }
     val key: CacheHashKey = getTupleKey(elementInfos, readonly)
-    var t: Type? = this!!.tupleTypes[key.goCopy()]
+    var t: Type? = this!!.tupleTypes[key]
     if (t == null) {
         t = this.createTupleTargetType(elementInfos, readonly)
-        this!!.tupleTypes[key.goCopy()] = t
+        this!!.tupleTypes[key] = t
     }
     return t
 }
@@ -2892,7 +2892,7 @@ fun Checker?.createTypeReference(target: Type?, typeArguments: GoSlice<Type?>): 
 fun Checker?.createTypeReferenceEx(target: Type?, typeArguments: GoSlice<Type?>, objectFlags: ObjectFlags): Type? {
     val id: CacheHashKey = getTypeListKey(typeArguments)
     val intf: InterfaceType? = target.asInterfaceType()
-    val t0 = intf!!.typeReference.objectType.instantiations.probe(id.goCopy())
+    val t0 = intf!!.typeReference.objectType.instantiations.probe(id)
     val t: Type? = goProbeValue<Type?>(t0) { null }
     val ok: Boolean = t0 !== GoMapAbsent
     if (ok) {
@@ -2902,7 +2902,7 @@ fun Checker?.createTypeReferenceEx(target: Type?, typeArguments: GoSlice<Type?>,
     val d: TypeReference? = t_1.asTypeReference()
     d!!.objectType.target = target
     d!!.resolvedTypeArguments = typeArguments
-    intf!!.typeReference.objectType.instantiations[id.goCopy()] = t_1
+    intf!!.typeReference.objectType.instantiations[id] = t_1
     return t_1
 }
 
@@ -3605,7 +3605,7 @@ fun Checker?.getUnionTypeFromSortedList(types: GoSlice<Type?>, precomputedObject
         return types[0]
     }
     val key: CacheHashKey = getUnionKey(types, origin, alias)
-    var t: Type? = this!!.unionTypes[key.goCopy()]
+    var t: Type? = this!!.unionTypes[key]
     if (t == null) {
         t = this.newUnionType(ObjectFlags(precomputedObjectFlags.value or this.getPropagatingFlagsOfTypes(types, TypeFlagsNullable).value), types)
         t.asUnionType()!!.origin = origin
@@ -3613,7 +3613,7 @@ fun Checker?.getUnionTypeFromSortedList(types: GoSlice<Type?>, precomputedObject
         if (types.len == 2 && types[0]!!.flags.value and 8192u != 0u && types[1]!!.flags.value and 8192u != 0u) {
             t!!.flags = TypeFlags(t!!.flags.value or 256u)
         }
-        this!!.unionTypes[key.goCopy()] = t
+        this!!.unionTypes[key] = t
     }
     return t
 }

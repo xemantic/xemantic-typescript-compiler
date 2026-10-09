@@ -3686,7 +3686,7 @@ fun Checker?.getErasedSignature(signature: Signature?): Signature? {
     if (signature!!.typeParameters.len == 0) {
         return signature
     }
-    val key: CachedSignatureKey = CachedSignatureKey(sig = signature, key = signatureKeyErased.goCopy())
+    val key: CachedSignatureKey = CachedSignatureKey(sig = signature, key = signatureKeyErased)
     var erased: Signature? = this!!.cachedSignatures[key.goCopy()]
     if (erased == null) {
         erased = this.instantiateSignatureEx(signature, newArrayToSingleTypeMapper(signature!!.typeParameters, this!!.anyType), true)
@@ -3700,7 +3700,7 @@ fun Checker?.getCanonicalSignature(signature: Signature?): Signature? {
     if (signature!!.typeParameters.len == 0) {
         return signature
     }
-    val key: CachedSignatureKey = CachedSignatureKey(sig = signature, key = signatureKeyCanonical.goCopy())
+    val key: CachedSignatureKey = CachedSignatureKey(sig = signature, key = signatureKeyCanonical)
     var canonical: Signature? = this!!.cachedSignatures[key.goCopy()]
     if (canonical == null) {
         canonical = this.createCanonicalSignature(signature)
@@ -3726,7 +3726,7 @@ fun Checker?.getBaseSignature(signature: Signature?): Signature? {
     if (typeParameters.len == 0) {
         return signature
     }
-    val key: CachedSignatureKey = CachedSignatureKey(sig = signature, key = signatureKeyBase.goCopy())
+    val key: CachedSignatureKey = CachedSignatureKey(sig = signature, key = signatureKeyBase)
     val cached: Signature? = this!!.cachedSignatures[key.goCopy()]
     if (cached != null) {
         return cached

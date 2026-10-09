@@ -322,7 +322,7 @@ class Relation(
 
 // go: github.com/microsoft/typescript-go/internal/checker.Relation.get 79ba3aac
 fun Relation?.get(key: CacheHashKey): RelationComparisonResult {
-    return this!!.results[key.goCopy()]
+    return this!!.results[key]
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Relation.set db5a84fd
@@ -330,7 +330,7 @@ fun Relation?.set(key: CacheHashKey, result: RelationComparisonResult) {
     if (this!!.results.isNil) {
         this!!.results = GoMap.make<CacheHashKey, RelationComparisonResult>(RelationComparisonResult.ELEM)
     }
-    this!!.results[key.goCopy()] = result
+    this!!.results[key] = result
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Relation.size f1ff629e
@@ -428,7 +428,7 @@ fun Checker?.isTypeRelatedTo(source_0: Type?, target_1: Type?, relation: Relatio
     if (source!!.flags.value and 1048576u != 0u && target!!.flags.value and 1048576u != 0u) {
         val t2 = getRelationKey(source, target, IntersectionStateNone, relation === this!!.identityRelation, false)
         val id: CacheHashKey = t2.first
-        val related: RelationComparisonResult = relation.get(id.goCopy())
+        val related: RelationComparisonResult = relation.get(id)
         if (related.value != 0u) {
             return related.value and 1u != 0u
         }
@@ -600,7 +600,7 @@ fun Checker?.checkTypeRelatedToEx(source: Type?, target: Type?, relation: Relati
     if (r!!.overflow) {
         val t1 = getRelationKey(source, target, IntersectionStateNone, relation === this!!.identityRelation, false)
         val id: CacheHashKey = t1.first
-        relation.set(id.goCopy(), RelationComparisonResult(2u or com.xemantic.typescript.tsgo.core.ifElse<RelationComparisonResult>(RelationComparisonResult.ELEM, r!!.relationCount <= 0, RelationComparisonResultComplexityOverflow, RelationComparisonResultStackDepthOverflow).value))
+        relation.set(id, RelationComparisonResult(2u or com.xemantic.typescript.tsgo.core.ifElse<RelationComparisonResult>(RelationComparisonResult.ELEM, r!!.relationCount <= 0, RelationComparisonResultComplexityOverflow, RelationComparisonResultStackDepthOverflow).value))
         val tr: Tracer? = this!!.tracer
         if (tr != null) {
             tr.instant(Phase("checkTypes"), "checkTypeRelatedTo_DepthLimit", GoMap.make<String, Any?>(GoElem.ref<Any?>()).also { it["sourceId"] = source!!.id; it["targetId"] = target!!.id; it["depth"] = r!!.sourceStack.len; it["targetDepth"] = r!!.targetStack.len })
@@ -2848,8 +2848,8 @@ class Relater(
     @kotlin.jvm.JvmField var errorNode: Node? = null,
     @kotlin.jvm.JvmField var errorChain: ErrorChain? = null,
     @kotlin.jvm.JvmField var relatedInfo: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
-    @kotlin.jvm.JvmField var maybeKeys: GoSlice<CacheHashKey> = GoElem<CacheHashKey>({ CacheHashKey() }, { it.goCopy() }).nilSlice,
-    @kotlin.jvm.JvmField var maybeKeysSet: com.xemantic.typescript.tsgo.collections.Set<CacheHashKey> = com.xemantic.typescript.tsgo.collections.Set<CacheHashKey>(goElem_T = GoElem<CacheHashKey>({ CacheHashKey() }, { it.goCopy() })),
+    @kotlin.jvm.JvmField var maybeKeys: GoSlice<CacheHashKey> = GoElem<CacheHashKey>({ CacheHashKey() }).nilSlice,
+    @kotlin.jvm.JvmField var maybeKeysSet: com.xemantic.typescript.tsgo.collections.Set<CacheHashKey> = com.xemantic.typescript.tsgo.collections.Set<CacheHashKey>(goElem_T = GoElem<CacheHashKey>({ CacheHashKey() })),
     @kotlin.jvm.JvmField var sourceStack: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice,
     @kotlin.jvm.JvmField var targetStack: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice,
     @kotlin.jvm.JvmField var maybeCount: Int = 0,
@@ -3359,7 +3359,7 @@ fun Relater?.recursiveTypeRelatedTo(source: Type?, target: Type?, reportErrors: 
         val t1 = getRelationKey(source, target, intersectionState, this!!.relation === this!!.c!!.identityRelation, false)
         val id: CacheHashKey = t1.first
         val constrained: Boolean = t1.second
-        val entry: RelationComparisonResult = this!!.relation.get(id.goCopy())
+        val entry: RelationComparisonResult = this!!.relation.get(id)
         if (entry.value != 0u) {
             if (reportErrors && entry.value and 2u != 0u && entry.value and 96u == 0u) {
             } else {
@@ -3378,13 +3378,13 @@ fun Relater?.recursiveTypeRelatedTo(source: Type?, target: Type?, reportErrors: 
             this!!.overflow = true
             return TernaryFalse
         }
-        if (this!!.maybeKeysSet.has(id.goCopy())) {
+        if (this!!.maybeKeysSet.has(id)) {
             return TernaryMaybe
         }
         if (constrained) {
             val t2 = getRelationKey(source, target, intersectionState, this!!.relation === this!!.c!!.identityRelation, true)
             val broadestEquivalentId: CacheHashKey = t2.first
-            if (this!!.maybeKeysSet.has(broadestEquivalentId.goCopy())) {
+            if (this!!.maybeKeysSet.has(broadestEquivalentId)) {
                 return TernaryMaybe
             }
         }
@@ -3393,8 +3393,8 @@ fun Relater?.recursiveTypeRelatedTo(source: Type?, target: Type?, reportErrors: 
             return TernaryFalse
         }
         val maybeStart: Int = this!!.maybeKeys.len
-        this!!.maybeKeys = this!!.maybeKeys.append1(id.goCopy())
-        this!!.maybeKeysSet.add(id.goCopy())
+        this!!.maybeKeys = this!!.maybeKeys.append1(id)
+        this!!.maybeKeysSet.add(id)
         val saveExpandingFlags: ExpandingFlags = this!!.expandingFlags
         if (recursionFlags.value and 1u != 0u) {
             this!!.sourceStack = this!!.sourceStack.append1(source)
@@ -3443,7 +3443,7 @@ fun Relater?.recursiveTypeRelatedTo(source: Type?, target: Type?, reportErrors: 
                 }
             }
         } else {
-            this!!.relation.set(id.goCopy(), RelationComparisonResult(2u or propagatingVarianceFlags.value))
+            this!!.relation.set(id, RelationComparisonResult(2u or propagatingVarianceFlags.value))
             this!!.relationCount = this!!.relationCount - 1
             this.resetMaybeStack(maybeStart, propagatingVarianceFlags, false)
         }
@@ -3455,9 +3455,9 @@ fun Relater?.recursiveTypeRelatedTo(source: Type?, target: Type?, reportErrors: 
 fun Relater?.resetMaybeStack(maybeStart: Int, propagatingVarianceFlags: RelationComparisonResult, markAllAsSucceeded: Boolean) {
     var i: Int = maybeStart
     l0@ while (i < this!!.maybeKeys.len) {
-        this!!.maybeKeysSet.delete(this!!.maybeKeys[i].goCopy())
+        this!!.maybeKeysSet.delete(this!!.maybeKeys[i])
         if (markAllAsSucceeded) {
-            this!!.relation.set(this!!.maybeKeys[i].goCopy(), RelationComparisonResult(1u or propagatingVarianceFlags.value))
+            this!!.relation.set(this!!.maybeKeys[i], RelationComparisonResult(1u or propagatingVarianceFlags.value))
             this!!.relationCount = this!!.relationCount - 1
         }
         i++

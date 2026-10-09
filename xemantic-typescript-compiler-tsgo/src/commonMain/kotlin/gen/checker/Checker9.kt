@@ -296,7 +296,7 @@ fun Checker?.removeSubtypes(types_0: GoSlice<Type?>, hasObjectTypes: Boolean): G
         return types
     }
     val key: CacheHashKey = getTypeListKey(types)
-    val cached: GoSlice<Type?> = this!!.subtypeReductionCache[key.goCopy()]
+    val cached: GoSlice<Type?> = this!!.subtypeReductionCache[key]
     if (!cached.isNil) {
         return cached
     }
@@ -364,7 +364,7 @@ fun Checker?.removeSubtypes(types_0: GoSlice<Type?>, hasObjectTypes: Boolean): G
             }
         }
     }
-    this!!.subtypeReductionCache[key.goCopy()] = types
+    this!!.subtypeReductionCache[key] = types
     return types
 }
 
@@ -496,7 +496,7 @@ fun Checker?.getIntersectionTypeEx(types: GoSlice<Type?>, flags: IntersectionFla
         }
     }
     val key: CacheHashKey = getIntersectionKey(typeSet, flags, alias)
-    var result: Type? = this!!.intersectionTypes[key.goCopy()]
+    var result: Type? = this!!.intersectionTypes[key]
     if (result == null) {
         if (includes.value and 134217728u != 0u) {
             var reduced: Boolean = false
@@ -539,7 +539,7 @@ fun Checker?.getIntersectionTypeEx(types: GoSlice<Type?>, flags: IntersectionFla
             result = this.newIntersectionType(ObjectFlags(objectFlags.value or this.getPropagatingFlagsOfTypes(types, TypeFlagsNullable).value), typeSet)
             result!!.alias = alias
         }
-        this!!.intersectionTypes[key.goCopy()] = result
+        this!!.intersectionTypes[key] = result
     }
     return result
 }
@@ -1297,11 +1297,11 @@ fun Checker?.getIndexedAccessTypeOrUndefined(objectType_0: Type?, indexType_1: T
         }
         val persistentAccessFlags: AccessFlags = AccessFlags(accessFlags.value and 1u)
         val key: CacheHashKey = getIndexedAccessKey(objectType, indexType, accessFlags, alias)
-        var t: Type? = this!!.indexedAccessTypes[key.goCopy()]
+        var t: Type? = this!!.indexedAccessTypes[key]
         if (t == null) {
             t = this.newIndexedAccessType(objectType, indexType, persistentAccessFlags)
             t!!.alias = alias
-            this!!.indexedAccessTypes[key.goCopy()] = t
+            this!!.indexedAccessTypes[key] = t
         }
         return t
     }
@@ -3519,10 +3519,10 @@ fun Checker?.getTemplateLiteralType(texts: GoSlice<String>, types: GoSlice<Type?
         }
     }
     val key: CacheHashKey = getTemplateTypeKey(newTexts, newTypes)
-    var t_5: Type? = this!!.templateLiteralTypes[key.goCopy()]
+    var t_5: Type? = this!!.templateLiteralTypes[key]
     if (t_5 == null) {
         t_5 = this.newTemplateLiteralType(newTexts, newTypes)
-        this!!.templateLiteralTypes[key.goCopy()] = t_5
+        this!!.templateLiteralTypes[key] = t_5
     }
     return t_5
 }

@@ -305,7 +305,9 @@ class GoMap<K, V> private constructor(
         fun <K, V> make(elem: GoElem<V>, hint: Int = 0): GoMap<K, V> = GoMap(elem, true, maxOf(hint, 0))
 
         /** A nil map of value kind [elem]. */
-        fun <K, V> nil(elem: GoElem<V>): GoMap<K, V> = GoMap(elem, false, 0)
+        @Suppress("UNCHECKED_CAST")
+        fun <K, V> nil(elem: GoElem<V>): GoMap<K, V> =
+            (elem.nilMapCache ?: GoMap<K, V>(elem, false, 0).also { elem.nilMapCache = it }) as GoMap<K, V>
     }
 
 }
