@@ -102,3 +102,77 @@ tasks.withType<Test>().configureEach {
     // bundled libs alone are ~100 MB of AST. Opt-in larger heap, so a plain run keeps Gradle's default.
     providers.environmentVariable("TSGO_TEST_HEAP").orNull?.let { maxHeapSize = it }
 }
+
+// (TSGO.6) THE GraalVM IMAGE OF THE PORTED tsc COMMAND LINE ((TSGO.5)'s `TsgoMain`), the counterpart of
+// -cli's `nativeImage` (whose comments carry the rationale; this one is that task with the port's entry):
+//
+//   ./gradlew :xemantic-typescript-compiler-tsgo:nativeImage -PgraalvmHome=tools/graalvm-25
+//   ./gradlew :…-tsgo:nativeImage -PnativeImageArgs="--pgo-instrument" -PnativeImageOutput=xtsc-tsgo-instrumented
+//
+// THE GC IS G1 BY DEFAULT, AND ITS HEAP LIMIT IS RAISED TO 80% OF RAM (measured 2026-10-09, Oracle GraalVM 25.0.4,
+// tsc's compiler profile, 65 rows byte-identical in every arm): the default serial collector is single-threaded
+// and stopped every goroutine for ~6.4 s of an 8.8 s check (1.76 s for tsgo); G1 runs it in 2.9 s. But G1's
+// default limit is 25% of RAM (`-R:MaxRAMPercentage=25`, serial's is 80%), and type-fest needs ~9.7 GB: at the
+// default the image ran out of memory INSIDE goroutines and hung (now a fatal exit, `goSpawn`). G1 is Oracle
+// GraalVM only — GraalVM Community Edition builds with `-PnativeImageGc=serial`.
+//
+// Not wired into `build`/`check` (needs GraalVM + a C toolchain). Builds run ALONE under CLAUDE.md's memory
+// protocol: the builder is a separate JVM of `-PnativeImageHeap` (default 8g — the port's closed world is
+// ~4,850 classes, over twice -core's) outside every Gradle heap, on a box with zero swap.
+val tsgoNativeImageMainClass = "com.xemantic.typescript.tsgo.cli.TsgoMainKt"
+
+tasks.register("nativeImage") {
+    group = "build"
+    description = "Ahead-of-time compiles the ported tsc CLI into a native executable (needs GraalVM + a C toolchain)."
+
+    val jvmMain = kotlin.targets.getByName("jvm").compilations.getByName("main")
+    dependsOn(jvmMain.compileTaskProvider)
+    val classpathFiles = files(jvmMain.output.allOutputs, jvmMain.runtimeDependencyFiles)
+    inputs.files(classpathFiles)
+    inputs.property("mainClass", tsgoNativeImageMainClass)
+
+    // A relative -PgraalvmHome resolves against the ROOT project, never the daemon's cwd (CLAUDE.md).
+    val graalHome = ((project.findProperty("graalvmHome") as String?) ?: System.getenv("GRAALVM_HOME"))
+        ?.let { rootDir.resolve(it) }
+    val builderHeap = (project.findProperty("nativeImageHeap") as String?) ?: "8g"
+    val extraArgs = (project.findProperty("nativeImageArgs") as String?)
+        ?.split(" ", "\t", "\n")?.filter { it.isNotBlank() } ?: emptyList()
+    val gcArgs = when (val gc = (project.findProperty("nativeImageGc") as String?) ?: "G1") {
+        "G1" -> listOf("--gc=G1", "-R:MaxRAMPercentage=80")
+        "serial" -> listOf("--gc=serial")
+        else -> error("-PnativeImageGc must be G1 or serial, not '$gc'")
+    }
+    val outputName = (project.findProperty("nativeImageOutput") as String?) ?: "xtsc-tsgo"
+    inputs.property("nativeImageArgs", extraArgs)
+    inputs.property("gcArgs", gcArgs)
+    inputs.property("outputName", outputName)
+    val outputDir = layout.buildDirectory.dir("native")
+    outputs.file(outputDir.map { it.file(outputName) })
+
+    doLast {
+        val fromHome = graalHome?.resolve("bin/native-image")
+        val onPath = System.getenv("PATH")?.split(File.pathSeparator)
+            ?.map { File(it).resolve("native-image") }?.firstOrNull { it.canExecute() }
+        val tool = when {
+            fromHome != null && fromHome.canExecute() -> fromHome.absolutePath
+            fromHome != null -> error("native-image not found at $fromHome — is it a GraalVM JDK?")
+            onPath != null -> onPath.absolutePath
+            else -> error(
+                "native-image not found. Put a GraalVM JDK's bin/ on PATH, set GRAALVM_HOME, or pass " +
+                    "-PgraalvmHome=/path/to/graalvm. A C toolchain (gcc, binutils, libc headers, zlib) is also required."
+            )
+        }
+        val out = outputDir.get().asFile.also { it.mkdirs() }
+        val binary = out.resolve(outputName)
+        val cmd = listOf(
+            tool,
+            "-cp", classpathFiles.joinToString(File.pathSeparator) { it.absolutePath },
+            "-o", binary.absolutePath,
+            "--no-fallback",
+            "-J-Xmx$builderHeap",
+        ) + gcArgs + extraArgs + tsgoNativeImageMainClass
+        val exitCode = ProcessBuilder(cmd).directory(projectDir).inheritIO().start().waitFor()
+        check(exitCode == 0) { "native-image failed (exit $exitCode)" }
+        logger.lifecycle("Native executable: $binary")
+    }
+}

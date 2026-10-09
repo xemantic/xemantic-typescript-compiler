@@ -127,3 +127,36 @@ heap it is reported as SKIPPED, never as equal.
 Positive control: `TSGO_CLI_INJECT=<case>` appends to that case's recorded stdout, which must read red.
 
 **Receipts** (2026-10-08): see the (TSGO.5) session note in PLAN-PHASE-5.md.
+
+## 4. The GraalVM image ((TSGO.6))
+
+```
+./gradlew :xemantic-typescript-compiler-tsgo:nativeImage -PgraalvmHome=tools/graalvm-25   # → build/native/xtsc-tsgo
+scripts/tsgo-cli-native-replay.py [--workers N]                                            # the 106 recorded cases
+```
+
+`TsgoMain` compiles closed-world with `--no-fallback` and NO reflection metadata (the port emits its own type
+information for `reflect`/`json`; the one reflective call, `Console.isTerminal`, degrades through `runCatching`).
+Oracle GraalVM 25.0.4 lives in the gitignored `tools/graalvm-25` (as Go in `tools/go`); the build takes ~2 min and
+the image is ~57 MB. The gate replays the CLI recording through the image (the recorder's own `run_case`, copies at
+`build/goport/cli-work/native`): **106 / 106 equal** in stdout, exit status and written files, type-fest included —
+the in-process `CliParityTest` skips it below an 8 GB heap.
+
+The task defaults to **G1 with `-R:MaxRAMPercentage=80`**, both measured (2026-10-09, `--noEmit` on tsc's compiler
+profile, 65 rows byte-identical in every arm, 8-core box):
+
+| | wall | RSS |
+|---|---:|---:|
+| tsgo 7.0.2 | 1.76 s | 0.39 GB |
+| image, G1 (the default) | 2.9 s | 1.7 GB |
+| image, serial GC | 8.7 s | 0.81 GB |
+| port on the JVM, cold | 10.7 s | 2.5 GB |
+| port on the JVM, warm (BenchMain) | 2.7 s | — |
+
+The serial collector (`--gc=serial`, the only one in GraalVM Community Edition) is single-threaded and stops every
+goroutine: its pauses summed ~6.4 s of the 8.7 s; `-Xmn1g -Xms2g` only reaches 6.9 s. G1's DEFAULT limit is 25%
+of RAM (`-R:MaxRAMPercentage=25`; serial's is 80%), and type-fest needs ~9.7 GB (tsgo: 6 GB, 17 s; the image
+28 s parallel at `-Xmx10g`) — at 25% the image ran out of memory inside goroutines and HUNG at 0% CPU, because the
+error recurred inside `WaitGroup`'s own handler and the waiter was never signalled. A throwable escaping a
+goroutine is now fatal to the process with Go's panic status 2 (`goSpawn`, both actuals; `GoroutineFatalTest`).
+Community Edition builds with `-PnativeImageGc=serial`. Not yet tried: PGO (worth -21% on `-core`'s image).

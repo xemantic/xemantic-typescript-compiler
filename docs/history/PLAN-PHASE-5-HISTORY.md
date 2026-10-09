@@ -1,3 +1,27 @@
+### Round (TSGO.2-b) — the diagnostics differential is a GATE, tsgo's test harness is PORTED, and `-core`'s 10.7k `diagnose` pins run against `-tsgo`: 0 port defects (2026-10-08)
+
+**What landed** (c7e70a9ff, 8c0858ec0, and this commit). (1) `DiagParityTest` grades itself against
+`build/goport/diag-oracle` with `tsgo-diag-compare.py`'s rule and FAILS on any unequal or crashed configuration
+(positive control `TSGO_DIAG_INJECT=<case>/<variation>`, measured red). (2) The driver reads RAW cases through
+tsgo's own harness, ported: the extractor gained PARTIAL packages (declarations reachable from named roots) and
+go/packages overlays (the oracle's verbatim copies); `testrunner`/`harnessutil`/`tsoptionstest`/`testutil` slices plus
+`execute/incremental`, `vfs/{iovfs,internal,vfstest}` lower 100% mechanically (0 overrides, 0 stubs); existing
+generated packages byte-identical. A `case.json` cross-check (hash, cwd, roots, files, symlinks, options) runs
+before diagnostics and caught a porter defect on its first run: a `switch` on a `[2]byte` tag compared by identity
+(UTF-16 cases lost their directives) — now a rule (`goEquals`). (3) `XTSC_ENGINE=tsgo` routes `-core`'s
+`CompilerTestSupport.diagnose` through the ported harness (`-core` jvmTest → `-tsgo`, test scope; default path
+unchanged: 21,248 / 0).
+
+**Receipts:** diag 6,318 / 6,318 (ported harness, raw text); bound oracle 7,774 / 7,774; `-tsgo` 94/0, `-goport`
+12/0; huge methods 0; core default 21,248 / 0. **Pin census** (`docs/goport-pin-census.md`): 10,657 pin texts,
+**10,533 equal to tsgo, 0 differ**, 124 not compilable by tsgo's harness. Under tsgo 1,116 tests fail: **0 port
+defects**, 51 harness gaps (TS7-removed options, unknown `@lib`), 1,065 pins asserting `-core` behaviour (590
+tsgo-reports-more, 176 different rows, 152 `-core` instrumentation, 68 core-reports-more, 57 message text, 22
+chain/related/order). Two engine mapping gaps were fixed rather than counted (`@useRealLibs`, indented directives).
+
+**Open in (TSGO.2):** the remaining baseline layers beyond the conformance submodule; perf (`GoSlice.addr`
+per `core.Same`).
+
 ### Round (TSGO.2-a) — the ported CHECKER: the 42-package `internal/compiler` closure lowers and compiles, and its diagnostics equal tsgo's on 6,318 / 6,318 conformance configurations (2026-10-07)
 
 **What landed** (one lowering agent; commits 643546ddb, b92728e60, 934160a6d, 8961a3c0e, ddea91894,

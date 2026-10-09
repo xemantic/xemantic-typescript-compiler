@@ -25,6 +25,30 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-b) — THE GraalVM IMAGE OF THE PORTED CLI: `:xemantic-typescript-compiler-tsgo:nativeImage` builds `xtsc-tsgo` (~57 MB, ~2 min, no reflection metadata) and it answers all 106 recorded command-line cases byte-identically to the tsgo 7.0.2 binary, type-fest included; G1 makes it 2.9 s on tsc's compiler profile against tsgo's 1.76 s (2026-10-09)
+
+- **Toolchain**: Oracle GraalVM 25.0.4 downloaded into the gitignored `tools/graalvm-25` (no GraalVM was on the box).
+  The task is -cli's `nativeImage` with the port's entry (`TsgoMainKt`); a relative `-PgraalvmHome` resolves against
+  the root project.
+- **Gate**: `scripts/tsgo-cli-native-replay.py` replays the recording through the image with the recorder's own
+  `run_case`: **106 / 106 equal** (stdout, exit, written files) — serial-GC image and G1 image alike. Positive
+  control: `--bin /bin/true` reads every case DIFFER.
+- **The GC is the whole performance story** (`--noEmit`, compiler profile, 3 runs each, alone on the box): serial
+  8.45-8.89 s / 0.81 GB — `-XX:+PrintGC` shows 19 pauses summing ~6.4 s, the stop-the-world collector freezing every
+  goroutine; `-Xmn`/`-Xms` sizing bottoms out at 6.87 s. `--gc=G1` 2.84-2.93 s / 1.7 GB (2.61 s with `-Xmn1g`), tsgo
+  1.65-1.87 s / 0.39 GB, the JVM port cold 10.6-10.9 s / 2.5 GB.
+- **A hang, found and fixed**: G1's default heap limit is 25% of RAM (`-R:MaxRAMPercentage=25`; serial's
+  `MaximumHeapSizePercent` is 80), and type-fest needs ~9.7 GB. At the default the image ran ~10 min, then sat at 0% CPU
+  forever: `OutOfMemoryError thrown from the UncaughtExceptionHandler in thread "goroutine-122"` — the error recurred
+  inside WaitGroup's/onGoStack's own handler, the pool thread died and the waiter was never unparked. `goSpawn`
+  (JVM and native actuals) now treats a throwable escaping a goroutine as Go treats an unrecovered panic: stderr
+  `fatal error: goroutine: …`, exit status 2 (`halt`/`_exit`). Pin `GoroutineFatalTest` (a child JVM; the old code
+  sleeps past the 60 s deadline) + a negative control (WaitGroup still hands a caught throwable to `wait`). The task
+  now defaults to `--gc=G1 -R:MaxRAMPercentage=80`; type-fest then passes at the default (40 s `--singleThreaded`
+  in the replay; 28 s parallel vs tsgo 17 s / 6 GB).
+- Receipts: `-tsgo` suite 119 / 0 (117 + 2), JVM + `linuxX64` compiles warning-clean (`--rerun-tasks`).
+- **Next**: PGO for the image (-21% on `-core`'s), a bounded Kotlin/Native GC default, a native `-tsgo` CI job.
+
 ### Round (TSGO.6) — THE PORT IS MULTIPLATFORM: `-tsgo` builds for Kotlin/Native `linuxX64` with the generated 28 MB unchanged, its commonTest suite runs natively 64/64, and a native executable checks tsc's own sources (123 files) with 65 / 65 rows byte-identical to the tsgo 7.0.2 binary, in 12.6 s parallel / 14.5 s single (6.5 s / 10.6 s with the GC's allocation stall off) against tsgo's 2.1 / 3.3 s (2026-10-08)
 
 **What landed**: `linuxX64` on `-tsgo` behind `-PenableNativeTargets=true` (as `-core`'s), three `nativeMain` actuals —
@@ -503,30 +527,6 @@ in any case (we port tsgo, so a triaged tsgo bug is not a port defect); all 71 a
 
 **Open after (TSGO.2):** perf (`GoSlice.addr` per `core.Same`, no per-file lib cache); (TSGO.3).
 
-### Round (TSGO.2-b) — the diagnostics differential is a GATE, tsgo's test harness is PORTED, and `-core`'s 10.7k `diagnose` pins run against `-tsgo`: 0 port defects (2026-10-08)
-
-**What landed** (c7e70a9ff, 8c0858ec0, and this commit). (1) `DiagParityTest` grades itself against
-`build/goport/diag-oracle` with `tsgo-diag-compare.py`'s rule and FAILS on any unequal or crashed configuration
-(positive control `TSGO_DIAG_INJECT=<case>/<variation>`, measured red). (2) The driver reads RAW cases through
-tsgo's own harness, ported: the extractor gained PARTIAL packages (declarations reachable from named roots) and
-go/packages overlays (the oracle's verbatim copies); `testrunner`/`harnessutil`/`tsoptionstest`/`testutil` slices plus
-`execute/incremental`, `vfs/{iovfs,internal,vfstest}` lower 100% mechanically (0 overrides, 0 stubs); existing
-generated packages byte-identical. A `case.json` cross-check (hash, cwd, roots, files, symlinks, options) runs
-before diagnostics and caught a porter defect on its first run: a `switch` on a `[2]byte` tag compared by identity
-(UTF-16 cases lost their directives) — now a rule (`goEquals`). (3) `XTSC_ENGINE=tsgo` routes `-core`'s
-`CompilerTestSupport.diagnose` through the ported harness (`-core` jvmTest → `-tsgo`, test scope; default path
-unchanged: 21,248 / 0).
-
-**Receipts:** diag 6,318 / 6,318 (ported harness, raw text); bound oracle 7,774 / 7,774; `-tsgo` 94/0, `-goport`
-12/0; huge methods 0; core default 21,248 / 0. **Pin census** (`docs/goport-pin-census.md`): 10,657 pin texts,
-**10,533 equal to tsgo, 0 differ**, 124 not compilable by tsgo's harness. Under tsgo 1,116 tests fail: **0 port
-defects**, 51 harness gaps (TS7-removed options, unknown `@lib`), 1,065 pins asserting `-core` behaviour (590
-tsgo-reports-more, 176 different rows, 152 `-core` instrumentation, 68 core-reports-more, 57 message text, 22
-chain/related/order). Two engine mapping gaps were fixed rather than counted (`@useRealLibs`, indented directives).
-
-**Open in (TSGO.2):** the remaining baseline layers beyond the conformance submodule; perf (`GoSlice.addr`
-per `core.Same`).
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -644,7 +644,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
   `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.
 
-- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). Remains: the GraalVM image of the (5-a) CLI, a goroutine thread pool, a bounded native GC default, a native `-tsgo` CI job.** Add a `linuxX64` target to
+- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). Remains: PGO for the image, a bounded Kotlin/Native GC default, a native `-tsgo` CI job.** Add a `linuxX64` target to
   `-tsgo` (Kotlin/Native was deferred to after (TSGO.2) by `docs/tsgo-port-plan.md`), run its suite natively, and build the
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.

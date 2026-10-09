@@ -129,13 +129,15 @@ private val goroutineRoutine = staticCFunction<COpaquePointer?, COpaquePointer?>
     val ref = arg!!.asStableRef<() -> Unit>()
     val f = ref.get()
     ref.dispose()
-    // A Go program crashes on a goroutine's unrecovered panic; every caller here (WaitGroup.Go,
-    // onGoStack) catches inside `f`, so this only keeps a stray throwable from killing the process
-    // without a word.
+    // A Go program crashes on a goroutine's unrecovered panic, and so does this one. Every caller here
+    // (WaitGroup.Go, onGoStack) catches inside `f`, so a throwable arriving here escaped THAT handler —
+    // an out-of-memory error raised again while the handler allocated — and the goroutine never
+    // signalled whoever waits on it. Carrying on would park that waiter forever: a hang, not an error.
     try {
         f()
     } catch (t: Throwable) {
-        println("goroutine: uncaught $t")
+        runCatching { platform.posix.fputs("fatal error: goroutine: $t\n", platform.posix.stderr) }
+        platform.posix._exit(2)
     }
     null
 }

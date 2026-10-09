@@ -53,6 +53,21 @@ private val goroutines: java.util.concurrent.ExecutorService by lazy {
     }
 }
 
+/**
+ * A goroutine's unrecovered panic is fatal to a Go program, and so is a throwable escaping [f] here. Every
+ * caller (WaitGroup.Go, onGoStack) catches inside `f`, so one arriving here escaped THAT handler — measured:
+ * an out-of-memory error raised again while the handler allocated — and the goroutine never signalled whoever
+ * waits on it. Left to the pool it killed the worker thread and the waiter parked forever: the GraalVM image
+ * HUNG at 0% CPU on type-fest instead of failing. Exit status 2 is Go's for an unrecovered panic; `halt`,
+ * because shutdown hooks may need the memory that just ran out.
+ */
 internal actual fun goSpawn(f: () -> Unit) {
-    goroutines.execute(f)
+    goroutines.execute {
+        try {
+            f()
+        } catch (t: Throwable) {
+            runCatching { System.err.println("fatal error: goroutine: $t") }
+            Runtime.getRuntime().halt(2)
+        }
+    }
 }

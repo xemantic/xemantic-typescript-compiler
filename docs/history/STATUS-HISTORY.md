@@ -1,3 +1,34 @@
+**(TSGO.3) DONE — type oracle + emit (2026-10-08):** tsgo's `internal/api` session runs in process behind the
+Kotlin facade `TsgoProject` (`-tsgo` `facade/`; `-core`/`-project` untouched): typeAtPosition, symbolAtPosition,
+resolvedSignature, contextualType, isTypeAssignableTo, propertiesOfType, typeToString, … plus `request(method, json)`
+for the rest of `proto.go`. `ApiParityTest` (`TSGO_API=1`, failing gate, positive control) replays **594,007 /
+594,007** requests recorded from `tsc --api` over tsc's 78 sources + 200 conformance cases, 0 differ, 0 crash.
+Re-verified on `3fd973259` from a fresh main-tree recording: also emit 13,127 / 13,127, diag 13,127 / 13,127,
+bound AST 7,774 / 7,774, `-tsgo` 106 / 0, `-goport` 15 / 0, 0 methods over 8,000 bytecodes. Not yet ported: the
+`internal/ls`-backed handlers (completions, references, JSDoc, …) and the live project system (17 stubs).
+`docs/goport-api.md`. Next: (TSGO.4).
+
+**(TSGO.3-a) DONE — emit parity (2026-10-08):** the ported compiler's emit is byte-identical to tsgo 7.0.2 on
+every configuration its compiler runner baselines: `EmitParityTest` (`TSGO_EMIT=1`, a FAILING gate with a positive
+control) reads **13,127 / 13,127** equal across `.js` (incl. `.d.ts`), `.js.map` and `.sourcemap.txt`, and tsc's
+78 sources emit `diff -r`-identical to the tsgo binary (8.8 MB, 65 diagnostics both sides). Four port defects
+fixed in shims (one a real emit bug: `fmt` mis-printed named ints, so >26 temporaries emitted `var _%!d(…)`).
+Re-verified on `d5d569c4f`: diag 13,127 / 13,127, bound oracle 7,774 / 7,774, `-tsgo` 99 / 0, `-goport` 15 / 0,
+0 methods over 8,000 bytecodes. `docs/goport-emit-oracle.md`. Next: (TSGO.3-b), the type oracle.
+
+**(TSGO.2) DONE — ported checker (2026-10-08):** the 42-package `internal/compiler` closure plus tsgo's own test
+harness (ported, 0 overrides) runs in `-tsgo`. `DiagParityTest` (a FAILING gate) covers all four suites tsgo's
+compiler runner runs (submodule + local x compiler + conformance): **13,127 / 13,127** configurations equal to tsgo,
+0 port defects; bound AST oracle 7,774 / 7,774; `-tsgo` 98 / 0, `-goport` 15 / 0; 0 `-tsgo` methods over 8,000
+bytecodes (2,554 classes). `XTSC_ENGINE=tsgo` runs -core's 10.7k `diagnose` pins on the port: 0 port defects, 1,065
+pins assert -core behaviour tsgo does not share (`docs/goport-pin-census.md`). Perf (`docs/goport-perf.md` § 6):
+tsc's 78 sources check in ~2.1-2.5 s warm with tsgo's default parallel Program (tsgo 1.8 s, -core 7.5 s) at
+2.6 GB allocated per check (from 5.8). Next: (TSGO.3).
+
+**(TSGO.1) tsgo-to-Kotlin port spike (2026-10-07):** encoded-AST byte equality vs the tsgo binary
+**7,774 / 7,774** (bound, real hash); mechanically lowered **99.0%** of 44,395 Go lines; overrides **1**; methods over
+8,000 bytecodes **0**; warning-clean; parse speed **~1.28x** `-core` warm. **GATE: GO** — (TSGO.2) binder+checker next. Modules `-goport` (porter) and `-tsgo` (runtime + generated port).
+
 **(P18.313) — (LIBS.4) ROUND 2: a `for … of this.<member>` loop variable is typed, seven hono object/array-literal mechanisms, and an object-literal ternary arm narrowed by a type guard (a tsc-source false positive the first fix exposed, caught by the grid) — hono 27 -> 18, zod 14 -> 13, TALLY 162 -> 152, NO ADDED POSITION; +14 PINS, 22,999 / 0 / 44 (2026-10-07). The same day (TSGO.0) was DECIDED (D1 latest Go, D2 AGPL, D3 `-core` frozen): the queue head is now the (TSGO.1) port spike.**
 Screen 0; grid 8x0; rxjs / marked / cronstrue / mitt / date-fns unchanged.
 
