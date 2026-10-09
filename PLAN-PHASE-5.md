@@ -25,6 +25,51 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-e) — GO'S Ps: AT MOST `TSGO_GOMAXPROCS` (DEFAULT THE CPU COUNT) GOROUTINES RUN AT ONCE, A QUEUED ONE HAS NO THREAD; date-fns' native check 3.60 → 2.02 s and 2.10 → 1.34 GB (parse 1.8-3.5 → 0.8-0.9 s), the JVM 5.14 → 4.75 s; the check-dominated tsc profiles do not move; output byte-identical to tsgo in every run (2026-10-09)
+
+- **Design** (`commonMain/go/sync/Procs.kt`, docs/goport-runtime.md § 9a "The run limit"): `GoProcs` holds N run
+  tokens (N = `TSGO_GOMAXPROCS`, else JVM `availableProcessors` / Native `Platform.getAvailableProcessors`, read once).
+  `goSpawn` is common now: `GoProcs.go(f)` starts `f` on a pooled goroutine thread (`expect startGoroutineThread`, the
+  old pool actuals) when a token is free, else QUEUES THE CLOSURE (no thread, as a Go goroutine waiting for a P has no
+  M). `blockingWait { … }` wraps the park loop of `WaitQueue.awaitSlow` (every Mutex / RWMutex / WaitGroup / Once /
+  CountingSemaphore wait) and of `onGoStack`: it releases the caller's token and takes one back BEFORE the woken waiter
+  re-checks. One FIFO holds parked threads and queued closures; a release hands the token to its head (unpark, or start
+  a thread with the token transferred), else bumps the free count — `free > 0` implies an empty queue, so nobody jumps
+  it. Non-goroutine threads (main / test / LSP request in `onGoStack`) hold no token. File reads keep the token.
+  `runtime.GOMAXPROCS` still answers 4 (autoimport's pool size; changing it is a behaviour change).
+- **Audit**: the ported code blocks only through `WaitQueue` and `onGoStack` (the lowering refuses `go`/`select`/
+  channels, `errgroup.Go` is synchronous, no `time.Sleep` in `gen/`); the remaining spins are bounded.
+- **The first cut was WRONG and measured so**: giving every goroutine its own thread up front, parked on a token, made
+  date-fns 4.1 s with **3,400 threads and 5.1 GB** (was ~700 / 2.1 GB) — the queue of runnable goroutines became a queue
+  of threads. Queuing closures fixed it.
+- **A/B** (3 rotated rounds, median (range); base = `a4cfb4618`: kn `89624697…`, graal `b8075f9e…`, graal-pgo
+  `e4e36bcc…`, JVM classes copied; new: kn `6f649031…`, graal `23fccf5a…`, graal-pgo retrained `02f14012…`; all 54 runs
+  Y vs `tsc --noEmit -p . --pretty false`):
+
+  | arm | compiler | services | date-fns |
+  |---|---|---|---|
+  | tsgo 7.0.2 | 1.77 s / 0.36 GB | 2.35 / 0.52 | 0.36 / 0.17 |
+  | K/N base → new | 8.07 (8.00-8.10) → 8.07 (7.95-8.25), 1.59 → 1.61 GB | 10.57 (10.10-10.73) → 10.20 (10.19-10.89), 2.16 → 1.97 | 3.60 (3.07-4.52) → **2.02 (1.97-2.29)**, 2.10 → **1.34** |
+  | K/N threads created | 137-153 → 45-94 | 289-347 → 31-158 | 602-891 → 510-951 |
+  | K/N parse / bind / check ms | 1032-1077 → 983-1148 / 174-208 → 135-155 / ~6.7 s both | 1432-1897 → 1108-1335 / 194-214 → 166-399 / ~8.5 s both | 1761-3471 → **821-914** / 135-864 → 264-418 / ~0.7 s both |
+  | GraalVM base → new | 2.90 → 2.95 | 3.82 → 3.66 | 0.74 (0.70-1.91) → 0.73 (0.71-0.75) |
+  | GraalVM PGO base → new | 2.57 → 2.46, 1.58 → 1.40 GB | 3.06 → 3.09 | 0.59 → 0.60, 0.61 → 0.53 GB |
+  | JVM cold base → new | 10.86 → 10.41 | 12.74 → 12.05 | 5.14 → 4.75, 1.03 → 0.85 GB |
+
+  `peakRunning=8` every native run; date-fns queued 11,300 of 11,326 goroutine starts. The compiler / services checks
+  are GC-bound ((TSGO.6-d)'s profile) and their 4 checker goroutines never contended for 8 tokens.
+- **Pins** `GoProcsTest` (commonTest, JVM 4/0 and Native 4/0): ≤ N running; a 1,000-goroutine fan-out at N=1 with the
+  parent holding the mutex its children take; at N=1 G2 blocks on a mutex held by G1, which G2 has just woken and which
+  waits for G2's token; a woken goroutine does not exceed N=2. Each runs on a goroutine under a 30 s deadline. Ablated
+  (JVM, one arm at a time, source restored by `cmp` against a snapshot): no release in `blockingWait` → the two N=1 pins
+  RED (deadline); no re-acquire after a wake → woken-limit, fan-out and ≤ N RED; goroutines started without a token →
+  the same three RED (the ≤ N pin needed 300k-iteration work to overlap — at 20k it read green under that arm).
+- Gates: `-tsgo` `jvmTest` 123 / 0, `-lsp` 38 / 0; DiagParity 13,127 / 13,127 (`tsgo-diag-compare.py` equal 13,127),
+  EmitParity 13,127 / 13,127, CliParity 105 equal / 0 differ / 1 skipped (type-fest), LsParity 21,614 / 21,614 — Emit
+  and Ls at their documented `TSGO_TEST_HEAP=3g` (at Gradle's default heap both die `OutOfMemoryError`; not checked on
+  base); `linuxX64Test` 68 / 0; release link OK; GraalVM `tsgo-cli-native-replay.py` 106 / 106 equal; warning-clean
+  (only the 5 host notices).
+
 ### Round (TSGO.6-d) — KOTLIN/NATIVE GOROUTINES ON A CACHED PTHREAD POOL, AND THE FIRST NATIVE CPU PROFILE: the pool runs the compiler profile's ~700 goroutines on ~150 pthreads (services ~1,700 on ~270-560) with wall and RSS unchanged within noise; `perf` attributes ~60% of the native port's CPU to memory management — GC mark 43%, sweep 4.4%, allocation 4.2%, page mapping ~7% (2026-10-09)
 
 - **The pool** (`nativeMain/go/sync/Park.native.kt`): the JVM actual's unbounded cached pool rebuilt on pthreads — one
@@ -400,74 +445,6 @@ of `KirFileLowering` (7.1k lines) over tsgo's `ast.Node`, plus a KIR-owned value
 `-core`'s own sink) stays on `-core` by design. The Kotlin/Native plugin path (`KirNativePlugin`, inside konanc) now pulls
 `-tsgo` onto the plugin classpath through `jvmRuntimeClasspath` — not rebuilt this round (native builds are run alone).
 
-### Round (TSGO.3-b) — THE TYPE ORACLE: tsgo's `internal/api` session is ported and runs in process behind a Kotlin facade (`TsgoProject`); 594,007 / 594,007 API requests over tsc's 78 sources and 200 conformance projects answer byte-for-byte as the tsgo 7.0.2 binary's `--api`, handles compared as a bijection (2026-10-08)
-
-**What is ported** (`docs/goport-api.md`). `internal/api` is a PARTIAL package (6,049 Go lines, 3,670 of them
-`session.go` + `proto.go`) whose roots are an overlay, `goport-extract/overlay/api/xtsc_api.go`:
-`XtscNewSession` (NewSession + `handleUpdateSnapshot`'s bookkeeping for one caller-built snapshot),
-`XtscMarshal` (the JSON payload `WriteResponse` writes), `XtscOpenProgram` (a configured project's program the
-way `project.CreateProgram` builds it) and `XtscCheckerPool` (`project/checkerpool.go` reduced to its API /
-diagnostics / query checkers). Kept with `Session`: `HandleRequest` verbatim and every handler, the
-snapshot registries, proto.go's types and `unmarshalers`. The transport (conn, protocol, transport, server,
-callbackfs, timing) is never reached. **Extractor**: `partialStubs` keeps a declaration as a SIGNATURE ONLY
-(the body is neither traversed nor extracted; the porter emits `TODO("goport: refused partial-stub …")`):
-17 declarations, 506 Go lines — the project-session lifecycle (`initialize`, `updateSnapshot`, `release`,
-`getDefaultProjectForFile`, `Close`, …), pprof, and the six handlers that need `internal/ls`. The
-extractor also resolves a symlinked `--tsgo` (an overlay keyed by a symlink silently never applies), as
-does `oracle-go/build.sh`. **Hand shims**: `project` (`Session`, `Snapshot`, `ProjectCollection`, `Project`
-with `GetProjectDiagnostics`, `FileChangeSummary`), `lsp/lsproto.DocumentUri.FileName`,
-`ls/lsconv.FileNameToDocumentURI`, empty `ls.LanguageService` and `pprof.CPUProfiler`.
-
-**The API** (`-tsgo`, `facade/TsgoProject.kt`; `-project` untouched, `-core` frozen): `TsgoProject.open(tsconfig,
-fs = diskFS(), libDirectory = null)`; typed queries `typeAtPosition`, `symbolAtPosition`, `nodeAt`,
-`typeAtLocation`, `symbolAtLocation`, `contextualType`, `resolvedSignature`, `typeToString`,
-`propertiesOfType`, `propertyOfType`, `signaturesOfType`, `isTypeAssignableTo`, `typesOfType`,
-`typeArguments`, `baseTypes`, `apparentType`, `typeOfSymbol`, `declaredTypeOfSymbol`,
-`parametersOfSignature`, `returnTypeOfSignature`, `sourceFileNames`, `semanticDiagnostics`; handles
-`TsgoType`/`TsgoSymbol`/`TsgoSignature`/`TsgoNode`; positions are UTF-16 offsets; and `request(method, json)`,
-the raw protocol, reaches every other ported proto.go method. Each call runs on a goroutine thread (1 GB
-stack); a handler panic is recovered into `TsgoApiException(panicked = true)`, as tsgo's `SyncConn` recovers it.
-
-**The gate.** `tsgo-oracle api` (oracle-go/api.go) drives the SHIPPED binary over msgpack and generates the
-request stream from its own answers: every Identifier (`getSymbolsAtLocations`, `getTypeAtLocations`),
-call-like (`getResolvedSignature`) and call argument (`getContextualType`, `getTypeAtLocation`,
-`isTypeAssignableTo`) of every non-library file; then `getTypeOfSymbol` per symbol, `typeToString` per type,
-`getPropertiesOfType` + `getSignaturesOfType` per located type, `getReturnTypeOfSignature` per signature.
-`scripts/tsgo-api-oracle.py` records tsc's 78 sources (a copy of the bench profile) and 200 single-file
-conformance cases → `build/goport/api-oracle` (18 MB gzipped, 594,007 requests). `ApiParityTest`
-(`TSGO_API=1`) replays them through `HandleRequest`; ids are bound as a tsgo↔port bijection, everything else
-(names, flags, node handles, raw JSON string tokens, field order, omitted fields) must be equal.
-
-**Receipts** (worktree, rebased on (TSGO.3-a), regenerated): **ApiParityTest 594,007 / 594,007 equal**, 0
-differ, 0 crash, 122 s (by method: getTypeOfSymbol 126,447, getContextualType 90,507, getTypeAtLocation
-90,507, isTypeAssignableTo 90,484, typeToString 75,680, getResolvedSignature 53,386, getPropertiesOfType
-24,231, getSignaturesOfType 24,231, getReturnTypeOfSignature 17,666, getSymbolsAtLocations 434 /
-getTypeAtLocations 434 batches); positive control `TSGO_API_INJECT=conf-0010:5` red (1 differ).
-**DiagParityTest 13,127 / 13,127**, **EmitParityTest 13,127 / 13,127**, **OracleParityTest bound 7,774 / 7,774**;
-`-tsgo` 106 tests / 0 failed, `-goport` 15 / 0 (gate inputs: the main checkout's `build/goport/{diag-*,oracle,
-emit-oracle,ts-submodule}` through symlinks). `huge_methods.py` 0 over (2,821 classes). Warning-clean (a
-positive control `1 as Int` file read its `w:` and was deleted).
-
-**Port defects fixed (5)**: (1) an explicitly instantiated generic function as a VALUE (`unmarshallerFor[P]`) was
-a `generic-func-value` refusal — now `funcValue` with the instantiation's dictionaries; (2) `&v` of an opaque
-type parameter flowing into an interface handed out a `GoBox` where Go's `*T` of a struct IS the struct, so
-`parsed.(*Params)` failed — `goOpaqueAddr(goElem_T, ptr)` (also `packagejson`, `OrderedMap`); (3) the json shim
-neither marshalled nor decoded value classes (`[]api.NodeHandle`) — marshal landed upstream the same day,
-decode of a named STRING type here (a named NUMERIC type stays refused: decoding it lets the incremental
-buildinfo reader past `[][]BuildInfoFileId` into two further shim gaps, `[]*BuildInfoFileInfo` and
-`*[2]BuildInfoFileId` as `any` — `incrementalConcurrentSafeAliasFollowing` crashed when tried; latent, the
-diagnostics agree because the program is rebuilt); (4) `fmt` printed a value class by `toString`
-(`%!d(Kind=…)`) — the same fix landed upstream in (TSGO.3-a); (5) **K2's raw-FIR builder is EXPONENTIAL in
-`it[a] = fun(…) = x; it[b] = fun(…) = y; …`** (22 entries 32 s, 26 > 200 s, 130 parenthesized 5.6 s): the
-112-entry `unmarshalers` held a whole-module compile for 43 minutes (killed by the orchestrator); a composite
-literal's anonymous-function element is now parenthesized (`setValue`). Not a port defect: tsgo's own
-`newTypeResponse` panics on a tuple-target type reference (`AsTupleType` of a `TypeReference`); both sides panic.
-
-**Not ported (the remaining surface)**: completions, references, signature usages, JSDoc tags, documentation
-comments (need `internal/ls` + `lsutil`/`format`/`autoimport`/`change`/`lsproto`, ~60k lines), and the
-project system (`updateSnapshot` with file changes, `release`, watching). Differences from `tsc --api`: one
-snapshot per session; the disk FS has no symlink resolution.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -585,7 +562,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
   `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.
 
-- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). (6-c) AOT levers + the Kotlin/Native GC DONE 2026-10-09 (`scripts/tsgo-native-image-pgo.sh`: PGO + `-O3` -15-23%, compiler profile 2.47 s vs tsgo 1.73 s; K/N links `gc=pmcs`: 7.8 s / 1.7 GB vs the default `cms`'s 11.6 s / 2.1 GB). (6-d) the Kotlin/Native goroutine pool + the first native `perf` profile DONE 2026-10-09 (~700 goroutines on ~150 pthreads, wall unchanged; ~60% of native CPU is memory management, GC mark 43%; docs/goport-runtime.md § 9a). Remains: a native `-tsgo` CI job.** Add a `linuxX64` target to
+- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). (6-c) AOT levers + the Kotlin/Native GC DONE 2026-10-09 (`scripts/tsgo-native-image-pgo.sh`: PGO + `-O3` -15-23%, compiler profile 2.47 s vs tsgo 1.73 s; K/N links `gc=pmcs`: 7.8 s / 1.7 GB vs the default `cms`'s 11.6 s / 2.1 GB). (6-d) the Kotlin/Native goroutine pool + the first native `perf` profile DONE 2026-10-09 (~700 goroutines on ~150 pthreads, wall unchanged; ~60% of native CPU is memory management, GC mark 43%; docs/goport-runtime.md § 9a). (6-e) Go's Ps DONE 2026-10-09 (`GoProcs`: ≤ `TSGO_GOMAXPROCS` goroutines run, a queued one has no thread; date-fns native 3.60 → 2.02 s, 2.10 → 1.34 GB; tsc profiles unchanged, GC-bound). Remains: a native `-tsgo` CI job.** Add a `linuxX64` target to
   `-tsgo` (Kotlin/Native was deferred to after (TSGO.2) by `docs/tsgo-port-plan.md`), run its suite natively, and build the
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.

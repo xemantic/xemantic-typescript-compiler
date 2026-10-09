@@ -42,16 +42,34 @@ internal actual fun unpark(token: Any) {
  * it is touched), REUSED while idle: a program's parse queues a goroutine per file and import, most of
  * them short or parked on a per-file mutex, and creating a 1 GB-stack thread for each was a visible part
  * of a parallel build. Unbounded (a cached pool: a direct hand-off, a new thread whenever none is idle),
- * so a goroutine waiting on another goroutine can never starve it, as in Go.
+ * so a goroutine waiting on another goroutine can never starve it, as in Go; how many of them RUN at once
+ * is bounded by [GoProcs]' run tokens instead ((TSGO.6-e)).
  */
 private val goroutines: java.util.concurrent.ExecutorService by lazy {
     val n = java.util.concurrent.atomic.AtomicInteger()
     java.util.concurrent.ThreadPoolExecutor(
         0, Int.MAX_VALUE, 30L, java.util.concurrent.TimeUnit.SECONDS, java.util.concurrent.SynchronousQueue(),
     ) { r ->
-        Thread(null, r, "goroutine-${n.incrementAndGet()}", 1L shl 30).also { it.isDaemon = true }
+        GoroutineThread(r, "goroutine-${n.incrementAndGet()}").also { it.isDaemon = true }
     }
 }
+
+/** A goroutine's thread; [holdsProc] is whether it currently holds a [GoProcs] run token. */
+private class GoroutineThread(r: Runnable, name: String) : Thread(null, r, name, 1L shl 30) {
+    @JvmField
+    var holdsProc = false
+}
+
+internal actual fun goProcHeld(): Boolean = (Thread.currentThread() as? GoroutineThread)?.holdsProc ?: false
+
+/** Only a goroutine thread holds tokens ([GoProcs]); another thread has nowhere to record one. */
+internal actual fun setGoProcHeld(held: Boolean) {
+    (Thread.currentThread() as? GoroutineThread)?.holdsProc = held
+}
+
+internal actual fun goProcLimitDefault(): Int =
+    System.getenv("TSGO_GOMAXPROCS")?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+        ?: Runtime.getRuntime().availableProcessors()
 
 /**
  * A goroutine's unrecovered panic is fatal to a Go program, and so is a throwable escaping [f] here. Every
@@ -61,10 +79,10 @@ private val goroutines: java.util.concurrent.ExecutorService by lazy {
  * HUNG at 0% CPU on type-fest instead of failing. Exit status 2 is Go's for an unrecovered panic; `halt`,
  * because shutdown hooks may need the memory that just ran out.
  */
-internal actual fun goSpawn(f: () -> Unit) {
+internal actual fun startGoroutineThread(body: () -> Unit) {
     goroutines.execute {
         try {
-            f()
+            body()
         } catch (t: Throwable) {
             runCatching { System.err.println("fatal error: goroutine: $t") }
             Runtime.getRuntime().halt(2)

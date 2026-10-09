@@ -1,3 +1,71 @@
+### Round (TSGO.3-b) — THE TYPE ORACLE: tsgo's `internal/api` session is ported and runs in process behind a Kotlin facade (`TsgoProject`); 594,007 / 594,007 API requests over tsc's 78 sources and 200 conformance projects answer byte-for-byte as the tsgo 7.0.2 binary's `--api`, handles compared as a bijection (2026-10-08)
+
+**What is ported** (`docs/goport-api.md`). `internal/api` is a PARTIAL package (6,049 Go lines, 3,670 of them
+`session.go` + `proto.go`) whose roots are an overlay, `goport-extract/overlay/api/xtsc_api.go`:
+`XtscNewSession` (NewSession + `handleUpdateSnapshot`'s bookkeeping for one caller-built snapshot),
+`XtscMarshal` (the JSON payload `WriteResponse` writes), `XtscOpenProgram` (a configured project's program the
+way `project.CreateProgram` builds it) and `XtscCheckerPool` (`project/checkerpool.go` reduced to its API /
+diagnostics / query checkers). Kept with `Session`: `HandleRequest` verbatim and every handler, the
+snapshot registries, proto.go's types and `unmarshalers`. The transport (conn, protocol, transport, server,
+callbackfs, timing) is never reached. **Extractor**: `partialStubs` keeps a declaration as a SIGNATURE ONLY
+(the body is neither traversed nor extracted; the porter emits `TODO("goport: refused partial-stub …")`):
+17 declarations, 506 Go lines — the project-session lifecycle (`initialize`, `updateSnapshot`, `release`,
+`getDefaultProjectForFile`, `Close`, …), pprof, and the six handlers that need `internal/ls`. The
+extractor also resolves a symlinked `--tsgo` (an overlay keyed by a symlink silently never applies), as
+does `oracle-go/build.sh`. **Hand shims**: `project` (`Session`, `Snapshot`, `ProjectCollection`, `Project`
+with `GetProjectDiagnostics`, `FileChangeSummary`), `lsp/lsproto.DocumentUri.FileName`,
+`ls/lsconv.FileNameToDocumentURI`, empty `ls.LanguageService` and `pprof.CPUProfiler`.
+
+**The API** (`-tsgo`, `facade/TsgoProject.kt`; `-project` untouched, `-core` frozen): `TsgoProject.open(tsconfig,
+fs = diskFS(), libDirectory = null)`; typed queries `typeAtPosition`, `symbolAtPosition`, `nodeAt`,
+`typeAtLocation`, `symbolAtLocation`, `contextualType`, `resolvedSignature`, `typeToString`,
+`propertiesOfType`, `propertyOfType`, `signaturesOfType`, `isTypeAssignableTo`, `typesOfType`,
+`typeArguments`, `baseTypes`, `apparentType`, `typeOfSymbol`, `declaredTypeOfSymbol`,
+`parametersOfSignature`, `returnTypeOfSignature`, `sourceFileNames`, `semanticDiagnostics`; handles
+`TsgoType`/`TsgoSymbol`/`TsgoSignature`/`TsgoNode`; positions are UTF-16 offsets; and `request(method, json)`,
+the raw protocol, reaches every other ported proto.go method. Each call runs on a goroutine thread (1 GB
+stack); a handler panic is recovered into `TsgoApiException(panicked = true)`, as tsgo's `SyncConn` recovers it.
+
+**The gate.** `tsgo-oracle api` (oracle-go/api.go) drives the SHIPPED binary over msgpack and generates the
+request stream from its own answers: every Identifier (`getSymbolsAtLocations`, `getTypeAtLocations`),
+call-like (`getResolvedSignature`) and call argument (`getContextualType`, `getTypeAtLocation`,
+`isTypeAssignableTo`) of every non-library file; then `getTypeOfSymbol` per symbol, `typeToString` per type,
+`getPropertiesOfType` + `getSignaturesOfType` per located type, `getReturnTypeOfSignature` per signature.
+`scripts/tsgo-api-oracle.py` records tsc's 78 sources (a copy of the bench profile) and 200 single-file
+conformance cases → `build/goport/api-oracle` (18 MB gzipped, 594,007 requests). `ApiParityTest`
+(`TSGO_API=1`) replays them through `HandleRequest`; ids are bound as a tsgo↔port bijection, everything else
+(names, flags, node handles, raw JSON string tokens, field order, omitted fields) must be equal.
+
+**Receipts** (worktree, rebased on (TSGO.3-a), regenerated): **ApiParityTest 594,007 / 594,007 equal**, 0
+differ, 0 crash, 122 s (by method: getTypeOfSymbol 126,447, getContextualType 90,507, getTypeAtLocation
+90,507, isTypeAssignableTo 90,484, typeToString 75,680, getResolvedSignature 53,386, getPropertiesOfType
+24,231, getSignaturesOfType 24,231, getReturnTypeOfSignature 17,666, getSymbolsAtLocations 434 /
+getTypeAtLocations 434 batches); positive control `TSGO_API_INJECT=conf-0010:5` red (1 differ).
+**DiagParityTest 13,127 / 13,127**, **EmitParityTest 13,127 / 13,127**, **OracleParityTest bound 7,774 / 7,774**;
+`-tsgo` 106 tests / 0 failed, `-goport` 15 / 0 (gate inputs: the main checkout's `build/goport/{diag-*,oracle,
+emit-oracle,ts-submodule}` through symlinks). `huge_methods.py` 0 over (2,821 classes). Warning-clean (a
+positive control `1 as Int` file read its `w:` and was deleted).
+
+**Port defects fixed (5)**: (1) an explicitly instantiated generic function as a VALUE (`unmarshallerFor[P]`) was
+a `generic-func-value` refusal — now `funcValue` with the instantiation's dictionaries; (2) `&v` of an opaque
+type parameter flowing into an interface handed out a `GoBox` where Go's `*T` of a struct IS the struct, so
+`parsed.(*Params)` failed — `goOpaqueAddr(goElem_T, ptr)` (also `packagejson`, `OrderedMap`); (3) the json shim
+neither marshalled nor decoded value classes (`[]api.NodeHandle`) — marshal landed upstream the same day,
+decode of a named STRING type here (a named NUMERIC type stays refused: decoding it lets the incremental
+buildinfo reader past `[][]BuildInfoFileId` into two further shim gaps, `[]*BuildInfoFileInfo` and
+`*[2]BuildInfoFileId` as `any` — `incrementalConcurrentSafeAliasFollowing` crashed when tried; latent, the
+diagnostics agree because the program is rebuilt); (4) `fmt` printed a value class by `toString`
+(`%!d(Kind=…)`) — the same fix landed upstream in (TSGO.3-a); (5) **K2's raw-FIR builder is EXPONENTIAL in
+`it[a] = fun(…) = x; it[b] = fun(…) = y; …`** (22 entries 32 s, 26 > 200 s, 130 parenthesized 5.6 s): the
+112-entry `unmarshalers` held a whole-module compile for 43 minutes (killed by the orchestrator); a composite
+literal's anonymous-function element is now parenthesized (`setValue`). Not a port defect: tsgo's own
+`newTypeResponse` panics on a tuple-target type reference (`AsTupleType` of a `TypeReference`); both sides panic.
+
+**Not ported (the remaining surface)**: completions, references, signature usages, JSDoc tags, documentation
+comments (need `internal/ls` + `lsutil`/`format`/`autoimport`/`change`/`lsproto`, ~60k lines), and the
+project system (`updateSnapshot` with file changes, `release`, watching). Differences from `tsc --api`: one
+snapshot per session; the disk FS has no symlink resolution.
+
 ### Round (TSGO.3-a) — EMIT PARITY: the ported runner renders tsgo's `.js` / `.js.map` / `.sourcemap.txt` baselines byte-identical on 13,127 / 13,127 configurations, and tsc's own 78 sources emit byte-identical to the tsgo 7.0.2 binary; 4 port defects fixed, all mechanisms (2026-10-08)
 
 **The gate**, defined as tsgo's compiler runner defines it (`docs/goport-emit-oracle.md`). `runSingleConfigTest` baselines

@@ -223,13 +223,68 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
   `OnceValue` call (Go 1.21+ semantics).
 - `Pool`, `Map`: a `HashMap`/free list under a `Mutex`; `Map.Range` calls `f` outside the lock.
 - `WaitGroup`: atomic counter; `Wait` parks until zero (`Add` reaching zero wakes waiters); `Go` runs
-  `f` in a new goroutine: `expect fun goSpawn` (JVM: an unbounded cached pool of daemon platform
+  `f` in a new goroutine: `goSpawn` → `GoProcs.go` (run-limited, below) → `expect fun startGoroutineThread` (JVM: an unbounded cached pool of daemon platform
   threads with Go's 1 GB maximum goroutine stack, reserved and committed as it is touched; an idle
   thread is reused for 30 s, so a parse's goroutine per file does not create a thread each). It is what `core.parallelWorkGroup` uses,
   i.e. a program built WITHOUT `SingleThreaded` (tsgo's default: 4 checkers, parallel parse and bind).
   Running `f` synchronously instead DEADLOCKS there — the files parser queues children while holding a
   mutex they take. A panic in a goroutine crashes a Go program; here the first one is kept and `Wait`
   re-throws it. (Kotlin/Native: the same unbounded cached pool over detached pthreads, see below.)
+- **The run limit — Go's Ps** ((TSGO.6-e), `go/sync/Procs.kt`). Go runs at most `GOMAXPROCS` goroutines at
+  once; the rest wait cheaply on a run queue. Without that the port ran every goroutine at once — tsgo's parse
+  spawns one per file, and date-fns' check had 1,331 threads RUNNABLE on 8 cores, the native GC stalling on all
+  of them. `GoProcs` holds N run tokens, N = `TSGO_GOMAXPROCS` when set to a positive integer, else the processor
+  count (JVM `availableProcessors`, Native `Platform.getAvailableProcessors`), read once:
+  - **Who holds a token**: a goroutine thread, from start to exit. `goSpawn` (common now) asks `GoProcs.go(f)`: with
+    a free token it starts `f` on a pooled goroutine thread (`startGoroutineThread`, the platform `actual`) at once;
+    otherwise it QUEUES THE CLOSURE — no thread — as a Go goroutine queued without an M. A thread is started for it
+    when a token is handed to it. So threads exist for running and BLOCKED goroutines only; they stay unbounded,
+    because a goroutine blocked on another must never wait for a thread (tsgo's parse queues children while holding
+    mutexes they take). A non-goroutine thread (the `main`/test/LSP-request thread parked in `onGoStack`) holds no
+    token and needs none: its only job is to wait, and giving it a token would idle one of the N.
+  - **Where a token is released — every indefinite block.** The audit: all blocking in the shims goes through
+    `WaitQueue.await` (`Mutex`, `RWMutex` both modes, `WaitGroup.wait`, `Once`'s slow path via its `Mutex`,
+    `CountingSemaphore` — the osvfs syscall limiter) or `onGoStack`'s park; `blockingWait { … }` wraps exactly the
+    PARK loop of both, releasing the caller's token if it holds one and taking one back (FIFO, see below) before
+    returning, i.e. BEFORE the woken waiter re-checks its condition (a runnable goroutine needs a P). The ported
+    code has no other blocking: the lowering refuses `go`, `select` and channels, `errgroup.Go` runs synchronously,
+    and `time.Sleep` is never reached; the remaining spins are bounded — `WaitQueue`'s 7 rounds before parking and
+    the queue guards' CAS spins, which no holder keeps across a park. A goroutine HOLDING a token therefore never
+    waits indefinitely, so whatever it waits for can always get a token: no deadlock from the limit at any N >= 1.
+    File reads keep the token (Go releases its P around a syscall; local reads here are short, and the osvfs
+    semaphore already bounds them).
+  - **Fairness**: one FIFO holds both kinds of waiter — a parked thread wanting a token back and a queued closure.
+    A released token goes to its head (unparked, or started on a thread with the token transferred); the free count
+    only grows when the queue is empty, so `free > 0` implies an empty queue and a fast-path taker can never jump a
+    queued waiter. The queue and the free count's increments are under one CAS spin guard; the hand-off happens
+    outside it, so a releaser never waits for the woken thread.
+  - `runtime.GOMAXPROCS` still answers a fixed 4: tsgo's one caller sizes autoimport's checker pool from it, and
+    changing that is a behaviour change no measurement here asked for. tsgo's own program checkers (4 by default)
+    are unaffected — they are goroutines and simply hold tokens while they run.
+  - Pins: `GoProcsTest` (commonTest, JVM and Native) — never more than N running; a 1,000-goroutine fan-out at N=1
+    with the parent holding the mutex its children take; at N=1, G2 blocking on a mutex held by G1, which G2 has
+    just woken and which is waiting for G2's token; a woken goroutine never exceeds N. Each scenario runs on a
+    goroutine under a 30 s deadline, so a deadlock fails instead of hanging the suite. Ablated: not releasing in
+    `blockingWait` reddens the two N=1 pins (deadline); not re-acquiring after a wake reddens the woken-limit,
+    the N=1 fan-out and the N-limit pins; starting goroutines without a token reddens the same three.
+  - Measured (2026-10-09, 8 cores, N = 8, 3 rotated rounds, every run's stdout byte-identical to
+    tsgo's; median (range) wall, median peak RSS; Kotlin/Native release `gc=pmcs`; JVM cold one-shot):
+
+    | arm | compiler (123 files) | services (297) | date-fns (1,445) |
+    |---|---|---|---|
+    | tsgo 7.0.2 | 1.77 s / 0.36 GB | 2.35 s / 0.52 GB | 0.36 s / 0.17 GB |
+    | Kotlin/Native before → after | 8.07 (8.00-8.10) → 8.07 (7.95-8.25) s, 1.59 → 1.61 GB | 10.57 (10.10-10.73) → 10.20 (10.19-10.89) s, 2.16 → 1.97 GB | **3.60 (3.07-4.52) → 2.02 (1.97-2.29) s, 2.10 → 1.34 GB** |
+    | GraalVM image before → after | 2.90 → 2.95 s | 3.82 → 3.66 s | 0.74 (0.70-1.91) → 0.73 (0.71-0.75) s |
+    | GraalVM PGO image before → after (retrained) | 2.57 → 2.46 s, 1.58 → 1.40 GB | 3.06 → 3.09 s | 0.59 → 0.60 s, 0.61 → 0.53 GB |
+    | JVM before → after | 10.86 → 10.41 s | 12.74 → 12.05 s | 5.14 (4.99-6.04) → 4.75 (4.61-4.93) s, 1.03 → 0.85 GB |
+
+    The win is date-fns' PARSE, where tsgo's per-file fan-out lives: native parse 1.76-3.47 s → 0.82-0.91 s, and the bind
+    phase (0.14-0.86 s, a GC-stall lottery) reads 0.26-0.42 s. Threads created fall from 600-900 to 510-950
+    on date-fns (now one per BLOCKED goroutine — the parse's per-file mutex waiters; 11,300 of 11,326 goroutines were
+    queued as closures at first) and from ~140 / ~300 to 45-94 / 31-158 on compiler / services. The check-dominated
+    profiles do not move: their 4 checker goroutines never contended for the 8 tokens, and their cost is the GC (§ above).
+    A first cut that gave every queued goroutine its own thread up front (parked on a token) made date-fns WORSE
+    (3,400 threads, 5.1 GB): a Go goroutine waiting for a P has no M, and queuing the closure is what reproduces that.
 - `sync/atomic` types wrap `AtomicInt`/`AtomicLong`/`AtomicBoolean`/`AtomicReference` (unsigned
   kinds wrap the signed atomic of the same width; two's-complement add is identical).
 - `errgroup.Group`: `Go` runs `f` synchronously; the first error is kept with a CAS.
@@ -240,7 +295,7 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
   until the permit is set and consumes it, `unpark` sets it and signals; an `unpark` before the `park`
   is a permit, as with `LockSupport`. The pthread objects are freed by a `Cleaner` when the token is
   collected, NOT at thread exit: an unparker may still hold the token of a thread that has finished.
-- `goSpawn`: the JVM's unbounded cached pool rebuilt on pthreads — DETACHED worker threads with Go's 1 GB
+- `startGoroutineThread` (what `goSpawn` reaches once `GoProcs` grants a token): the JVM's unbounded cached pool rebuilt on pthreads — DETACHED worker threads with Go's 1 GB
   maximum goroutine stack (virtual, committed as touched; 256 MB if that reservation is refused). One pthread
   mutex guards a LIFO list of idle workers; a spawn pops one and hands it the closure directly (the worker
   waits on its own `pthread_cond` under that mutex), and creates a new worker only when none is idle — never a
@@ -255,7 +310,7 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
   reservation, so creating one per goroutine was never the cost; the pool keeps the thread count down and
   matches the JVM. Every worker that ran is still alive at exit (`peakLive` = threads created): the
   goroutines of one parse are concurrent, so reuse comes from later phases. `TSGO_GOROUTINE_STATS=1` makes
-  `NativeCheckMain` print `spawns=… threads=… peakLive=…` on stderr. A throwable escaping a goroutine is
+  `NativeCheckMain` print `spawns=… threads=… peakLive=… procs=… peakRunning=… queuedStarts=… queuedAcquires=…` on stderr. A throwable escaping a goroutine is
   FATAL — `fatal error: goroutine: …` on stderr and exit status 2, as
   Go's unrecovered panic, on both actuals: every caller catches inside `f`, so one arriving there escaped
   that handler (an out-of-memory error raised again while it allocated), and carrying on parked the
@@ -386,7 +441,7 @@ Lowering rules that come with the shims:
 2. **`math.Log`/`Exp`** are ports of Go's pure-Go `log` and `exp` (the platform `exp` was dropped at (TSGO.6): glibc's, i.e. Kotlin/Native's, differed from Go in the last ulp on `Pow(7, 1.5)`); Go on amd64 uses assembly for both. Sampled values agree with Go bit-for-bit (oracle), but the last ulp is not guaranteed. `Log2` and a FRACTIONAL `Pow` exponent inherit this; integer exponents are exact.
 3. **`strconv.Quote` / `%q`** keep every valid non-ASCII rune; Go escapes non-printable ones (`­`, unassigned code points).
 4. **`fmt` `%v` of a struct/pointer** prints Kotlin `toString()`, `%T` names only builtin kinds; map keys in `%v` are sorted by `toString()`.
-5. **`errgroup.Group.Go`** runs its function synchronously (§ 9a); `WaitGroup.Go` starts a thread per goroutine (no M:N scheduling) and re-throws a goroutine's panic from `Wait` instead of crashing. Mutual exclusion and blocking are real.
+5. **`errgroup.Group.Go`** runs its function synchronously (§ 9a); `WaitGroup.Go` runs a goroutine on a pooled thread — at most `TSGO_GOMAXPROCS` (default the processor count) run at once and a queued one has no thread, but a BLOCKED goroutine keeps its thread (no M:N stack switching) and re-throws a goroutine's panic from `Wait` instead of crashing. Mutual exclusion and blocking are real.
 6. **`context`** has no deadlines or cancellation. **`os.Getenv`** returns `""`. **`debug.SetMaxStack`** is a no-op.
 7. **`regexp`** compiles a TRANSLATION of the RE2 source with Kotlin `Regex` (§ 9b); the residue listed there is not Go.
 8. **`language`** keeps case-normalized subtags and matches by exact tag then language subtag — not CLDR canonicalization or distance matching.

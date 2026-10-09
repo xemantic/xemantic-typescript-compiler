@@ -50,10 +50,11 @@ internal expect fun park(blocker: Any)
 internal expect fun unpark(token: Any)
 
 /**
- * Runs [f] concurrently — a goroutine (`WaitGroup.Go`, docs/goport-runtime.md § 9a). The thread
- * gets a large stack: a goroutine's stack grows to 1 GB in Go, and the checker recurses deeply.
+ * Runs [f] concurrently — a goroutine (`WaitGroup.Go`, `onGoStack`; docs/goport-runtime.md § 9a): on a
+ * goroutine thread ([startGoroutineThread]: a large stack, as a goroutine's grows to 1 GB in Go and the
+ * checker recurses deeply), holding one of [GoProcs]' run tokens — queued until one is free.
  */
-internal expect fun goSpawn(f: () -> Unit)
+internal fun goSpawn(f: () -> Unit) = GoProcs.go(f)
 
 /**
  * A FIFO of parked threads, each waiting for its own condition. [await] spins briefly, then parks;
@@ -103,7 +104,8 @@ internal class WaitQueue {
                 waiting.decrementAndFetch()
                 return
             }
-            while (w.signaled.load() == 0) park(this)
+            // a goroutine gives its run token back while it is parked, and takes one before it re-checks
+            blockingWait { while (w.signaled.load() == 0) park(this) }
             waiting.decrementAndFetch()
             if (ready()) return
         }

@@ -79,6 +79,7 @@ import com.xemantic.typescript.tsgo.api.encoder.getIndex
 import com.xemantic.typescript.tsgo.ast.getPositionMap
 import com.xemantic.typescript.tsgo.ast.utf16ToUTF8
 import com.xemantic.typescript.tsgo.compiler.Program
+import com.xemantic.typescript.tsgo.go.sync.blockingWait
 import com.xemantic.typescript.tsgo.go.sync.goSpawn
 import com.xemantic.typescript.tsgo.go.sync.park
 import com.xemantic.typescript.tsgo.go.sync.parkToken
@@ -391,6 +392,7 @@ internal fun <R> onGoStack(block: () -> R): R {
         done.store(1)
         unpark(token)
     }
-    while (done.load() == 0) park(done)
+    // a goroutine caller (nested onGoStack) gives its run token back while it waits for the spawned one
+    blockingWait { while (done.load() == 0) park(done) }
     return out!!.getOrThrow()
 }

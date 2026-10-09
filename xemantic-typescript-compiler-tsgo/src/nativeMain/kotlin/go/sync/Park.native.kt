@@ -27,7 +27,7 @@
 
 package com.xemantic.typescript.tsgo.go.sync
 
-// (TSGO.6) The Kotlin/Native `actual`s of the park and the goroutine spawn (docs/goport-runtime.md § 9a).
+// (TSGO.6) The Kotlin/Native `actual`s of the park, the goroutine thread start and the run-token thread state (docs/goport-runtime.md § 9a).
 //
 // PARK: a per-thread token holding a `pthread_mutex` + `pthread_cond` and a PERMIT flag, i.e.
 // `LockSupport` semantics — an `unpark` before the `park` leaves the permit set and the `park` returns
@@ -36,7 +36,7 @@ package com.xemantic.typescript.tsgo.go.sync
 // token is collected — a token can outlive its thread while an unparker still holds it, so it must not
 // be freed at thread exit.
 //
-// SPAWN: an unbounded cached pool of detached worker pthreads, the JVM actual's `ThreadPoolExecutor(0,
+// SPAWN (`startGoroutineThread`, called by `GoProcs` once a goroutine has a run token): an unbounded cached pool of detached worker pthreads, the JVM actual's `ThreadPoolExecutor(0,
 // MAX, 30 s, SynchronousQueue)` rebuilt on one pthread mutex: a spawn hands its closure DIRECTLY to an
 // idle worker, and creates a new worker (Go's 1 GB maximum goroutine stack, reserved and committed as
 // touched; 256 MB when that reservation is refused) only when none is idle — never a queue, so a
@@ -45,6 +45,7 @@ package com.xemantic.typescript.tsgo.go.sync
 
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.concurrent.ThreadLocal
+import kotlin.native.Platform
 import kotlin.native.ref.Cleaner
 import kotlin.native.ref.createCleaner
 import kotlinx.cinterop.COpaquePointer
@@ -57,6 +58,7 @@ import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.nativeHeap
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.staticCFunction
+import kotlinx.cinterop.toKString
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.decrementAndFetch
@@ -111,6 +113,20 @@ private class ParkToken {
 @ThreadLocal
 private var currentToken: ParkToken? = null
 
+/** Whether this thread holds a [GoProcs] run token (only a goroutine thread ever does). */
+@ThreadLocal
+private var holdsProc = false
+
+internal actual fun goProcHeld(): Boolean = holdsProc
+
+internal actual fun setGoProcHeld(held: Boolean) {
+    holdsProc = held
+}
+
+internal actual fun goProcLimitDefault(): Int =
+    platform.posix.getenv("TSGO_GOMAXPROCS")?.toKString()?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+        ?: Platform.getAvailableProcessors()
+
 private fun tokenOfThisThread(): ParkToken = currentToken ?: ParkToken().also { currentToken = it }
 
 internal actual fun parkToken(): Any = tokenOfThisThread()
@@ -161,7 +177,8 @@ private val threadsPeak = AtomicInt(0)
 
 /** `spawns=… threads=… peak=…`: how many goroutines ran on how many pthreads (`NativeCheckMain`). */
 internal fun goroutinePoolStats(): String =
-    "spawns=${spawns.load()} threads=${threadsCreated.load()} peakLive=${threadsPeak.load()} live=${threadsLive.load()}"
+    "spawns=${spawns.load()} threads=${threadsCreated.load()} peakLive=${threadsPeak.load()} live=${threadsLive.load()} " +
+        GoProcs.stats()
 
 /**
  * A goroutine's unrecovered panic crashes a Go program, and so does this one. Every caller here
@@ -233,7 +250,8 @@ private fun spawnWithStack(ref: StableRef<Worker>, stack: ULong): Boolean = memS
     }
 }
 
-internal actual fun goSpawn(f: () -> Unit) {
+internal actual fun startGoroutineThread(body: () -> Unit) {
+    val f = body
     spawns.incrementAndFetch()
     pthread_mutex_lock(poolMutex.ptr)
     val w = idle.removeLastOrNull()
@@ -258,5 +276,5 @@ internal actual fun goSpawn(f: () -> Unit) {
     ref.dispose()
     pthread_cond_destroy(worker.cond.ptr)
     nativeHeap.free(worker.cond)
-    error("goSpawn: pthread_create failed")
+    error("startGoroutineThread: pthread_create failed")
 }

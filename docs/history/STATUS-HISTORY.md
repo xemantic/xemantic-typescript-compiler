@@ -1,3 +1,11 @@
+**(TSGO.4) DONE — `-core` sunset report (2026-10-08):** `docs/core-sunset.md` (4-d). On 18 real projects (8 tsc
+profiles, 8 census libraries, cronstrue, marked) the port reports 616 / 616 rows identical to tsgo 7.0.2 where
+`-core` has 153 false positives and 184 misses; warm check on the compiler profile ~2.7 s vs `-core` ~7.5 s
+(tsgo 1.8 s), at ~1.6x `-core`'s memory. Recommendation: retire `-core`, staged behind a ported tsgo CLI (TSGO.5),
+a native build of the port (TSGO.6, the go/no-go — never measured) and moving `-daemon`/launcher/bench/KIR
+lowering (TSGO.7); the deletion itself is (TSGO.8), **BLOCKED-PENDING-USER** (owner decides retirement, `-project`
+compatibility, artifact coordinates, a JVM-only interval, the memory budget). Next: (TSGO.5).
+
 **(TSGO.4-a) DONE — the language service on the tsgo port (2026-10-08):** tsgo's `internal/ls` closure (~62k Go
 lines, 99.5% lowered mechanically) runs in process behind `TsgoLanguageService` (`-tsgo` `facade/`); the
 server/project-system ends tsgo has not ported are an overlay (`goport-extract/overlay/api/xtsc_ls.go`, handler

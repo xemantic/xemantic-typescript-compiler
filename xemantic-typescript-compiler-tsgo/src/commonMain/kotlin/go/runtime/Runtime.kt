@@ -39,7 +39,12 @@ fun caller(skip: Int): Tuple4<ULong, String, Int, Boolean> = Tuple4(0uL, "", 0, 
 const val GOOS: String = "linux"
 const val GOARCH: String = "amd64"
 
-/** `runtime.GOMAXPROCS(n)`: the port runs goroutines on threads; it reports a fixed 4 and ignores [n] ((TSGO.4-a): sizes autoimport's checker pool). */
+/**
+ * `runtime.GOMAXPROCS(n)`: reports a fixed 4 and ignores [n] ((TSGO.4-a): sizes autoimport's checker pool).
+ * The port's real run limit is `go.sync.GoProcs` (`TSGO_GOMAXPROCS`, default the processor count; (TSGO.6-e)),
+ * deliberately NOT what this answers: tsgo's only caller sizes a pool from it, and changing that pool's size
+ * changes which checker a file lands on — a behaviour change no run-limit measurement asked for.
+ */
 @Suppress("UNUSED_PARAMETER")
 fun gomaxprocs(n: Int): Int = 4
 
