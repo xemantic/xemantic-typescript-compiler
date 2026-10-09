@@ -1,3 +1,14 @@
+**(TSGO.5-a / TSGO.6-a) DONE — the tsgo CLI on the JVM, and the port on Kotlin/Native (2026-10-08):**
+`com.xemantic.typescript.tsgo.cli.TsgoMainKt` is `tsc` 7.0.2 ported (`internal/execute` + `execute/tsc` + `vfs/osvfs`
+through the porter): `CliParityTest` (`TSGO_CLI=1`, oracle `scripts/tsgo-cli-oracle.py`) **105 / 106 equal, 0 differ**
+(type-fest skipped below an 8 GB heap) over the 8 tsc profiles, the census libraries, cronstrue, marked, 20 type-oracle
+projects and 32 flag/config shapes. `-tsgo` gains an opt-in `linuxX64` target (`-PenableNativeTargets=true`): all generated
+code compiles unchanged, native suite **64 / 64**, and `NativeCheckMain` reports tsc's 65 rows identically to tsgo — at
+12.6 s parallel vs tsgo 2.1 s (6.6 s with the native GC stall off, `TSGO_GC_PAUSE=0`, at 4 GB RSS). Re-verified on main by
+the orchestrator: diag 13,127, emit 13,127, bound AST 7,774, API 594,007, LS 21,614, CLI 105 — all equal; tsgo 117 / goport 15
+/ lsp 38 / native 64, 0 failed; 0 methods over 8,000 bytecodes (4,850 classes). Remains: `--build`/`--watch`, the GraalVM
+image, a native goroutine pool and bounded GC default. Next: (TSGO.5)/(TSGO.6) remainders, then (TSGO.7).
+
 **(TSGO.4) DONE — `-core` sunset report (2026-10-08):** `docs/core-sunset.md` (4-d). On 18 real projects (8 tsc
 profiles, 8 census libraries, cronstrue, marked) the port reports 616 / 616 rows identical to tsgo 7.0.2 where
 `-core` has 153 false positives and 184 misses; warm check on the compiler profile ~2.7 s vs `-core` ~7.5 s

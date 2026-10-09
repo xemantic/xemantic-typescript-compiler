@@ -173,7 +173,9 @@ function); `defer` → `withDefers` (named results + defer still refused).
 Shim interop: shim variadics are Kotlin `vararg` (packed args passed directly, spreads via
 `toArray`/`toTypedArray`); shim function/struct-pointer parameters are non-null (`!!` at the call);
 `utf8.DecodeRuneInString(s[i:])` → `decodeRuneInStringAt(s, i)`; external struct types without a
-`goCopy`/zero constructor are detected from the shim sources (`ShimIndex`).
+`goCopy`/zero constructor are detected from the shim sources (`ShimIndex`, which reads `expect`/`actual`
+declarations too — `atomic.Uint64` is an `expect` class). A shim struct WITHOUT `goCopy` is copied nowhere:
+that is how an immutable shim value (`xxh3.Uint128`, `val` fields) opts out of Go's value copies.
 
 Files: one Kotlin file per Go file, split above 3,000 Go lines or 150 package variables (a JVM
 `<clinit>` holds 64 KB); package variables sorted by the IR's `initOrder` (Kotlin rejects a forward

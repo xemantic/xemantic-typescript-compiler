@@ -48,14 +48,17 @@ DISTINCT zero objects and value copies; the runtime itself copies on growth, `co
 Semantics: a never-written slot (the tail of a grown array, a cleared range) is Kotlin `null` and is
 materialized to the zero on first read and stored back, so `s[i].f = x` on an implicit struct zero
 works through every alias. Growth follows Go's `nextslicecap` (double below 256, then ×1.25+192).
-Equality is identity.
+Equality is identity. A slice is nil iff its backing array is `GoElem.NIL_ARRAY` (`isNil` is derived, not
+a field: a 5-field header is 32 bytes on the JVM, a 6th `Boolean` made it 40). `slices.BinarySearchFunc` is
+`inline`, so each call site's comparator call is monomorphic and neither its boxed `Int` nor the result
+`Tuple2` is allocated (docs/goport-perf.md § 7).
 
 ## 3. Maps — `GoMap<K, V>`
 
 | Go | Kotlin |
 |---|---|
 | `make(map[K]V, n)`, `map[K]V{}` | `GoMap.make<K, V>(valueElem, n)` / `goMakeMap(valueElem, n)` |
-| nil map | `GoMap.nil<K, V>(valueElem)` — reads answer zero, writes panic `assignment to entry in nil map` |
+| nil map | `GoMap.nil<K, V>(valueElem)` — reads answer zero, writes panic `assignment to entry in nil map`; ONE shared object per value kind (`GoElem.nilMapCache`, made on first use — a nil map is immutable and Go compares maps only to `nil`) |
 | `m[k]` | `m[k]` (zero value when absent) |
 | `v, ok := m[k]` | `val (v, ok) = m.lookup(k)`; `_, ok :=` → `m.contains(k)` |
 | `m[k] = v`, `delete(m, k)`, `len(m)`, `clear(m)` | `m[k] = v`, `m.delete(k)`, `m.len`, `m.clear()` / `goClear(m)` |
@@ -132,6 +135,10 @@ Kotlin's flow analysis (never reached; not a Go panic, so `recover` does not see
 A panic inside a deferred call replaces the current panic and the remaining defers still run. A
 `StackOverflowError`/`OutOfMemoryError` is NOT recoverable (Go: fatal).
 
+A frame's defer list is made on the first `defer`: most frames register none (`checkExpressionEx` and
+`recursiveTypeRelatedTo` defer only when tracing is on), and an eager `ArrayList` per call was ~1% of a
+check's allocation (docs/goport-perf.md § 7).
+
 ## 8. Errors, tuples, nominal stand-ins for anonymous interfaces
 
 | declaration | meaning |
@@ -194,7 +201,7 @@ parse/encode path.
 | `os`, `runtime/debug` | `getenv` (always `""`), `setMaxStack` (no-op) | approx |
 | `regexp` | `Regexp` (`replaceAllStringFunc replaceAllString replaceAllLiteralString matchString findString findStringSubmatch findAllString findAllStringSubmatch split string`), `mustCompile compile quoteMeta`; NOT Go: `translateRe2(expr)` | RE2 syntax translated (§ 9b) †; `ReplaceAllString` uses Go's `$` template rules; `split`/`findAllString` use Go's `allMatches` (an empty match right after a match is skipped) † |
 | `golang.org/x/text/language` | `Tag` (zero `Tag()` = `und`; `string goCopy goEquals goHash`) `und english parse mustParse Matcher newMatcher Confidence No Low High Exact` | approx |
-| `github.com/zeebo/xxh3` | `hashString128 hash128 hashString hash`; `Uint128(hi, lo)` + `bytes goCopy goEquals goHash`; `Hasher` (`write writeString sum64 sum128 sum reset blockSize size goCopy`; NOT Go: `writeU8 writeU32le writeU64le`, the checker's `hashWrite32/64` overrides — a byte buffer grown on demand, a short input hashed straight from it), `new` | exact † (lengths 0..300, block edges, 64 KiB, 1 MiB; v1.1.0's scalar path; the `Hasher` over 290 chunkings across the 1088-byte buffer and 1024-byte block edges, including a `Sum64` mid-stream). Seeded variants not ported |
+| `github.com/zeebo/xxh3` | `hashString128 hash128 hashString hash`; `Uint128(hi, lo)` + `bytes goEquals goHash` — IMMUTABLE (`val` fields, no `goCopy`, so the porter emits no copy of one: tsgo never writes a Uint128 field); `Hasher` (`write writeString sum64 sum128 sum reset blockSize size goCopy`; NOT Go: `writeU8 writeU32le writeU64le`, the checker's `hashWrite32/64` overrides — a byte buffer grown on demand, a short input hashed straight from it), `new` | exact † (lengths 0..300, block edges, 64 KiB, 1 MiB; v1.1.0's scalar path; the `Hasher` over 290 chunkings across the 1088-byte buffer and 1024-byte block edges, including a `Sum64` mid-stream). Seeded variants not ported |
 | `github.com/go-json-experiment/json` | `Options deterministic`, `Marshaler MarshalerTo Unmarshaler UnmarshalerFrom` (typealiases of `encoding/json/v2`'s), `Decoder Encoder` (aliases of `jsontext`'s), `marshal marshalWrite marshalEncode unmarshal unmarshalRead unmarshalDecode`, `SemanticError`; NOT Go: `GoJsonStruct`/`JsonField` (§ 9c) | exact † for the representations in § 9c (values AND whether Go errs; layouts; string escaping); approx § 10 |
 | `…/json/jsontext` (+ alias package `encoding/json/jsontext`) | options `allowInvalidUTF8 allowDuplicateNames withIndent withIndentPrefix`; `Kind` (`string`), `Token` (zero `Token()`; `kind string bool float int goCopy`), token values `beginObject endObject beginArray endArray `` `null` `` `` `true` `` `` `false` ``, constructors `bool string float int uint`; `Value`; `Decoder` (`peekKind readToken readValue skipValue inputOffset stackDepth`), `Encoder` (`writeToken writeValue outputOffset stackDepth`), `newDecoder newEncoder`, `SyntacticError`, vars `errUnexpectedEOF errInvalidUTF8 errDuplicateName errNonStringName`; NOT Go: `newDecoderString(s, opts…)` | exact † (the token stream with `PeekKind`, incl. RFC 8259 number/escape/surrogate/UTF-8/duplicate-name validation; error MESSAGES approx) |
 | `encoding/json/v2` | `Marshaler MarshalerTo Unmarshaler UnmarshalerFrom` (`marshalJSON(): Tuple2<GoSlice<Int>, GoError?>`, `marshalJSONTo(enc: Encoder?)`, `unmarshalJSON(data: GoSlice<Int>)`, `unmarshalJSONFrom(dec: Decoder?)`) | interfaces only |
@@ -286,7 +293,10 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
     A first cut that gave every queued goroutine its own thread up front (parked on a token) made date-fns WORSE
     (3,400 threads, 5.1 GB): a Go goroutine waiting for a P has no M, and queuing the closure is what reproduces that.
 - `sync/atomic` types wrap `AtomicInt`/`AtomicLong`/`AtomicBoolean`/`AtomicReference` (unsigned
-  kinds wrap the signed atomic of the same width; two's-complement add is identical).
+  kinds wrap the signed atomic of the same width; two's-complement add is identical). `Uint64` is an
+  `expect` class — every `ast.Node` and `ast.Symbol` embeds one — and on the JVM it is ONE object, a
+  `@Volatile long` driven by an `AtomicLongFieldUpdater` (the common form was the class plus its
+  `AtomicLong`); Native keeps the wrapper (docs/goport-perf.md § 7).
 - `errgroup.Group`: `Go` runs `f` synchronously; the first error is kept with a CAS.
 
 **Kotlin/Native** (`nativeMain`, built since (TSGO.6) behind `-PenableNativeTargets=true`):

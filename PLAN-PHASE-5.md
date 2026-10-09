@@ -25,6 +25,35 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-f) — THE JVM PORT PROFILED: cold is the JIT ramp (50% of all CPU in compiler threads, a third of the check interpreted; the JDK AOT cache takes it 10.4 → 6.5 s), warm is flat checker code + identity-map probes + G1; six runtime-shim levers cut a warm rebuild's allocation 12.6% and GC pauses 11-17%, wall −1.6% single / −2..−7% parallel; 0 methods over 8,000 bytecodes (2026-10-09)
+
+- **Census** (async-profiler 4.1, `scripts/tsgo-jvm-profile.sh` + `scripts/tsgo_ap_stacks.py`, docs/goport-perf.md § 7):
+  COLD 10.4 s / ~66 s CPU — JIT threads 50.4% (C2 40.6%), goroutines 43.9% (of which interpreted 34.9%, C1 16.3%),
+  GC 5.4%. WARM single-threaded (3.71 s, 2.64 GB/rebuild) — bench thread 57% of process CPU, G1 workers 31% + 6%;
+  the thread: checker 36.7% flat, `GoMap.find` 11.6% (55% under `LinkStore.Get`), `ast` 13.3% flat, `GoSlice` 4.9%,
+  itable stubs 4.3%. Allocation: JSDoc prefix copies ~16%, `GoSlice` headers 17.6%, boxed comparator `Integer` 4.1%,
+  nil maps 5%, `FlowType` 5.2%, `Uint128` 3.8%, `TextRange` 3.3%, `AtomicLong` + wrapper 2.0%. Huge methods: 0 of
+  69,617 (largest hot: `structuredTypeRelatedToWorker` 5,953). `Ref$*` closure boxes 0.4% — not a lever.
+- **Landed** (runtime shims; gen/ changed only by regeneration): `slices.BinarySearchFunc` inline (monomorphic
+  comparator, no `Integer`/`Tuple2`); `GoMap.nil` shared per value kind; `xxh3.Uint128` immutable (no `goCopy`, the
+  porter emits no copy); `atomic.Uint64` an `expect` class, one object on the JVM (`AtomicLongFieldUpdater`);
+  `GoSlice.isNil` derived from `GoElem.NIL_ARRAY` (40 → 32-byte headers); `GoDeferFrame` list on first `defer`.
+  The porter's `ShimIndex` reads `expect`/`actual`; `goport-extract` absolutizes `--tsgo` (a relative one applied
+  no overlay: "partial package internal/api has no root XtscNewSession").
+- **A/B** (each arm its own JVM, ABBA × 2, 6+10 rebuilds; md5 `5f9ff3f5` → `c93b7187` → `d0e826cf`): first three
+  levers single −2.4% (4/4), parallel −4.9% (4/4), alloc −7.0%; last three alloc −3.9%, parallel −7.3% (4/4), single
+  noise; base → all six: single 3,693 → 3,632 ms (−1.6%, 3/4), parallel 2,057 → 2,010 ms (−2.3%, 3/4), alloc
+  2,693 → 2,352 MB (−12.6%), GC pause −17% / −11%; services parallel 2,818 → 2,684 ms (−4.8%, 4/4); date-fns and
+  all cold runs noise. Every run 65 diagnostics, one digest; every cold run byte-identical to tsgo.
+- **Not done, sized**: the JSDoc prefix copy (needs a byte-string window type), `LinkStore` probes (~8% CPU; needs a
+  thread-safe per-object link slot), `nodeData`/`TypeData` as abstract classes (itable 4.3%), porter copy elision for
+  `FlowType` via non-escaping pointer receivers (~3% alloc). Cold: the JDK AOT cache, 10.4-11.2 → 6.3-6.7 s, needs a
+  packaged (JAR) launcher.
+- Gates (on the final tree): `-tsgo` 123 / 0, `-lsp` 38 / 0, `-goport` 15 / 0; DiagParity 13,127 (compare equal
+  13,127), EmitParity 13,127, CliParity 105 equal / 0 differ / 1 skipped, LsParity 21,614, ApiParity 594,007 equal;
+  `linuxX64Test` 68 / 0; GraalVM image replay 106 / 106; warning-clean (56 tasks rerun, 0 `w:`, injected positive
+  control prints one).
+
 ### Round (TSGO.6-e) — GO'S Ps: AT MOST `TSGO_GOMAXPROCS` (DEFAULT THE CPU COUNT) GOROUTINES RUN AT ONCE, A QUEUED ONE HAS NO THREAD; date-fns' native check 3.60 → 2.02 s and 2.10 → 1.34 GB (parse 1.8-3.5 → 0.8-0.9 s), the JVM 5.14 → 4.75 s; the check-dominated tsc profiles do not move; output byte-identical to tsgo in every run (2026-10-09)
 
 - **Design** (`commonMain/go/sync/Procs.kt`, docs/goport-runtime.md § 9a "The run limit"): `GoProcs` holds N run
@@ -384,67 +413,6 @@ A/B says they change nothing; retiring them is a cleanup round with its own A/B.
 now depends on `-tsgo`'s native story. Recorder (`XTSC_EXTERNALS_DUMP`, `.kt` + `.diag` per generation) and bench
 stay as the instruments for the next A/B.
 
-### Round (TSGO.4-c) — KIR on the ported checker: the JVM backend's front end asks tsgo, not `-core`'s checker; kir 313/313, `kir-bench.sh`'s equivalence gate unchanged (mitt + toml, all 3 arms agree), 9 of 33 programs lower differently and every change is toward TYPED operations; the tsgo front end is faster than `-core`'s on this corpus (1,265 vs 1,973 ms) at the same peak heap (2026-10-08)
-
-**What moved.** `checkTypeScript` / `checkTypeScriptProject` (`-kir`'s only checker seam) now build a tsgo program and answer
-`CheckedFacts` post hoc (`kir/front/TsgoProgram.kt`, `TsgoFacts.kt`): tsgo's `tsoptions` + `NewProgram` + the API's
-`XtscCheckerPool`, bundled libs parsed once per process (a caching compiler host, as tsgo's harness and project system share
-them), the program SINGLE-THREADED; then every `-core` node the lowering walks is paired with its tsgo node (`FileNodeMap`:
-kind + first-token offset, outermost first within a group; `-core`'s keyword identifiers and literal node names mapped; a
-modified tsgo node keyed also after its modifiers, because `-core`'s declaration `pos` skips them) and tsgo's answers are
-rebuilt in `-core`'s value shapes (`TsgoTranslator`: flags by NAME — tsgo reordered `TypeFlags` and `-core` numbers
-`SymbolFlags` its own way; an instantiation as a `Type.Reference` over its target `Type.Interface` with no symbol of its own,
-as `-core` reported it; tuples, call/construct signatures, `false|true` read back as `boolean`; a library declaration a
-stand-in node in no program file). Every fact the `-core` sink recorded in its walk is asked AFTER the check, which tsgo
-supports and `-core` could not. `-core` still supplies the PARSER/AST the lowering walks and the value classes; its checker
-stays reachable as `XTSC_KIR_ENGINE=core` (the sunset A/B). `-tsgo` untouched; `-core` untouched (frozen).
-
-**Translation rules that are mechanisms, not shape-copying**: the polymorphic `this` type is its constraint (the class
-instance type); a generic `Events[Key]` / conditional / `keyof T` is its BASE CONSTRAINT (`unknown` → `Any?`; `-core` typed
-these `any`); an intersection drops EMPTY object members (`X & {}` is TypeScript's `NonNullable<X>` — kept, mitt's
-`handler(evt!)` cast a `String` to `JsObject` at run time, measured); a namespace import's export table is tsgo's
-`getExportsOfModule` (stars, renames, a star's `default`), ordered as `-core` built it and ONE table per module (a table per
-mention made `ns === ns` print `false`, measured); a shorthand member's name resolves through
-`getShorthandAssignmentValueSymbol`; a derived class's inherited construct signature is handed over without the base's
-declaration.
-
-**Lowering changes (two, both in `KirFileLowering`)**: a module namespace object's type (`typeof import("./m")`, which
-`-core` typed `any`) erases to the bag the lowering already builds for it; a NESTED class — which tsgo binds and `-core`
-never did — now meets the backend first as a TYPE (`typeof P`) or a CALL declaration (`p.describe()`), so both refuse with
-the existing nested-class reason (`nestedClassOf`) rather than a generic "cannot map".
-
-**Adjudicated (each against the tsgo 7.0.2 binary).** Four fixtures were not TypeScript 7: `14-strings.ts` and
-`KirEqualitySemanticsTest`'s switch case declare a script-level `name`, which collides with lib.dom's (TS2451 + `void`);
-`19-nullish.ts`'s `"" || x` is TS2873; `yes === no` over two `const ...: boolean` initialized `true`/`false` is TS2367
-(narrowed); `KirReceiverShapeTest`'s field initializer reading a parameter property is TS2729 under define semantics (TS7's
-default) — fixtures renamed / routed through a `string`/`boolean`-typed binding, and the last one now runs with
-`useDefineForClassFields: false` (which `checkTypeScript` honours, with `strict` written false). All corpus and project
-fixtures re-swept: tsgo binary 0 errors each. ONE refusal went away and its value was audited: a 71-hop barrel chain past
-`-core`'s walk-depth bound now resolves and prints the leaf's `"D"`, as JavaScript does (test re-pointed). Lowering diff
-(`KirFrontEndCompareMain`, `javap -c -p` of each program, both engines): 24 identical, 9 changed (`10-closures`,
-`15-control`, `17-rest-params`, `22-entries-destructuring`, `25-library-members`, `26-callback-arity`,
-`27-array-callbacks`, `30-nested-functions`, `toml`) — every change is a more precise type: typed `dadd` / `jsStrictEqualsNumbers`
-/ `jsStrictEqualsStrings` replacing `jsAdd` / `...Any...`, `toml` `jsGet` 5→3, `jsInvoke` 5→1, `jsIndexGet` 16→12, `25` and
-`27` lose their last `jsInvoke`/`jsGet`, `26`'s `${x}` of a `string | undefined` now renders through the undefined-aware
-path; outputs unchanged.
-
-**Receipts.** kir `jvmTest` **313 / 313** (tsgo; baseline 313 / 313 on `-core`, 84 s → 89 s of test time); the same suite with
-`XTSC_KIR_ENGINE=core` (`--rerun`): **312 / 313**, the one red being the re-pointed barrel-depth pin (that engine still
-refuses past its walk-depth bound — the positive control that the switch reaches the test JVM). `scripts/kir-bench.sh 1`: equivalence gate **mitt + toml, all 3 arms agree**
-(`kir:sink=128000000`, `-5440000`); one-process timings not quoted. Warning-clean (a positive-control `1 as Int` file read
-its `w:` on a from-scratch kir compile, then deleted). `huge_methods.py --fail-over 0` on kir: 0 over, 129 classes.
-
-**Wall / heap per engine** (for (TSGO.4-d); `KirFrontEndCompareMain`, one warm-up pass over the corpus, ONE draw per arm,
-`-Xmx4g`): front-end total over 30 corpus programs + 3 projects **tsgo 1,265 ms vs `-core` 1,973 ms**, process peak heap
-**394 MB vs 367 MB**; toml 373 vs 483 ms, mitt-consumer 104 vs 373 ms. Before the front end skipped the bundled libs' semantic
-check (tsgo's CLI checks them; they are clean) it was 10,981 ms and 4,116 MB — the first version of this round's numbers.
-
-**Not moved / what remains for a full re-base**: the lowering still walks `-core`'s AST and reads `-core`'s `Type` / `Symbol` /
-`Signature` classes, so `-kir` still depends on `-core` (parser + value classes, not the checker). Removing that is a rewrite
-of `KirFileLowering` (7.1k lines) over tsgo's `ast.Node`, plus a KIR-owned value model. `census/StructuralCensus*` (a census of
-`-core`'s own sink) stays on `-core` by design. The Kotlin/Native plugin path (`KirNativePlugin`, inside konanc) now pulls
-`-tsgo` onto the plugin classpath through `jvmRuntimeClasspath` — not rebuilt this round (native builds are run alone).
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -562,7 +530,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
   `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.
 
-- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). (6-c) AOT levers + the Kotlin/Native GC DONE 2026-10-09 (`scripts/tsgo-native-image-pgo.sh`: PGO + `-O3` -15-23%, compiler profile 2.47 s vs tsgo 1.73 s; K/N links `gc=pmcs`: 7.8 s / 1.7 GB vs the default `cms`'s 11.6 s / 2.1 GB). (6-d) the Kotlin/Native goroutine pool + the first native `perf` profile DONE 2026-10-09 (~700 goroutines on ~150 pthreads, wall unchanged; ~60% of native CPU is memory management, GC mark 43%; docs/goport-runtime.md § 9a). (6-e) Go's Ps DONE 2026-10-09 (`GoProcs`: ≤ `TSGO_GOMAXPROCS` goroutines run, a queued one has no thread; date-fns native 3.60 → 2.02 s, 2.10 → 1.34 GB; tsc profiles unchanged, GC-bound). Remains: a native `-tsgo` CI job.** Add a `linuxX64` target to
+- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). (6-c) AOT levers + the Kotlin/Native GC DONE 2026-10-09 (`scripts/tsgo-native-image-pgo.sh`: PGO + `-O3` -15-23%, compiler profile 2.47 s vs tsgo 1.73 s; K/N links `gc=pmcs`: 7.8 s / 1.7 GB vs the default `cms`'s 11.6 s / 2.1 GB). (6-d) the Kotlin/Native goroutine pool + the first native `perf` profile DONE 2026-10-09 (~700 goroutines on ~150 pthreads, wall unchanged; ~60% of native CPU is memory management, GC mark 43%; docs/goport-runtime.md § 9a). (6-e) Go's Ps DONE 2026-10-09 (`GoProcs`: ≤ `TSGO_GOMAXPROCS` goroutines run, a queued one has no thread; date-fns native 3.60 → 2.02 s, 2.10 → 1.34 GB; tsc profiles unchanged, GC-bound). (6-f) the JVM port profiled + six runtime-shim allocation levers DONE 2026-10-09 (warm allocation −12.6%, GC pauses −11..−17%, wall −1.6% single / −2..−7% parallel; cold is the JIT ramp, the JDK AOT cache 10.4 → 6.5 s; docs/goport-perf.md § 7). Remains: a native `-tsgo` CI job; a JAR launcher with an AOT cache; the JSDoc prefix copy (a byte-string window).** Add a `linuxX64` target to
   `-tsgo` (Kotlin/Native was deferred to after (TSGO.2) by `docs/tsgo-port-plan.md`), run its suite natively, and build the
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.

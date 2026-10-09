@@ -310,3 +310,121 @@ tools/tsgo-7.0.2/lib/tsc --noEmit -p build/bench/tsc-project-*/tsconfig.json [--
 jfr print --events jdk.ExecutionSample --stack-depth 2048 x.jfr > samples.txt
 python3 scripts/tsgo_parse_profile.py samples.txt check-bench-deep-stack 2048
 ```
+
+## 7. The JVM port profiled: where cold and warm time goes, and what is un-JVM-like ((TSGO.6-f), 2026-10-09)
+
+Instruments: async-profiler 4.1 (`scripts/tsgo-jvm-profile.sh` downloads it into `tools/async-profiler`;
+`scripts/tsgo_ap_stacks.py` reads its collapsed output — by thread, leaf mechanism, nearest ported owner,
+callers, frame kind, allocated class and allocation site). WARM = `CheckBenchMain` on tsc's compiler profile
+(123 files, 65 diagnostics), the profiler attached after ~10 rebuilds for 30-40 s; COLD = one
+`TsgoMainKt --noEmit -p .` run with the agent from JVM start. JDK 26 (Zulu), 8 cores, `-Xms2g -Xmx6g`, G1.
+Every profiled run printed the same 65 diagnostics / digest; every cold run is byte-identical to tsgo.
+
+### 7.1 Cold (10.4 s wall, ~66 s CPU)
+
+| thread kind | share of all CPU |
+|---|---:|
+| JIT compiler threads | **50.4%** (C2 40.6%, C1 9.8% — the three C2 threads are busy the whole run) |
+| goroutines (the check: parse, bind, 4 checkers) | 43.9% |
+| GC (G1 workers + concurrent) | 5.4% |
+
+Inside the goroutines, by the frame the sample landed in: **interpreted 34.9%**, C1 16.3%, C2 9.5% + inlined
+25.9%, native/VM 13.4%. So the cold gap to tsgo (1.77 s) is the JIT ramp, not code shape: a third of the
+compiler's own time runs in the interpreter, and as much CPU again goes to compiling. GC pauses summed 450 ms.
+**Zero methods are over HotSpot's 8,000-bytecode `HugeMethodLimit`** (`scripts/huge_methods.py --classes
+xemantic-typescript-compiler-tsgo/build/classes/kotlin/jvm/main`: 4,857 classes, 69,617 methods; largest a
+`<clinit>` at 7,526, the largest hot ones `structuredTypeRelatedToWorker` 5,953 and `scanner.scan` 5,821).
+
+The lever that moves cold is the JDK's AOT cache (JEP 483/514/515: classes loaded and linked ahead, plus
+method profiles), not a code change: trained once (`-XX:AOTCacheOutput=…`, one check of the same project) and
+used with `-XX:AOTCache=…`, three runs each, **10.41-11.15 s → 6.33-6.67 s (−38%)**, output identical. The cache
+needs a classpath of JARs (directories are refused: `non-empty directory`), so it belongs to a packaged launcher,
+as `-core`'s `scripts/xtsc` does (`docs/perf/aot-cache.md`); nothing ships it for the port yet.
+
+### 7.2 Warm, single-threaded (before this round: 3.71 s per rebuild, 2.64 GB allocated)
+
+Process CPU over 40 s: the bench thread 57%, **G1 workers 31% + concurrent 6%** (parallel young collections of
+2.6 GB/rebuild), C2 still 6%. The bench thread by leaf mechanism:
+
+| mechanism | share | what |
+|---|---:|---|
+| generated checker code | 36.7% | flat: ~200 functions, none above 2.8% |
+| `runtime.GoMap` | **14.3%** | `find` 11.6% leaf; **55% of its callers are `core.LinkStore.Get`** (node/symbol → links), i.e. ~7.9% of the thread is one identity-keyed probe per link read — memory latency, the same lookups Go pays |
+| generated `ast` | 13.3% | `visitNodeList`, `asIdentifier`, `forEachChild`, `text`, `kind`: flat |
+| `runtime.GoSlice` | 4.9% | `load` (materializes a never-written slot), `slice`, `append1`, `len` |
+| itable stubs | **4.3%** | megamorphic INTERFACE dispatch: `nodeData` methods (`localsContainerData`, `flowNodeData`, `modifiers`, `declarationData`, …) ~50%, `TypeData` (`asStructuredType`, `asObjectType`) ~21%, Kotlin `Function` comparators/zero lambdas ~20% |
+| binder / parser / scanner | 2.9 / 1.9 / 1.8% | |
+| `jlong_disjoint_arraycopy` | 1.7% | the JSDoc prefix copy below |
+| `String.equals` | 1.2% | name-keyed symbol tables |
+
+Allocation (2.64 GB/rebuild) by class: `byte[]` **21.4%** — 76% of it `parseJSDocComment`'s
+`p.sourceText = p.sourceText[:end-2]` (§ 6.2: a COPY of the file prefix per JSDoc comment; the program's
+5,318 `/** */` comments average a 180 KB prefix, so this is a real price, not a location, and every prefix
+over half a G1 region is a humongous allocation), 16% `xxh3.Hasher` buffers; `GoSlice` headers **17.6%**;
+`Object[]` 5.9% (map tables, slice growth); `FlowType` 5.2% (struct value copies); nil `GoMap`s 5.0%;
+**`java.lang.Integer` 4.1%** (boxed comparator results); `xxh3.Uint128` 3.8% (value copies of cache keys);
+`TextRange` 3.3% (three per node: the constructor's zero, `UndefinedTextRange()`, `NewTextRange`); `Tuple2`
+2.9%; `AtomicLong` + its `atomic.Uint64` wrapper 2.0% (one pair per Node and Symbol); `GoDeferFrame`'s
+`ArrayList` 1.0%. Closure boxes (`Ref$ObjectRef`/`IntRef`/`BooleanRef`, 1,929 sites in the bytecode) are
+0.4% — not a lever.
+
+### 7.3 What landed (runtime shims only; generated code changed only through a regeneration)
+
+| lever | why it is the JVM's way | measured |
+|---|---|---|
+| `slices.BinarySearchFunc` is `inline` | the comparator call becomes monomorphic per call site, so C2 inlines it and scalar-replaces the boxed `Int` and the result `Tuple2` | `Integer` 4.1% → 0.45% of allocation |
+| `GoMap.nil` shares one map per value kind (`GoElem.nilMapCache`) | a nil map is immutable and Go compares maps only to `nil` | nil maps 5% of allocation → ~0 |
+| `xxh3.Uint128` immutable (`val`, no `goCopy`; porter emits no copy) | an immutable value needs no defensive copies | 12 regenerated files lose `.goCopy()` |
+| `atomic.Uint64` one object on the JVM (`expect` class; `@Volatile long` + `AtomicLongFieldUpdater`) | a field updater is how the JDK embeds an atomic in an object | −1 object per Node and Symbol |
+| `GoSlice.isNil` derived (`array === GoElem.NIL_ARRAY`) | a 5-field header is 32 bytes, a 6th `Boolean` made it 40 | −20% of every header |
+| `GoDeferFrame`'s list made on the first `defer` | most frames defer nothing | −1% of allocation |
+
+A/B, each arm its own JVM, ABBA × 2 batches, 6 warm-up + 10 measured rebuilds per process (medians of process
+medians, [range], paired wins); class md5 base `5f9ff3f5` (= `e209fb352`), first three levers `c93b7187`, all six
+`d0e826cf`:
+
+| | base → first three | first three → all six | **base → all six (final run)** |
+|---|---|---|---|
+| compiler, single-threaded | 3,712 → 3,622 ms (−2.4%, 4/4) | −0.5% (2/4) | **3,693 → 3,632 ms (−1.6%, 3/4)** |
+| compiler, allocation | 2,644 → 2,458 MB (−7.0%) | 2,422 → 2,327 MB (−3.9%) | **2,693 → 2,352 MB (−12.6%)**; GC pause −17% |
+| compiler, parallel (4 checkers) | 2,142 → 2,038 ms (−4.9%, 4/4) | 2,129 → 1,974 ms (−7.3%, 4/4) | **2,057 → 2,010 ms (−2.3%, 3/4)**; GC pause −11% |
+| services, parallel | | | **2,818 → 2,684 ms (−4.8%, 4/4)** |
+| date-fns, parallel | | | 468 → 464 ms (noise; 98 MB/rebuild) |
+| cold (compiler / services / date-fns) | 10.39 → 10.35 s | | 9.78 → 10.14 / 12.83 → 12.30 / 4.78 → 4.56 s (noise both ways) |
+
+The allocation and GC-pause reductions are deterministic; the wall gains are real but small and sit near the
+box's ±5% process spread in the parallel mode (three A/Bs read −4.9%, −7.3% and −2.3%). tsgo 7.0.2 on the same
+box: 1.77 s parallel, ~3.1-3.3 s `--singleThreaded` — the warm JVM port is ~1.15-1.2x tsgo.
+
+### 7.4 Measured and NOT done, with their sizes (the next levers)
+
+1. **JSDoc prefix copy** — ~19% of the remaining allocation (now the largest class at 25%) and ~2-3% CPU.
+   Exact semantics need the scanner and parser to see a string of length `end-2`; the scanner's own `s.end` is
+   not enough (six `len(s.text)` reads and every window-lowered suffix search — `IndexByte(s.text[s.pos:], q)` —
+   run to the true end). A representation change (a byte-string window type), never a rule.
+2. **`LinkStore` probes** — ~8% of warm CPU in `GoMap.find`. A per-object link slot would be the JVM's way, but
+   nodes are shared by four checkers and lib nodes outlive programs, so it needs a thread-safe, leak-free design.
+3. **Megamorphic interface dispatch** — 4.3% in itable stubs. `nodeData`/`TypeData` as abstract CLASSES (vtable
+   dispatch) is legal for the generated hierarchy (every implementer is a struct class with no superclass) but
+   no other interface may extend them; the struct-embedding forwarding chains behind them
+   (`this.jsDocTagBase.nodeBase.nodeDefault.localsContainerData()`) and the 4-7 objects per AST node they
+   imply are the larger representation question (Go embeds by value).
+4. **Immutable-struct copy elision in the porter** — a prototype analysis over the IR finds 392 of 1,635 named
+   struct types never written in place and never pointer-compared/hashed/interface-converted; the hot ones are
+   NOT among them: `TextRange` (pointer type-arguments, goSet locals in `ls`) and `FlowType` (`t.isNil()`'s
+   implicit `&t` makes `getTypeAtFlowNode`'s `t` an address-taken local: `goSet` in place plus a copy on return,
+   ~3% of allocation). The refinement that would free `FlowType` — an implicit `&x` through a pointer method
+   whose receiver never escapes is not an address — is a porter rule worth ~1-2% of parallel wall.
+5. **The GC** — 31% of the process's CPU warm is G1 young collection of ~2.3 GB/rebuild; every allocation lever
+   above is a GC lever. Choosing a collector is the HOST's decision (the LSP/daemon JVM), not the port's.
+
+### 7.5 Reproduce
+
+```bash
+scripts/tsgo-jvm-profile.sh warm build/bench/tsc-project-*/tsconfig.json cpu single 45 40
+scripts/tsgo_ap_stacks.py build/tsgo-jvm-profile/warm-cpu.collapsed --threads --thread check-bench --mechanisms --owners
+scripts/tsgo-jvm-profile.sh warm build/bench/tsc-project-*/tsconfig.json alloc single
+scripts/tsgo_ap_stacks.py build/tsgo-jvm-profile/warm-alloc.collapsed --classes --allocated-by 'byte[]'
+scripts/tsgo-jvm-profile.sh cold build/bench/tsc-project-637d5746 cpu
+scripts/tsgo_ap_stacks.py build/tsgo-jvm-profile/cold-cpu.collapsed --threads --thread goroutine --frame-kinds
+```
