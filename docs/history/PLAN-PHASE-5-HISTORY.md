@@ -1,3 +1,59 @@
+### Round (TSGO.2-c) — the diagnostics differential covers ALL FOUR suites tsgo's compiler runner runs: 13,127 / 13,127 configurations equal, 0 crashed, 0 port defects; (TSGO.2)'s oracle is complete (2026-10-08)
+
+**The four layers, as tsgo's runner defines them** (`internal/testrunner/compiler_runner_test.go`): `TestSubmodule`
+and `TestLocal`, each over a `compiler` and a `conformance` `CompilerBaselineRunner`. Submodule cases are
+`_submodules/TypeScript/tests/cases/{compiler,conformance}`, baselined in `reference/submodule/<suite>/`, with each
+`.diff` recorded in `submodule`/`submoduleAccepted`/`submoduleTriaged`. Local cases are tsgo's own
+`testdata/tests/cases/{compiler,conformance}`, baselined in `reference/<suite>/`. Before this round the oracle covered
+the submodule compiler suite plus the 36 conformance cases in `typescript-repo`'s SPARSE working tree. The git objects
+hold the whole `4d4f005c` tree, so the materializer now `git archive`s `tests/cases` into `build/goport/ts-submodule`
+and reaches all four suites through one root, `build/goport/diag-src` (symlinks; a `local/` prefix marks tsgo's
+own cases).
+
+**What changed:** `scripts/tsgo-diag-cases.py` (enumeration over four suites, the runner's no-duplicate-basename
+invariant asserted), `scripts/tsgo-diag-oracle.py` (layer `local`, baselines root), `oracle-go/diags.go` (`suiteOf`
+strips `local/`; `-runner` finds a local baseline under `reference/<suite>/`), and `DiagParityTest` (reads raw cases
+from `diag-src`). The generated port, the porter and the runtime are unchanged.
+
+**Population:** 12,760 cases → 15,249 configurations → **13,127 materialized**, with 0 fatal. Per suite (ok / skipped):
+
+| suite | cases | ok | skipped |
+|---|---|---|---|
+| submodule `compiler/` | 6,537 | 6,282 | 987 |
+| submodule `conformance/` | 5,907 | 6,515 | 1,176 |
+| local `compiler/` | 297 | 305 | 3 |
+| local `conformance/` | 19 | 25 | 1 |
+
+All skips are tsgo's own: `skippedTests` covers 45 files, and `SkipUnsupportedCompilerOptions` covers 2,122
+configurations (2,118 submodule, 4 local).
+
+Baseline layer of the 13,127 configurations:
+
+| layer | configurations |
+|---|---|
+| none | 12,074 |
+| `submoduleAccepted` | 418 |
+| `submodule` | 234 |
+| `submoduleTriaged` | 71 |
+| `local` | 330 |
+
+**Receipts:**
+- **Oracle against tsgo's committed baselines** (`-runner`): **13,127 / 13,127 byte-identical**, local included.
+- **Check-only vs runner list:** 13,054 equal and 73 not. The 73 are 69 `submoduleTriaged` (55 TS-1, 14 same-count), 3 TS-1
+  with no diff layer, and 1 local TS-1. tsgo's order dependence, recorded by tsgo; the check-only list is the
+  oracle.
+- **`DiagParityTest`** (ported harness, raw case text, `case.json` cross-check first): **13,127 configurations, equal
+  13,127, differ 0, missing 0** (84 s). `tsgo-diag-compare.py` independently agrees: 13,127 equal.
+- **Positive control:** `TSGO_DIAG_INJECT` on a `local/` case reads `1 of 330 not equal`, red.
+- **Bound AST oracle:** 7,774 / 7,774.
+- **Test suites:** `-tsgo` 95 / 0, `-goport` 12 / 0.
+
+**Port defects found: none.** The 6,809 newly covered configurations passed on the first run, so every lowering rule
+from (TSGO.2-a/b) generalized. A submoduleTriaged configuration would have been graded against tsgo's ACTUAL output
+in any case (we port tsgo, so a triaged tsgo bug is not a port defect); all 71 are equal.
+
+**Open after (TSGO.2):** perf (`GoSlice.addr` per `core.Same`, no per-file lib cache); (TSGO.3).
+
 ### Round (TSGO.2-b) — the diagnostics differential is a GATE, tsgo's test harness is PORTED, and `-core`'s 10.7k `diagnose` pins run against `-tsgo`: 0 port defects (2026-10-08)
 
 **What landed** (c7e70a9ff, 8c0858ec0, and this commit). (1) `DiagParityTest` grades itself against

@@ -25,6 +25,28 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-c) — EVERY AOT LEVER MEASURED: Oracle GraalVM's PGO + `-O3` makes the image 15-23% faster (compiler profile 2.95 → 2.47 s, held-out services 4.00 → 3.08 s; tsgo 1.73 / 2.36 s), `-O3` alone 5-11%, `-march=native` nothing; Kotlin/Native now links `gc=pmcs`, 33-35% faster AND ~20% smaller than Kotlin's default `cms` (2026-10-09)
+
+- **GraalVM** (5 images, ~2.5 min each; rotated medians of 3 over 4 workloads, every arm byte-identical to tsgo incl.
+  the 78 emitted files): default G1 / `-O3` / `-O3 -march=native` / PGO + `-O3` / PGO + `-O3 -march=native` read
+  compiler check 2.95 / 2.80 / 2.82 / 2.47 / 2.44 s, check+emit 4.54 / 4.34 / 4.41 / 3.90 / 3.68 s, services
+  (held out) 4.00 / 3.56 / 3.64 / 3.08 / 3.23 s, date-fns (held out) 0.66 / 0.65 / 0.63 / 0.59 / 0.58 s. Training:
+  the compiler profile check + emit and zod (three `.iprof`, 13-16 MB each). `-march=native` is noise on Zen 2 (the
+  default is `x86-64-v3`, no AVX-512). G1 young-gen sizing on top of PGO: under ~5%, mixed — not baked in.
+  `scripts/tsgo-native-image-pgo.sh` reproduces it from scratch (2.37-2.55 s) and the PGO image passes the
+  106-case replay (162 s for all of them vs 189 s without PGO). Profiles are NOT committed (40 MB, binary-specific).
+- **Kotlin/Native** (release links ~8 min each, alone): `NativeCheckMain` reads every runtime GC knob;
+  `-PtsgoNativeBinaryOptions` relinks with others. **Three of six links were byte-identical to the default**
+  (`gc=cms` IS the 2.4 default; `gcMutatorsCooperate=true`, `auxGCThreads=4` no-ops) — caught by `md5sum` before
+  any timing; `gc=pmcs` differs (the positive control). Compiler / services, parallel, 2 rounds, outputs = tsgo:
+  `cms` 11.6 s / 2.1 GB, 15.5 / 2.9; **`pmcs` 7.8 / 1.7, 10.1 / 2.3**; `cms` + utilisation 0.3 + trigger 0.5 (stall
+  on) 6.2 / 3.5, 8.9 / 5.3; `cms` stall off 5.8 / 4.1, 8.1 / 6.0 (and `TSGO_GC_MAX_MB=3072` does not bound it). The
+  knobs make `pmcs` worse (0.4 / 0.5: 14.7 s). **The build now links `gc=pmcs`** — faster, smaller, and still
+  bounded — for every `-tsgo` native binary; native suite 64 / 64 on it, and the default link is byte-identical to
+  the measured `pmcs` arm.
+- **Next**: a native `-tsgo` CI job; a native goroutine thread pool; attributing the remaining native gap (no
+  profiler on the box).
+
 ### Round (TSGO.6-b) — THE GraalVM IMAGE OF THE PORTED CLI: `:xemantic-typescript-compiler-tsgo:nativeImage` builds `xtsc-tsgo` (~57 MB, ~2 min, no reflection metadata) and it answers all 106 recorded command-line cases byte-identically to the tsgo 7.0.2 binary, type-fest included; G1 makes it 2.9 s on tsc's compiler profile against tsgo's 1.76 s (2026-10-09)
 
 - **Toolchain**: Oracle GraalVM 25.0.4 downloaded into the gitignored `tools/graalvm-25` (no GraalVM was on the box).
@@ -471,62 +493,6 @@ per-case patch:
 **Open:** (TSGO.3-b) the type oracle (another agent). The json shim's `[]byte` is still a number array where Go writes
 base64; nothing in the closure marshals one.
 
-### Round (TSGO.2-c) — the diagnostics differential covers ALL FOUR suites tsgo's compiler runner runs: 13,127 / 13,127 configurations equal, 0 crashed, 0 port defects; (TSGO.2)'s oracle is complete (2026-10-08)
-
-**The four layers, as tsgo's runner defines them** (`internal/testrunner/compiler_runner_test.go`): `TestSubmodule`
-and `TestLocal`, each over a `compiler` and a `conformance` `CompilerBaselineRunner`. Submodule cases are
-`_submodules/TypeScript/tests/cases/{compiler,conformance}`, baselined in `reference/submodule/<suite>/`, with each
-`.diff` recorded in `submodule`/`submoduleAccepted`/`submoduleTriaged`. Local cases are tsgo's own
-`testdata/tests/cases/{compiler,conformance}`, baselined in `reference/<suite>/`. Before this round the oracle covered
-the submodule compiler suite plus the 36 conformance cases in `typescript-repo`'s SPARSE working tree. The git objects
-hold the whole `4d4f005c` tree, so the materializer now `git archive`s `tests/cases` into `build/goport/ts-submodule`
-and reaches all four suites through one root, `build/goport/diag-src` (symlinks; a `local/` prefix marks tsgo's
-own cases).
-
-**What changed:** `scripts/tsgo-diag-cases.py` (enumeration over four suites, the runner's no-duplicate-basename
-invariant asserted), `scripts/tsgo-diag-oracle.py` (layer `local`, baselines root), `oracle-go/diags.go` (`suiteOf`
-strips `local/`; `-runner` finds a local baseline under `reference/<suite>/`), and `DiagParityTest` (reads raw cases
-from `diag-src`). The generated port, the porter and the runtime are unchanged.
-
-**Population:** 12,760 cases → 15,249 configurations → **13,127 materialized**, with 0 fatal. Per suite (ok / skipped):
-
-| suite | cases | ok | skipped |
-|---|---|---|---|
-| submodule `compiler/` | 6,537 | 6,282 | 987 |
-| submodule `conformance/` | 5,907 | 6,515 | 1,176 |
-| local `compiler/` | 297 | 305 | 3 |
-| local `conformance/` | 19 | 25 | 1 |
-
-All skips are tsgo's own: `skippedTests` covers 45 files, and `SkipUnsupportedCompilerOptions` covers 2,122
-configurations (2,118 submodule, 4 local).
-
-Baseline layer of the 13,127 configurations:
-
-| layer | configurations |
-|---|---|
-| none | 12,074 |
-| `submoduleAccepted` | 418 |
-| `submodule` | 234 |
-| `submoduleTriaged` | 71 |
-| `local` | 330 |
-
-**Receipts:**
-- **Oracle against tsgo's committed baselines** (`-runner`): **13,127 / 13,127 byte-identical**, local included.
-- **Check-only vs runner list:** 13,054 equal and 73 not. The 73 are 69 `submoduleTriaged` (55 TS-1, 14 same-count), 3 TS-1
-  with no diff layer, and 1 local TS-1. tsgo's order dependence, recorded by tsgo; the check-only list is the
-  oracle.
-- **`DiagParityTest`** (ported harness, raw case text, `case.json` cross-check first): **13,127 configurations, equal
-  13,127, differ 0, missing 0** (84 s). `tsgo-diag-compare.py` independently agrees: 13,127 equal.
-- **Positive control:** `TSGO_DIAG_INJECT` on a `local/` case reads `1 of 330 not equal`, red.
-- **Bound AST oracle:** 7,774 / 7,774.
-- **Test suites:** `-tsgo` 95 / 0, `-goport` 12 / 0.
-
-**Port defects found: none.** The 6,809 newly covered configurations passed on the first run, so every lowering rule
-from (TSGO.2-a/b) generalized. A submoduleTriaged configuration would have been graded against tsgo's ACTUAL output
-in any case (we port tsgo, so a triaged tsgo bug is not a port defect); all 71 are equal.
-
-**Open after (TSGO.2):** perf (`GoSlice.addr` per `core.Same`, no per-file lib cache); (TSGO.3).
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -644,7 +610,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
   `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.
 
-- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). Remains: PGO for the image, a bounded Kotlin/Native GC default, a native `-tsgo` CI job.** Add a `linuxX64` target to
+- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). (6-c) AOT levers + the Kotlin/Native GC DONE 2026-10-09 (`scripts/tsgo-native-image-pgo.sh`: PGO + `-O3` -15-23%, compiler profile 2.47 s vs tsgo 1.73 s; K/N links `gc=pmcs`: 7.8 s / 1.7 GB vs the default `cms`'s 11.6 s / 2.1 GB). Remains: a native `-tsgo` CI job, a native goroutine thread pool.** Add a `linuxX64` target to
   `-tsgo` (Kotlin/Native was deferred to after (TSGO.2) by `docs/tsgo-port-plan.md`), run its suite natively, and build the
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.

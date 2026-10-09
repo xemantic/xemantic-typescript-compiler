@@ -159,4 +159,20 @@ of RAM (`-R:MaxRAMPercentage=25`; serial's is 80%), and type-fest needs ~9.7 GB 
 28 s parallel at `-Xmx10g`) — at 25% the image ran out of memory inside goroutines and HUNG at 0% CPU, because the
 error recurred inside `WaitGroup`'s own handler and the waiter was never signalled. A throwable escaping a
 goroutine is now fatal to the process with Go's panic status 2 (`goSpawn`, both actuals; `GoroutineFatalTest`).
-Community Edition builds with `-PnativeImageGc=serial`. Not yet tried: PGO (worth -21% on `-core`'s image).
+Community Edition builds with `-PnativeImageGc=serial`.
+
+**AOT optimisation levers** (`scripts/tsgo-native-image-pgo.sh` builds the PGO image: instrument → train on the
+compiler profile check + emit and zod → `--pgo=… -O3`). Rotated medians of 3, every arm's output byte-identical to
+tsgo (the 78 emitted files too), and the PGO image passes the 106-case replay:
+
+| workload | tsgo | default (G1) | `-O3` | `-O3 -march=native` | **PGO + `-O3`** |
+|---|---:|---:|---:|---:|---:|
+| compiler profile, check (trained) | 1.73 s | 2.95 s | 2.80 s | 2.82 s | **2.47 s** |
+| compiler profile, check + emit (trained) | 2.39 s | 4.54 s | 4.34 s | 4.41 s | **3.79 s** |
+| tsc's services, check (held out) | 2.36 s | 4.00 s | 3.56 s | 3.64 s | **3.08 s** |
+| date-fns, check (held out) | 0.36 s | 0.66 s | 0.65 s | 0.63 s | **0.59 s** |
+
+PGO is the lever (15-23%, and it carries to projects it was not trained on); `-O3` alone is 5-11%; `-march=native`
+is nothing on this Zen 2 (the default is already `x86-64-v3`, and Zen 2 has no AVX-512). A larger G1 young
+generation (`-Xmn512m`..`2g`) or fewer GC threads move the PGO image by under ~5%, both directions — not baked in.
+Memory stays ~1.6 GB on the compiler profile (tsgo 0.38 GB).

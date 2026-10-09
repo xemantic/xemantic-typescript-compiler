@@ -243,8 +243,30 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
 - `goSpawn`: a DETACHED pthread with Go's 1 GB maximum goroutine stack (virtual, committed as touched),
   256 MB if that reservation is refused; one thread per goroutine (no idle-thread pool yet — the JVM
   reuses idle threads for 30 s). The routine is a `staticCFunction` taking a `StableRef` to the
-  closure; a throwable escaping it is printed, never propagated (every caller catches inside `f`).
+  closure. A throwable escaping it is FATAL — `fatal error: goroutine: …` on stderr and exit status 2, as
+  Go's unrecovered panic, on both actuals: every caller catches inside `f`, so one arriving there escaped
+  that handler (an out-of-memory error raised again while it allocated), and carrying on parked the
+  waiter forever — the GraalVM image hung on type-fest that way ((TSGO.6-b), `GoroutineFatalTest`).
   `onGoStack` (the facade's deep-stack entry) needs nothing else: it spawns through `goSpawn` and parks.
+- **The GC is `gc=pmcs`** (parallel mark, concurrent sweep; `-tsgo/build.gradle.kts`), not Kotlin 2.4's default
+  concurrent mark (`cms`). tsc's compiler / services profiles, release binary, parallel check, output byte-identical
+  to tsgo in every arm (2026-10-09):
+
+  | binary / runtime knobs | compiler | services |
+  |---|---:|---:|
+  | `cms` (Kotlin's default) | 11.6 s / 2.1 GB | 15.5 s / 2.9 GB |
+  | **`pmcs` (the build's default)** | **7.8 s / 1.7 GB** | **10.1 s / 2.3 GB** |
+  | `cms`, `TSGO_GC_UTILIZATION=0.3 TSGO_GC_TRIGGER=0.5` | 6.2 s / 3.5 GB | 8.9 s / 5.3 GB |
+  | `cms`, `TSGO_GC_PAUSE=0` (no heap bound) | 5.8 s / 4.1 GB | 8.1 s / 6.0 GB |
+  | tsgo 7.0.2 | 1.7 s / 0.38 GB | 2.4 s / 0.55 GB |
+
+  `pmcs` is faster AND smaller with the allocation stall (`pauseOnTargetHeapOverflow`, the heap bound) still on.
+  `cms` only wins by spending heap: lower utilisation plus an earlier trigger keep the stall on and recover most
+  of the unbounded speed. The runtime knobs make `pmcs` WORSE (utilisation 0.4 / trigger 0.5: 14.7 s at 1.25 GB).
+  `TSGO_GC_MAX_MB` does not bound a run with the stall off (3 GB asked, 4 GB used). `gcMutatorsCooperate=true` and
+  `auxGCThreads=4` link byte-identical binaries (defaults or no-ops here). `NativeCheckMain` reads every runtime
+  knob (`TSGO_GC_{TARGET,MIN,MAX}_MB`, `_UTILIZATION`, `_TRIGGER`, `_INTERVAL_MS`, `_PAUSE`, `_AUTOTUNE`);
+  `-PtsgoNativeBinaryOptions=gc=cms,…` relinks with other binary options (~8 min per release link).
 - `go/os` (`Os.native.kt`): POSIX `stat` (following links, as `java.io.File` does) / `opendir` +
   `readdir` / `open` + `read`.
 

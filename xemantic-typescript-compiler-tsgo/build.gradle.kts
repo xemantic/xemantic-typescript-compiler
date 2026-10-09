@@ -61,6 +61,16 @@ kotlin {
                 // `-PtsgoNativeGcLogs=true`: the runtime's GC epochs on stderr (how (TSGO.6) found the stalls).
                 if (project.findProperty("tsgoNativeGcLogs") == "true") freeCompilerArgs += "-Xruntime-logs=gc=info"
             }
+            // THE GC IS PARALLEL-MARK (`gc=pmcs`), NOT KOTLIN 2.4's DEFAULT CONCURRENT-MARK (`cms`) — measured
+            // 2026-10-09 on tsc's compiler / services profiles, output byte-identical to tsgo in every arm:
+            // cms 11.6 s / 2.1 GB and 15.5 s / 2.9 GB, pmcs 7.8 s / 1.7 GB and 10.1 s / 2.3 GB — faster AND
+            // smaller, with the allocation stall (the heap bound) left on. cms only wins with more heap:
+            // `TSGO_GC_UTILIZATION=0.3 TSGO_GC_TRIGGER=0.5` 6.2 s / 3.5 GB, the stall off 5.8 s / 4.1 GB.
+            // `-PtsgoNativeBinaryOptions=gc=cms,…` replaces the list (`-Xbinary=…` each), for measuring.
+            // `gcMutatorsCooperate=true` and `auxGCThreads=4` link byte-identical binaries (no-ops here).
+            val binaryOptions = ((project.findProperty("tsgoNativeBinaryOptions") as String?) ?: "gc=pmcs")
+                .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            binaries.all { binaryOptions.forEach { freeCompilerArgs += "-Xbinary=$it" } }
         }
     }
 

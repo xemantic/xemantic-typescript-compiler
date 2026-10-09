@@ -1,3 +1,14 @@
+**(TSGO.4-b/-c) DONE — externals and KIR on the tsgo port (2026-10-08):** `-externals` now depends only on
+`-tsgo` (adapter `ts/{Ast,Types,TsgoEngine}.kt`; 291 / 0); KIR's `CheckedFacts` are filled from the ported checker
+(`kir/front/Tsgo*.kt`) while the lowering still walks `-core`'s AST, so `-kir` keeps a `-core` dependency
+(313 / 0; `XTSC_KIR_ENGINE=core` keeps the old path for the A/B). Every output change against `-core` was
+adjudicated toward tsgo (externals: alias names kept, `Observable<T>` no longer `any`, `NonSharedBuffer` keeps
+`ArrayBuffer`; KIR: 9 of 33 programs lower to MORE typed ops, same output; 4 fixtures were invalid TS 7).
+Engine cost, warm: externals `@types/node` 51 modules tsgo ~17 s vs `-core` ~30 s, heap <= 1.6 GB vs 0.7 GB;
+KIR front end over 33 programs tsgo 1,265 ms vs `-core` 1,973 ms. Re-verified on `d3f62c2fc` by the
+orchestrator: externals 291 / 0, kir 313 / 0, 0 methods over 8,000 bytecodes in either. Next: (4-a) LSP, then
+(4-d) the `-core` sunset report.
+
 **(TSGO.3) DONE — type oracle + emit (2026-10-08):** tsgo's `internal/api` session runs in process behind the
 Kotlin facade `TsgoProject` (`-tsgo` `facade/`; `-core`/`-project` untouched): typeAtPosition, symbolAtPosition,
 resolvedSignature, contextualType, isTypeAssignableTo, propertiesOfType, typeToString, … plus `request(method, json)`

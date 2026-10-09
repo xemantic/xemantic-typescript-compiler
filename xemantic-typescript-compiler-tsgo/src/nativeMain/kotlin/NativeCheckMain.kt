@@ -73,17 +73,28 @@ fun nativeCheckMain(args: Array<String>) {
 
 /**
  * Kotlin/Native's GC tuning, from the environment while it is being measured: `TSGO_GC_TARGET_MB`
- * (the initial target heap), `TSGO_GC_PAUSE=0` (do not stall allocating threads when the target heap
+ * (the initial target heap), `TSGO_GC_MIN_MB` / `TSGO_GC_MAX_MB` (the bounds autotune keeps the target
+ * in), `TSGO_GC_UTILIZATION` (the live share of the target heap autotune aims at, 0..1),
+ * `TSGO_GC_TRIGGER` (the share of the target heap at which a collection starts), `TSGO_GC_INTERVAL_MS`
+ * (the timer collection), `TSGO_GC_PAUSE=0` (do not stall allocating threads when the target heap
  * overflows), `TSGO_GC_AUTOTUNE=0`.
  */
 private fun configureGc() {
     val gc = kotlin.native.runtime.GC
-    platform.posix.getenv("TSGO_GC_TARGET_MB")?.toKString()?.toLongOrNull()?.let { gc.targetHeapBytes = it shl 20 }
-    if (platform.posix.getenv("TSGO_GC_PAUSE")?.toKString() == "0") gc.pauseOnTargetHeapOverflow = false
-    if (platform.posix.getenv("TSGO_GC_AUTOTUNE")?.toKString() == "0") gc.autotune = false
+    fun env(name: String) = platform.posix.getenv(name)?.toKString()
+    env("TSGO_GC_MIN_MB")?.toLongOrNull()?.let { gc.minHeapBytes = it shl 20 }
+    env("TSGO_GC_MAX_MB")?.toLongOrNull()?.let { gc.maxHeapBytes = it shl 20 }
+    env("TSGO_GC_TARGET_MB")?.toLongOrNull()?.let { gc.targetHeapBytes = it shl 20 }
+    env("TSGO_GC_UTILIZATION")?.toDoubleOrNull()?.let { gc.targetHeapUtilization = it }
+    env("TSGO_GC_TRIGGER")?.toDoubleOrNull()?.let { gc.heapTriggerCoefficient = it }
+    env("TSGO_GC_INTERVAL_MS")?.toLongOrNull()?.let { gc.regularGCInterval = kotlin.time.Duration.parse("${it}ms") }
+    if (env("TSGO_GC_PAUSE") == "0") gc.pauseOnTargetHeapOverflow = false
+    if (env("TSGO_GC_AUTOTUNE") == "0") gc.autotune = false
     platform.posix.fprintf(
         platform.posix.stderr,
-        "gc: targetHeapBytes=${gc.targetHeapBytes} pauseOnTargetHeapOverflow=${gc.pauseOnTargetHeapOverflow} autotune=${gc.autotune}\n",
+        "gc: targetHeapBytes=${gc.targetHeapBytes} min=${gc.minHeapBytes} max=${gc.maxHeapBytes} " +
+            "utilization=${gc.targetHeapUtilization} trigger=${gc.heapTriggerCoefficient} " +
+            "interval=${gc.regularGCInterval} pauseOnTargetHeapOverflow=${gc.pauseOnTargetHeapOverflow} autotune=${gc.autotune}\n",
     )
 }
 
