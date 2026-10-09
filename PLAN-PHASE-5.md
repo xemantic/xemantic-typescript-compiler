@@ -25,6 +25,31 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-d) — KOTLIN/NATIVE GOROUTINES ON A CACHED PTHREAD POOL, AND THE FIRST NATIVE CPU PROFILE: the pool runs the compiler profile's ~700 goroutines on ~150 pthreads (services ~1,700 on ~270-560) with wall and RSS unchanged within noise; `perf` attributes ~60% of the native port's CPU to memory management — GC mark 43%, sweep 4.4%, allocation 4.2%, page mapping ~7% (2026-10-09)
+
+- **The pool** (`nativeMain/go/sync/Park.native.kt`): the JVM actual's unbounded cached pool rebuilt on pthreads — one
+  mutex, a LIFO idle list, a per-worker `pthread_cond`; a spawn hands its closure directly to an idle worker or creates
+  a new detached 1 GB-stack worker (never a queue: a bounded pool deadlocks the parse); an idle worker exits after 30 s
+  (`pthread_cond_timedwait`; time-out and hand-off decided under the one mutex). A throwable escaping a goroutine stays
+  fatal (exit 2). Process exit does not wait for idle workers. `TSGO_GOROUTINE_STATS=1` prints the counts.
+- **A/B** (release, `gc=pmcs`, parallel, ABBA x4 per arm, `base` md5 `533a0973…` = HEAD `3d38379d9`, `pool` `89624697…`,
+  every run byte-identical to `tsc --noEmit -p`): compiler 7.84 / 7.84 s median, services 10.62 / 10.59 s; RSS
+  1.63 / 1.69 GB and 2.39 / 2.27 GB (noise). Goroutines 666-732 -> 135-161 pthreads (compiler), 1,666-1,817 -> 272-561
+  (services); `peakLive` = threads created, i.e. one parse's goroutines are concurrent and reuse comes from later phases.
+  A 1 GB-stack pthread is only an address-space reservation, so thread creation was never the cost.
+- **Profile** (`scripts/tsgo-native-profile.sh` + `scripts/tsgo_perf_stacks.py`, docs/goport-runtime.md § 9a "Native CPU
+  profile"): `perf` (owner-installed, `perf_event_paranoid=1`, a runtime sysctl a reboot resets); the kexe has symbols but
+  no frame pointers, so `--call-graph dwarf`; samples must be weighted by PERIOD (an unweighted count read the kernel's
+  thread start-up as 52%). Self time over all CPU: GC mark 43.1% (`processObjectInMark` 35.1), ported code 23.1% (flat,
+  no frame > 0.6%), kernel 9.5% (77% `__mmap` from the allocator's `GetPage`), `GoMap` 5.8% (`find` 3.9, cache misses),
+  `GoSlice` 5.2%, sweep 4.4%, allocation 4.2%, libc 2.3%, strings 0.9%, locks/park 0.3%. pmcs marks INSIDE mutator
+  safepoints (31.2% inclusive under `suspendIfRequested`), so checker frames' inclusive shares contain GC — read self.
+- **Measured and not adopted**: `-Xbinary=disableMmap=true` (allocator pages from `malloc`): compiler 8.18 -> 8.05 s at
+  +10% RSS, services 10.55 -> 10.33 s, inside the noise. No cheap lever left in the hand-written runtime; the gap to tsgo
+  (7.8 s vs 1.7 s) is the K/N heap and the generated code's allocation rate.
+- Gates: `linuxX64Test` 64 / 0, `-tsgo` `jvmTest` 119 / 0, warning-clean (only the 5 host notices). gperftools was tried
+  first (no root) and dropped once `perf` was available.
+
 ### Round (TSGO.6-c) — EVERY AOT LEVER MEASURED: Oracle GraalVM's PGO + `-O3` makes the image 15-23% faster (compiler profile 2.95 → 2.47 s, held-out services 4.00 → 3.08 s; tsgo 1.73 / 2.36 s), `-O3` alone 5-11%, `-march=native` nothing; Kotlin/Native now links `gc=pmcs`, 33-35% faster AND ~20% smaller than Kotlin's default `cms` (2026-10-09)
 
 - **GraalVM** (5 images, ~2.5 min each; rotated medians of 3 over 4 workloads, every arm byte-identical to tsgo incl.
@@ -443,56 +468,6 @@ comments (need `internal/ls` + `lsutil`/`format`/`autoimport`/`change`/`lsproto`
 project system (`updateSnapshot` with file changes, `release`, watching). Differences from `tsc --api`: one
 snapshot per session; the disk FS has no symlink resolution.
 
-### Round (TSGO.3-a) — EMIT PARITY: the ported runner renders tsgo's `.js` / `.js.map` / `.sourcemap.txt` baselines byte-identical on 13,127 / 13,127 configurations, and tsc's own 78 sources emit byte-identical to the tsgo 7.0.2 binary; 4 port defects fixed, all mechanisms (2026-10-08)
-
-**The gate**, defined as tsgo's compiler runner defines it (`docs/goport-emit-oracle.md`). `runSingleConfigTest` baselines
-emit in three subtests: `output` (`.js`, with its `.d.ts`, its `DtsFileErrors` re-compile and its noCheck re-compile),
-`sourcemap` (`.js.map` with preview link) and `sourcemap record` (`.sourcemap.txt`). The overlay
-`oracle-go/overlay/tsbaseline/xtsc_export.go` holds VERBATIM copies of `DoJSEmitBaseline` / `DoSourcemapBaseline` /
-`DoSourcemapRecordBaseline` whose only change is that `baseline.Run` RETURNS the text. `testrunner.XtscEmitBaselines`
-runs the unmodified `newCompilerTest` and then the three verifications, each in its own `t.Run`. Go runs it in the oracle
-(`tsgo-oracle emit`, `scripts/tsgo-emit-oracle.py`), and the port runs the same code mechanically lowered (`EmitParityTest`,
-`TSGO_EMIT=1`). Both write one byte-exact frame per configuration, and the gate compares bytes. Same population as the
-diag differential: the four suites, 13,127 configurations.
-
-**Receipts:**
-- **Oracle vs tsgo's committed baselines:** `.js` 13,058 / 13,058 (61 absent = `.d.ts`-only, 8 = `skippedEmitTests`),
-  `.js.map` 146 / 146, `.sourcemap.txt` 13,127 / 13,127 byte-identical. Determinism 100 / 100, 33 s on 5 workers.
-- **`EmitParityTest`:** **13,127 / 13,127 equal, 0 differ, 0 missing** (89 s, 4 threads).
-  - Positive control: `TSGO_EMIT_INJECT=compiler/emitBOM.ts/_` reads `differ 1`, red.
-- **Project receipt** (`scripts/tsgo-emit-project.sh`, `EmitProjectMain` against `tools/tsgo-7.0.2/lib/tsc -p … --outDir`,
-  `diff -r`): tsc's 78 sources give **78 files, 8,841,387 bytes, IDENTICAL**, with 65 diagnostics on both sides.
-- **Gates:** `TSGO_DIAG=1 TSGO_ORACLE=bound` `-tsgo` 99 / 0 and `-goport` 15 / 0. That covers DiagParityTest 13,127 equal
-  and OracleParityTest 7,774 / 7,774.
-
-**Port defects (first full run: 12,964 equal, 153 differ, 10 crashed)**, every one fixed by a rule or a shim, none by a
-per-case patch:
-1. **`fmt` printed a named integer type as `%!d(UTF16Offset=…)`.** A generated value class (`GoBasicValue`) now formats as
-   its underlying value. This was 147 source-map records. It was ALSO a real emit bug: the transformers name temporaries
-   through `fmt.Sprintf("_%d", tempFlags)`, so `var _0, _1` came out as `var _%!d(tempFlags=…)` (6 `.js` baselines),
-   which is silently wrong JavaScript on any program with more than 26 temporaries.
-2. **The json shim could not marshal a named basic type** (`incremental.BuildInfoFileId`): every `incremental` build
-   panicked writing `.tsbuildinfo` (6 crashes). It now marshals the underlying kind, map keys too.
-3. **`slices.Concat()` over zero slices** (a program with no files, 4 crashes). The shim takes the porter's
-   `GoElem<S>` dictionary.
-4. **`[]byte` was indistinguishable from `[]int` once inside an `any`**, so `%s` printed `%!s([]=[91 34 …])` (4
-   `sourcesContent:` records). There is a new `GoElem.BYTE` kind: the porter emits it for `uint8`/`byte` elements, and
-   `fmt`'s `%s`/`%q`/`%x` print such a slice's bytes.
-
-**What the closure needed:**
-- Partial packages `testutil/tsbaseline` and `testutil/baseline`; `diagnosticwriter` whole.
-- The porter now accepts a THIRD-PARTY Go package listed in `THIRD_PARTY` (Main.kt: version, copyright, licence) and
-  emits it under `gen/thirdparty/` with its own header. The first is `github.com/peter-evans/patience` (MIT, tsgo's baseline
-  diff; `LICENSE-patience` in -tsgo); no configuration reaches it.
-- Shims: `testing.T.Run`, `net/url` Query(Un)Escape, `gotest.tools` `assert.Check` / `cmp.Equal`.
-- Two lowering rules: an imported PROMOTED nil-safe extension method, and a type parameter shadowing a same-named
-  imported class.
-- `baseline.Run` is a pinned refusal: it writes files.
-- Harness census bound 7 → 8.
-
-**Open:** (TSGO.3-b) the type oracle (another agent). The json shim's `[]byte` is still a number array where Go writes
-base64; nothing in the closure marshals one.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -610,7 +585,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
   `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.
 
-- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). (6-c) AOT levers + the Kotlin/Native GC DONE 2026-10-09 (`scripts/tsgo-native-image-pgo.sh`: PGO + `-O3` -15-23%, compiler profile 2.47 s vs tsgo 1.73 s; K/N links `gc=pmcs`: 7.8 s / 1.7 GB vs the default `cms`'s 11.6 s / 2.1 GB). Remains: a native `-tsgo` CI job, a native goroutine thread pool.** Add a `linuxX64` target to
+- [ ] **(TSGO.6) native for `-tsgo` (§ 6 stage 2 — the go/no-go of `-core`'s retirement).** **IN PROGRESS — (6-a) the `linuxX64` target DONE 2026-10-08 (native suite 64/64; `NativeCheckMain` reports tsc's 65 rows identically; ~6x tsgo wall, half of it the native GC stall). (6-b) the GraalVM image of the (5-a) CLI DONE 2026-10-09 (`:…-tsgo:nativeImage`, G1 + 80% RAM by default; `scripts/tsgo-cli-native-replay.py` 106 / 106 equal incl. type-fest; compiler profile 2.9 s vs tsgo 1.76 s; docs/goport-cli.md § 4). (6-c) AOT levers + the Kotlin/Native GC DONE 2026-10-09 (`scripts/tsgo-native-image-pgo.sh`: PGO + `-O3` -15-23%, compiler profile 2.47 s vs tsgo 1.73 s; K/N links `gc=pmcs`: 7.8 s / 1.7 GB vs the default `cms`'s 11.6 s / 2.1 GB). (6-d) the Kotlin/Native goroutine pool + the first native `perf` profile DONE 2026-10-09 (~700 goroutines on ~150 pthreads, wall unchanged; ~60% of native CPU is memory management, GC mark 43%; docs/goport-runtime.md § 9a). Remains: a native `-tsgo` CI job.** Add a `linuxX64` target to
   `-tsgo` (Kotlin/Native was deferred to after (TSGO.2) by `docs/tsgo-port-plan.md`), run its suite natively, and build the
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.

@@ -1,3 +1,16 @@
+**(TSGO.4-a) DONE — the language service on the tsgo port (2026-10-08):** tsgo's `internal/ls` closure (~62k Go
+lines, 99.5% lowered mechanically) runs in process behind `TsgoLanguageService` (`-tsgo` `facade/`); the
+server/project-system ends tsgo has not ported are an overlay (`goport-extract/overlay/api/xtsc_ls.go`, handler
+bodies copied from `server.go`). `-lsp` now depends on `-tsgo`, not `-project`: hover, definition, typeDefinition,
+references, implementation, completion, signatureHelp, documentHighlight, pull diagnostics. Gate `LsParityTest`
+(`TSGO_LS=1`, `scripts/tsgo-ls-oracle.py` recording the real `tsc --lsp -stdio`): **21,614 / 21,614** equal over
+tsc's 78 sources + 200 conformance projects. Open: auto-import completions (needs tsgo's project registry —
+clients must set `suggest.autoImports: false`), inferred projects, rename, incremental updates (`-lsp` rebuilds
+the program per change). Re-verified on `19a3779c5` by the orchestrator (oracles re-recorded from a rebuilt
+binary): LS 21,614, API 594,007, diag 13,127, emit 13,127, bound AST 7,774 — all equal; tests tsgo 110 / goport
+15 / lsp 38, 0 failed; 0 methods over 8,000 bytecodes in `-tsgo` / `-lsp`; `-lsp` warning-clean. Next: (4-d) the
+`-core` sunset report (deletion is an OWNER decision).
+
 **(TSGO.4-b/-c) DONE — externals and KIR on the tsgo port (2026-10-08):** `-externals` now depends only on
 `-tsgo` (adapter `ts/{Ast,Types,TsgoEngine}.kt`; 291 / 0); KIR's `CheckedFacts` are filled from the ported checker
 (`kir/front/Tsgo*.kt`) while the lowering still walks `-core`'s AST, so `-kir` keeps a `-core` dependency

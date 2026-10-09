@@ -283,6 +283,41 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
 - `go/os` (`Os.native.kt`): POSIX `stat` (following links, as `java.io.File` does) / `opendir` +
   `readdir` / `open` + `read`.
 
+
+**Native CPU profile** (2026-10-09; `scripts/tsgo-native-profile.sh <project>` = `perf record --call-graph dwarf` +
+`scripts/tsgo_perf_stacks.py`). Linux `perf` needs `kernel.perf_event_paranoid <= 2` (1 here); it is a RUNTIME sysctl
+that a reboot resets to the distro default (4), after which `perf record` refuses — `sudo sysctl
+kernel.perf_event_paranoid=1`. The release kexe keeps its symbol table but has NO frame pointers, so `perf -g` unwinds
+garbage; DWARF unwinding works (~320 MB per 8 s run at 199 Hz). Weight samples by PERIOD (the script does): in `-F`
+mode every new thread starts at a tiny period, and with hundreds of goroutine threads a sample COUNT reads the
+kernel's thread start-up as half the run. tsc's compiler profile, parallel, `gc=pmcs`, pooled goroutines — share of ALL
+CPU cycles (every thread; the run uses ~3.7 cores over 8.3 s wall):
+
+| mechanism | self | the top frames |
+|---|---:|---|
+| GC mark | **43.1%** | `Kotlin_processObjectInMark` 35.1, `ParallelMark::parallelMark` 4.1, `Kotlin_processArrayInMark` 3.7 |
+| ported code (`gen/` + runtime), everything else | 23.1% | flat: no frame above 0.6% (`ast#text`, `ast#locals`, `getSourceFileOfNode`, `LinkStore.get`, `compareTypes`, `scanner#scan`, …) |
+| kernel | 9.5% | 77% of it `__mmap`, 6% `__munmap` — the allocator's `PageStore::GetPage` mapping fresh pages |
+| `GoMap` | 5.8% | `GoMap.find` 3.9 (cache misses on the probe: 4.5 via `get`, 0.9 from `isReachableFlowNodeWorker`), `set` 0.35 |
+| `GoSlice` / `slices` | 5.2% | `GoSlice.load` 1.1, `binarySearchFunc` 0.4 (its 5.0% inclusive is `isTypeSubsetOfUnion`'s comparator, mostly GC) |
+| GC sweep | 4.4% | `FixedBlockPage::Sweep` 4.3 (the main GC thread) |
+| allocation | 4.2% | `CustomAllocator::Allocate` 4.0 (12.2% inclusive with page mapping) |
+| libc | 2.3% | unsymbolised (`memset`/`memcpy` family) |
+| strings, locks/park | 0.9%, 0.3% | `StringBuilder.ensureCapacityInternal` 0.4, `String.equals` 0.2; `WaitQueue.signalOne` 0.16 |
+
+(A second run at 99 Hz read GC mark 34.3%, ported code 26.5%, kernel 14.3%, sweep 3.7%, allocation 3.3%: single-run
+shares move by several points, the ranking does not.) So **~55-60% of the native port's CPU is memory management** (mark + sweep + allocate + page mapping) against ~23% of
+actual checker/parser/binder work plus ~11% in the Go map/slice runtime. The GC mark is NOT only on the GC thread
+(16.7% of cycles are the "Main GC thread"): pmcs makes every mutator mark at its safepoint
+(`ThreadSuspensionData::suspendIfRequested` → `ParallelMark::completeRootSetAndMark`, 31.2% inclusive), i.e. the
+checker threads spend about a third of the run marking during stop-the-world pauses — which is also why a checker
+frame's INCLUSIVE share (`checkSourceElementWorker` 43.9%) overstates its own work; read self time. Inclusive, the
+check is ~38% (`getSemanticDiagnosticsWithChecker`), the parse ~11% (`parseSourceFile`), JSDoc parsing 4.8%. The
+direct levers are the allocation rate of the generated code (the runtime's boxed `Any?` values, tuples, closures)
+and the K/N heap; nothing cheap is left in the hand-written runtime (`GoMap.find` is already one probe of a
+flat table). The binary option `disableMmap=true` (pages from `malloc`) moved neither wall nor RSS out of the
+noise (compiler 8.18 -> 8.05 s at +10% RSS, services 10.55 -> 10.33 s, 4 ABBA runs each) — not adopted.
+
 Pins: `commonTest/SyncSemanticsTest` (misuse panics, Once/OnceValue panic semantics) and
 `jvmTest/SyncConcurrencyTest` (8 threads; contended `Mutex`/`WaitGroup` waiters measured to use
 ~no CPU while blocked; a waiting writer goes before a later reader; no lost wake-up under yields).
