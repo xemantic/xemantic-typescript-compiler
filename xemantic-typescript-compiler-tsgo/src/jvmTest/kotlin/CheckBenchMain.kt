@@ -152,13 +152,16 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
         val cpus = ArrayList<Double>()
         val gcs = ArrayList<Double>()
         val allocs = ArrayList<Double>()
+        val tallocs = ArrayList<Double>()
         val threads = java.lang.management.ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
         val gcBeans = java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()
-        fun gcMs() = gcBeans.sumOf { it.collectionTime.coerceAtLeast(0) }
+        // ZGC's "… Cycles" beans time whole concurrent cycles; only its "… Pauses" beans are pauses (G1's beans are pauses)
+        fun gcMs() = gcBeans.filter { !it.name.endsWith("Cycles") }.sumOf { it.collectionTime.coerceAtLeast(0) }
         var checksum = 0L
         for (i in 0 until warmup + iters) {
             val c0 = threads.currentThreadCpuTime
             val a0 = threads.currentThreadAllocatedBytes
+            val ta0 = threads.totalThreadAllocatedBytes
             val g0 = gcMs()
             val t0 = System.nanoTime()
             val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(disk)
@@ -181,6 +184,8 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val t4 = System.nanoTime()
             val cpu = (threads.currentThreadCpuTime - c0) / 1e6
             val alloc = (threads.currentThreadAllocatedBytes - a0) / 1e6
+            // every thread's allocation (the goroutines of a parallel check allocate off the bench thread)
+            val talloc = (threads.totalThreadAllocatedBytes - ta0) / 1e6
             val gc = (gcMs() - g0).toDouble()
             val ms = (t4 - t0) / 1e6
             val n = all.size
@@ -193,14 +198,15 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             checksum = checksum * 31 + n
             val tag = if (i < warmup) "warm" else "meas"
             println(
-                "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f files=%d diags=%d digest=%08x"
-                    .format(ms, cpu, gc, alloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, program.getSourceFiles().len, n, digest),
+                "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f talloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f files=%d diags=%d digest=%08x"
+                    .format(ms, cpu, gc, alloc, talloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, program.getSourceFiles().len, n, digest),
             )
             if (i >= warmup) {
                 totals += ms
                 cpus += cpu
                 gcs += gc
                 allocs += alloc
+                tallocs += talloc
             }
         }
         fun median(xs: List<Double>): Double {
@@ -208,8 +214,8 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             return if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2
         }
         println(
-            "RESULT median_ms=%.1f min_ms=%.1f max_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f checksum=$checksum"
-                .format(median(totals), totals.min(), totals.max(), median(cpus), median(gcs), median(allocs)),
+            "RESULT median_ms=%.1f min_ms=%.1f max_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f talloc_mb=%.0f checksum=$checksum"
+                .format(median(totals), totals.min(), totals.max(), median(cpus), median(gcs), median(allocs), median(tallocs)),
         )
     }
 }

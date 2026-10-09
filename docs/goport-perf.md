@@ -428,3 +428,54 @@ scripts/tsgo_ap_stacks.py build/tsgo-jvm-profile/warm-alloc.collapsed --classes 
 scripts/tsgo-jvm-profile.sh cold build/bench/tsc-project-637d5746 cpu
 scripts/tsgo_ap_stacks.py build/tsgo-jvm-profile/cold-cpu.collapsed --threads --thread goroutine --frame-kinds
 ```
+
+## 8. (TSGO.6-g) JDK 27, and the next levers (2026-10-09)
+
+### 8.1 JDK 27 as a runtime arm
+
+Temurin 27+35 (`tools/jdk-27`, gitignored). **Its default collector is still G1, not ZGC**
+(`-XX:+PrintFlagsFinal`: `UseG1GC = true {ergonomic}`, `UseZGC = false {default}`); what changed by default is
+**`UseCompactObjectHeaders = true`** (8-byte headers; it is a product flag, off by default, on JDK 26). The build
+is untouched: `javaTarget` stays 25 (GraalVM has no JDK > 25 and `native-image` must read the classes), so JDK 27
+runs the SAME bytecode (class md5 `d0e826cf`).
+
+Arms (each its own JVM; two batches, each a forward rotation of the six arms then its reverse, so every arm ran
+4 processes per regime early and late; warm = `CheckBenchMain` 6 warm-up + 10 measured rebuilds, `-Xms2g -Xmx6g`;
+cold = one `TsgoMain --noEmit -p .`; allocation = every thread's (`getTotalThreadAllocatedBytes`), GC = pause time
+(ZGC: its `… Pauses` beans only, its cycles are concurrent); every warm run one digest, every cold run
+byte-identical to tsgo 7.0.2). `z26` = Zulu 26.0.2 (the box's `java`), `t26` = Temurin 26.0.2.1 (the vendor
+control: CLAUDE.md records Zulu ~13% pessimistic cold), `t27` = Temurin 27 default, `t27nocoh` = `-XX:-UseCompactObjectHeaders`,
+`t27zgc` = `-XX:+UseZGC` (generational), `t26coh` = Temurin 26 `-XX:+UseCompactObjectHeaders`. Medians of process
+medians, [range of process medians]:
+
+| regime | z26 | t26 | **t27** | t27nocoh | t27zgc | t26coh |
+|---|---:|---:|---:|---:|---:|---:|
+| compiler single, ms | 3,622 [3,510-3,810] | 3,715 | **3,506** [3,446-3,533] | 3,618 | 4,024 | 3,560 |
+| compiler parallel, ms | 2,038 [1,983-2,214] | 2,016 | **1,930** [1,883-2,078] | 1,926 | 2,320 | 1,955 |
+| services parallel, ms | 2,588 [2,537-2,648] | 2,630 | **2,562** [2,463-2,610] | 2,485 | 2,965 | 2,515 |
+| date-fns parallel, ms | 471 | 442 | **454** | 455 | 514 | 453 |
+| compiler cold, s | 10.17 | 9.86 | **10.66** | 10.31 | 10.88 | 10.42 |
+| services cold, s | 11.44 | 11.58 | **11.94** | 12.40 | 12.71 | 12.01 |
+| date-fns cold, s | 4.86 | 4.51 | **4.61** | 4.77 | 5.04 | 4.55 |
+| compiler alloc/rebuild (parallel), MB | 2,550 | 2,532 | **2,336** | 2,508 | 2,794 | 2,312 |
+| compiler GC pause/rebuild (parallel), ms | 263 | 247 | **181** | 201 | ~0 | 201 |
+| compiler RSS (parallel), MB | 6,496 | 6,587 | **6,422** | 6,451 | 7,123 | 6,457 |
+
+Readings:
+
+- **Compact headers are a real, deterministic allocation lever: −7 to −9% of bytes** (2,508 → 2,336 MB on JDK 27,
+  2,532 → 2,312 on JDK 26), exactly the port's shape (4-7 small objects per AST node). Their WALL effect is not
+  resolvable here: `t27` vs `t27nocoh` is −3.1% single but +0.2% parallel and +3% services parallel.
+- **JDK 27 vs JDK 26 (same vendor), warm: −5.6% single, −4.3% parallel on compiler, −2.6% services, +2.7% date-fns**
+  — a small, mostly consistent warm win, about half of which is the compact headers (`t26coh` is −4.2% / −3.0% vs
+  `t26`). Against the box's Zulu 26: −3.2% / −5.3% / −1.0%. Ranges overlap; the process spread here is ±3-5%.
+- **Cold, JDK 27 is NOT faster**: +8% compiler, +3% services, +2% date-fns against Temurin 26 (Zulu sits between).
+  The vendor control matters: Zulu → Temurin 26 alone is −3.1% / +1.2% / −7.2% cold.
+- **ZGC loses everywhere for this workload**: +11-15% warm wall, +10% allocation (its load barriers and
+  colour bits; no compressed oops), +10% RSS, +4-11% cold. Its pauses are ~0 ms, but the port is a batch job
+  whose G1 pauses are ~200 ms of a ~2-3.5 s rebuild — there is nothing for a low-latency collector to buy.
+
+**Decision.** JDK 27 is a modest warm improvement, not a clear one, and a cold regression; it is NOT made the
+default. `scripts/tsgo-jvm-profile.sh` takes `TSGO_JAVA=<java>` so either arm can be profiled. **Proposal (owner,
+not done — CI is a guardrail):** the daemon/LSP host — the warm regime — could run on JDK 27 (or on any JDK with
+`-XX:+UseCompactObjectHeaders`, which buys the same −8% allocation on 26); the CLI and CI should stay where they are.

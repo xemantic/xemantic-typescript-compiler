@@ -3,6 +3,7 @@
 #
 #   scripts/tsgo-jvm-profile.sh warm <tsconfig.json> <cpu|alloc> [single|parallel] [delay_s=45] [dur_s=30]
 #   scripts/tsgo-jvm-profile.sh cold <project dir> cpu
+#   TSGO_JAVA=<java binary> (default: `java` on PATH)
 #
 # warm: CheckBenchMain rebuilds the program forever in one JVM; the profiler ATTACHES after `delay_s`
 #       (past JIT warm-up) for `dur_s`, so the samples are steady-state rebuilds.
@@ -43,9 +44,11 @@ G
 [[ $(grep -ac '^JVMPROFILE_CP=' "$OUT/gradle.log") == 1 ]] || { cat "$OUT/gradle.log"; exit 1; }
 CP=$(grep -a '^JVMPROFILE_CP=' "$OUT/gradle.log" | sed 's/^JVMPROFILE_CP=//')
 export XTSC_TSGO_LIB_DIR="$REPO/tools/tsgo-7.0.2/lib"
+# The JVM: `TSGO_JAVA=tools/jdk-27/bin/java …` (docs/goport-perf.md § 8.1 — a runtime arm only; the build stays on JDK 25 bytecode).
+JAVA="${TSGO_JAVA:-java}"
 case "$MODE" in
   warm)
-    java -Xms2g -Xmx6g -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -cp "$CP" \
+    "$JAVA" -Xms2g -Xmx6g -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -cp "$CP" \
       com.xemantic.typescript.tsgo.CheckBenchMainKt "$TARGET" 1000 0 nolib "$THREADS" > "$OUT/warm-run.log" 2>&1 &
     PID=$!
     sleep "$DELAY"
@@ -57,7 +60,7 @@ case "$MODE" in
     ;;
   cold)
     cd "$TARGET"
-    java -Xss4m -agentpath:"$AP/lib/libasyncProfiler.so"=start,event=cpu,interval=1ms,threads,ann,file="$OUT/cold-cpu.collapsed",collapsed \
+    "$JAVA" -Xss4m -agentpath:"$AP/lib/libasyncProfiler.so"=start,event=cpu,interval=1ms,threads,ann,file="$OUT/cold-cpu.collapsed",collapsed \
       -cp "$CP" com.xemantic.typescript.tsgo.cli.TsgoMainKt --noEmit -p . --pretty false > "$OUT/cold-run.log" 2>&1 || true
     grep -c 'error TS' "$OUT/cold-run.log" || true
     ;;
