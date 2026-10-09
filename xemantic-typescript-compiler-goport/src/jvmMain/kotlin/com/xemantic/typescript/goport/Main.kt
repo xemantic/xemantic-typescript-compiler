@@ -171,6 +171,9 @@ fun main(argv: Array<String>) {
     val overrides = loadOverrides(args.overrides)
     val prog = Program(packages, shims, renames)
     prog.computeInlineFuncs(overrides.keys)
+    prog.computeWindowFields()
+    prog.computeImmutableStructs()
+    for ((k, why) in prog.immutableRefusals) println("goport: immutable struct refused: $k — $why")
     prog.computeWindowFuncs(overrides.keys)
     val pinned = RenameTable.load(args.refuse).let { t -> t.entries() }
     val report = Report()

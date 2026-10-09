@@ -31,7 +31,9 @@ import com.xemantic.typescript.tsgo.runtime.appendRuneBytes
 import com.xemantic.typescript.tsgo.runtime.goAppendString
 import com.xemantic.typescript.tsgo.runtime.goBytesToString
 import com.xemantic.typescript.tsgo.runtime.goDecodeLastRune
+import com.xemantic.typescript.tsgo.runtime.goDecodeLastRuneIn
 import com.xemantic.typescript.tsgo.runtime.goDecodeRune
+import com.xemantic.typescript.tsgo.runtime.goDecodeRuneIn
 import com.xemantic.typescript.tsgo.runtime.goRuneCount
 import com.xemantic.typescript.tsgo.runtime.runeLen as rtRuneLen
 
@@ -58,6 +60,12 @@ fun decodeRuneInString(s: String): Tuple2<Int, Int> = unpack(goDecodeRune(s, 0))
  * quadratic in a scanner loop).
  */
 fun decodeRuneInStringAt(s: String, i: Int): Tuple2<Int, Int> = unpack(goDecodeRune(s, i))
+
+/** NOT Go API — `utf8.DecodeRuneInString(s[from:to])` without the substring (a window field's suffix). */
+fun decodeRuneInStringIn(s: String, from: Int, to: Int): Tuple2<Int, Int> = unpack(goDecodeRuneIn(s, from, to))
+
+/** NOT Go API — `utf8.DecodeLastRuneInString(s[from:end])` without the substring. */
+fun decodeLastRuneInStringIn(s: String, from: Int, end: Int): Tuple2<Int, Int> = unpack(goDecodeLastRuneIn(s, from, end))
 
 /** `utf8.DecodeLastRuneInString(s)` → (rune, size). */
 fun decodeLastRuneInString(s: String): Tuple2<Int, Int> = unpack(goDecodeLastRune(s, s.length))

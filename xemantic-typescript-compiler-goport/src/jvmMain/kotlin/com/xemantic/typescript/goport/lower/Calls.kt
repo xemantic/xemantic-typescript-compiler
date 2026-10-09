@@ -215,10 +215,11 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         // A window overload (docs/goport-lowering.md § 3): pass `s[lo:hi]` as (base, from, length).
         prog.windowFuncs[o.str("key")]?.let { idx ->
             val a = e.list("args").getOrNull(idx) ?: return@let
-            val w = windowOf(a) ?: return@let
-            if (!SIMPLE_BASE.matches(w.base)) return@let
+            val triple = viewOf(a)?.let { v -> "${v.base}, ${v.off}, ${v.len}" }
+                ?: windowOf(a)?.takeIf { SIMPLE_BASE.matches(it.base) }?.let { w -> "${w.base}, ${w.from}, goStrView(${w.base}, ${w.from}, ${w.to ?: "${w.base}.length"})" }
+                ?: return@let
             val codes = args(e, sig, false, false).toMutableList()
-            codes[idx] = "${w.base}, ${w.from}, goStrView(${w.base}, ${w.from}, ${w.to ?: "${w.base}.length"})"
+            codes[idx] = triple
             val wref = ref.substringBeforeLast('.', "").let { if (it.isEmpty()) "" else "$it." } + prog.windowName(o.str("key")!!, o.str("name")!!)
             return Ex.primary("$wref(${codes.joinToString(", ")})")
         }
@@ -288,11 +289,18 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
                 return Ex.primary("run { val $v = ${raw(args[0]).at(PRIMARY)}.`interface`(); if ($v is ${isCheck(targ)}) Tuple2($v as ${castTarget(targ)}, true) else Tuple2(${tm.zero(targ)}, false) }")
             }
             "unicode/utf8.DecodeRuneInString" -> suffixArg(args[0])?.let { (s, lo) ->
+                // Of a view (a window field): decode within the window, as Go decodes within the narrowed string.
+                viewOf(s)?.let { v ->
+                    return Ex.primary("com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringIn(${v.base}, ${v.off} + goViewBound(${v.len}, ${intIndex(lo).code}), ${v.off} + ${v.len})")
+                }
                 return Ex.primary("com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(${raw(s).code}, ${intIndex(lo).code})")
             }
             "unicode/utf8.DecodeLastRuneInString" -> {
                 val a = args[0]
                 if (a.k == "SliceExpr" && a.str("sk") == "string" && a.obj("low") == null && a.obj("high") != null) {
+                    viewOf(a.reqObj("x"))?.let { v ->
+                        return Ex.primary("com.xemantic.typescript.tsgo.go.unicode.utf8.decodeLastRuneInStringIn(${v.base}, ${v.off}, ${v.off} + goViewBound(${v.len}, ${intIndex(a.reqObj("high")).code}))")
+                    }
                     return Ex.primary("com.xemantic.typescript.tsgo.go.unicode.utf8.decodeLastRuneInStringBefore(${raw(a.reqObj("x")).code}, ${intIndex(a.reqObj("high")).code})")
                 }
             }
@@ -368,6 +376,21 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val sig = sigOf(e)
         val mo = pc.obj(sel.reqObj("sel").int("obj")!!)
         val shim = mo.str("pkg") != null && mo.str("pkg") !in prog.ported
+        // A method's window overload (Program.windowMethods): pass `s[lo:hi]` or a window field as (base, offset, length).
+        mo.str("key")?.takeIf { it in prog.windowMethods }?.let { key ->
+            val idx = prog.windowFuncs[key] ?: return@let
+            val a = e.list("args").getOrNull(idx) ?: return@let
+            val triple = viewOf(a)?.let { v -> "${v.base}, ${v.off}, ${v.len}" }
+                ?: windowOf(a)?.takeIf { SIMPLE_BASE.matches(it.base) }?.let { w -> "${w.base}, ${w.from}, goStrView(${w.base}, ${w.from}, ${w.to ?: "${w.base}.length"})" }
+                ?: return@let
+            val codes = args(e, sig, false, false).toMutableList()
+            codes[idx] = triple
+            val wname = prog.windowName(key, mo.str("name")!!, true)
+            // An extension overload from another package is callable only through an import (as methodTarget does).
+            val mpkg = mo.str("pkg")
+            if (key in prog.extensionMethods && mpkg != null && mpkg != pc.pkg.path) fn.fc.importFun(naming(mpkg), wname)
+            return withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$wname(${codes.joinToString(", ")})"))
+        }
         return withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$name(${inlineArgs(e, mo.str("key"), args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})"))
     }
 
@@ -414,13 +437,19 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
          * bounded form, or the left operand of `==`/`!=`). [defIdents] are the defining identifiers
          * (skipped); [keyOf] answers a `func` call's callee key.
          */
-        fun viewUseViolations(root: Node, ids: Set<Int>, defIdents: Set<Any>, keyOf: (Node) -> String?): Set<Int> {
+        fun viewUseViolations(
+            root: Node, ids: Set<Int>, defIdents: Set<Any>, windowStore: (Node) -> Boolean = { false }, keyOf: (Node) -> String?,
+        ): Set<Int> {
             val bad = HashSet<Int>()
             val stack = ArrayList<Pair<Node, String>>()
             fun allowed(): Boolean {
                 val (p, pk) = stack[stack.size - 1]
                 if (p.k == "CallExpr" && p.str("call") == "builtin" && p.str("builtin") == "len") return true
                 if (p.k == "IndexExpr" && pk == "x" && p.str("ik") == "string") return true
+                // `x.f = p` into a window field ([Program.windowFields]) stores the window.
+                if (p.k == "AssignStmt" && pk == "rhs" && p.str("tok") == "=" && p.list("lhs").size == 1 && p.list("rhs").size == 1 &&
+                    windowStore(p.list("lhs")[0])
+                ) return true
                 if (pk == "x" && isStringSlice(p) && stack.size >= 2) {
                     val (g, gk) = stack[stack.size - 2]
                     if (g.k == "BinaryExpr" && gk == "x" && g.str("op") in setOf("==", "!=")) return true

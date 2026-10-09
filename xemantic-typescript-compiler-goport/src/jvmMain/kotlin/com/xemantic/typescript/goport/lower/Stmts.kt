@@ -297,6 +297,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         if (define && lhs.size == 1 && rhs.size == 1 && lhs[0].k == "Ident" && lhs[0].bool("def") &&
             lhs[0].int("obj")?.let { it in viewCandidates() } == true
         ) return declareView(lhs[0].int("obj")!!, rhs[0]) { w.line(it) }
+        if (!define && lhs.size == 1 && rhs.size == 1 && isWindowField(lhs[0])) return windowStore(lhs[0], rhs[0])
         if (lhs.size == rhs.size) {
             if (lhs.size == 1) return single(lhs[0], flow(rhs[0]), define)
             // Parallel assignment: every right side is evaluated before any store.
@@ -310,6 +311,46 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         }
         val r = rhs.single()
         multi(lhs, r, define)
+    }
+
+    private fun isWindowField(l: Node): Boolean =
+        if (l.k == "ParenExpr") isWindowField(l.reqObj("x")) else prog.windowFieldKey(pc.pkg, l) != null
+
+    /**
+     * `o.f = r` into a window field ([Program.windowFields]): the owner first (Go evaluates the
+     * left operands first), then the window of `r` — a view's slots, a string slice's bounds
+     * (checked as Go checks them), or a whole string — into `f`, `f_o`, `f_n`. No copy.
+     */
+    private fun windowStore(l0: Node, r: Node) {
+        val l = if (l0.k == "ParenExpr") l0.reqObj("x") else l0
+        val (owner, name) = fieldOwner(l)
+        val ot = fn.fresh("wo")
+        w.line("val $ot = ${owner.code}")
+        val b = fn.fresh("wb")
+        val o = fn.fresh("wof")
+        val n = fn.fresh("wn")
+        val v = viewOf(r)
+        val win = if (v == null) windowOf(r) else null
+        when {
+            v != null -> {
+                w.line("val $b: String = ${v.base}")
+                w.line("val $o: Int = ${v.off}")
+                w.line("val $n: Int = ${v.len}")
+            }
+            win != null -> {
+                w.line("val $b: String = ${win.base}")
+                w.line("val $o: Int = ${win.from}")
+                w.line("val $n: Int = goStrView($b, $o, ${win.to ?: "$b.length"})")
+            }
+            else -> {
+                w.line("val $b: String = ${flow(r).code}")
+                w.line("val $o: Int = 0")
+                w.line("val $n: Int = $b.length")
+            }
+        }
+        w.line("$ot.$name = $b")
+        w.line("$ot.${name}_o = $o")
+        w.line("$ot.${name}_n = $n")
     }
 
     /** `a, b := f()` / comma-ok forms. */
@@ -376,6 +417,14 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         store(l, value)
     }
 
+    /**
+     * A struct variable whose address is taken keeps ONE object for its life (assigned by `goSet`),
+     * so outstanding pointers see later stores — except a [Program.immutableStructs] value, whose
+     * only `&x` is a pure method's receiver: a plain rebindable reference.
+     */
+    private fun addrStable(o: Node): Boolean =
+        o.bool("addr") && (types.unalias(o.int("t")!!) as? com.xemantic.typescript.goport.types.NamedType)?.key !in prog.immutableStructs
+
     fun declareLocal(id: Int, init: String?) {
         val o = pc.obj(id)
         val t = o.int("t")!!
@@ -384,7 +433,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         val v = init ?: tm.zero(t)
         when {
             id in fn.boxed -> w.line("val $n: GoBox<$kt> = GoBox($v)")
-            o.bool("mut") && !(tm.isStructValue(t) && o.bool("addr")) -> w.line("var $n: $kt = $v")
+            o.bool("mut") && !(tm.isStructValue(t) && addrStable(o)) -> w.line("var $n: $kt = $v")
             else -> w.line("val $n: $kt = $v")
         }
     }
@@ -396,13 +445,23 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             "Ident" -> {
                 val id = l.int("obj")!!
                 val o = pc.obj(id)
-                if (o.bool("local") && tm.isStructValue(o.int("t")!!) && o.bool("addr")) {
+                if (o.bool("local") && tm.isStructValue(o.int("t")!!) && addrStable(o)) {
                     w.line("${lower(l).code}.goSet(${value.code})")
                 } else {
                     w.line("${lower(l).code} = ${value.code}")
                 }
             }
-            "SelectorExpr", "IndexExpr" -> w.line("${lower(l).code} = ${value.code}")
+            "SelectorExpr", "IndexExpr" -> if (isWindowField(l)) {
+                // A whole string into a window field (a parallel or tuple assignment).
+                val (owner, name) = fieldOwner(l)
+                val ot = fn.fresh("wo")
+                val t = fn.fresh("wv")
+                w.line("val $t: String = ${value.code}")
+                w.line("val $ot = ${owner.code}")
+                w.line("$ot.$name = $t")
+                w.line("$ot.${name}_o = 0")
+                w.line("$ot.${name}_n = $t.length")
+            } else w.line("${lower(l).code} = ${value.code}")
             "StarExpr" -> {
                 val p = l.reqObj("x")
                 val pt = types.under(ty(p)) as PointerType
@@ -415,6 +474,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
     }
 
     private fun opAssign(l: Node, op: String, r: Node) {
+        if (isWindowField(l)) refuse("window-field-op-assign")
         val t = ty(l)
         val rep = tm.repOf(t)
         val simple = !tm.isValueClass(t) && rep != null && tm.kindOf(types.basic(t)!!) in PLAIN_KINDS

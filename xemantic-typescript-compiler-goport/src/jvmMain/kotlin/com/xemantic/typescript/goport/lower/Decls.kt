@@ -324,8 +324,8 @@ class PackageEmitter(
                 report.inlined(qname)
                 sigText.replaceFirst("fun ", "inline fun ")
             } else sigText
-            val win = if (recvField == null && member == null && !probeMode) prog.windowFuncs[qname]?.let { idx ->
-                windowOverload(d, fc, qname, tm, sig, ft, params, idx, name, declList, resultText)
+            val win = if (!probeMode && (recvField == null && member == null || qname in prog.windowMethods)) prog.windowFuncs[qname]?.let { idx ->
+                windowOverload(d, fc, qname, tm, sig, ft, params, idx, name, declList, resultText, recvField, recvTypeText, fn)
             } ?: "" else ""
             "${traceLine(qname, d.str("hash"))}\n$sigOut {\n$bodyWriter}\n" + fn.helpers.joinToString("") { "\n$it" } + win
         } catch (r: Refusal) {
@@ -344,11 +344,16 @@ class PackageEmitter(
     private fun windowOverload(
         d: Node, fc: FileCtx, qname: String, tm: TypeMapper, sig: SignatureType, ft: Node, params: List<Node>,
         idx: Int, name: String, declList: List<String>, resultText: String,
+        recvField: Node?, recvTypeText: String, outer: FnCtx,
     ): String {
-        val wname = prog.windowName(qname, d.str("name")!!)
+        val wname = prog.windowName(qname, d.str("name")!!, recvField != null)
         val f = FnCtx(fc, qname, tm)
         f.root = d.obj("body")
         f.windowParamIdx = idx
+        // A method's overload has its method's receiver context (Decls.funcDecl).
+        f.classMembers = outer.classMembers
+        f.recvObj = outer.recvObj
+        f.recvNullable = outer.recvNullable
         val l = Lowering(f)
         val bw = CodeWriter(1)
         f.w = bw
@@ -356,10 +361,13 @@ class PackageEmitter(
         val trace = "// goport: window overload of $qname (parameter $idx)\n"
         try {
             f.frames.addLast(Frame(sig.results.map { it.t }, l.namedResultObjs(ft)))
+            recvField?.list("names")?.firstOrNull()?.int("obj")?.let { r ->
+                if (f.recvObj != r && pc.obj(r).str("name") != "_") l.declareLocal(r, "this")
+            }
             l.copyInParams(params)
             l.declareNamedResults()
             l.withDefersIfNeeded(d.reqObj("body"), sig.results.map { it.t }) { l.body(d.reqObj("body").list("list")) }
-            if (f.helpers.isEmpty()) return "\n${trace}fun $wname(${decl.joinToString(", ")})$resultText {\n$bw}\n"
+            if (f.helpers.isEmpty()) return "\n${trace}fun $recvTypeText$wname(${decl.joinToString(", ")})$resultText {\n$bw}\n"
         } catch (_: Refusal) {
         }
         // Delegation: the same arguments, the window copied back into a string.
@@ -368,7 +376,7 @@ class PackageEmitter(
         val wdecl = declList.flatMapIndexed { i, p ->
             if (i == idx) { val n = names[i]; listOf("${n}_b: String", "${n}_o: Int", "${n}_n: Int") } else listOf(p)
         }
-        return "\n${trace}fun $wname(${wdecl.joinToString(", ")})$resultText = $name(${args.joinToString(", ")})\n"
+        return "\n${trace}fun $recvTypeText$wname(${wdecl.joinToString(", ")})$resultText = $name(${args.joinToString(", ")})\n"
     }
 
     /**
@@ -618,12 +626,19 @@ class PackageEmitter(
         // A struct with more fields than a JVM constructor takes arguments (255 slots: `checker.Checker`)
         // keeps its fields in the body; composite literals then assign them (Program.bigStruct).
         val big = prog.bigStruct(st)
+        val windowIdx = st.fields.indices.filter { "$qname.${st.fields[it].name}" in prog.windowFields }.toSet()
+        if (big && windowIdx.isNotEmpty()) error("window field in a big struct: $qname")
         w.line("class $name$tpDecl(")
         w.indent {
             for (tp in dict) w.line("@kotlin.jvm.JvmField val goElem_$tp: GoElem<${Naming.escape(tp)}>,")
             if (!big) st.fields.forEachIndexed { i, f ->
                 // @JvmField: no accessors (a Go `SetText` method would clash with `text`'s setter), and direct field access.
                 w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${tm.kt(f.t)} = ${tm.zero(f.t)},")
+                if (i in windowIdx) {
+                    // A window field (Program.windowFields): offset and length into the base above.
+                    w.line("@kotlin.jvm.JvmField var ${fieldNames[i]}_o: Int = 0,")
+                    w.line("@kotlin.jvm.JvmField var ${fieldNames[i]}_n: Int = ${fieldNames[i]}.length,")
+                }
             }
         }
         w.line(")${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
@@ -639,12 +654,26 @@ class PackageEmitter(
                     w.line("return goOut")
                 }
             } else {
-                val copyArgs = dict.map { "goElem_$it = goElem_$it" } + st.fields.indices.map { "${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm)}" }
+                if (qname in prog.immutableStructs) {
+                    // Program.immutableStructs: Go never changes one in place, so a copy is the value itself.
+                    w.line("fun goCopy(): $self = this")
+                } else {
+                val copyArgs = dict.map { "goElem_$it = goElem_$it" } + st.fields.indices.flatMap {
+                    listOf("${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm)}") +
+                        (if (it in windowIdx) listOf("${fieldNames[it]}_o = ${fieldNames[it]}_o", "${fieldNames[it]}_n = ${fieldNames[it]}_n") else emptyList())
+                }
                 w.line("fun goCopy(): $self = $name(${copyArgs.joinToString(", ")})")
+                }
             }
             w.line()
             w.block("fun goSet(o: $self)") {
-                st.fields.forEachIndexed { i, f -> w.line("${fieldNames[i]} = ${copyField("o." + fieldNames[i], f.t, tm)}") }
+                st.fields.forEachIndexed { i, f ->
+                    w.line("${fieldNames[i]} = ${copyField("o." + fieldNames[i], f.t, tm)}")
+                    if (i in windowIdx) {
+                        w.line("${fieldNames[i]}_o = o.${fieldNames[i]}_o")
+                        w.line("${fieldNames[i]}_n = o.${fieldNames[i]}_n")
+                    }
+                }
             }
             // A generic struct is comparable per instantiation (`Expected[string]` in a comparable struct).
             if (named.comparable || named.isGenericOrigin) {

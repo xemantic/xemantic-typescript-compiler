@@ -91,6 +91,7 @@ import com.xemantic.typescript.tsgo.scanner.resetPos
 import com.xemantic.typescript.tsgo.scanner.rewind
 import com.xemantic.typescript.tsgo.scanner.setSkipJSDocLeadingAsterisks
 import com.xemantic.typescript.tsgo.scanner.setText
+import com.xemantic.typescript.tsgo.scanner.setTextWin
 import com.xemantic.typescript.tsgo.scanner.tokenEnd
 import com.xemantic.typescript.tsgo.scanner.tokenFullStart
 import com.xemantic.typescript.tsgo.scanner.tokenStart
@@ -194,7 +195,7 @@ fun Parser?.withJSDoc(node: Node?, info: com.xemantic.typescript.tsgo.parser.jsd
             return GoElem.ref<Node?>().nilSlice
         }
     }
-    val ranges: GoSlice<CommentRange> = getJSDocCommentRanges(this!!.factory, this!!.jsdocCommentRangesSpace, node, this!!.sourceText)
+    val ranges: GoSlice<CommentRange> = getJSDocCommentRanges(this!!.factory, this!!.jsdocCommentRangesSpace, node, goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n))
     this!!.jsdocCommentRangesSpace = ranges.slice(0, 0)
     this!!.hasDeprecatedTag = false
     var jsdoc: GoSlice<Node?> = this!!.nodeSliceArena.newSlice(ranges.len).slice(0, 0)
@@ -262,12 +263,12 @@ fun Parser?.parseJSDocNameReference(): Node? {
 fun Parser?.parseJSDocComment(parent: Node?, start: Int, end_0: Int, fullStart: Int): Node? {
     var end: Int = end_0
     if (end == -1) {
-        end = this!!.sourceText.length
+        end = this!!.sourceText_n
     }
-    if (!isJSDocLikeTextWin(this!!.sourceText, start, goStrView(this!!.sourceText, start, this!!.sourceText.length))) {
+    if (!isJSDocLikeTextWin(this!!.sourceText, this!!.sourceText_o + goViewBound(this!!.sourceText_n, start), goStrView(this!!.sourceText, this!!.sourceText_o + goViewBound(this!!.sourceText_n, start), this!!.sourceText_o + this!!.sourceText_n))) {
         return null
     }
-    val saveSourceText: String = this!!.sourceText
+    val saveSourceText: String = goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n)
     val saveToken: Kind = this!!.token
     val saveContextFlags: NodeFlags = this!!.contextFlags
     val saveParsingContexts: ParsingContexts = this!!.parsingContexts
@@ -275,9 +276,15 @@ fun Parser?.parseJSDocComment(parent: Node?, start: Int, end_0: Int, fullStart: 
     val saveDiagnosticsLength: Int = this!!.diagnostics.len
     val saveHasParseError: Boolean = this!!.hasParseError
     val saveHasAwaitIdentifier: Boolean = this!!.statementHasAwaitIdentifier
-    val initialIndent: Int = start + 4 - (com.xemantic.typescript.tsgo.go.strings.lastIndexIn(this!!.sourceText, 0, start, "\n") + 1)
-    this!!.sourceText = this!!.sourceText.substring(0, end - 2)
-    this!!.scanner.setText(this!!.sourceText)
+    val initialIndent: Int = start + 4 - (com.xemantic.typescript.tsgo.go.strings.lastIndexIn(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_o + goViewBound(this!!.sourceText_n, start), "\n") + 1)
+    val wo1 = this!!
+    val wb2: String = this!!.sourceText
+    val wof3: Int = this!!.sourceText_o
+    val wn4: Int = goStrView(wb2, wof3, this!!.sourceText_o + goViewBound(this!!.sourceText_n, end - 2))
+    wo1.sourceText = wb2
+    wo1.sourceText_o = wof3
+    wo1.sourceText_n = wn4
+    this!!.scanner.setTextWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n)
     this!!.scanner.resetPos(start + 3)
     this.setContextFlags(NodeFlags(4194304u), true)
     this!!.parsingContexts = ParsingContexts(this!!.parsingContexts.value or 33554432)
@@ -286,8 +293,14 @@ fun Parser?.parseJSDocComment(parent: Node?, start: Int, end_0: Int, fullStart: 
         this!!.jsdocDiagnostics = this!!.jsdocDiagnostics.appendSlice(this!!.diagnostics.slice(saveDiagnosticsLength))
     }
     this!!.diagnostics = this!!.diagnostics.slice(0, saveDiagnosticsLength)
-    this!!.sourceText = saveSourceText
-    this!!.scanner.setText(this!!.sourceText)
+    val wo5 = this!!
+    val wb6: String = saveSourceText
+    val wof7: Int = 0
+    val wn8: Int = wb6.length
+    wo5.sourceText = wb6
+    wo5.sourceText_o = wof7
+    wo5.sourceText_n = wn8
+    this!!.scanner.setTextWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n)
     this!!.parsingContexts = saveParsingContexts
     this!!.contextFlags = saveContextFlags
     this!!.scanner.rewind(saveScannerState.goCopy())
@@ -1060,7 +1073,7 @@ fun Parser?.parseTypeTag(previousTags: GoSlice<Node?>, start: Int, tagName: Node
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.parseSeeTag ab4b4dda
 fun Parser?.parseSeeTag(start: Int, tagName: Node?, indent: Int, indentText: String): Node? {
-    val hasNameReference: Boolean = this.isIdentifier() && !com.xemantic.typescript.tsgo.go.strings.hasPrefixAt(this!!.sourceText, this!!.scanner.tokenEnd(), "://") || this!!.token.value == 18 && this.lookAhead(fun(p0: Parser?): Boolean = p0.nextTokenIsIdentifierOrKeyword())
+    val hasNameReference: Boolean = this.isIdentifier() && !com.xemantic.typescript.tsgo.go.strings.hasPrefixIn(this!!.sourceText, this!!.sourceText_o + goViewBound(this!!.sourceText_n, this!!.scanner.tokenEnd()), this!!.sourceText_o + this!!.sourceText_n, "://") || this!!.token.value == 18 && this.lookAhead(fun(p0: Parser?): Boolean = p0.nextTokenIsIdentifierOrKeyword())
     var nameExpression: Node? = null
     if (hasNameReference) {
         nameExpression = this.parseJSDocNameReference()

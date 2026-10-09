@@ -128,7 +128,7 @@ class LoweringRulesTest {
         assert(ascii.contains("goStrView(") && ascii.contains("goViewByte("))
         // Fused calls: HasPrefix / IndexByte / Index over a suffix of the source.
         // (scanString keeps ONE bounded `substring`: the literal's value genuinely escapes as a string.)
-        assert(genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanString").let { it.contains("indexByteAt(") && !suffixCopy.containsMatchIn(it) })
+        assert(genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanString").let { (it.contains("indexByteAt(") || it.contains("indexByteIn(")) && !suffixCopy.containsMatchIn(it) })
         assert(!genFunction("scanner/Scanner.kt", "$scanner.Scanner.processCommentDirective").contains(".substring("))
         assert(!genFunction("parser/Parser3.kt", "$parser.match").contains(".substring("))
         assert(!genFunction("parser/Parser3.kt", "$parser.skipTo").contains(".substring("))
@@ -246,7 +246,7 @@ class LoweringRulesTest {
         assert(genFunction("core/Core.kt", "github.com/microsoft/typescript-go/internal/core.Same").contains("s1.sameSlot(0, s2, 0)"))
         // parseJSDocComment's indent: `strings.LastIndex(p.sourceText[:start], "\n")`, once a prefix copy per JSDoc comment.
         val jsdoc = genFunction("parser/Jsdoc.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.parseJSDocComment")
-        assert(jsdoc.contains("lastIndexIn(this!!.sourceText, 0, start, \"\\n\")") && !jsdoc.contains("substring(0, start)"))
+        assert(jsdoc.contains("lastIndexIn(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_o + goViewBound(this!!.sourceText_n, start), \"\\n\")") && !jsdoc.contains("substring(0, start)"))
     }
 
     @Test
@@ -254,12 +254,42 @@ class LoweringRulesTest {
         val parser = "github.com/microsoft/typescript-go/internal/parser"
         // isJSDocLikeText(p.sourceText[start:]) — a suffix copy of the whole source per JSDoc comment.
         val jsdoc = genFunction("parser/Jsdoc.kt", "$parser.Parser.parseJSDocComment")
-        assert(jsdoc.contains("isJSDocLikeTextWin(this!!.sourceText, start, goStrView(this!!.sourceText, start, this!!.sourceText.length))"))
+        // (TSGO.6-g) sourceText is a window field now, so the window is read through its slots.
+        assert(jsdoc.contains("isJSDocLikeTextWin(this!!.sourceText, this!!.sourceText_o + goViewBound(this!!.sourceText_n, start), goStrView("))
         assert(!jsdoc.contains("isJSDocLikeText(this!!.sourceText.substring("))
         // The overload reads the window through the view helpers; the copying function stays for other callers.
         val text = File(gen, "parser/Utilities.kt").readText()
         assert(text.contains("fun isJSDocLikeTextWin(text_b0: String, text_o1: Int, text_n2: Int): Boolean {"))
         assert(text.contains("text_n2 >= 4 && goViewByte(text_b0, text_o1, text_n2, 1) == 42"))
         assert(text.contains("fun isJSDocLikeText(text: String): Boolean {"))
+    }
+
+    @Test
+    fun `a window field narrows without copying - the parser's JSDoc source and the scanner's text`() {
+        val parser = "github.com/microsoft/typescript-go/internal/parser"
+        val scanner = "github.com/microsoft/typescript-go/internal/scanner"
+        // p.sourceText = p.sourceText[:end-2] was a copy of the file prefix per JSDoc comment (docs/goport-perf.md § 8.2).
+        val jsdoc = genFunction("parser/Jsdoc.kt", "$parser.Parser.parseJSDocComment")
+        assert(!jsdoc.contains("this!!.sourceText.substring("))
+        assert(jsdoc.contains("this!!.scanner.setTextWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n)"))
+        // The struct carries the slots; a copy and a goSet carry them too.
+        val scannerKt = File(gen, "scanner/Scanner.kt").readText()
+        assert(scannerKt.contains("@kotlin.jvm.JvmField var text_n: Int = text.length,"))
+        assert(scannerKt.contains("Scanner(text = text, text_o = text_o, text_n = text_n,"))
+        // SetText's window overload stores the window; reads go through the view (bounds checked against the window).
+        assert(genFunction("scanner/Scanner.kt", "$scanner.Scanner.SetText").contains("fun Scanner?.setTextWin(text_1_b0: String, text_1_o1: Int, text_1_n2: Int)"))
+        assert(genFunction("scanner/Scanner.kt", "$scanner.Scanner.charAndSize").contains("decodeRuneInStringIn("))
+        // A whole read materializes (the base itself when the window covers it).
+        assert(genFunction("scanner/Scanner.kt", "$scanner.Scanner.Text").contains("goStrWin(this!!.text, this!!.text_o, this!!.text_n)"))
+    }
+
+    @Test
+    fun `an immutable struct is its own copy and its pure-receiver local is rebound - FlowType`() {
+        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val flow = File(gen, "checker/Flow.kt").readText()
+        assert(flow.contains("fun goCopy(): FlowType = this"))
+        val node = genFunction("checker/Flow.kt", "$checker.Checker.getTypeAtFlowNode")
+        assert(node.contains("t = this.getTypeAtFlowAssignment(f, flow)"))
+        assert(!node.contains("t.goSet("))
     }
 }

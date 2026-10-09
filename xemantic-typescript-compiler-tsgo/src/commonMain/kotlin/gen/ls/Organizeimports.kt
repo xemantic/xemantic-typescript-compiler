@@ -98,6 +98,7 @@ import com.xemantic.typescript.tsgo.printer.setEmitFlags
 import com.xemantic.typescript.tsgo.scanner.scan
 import com.xemantic.typescript.tsgo.scanner.setSkipTrivia
 import com.xemantic.typescript.tsgo.scanner.setText
+import com.xemantic.typescript.tsgo.scanner.setTextWin
 import com.xemantic.typescript.tsgo.scanner.tokenStart
 
 // go: github.com/microsoft/typescript-go/internal/ls.LanguageService.OrganizeImports d3aa2746
@@ -469,7 +470,7 @@ fun isNewGroup(sourceFile: SourceFile?, decl: Node?, s: Scanner?): Boolean {
         return false
     }
     val triviaLen: Int = startPos - fullStart
-    s.setText(text.substring(fullStart, startPos))
+    s.setTextWin(text, fullStart, goStrView(text, fullStart, startPos))
     var numberOfNewLines: Int = 0
     l0@ while (s.tokenStart() < triviaLen) {
         val tokenKind: Kind = s.scan()

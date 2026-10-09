@@ -293,6 +293,7 @@ import com.xemantic.typescript.tsgo.scanner.setLanguageVariant
 import com.xemantic.typescript.tsgo.scanner.setOnError
 import com.xemantic.typescript.tsgo.scanner.setSkipJSDocLeadingAsterisks
 import com.xemantic.typescript.tsgo.scanner.setText
+import com.xemantic.typescript.tsgo.scanner.setTextWin
 import com.xemantic.typescript.tsgo.scanner.token
 import com.xemantic.typescript.tsgo.scanner.tokenFlags
 import com.xemantic.typescript.tsgo.scanner.tokenFullStart
@@ -1515,7 +1516,7 @@ fun Parser?.parseUnaryExpressionOrHigher(): Node? {
     val unaryOperator: Kind = this!!.token
     val simpleUnaryExpression: Node? = this.parseSimpleUnaryExpression()
     if (this!!.token.value == 42) {
-        val pos_1: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, simpleUnaryExpression!!.pos())
+        val pos_1: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), simpleUnaryExpression!!.pos())
         val end: Int = simpleUnaryExpression!!.end()
         if (simpleUnaryExpression!!.kind.value == 217) {
             this.parseErrorAt(pos_1, end, com.xemantic.typescript.tsgo.diagnostics.a_type_assertion_expression_is_not_allowed_in_the_left_hand_side_of_an_exponentiation_expression_Consider_enclosing_the_expression_in_parentheses, GoElem.ref<Any?>().nilSlice)
@@ -1591,9 +1592,9 @@ fun Parser?.parseJsxElementOrSelfClosingElementOrFragment(inExpressionContext: B
                 closingElement = this.parseJsxClosingElement(opening, inExpressionContext)
                 if (!com.xemantic.typescript.tsgo.ast.tagNamesAreEquivalent(opening.tagName(), closingElement.tagName())) {
                     if (openingTag != null && com.xemantic.typescript.tsgo.ast.isJsxOpeningElement(openingTag) && com.xemantic.typescript.tsgo.ast.tagNamesAreEquivalent(closingElement.tagName(), openingTag.tagName())) {
-                        this.parseErrorAtRange(opening.tagName()!!.loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.jsx_element_0_has_no_corresponding_closing_tag, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(this!!.sourceText, opening.tagName(), false)))
+                        this.parseErrorAtRange(opening.tagName()!!.loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.jsx_element_0_has_no_corresponding_closing_tag, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), opening.tagName(), false)))
                     } else {
-                        this.parseErrorAtRange(closingElement.tagName()!!.loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.expected_corresponding_JSX_closing_tag_for_0, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(this!!.sourceText, opening.tagName(), false)))
+                        this.parseErrorAtRange(closingElement.tagName()!!.loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.expected_corresponding_JSX_closing_tag_for_0, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), opening.tagName(), false)))
                     }
                 }
             }
@@ -1618,7 +1619,7 @@ fun Parser?.parseJsxElementOrSelfClosingElementOrFragment(inExpressionContext: B
         val invalidElement: Node? = this.parseJsxElementOrSelfClosingElementOrFragment(true, topBadPos, null, false)
         val operatorToken: Node? = this!!.factory.newToken(Kind(27))
         operatorToken!!.loc = com.xemantic.typescript.tsgo.core.newTextRange(invalidElement!!.pos(), invalidElement!!.pos())
-        this.parseErrorAt(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, topBadPos), invalidElement!!.end(), com.xemantic.typescript.tsgo.diagnostics.jsx_expressions_must_have_one_parent_element, GoElem.ref<Any?>().nilSlice)
+        this.parseErrorAt(com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), topBadPos), invalidElement!!.end(), com.xemantic.typescript.tsgo.diagnostics.jsx_expressions_must_have_one_parent_element, GoElem.ref<Any?>().nilSlice)
         result = this.finishNode(this!!.factory.newBinaryExpression(null, result, null, operatorToken, invalidElement), pos)
     }
     return result
@@ -1653,8 +1654,8 @@ fun Parser?.parseJsxChild(openingTag: Node?, token: Kind): Node? {
                 this.parseErrorAtRange(openingTag!!.loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.jsx_fragment_has_no_corresponding_closing_tag, GoElem.ref<Any?>().nilSlice)
             } else {
                 val tag: Node? = openingTag.tagName()
-                val start: Int = minOf(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, tag!!.pos()), tag!!.end())
-                this.parseErrorAt(start, tag!!.end(), com.xemantic.typescript.tsgo.diagnostics.jsx_element_0_has_no_corresponding_closing_tag, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(this!!.sourceText, openingTag.tagName(), false)))
+                val start: Int = minOf(com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), tag!!.pos()), tag!!.end())
+                this.parseErrorAt(start, tag!!.end(), com.xemantic.typescript.tsgo.diagnostics.jsx_element_0_has_no_corresponding_closing_tag, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), openingTag.tagName(), false)))
             }
             return null
         }
@@ -2130,7 +2131,7 @@ fun Parser?.parsePropertyAccessExpressionRest(pos: Int, expression: Node?, quest
     if (com.xemantic.typescript.tsgo.ast.isExpressionWithTypeArguments(expression)) {
         val typeArguments: NodeList? = expression.typeArgumentList()
         if (typeArguments != null) {
-            val loc: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(typeArguments!!.pos() - 1, com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, typeArguments!!.end()) + 1)
+            val loc: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(typeArguments!!.pos() - 1, com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), typeArguments!!.end()) + 1)
             this.parseErrorAtRange(loc.goCopy(), com.xemantic.typescript.tsgo.diagnostics.an_instantiation_expression_cannot_be_followed_by_a_property_access, GoElem.ref<Any?>().nilSlice)
         }
     }
@@ -2524,7 +2525,7 @@ fun Parser?.parseNewExpressionOrNewDotTarget(): Node? {
         expression = expression.asExpressionWithTypeArguments()!!.expression
     }
     if (this!!.token.value == 28) {
-        this.parseErrorAtCurrentToken(com.xemantic.typescript.tsgo.diagnostics.invalid_optional_chain_from_new_expression_Did_you_mean_to_call_0, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(this!!.sourceText, expression, false)))
+        this.parseErrorAtCurrentToken(com.xemantic.typescript.tsgo.diagnostics.invalid_optional_chain_from_new_expression_Did_you_mean_to_call_0, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.getTextOfNodeFromSourceText(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), expression, false)))
     }
     var argumentList: NodeList? = null
     if (this!!.token.value == 20) {
@@ -3146,7 +3147,7 @@ fun Parser?.inAwaitContext(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.skipRangeTrivia ba95c187
 fun Parser?.skipRangeTrivia(textRange: TextRange): TextRange {
-    return com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, textRange.pos()), textRange.end())
+    return com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), textRange.pos()), textRange.end())
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.isReservedWord ba4de570

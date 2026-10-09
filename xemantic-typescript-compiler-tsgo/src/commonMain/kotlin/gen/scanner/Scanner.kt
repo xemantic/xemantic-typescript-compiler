@@ -129,6 +129,8 @@ class ScannerState(
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner 04f9521d
 class Scanner(
     @kotlin.jvm.JvmField var text: String = "",
+    @kotlin.jvm.JvmField var text_o: Int = 0,
+    @kotlin.jvm.JvmField var text_n: Int = text.length,
     @kotlin.jvm.JvmField var end: Int = 0,
     @get:kotlin.jvm.JvmName("goGet_languageVariant") @set:kotlin.jvm.JvmName("goSet_languageVariant") var languageVariant: LanguageVariant = LanguageVariant(0),
     @get:kotlin.jvm.JvmName("goGet_scriptTarget") @set:kotlin.jvm.JvmName("goSet_scriptTarget") var scriptTarget: ScriptTarget = ScriptTarget(0),
@@ -140,10 +142,12 @@ class Scanner(
     @kotlin.jvm.JvmField var hexDigitCache: GoMap<String, String> = GoMap.nil<String, String>(GoElem.STRING),
 ) {
 
-    fun goCopy(): Scanner = Scanner(text = text, end = end, languageVariant = languageVariant, scriptTarget = scriptTarget, onError = onError, skipTrivia = skipTrivia, scannerState = scannerState.goCopy(), numberCache = numberCache, hexNumberCache = hexNumberCache, hexDigitCache = hexDigitCache)
+    fun goCopy(): Scanner = Scanner(text = text, text_o = text_o, text_n = text_n, end = end, languageVariant = languageVariant, scriptTarget = scriptTarget, onError = onError, skipTrivia = skipTrivia, scannerState = scannerState.goCopy(), numberCache = numberCache, hexNumberCache = hexNumberCache, hexDigitCache = hexDigitCache)
 
     fun goSet(o: Scanner) {
         text = o.text
+        text_o = o.text_o
+        text_n = o.text_n
         end = o.end
         languageVariant = o.languageVariant
         scriptTarget = o.scriptTarget
@@ -190,7 +194,7 @@ fun <K, V> cleared(goElem_K: GoElem<K>, goElem_V: GoElem<V>, m: GoMap<K, V>): Go
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.Text 0db52043
 fun Scanner?.text(): String {
-    return this!!.text
+    return goStrWin(this!!.text, this!!.text_o, this!!.text_n)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.Token ef1a2ab6
@@ -220,7 +224,7 @@ fun Scanner?.tokenEnd(): Int {
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.TokenText 674c3086
 fun Scanner?.tokenText(): String {
-    return this!!.text.substring(this!!.scannerState.tokenStart, this!!.scannerState.pos)
+    return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.tokenStart, this!!.scannerState.pos)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.TokenValue e34257d6
@@ -357,8 +361,27 @@ fun hasJSDocTag(text: String, tags: GoSlice<String>): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.SetText 030d02a7
 fun Scanner?.setText(text_1: String) {
-    this!!.text = text_1
+    val wo0 = this!!
+    val wb1: String = text_1
+    val wof2: Int = 0
+    val wn3: Int = wb1.length
+    wo0.text = wb1
+    wo0.text_o = wof2
+    wo0.text_n = wn3
     this!!.end = text_1.length
+    this!!.scannerState = ScannerState()
+}
+
+// goport: window overload of github.com/microsoft/typescript-go/internal/scanner.Scanner.SetText (parameter 0)
+fun Scanner?.setTextWin(text_1_b0: String, text_1_o1: Int, text_1_n2: Int) {
+    val wo3 = this!!
+    val wb4: String = text_1_b0
+    val wof5: Int = text_1_o1
+    val wn6: Int = text_1_n2
+    wo3.text = wb4
+    wo3.text_o = wof5
+    wo3.text_n = wn6
+    this!!.end = text_1_n2
     this!!.scannerState = ScannerState()
 }
 
@@ -400,7 +423,7 @@ fun Scanner?.errorAt(diagnostic: Message?, pos: Int, length: Int, args: GoSlice<
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.char e9ff6e0a
 fun Scanner?.char(): Int {
     if (this!!.scannerState.pos < this!!.end) {
-        return this!!.text[this!!.scannerState.pos].code
+        return goViewByte(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.pos)
     }
     return -1
 }
@@ -408,7 +431,7 @@ fun Scanner?.char(): Int {
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.charAt 94c9862a
 fun Scanner?.charAt(offset: Int): Int {
     if (this!!.scannerState.pos + offset < this!!.end) {
-        return this!!.text[this!!.scannerState.pos + offset].code
+        return goViewByte(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.pos + offset)
     }
     return -1
 }
@@ -416,19 +439,19 @@ fun Scanner?.charAt(offset: Int): Int {
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.charAndSize 35fbfb94
 fun Scanner?.charAndSize(): Tuple2<Int, Int> {
     if (this!!.scannerState.pos < this!!.end) {
-        val b: Int = this!!.text[this!!.scannerState.pos].code
+        val b: Int = goViewByte(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.pos)
         if (b < 128) {
             return Tuple2<Int, Int>(b, 1)
         }
     }
-    return com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(this!!.text, this!!.scannerState.pos)
+    return com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringIn(this!!.text, this!!.text_o + goViewBound(this!!.text_n, this!!.scannerState.pos), this!!.text_o + this!!.text_n)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.scanASCIIWhile e705e82f
 inline fun Scanner?.scanASCIIWhile(pred: ((Int) -> Boolean)) {
     val text_1_b0: String = this!!.text
-    val text_1_o1: Int = this!!.scannerState.pos
-    val text_1_n2: Int = goStrView(text_1_b0, text_1_o1, this!!.end)
+    val text_1_o1: Int = this!!.text_o + goViewBound(this!!.text_n, this!!.scannerState.pos)
+    val text_1_n2: Int = goStrView(text_1_b0, text_1_o1, this!!.text_o + goViewBound(this!!.text_n, this!!.end))
     var i: Int = 0
     l0@ while (i < text_1_n2) {
         val b: Int = goViewByte(text_1_b0, text_1_o1, text_1_n2, i)
@@ -651,7 +674,7 @@ fun Scanner?.scan(): Kind {
                         }
                         if (isJSDoc) {
                             this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 2)
-                            this.scanJSDocCommentForTags(this!!.text.substring(this!!.scannerState.tokenStart, this!!.scannerState.pos))
+                            this.scanJSDocCommentForTags(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.tokenStart, this!!.scannerState.pos))
                         }
                         this.processCommentDirective(lastLineStart, this!!.scannerState.pos, true)
                         if (!commentClosed) {
@@ -692,7 +715,7 @@ fun Scanner?.scan(): Kind {
                         if (ok) {
                             this!!.scannerState.tokenValue = cachedValue
                         } else {
-                            val rawText: String = this!!.text.substring(start, this!!.scannerState.pos)
+                            val rawText: String = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
                             if (com.xemantic.typescript.tsgo.go.strings.hasPrefix(rawText, "0x") && goStrEqAt(rawText, 2, digits)) {
                                 this!!.scannerState.tokenValue = rawText
                             } else {
@@ -742,8 +765,8 @@ fun Scanner?.scan(): Kind {
                     this!!.scannerState.token = Kind(26)
                 }
                 60 -> {
-                    if (this.charAt(1) == 60 && isConflictMarkerTrivia(this!!.text, this!!.scannerState.pos)) {
-                        this!!.scannerState.pos = scanConflictMarkerTrivia(this!!.text, this!!.scannerState.pos, run { val r4 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r4.errorAt(p0, p1, p2, p3) })
+                    if (this.charAt(1) == 60 && isConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos)) {
+                        this!!.scannerState.pos = scanConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos, run { val r4 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r4.errorAt(p0, p1, p2, p3) })
                         if (this!!.skipTrivia) {
                             continue@l0
                         } else {
@@ -771,8 +794,8 @@ fun Scanner?.scan(): Kind {
                     }
                 }
                 61 -> {
-                    if (this.charAt(1) == 61 && isConflictMarkerTrivia(this!!.text, this!!.scannerState.pos)) {
-                        this!!.scannerState.pos = scanConflictMarkerTrivia(this!!.text, this!!.scannerState.pos, run { val r5 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r5.errorAt(p0, p1, p2, p3) })
+                    if (this.charAt(1) == 61 && isConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos)) {
+                        this!!.scannerState.pos = scanConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos, run { val r5 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r5.errorAt(p0, p1, p2, p3) })
                         if (this!!.skipTrivia) {
                             continue@l0
                         } else {
@@ -797,8 +820,8 @@ fun Scanner?.scan(): Kind {
                     }
                 }
                 62 -> {
-                    if (this.charAt(1) == 62 && isConflictMarkerTrivia(this!!.text, this!!.scannerState.pos)) {
-                        this!!.scannerState.pos = scanConflictMarkerTrivia(this!!.text, this!!.scannerState.pos, run { val r6 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r6.errorAt(p0, p1, p2, p3) })
+                    if (this.charAt(1) == 62 && isConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos)) {
+                        this!!.scannerState.pos = scanConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos, run { val r6 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r6.errorAt(p0, p1, p2, p3) })
                         if (this!!.skipTrivia) {
                             continue@l0
                         } else {
@@ -848,8 +871,8 @@ fun Scanner?.scan(): Kind {
                     this!!.scannerState.token = Kind(18)
                 }
                 124 -> {
-                    if (this.charAt(1) == 124 && isConflictMarkerTrivia(this!!.text, this!!.scannerState.pos)) {
-                        this!!.scannerState.pos = scanConflictMarkerTrivia(this!!.text, this!!.scannerState.pos, run { val r7 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r7.errorAt(p0, p1, p2, p3) })
+                    if (this.charAt(1) == 124 && isConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos)) {
+                        this!!.scannerState.pos = scanConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos, run { val r7 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r7.errorAt(p0, p1, p2, p3) })
                         if (this!!.skipTrivia) {
                             continue@l0
                         } else {
@@ -944,7 +967,7 @@ fun Scanner?.scan(): Kind {
                     var size_4: Int = t10.second
                     if (ch_3 == 65533) {
                         this.errorAt(com.xemantic.typescript.tsgo.diagnostics.file_appears_to_be_binary, 0, 0, GoElem.ref<Any?>().nilSlice)
-                        this!!.scannerState.pos = this!!.text.length
+                        this!!.scannerState.pos = this!!.text_n
                         this!!.scannerState.token = Kind(7)
                         return@sw1
                     }
@@ -983,31 +1006,31 @@ fun Scanner?.scan(): Kind {
 fun Scanner?.processCommentDirective(start: Int, end: Int, multiline: Boolean) {
     var pos: Int = start
     if (multiline) {
-        l0@ while (pos < end && (this!!.text[pos].code == 32 || this!!.text[pos].code == 9)) {
+        l0@ while (pos < end && (goViewByte(this!!.text, this!!.text_o, this!!.text_n, pos) == 32 || goViewByte(this!!.text, this!!.text_o, this!!.text_n, pos) == 9)) {
             pos++
         }
-        l1@ while (pos < end && (this!!.text[pos].code == 47 || this!!.text[pos].code == 42)) {
+        l1@ while (pos < end && (goViewByte(this!!.text, this!!.text_o, this!!.text_n, pos) == 47 || goViewByte(this!!.text, this!!.text_o, this!!.text_n, pos) == 42)) {
             pos++
         }
     } else {
         pos += 2
-        l2@ while (pos < end && this!!.text[pos].code == 47) {
+        l2@ while (pos < end && goViewByte(this!!.text, this!!.text_o, this!!.text_n, pos) == 47) {
             pos++
         }
     }
-    l3@ while (pos < end && (this!!.text[pos].code == 32 || this!!.text[pos].code == 9)) {
+    l3@ while (pos < end && (goViewByte(this!!.text, this!!.text_o, this!!.text_n, pos) == 32 || goViewByte(this!!.text, this!!.text_o, this!!.text_n, pos) == 9)) {
         pos++
     }
-    if (!(pos < end && this!!.text[pos].code == 64)) {
+    if (!(pos < end && goViewByte(this!!.text, this!!.text_o, this!!.text_n, pos) == 64)) {
         return
     }
     pos++
     var kind: CommentDirectiveKind = CommentDirectiveKind(0)
     when {
-        com.xemantic.typescript.tsgo.go.strings.hasPrefixAt(this!!.text, pos, "ts-expect-error") -> {
+        com.xemantic.typescript.tsgo.go.strings.hasPrefixIn(this!!.text, this!!.text_o + goViewBound(this!!.text_n, pos), this!!.text_o + this!!.text_n, "ts-expect-error") -> {
             kind = CommentDirectiveKind(1)
         }
-        com.xemantic.typescript.tsgo.go.strings.hasPrefixAt(this!!.text, pos, "ts-ignore") -> {
+        com.xemantic.typescript.tsgo.go.strings.hasPrefixIn(this!!.text, this!!.text_o + goViewBound(this!!.text_n, pos), this!!.text_o + this!!.text_n, "ts-ignore") -> {
             kind = CommentDirectiveKind(2)
         }
         else -> {
@@ -1090,7 +1113,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
                 this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 4)
                 break@l0
             }
-            val ch: Int = this!!.text[p].code
+            val ch: Int = goViewByte(this!!.text, this!!.text_o, this!!.text_n, p)
             when {
                 com.xemantic.typescript.tsgo.stringutil.isLineBreak(ch) -> {
                     this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 4)
@@ -1111,7 +1134,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
                 ch == 93 -> {
                     inCharacterClass = false
                 }
-                !inCharacterClass && ch == 40 && p + 1 < this!!.end && this!!.text[p + 1].code == 63 && p + 2 < this!!.end && this!!.text[p + 2].code == 60 && (p + 3 >= this!!.end || (this!!.text[p + 3].code != 61 && this!!.text[p + 3].code != 33)) -> {
+                !inCharacterClass && ch == 40 && p + 1 < this!!.end && goViewByte(this!!.text, this!!.text_o, this!!.text_n, p + 1) == 63 && p + 2 < this!!.end && goViewByte(this!!.text, this!!.text_o, this!!.text_n, p + 2) == 60 && (p + 3 >= this!!.end || (goViewByte(this!!.text, this!!.text_o, this!!.text_n, p + 3) != 61 && goViewByte(this!!.text, this!!.text_o, this!!.text_n, p + 3) != 33)) -> {
                     namedCaptureGroups = true
                 }
             }
@@ -1125,7 +1148,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
             var inDecimalQuantifier: Boolean = false
             var groupDepth: Int = 0
             l2@ while (p < endOfRegExpBody) {
-                val ch_1: Int = this!!.text[p].code
+                val ch_1: Int = goViewByte(this!!.text, this!!.text_o, this!!.text_n, p)
                 if (inEscape) {
                     inEscape = false
                 } else if (ch_1 == 92) {
@@ -1152,7 +1175,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
                 p++
             }
             l3@ while (p > startOfRegExpBody) {
-                val t0 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeLastRuneInStringBefore(this!!.text, p)
+                val t0 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeLastRuneInStringIn(this!!.text, this!!.text_o, this!!.text_o + goViewBound(this!!.text_n, p))
                 val ch_2: Int = t0.first
                 val size: Int = t0.second
                 if (com.xemantic.typescript.tsgo.stringutil.isWhiteSpaceLike(ch_2) || ch_2 == 59) {
@@ -1166,7 +1189,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
             p++
             var regExpFlags: com.xemantic.typescript.tsgo.scanner.regularExpressionFlags = com.xemantic.typescript.tsgo.scanner.regularExpressionFlags(0)
             l4@ while (p < this!!.end) {
-                val t1 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(this!!.text, p)
+                val t1 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringIn(this!!.text, this!!.text_o + goViewBound(this!!.text_n, p), this!!.text_o + this!!.text_n)
                 val ch_3: Int = t1.first
                 val size_1: Int = t1.second
                 if (ch_3 == 65533 || !isIdentifierPart(ch_3)) {
@@ -1206,7 +1229,7 @@ fun Scanner?.reScanSlashToken(reportErrors: GoSlice<Boolean>): Kind {
             }
         }
         this!!.scannerState.pos = p
-        this!!.scannerState.tokenValue = this!!.text.substring(this!!.scannerState.tokenStart, this!!.scannerState.pos)
+        this!!.scannerState.tokenValue = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.tokenStart, this!!.scannerState.pos)
         this!!.scannerState.token = Kind(13)
     }
     return this!!.scannerState.token
@@ -1276,8 +1299,8 @@ fun Scanner?.scanJsxTokenEx(allowMultilineJsxText: Boolean): Kind {
                     break@l1
                 }
                 if (ch_1 == 60) {
-                    if (isConflictMarkerTrivia(this!!.text, this!!.scannerState.pos)) {
-                        this!!.scannerState.pos = scanConflictMarkerTrivia(this!!.text, this!!.scannerState.pos, run { val r1 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r1.errorAt(p0, p1, p2, p3) })
+                    if (isConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos)) {
+                        this!!.scannerState.pos = scanConflictMarkerTrivia(goStrWin(this!!.text, this!!.text_o, this!!.text_n), this!!.scannerState.pos, run { val r1 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r1.errorAt(p0, p1, p2, p3) })
                         this!!.scannerState.token = Kind(6)
                         return this!!.scannerState.token
                     }
@@ -1297,7 +1320,7 @@ fun Scanner?.scanJsxTokenEx(allowMultilineJsxText: Boolean): Kind {
                 }
                 this!!.scannerState.pos += size
             }
-            this!!.scannerState.tokenValue = this!!.text.substring(this!!.scannerState.fullStartPos, this!!.scannerState.pos)
+            this!!.scannerState.tokenValue = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.fullStartPos, this!!.scannerState.pos)
             this!!.scannerState.token = Kind(11)
             if (firstNonWhitespace == -1) {
                 this!!.scannerState.token = Kind(12)
@@ -1368,7 +1391,7 @@ fun Scanner?.reScanJsxAttributeValue(): Kind {
 fun Scanner?.scanJSDocCommentTextToken(inBackticks: Boolean): Kind {
     this!!.scannerState.fullStartPos = this!!.scannerState.pos
     this!!.scannerState.tokenFlags = TokenFlags(0)
-    if (this!!.scannerState.pos >= this!!.text.length) {
+    if (this!!.scannerState.pos >= this!!.text_n) {
         this!!.scannerState.token = Kind(1)
         return this!!.scannerState.token
     }
@@ -1376,15 +1399,15 @@ fun Scanner?.scanJSDocCommentTextToken(inBackticks: Boolean): Kind {
     val t0 = this.charAndSize()
     var ch: Int = t0.first
     var size: Int = t0.second
-    l0@ while (this!!.scannerState.pos < this!!.text.length && !com.xemantic.typescript.tsgo.stringutil.isLineBreak(ch) && ch != 96) {
+    l0@ while (this!!.scannerState.pos < this!!.text_n && !com.xemantic.typescript.tsgo.stringutil.isLineBreak(ch) && ch != 96) {
         if (!inBackticks) {
             if (ch == 123) {
                 break@l0
             } else if (ch == 64 && this!!.scannerState.pos >= 0) {
-                val t1 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeLastRuneInStringBefore(this!!.text, this!!.scannerState.pos)
+                val t1 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeLastRuneInStringIn(this!!.text, this!!.text_o, this!!.text_o + goViewBound(this!!.text_n, this!!.scannerState.pos))
                 val previous: Int = t1.first
                 if (com.xemantic.typescript.tsgo.stringutil.isWhiteSpaceSingleLine(previous)) {
-                    val t2 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(this!!.text, this!!.scannerState.pos + size)
+                    val t2 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringIn(this!!.text, this!!.text_o + goViewBound(this!!.text_n, this!!.scannerState.pos + size), this!!.text_o + this!!.text_n)
                     val next: Int = t2.first
                     if (isIdentifierStart(next)) {
                         break@l0
@@ -1400,17 +1423,17 @@ fun Scanner?.scanJSDocCommentTextToken(inBackticks: Boolean): Kind {
     if (this!!.scannerState.pos == this!!.scannerState.tokenStart) {
         return this.scanJSDocToken()
     }
-    this!!.scannerState.tokenValue = this!!.text.substring(this!!.scannerState.tokenStart, this!!.scannerState.pos)
+    this!!.scannerState.tokenValue = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.tokenStart, this!!.scannerState.pos)
     this!!.scannerState.token = Kind(81)
     return this!!.scannerState.token
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.CanFollowJSDocAt d332d266
 fun Scanner?.canFollowJSDocAt(): Boolean {
-    if (this!!.scannerState.pos >= this!!.text.length) {
+    if (this!!.scannerState.pos >= this!!.text_n) {
         return true
     }
-    val t0 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(this!!.text, this!!.scannerState.pos)
+    val t0 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringIn(this!!.text, this!!.text_o + goViewBound(this!!.text_n, this!!.scannerState.pos), this!!.text_o + this!!.text_n)
     val ch: Int = t0.first
     return isIdentifierStart(ch) || com.xemantic.typescript.tsgo.stringutil.isWhiteSpaceSingleLine(ch) || com.xemantic.typescript.tsgo.stringutil.isLineBreak(ch)
 }
@@ -1419,7 +1442,7 @@ fun Scanner?.canFollowJSDocAt(): Boolean {
 fun Scanner?.scanJSDocToken(): Kind {
     this!!.scannerState.fullStartPos = this!!.scannerState.pos
     this!!.scannerState.tokenFlags = TokenFlags(0)
-    if (this!!.scannerState.pos >= this!!.text.length) {
+    if (this!!.scannerState.pos >= this!!.text_n) {
         this!!.scannerState.token = Kind(1)
         return this!!.scannerState.token
     }
@@ -1531,7 +1554,7 @@ fun Scanner?.scanJSDocToken(): Kind {
     if (isIdentifierStart(ch)) {
         var char_1: Int = ch
         l2@ while (true) {
-            if (this!!.scannerState.pos >= this!!.text.length) {
+            if (this!!.scannerState.pos >= this!!.text_n) {
                 break@l2
             }
             val t3 = this.charAndSize()
@@ -1542,7 +1565,7 @@ fun Scanner?.scanJSDocToken(): Kind {
             }
             this!!.scannerState.pos += size
         }
-        this!!.scannerState.tokenValue = this!!.text.substring(this!!.scannerState.tokenStart, this!!.scannerState.pos)
+        this!!.scannerState.tokenValue = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.tokenStart, this!!.scannerState.pos)
         if (char_1 == 92) {
             this!!.scannerState.tokenValue += this.scanIdentifierParts()
         }
@@ -1567,7 +1590,7 @@ fun Scanner?.scanIdentifier(prefixLength: Int): Boolean {
         })
         ch = this.char()
         if (ch < 128 && ch != 92) {
-            this!!.scannerState.tokenValue = this!!.text.substring(start, this!!.scannerState.pos)
+            this!!.scannerState.tokenValue = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
             return true
         }
         this!!.scannerState.pos = start + prefixLength
@@ -1585,7 +1608,7 @@ fun Scanner?.scanIdentifier(prefixLength: Int): Boolean {
                 break@l0
             }
         }
-        this!!.scannerState.tokenValue = this!!.text.substring(start, this!!.scannerState.pos)
+        this!!.scannerState.tokenValue = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
         if (ch == 92) {
             this!!.scannerState.tokenValue += this.scanIdentifierParts()
         }
@@ -1609,7 +1632,7 @@ fun Scanner?.scanIdentifierParts(): String {
         if (ch == 92) {
             val escaped: Int = this.peekUnicodeEscape()
             if (escaped >= 0 && isIdentifierPart(escaped)) {
-                sb.writeString(this!!.text.substring(start, this!!.scannerState.pos))
+                sb.writeString(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
                 sb.writeRune(this.scanUnicodeEscape(true))
                 start = this!!.scannerState.pos
                 continue@l0
@@ -1617,7 +1640,7 @@ fun Scanner?.scanIdentifierParts(): String {
         }
         break@l0
     }
-    sb.writeString(this!!.text.substring(start, this!!.scannerState.pos))
+    sb.writeString(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
     return sb.string()
 }
 
@@ -1628,13 +1651,13 @@ fun Scanner?.scanString(jsxAttributeString: Boolean): String {
         this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 65536)
     }
     this!!.scannerState.pos = this!!.scannerState.pos + 1
-    val strLen: Int = com.xemantic.typescript.tsgo.go.strings.indexByteAt(this!!.text, this!!.scannerState.pos, goUint8(quote))
+    val strLen: Int = com.xemantic.typescript.tsgo.go.strings.indexByteIn(this!!.text, this!!.text_o + goViewBound(this!!.text_n, this!!.scannerState.pos), this!!.text_o + this!!.text_n, goUint8(quote))
     if (strLen == 0) {
         this!!.scannerState.pos = this!!.scannerState.pos + 1
         return ""
     }
     if (strLen > 0) {
-        val str: String = this!!.text.substring(this!!.scannerState.pos, this!!.scannerState.pos + strLen)
+        val str: String = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, this!!.scannerState.pos, this!!.scannerState.pos + strLen)
         if (jsxAttributeString || com.xemantic.typescript.tsgo.go.strings.indexByte(str, 92) < 0 && com.xemantic.typescript.tsgo.go.strings.indexByte(str, 13) < 0 && com.xemantic.typescript.tsgo.go.strings.indexByte(str, 10) < 0) {
             this!!.scannerState.pos += (strLen + 1)
             return str
@@ -1645,24 +1668,24 @@ fun Scanner?.scanString(jsxAttributeString: Boolean): String {
     l0@ while (true) {
         val ch: Int = this.char()
         if (ch < 0) {
-            sb.writeString(this!!.text.substring(start, this!!.scannerState.pos))
+            sb.writeString(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 4)
             this.error(com.xemantic.typescript.tsgo.diagnostics.unterminated_string_literal)
             break@l0
         }
         if (ch == quote) {
-            sb.writeString(this!!.text.substring(start, this!!.scannerState.pos))
+            sb.writeString(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             this!!.scannerState.pos = this!!.scannerState.pos + 1
             break@l0
         }
         if (ch == 92 && !jsxAttributeString) {
-            sb.writeString(this!!.text.substring(start, this!!.scannerState.pos))
+            sb.writeString(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             sb.writeString(this.scanEscapeSequence(EscapeSequenceScanningFlags(3)))
             start = this!!.scannerState.pos
             continue@l0
         }
         if ((ch == 10 || ch == 13) && !jsxAttributeString) {
-            sb.writeString(this!!.text.substring(start, this!!.scannerState.pos))
+            sb.writeString(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 4)
             this.error(com.xemantic.typescript.tsgo.diagnostics.unterminated_string_literal)
             break@l0
@@ -1685,7 +1708,7 @@ fun Scanner?.scanTemplateAndSetTokenValue(shouldEmitInvalidEscapeError: Boolean)
         })
         val ch: Int = this.char()
         if (ch < 0 || ch == 96) {
-            parts = parts.append1(this!!.text.substring(start, this!!.scannerState.pos))
+            parts = parts.append1(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             if (ch == 96) {
                 this!!.scannerState.pos = this!!.scannerState.pos + 1
             } else {
@@ -1696,19 +1719,19 @@ fun Scanner?.scanTemplateAndSetTokenValue(shouldEmitInvalidEscapeError: Boolean)
             break@l0
         }
         if (ch == 36 && this.charAt(1) == 123) {
-            parts = parts.append1(this!!.text.substring(start, this!!.scannerState.pos))
+            parts = parts.append1(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             this!!.scannerState.pos += 2
             token_1 = com.xemantic.typescript.tsgo.core.ifElse<Kind>(Kind.ELEM, startedWithBacktick, Kind(15), Kind(16))
             break@l0
         }
         if (ch == 92) {
-            parts = parts.append1(this!!.text.substring(start, this!!.scannerState.pos))
+            parts = parts.append1(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             parts = parts.append1(this.scanEscapeSequence(EscapeSequenceScanningFlags(1 or com.xemantic.typescript.tsgo.core.ifElse<EscapeSequenceScanningFlags>(EscapeSequenceScanningFlags.ELEM, shouldEmitInvalidEscapeError, EscapeSequenceScanningFlagsReportErrors, EscapeSequenceScanningFlags(0)).value)))
             start = this!!.scannerState.pos
             continue@l0
         }
         if (ch == 13) {
-            parts = parts.append1(this!!.text.substring(start, this!!.scannerState.pos))
+            parts = parts.append1(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             this!!.scannerState.pos = this!!.scannerState.pos + 1
             if (this.char() == 10) {
                 this!!.scannerState.pos = this!!.scannerState.pos + 1
@@ -1746,7 +1769,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
             }
             this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 2048)
             if (flags.value and 6 != 0) {
-                val t0 = com.xemantic.typescript.tsgo.go.strconv.parseInt(this!!.text.substring(start + 1, this!!.scannerState.pos), 8, 32)
+                val t0 = com.xemantic.typescript.tsgo.go.strconv.parseInt(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start + 1, this!!.scannerState.pos), 8, 32)
                 val code: Long = t0.first
                 if (flags.value and 4 != 0 && flags.value and 32 == 0 && ch != 48) {
                     this.errorAt(com.xemantic.typescript.tsgo.diagnostics.octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended_as_an_escape_sequence_use_the_syntax_0_instead, start, this!!.scannerState.pos - start, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.go.fmt.sprintf("\\x%02x", code)))
@@ -1755,7 +1778,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
                 }
                 return goRuneToString(code.toInt())
             }
-            return this!!.text.substring(start, this!!.scannerState.pos)
+            return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
         }
         49, 50, 51 -> {
             if (com.xemantic.typescript.tsgo.stringutil.isOctalDigit(this.char())) {
@@ -1766,7 +1789,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
             }
             this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 2048)
             if (flags.value and 6 != 0) {
-                val t1 = com.xemantic.typescript.tsgo.go.strconv.parseInt(this!!.text.substring(start + 1, this!!.scannerState.pos), 8, 32)
+                val t1 = com.xemantic.typescript.tsgo.go.strconv.parseInt(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start + 1, this!!.scannerState.pos), 8, 32)
                 val code: Long = t1.first
                 if (flags.value and 4 != 0 && flags.value and 32 == 0 && ch != 48) {
                     this.errorAt(com.xemantic.typescript.tsgo.diagnostics.octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended_as_an_escape_sequence_use_the_syntax_0_instead, start, this!!.scannerState.pos - start, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.go.fmt.sprintf("\\x%02x", code)))
@@ -1775,7 +1798,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
                 }
                 return goRuneToString(code.toInt())
             }
-            return this!!.text.substring(start, this!!.scannerState.pos)
+            return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
         }
         52, 53, 54, 55 -> {
             if (com.xemantic.typescript.tsgo.stringutil.isOctalDigit(this.char())) {
@@ -1783,7 +1806,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
             }
             this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 2048)
             if (flags.value and 6 != 0) {
-                val t2 = com.xemantic.typescript.tsgo.go.strconv.parseInt(this!!.text.substring(start + 1, this!!.scannerState.pos), 8, 32)
+                val t2 = com.xemantic.typescript.tsgo.go.strconv.parseInt(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start + 1, this!!.scannerState.pos), 8, 32)
                 val code: Long = t2.first
                 if (flags.value and 4 != 0 && flags.value and 32 == 0 && ch != 48) {
                     this.errorAt(com.xemantic.typescript.tsgo.diagnostics.octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended_as_an_escape_sequence_use_the_syntax_0_instead, start, this!!.scannerState.pos - start, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.go.fmt.sprintf("\\x%02x", code)))
@@ -1792,7 +1815,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
                 }
                 return goRuneToString(code.toInt())
             }
-            return this!!.text.substring(start, this!!.scannerState.pos)
+            return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
         }
         56, 57 -> {
             this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 2048)
@@ -1800,11 +1823,11 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
                 if (flags.value and 4 != 0 && flags.value and 32 == 0) {
                     this.errorAt(com.xemantic.typescript.tsgo.diagnostics.decimal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class, start, this!!.scannerState.pos - start, GoElem.ref<Any?>().nilSlice)
                 } else {
-                    this.errorAt(com.xemantic.typescript.tsgo.diagnostics.escape_sequence_0_is_not_allowed, start, this!!.scannerState.pos - start, GoSlice.of(GoElem.ref<Any?>(), this!!.text.substring(start, this!!.scannerState.pos)))
+                    this.errorAt(com.xemantic.typescript.tsgo.diagnostics.escape_sequence_0_is_not_allowed, start, this!!.scannerState.pos - start, GoSlice.of(GoElem.ref<Any?>(), goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)))
                 }
                 return goRuneToString(ch)
             }
-            return this!!.text.substring(start, this!!.scannerState.pos)
+            return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
         }
         98 -> {
             return "\u0008"
@@ -1842,7 +1865,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
                     }
                 }
                 if (codePoint < 0) {
-                    return this!!.text.substring(start, this!!.scannerState.pos)
+                    return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
                 }
                 if (flags.value and 4 == 0 && com.xemantic.typescript.tsgo.stringutil.isHighSurrogate(codePoint)) {
                     val t3 = this.scanLowSurrogateEscape(codePoint)
@@ -1855,7 +1878,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
                 return com.xemantic.typescript.tsgo.stringutil.encodeJSStringRune(codePoint)
             }
             if (codePoint < 0) {
-                return this!!.text.substring(start, this!!.scannerState.pos)
+                return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
             } else if (com.xemantic.typescript.tsgo.stringutil.isHighSurrogate(codePoint)) {
                 if (flags.value and 4 == 0) {
                     val t4 = this.scanLowSurrogateEscape(codePoint)
@@ -1882,12 +1905,12 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
                     if (flags.value and 6 != 0) {
                         this.error(com.xemantic.typescript.tsgo.diagnostics.hexadecimal_digit_expected)
                     }
-                    return this!!.text.substring(start, this!!.scannerState.pos)
+                    return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
                 }
                 this!!.scannerState.pos = this!!.scannerState.pos + 1
             }
             this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 4096)
-            val t5 = com.xemantic.typescript.tsgo.go.strconv.parseInt(this!!.text.substring(start + 2, this!!.scannerState.pos), 16, 32)
+            val t5 = com.xemantic.typescript.tsgo.go.strconv.parseInt(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start + 2, this!!.scannerState.pos), 16, 32)
             val escapedValue: Long = t5.first
             return goRuneToString(escapedValue.toInt())
         }
@@ -1904,7 +1927,7 @@ fun Scanner?.scanEscapeSequence(flags: EscapeSequenceScanningFlags): String {
             if (ch >= 128) {
                 this!!.scannerState.pos = this!!.scannerState.pos - 1
                 var size: Int = 0
-                val t6 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringAt(this!!.text, this!!.scannerState.pos)
+                val t6 = com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringIn(this!!.text, this!!.text_o + goViewBound(this!!.text_n, this!!.scannerState.pos), this!!.text_o + this!!.text_n)
                 ch = t6.first
                 size = t6.second
                 this!!.scannerState.pos += size
@@ -2059,7 +2082,7 @@ fun Scanner?.scanNumber(): Kind {
         if (exponentPart == "") {
             this.error(com.xemantic.typescript.tsgo.diagnostics.digit_expected)
         } else {
-            exponentPreamble = this!!.text.substring(end, startNumericPart)
+            exponentPreamble = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, end, startNumericPart)
             end = this!!.scannerState.pos
         }
     }
@@ -2072,7 +2095,7 @@ fun Scanner?.scanNumber(): Kind {
             this!!.scannerState.tokenValue += (exponentPreamble + exponentPart)
         }
     } else {
-        this!!.scannerState.tokenValue = this!!.text.substring(start, end)
+        this!!.scannerState.tokenValue = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, end)
     }
     if (this!!.scannerState.tokenFlags.value and 8192 != 0) {
         this.errorAt(com.xemantic.typescript.tsgo.diagnostics.decimals_with_leading_zeros_are_not_allowed, start, this!!.scannerState.pos - start, GoElem.ref<Any?>().nilSlice)
@@ -2091,7 +2114,7 @@ fun Scanner?.scanNumber(): Kind {
     if (isIdentifierStart(ch)) {
         val idStart: Int = this!!.scannerState.pos
         val id: String = this.scanIdentifierParts()
-        if (result.value != 9 && id.length == 1 && this!!.text[idStart].code == 110) {
+        if (result.value != 9 && id.length == 1 && goViewByte(this!!.text, this!!.text_o, this!!.text_n, idStart) == 110) {
             if (this!!.scannerState.tokenFlags.value and 16 != 0) {
                 this.errorAt(com.xemantic.typescript.tsgo.diagnostics.a_bigint_literal_cannot_use_exponential_notation, start, this!!.scannerState.pos - start, GoElem.ref<Any?>().nilSlice)
                 return result
@@ -2128,7 +2151,7 @@ fun Scanner?.scanNumberFragment(): String {
             if (allowSeparator) {
                 allowSeparator = false
                 isPreviousTokenSeparator = true
-                result.writeString(this!!.text.substring(start, this!!.scannerState.pos))
+                result.writeString(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
             } else {
                 this!!.scannerState.tokenFlags = TokenFlags(this!!.scannerState.tokenFlags.value or 16384)
                 if (isPreviousTokenSeparator) {
@@ -2148,9 +2171,9 @@ fun Scanner?.scanNumberFragment(): String {
         this.errorAt(com.xemantic.typescript.tsgo.diagnostics.numeric_separators_are_not_allowed_here, this!!.scannerState.pos - 1, 1, GoElem.ref<Any?>().nilSlice)
     }
     if (result.len() == 0) {
-        return this!!.text.substring(start, this!!.scannerState.pos)
+        return goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
     }
-    result.writeString(this!!.text.substring(start, this!!.scannerState.pos))
+    result.writeString(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos))
     return result.string()
 }
 
@@ -2164,7 +2187,7 @@ fun Scanner?.scanDigits(): Tuple2<String, Boolean> {
         }
         this!!.scannerState.pos = this!!.scannerState.pos + 1
     }
-    return Tuple2<String, Boolean>(this!!.text.substring(start, this!!.scannerState.pos), isOctal)
+    return Tuple2<String, Boolean>(goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos), isOctal)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.Scanner.scanHexDigits a59ee0e7
@@ -2200,7 +2223,7 @@ fun Scanner?.scanHexDigits(minCount: Int, scanAsManyAsPossible: Boolean, canHave
     if (digitCount < minCount) {
         return ""
     }
-    var digits: String = this!!.text.substring(start, this!!.scannerState.pos)
+    var digits: String = goViewSubstring(this!!.text, this!!.text_o, this!!.text_n, start, this!!.scannerState.pos)
     if (this!!.hexDigitCache.isNil) {
         this!!.hexDigitCache = GoMap.make<String, String>(GoElem.STRING)
     }
@@ -2630,9 +2653,15 @@ fun getShebang(text: String): String {
 // go: github.com/microsoft/typescript-go/internal/scanner.GetScannerForSourceFile 79c2d6bc
 fun getScannerForSourceFile(sourceFile: SourceFile?, pos: Int): Scanner? {
     val s: Scanner? = newScanner()
-    s!!.text = sourceFile!!.text()
+    val wo0 = s!!
+    val wb1: String = sourceFile!!.text()
+    val wof2: Int = 0
+    val wn3: Int = wb1.length
+    wo0.text = wb1
+    wo0.text_o = wof2
+    wo0.text_n = wn3
     s!!.scannerState.pos = pos
-    s!!.end = s!!.text.length
+    s!!.end = s!!.text_n
     s!!.languageVariant = sourceFile!!.languageVariant
     s.scan()
     return s

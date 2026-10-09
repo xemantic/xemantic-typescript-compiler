@@ -46,7 +46,11 @@ import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.goStrEqAt
 import com.xemantic.typescript.tsgo.runtime.goStrEqIn
 import com.xemantic.typescript.tsgo.runtime.goStrView
+import com.xemantic.typescript.tsgo.runtime.goStrWin
 import com.xemantic.typescript.tsgo.runtime.goViewByte
+import com.xemantic.typescript.tsgo.runtime.goViewSubstring
+import com.xemantic.typescript.tsgo.go.unicode.utf8.decodeLastRuneInStringIn
+import com.xemantic.typescript.tsgo.go.unicode.utf8.decodeRuneInStringIn
 import kotlin.test.Test
 
 // Pins the substring-elimination rule's runtime (docs/goport-lowering.md § 3): every window
@@ -155,5 +159,35 @@ class WindowShimTest {
         assert(panics { hasPrefixIn(s, 4, 3, "x") })
         assert(panics { goStrEqIn(s, 5, 20, "") })
         assert(panics { goStrView(s, 5, 20) })
+    }
+
+    // A WINDOW FIELD (docs/goport-lowering.md § 3, "Window fields"): `p.sourceText = p.sourceText[:13]` keeps
+    // (s, 0, 13). Go: `t := s[:13]`; `t`, `s[3:7]`, `t[10:13]` → "abc/**/x*/yé" "/**/" "yé"; `t[10:14]` panics.
+    @Test
+    fun `a window field materializes to the slice and to the base itself when it covers it`() {
+        assert(goStrWin(s, 0, s.length) === s)
+        assert(goStrWin(s, 0, 13) == GoString.fromUtf16("abc/**/x*/yé"))
+        assert(goStrWin(s, 3, 4) == "/**/")
+        assert(goViewSubstring(s, 0, 13, 10, 13) == GoString.fromUtf16("yé"))
+        assert(panics { goViewSubstring(s, 0, 13, 10, 14) })
+        assert(panics { goViewSubstring(s, 0, 13, 11, 10) })
+    }
+
+    // Go: `utf8.DecodeRuneInString(s[11:13])`, `(s[11:12])`, `(s[13:13])` → (233,2) (65533,1) (65533,0);
+    // `utf8.DecodeLastRuneInString(s[0:13])`, `(s[12:13])`, `(s[3:3])` → (233,2) (65533,1) (65533,0).
+    @Test
+    fun `rune decoding inside a window never reads past its end nor before its start`() {
+        val a = decodeRuneInStringIn(s, 11, 13)
+        val b = decodeRuneInStringIn(s, 11, 12)
+        val c = decodeRuneInStringIn(s, 13, 13)
+        assert(a.first == 233 && a.second == 2)
+        assert(b.first == 65533 && b.second == 1)
+        assert(c.first == 65533 && c.second == 0)
+        val d = decodeLastRuneInStringIn(s, 0, 13)
+        val e = decodeLastRuneInStringIn(s, 12, 13)
+        val f = decodeLastRuneInStringIn(s, 3, 3)
+        assert(d.first == 233 && d.second == 2)
+        assert(e.first == 65533 && e.second == 1)
+        assert(f.first == 65533 && f.second == 0)
     }
 }

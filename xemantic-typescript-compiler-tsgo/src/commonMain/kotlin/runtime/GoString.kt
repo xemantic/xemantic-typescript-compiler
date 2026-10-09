@@ -115,8 +115,11 @@ private fun pack(rune: Int, width: Int): Long = (width.toLong() shl 32) or (rune
  *
  * Unpack: `val r = p.toInt(); val w = (p ushr 32).toInt()`.
  */
-fun goDecodeRune(s: String, i: Int): Long {
-    val n = s.length - i
+fun goDecodeRune(s: String, i: Int): Long = goDecodeRuneIn(s, i, s.length)
+
+/** NOT Go API — [goDecodeRune] of the window `s[i:end]` (`utf8.DecodeRuneInString(s[i:end])` without the substring). */
+fun goDecodeRuneIn(s: String, i: Int, end: Int): Long {
+    val n = end - i
     if (n < 1) return pack(RUNE_ERROR, 0)
     val b0 = s[i].code
     if (b0 < 0x80) return pack(b0, 1)
@@ -153,20 +156,23 @@ fun goDecodeRune(s: String, i: Int): Long {
  * Decodes the last rune of `s[:end]` with Go's `utf8.DecodeLastRuneInString` rules, packed as in
  * [goDecodeRune].
  */
-fun goDecodeLastRune(s: String, end: Int = s.length): Long {
-    if (end == 0) return pack(RUNE_ERROR, 0)
+fun goDecodeLastRune(s: String, end: Int = s.length): Long = goDecodeLastRuneIn(s, 0, end)
+
+/** NOT Go API — [goDecodeLastRune] of the window `s[from:end]`. */
+fun goDecodeLastRuneIn(s: String, from: Int, end: Int): Long {
+    if (end == from) return pack(RUNE_ERROR, 0)
     var start = end - 1
     val r = s[start].code
     if (r < 0x80) return pack(r, 1)
-    val lim = maxOf(end - 4, 0)
+    val lim = maxOf(end - 4, from)
     start--
     while (start >= lim) {
         if (s[start].code and 0xC0 != 0x80) break
         start--
     }
-    if (start < 0) start = 0
+    if (start < from) start = from
     // Decode within s[start:end] only.
-    val p = goDecodeRune(if (end == s.length) s else s.substring(0, end), start)
+    val p = goDecodeRuneIn(s, start, end)
     val size = (p ushr 32).toInt()
     if (start + size != end) return pack(RUNE_ERROR, 1)
     return p
@@ -319,6 +325,20 @@ inline fun goViewByte(s: String, off: Int, n: Int, k: Int): Int {
 fun goViewBound(n: Int, b: Int): Int {
     if (b < 0 || b > n) goPanicSlice("[$b] with length $n")
     return b
+}
+
+/**
+ * NOT Go API — a WINDOW FIELD read as a whole string (docs/goport-lowering.md § 3, "Window
+ * fields"): the base itself when the window covers it (no copy — every window outside a narrowed
+ * one), else its substring.
+ */
+fun goStrWin(b: String, off: Int, n: Int): String = if (off == 0 && n == b.length) b else b.substring(off, off + n)
+
+/** NOT Go API — `w[lo:hi]` of a window of length [n] at [off] in [b], as a string; Go's bounds panics. */
+fun goViewSubstring(b: String, off: Int, n: Int, lo: Int, hi: Int): String {
+    if (hi < 0 || hi > n) goPanicSlice("[:$hi] with length $n")
+    if (lo < 0 || lo > hi) goPanicSlice("[$lo:$hi]")
+    return b.substring(off + lo, off + hi)
 }
 
 /** NOT Go API — `s[from:] == t` without the copy. */

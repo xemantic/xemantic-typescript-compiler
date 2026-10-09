@@ -239,7 +239,7 @@ fun com.xemantic.typescript.tsgo.scanner.regExpParser?.error(msg: Message?, pos_
 
 // go: github.com/microsoft/typescript-go/internal/scanner.regExpParser.text 4aae977e
 fun com.xemantic.typescript.tsgo.scanner.regExpParser?.text(): String {
-    return this!!.scanner!!.text
+    return goStrWin(this!!.scanner!!.text, this!!.scanner!!.text_o, this!!.scanner!!.text_n)
 }
 
 // go: github.com/microsoft/typescript-go/internal/scanner.compareDecimalStrings 38497341

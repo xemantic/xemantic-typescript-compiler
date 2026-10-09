@@ -516,6 +516,13 @@ open class ExprLowering(val fn: FnCtx) {
 
     fun fieldSelect(e: Node): Ex {
         val x = e.reqObj("x")
+        if (prog.windowFieldKey(pc.pkg, e) != null) {
+            // A window field read as a whole string: materialized (the base itself when the window covers it).
+            viewOf(e)?.let { v -> return Ex.primary("goStrWin(${v.base}, ${v.off}, ${v.len})") }
+            val (owner, name) = fieldOwner(e)
+            val t = fn.fresh("wf")
+            return Ex.primary("run { val $t = ${owner.code}; goStrWin($t.$name, $t.${name}_o, $t.${name}_n) }")
+        }
         return walkPath(lower(x), e.int("recv") ?: ty(x), e.ints("path")).first
     }
 
@@ -638,8 +645,24 @@ open class ExprLowering(val fn: FnCtx) {
     /** A string window `base[from:to]` (`to == null`: to the end of `base`) — Go's O(1) slice, no copy. */
     class Window(val base: String, val from: String, val to: String?)
 
-    /** The view local [x] names, if it is one (docs/goport-lowering.md § 3, substring elimination). */
-    fun viewOf(x: Node): View? = if (x.k == "Ident") x.int("obj")?.let { fn.views[it] } else null
+    /**
+     * The view [x] names, if it is one (docs/goport-lowering.md § 3, substring elimination): a view
+     * local, or a window FIELD selection `o.f` ([Program.windowFields]) over its slots `f`, `f_o`,
+     * `f_n` when the owner `o` is safe to evaluate more than once.
+     */
+    fun viewOf(x: Node): View? = when (x.k) {
+        "Ident" -> x.int("obj")?.let { fn.views[it] }
+        "ParenExpr" -> viewOf(x.reqObj("x"))
+        "SelectorExpr" -> if (prog.windowFieldKey(pc.pkg, x) == null) null else {
+            val (owner, name) = fieldOwner(x)
+            val o = owner.at(PRIMARY)
+            if (SIMPLE_OWNER.matches(o)) View("$o.$name", "$o.${name}_o", "$o.${name}_n") else null
+        }
+        else -> null
+    }
+
+    /** An owner expression safe to evaluate repeatedly: a name or a field chain (no call, no side effect). */
+    private val SIMPLE_OWNER = Regex("""[A-Za-z_][A-Za-z0-9_]*(!!)?(\.[A-Za-z_][A-Za-z0-9_]*(!!)?)*""")
 
     /**
      * [a] as a window when it is a string slice `s[lo:hi]` with at least one bound — of a plain
@@ -667,6 +690,10 @@ open class ExprLowering(val fn: FnCtx) {
         val hi = e.obj("high")?.let { intIndex(it).code }
         val r = when (e.str("sk")) {
             "string" -> {
+                // A sub-slice of a view as a string value: one checked substring of the base.
+                viewOf(x)?.let { v ->
+                    return wrap(Ex.primary("goViewSubstring(${v.base}, ${v.off}, ${v.len}, ${lo ?: "0"}, ${hi ?: v.len})"), ty(e))
+                }
                 val s = raw(x)
                 when {
                     hi == null && lo == null -> s

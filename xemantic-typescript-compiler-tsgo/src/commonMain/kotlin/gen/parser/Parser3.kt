@@ -293,6 +293,7 @@ import com.xemantic.typescript.tsgo.scanner.setLanguageVariant
 import com.xemantic.typescript.tsgo.scanner.setOnError
 import com.xemantic.typescript.tsgo.scanner.setSkipJSDocLeadingAsterisks
 import com.xemantic.typescript.tsgo.scanner.setText
+import com.xemantic.typescript.tsgo.scanner.setTextWin
 import com.xemantic.typescript.tsgo.scanner.token
 import com.xemantic.typescript.tsgo.scanner.tokenFlags
 import com.xemantic.typescript.tsgo.scanner.tokenFullStart
@@ -547,7 +548,7 @@ fun Parser?.parseResolutionMode(mode: String, pos: Int, end: Int): ModuleKind {
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.jsErrorAtRange 05782658
 fun Parser?.jsErrorAtRange(loc: TextRange, message: Message?, args: GoSlice<Any?>) {
-    this!!.jsDiagnostics = this!!.jsDiagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(null, com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, loc.pos()), loc.end()), message, args))
+    this!!.jsDiagnostics = this!!.jsDiagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(null, com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), loc.pos()), loc.end()), message, args))
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.checkJSDecoratorSyntax 047cfef6
@@ -587,8 +588,8 @@ fun Parser?.checkJSDecoratorSyntax(node: Node?) {
                             i++
                         }
                         if (trailingDecoratorIndex >= 0) {
-                            val diag: Diagnostic? = com.xemantic.typescript.tsgo.ast.newDiagnostic(null, com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, modifiers[trailingDecoratorIndex]!!.loc.pos()), modifiers[trailingDecoratorIndex]!!.loc.end()), com.xemantic.typescript.tsgo.diagnostics.decorators_may_not_appear_after_export_or_export_default_if_they_also_appear_before_export, GoElem.ref<Any?>().nilSlice)
-                            diag.addRelatedInfo(com.xemantic.typescript.tsgo.ast.newDiagnostic(null, com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, modifiers[decoratorIndex]!!.loc.pos()), modifiers[decoratorIndex]!!.loc.end()), com.xemantic.typescript.tsgo.diagnostics.decorator_used_before_export_here, GoElem.ref<Any?>().nilSlice))
+                            val diag: Diagnostic? = com.xemantic.typescript.tsgo.ast.newDiagnostic(null, com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), modifiers[trailingDecoratorIndex]!!.loc.pos()), modifiers[trailingDecoratorIndex]!!.loc.end()), com.xemantic.typescript.tsgo.diagnostics.decorators_may_not_appear_after_export_or_export_default_if_they_also_appear_before_export, GoElem.ref<Any?>().nilSlice)
+                            diag.addRelatedInfo(com.xemantic.typescript.tsgo.ast.newDiagnostic(null, com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), modifiers[decoratorIndex]!!.loc.pos()), modifiers[decoratorIndex]!!.loc.end()), com.xemantic.typescript.tsgo.diagnostics.decorator_used_before_export_here, GoElem.ref<Any?>().nilSlice))
                             this!!.jsDiagnostics = this!!.jsDiagnostics.append1(diag)
                         }
                     }

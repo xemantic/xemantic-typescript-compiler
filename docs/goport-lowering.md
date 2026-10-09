@@ -326,6 +326,28 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   body is lowered, so the overload always exists. First run: 1 function (`parser.isJSDocLikeText`,
   the per-JSDoc-comment suffix copy). Pin: `LoweringRulesTest`.
 
+- **Window fields** ((TSGO.6-g), `Program.computeWindowFields`, `ExprLowering.viewOf`/`fieldSelect`,
+  `Lowering.windowStore`, `Decls.structClass`). A `string` struct field in `WINDOW_FIELD_CANDIDATES`
+  (`parser.Parser.sourceText`, `scanner.Scanner.text`) of a struct Go never compares, hashes or reflects, and
+  that no `&x.f` takes the address of, is three slots `f`, `f_o`, `f_n` (base, offset, length; the length
+  defaults to `f.length`, so a composite literal naming only `f` stays exact). A read in a view position (`len`,
+  `x.f[k]`, a sub-slice fed to a window call, a `utf8` decode) reads the window with Go's bounds; a sub-slice as a
+  string is one checked `goViewSubstring`; any other read materializes it (`goStrWin`: the base itself when the
+  window covers it, so outside a narrowed window nothing is copied); a store of `s[lo:hi]`, of another window or
+  of a window parameter stores the window, any other string stores `(s, 0, len(s))`; an op-assignment refuses.
+  Window parameters extend to METHODS of non-generic structs for this (`Scanner.SetText` → `setTextWin`, imported
+  across packages like any extension). It removes the parser's per-JSDoc-comment copy of the file prefix
+  (`p.sourceText = p.sourceText[:end-2]`; docs/goport-perf.md § 8.2). Pins: `LoweringRulesTest`, `WindowShimTest`.
+- **Immutable structs** ((TSGO.6-g), `Program.computeImmutableStructs`). A struct in `IMMUTABLE_STRUCT_CANDIDATES`
+  (`checker.FlowType`) is lowered with `goCopy() = this` when the whole run proves Go never changes one in place:
+  no field of it is assigned (`=`, op-assign, `++`, a range target) and none is address-taken; no `*p = v`
+  or element store of the type; no `&v` of a variable, field or element of it (a pointer to STORAGE that a later
+  store would have to be visible through); no `==` on `*T`; no `*T` into an interface; and every implicit `&x`
+  (`autoAddr`) is the receiver of a CALL to a PURE pointer method — one whose body uses the receiver only to read
+  a field, deref, or call another pure method (fixpoint). Such a local is then a plain rebindable reference
+  (`var t = …; t = f()`), not an address-stable object assigned by `goSet`. Refusals are printed by the porter.
+  Pin: `LoweringRulesTest`.
+
 (TSGO.2) harness rules:
 
 - **A `switch` whose tag is an array or a comparable struct compares by VALUE**: the tag is bound

@@ -42,6 +42,26 @@ import com.xemantic.typescript.goport.types.TypeTable
 /** The largest Go body (lines) lowered `inline` ([Program.computeInlineFuncs]). */
 const val INLINE_MAX_LINES = 15
 
+/**
+ * String fields that may be lowered as windows ([Program.windowFields], docs/goport-perf.md § 8):
+ * the parser narrows its source to each JSDoc comment (`p.sourceText = p.sourceText[:end-2]`, then
+ * `p.scanner.SetText(p.sourceText)`) — on the JVM a COPY of the file prefix per comment, ~19% of a
+ * check's allocation.
+ */
+val WINDOW_FIELD_CANDIDATES = setOf(
+    "github.com/microsoft/typescript-go/internal/parser.Parser.sourceText",
+    "github.com/microsoft/typescript-go/internal/scanner.Scanner.text",
+)
+
+/**
+ * Struct types that may be lowered as immutable values ([Program.immutableStructs], docs/goport-perf.md
+ * § 8): `checker.FlowType` is copied on every flow-node step (`return t`, `SharedFlow{flowType: t}`)
+ * and `getTypeAtFlowNode`'s `t` was an address-stable object only because `t.isNil()` takes `&t`.
+ */
+val IMMUTABLE_STRUCT_CANDIDATES = setOf(
+    "github.com/microsoft/typescript-go/internal/checker.FlowType",
+)
+
 val OBJECT_MEMBERS = setOf("toString", "hashCode", "equals", "getClass", "wait", "notify", "notifyAll", "finalize", "clone")
 
 /**
@@ -722,27 +742,42 @@ class Program(
      */
     val windowFuncs = HashMap<String, Int>()
 
-    /** The Kotlin name of [qname]'s window overload. */
-    fun windowName(qname: String, goName: String): String = funName(qname, goName).trim('`') + "Win"
+    /** The Kotlin name of [qname]'s window overload (a method's when [method]). */
+    fun windowName(qname: String, goName: String, method: Boolean = false): String =
+        (if (method) methodName(qname, goName) else funName(qname, goName)).trim('`') + "Win"
+
+    /** Window overloads that are METHODS (members of their receiver's class), by qualified name. */
+    val windowMethods = HashSet<String>()
 
     /**
-     * A top-level, non-generic, non-variadic function gets a window overload for its string
-     * parameter `p` when `p` is used ONLY as a view (`len(p)`, `p[k]`, a sub-slice feeding a fused
-     * `strings` call or `==` — [CallLowering.viewUseViolations]), is never reassigned or
+     * A non-generic, non-variadic function — top-level, or a MEMBER method of a non-generic struct —
+     * gets a window overload for its string parameter `p` when `p` is used ONLY as a view (`len(p)`,
+     * `p[k]`, a sub-slice feeding a fused `strings` call or `==`, or stored whole into a
+     * [windowFields] field — [CallLowering.viewUseViolations]), is never reassigned or
      * address-taken, it is the ONLY such string parameter, and some call site in the run passes a
-     * string slice for it (`isJSDocLikeText(p.sourceText[start:])`: a suffix copy of the source per
-     * JSDoc comment). Such a call then passes the window and copies nothing.
+     * string slice or a window field for it (`isJSDocLikeText(p.sourceText[start:])`: a suffix copy
+     * of the source per JSDoc comment; `p.scanner.SetText(p.sourceText)` with the source narrowed
+     * to a comment). Such a call then passes the window and copies nothing.
      */
     fun computeWindowFuncs(exclude: Set<String>) {
         windowFuncs.clear()
+        windowMethods.clear()
         val cand = HashMap<String, Int>()
+        val methodCand = HashSet<String>()
         for (p in packages) {
             val tt = TypeTable(p)
             for (f in p.files) for (d in f.list("decls")) {
-                if (d.k != "FuncDecl" || d.obj("recv") != null) continue
+                if (d.k != "FuncDecl") continue
                 val q = d.str("qname") ?: continue
                 val body = d.obj("body") ?: continue
                 if (d.str("name") == "init" || q in exclude || q in inlineFuncs) continue
+                val recv = d.obj("recv")
+                if (recv != null) {
+                    // A method of a non-generic struct (member, or extension on its nullable receiver).
+                    val rt = recv.list("list").firstOrNull()?.obj("type")?.int("t")?.let { tt.unalias(it) } ?: continue
+                    val rn = (if (rt is com.xemantic.typescript.goport.types.PointerType) tt.unalias(rt.elem) else rt) as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                    if (rn.tparams.isNotEmpty() || rn.origin != null || !structKind(rn.key)) continue
+                }
                 val sig = d.int("obj")?.let { p.obj(it).int("t") }?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.SignatureType ?: continue
                 if (sig.tparams.isNotEmpty() || sig.variadic) continue
                 val strParams = HashMap<Int, Int>()
@@ -759,33 +794,199 @@ class Program(
                     }
                 }
                 if (strParams.isEmpty()) continue
-                val bad = CallLowering.viewUseViolations(body, strParams.keys, emptySet()) { call ->
+                val bad = CallLowering.viewUseViolations(body, strParams.keys, emptySet(), { lhs -> windowFieldKey(p, lhs) != null }) { call ->
                     val fe = call.obj("fun")
                     val ident = if (fe?.str("k") == "SelectorExpr") fe.obj("sel") else fe
                     ident?.int("obj")?.let { p.obj(it).str("key") }
                 }
                 val ok = strParams.keys - bad
                 if (ok.size != 1) continue
-                val name = windowName(q, d.str("name")!!)
-                if (name in (topValueNames[p.path] ?: emptySet<String>())) continue
+                val name = windowName(q, d.str("name")!!, recv != null)
+                if (recv == null && name in (topValueNames[p.path] ?: emptySet<String>())) continue
+                if (recv != null) {
+                    val owner = q.substringBeforeLast('.')
+                    if ((methodsByType[owner] ?: emptyList()).any { (_, m) -> methodName(m.str("qname")!!, m.str("name")!!) == name }) continue
+                    methodCand += q
+                }
                 cand[q] = strParams[ok.first()]!!
             }
         }
         if (cand.isEmpty()) return
-        // Only where some call passes a string slice for the parameter.
+        // Only where some call passes a string slice (or a window field) for the parameter.
         for (p in packages) for (f in p.files) walk(f) { n ->
-            if (n.str("k") == "CallExpr" && n.str("call") == "func") {
+            if (n.str("k") == "CallExpr" && (n.str("call") == "func" || n.str("call") == "method")) {
                 val fe = n.obj("fun")
                 val ident = if (fe?.str("k") == "SelectorExpr") fe.obj("sel") else fe
                 val key = ident?.int("obj")?.let { p.obj(it).str("key") }
-                val idx = key?.let { cand[it] }
+                val idx = key?.let { cand[it] }?.takeIf { (n.str("call") == "method") == (key in methodCand) }
                 val a = idx?.let { n.list("args").getOrNull(it) }
-                if (a != null && a.str("k") == "SliceExpr" && a.str("sk") == "string" && !a.bool("slice3") &&
-                    (a.obj("low") != null || a.obj("high") != null) && !n.bool("tupleArg")
-                ) windowFuncs[key] = idx
+                if (a != null && !n.bool("tupleArg") && (
+                        (a.str("k") == "SliceExpr" && a.str("sk") == "string" && !a.bool("slice3") && (a.obj("low") != null || a.obj("high") != null)) ||
+                            windowFieldKey(p, a) != null)
+                ) {
+                    windowFuncs[key] = idx
+                    if (key in methodCand) windowMethods += key
+                }
             }
             true
         }
+    }
+
+    // ---- window fields (docs/goport-lowering.md § 3, "Window fields") ----
+
+    /**
+     * String struct fields lowered as a WINDOW `(f, f_o, f_n)` — base, offset, length — by object
+     * key. Filled by [computeWindowFields] from [WINDOW_FIELD_CANDIDATES], keeping a candidate only
+     * when it is a `string` field of a struct Go never compares, hashes or reflects, and no `&x.f`
+     * takes its address. A read in a view position (`len`, `x.f[k]`, a sub-slice feeding a window
+     * call) reads the window; any other read materializes it (`goStrWin`, the base itself when the
+     * window covers it, so no copy outside a narrowed window); a store of `s[lo:hi]` or of another
+     * window stores the window — Go's O(1) slice, where `substring` copied.
+     */
+    val windowFields = HashSet<String>()
+
+    fun computeWindowFields() {
+        windowFields.clear()
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (o in p.objects) {
+                val key = o.str("key") ?: continue
+                if (o.str("k") != "field" || key !in WINDOW_FIELD_CANDIDATES) continue
+                if ((tt.under(o.int("t") ?: continue) as? com.xemantic.typescript.goport.types.BasicType)?.name != "string") continue
+                // The field object's `owner` is the UNDERLYING struct; the named type is found by the key's prefix.
+                val ownerKey = key.substringBeforeLast('.')
+                val ownerId = p.types.firstOrNull { it.str("k") == "named" && it.str("key") == ownerKey }?.int("id") ?: continue
+                val owner = tt.unalias(ownerId) as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                if (owner.comparable || owner.key in reflectStructs || owner.key in structKeys || owner.tparams.isNotEmpty()) continue
+                // A big struct's composite literal assigns fields after construction (the length default would be stale).
+                if ((tt.under(owner.id) as? com.xemantic.typescript.goport.types.StructType)?.let { bigStruct(it) } != false) continue
+                windowFields += key
+            }
+        }
+        if (windowFields.isEmpty()) return
+        // Never address-taken (`&x.f` would need a pointer to three slots).
+        for (p in packages) for (f in p.files) walk(f) { n ->
+            if (n.str("k") == "UnaryExpr" && n.str("op") == "&") {
+                val x = n.obj("x")
+                val key = if (x?.str("k") == "SelectorExpr") x.obj("sel")?.int("obj")?.let { p.obj(it).str("key") } else null
+                if (key != null) windowFields -= key
+            }
+            true
+        }
+    }
+
+    // ---- immutable structs (docs/goport-lowering.md § 3, "Immutable structs") ----
+
+    /**
+     * Named struct types whose values Go never changes in place ([computeImmutableStructs]), by key:
+     * a copy of one is indistinguishable from the value itself, so `goCopy()` answers `this`, and a
+     * local whose only address-taking is an implicit `&x` receiver of a PURE pointer method (one
+     * that only reads through its receiver: `t.isNil()`) is a plain rebindable reference, not an
+     * address-stable object assigned by `goSet`.
+     */
+    val immutableStructs = HashSet<String>()
+
+    /** Why each [IMMUTABLE_STRUCT_CANDIDATES] entry was refused (for the report and the pins). */
+    val immutableRefusals = HashMap<String, String>()
+
+    fun computeImmutableStructs() {
+        immutableStructs.clear()
+        immutableRefusals.clear()
+        val cand = IMMUTABLE_STRUCT_CANDIDATES.filter { it in structTypes && it !in reflectStructs }.toMutableSet()
+        for (k in IMMUTABLE_STRUCT_CANDIDATES - cand) immutableRefusals[k] = "not a reflected-free struct declared in the run"
+        if (cand.isEmpty()) return
+        fun refuse(k: String, why: String) { if (cand.remove(k)) immutableRefusals[k] = why }
+        fun named(tt: TypeTable, id: Int?): String? {
+            val t = id?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.NamedType ?: return null
+            if (t.origin != null || t.tparams.isNotEmpty()) return null
+            return t.key
+        }
+        fun ptrTo(tt: TypeTable, id: Int?): String? = (id?.let { tt.under(it) } as? com.xemantic.typescript.goport.types.PointerType)?.let { named(tt, it.elem) }
+        fun fieldOwner(p: IrPackage, sel: Node): String? =
+            if (sel.str("k") != "SelectorExpr" || sel.str("selk") != "field") null
+            else sel.obj("sel")?.int("obj")?.let { p.obj(it) }?.takeIf { it.str("k") == "field" }?.str("key")?.substringBeforeLast('.')
+        fun unparen(n: Node): Node = if (n.str("k") == "ParenExpr") unparen(n.obj("x")!!) else n
+        // Pointer-receiver methods of a candidate, and which of them use the receiver only to READ (fixpoint).
+        val ptrMethods = HashMap<String, Pair<IrPackage, Node>>()
+        for (k in cand) for ((p, d) in methodsByType[k] ?: emptyList()) {
+            if (d.obj("recv")!!.list("list").first().obj("type")?.str("star") == "pointerType") ptrMethods[d.str("qname")!!] = p to d
+        }
+        val pure = HashSet(ptrMethods.keys)
+        var changed = true
+        while (changed) {
+            changed = false
+            for ((q, pd) in ptrMethods) {
+                if (q !in pure) continue
+                val (p, d) = pd
+                val r = d.obj("recv")!!.list("list").first().list("names").firstOrNull()?.int("obj") ?: continue
+                var ok = true
+                fun use(n: Any?, parent: Node?, parentKey: String?) {
+                    if (!ok) return
+                    when (n) {
+                        is kotlinx.serialization.json.JsonObject -> {
+                            if (n.str("k") == "Ident" && n.int("obj") == r) {
+                                // Allowed: `r.f` (a read — a write is a candidate violation anyway), `*r` (a read), `r.m()` with m pure.
+                                val allowed = parent != null && parentKey == "x" && when (parent.str("k")) {
+                                    "SelectorExpr" -> parent.str("selk") == "field" ||
+                                        (parent.str("selk") == "method" && parent.bool("callee") &&
+                                            parent.obj("sel")?.int("obj")?.let { p.obj(it).str("key") }?.let { it in pure || it !in ptrMethods } == true)
+                                    "StarExpr" -> true
+                                    else -> false
+                                }
+                                if (!allowed) ok = false
+                                return
+                            }
+                            for ((k2, v) in n) use(v, n, k2)
+                        }
+                        is List<*> -> for (v in n) use(v, parent, parentKey)
+                        else -> {}
+                    }
+                }
+                use(d.obj("body"), null, null)
+                if (!ok) { pure.remove(q); changed = true }
+            }
+        }
+        for (p in packages) {
+            val tt = TypeTable(p)
+            fun lhs(l0: Node) {
+                val l = unparen(l0)
+                fieldOwner(p, l)?.let { if (it in cand) refuse(it, "a field is assigned (${p.path})") }
+                when (l.str("k")) {
+                    "StarExpr", "IndexExpr" -> named(tt, l.int("t"))?.let { if (it in cand) refuse(it, "assigned through ${l.str("k")} (${p.path})") }
+                }
+            }
+            for (f in p.files) walk(f) { n ->
+                when (n.str("k")) {
+                    "AssignStmt" -> n.list("lhs").forEach { lhs(it) }
+                    "IncDecStmt" -> n.obj("x")?.let { lhs(it) }
+                    "RangeStmt" -> listOfNotNull(n.obj("key"), n.obj("value")).forEach { if (n.str("tok") == "=") lhs(it) }
+                    "UnaryExpr" -> if (n.str("op") == "&") {
+                        val x = unparen(n.obj("x")!!)
+                        fieldOwner(p, x)?.let { if (it in cand) refuse(it, "&x.f of a field (${p.path})") }
+                        // `&v` of a variable, a field or an element of the type: a pointer to STORAGE that may be reassigned.
+                        if (x.str("k") != "CompositeLit") named(tt, x.int("t"))?.let { if (it in cand) refuse(it, "&${x.str("k")} (${p.path})") }
+                    }
+                    "BinaryExpr" -> if (n.str("op") == "==" || n.str("op") == "!=") {
+                        listOfNotNull(n.obj("x"), n.obj("y")).forEach { o -> ptrTo(tt, o.int("t"))?.let { if (it in cand) refuse(it, "pointer comparison (${p.path})") } }
+                    }
+                    "SelectorExpr" -> if (n.bool("autoAddr")) {
+                        val m = n.obj("sel")?.int("obj")?.let { p.obj(it).str("key") }
+                        val owner = m?.substringBeforeLast('.')
+                        if (owner in cand && (!n.bool("callee") || m !in pure)) refuse(owner!!, "implicit &x for ${if (n.bool("callee")) "an impure method $m" else "a method value"} (${p.path})")
+                    }
+                }
+                n.obj("impl")?.takeIf { it.str("k") == "iface" }?.let { im -> ptrTo(tt, im.int("from"))?.let { if (it in cand) refuse(it, "*T into an interface (${p.path})") } }
+                true
+            }
+        }
+        immutableStructs += cand
+    }
+
+    /** The window field a `SelectorExpr` selects in [p], or null. */
+    fun windowFieldKey(p: IrPackage, sel: Node): String? {
+        if (sel.str("k") != "SelectorExpr" || sel.str("selk") != "field") return null
+        val key = sel.obj("sel")?.int("obj")?.let { p.obj(it) }?.takeIf { it.str("k") == "field" }?.str("key") ?: return null
+        return key.takeIf { it in windowFields }
     }
 
     // ---- names of package-level declarations (keyed by the Go qualified name / object key) ----

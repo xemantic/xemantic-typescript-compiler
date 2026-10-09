@@ -293,6 +293,7 @@ import com.xemantic.typescript.tsgo.scanner.setLanguageVariant
 import com.xemantic.typescript.tsgo.scanner.setOnError
 import com.xemantic.typescript.tsgo.scanner.setSkipJSDocLeadingAsterisks
 import com.xemantic.typescript.tsgo.scanner.setText
+import com.xemantic.typescript.tsgo.scanner.setTextWin
 import com.xemantic.typescript.tsgo.scanner.token
 import com.xemantic.typescript.tsgo.scanner.tokenFlags
 import com.xemantic.typescript.tsgo.scanner.tokenFullStart
@@ -460,6 +461,8 @@ class Parser(
     @kotlin.jvm.JvmField var factory: NodeFactory = NodeFactory(),
     @kotlin.jvm.JvmField var opts: SourceFileParseOptions = SourceFileParseOptions(),
     @kotlin.jvm.JvmField var sourceText: String = "",
+    @kotlin.jvm.JvmField var sourceText_o: Int = 0,
+    @kotlin.jvm.JvmField var sourceText_n: Int = sourceText.length,
     @get:kotlin.jvm.JvmName("goGet_scriptKind") @set:kotlin.jvm.JvmName("goSet_scriptKind") var scriptKind: ScriptKind = ScriptKind(0),
     @get:kotlin.jvm.JvmName("goGet_languageVariant") @set:kotlin.jvm.JvmName("goSet_languageVariant") var languageVariant: LanguageVariant = LanguageVariant(0),
     @kotlin.jvm.JvmField var diagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
@@ -490,13 +493,15 @@ class Parser(
     @kotlin.jvm.JvmField var reparsedClones: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
 ) {
 
-    fun goCopy(): Parser = Parser(scanner = scanner, factory = factory.goCopy(), opts = opts.goCopy(), sourceText = sourceText, scriptKind = scriptKind, languageVariant = languageVariant, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, token = token, sourceFlags = sourceFlags, contextFlags = contextFlags, parsingContexts = parsingContexts, statementHasAwaitIdentifier = statementHasAwaitIdentifier, hasDeprecatedTag = hasDeprecatedTag, hasParseError = hasParseError, identifiers = identifiers, identifierCount = identifierCount, notParenthesizedArrow = notParenthesizedArrow.goCopy(), nodeSliceArena = nodeSliceArena.goCopy(), stringSliceArena = stringSliceArena.goCopy(), jsdocInfos = jsdocInfos, possibleAwaitSpans = possibleAwaitSpans, jsdocCommentsSpace = jsdocCommentsSpace, jsdocCommentRangesSpace = jsdocCommentRangesSpace, jsdocTagCommentsSpace = jsdocTagCommentsSpace, jsdocTagCommentsPartsSpace = jsdocTagCommentsPartsSpace, reparseList = reparseList, commonJSModuleIndicator = commonJSModuleIndicator, currentParent = currentParent, setParentFromContext = setParentFromContext, reparsedClones = reparsedClones)
+    fun goCopy(): Parser = Parser(scanner = scanner, factory = factory.goCopy(), opts = opts.goCopy(), sourceText = sourceText, sourceText_o = sourceText_o, sourceText_n = sourceText_n, scriptKind = scriptKind, languageVariant = languageVariant, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, token = token, sourceFlags = sourceFlags, contextFlags = contextFlags, parsingContexts = parsingContexts, statementHasAwaitIdentifier = statementHasAwaitIdentifier, hasDeprecatedTag = hasDeprecatedTag, hasParseError = hasParseError, identifiers = identifiers, identifierCount = identifierCount, notParenthesizedArrow = notParenthesizedArrow.goCopy(), nodeSliceArena = nodeSliceArena.goCopy(), stringSliceArena = stringSliceArena.goCopy(), jsdocInfos = jsdocInfos, possibleAwaitSpans = possibleAwaitSpans, jsdocCommentsSpace = jsdocCommentsSpace, jsdocCommentRangesSpace = jsdocCommentRangesSpace, jsdocTagCommentsSpace = jsdocTagCommentsSpace, jsdocTagCommentsPartsSpace = jsdocTagCommentsPartsSpace, reparseList = reparseList, commonJSModuleIndicator = commonJSModuleIndicator, currentParent = currentParent, setParentFromContext = setParentFromContext, reparsedClones = reparsedClones)
 
     fun goSet(o: Parser) {
         scanner = o.scanner
         factory = o.factory.goCopy()
         opts = o.opts.goCopy()
         sourceText = o.sourceText
+        sourceText_o = o.sourceText_o
+        sourceText_n = o.sourceText_n
         scriptKind = o.scriptKind
         languageVariant = o.languageVariant
         diagnostics = o.diagnostics
@@ -657,7 +662,7 @@ fun Parser?.parseJSONText(): SourceFile? {
         statements = this.newNodeList(com.xemantic.typescript.tsgo.core.newTextRange(pos, this.nodePos()), GoSlice.of(GoElem.ref<Node?>(), statement))
         eof = this.parseExpectedToken(Kind(1))
     }
-    val node: Node? = this.finishNode(this!!.factory.newSourceFile(this!!.opts.goCopy(), this!!.sourceText, statements, eof), pos)
+    val node: Node? = this.finishNode(this!!.factory.newSourceFile(this!!.opts.goCopy(), goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), statements, eof), pos)
     val result: SourceFile? = node.asSourceFile()
     if (result!!.statements!!.nodes.len > 0) {
         this.validateJsonValue(result, result!!.statements!!.nodes[0].expression())
@@ -684,7 +689,7 @@ fun Parser?.validateJsonValue(sourceFile: SourceFile?, valueExpression: Node?) {
             }
             10 -> {
                 if (!isDoubleQuotedString(valueExpression)) {
-                    this!!.diagnostics = this!!.diagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, getErrorSpanForNode(this!!.sourceText, valueExpression), com.xemantic.typescript.tsgo.diagnostics.string_literal_with_double_quotes_expected, GoElem.ref<Any?>().nilSlice))
+                    this!!.diagnostics = this!!.diagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, getErrorSpanForNode(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), valueExpression), com.xemantic.typescript.tsgo.diagnostics.string_literal_with_double_quotes_expected, GoElem.ref<Any?>().nilSlice))
                 }
                 return
             }
@@ -708,7 +713,7 @@ fun Parser?.validateJsonValue(sourceFile: SourceFile?, valueExpression: Node?) {
             }
         }
     }
-    this!!.diagnostics = this!!.diagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, getErrorSpanForNode(this!!.sourceText, valueExpression), com.xemantic.typescript.tsgo.diagnostics.property_value_can_only_be_string_literal_numeric_literal_true_false_null_object_literal_or_array_literal, GoElem.ref<Any?>().nilSlice))
+    this!!.diagnostics = this!!.diagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, getErrorSpanForNode(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), valueExpression), com.xemantic.typescript.tsgo.diagnostics.property_value_can_only_be_string_literal_numeric_literal_true_false_null_object_literal_or_array_literal, GoElem.ref<Any?>().nilSlice))
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.isDoubleQuotedString d8544894
@@ -722,11 +727,11 @@ fun Parser?.validateJsonObjectLiteral(sourceFile: SourceFile?, node: ObjectLiter
     l0@ for (i1 in 0 until s0.len) {
         val element: Node? = s0[i1]
         if (element!!.kind.value != 303) {
-            this!!.diagnostics = this!!.diagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, getErrorSpanForNode(this!!.sourceText, element), com.xemantic.typescript.tsgo.diagnostics.property_assignment_expected, GoElem.ref<Any?>().nilSlice))
+            this!!.diagnostics = this!!.diagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, getErrorSpanForNode(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), element), com.xemantic.typescript.tsgo.diagnostics.property_assignment_expected, GoElem.ref<Any?>().nilSlice))
             continue@l0
         }
         if (element.name() != null && !isDoubleQuotedString(element.name())) {
-            this!!.diagnostics = this!!.diagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, getErrorSpanForNode(this!!.sourceText, element.name()), com.xemantic.typescript.tsgo.diagnostics.string_literal_with_double_quotes_expected, GoElem.ref<Any?>().nilSlice))
+            this!!.diagnostics = this!!.diagnostics.append1(com.xemantic.typescript.tsgo.ast.newDiagnostic(sourceFile, getErrorSpanForNode(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), element.name()), com.xemantic.typescript.tsgo.diagnostics.string_literal_with_double_quotes_expected, GoElem.ref<Any?>().nilSlice))
         }
         this.validateJsonValue(sourceFile, element.asPropertyAssignment()!!.initializer)
     }
@@ -756,7 +761,13 @@ fun Parser?.initializeState(opts: SourceFileParseOptions, sourceText: String, sc
         this!!.scanner.reset()
     }
     this!!.opts = opts.goCopy()
-    this!!.sourceText = sourceText
+    val wo0 = this!!
+    val wb1: String = sourceText
+    val wof2: Int = 0
+    val wn3: Int = wb1.length
+    wo0.sourceText = wb1
+    wo0.sourceText_o = wof2
+    wo0.sourceText_n = wn3
     this!!.scriptKind = scriptKind
     this!!.languageVariant = getLanguageVariant(this!!.scriptKind)
     when (this!!.scriptKind.value) {
@@ -770,8 +781,8 @@ fun Parser?.initializeState(opts: SourceFileParseOptions, sourceText: String, sc
             this!!.contextFlags = NodeFlags(0u)
         }
     }
-    this!!.scanner.setText(this!!.sourceText)
-    this!!.scanner.setOnError(run { val r0 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r0.scanError(p0, p1, p2, p3) })
+    this!!.scanner.setTextWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n)
+    this!!.scanner.setOnError(run { val r4 = this; fun(p0: Message?, p1: Int, p2: Int, p3: GoSlice<Any?>) = r4.scanError(p0, p1, p2, p3) })
     this!!.scanner.setLanguageVariant(this!!.languageVariant)
 }
 
@@ -928,7 +939,7 @@ fun Parser?.parseSourceFileWorker(): SourceFile? {
         statements = statements.appendSlice(this!!.reparseList)
         this!!.reparseList = GoElem.ref<Node?>().nilSlice
     }
-    val node: Node? = this.finishNode(this!!.factory.newSourceFile(this!!.opts.goCopy(), this!!.sourceText, this.newNodeList(com.xemantic.typescript.tsgo.core.newTextRange(pos, end), statements), eof), pos)
+    val node: Node? = this.finishNode(this!!.factory.newSourceFile(this!!.opts.goCopy(), goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), this.newNodeList(com.xemantic.typescript.tsgo.core.newTextRange(pos, end), statements), eof), pos)
     var result: SourceFile? = node.asSourceFile()
     this.finishSourceFile(result, isDeclarationFile)
     if (!result!!.isDeclarationFile && result!!.externalModuleIndicator != null && this!!.possibleAwaitSpans.len > 0) {
@@ -948,7 +959,7 @@ fun Parser?.parseSourceFileWorker(): SourceFile? {
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.finishSourceFile baa67f99
 fun Parser?.finishSourceFile(result: SourceFile?, isDeclarationFile: Boolean) {
     result!!.commentDirectives = this!!.scanner.commentDirectives()
-    result!!.pragmas = getCommentPragmas(this!!.factory, this!!.sourceText)
+    result!!.pragmas = getCommentPragmas(this!!.factory, goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n))
     this.processPragmasIntoFields(result)
     result.setDiagnostics(attachFileToDiagnostics(this!!.diagnostics, result))
     result.setJSDocDiagnostics(attachFileToDiagnostics(this!!.jsdocDiagnostics, result))
@@ -1076,7 +1087,7 @@ fun Parser?.reparseTopLevelAwait(sourceFile: SourceFile?): Node? {
             this!!.diagnostics = this!!.diagnostics.appendSlice(savedParseDiagnostics.slice(diagnosticStart_1))
         }
     }
-    val result: Node? = this!!.factory.newSourceFile(sourceFile.parseOptions(), this!!.sourceText, this.newNodeList(sourceFile!!.statements!!.loc.goCopy(), statements), sourceFile!!.endOfFileToken)
+    val result: Node? = this!!.factory.newSourceFile(sourceFile.parseOptions(), goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), this.newNodeList(sourceFile!!.statements!!.loc.goCopy(), statements), sourceFile!!.endOfFileToken)
     val s0 = statements
     l2@ for (i1 in 0 until s0.len) {
         val s: Node? = s0[i1]
@@ -2590,7 +2601,7 @@ fun Parser?.parseErrorForMissingSemicolonAfter(node: Node?) {
         this.parseErrorAtCurrentToken(com.xemantic.typescript.tsgo.diagnostics.x_0_expected, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.tokenToString(Kind(26))))
         return
     }
-    val pos: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.sourceText, node!!.pos())
+    val pos: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(goStrWin(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_n), node!!.pos())
     when (expressionText) {
         "const", "let", "var" -> {
             this.parseErrorAt(pos, node!!.end(), com.xemantic.typescript.tsgo.diagnostics.variable_declaration_not_allowed_at_this_location, GoElem.ref<Any?>().nilSlice)

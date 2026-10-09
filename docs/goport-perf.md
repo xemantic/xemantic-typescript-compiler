@@ -479,3 +479,65 @@ Readings:
 default. `scripts/tsgo-jvm-profile.sh` takes `TSGO_JAVA=<java>` so either arm can be profiled. **Proposal (owner,
 not done — CI is a guardrail):** the daemon/LSP host — the warm regime — could run on JDK 27 (or on any JDK with
 `-XX:+UseCompactObjectHeaders`, which buys the same −8% allocation on 26); the CLI and CI should stay where they are.
+
+### 8.2 Levers 1 + 2: window fields and an immutable `FlowType` (landed)
+
+**Predicted before building**: the JSDoc prefix copy is ~19% of a warm rebuild's allocation and ~2-3% CPU → −19%
+allocation, −2..−4% single, −3..−6% parallel; `FlowType` ~3% of allocation → ~−1% parallel.
+
+Both are porter rules (docs/goport-lowering.md § 3, "Window fields" / "Immutable structs"), the generated code
+changed only by regeneration (8 files; `parser`/`scanner`/`checker/Flow.kt`, plus `ls/organizeimports`, whose
+`s.SetText(text[fullStart:startPos])` now passes a window too). The runtime gains `goStrWin`, `goViewSubstring` and
+the bounded `utf8` decoders (`goDecodeRuneIn`, `goDecodeLastRuneIn` — the latter also drops a copy
+`goDecodeLastRune` made of `s[:end]`).
+
+A/B (each arm its own JVM on Zulu 26, ABBA + BAAB, 6 + 10 rebuilds; class md5 `d0e826cf` → `d352ffe2`; every run
+one digest, every cold run byte-identical to tsgo):
+
+| | before | after | Δ |
+|---|---:|---:|---:|
+| compiler single, ms | 3,480 [3,410-3,551] | 3,414 [3,355-3,540] | −1.9% |
+| compiler single, allocation MB/rebuild | 2,305 | **1,560** | **−32%** |
+| compiler parallel, ms | 1,940 [1,937-1,945] | 1,904 [1,849-1,941] | −1.9% |
+| compiler parallel, allocation (all threads) | 2,508 | **1,744** | **−30%** |
+| compiler GC pause/rebuild, ms (single / parallel) | 251 / 235 | 228 / 210 | −9% / −10% |
+| services parallel, ms | 2,711 [2,638-2,781] | **2,562** [2,519-2,640] | **−5.5%** |
+| services parallel, allocation | 3,250 | 2,413 | −26% |
+| date-fns parallel, ms | 503 | 460 | −8.6% (allocation −2%: mostly noise) |
+| cold compiler / services / date-fns, s | 9.67 / 11.91 / 4.75 | 9.62 / 12.18 / 4.35 | noise |
+| cold RSS compiler, MB | 2,356 | 1,908 | −19% |
+
+The allocation drop is larger than predicted (−32% vs −19%): the § 7 census charged the prefix copies to
+`byte[]` only, while each comment also paid the `String` object, the scanner's `goDecodeLastRune` copy and the
+humongous-region churn. Allocation profile after the change (async-profiler, warm single): `byte[]` 7.1% (was 25%),
+`FlowType` 2.0% of a smaller total (~31 MB, was ~120 MB: what remains are the constructions Go also makes).
+Wall gains are real but small for the compiler profile (inside the ±3% process spread) and clear for services.
+
+### 8.3 Lever 3: `LinkStore` per-object slots — REFUSED (design)
+
+`core.LinkStore[K, V]` is a `map[K]*V` per checker per link kind (26 stores: 9 keyed by `*ast.Node`, 16 by
+`*ast.Symbol`, 1 by `*ast.SourceFile`). § 7.2 measured `GoMap.find` at 11.6% of the warm bench thread, 55% of it
+under `LinkStore.Get` (~6.4% of the thread). The JVM's way to answer "this object's link" is a field on the
+object. Every variant of that is unsound or leaks here:
+
+- **Nodes and symbols outlive their checker.** The bundled libs' `SourceFile`s (and the symbols their binder
+  made) are shared across programs (the bench's `libcache`, the LSP, the API session, and `-core`'s
+  `RealLibSnapshots`), and an LSP reuses unchanged files' trees across program versions. A slot holding
+  `(store, value)` therefore retains a dead checker — and through `value` its whole type graph — until something
+  overwrites it; a lib node no later checker touches keeps it forever. A `WeakReference` per slot costs an
+  allocation per install and a dereference per read, which is the price being saved.
+- **Four checkers read and write the same nodes concurrently** (`checker.CheckerPool`). A slot table needs a CAS on
+  install, and losing a race must never drop a link: links carry the checker's in-progress flags for cycle
+  detection (`resolvedType` sentinels), so a link that vanishes mid-resolution is a wrong answer or a non-
+  terminating resolution, not a recomputation.
+- **A slot as a cache in front of the authoritative map** (the only sound shape — the map keeps every entry, the
+  slot just short-circuits the probe) still pays the map insert, still retains one stale pair per object, and
+  helps only the one store that owns the slot; 26 stores × 4 checkers compete for it.
+- **Dense arrays indexed by `Node.id`/`Symbol.id`** would need the id read through `ast.GetNodeId`, which ASSIGNS
+  ids lazily (an atomic increment): reading it where Go does not shifts every later id away from tsgo's
+  assignment order (ids key the node builder's and the emit resolver's caches). Process-global ids also grow
+  without bound in a long-lived host, so the arrays would be sparse.
+
+The cost is real (~6% of a warm thread is one identity-hash probe per link read, the same probes Go makes — Go's
+are cheaper because its map hashes the pointer without a header read), but no design keeps both soundness and
+bounded retention. Not built.

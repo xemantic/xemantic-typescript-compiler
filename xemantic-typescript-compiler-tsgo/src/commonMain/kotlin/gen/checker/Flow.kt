@@ -88,7 +88,7 @@ class FlowType(
     @kotlin.jvm.JvmField var incomplete: Boolean = false,
 ) {
 
-    fun goCopy(): FlowType = FlowType(t = t, incomplete = incomplete)
+    fun goCopy(): FlowType = this
 
     fun goSet(o: FlowType) {
         t = o.t
@@ -263,27 +263,27 @@ fun Checker?.getTypeAtFlowNode(f: FlowState?, flow_0: FlowNode?): FlowType {
             }
             sharedFlow = flow
         }
-        val t: FlowType = FlowType()
+        var t: FlowType = FlowType()
         when {
             flags.value and 16u != 0u -> {
-                t.goSet(this.getTypeAtFlowAssignment(f, flow))
+                t = this.getTypeAtFlowAssignment(f, flow)
                 if (t.isNil()) {
                     flow = flow!!.antecedent
                     continue@l0
                 }
             }
             flags.value and 512u != 0u -> {
-                t.goSet(this.getTypeAtFlowCall(f, flow))
+                t = this.getTypeAtFlowCall(f, flow)
                 if (t.isNil()) {
                     flow = flow!!.antecedent
                     continue@l0
                 }
             }
             flags.value and 96u != 0u -> {
-                t.goSet(this.getTypeAtFlowCondition(f, flow))
+                t = this.getTypeAtFlowCondition(f, flow)
             }
             flags.value and 128u != 0u -> {
-                t.goSet(this.getTypeAtSwitchClause(f, flow))
+                t = this.getTypeAtSwitchClause(f, flow)
             }
             flags.value and 4u != 0u -> {
                 val antecedents: FlowList? = getBranchLabelAntecedents(flow, f!!.reduceLabels)
@@ -291,17 +291,17 @@ fun Checker?.getTypeAtFlowNode(f: FlowState?, flow_0: FlowNode?): FlowType {
                     flow = antecedents!!.flow
                     continue@l0
                 }
-                t.goSet(this.getTypeAtFlowBranchLabel(f, flow, antecedents))
+                t = this.getTypeAtFlowBranchLabel(f, flow, antecedents)
             }
             flags.value and 8u != 0u -> {
                 if (flow!!.antecedents!!.next == null) {
                     flow = flow!!.antecedents!!.flow
                     continue@l0
                 }
-                t.goSet(this.getTypeAtFlowLoopLabel(f, flow))
+                t = this.getTypeAtFlowLoopLabel(f, flow)
             }
             flags.value and 256u != 0u -> {
-                t.goSet(this.getTypeAtFlowArrayMutation(f, flow))
+                t = this.getTypeAtFlowArrayMutation(f, flow)
                 if (t.isNil()) {
                     flow = flow!!.antecedent
                     continue@l0
@@ -309,7 +309,7 @@ fun Checker?.getTypeAtFlowNode(f: FlowState?, flow_0: FlowNode?): FlowType {
             }
             flags.value and 1024u != 0u -> {
                 f!!.reduceLabels = f!!.reduceLabels.append1(flow!!.node.asFlowReduceLabelData())
-                t.goSet(this.getTypeAtFlowNode(f, flow!!.antecedent))
+                t = this.getTypeAtFlowNode(f, flow!!.antecedent)
                 f!!.reduceLabels = f!!.reduceLabels.slice(0, f!!.reduceLabels.len - 1)
             }
             flags.value and 2u != 0u -> {
@@ -318,10 +318,10 @@ fun Checker?.getTypeAtFlowNode(f: FlowState?, flow_0: FlowNode?): FlowType {
                     flow = container.flowNodeData()!!.flowNode
                     continue@l0
                 }
-                t.goSet(FlowType(t = f!!.initialType))
+                t = FlowType(t = f!!.initialType)
             }
             else -> {
-                t.goSet(FlowType(t = this.convertAutoToAny(f!!.declaredType)))
+                t = FlowType(t = this.convertAutoToAny(f!!.declaredType))
             }
         }
         if (sharedFlow != null) {
@@ -1478,12 +1478,12 @@ fun Checker?.getTypeAtFlowLoopLabel(f: FlowState?, flow: FlowNode?): FlowType {
     }
     var antecedentTypes: GoSlice<Type?> = GoSlice.make(GoElem.ref<Type?>(), 0, 4)
     var subtypeReduction: Boolean = false
-    val firstAntecedentType: FlowType = FlowType()
+    var firstAntecedentType: FlowType = FlowType()
     var list: FlowList? = flow!!.antecedents
     l1@ while (list != null) {
         var flowType: FlowType = FlowType()
         if (firstAntecedentType.isNil()) {
-            firstAntecedentType.goSet(this.getTypeAtFlowNode(f, list!!.flow))
+            firstAntecedentType = this.getTypeAtFlowNode(f, list!!.flow)
             flowType = firstAntecedentType.goCopy()
         } else {
             this!!.flowLoopStack = this!!.flowLoopStack.append1(FlowLoopInfo(key = key.goCopy(), types = antecedentTypes))
