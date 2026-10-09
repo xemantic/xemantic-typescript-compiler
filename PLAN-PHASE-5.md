@@ -25,6 +25,32 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-g) — JDK 27 MEASURED (default GC still G1; compact object headers now on by default: −7..−9% allocation, warm −3..−6%, cold no win, ZGC +11-15% slower); WINDOW FIELDS + AN IMMUTABLE `FlowType` CUT A WARM CHECK'S ALLOCATION 30% (wall −2% compiler, −5.5% services); `LinkStore` slots REFUSED on lifetime/concurrency; itable dispatch sized at ≤ ~2%; a guarded AOT-cache launcher for the ported CLI, cold −20..−34% (2026-10-09)
+
+- **JDK 27** (Temurin 27+35 at `tools/jdk-27`, a RUNTIME arm only — `javaTarget` stays 25 for GraalVM): six arms
+  (Zulu 26, Temurin 26 vendor control, Temurin 27 ± compact headers, + ZGC, Temurin 26 + compact headers), two
+  rotated batches, 4 processes per arm and regime, same bytecode, outputs identical. Default GC is G1
+  (`UseZGC=false`); `UseCompactObjectHeaders` is the default change and buys −7..−9% allocation on 27 and on 26.
+  Warm vs Temurin 26: compiler −5.6% single / −4.3% parallel, services −2.6%; cold +2..+8%; ZGC +11-15% warm,
+  +10% allocation and RSS. NOT made the default; `scripts/tsgo-jvm-profile.sh` takes `TSGO_JAVA`. Proposal for
+  the owner: the warm host (daemon/LSP) on JDK 27 or with `-XX:+UseCompactObjectHeaders`; CLI/CI unchanged.
+- **Levers 1+2** (porter rules, gen/ by regeneration; docs/goport-lowering.md § 3): `Parser.sourceText` and
+  `Scanner.text` are WINDOW FIELDS (base, offset, length) — the per-JSDoc-comment copy of the file prefix is gone;
+  window parameters extend to methods (`setTextWin`). `checker.FlowType` is an IMMUTABLE STRUCT (`goCopy() = this`,
+  its pure-receiver local rebound) after a whole-run proof. Predicted −19% allocation; measured compiler single
+  2,305 → 1,560 MB (−32%), 3,480 → 3,414 ms (−1.9%); parallel −30% allocation, −1.9% wall, GC pause −10%;
+  services parallel 2,711 → 2,562 ms (−5.5%); cold noise, cold RSS −19%.
+- **Lever 3** `LinkStore` per-object slots: REFUSED (docs/goport-perf.md § 8.3) — lib and reused nodes outlive their
+  checker (a slot retains a dead checker's graph), four checkers write concurrently and a lost link breaks cycle
+  detection, a slot-in-front-of-the-map still pays the insert, id-indexed arrays would shift tsgo's lazy id order.
+- **Lever 4** itable dispatch: 4.38% of the thread, ≤ ~1.5-2% reachable by abstract classes; sized, not built.
+- **Lever 5**: `scripts/xtsc-tsgo` + `scripts/xtsc-tsgo-aot` (stage/train/status/clean), the existing fail-safe
+  guard, own cache dir, no build change: cold compiler 9.6-10.2 → 6.3-6.6 s, services 11.2-12.3 → 7.5-7.7 s,
+  date-fns (held out) 4.4-4.8 → 3.6-3.7 s, outputs identical; a one-byte jar change reads SKIP.
+- Gates (levers 1+2 tree): `-tsgo` 125/0, `-lsp` 38/0, `-goport` 17/0; DiagParity 13,127 equal; Emit/Cli/Ls parity
+  pass; ApiParity 594,007 equal; `linuxX64Test` 68/0; GraalVM replay 106/106; warning-clean with a positive
+  control; 0 of 69,620 methods over 8,000 bytecodes.
+
 ### Round (TSGO.6-f) — THE JVM PORT PROFILED: cold is the JIT ramp (50% of all CPU in compiler threads, a third of the check interpreted; the JDK AOT cache takes it 10.4 → 6.5 s), warm is flat checker code + identity-map probes + G1; six runtime-shim levers cut a warm rebuild's allocation 12.6% and GC pauses 11-17%, wall −1.6% single / −2..−7% parallel; 0 methods over 8,000 bytecodes (2026-10-09)
 
 - **Census** (async-profiler 4.1, `scripts/tsgo-jvm-profile.sh` + `scripts/tsgo_ap_stacks.py`, docs/goport-perf.md § 7):
@@ -342,76 +368,6 @@ registry: `ErrNeedsAutoImports` is an error, so clients must set `suggest.autoIm
 cross-project workspace edit), the project system's incremental program updates (`-lsp` rebuilds the program after any change),
 call hierarchy (`defer` with named results), organize-imports collation (`x/text/unicode/norm`). Not yet gated: typeDefinition,
 implementation, signatureHelp, documentHighlight (wired, in no recording), and the API's six language-service handlers.
-
-### Round (TSGO.4-b) — THE EXTERNALS GENERATOR READS THE PORT: `-externals` depends on `-tsgo` and no longer on `-core`; every generated Kotlin DECLARATION of the 250-output test corpus is unchanged and only marker text moved, the 51-module `@types/node` set compiles with 0 metadata / 0 Kotlin/JS errors, and it generates 1.6-1.8x faster (2026-10-08)
-
-**What changed.** `xemantic-typescript-compiler-externals` (commonMain) depends on `-tsgo` (`implementation`) and
-nothing else of this repo; `-core` and `-tsgo` are untouched. The generator's ~8.5k lines of rules are unchanged
-except for imports and the entry points: they walk a typed VIEW of tsgo's AST (`ts/Ast.kt`, one wrapper per tsgo
-node, built lazily and memoized by node identity, so a symbol's `declarations` are `===` the nodes the scan
-collected) and a classified view of tsgo's types and symbols (`ts/Types.kt`), and ask tsgo's own `Checker`
-AFTER the check through a six-method `CheckedLens` (`getTypeAtLocation`, `getTypeFromTypeNode`,
-`getSymbolAtLocation`, `getAliasedSymbol`, `typeToStringEx`) — the in-walk `CheckedNodeSink` is gone, because a
-post-hoc question is exact in tsgo. `ts/TsgoEngine.kt` builds one program per call (tsgo's `compiler` test recipe:
-an in-memory map FS + the bundled libs, default TypeScript 7 options, `singleThreaded`, per-file diagnostics
-first so types resolve in tsgo's order) on a 1 GB-stack thread; a per-module set (`generateKotlinExternalsPerModule`)
-now checks ONE program for both passes and all modules where `-core` built 2 x N checkers. The view normalises
-four tsgo spellings to the shapes the generator was written against (call/construct signature as a method named
-`""`/`new`, a dotted namespace as one declaration, `null` type as a keyword, `true`/`false` literal as an
-identifier). Public API: `SourceFileEntry`, `DiagnosticCategory` and `ExternalsDiagnostic` (1-based line/column)
-are the module's own; the `options: CompilerOptions` parameter is gone (tsgo's defaults).
-
-**Adapter defects found and fixed while gating** (each a wrong or degraded answer of the ADAPTER, not of tsgo):
-(1) type classification recursed eagerly through tsgo's cyclic type graph (`type TomlValue = … | TomlValue[]`):
-`StackOverflowError` through a 1 GB stack and a 5.9 GB worker RSS — constituents are now wrapped on first ask;
-(2) every program re-parsed the whole bundled lib set (DOM included): 3.4 GB RSS on the generator test class
-alone — `BundledLibSharingHost` parses each bundled lib file once per process (copy-on-write, tsgo's own sharing
-model: binding is once per file) — 1.1 GB; (3) a single-member enum's declared type is tsgo's `Enum`-flagged
-member literal, not a union — classified as the enum; (4) tsgo flattens `K | undefined` to the members'
-literals — complete enums are folded back so `p?: K` still maps to `K?`; (5) a template literal / string mapping
-type widens to `String` like a string literal (`randomUUID(): String` in `@types/node`, not a marker); (6) an
-alias's skip marker printed the alias's own name — rendered with `InTypeAlias`; markers render untruncated.
-
-**A/B (`XTSC_EXTERNALS_DUMP`, every generation keyed by its inputs, `-core` HEAD vs this tree).**
-| corpus | outputs | identical | differ | generated-declaration lines changed | marker-only lines changed |
-|---|---|---|---|---|---|
-| the module's whole test suite (290 tests) | 250 | 237 | 13 | **0** | 740 |
-| rxjs 7 `dist/types` (250 files, wired `rxjs`) | 1 | 0 | 1 | 2 | 264 |
-| `@types/node` 20.19.43, 51 modules + the flat probe | 52 | 0 | 52 | 432 (255 hunks) | 3,781 |
-
-Adjudication — every difference is the port being right, none an adapter defect left open: the marker changes
-are tsgo's display (alias names kept — `TeardownLogic`, `PathLike`; a type parameter where `-core` printed
-`any` — `Partial<Observer<T>>`, `Promise<T | undefined>`, `this`; `Record<string, number>` resolved rather than
-"resolved to any"; `typeof Holder` of an interface and `Plain` without its type argument ARE errors in tsgo,
-TS2693/TS2314, so `any`). The rxjs shape lines are two `.d.ts`-annotated returns `-core` had degraded to `any`
-(now `Observable<T>`). The `@types/node` shape lines: 207 hunks are `NonSharedBuffer` = `Buffer<ArrayBuffer>`
-(`buffer.buffer.d.ts:458`), which `-core` read as a bare `Buffer` and filled from the default (`Buffer<Any?>`):
-tsgo keeps the `ArrayBuffer` argument, which has no Kotlin mapping, so the reference now refuses to its marker;
-35 are the overload collapses that follows from it; 2 are `node:sea`'s un-imported `Blob`, the GLOBAL `Blob`
-in tsgo (`node.buffer.global.Blob`) where `-core` named the module's. Pins re-pointed to tsgo's answers: 26
-expected-text occurrences (`repin.py` over the A/B pairs, scratch) plus 6 error assertions now naming the
-diagnostics tsgo 7.0.2 reports and `-core` missed — TS2300 x3 twice and TS2567 x2 (each confirmed with
-`tools/tsgo-7.0.2/lib/tsc`), TS2681 (a constructor `this` parameter), and in both rxjs gates the TS2307 rows for
-the 156 / 152 re-exports of files those fixtures do not carry (checked: none names a carried file).
-
-**Receipts.** `:xemantic-typescript-compiler-externals:jvmTest` **291 / 291** green (290 before + the engine
-bench), 37 s, worker peak RSS 1.3-4.0 GB (2 GB heap; the 512 MB Gradle default cannot hold a tsgo program over
-the default libs, so the build sets `maxHeapSize = "2g"`, `XTSC_TEST_HEAP` overrides); typescript.d.ts gate
-(`XTSC_TYPESCRIPT_DTS`) green; `@types/node` per-module set 0 metadata / 0 Kotlin/JS errors, rxjs 0 / 0;
-warning-clean (positive control `1 as Int` read its `w:`, then removed); `huge_methods.py --fail-over 0
---classes …-externals/…/main` 0 over (174 classes). `-tsgo` not touched.
-
-**For the `-core` sunset report** (`XTSC_EXTERNALS_BENCH=3`, `@types/node` 20.19.43 per-module set, 51 modules,
-17,880 lines, one JVM, `XTSC_TEST_HEAP=4g`): `-core` **34.5 s cold / 29.9 / 29.8 s warm, peak heap 843 / 690 /
-688 MB**; `-tsgo` **23.1 s cold / 17.6 / 16.7 s warm, peak heap 1,049 / 1,587 / 1,603 MB** (pool peaks after a
-`System.gc()`: GC-timing-sensitive, read as an upper bound). The tsgo arm checks ONE program for the set where
-`-core` built 102 checkers, and still allocates more per program (the full bundled lib set's AST is resident).
-
-**Left open.** Stale KDoc in the generator still explains `-core` quirks (CHK.73's instance-typed class value, the
-written-name fallbacks for `declare module` bodies) that tsgo does not have — the code paths are harmless and the
-A/B says they change nothing; retiring them is a cleanup round with its own A/B. Kotlin/Native for `-externals`
-now depends on `-tsgo`'s native story. Recorder (`XTSC_EXTERNALS_DUMP`, `.kt` + `.diag` per generation) and bench
-stay as the instruments for the next A/B.
 
 ## QUEUE
 

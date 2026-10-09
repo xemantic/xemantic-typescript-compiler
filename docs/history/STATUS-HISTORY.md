@@ -1,3 +1,13 @@
+
+**(TSGO.6-b) DONE — the GraalVM image of the ported tsgo CLI (2026-10-09):** `./gradlew
+:xemantic-typescript-compiler-tsgo:nativeImage -PgraalvmHome=tools/graalvm-25` (Oracle GraalVM 25.0.4, gitignored) builds
+`xtsc-tsgo`, ~57 MB, no reflection metadata. `scripts/tsgo-cli-native-replay.py` replays all **106 / 106** recorded CLI
+cases byte-identical to the tsgo binary (stdout, exit, files), type-fest included. `--noEmit` on tsc's compiler profile:
+**2.9 s / 1.7 GB with G1** (the task default) vs tsgo 1.76 s / 0.39 GB, serial GC 8.7 s (stop-the-world pauses ~6.4 s),
+JVM port cold 10.7 s. G1's default 25%-of-RAM heap made type-fest run out of memory inside goroutines and HANG; the task
+now sets `-R:MaxRAMPercentage=80`, and a throwable escaping a goroutine is fatal (exit 2, as Go's panic;
+`GoroutineFatalTest`). `-tsgo` 119 / 0. Next: PGO for the image, a bounded Kotlin/Native GC default, a native CI job.
+
 **(TSGO.5-a / TSGO.6-a) DONE — the tsgo CLI on the JVM, and the port on Kotlin/Native (2026-10-08):**
 `com.xemantic.typescript.tsgo.cli.TsgoMainKt` is `tsc` 7.0.2 ported (`internal/execute` + `execute/tsc` + `vfs/osvfs`
 through the porter): `CliParityTest` (`TSGO_CLI=1`, oracle `scripts/tsgo-cli-oracle.py`) **105 / 106 equal, 0 differ**
