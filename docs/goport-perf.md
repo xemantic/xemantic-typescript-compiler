@@ -541,3 +541,39 @@ object. Every variant of that is unsound or leaks here:
 The cost is real (~6% of a warm thread is one identity-hash probe per link read, the same probes Go makes — Go's
 are cheaper because its map hashes the pointer without a header read), but no design keeps both soundness and
 bounded retention. Not built.
+
+### 8.4 Lever 4: megamorphic interface dispatch — sized, not built
+
+Warm CPU profile after § 8.2 (single-threaded, 36,359 bench-thread samples): itable stubs **4.38%** of the thread,
+callers: `ast.locals()` → `localsContainerData()` 22%, `asStructuredType` (from `resolveStructuredTypeMembers`)
+14%, `modifiers()` 9%, `declarationData()` 7%, `GoElem.zeroValue` (from `Arena.new`) 6%, `flowNodeData()` 7%,
+`asObjectType` 3%, the rest < 2% each. Turning `ast.nodeData` and `checker.TypeData` into abstract classes would
+replace those itable calls by vtable calls (a megamorphic vtable stub is cheaper, not free): ~75% of 4.4% is
+reachable, so the prize is **≤ ~1.5-2% of the thread**. The change is a representation one in the porter (every
+implementer must extend the class, no interface may extend it, promoted forwarding chains stay), touching every
+AST node class. Not built this round; the larger lever behind it is the 4-7 objects per node (§ 7.4 item 3).
+`runtime:GoMap` is now 15.5% of the thread (the `LinkStore` probes of § 8.3 are about half).
+
+### 8.5 Lever 5: the AOT cache for a packaged launcher (landed)
+
+`scripts/xtsc-tsgo` runs the ported CLI (`TsgoMainKt`) through the SAME guard as `scripts/xtsc`
+(`scripts/xtsc-aot-lib.sh`: content-hashed classpath, JDK build, OS, main class, cache digest; fail-safe), with
+its own cache directory (`$XDG_CACHE_HOME/xtsc-tsgo`, so neither launcher's `train`/`clean` prunes the other's).
+`scripts/xtsc-tsgo-aot stage` builds `jvmJar` and copies it with its runtime jars (just `kotlin-stdlib` and
+`annotations`) into `build/xtsc-tsgo/lib` through a Gradle init script — no build change; `train <project>` runs
+one emitting check with `-XX:AOTCacheOutput`. No new module or dependency. Cold, trained on the compiler profile
+(Zulu 26, 4 alternating runs per arm, every output byte-identical to tsgo; `aot USE` printed on every cached run):
+
+| project | uncached | cached | Δ |
+|---|---:|---:|---:|
+| compiler (trained on) | 9.62-10.18 s | 6.30-6.62 s | **−34%** |
+| services | 11.17-12.27 s | 7.54-7.74 s | **−33%** |
+| date-fns (held out) | 4.37-4.82 s | 3.60-3.69 s | **−20%** |
+
+Controls: a cache is refused (`SKIP no-cache-file`, i.e. runs uncached) when any classpath jar changes by one byte;
+any rebuild of the jar changes its bytes (CLAUDE.md), so re-`stage` and re-`train` after one.
+
+```bash
+scripts/xtsc-tsgo-aot stage && scripts/xtsc-tsgo-aot train build/bench/tsc-project-637d5746
+XTSC_AOT_VERBOSE=1 scripts/xtsc-tsgo --noEmit -p <project>
+```

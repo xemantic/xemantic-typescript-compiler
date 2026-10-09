@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+#
+# xtsc-tsgo-aot - classpath staging and AOT cache administration for scripts/xtsc-tsgo.
+#
+#   scripts/xtsc-tsgo-aot stage                  build the -tsgo jar, stage it with its runtime jars (dev)
+#   scripts/xtsc-tsgo-aot train <project-dir>    train a cache for the current classpath
+#   scripts/xtsc-tsgo-aot status                 what the launcher would decide, and why
+#   scripts/xtsc-tsgo-aot clean                  remove every cache in the cache directory
+#
+# `stage` runs Gradle (serialized on $GRADLE_LOCK, default /tmp/xtsc-gradle.lock)
+# with an init script that prints the jvmJar and jvmMain's runtime jars; nothing
+# in the build changes. Any rebuild changes the jar's bytes, so re-stage AND
+# re-train after one (CLAUDE.md: the jar is not byte-reproducible) — the guard
+# then reads `SKIP manifest-mismatch` and runs uncached, never a stale cache.
+#
+# `train` runs one check of <project-dir> with -XX:AOTCacheOutput (emitting into a
+# throwaway --outDir, so the emitter's methods are profiled too), then writes the
+# manifest after the cache is in place, as scripts/xtsc-aot does.
+set -euo pipefail
+
+XTSC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/xtsc-tsgo-lib.sh
+. "$XTSC_SCRIPT_DIR/xtsc-tsgo-lib.sh"
+
+cmd="${1:-}"
+[ -n "$cmd" ] || { sed -n '3,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+shift || true
+
+if [ "$cmd" = stage ]; then
+  root="$(cd -- "$XTSC_SCRIPT_DIR/.." && pwd)"
+  init="$(mktemp "${TMPDIR:-/tmp}/xtsc-tsgo-stage.XXXXXX.init.gradle.kts")"
+  log="$(mktemp "${TMPDIR:-/tmp}/xtsc-tsgo-stage.XXXXXX.log")"
+  trap 'rm -f "$init" "$log"' EXIT
+  cat > "$init" <<'G'
+rootProject {
+    findProject(":xemantic-typescript-compiler-tsgo")?.let { p ->
+        p.tasks.register("printTsgoRuntimeJars") {
+            dependsOn("jvmJar")
+            val cp = p.configurations.getByName("jvmRuntimeClasspath")
+            val jar = p.tasks.named("jvmJar", org.gradle.jvm.tasks.Jar::class.java)
+            doLast { println("TSGO_RUNTIME_JARS=" + (listOf(jar.get().archiveFile.get().asFile) + cp.files).joinToString(":")) }
+        }
+    }
+}
+G
+  (cd "$root" && flock "${GRADLE_LOCK:-/tmp/xtsc-gradle.lock}" ./gradlew -q -I "$init" :xemantic-typescript-compiler-tsgo:printTsgoRuntimeJars) > "$log" 2>&1 \
+    || { cat "$log" >&2; xtsc_die "gradle failed"; }
+  [ "$(grep -ac '^TSGO_RUNTIME_JARS=' "$log")" = 1 ] || { cat "$log" >&2; xtsc_die "expected exactly one TSGO_RUNTIME_JARS line"; }
+  rm -rf "$XTSC_TSGO_STAGE"
+  mkdir -p "$XTSC_TSGO_STAGE"
+  IFS=':' read -r -a jars <<<"$(grep -a '^TSGO_RUNTIME_JARS=' "$log" | sed 's/^TSGO_RUNTIME_JARS=//')"
+  for j in "${jars[@]}"; do
+    case "$j" in *.jar) [ -f "$j" ] || xtsc_die "missing jar $j"; cp -f "$j" "$XTSC_TSGO_STAGE/" ;; *) xtsc_die "not a jar on the runtime classpath: $j" ;; esac
+  done
+  printf 'xtsc-tsgo: staged %s jars in %s (re-train the AOT cache: scripts/xtsc-tsgo-aot train <project>)\n' \
+    "$(find "$XTSC_TSGO_STAGE" -maxdepth 1 -name '*.jar' | wc -l | tr -d ' ')" "$XTSC_TSGO_STAGE" >&2
+  exit 0
+fi
+
+xtsc_tsgo_resolve_classpath || xtsc_die "cannot resolve a classpath - set XTSC_TSGO_CP or XTSC_TSGO_HOME, or run $0 stage"
+main="$XTSC_TSGO_MAIN_CLASS"
+block="$(xtsc_fingerprint_block "$XTSC_RESOLVED_CP" "$main")"
+id="$(xtsc_fingerprint_id "$block")"
+dir="$(xtsc_cache_dir)"
+cache="$dir/xtsc-$id.aot"
+manifest="$cache.manifest"
+
+case "$cmd" in
+  status)
+    printf 'classpath   %s\nfingerprint %s\ncache file  %s%s\ndecision    %s\n' "$XTSC_RESOLVED_CP" "$id" "$cache" \
+      "$([ -f "$cache" ] && printf ' (%s bytes)' "$(xtsc_file_size "$cache")" || printf ' (absent)')" \
+      "$(xtsc_aot_decide "$XTSC_RESOLVED_CP" "$main")"
+    ;;
+  train)
+    project="${1:-}"
+    [ -n "$project" ] && [ -d "$project" ] || xtsc_die "usage: $0 train <project-dir>"
+    case "$block" in
+      *NO-SHA256-TOOL*) xtsc_die "no sha256sum/shasum on PATH - refusing to train" ;;
+      *NOT-A-FILE*) xtsc_die "the classpath contains a directory; stage jars first ($0 stage)" ;;
+    esac
+    mkdir -p "$dir"
+    tmp="$cache.tmp.$$"
+    emitdir="$(mktemp -d "${TMPDIR:-/tmp}/xtsc-tsgo-train.XXXXXX")"
+    trap 'rm -f "$tmp" "$tmp.config"; rm -rf "$emitdir"' EXIT
+    rm -f "$manifest"
+    printf 'xtsc-tsgo: training an AOT cache from %s\n' "$project" >&2
+    # shellcheck disable=SC2206
+    extra=(${XTSC_JAVA_OPTS:--Xss4m -Xmx6g})
+    (cd "$project" && "${XTSC_JAVA:-java}" "-XX:AOTCacheOutput=$tmp" "${extra[@]}" \
+      -cp "$XTSC_RESOLVED_CP" "$main" -p . --outDir "$emitdir" --pretty false >/dev/null) || true
+    [ -s "$tmp" ] || xtsc_die "training produced no cache"
+    mv -f "$tmp" "$cache"
+    size="$(xtsc_file_size "$cache")"
+    sha="$(xtsc_sha256 "$cache")"
+    [ -n "$sha" ] || { rm -f "$cache"; xtsc_die "cannot hash the produced cache"; }
+    { printf '%s\n' "$block"; printf 'cache %s %s\n' "$size" "$sha"; } > "$manifest.tmp.$$"
+    mv -f "$manifest.tmp.$$" "$manifest"
+    for f in "$dir"/xtsc-*.aot; do
+      if [ -e "$f" ] && [ "$f" != "$cache" ]; then rm -f "$f" "$f.manifest"; fi
+    done
+    printf 'xtsc-tsgo: cache %s (%s bytes)\n' "$cache" "$size" >&2
+    case "$(xtsc_aot_decide "$XTSC_RESOLVED_CP" "$main")" in
+      USE\ *) printf 'xtsc-tsgo: verified - the launcher will use it\n' >&2 ;;
+      *) xtsc_die "the freshly trained cache does not verify - this is a bug" ;;
+    esac
+    ;;
+  clean)
+    rm -f "$dir"/xtsc-*.aot "$dir"/xtsc-*.aot.manifest
+    printf 'xtsc-tsgo: removed every cache in %s\n' "$dir" >&2
+    ;;
+  *) xtsc_die "unknown command: $cmd (try: stage, train, status, clean)" ;;
+esac

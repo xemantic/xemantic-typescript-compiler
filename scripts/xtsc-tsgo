@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# xtsc-tsgo - the guarded launcher of the PORTED tsc command line (-tsgo's TsgoMain).
+#
+# The tsgo-port counterpart of scripts/xtsc: runs `TsgoMainKt` on the JVM with
+# the JDK AOT cache when - and only when - scripts/xtsc-aot-lib.sh verifies that
+# cache's provenance (content-hashed classpath, JDK build, OS, main class). The
+# guard is the SAME code; only the classpath, the main class and the cache
+# directory differ (docs/goport-perf.md § 8.5).
+#
+#   scripts/xtsc-tsgo-aot stage                  # build the jar-only classpath (dev)
+#   scripts/xtsc-tsgo-aot train <project-dir>    # create the cache
+#   scripts/xtsc-tsgo --noEmit -p <project-dir>  # normal use (tsc's arguments)
+#   XTSC_AOT=off scripts/xtsc-tsgo ...           # never use a cache
+#   XTSC_AOT_VERBOSE=1 scripts/xtsc-tsgo ...     # print the decision to stderr
+#
+# Environment: XTSC_TSGO_CP (explicit jar classpath), XTSC_TSGO_HOME (a root with
+# lib/*.jar), XTSC_TSGO_AOT_DIR (cache dir, default $XDG_CACHE_HOME/xtsc-tsgo),
+# XTSC_JAVA (java binary), XTSC_JAVA_OPTS (extra JVM flags, default -Xss4m -Xmx6g).
+set -euo pipefail
+
+XTSC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/xtsc-tsgo-lib.sh
+. "$XTSC_SCRIPT_DIR/xtsc-tsgo-lib.sh"
+
+xtsc_tsgo_resolve_classpath || xtsc_die "cannot resolve a classpath - set XTSC_TSGO_CP or XTSC_TSGO_HOME, or run scripts/xtsc-tsgo-aot stage"
+
+decision="$(xtsc_aot_decide "$XTSC_RESOLVED_CP" "$XTSC_TSGO_MAIN_CLASS")"
+[ -n "${XTSC_AOT_VERBOSE:-}" ] && printf 'xtsc-tsgo: aot %s\n' "$decision" >&2
+if [ -n "${XTSC_AOT_DECIDE_ONLY:-}" ]; then
+  printf '%s\n' "$decision"
+  exit 0
+fi
+
+jvm_flags=()
+case "$decision" in
+  USE\ *)
+    while IFS= read -r flag; do jvm_flags+=("$flag"); done < <(xtsc_aot_jvm_flags "${decision#USE }")
+    ;;
+esac
+
+# shellcheck disable=SC2206
+extra=(${XTSC_JAVA_OPTS:--Xss4m -Xmx6g})
+
+exec "${XTSC_JAVA:-java}" ${jvm_flags[@]+"${jvm_flags[@]}"} "${extra[@]}" \
+  -cp "$XTSC_RESOLVED_CP" "$XTSC_TSGO_MAIN_CLASS" "$@"
