@@ -44,7 +44,8 @@ import kotlin.time.TimeSource
  * build a `compiler.Program` over the host disk with the bundled libs, collect config, program,
  * syntactic, global and semantic diagnostics, and print them through tsgo's own non-pretty writer
  * (`diagnosticwriter.WriteFormatDiagnostics`, paths relative to the project directory, so the output
- * diffs against `tsc --noEmit -p` run there), with a `time:` line per iteration on stderr.
+ * diffs against `tsc --noEmit -p` run there), with a `time:` line per iteration on stderr
+ * (`TSGO_GOROUTINE_STATS=1`: also the goroutine pool's spawn and thread counts).
  */
 fun nativeCheckMain(args: Array<String>) {
     val config = args.getOrNull(0) ?: run {
@@ -67,6 +68,9 @@ fun nativeCheckMain(args: Array<String>) {
             last = n
         }
         last
+    }
+    if (platform.posix.getenv("TSGO_GOROUTINE_STATS") != null) {
+        platform.posix.fprintf(platform.posix.stderr, "goroutines: ${com.xemantic.typescript.tsgo.go.sync.goroutinePoolStats()}\n")
     }
     exitProcess(if (count == 0) 0 else 1)
 }

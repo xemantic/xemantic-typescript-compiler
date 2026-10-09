@@ -229,7 +229,7 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
   i.e. a program built WITHOUT `SingleThreaded` (tsgo's default: 4 checkers, parallel parse and bind).
   Running `f` synchronously instead DEADLOCKS there — the files parser queues children while holding a
   mutex they take. A panic in a goroutine crashes a Go program; here the first one is kept and `Wait`
-  re-throws it. (Kotlin/Native: one detached pthread per goroutine with a 1 GB stack, see below.)
+  re-throws it. (Kotlin/Native: the same unbounded cached pool over detached pthreads, see below.)
 - `sync/atomic` types wrap `AtomicInt`/`AtomicLong`/`AtomicBoolean`/`AtomicReference` (unsigned
   kinds wrap the signed atomic of the same width; two's-complement add is identical).
 - `errgroup.Group`: `Go` runs `f` synchronously; the first error is kept with a CAS.
@@ -240,10 +240,23 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
   until the permit is set and consumes it, `unpark` sets it and signals; an `unpark` before the `park`
   is a permit, as with `LockSupport`. The pthread objects are freed by a `Cleaner` when the token is
   collected, NOT at thread exit: an unparker may still hold the token of a thread that has finished.
-- `goSpawn`: a DETACHED pthread with Go's 1 GB maximum goroutine stack (virtual, committed as touched),
-  256 MB if that reservation is refused; one thread per goroutine (no idle-thread pool yet — the JVM
-  reuses idle threads for 30 s). The routine is a `staticCFunction` taking a `StableRef` to the
-  closure. A throwable escaping it is FATAL — `fatal error: goroutine: …` on stderr and exit status 2, as
+- `goSpawn`: the JVM's unbounded cached pool rebuilt on pthreads — DETACHED worker threads with Go's 1 GB
+  maximum goroutine stack (virtual, committed as touched; 256 MB if that reservation is refused). One pthread
+  mutex guards a LIFO list of idle workers; a spawn pops one and hands it the closure directly (the worker
+  waits on its own `pthread_cond` under that mutex), and creates a new worker only when none is idle — never a
+  queue, so a goroutine waiting on another can never starve it (a BOUNDED pool deadlocks tsgo's parse, which
+  queues a goroutine per file while holding mutexes those goroutines take). An idle worker waits 30 s
+  (`pthread_cond_timedwait`), then leaves the list and exits; the time-out and a hand-off are decided under
+  the one mutex, so a popped worker always receives its closure. Process exit does not wait for idle workers
+  (they are detached, blocked in a native wait). Measured (2026-10-09, release, `gc=pmcs`, parallel check):
+  tsc's compiler profile ran 666-732 goroutines on 135-161 pthreads (was one each), services 1,666-1,817 on
+  272-561; wall and RSS UNCHANGED within noise (compiler 7.84 -> 7.84 s median, services 10.62 -> 10.59 s,
+  4 runs per arm, ABBA, output byte-identical to tsgo) — a 1 GB-stack pthread is only an address-space
+  reservation, so creating one per goroutine was never the cost; the pool keeps the thread count down and
+  matches the JVM. Every worker that ran is still alive at exit (`peakLive` = threads created): the
+  goroutines of one parse are concurrent, so reuse comes from later phases. `TSGO_GOROUTINE_STATS=1` makes
+  `NativeCheckMain` print `spawns=… threads=… peakLive=…` on stderr. A throwable escaping a goroutine is
+  FATAL — `fatal error: goroutine: …` on stderr and exit status 2, as
   Go's unrecovered panic, on both actuals: every caller catches inside `f`, so one arriving there escaped
   that handler (an out-of-memory error raised again while it allocated), and carrying on parked the
   waiter forever — the GraalVM image hung on type-fest that way ((TSGO.6-b), `GoroutineFatalTest`).
