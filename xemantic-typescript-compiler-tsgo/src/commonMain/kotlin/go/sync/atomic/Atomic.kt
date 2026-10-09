@@ -80,15 +80,18 @@ class Uint32 {
     fun goCopy(): Uint32 = Uint32().also { it.v.store(v.load()) }
 }
 
-/** `atomic.Uint64`. */
-class Uint64 {
-    private val v = AtomicLong(0L)
-    fun load(): ULong = v.load().toULong()
-    fun store(x: ULong) = v.store(x.toLong())
-    fun add(d: ULong): ULong = v.addAndFetch(d.toLong()).toULong()
-    fun swap(x: ULong): ULong = v.exchange(x.toLong()).toULong()
-    fun compareAndSwap(old: ULong, new: ULong): Boolean = v.compareAndSet(old.toLong(), new.toLong())
-    fun goCopy(): Uint64 = Uint64().also { it.v.store(v.load()) }
+/**
+ * `atomic.Uint64`. A platform class (docs/goport-perf.md § 7): every `ast.Node` and `ast.Symbol` embeds
+ * one, so it is ONE object on the JVM — a `@Volatile` field driven by a field updater — where the common
+ * form was this class plus the `AtomicLong` it wrapped.
+ */
+expect class Uint64() {
+    fun load(): ULong
+    fun store(x: ULong)
+    fun add(d: ULong): ULong
+    fun swap(x: ULong): ULong
+    fun compareAndSwap(old: ULong, new: ULong): Boolean
+    fun goCopy(): Uint64
 }
 
 /** `atomic.Pointer[T]`: `CompareAndSwap` compares by identity (Go pointer equality). */

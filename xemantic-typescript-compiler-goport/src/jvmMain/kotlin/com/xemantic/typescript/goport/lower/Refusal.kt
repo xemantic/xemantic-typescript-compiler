@@ -71,7 +71,7 @@ class ShimIndex(
 
     companion object {
         private val decl = Regex(
-            """^(\s*)(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|private|protected|override|open|abstract|sealed|data|inline|value|const|operator|infix|enum|annotation|external|tailrec|lateinit)\s+)*(class|interface|object|fun|val|var|typealias)\s+(?:<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>\s*)?((?:[A-Za-z_][\w]*(?:<(?:[^<>]|<[^<>]*>)*>)?\??\.)*)`?([A-Za-z_]\w*)`?(.*)"""
+            """^(\s*)(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|private|protected|override|open|abstract|sealed|data|inline|value|const|operator|infix|enum|annotation|external|tailrec|lateinit|expect|actual)\s+)*(class|interface|object|fun|val|var|typealias)\s+(?:<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>\s*)?((?:[A-Za-z_][\w]*(?:<(?:[^<>]|<[^<>]*>)*>)?\??\.)*)`?([A-Za-z_]\w*)`?(.*)"""
         )
 
         fun scan(vararg roots: File): ShimIndex {

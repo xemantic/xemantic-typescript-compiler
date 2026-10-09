@@ -54,9 +54,14 @@ class GoSlice<T> internal constructor(
     val cap: Int,
     /** The element kind (zero value and value copy). */
     val elem: GoElem<T>,
-    /** `s == nil`. */
-    val isNil: Boolean,
 ) {
+
+    /**
+     * `s == nil`: the nil slice is the one backed by [GoElem.NIL_ARRAY]. Derived, not a field: without the
+     * `Boolean` a header is 32 bytes instead of 40 on the JVM (compressed oops), and headers are ~18% of
+     * a check's allocation (docs/goport-perf.md § 7).
+     */
+    val isNil: Boolean get() = array === GoElem.NIL_ARRAY
 
     /** `s[i]`; panics with Go's index error when out of range. */
     operator fun get(i: Int): T {
@@ -88,7 +93,7 @@ class GoSlice<T> internal constructor(
         if (high < 0 || high > cap) goPanicSlice("[:$high] with capacity $cap")
         if (low < 0 || low > high) goPanicSlice("[$low:$high]")
         if (isNil) return this
-        return GoSlice(array, offset + low, high - low, cap - low, elem, false)
+        return GoSlice(array, offset + low, high - low, cap - low, elem)
     }
 
     /** `s[low:high:max]`. */
@@ -97,7 +102,7 @@ class GoSlice<T> internal constructor(
         if (high < 0 || high > max) goPanicSlice("[:$high:$max]")
         if (low < 0 || low > high) goPanicSlice("[$low:$high:]")
         if (isNil) return this
-        return GoSlice(array, offset + low, high - low, max - low, elem, false)
+        return GoSlice(array, offset + low, high - low, max - low, elem)
     }
 
     /** `append(s, elems...)`. */
@@ -112,7 +117,7 @@ class GoSlice<T> internal constructor(
         val newLen = len + 1
         if (newLen <= cap) {
             array[offset + len] = v
-            return GoSlice(array, offset, newLen, cap, elem, false)
+            return GoSlice(array, offset, newLen, cap, elem)
         }
         val grown = grow(newLen)
         grown.array[len] = v
@@ -134,7 +139,7 @@ class GoSlice<T> internal constructor(
         if (n == 0) return this
         val newLen = len + n
         val target: GoSlice<T> = if (newLen <= cap) {
-            GoSlice(array, offset, newLen, cap, elem, false)
+            GoSlice(array, offset, newLen, cap, elem)
         } else {
             grow(newLen)
         }
@@ -166,7 +171,7 @@ class GoSlice<T> internal constructor(
                 newArray[k] = if (v == null) null else copier(v)
             }
         }
-        return GoSlice(newArray, 0, newLen, newCap, elem, false)
+        return GoSlice(newArray, 0, newLen, newCap, elem)
     }
 
     /** `&s[i]`: a pointer to the element slot (equal to any other pointer to the same slot). */
@@ -219,19 +224,19 @@ class GoSlice<T> internal constructor(
         fun <T> make(elem: GoElem<T>, len: Int, cap: Int = len): GoSlice<T> {
             if (len < 0) goPanic(GoRuntimeError("makeslice: len out of range"))
             if (cap < len) goPanic(GoRuntimeError("makeslice: cap out of range"))
-            return GoSlice(arrayOfNulls(cap), 0, len, cap, elem, false)
+            return GoSlice(arrayOfNulls(cap), 0, len, cap, elem)
         }
 
         /** A composite literal `[]T{a, b, c}` (the values are taken as given; the lowering copies structs). */
         fun <T> of(elem: GoElem<T>, vararg values: T): GoSlice<T> {
             @Suppress("UNCHECKED_CAST")
             val a = (values as Array<Any?>).copyOf()
-            return GoSlice(a, 0, a.size, a.size, elem, false)
+            return GoSlice(a, 0, a.size, a.size, elem)
         }
 
         /** Wraps an existing array (shared, not copied) as a full slice. */
         fun <T> wrap(elem: GoElem<T>, array: Array<Any?>): GoSlice<T> =
-            GoSlice(array, 0, array.size, array.size, elem, false)
+            GoSlice(array, 0, array.size, array.size, elem)
 
         /** The nil slice of [elem]. */
         fun <T> nil(elem: GoElem<T>): GoSlice<T> = elem.nilSlice

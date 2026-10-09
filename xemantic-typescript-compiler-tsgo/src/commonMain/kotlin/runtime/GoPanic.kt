@@ -101,7 +101,8 @@ fun toGoPanic(e: Exception): GoPanic = when (e) {
  */
 class GoDeferFrame @PublishedApi internal constructor() {
 
-    private val stack = ArrayList<() -> Unit>()
+    /** Made on the first `defer`: most frames register none (a tracer's `defer` runs only when tracing is on). */
+    private var stack: ArrayList<() -> Unit>? = null
 
     @PublishedApi
     internal var panic: GoPanic? = null
@@ -111,7 +112,7 @@ class GoDeferFrame @PublishedApi internal constructor() {
 
     /** `defer f()`. Deferred calls run last-in first-out when the function returns or panics. */
     fun defer(f: () -> Unit) {
-        stack.add(f)
+        (stack ?: ArrayList<() -> Unit>().also { stack = it }).add(f)
     }
 
     /**
@@ -138,6 +139,7 @@ class GoDeferFrame @PublishedApi internal constructor() {
      */
     @PublishedApi
     internal fun runDefers() {
+        val stack = stack ?: return
         while (stack.isNotEmpty()) {
             val f = stack.removeAt(stack.size - 1)
             try {

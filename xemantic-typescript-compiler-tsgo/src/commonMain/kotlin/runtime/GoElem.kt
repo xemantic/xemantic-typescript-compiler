@@ -55,7 +55,7 @@ class GoElem<T>(
     }
 
     /** The shared nil slice of this element kind (eager: a `lazy` read was ~1.6% of a check, docs/goport-perf.md § 6). */
-    val nilSlice: GoSlice<T> = GoSlice(EMPTY_ARRAY, 0, 0, 0, this, true)
+    val nilSlice: GoSlice<T> = GoSlice(NIL_ARRAY, 0, 0, 0, this)
 
     /**
      * The shared nil map of this value kind, made on first use. A nil map is immutable (reads answer the
@@ -67,7 +67,8 @@ class GoElem<T>(
     internal var nilMapCache: GoMap<*, T>? = null
 
     companion object {
-        internal val EMPTY_ARRAY: Array<Any?> = arrayOfNulls(0)
+        /** The backing array of every nil slice and of nothing else ([GoSlice.isNil] is an identity test against it). */
+        internal val NIL_ARRAY: Array<Any?> = arrayOfNulls(0)
 
         private val INT_ZERO: () -> Int = { 0 }
 
