@@ -1172,3 +1172,9 @@ Startup is the next constant: `--version` takes ~20 ms against tsgo's 5, and ~12
 immer 542 / 548 (0.99), ky **92 / 120 (0.76)**, mitt **48 / 86 (0.55)**, date-fns 422 / 340 (1.24). Measured and refused
 in the same round: leaving `lib.webworker.d.ts` out of the snapshot (-10 MB of binary) moved start-up by ~1 ms, inside
 the noise — the start-up read of the image heap does not scale with it the way the per-MB estimate assumed.
+
+**Measured and refused: a larger G1 young generation.** The image's G1 starts small and date-fns pays 4 young pauses
+(~66 ms; tsc's compiler profile 9 / ~182 ms) copying data a compile keeps anyway. `-XX:NewSize=512m / 1g / 1.6g` removes
+them (date-fns 0 pauses at 1 g), but the wall does not follow — 3 runs per arm: date-fns default 399 / 463 / 415 / 440
+ms, compiler profile 1,650 / 1,636 / 1,780 / 1,752, services 2,367 / 2,173 / 2,136 / 2,409, hono 650 / 631 / 601 / 633,
+immer and mitt flat. First-touching the fresh young pages costs what the evacuations did; no setting wins everywhere.
