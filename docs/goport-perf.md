@@ -1136,3 +1136,15 @@ the listings) the walk took every prefetched listing and config time did not mov
 **Build-time initialization (§ 21) froze two things it must not:** `GoSyscall.statsOn` (so `TSGO_IO_STATS` printed
 nothing from the image) and osvfs's `isFileSystemCaseSensitive` (probed through the executable's path — the BUILD
 machine's). Both, and go.time's monotonic origin, are now `--initialize-at-run-time` in the PGO script.
+
+## 24. (TSGO.6-o) Measured and refused: the load phase's two hot spots that are not on the critical path (2026-10-10)
+
+The date-fns profile's load phase showed two hand-fixable costs: `packagejson.parse` (123 of 1,120 load samples; its
+261 KB `package.json` with a large `exports` map is read 8 times by concurrent first lookups — tsgo reads it **271**
+times) and path normalization's `hasRelativePathSegment` (~60 samples of per-character scanning). Both were fixed — a
+`Decoder.skipValue` that validates without decoding string values or copying the value out, primitive container stacks,
+and an exact early `false` for a path with no `/.`, `//` or leading `.` (proved by an exhaustive differential over every
+path of up to 8 characters on `a . /`) — and an image with them measured **no change** (date-fns 519.5 → 519 ms, the
+other five projects inside the noise, outputs identical). The package.json parse runs once per worker in parallel at
+the start and the path checks are spread over all workers; neither sits on the path the wall waits for. Reverted.
+`core.Arena.new`'s `GoElem.zeroValue` row is the node constructors themselves (the lambda is the allocation site).
