@@ -1040,6 +1040,74 @@ class Program(
         immutableStructs += cand
     }
 
+    // ---- pooled locals (docs/goport-lowering.md § 3, "Pooled locals") ----
+
+    /** Struct types given a per-thread `POOL` and an in-place `goReset()` ([computePooledLocals]), by key. */
+    val pooledStructs = HashSet<String>()
+
+    /** Pooled local variables (object ids) per package path: lowered to `POOL.stack().acquire()` + `try`/`finally`. */
+    val pooledLocals = HashMap<String, Set<Int>>()
+
+    /** Why each refused candidate type or local was refused (for the report and the pins). */
+    val pooledRefusals = ArrayList<String>()
+
+    /** The pointer parameters the escape proof found non-retaining (`func#i`, a receiver `func#-1`). */
+    val pooledNonRetaining = sortedSetOf<String>()
+
+    fun computePooledLocals() {
+        pooledNonRetaining.clear()
+        pooledStructs.clear()
+        pooledLocals.clear()
+        pooledRefusals.clear()
+        val cand = HashSet<String>()
+        for (k in POOLED_LOCAL_CANDIDATES) {
+            val why = pooledStructRefusal(k)
+            if (why == null) cand += k else pooledRefusals += "$k: $why"
+        }
+        if (cand.isEmpty()) return
+        val tables = HashMap<String, TypeTable>()
+        fun tt(p: IrPackage) = tables.getOrPut(p.path) { TypeTable(p) }
+        val ir = object : EscapeIr {
+            override fun objKey(p: IrPackage, id: Int): String? = p.objects.getOrNull(id)?.str("key")
+            override fun named(p: IrPackage, typeId: Int?): String? {
+                val t = typeId?.let { tt(p).unalias(it) } as? com.xemantic.typescript.goport.types.NamedType ?: return null
+                return if (t.origin != null || t.tparams.isNotEmpty()) null else t.key
+            }
+            override fun pointee(p: IrPackage, typeId: Int?): String? =
+                (typeId?.let { tt(p).under(it) } as? com.xemantic.typescript.goport.types.PointerType)?.let { named(p, it.elem) }
+        }
+        val a = EscapeAnalysis(ir, packages, cand, NON_RETAINING_SHIM_TYPES)
+        pooledRefusals += a.refusals
+        pooledNonRetaining += a.nonRetaining
+        for ((path, ids) in a.pooled) pooledLocals[path] = ids
+        if (a.pooled.isNotEmpty()) pooledStructs += cand
+    }
+
+    /** Null when struct [k] can be reset to Go's zero IN PLACE: every field basic, or a shim struct with `goReset()`. */
+    private fun pooledStructRefusal(k: String): String? {
+        if (k !in structTypes || k in reflectStructs || k in immutableStructs || k in structKeys) return "not a plain struct declared in the run"
+        val p = byPath[k.substringBeforeLast('.')] ?: return "package not in the run"
+        val tt = TypeTable(p)
+        for (i in 0 until tt.size) {
+            val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+            if (n.key != k || n.origin != null) continue
+            if (n.tparams.isNotEmpty()) return "generic"
+            val st = tt.under(n.id) as? com.xemantic.typescript.goport.types.StructType ?: return "not a struct"
+            if (bigStruct(st)) return "a big struct"
+            for (f in st.fields) {
+                if (windowFields.contains("$k.${f.name}")) return "a window field"
+                val u = tt.under(f.t)
+                if (u is com.xemantic.typescript.goport.types.BasicType && tt.unalias(f.t) is com.xemantic.typescript.goport.types.BasicType) continue
+                val fn = tt.unalias(f.t) as? com.xemantic.typescript.goport.types.NamedType
+                if (fn != null && u is com.xemantic.typescript.goport.types.StructType && fn.pkg != null && fn.pkg !in ported &&
+                    shims.classHas(Naming.kotlinPackage(fn.pkg), fn.name, "goReset")) continue
+                return "field ${f.name} cannot be reset in place"
+            }
+            return null
+        }
+        return "type not found"
+    }
+
     /** The window field a `SelectorExpr` selects in [p], or null. */
     fun windowFieldKey(p: IrPackage, sel: Node): String? {
         if (sel.str("k") != "SelectorExpr" || sel.str("selk") != "field") return null

@@ -1528,12 +1528,17 @@ class keyBuilder(
         h = o.h.goCopy()
     }
 
+    fun goReset() {
+        h.goReset()
+    }
+
     fun goEquals(o: keyBuilder): Boolean = h == o.h
 
     fun goHash(): Int = 31 * h.hashCode()
 
     companion object {
         val ELEM: GoElem<keyBuilder> = GoElem({ keyBuilder() }, { it.goCopy() })
+        val POOL: GoLocalPool<keyBuilder> = GoLocalPool({ keyBuilder() }, { it.goReset() })
     }
 }
 
@@ -1640,87 +1645,112 @@ fun com.xemantic.typescript.tsgo.checker.keyBuilder?.writeNode(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/checker.getTypeListKey bccc59c0
 fun getTypeListKey(types: GoSlice<Type?>): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeTypes(types)
-    return b.hash()
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeTypes(types)
+        return b.hash()
+    } finally {
+        ls0.release()
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getAliasKey 2377c2a5
 fun getAliasKey(alias: TypeAlias?): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeAlias(alias)
-    return b.hash()
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeAlias(alias)
+        return b.hash()
+    } finally {
+        ls0.release()
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getUnionKey a8482654
 fun getUnionKey(types: GoSlice<Type?>, origin: Type?, alias: TypeAlias?): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    when {
-        origin == null -> {
-            b.writeTypes(types)
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        when {
+            origin == null -> {
+                b.writeTypes(types)
+            }
+            origin!!.flags.value and 134217728u != 0u -> {
+                b.writeByte(124)
+                b.writeTypes(origin.types())
+            }
+            origin!!.flags.value and 268435456u != 0u -> {
+                b.writeByte(38)
+                b.writeTypes(origin.types())
+            }
+            origin!!.flags.value and 2097152u != 0u -> {
+                b.writeByte(35)
+                b.writeType(origin)
+                b.writeByte(124)
+                b.writeTypes(types)
+            }
+            else -> {
+                goPanic("Unhandled case in getUnionKey")
+            }
         }
-        origin!!.flags.value and 134217728u != 0u -> {
-            b.writeByte(124)
-            b.writeTypes(origin.types())
-        }
-        origin!!.flags.value and 268435456u != 0u -> {
-            b.writeByte(38)
-            b.writeTypes(origin.types())
-        }
-        origin!!.flags.value and 2097152u != 0u -> {
-            b.writeByte(35)
-            b.writeType(origin)
-            b.writeByte(124)
-            b.writeTypes(types)
-        }
-        else -> {
-            goPanic("Unhandled case in getUnionKey")
-        }
+        b.writeAlias(alias)
+        return b.hash()
+    } finally {
+        ls0.release()
     }
-    b.writeAlias(alias)
-    return b.hash()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getIntersectionKey fcbf8732
 fun getIntersectionKey(types: GoSlice<Type?>, flags: IntersectionFlags, alias: TypeAlias?): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeTypes(types)
-    if (flags.value and 2u == 0u) {
-        b.writeAlias(alias)
-    } else {
-        b.writeByte(42)
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeTypes(types)
+        if (flags.value and 2u == 0u) {
+            b.writeAlias(alias)
+        } else {
+            b.writeByte(42)
+        }
+        return b.hash()
+    } finally {
+        ls0.release()
     }
-    return b.hash()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getTupleKey 96c4a57e
 fun getTupleKey(elementInfos: GoSlice<TupleElementInfo>, readonly: Boolean): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    val s0 = elementInfos
-    l0@ for (i1 in 0 until s0.len) {
-        val e: TupleElementInfo = s0[i1].goCopy()
-        when {
-            e.flags.value and 1u != 0u -> {
-                b.writeByte(35)
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        val s1 = elementInfos
+        l0@ for (i2 in 0 until s1.len) {
+            val e: TupleElementInfo = s1[i2].goCopy()
+            when {
+                e.flags.value and 1u != 0u -> {
+                    b.writeByte(35)
+                }
+                e.flags.value and 2u != 0u -> {
+                    b.writeByte(63)
+                }
+                e.flags.value and 4u != 0u -> {
+                    b.writeByte(46)
+                }
+                else -> {
+                    b.writeByte(42)
+                }
             }
-            e.flags.value and 2u != 0u -> {
-                b.writeByte(63)
-            }
-            e.flags.value and 4u != 0u -> {
-                b.writeByte(46)
-            }
-            else -> {
-                b.writeByte(42)
+            if (e.labeledDeclaration != null) {
+                b.writeNode(e.labeledDeclaration)
             }
         }
-        if (e.labeledDeclaration != null) {
-            b.writeNode(e.labeledDeclaration)
+        if (readonly) {
+            b.writeByte(33)
         }
+        return b.hash()
+    } finally {
+        ls0.release()
     }
-    if (readonly) {
-        b.writeByte(33)
-    }
-    return b.hash()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getTypeAliasInstantiationKey e94012df
@@ -1730,53 +1760,73 @@ fun getTypeAliasInstantiationKey(typeArguments: GoSlice<Type?>, alias: TypeAlias
 
 // go: github.com/microsoft/typescript-go/internal/checker.getTypeInstantiationKey 8ce319f7
 fun getTypeInstantiationKey(typeArguments: GoSlice<Type?>, alias: TypeAlias?, singleSignature: Boolean): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeTypes(typeArguments)
-    b.writeAlias(alias)
-    if (singleSignature) {
-        b.writeByte(33)
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeTypes(typeArguments)
+        b.writeAlias(alias)
+        if (singleSignature) {
+            b.writeByte(33)
+        }
+        return b.hash()
+    } finally {
+        ls0.release()
     }
-    return b.hash()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getIndexedAccessKey a475999c
 fun getIndexedAccessKey(objectType: Type?, indexType: Type?, accessFlags: AccessFlags, alias: TypeAlias?): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeType(objectType)
-    b.writeType(indexType)
-    hashWrite32<AccessFlags>(AccessFlags.ELEM, b.h, accessFlags)
-    b.writeAlias(alias)
-    return b.hash()
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeType(objectType)
+        b.writeType(indexType)
+        hashWrite32<AccessFlags>(AccessFlags.ELEM, b.h, accessFlags)
+        b.writeAlias(alias)
+        return b.hash()
+    } finally {
+        ls0.release()
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getTemplateTypeKey 635920d0
 fun getTemplateTypeKey(texts: GoSlice<String>, types: GoSlice<Type?>): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeTypes(types)
-    b.writeByte(124)
-    val s0 = texts
-    l0@ for (i1 in 0 until s0.len) {
-        val s: String = s0[i1]
-        b.writeInt(s.length)
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeTypes(types)
+        b.writeByte(124)
+        val s1 = texts
+        l0@ for (i2 in 0 until s1.len) {
+            val s: String = s1[i2]
+            b.writeInt(s.length)
+        }
+        b.writeByte(124)
+        val s3 = texts
+        l1@ for (i4 in 0 until s3.len) {
+            val s_1: String = s3[i4]
+            b.writeString(s_1)
+        }
+        return b.hash()
+    } finally {
+        ls0.release()
     }
-    b.writeByte(124)
-    val s2 = texts
-    l1@ for (i3 in 0 until s2.len) {
-        val s_1: String = s2[i3]
-        b.writeString(s_1)
-    }
-    return b.hash()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getConditionalTypeKey 459ab74a
 fun getConditionalTypeKey(typeArguments: GoSlice<Type?>, alias: TypeAlias?, forConstraint: Boolean): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeTypes(typeArguments)
-    b.writeAlias(alias)
-    if (forConstraint) {
-        b.writeByte(33)
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeTypes(typeArguments)
+        b.writeAlias(alias)
+        if (forConstraint) {
+            b.writeByte(33)
+        }
+        return b.hash()
+    } finally {
+        ls0.release()
     }
-    return b.hash()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getRelationKey efe123b6
@@ -1789,30 +1839,40 @@ fun getRelationKey(source_0: Type?, target_1: Type?, intersectionState: Intersec
         source = t2
         target = t3
     }
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    var constrained: Boolean = false
-    if (isTypeReferenceWithGenericArguments(source) && isTypeReferenceWithGenericArguments(target)) {
-        b.writeByte(103)
-        constrained = b.writeGenericTypeReferences(source, target, ignoreConstraints)
-    } else {
-        b.writeByte(115)
-        b.writeType(source)
-        b.writeType(target)
+    val ls4 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls4.acquire()
+    try {
+        var constrained: Boolean = false
+        if (isTypeReferenceWithGenericArguments(source) && isTypeReferenceWithGenericArguments(target)) {
+            b.writeByte(103)
+            constrained = b.writeGenericTypeReferences(source, target, ignoreConstraints)
+        } else {
+            b.writeByte(115)
+            b.writeType(source)
+            b.writeType(target)
+        }
+        hashWrite32<IntersectionState>(IntersectionState.ELEM, b.h, intersectionState)
+        return Tuple2<CacheHashKey, Boolean>(b.hash(), constrained)
+    } finally {
+        ls4.release()
     }
-    hashWrite32<IntersectionState>(IntersectionState.ELEM, b.h, intersectionState)
-    return Tuple2<CacheHashKey, Boolean>(b.hash(), constrained)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.getNodeListKey 572dab59
 fun getNodeListKey(nodes: GoSlice<Node?>): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeInt(nodes.len)
-    val s0 = nodes
-    l0@ for (i1 in 0 until s0.len) {
-        val n: Node? = s0[i1]
-        b.writeNode(n)
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeInt(nodes.len)
+        val s1 = nodes
+        l0@ for (i2 in 0 until s1.len) {
+            val n: Node? = s1[i2]
+            b.writeNode(n)
+        }
+        return b.hash()
+    } finally {
+        ls0.release()
     }
-    return b.hash()
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.isTypeReferenceWithGenericArguments 6577c71d

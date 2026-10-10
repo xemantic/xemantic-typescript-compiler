@@ -1783,11 +1783,16 @@ fun Checker?.isMatchingReference(source: Node?, target: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getFlowReferenceKey 0a19fd79
 fun Checker?.getFlowReferenceKey(f: FlowState?): CacheHashKey {
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    if (this.writeFlowCacheKey(b, f!!.reference, f!!.declaredType, f!!.initialType, f!!.flowContainer)) {
-        return b.hash()
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        if (this.writeFlowCacheKey(b, f!!.reference, f!!.declaredType, f!!.initialType, f!!.flowContainer)) {
+            return b.hash()
+        }
+        return nonDottedNameCacheKey
+    } finally {
+        ls0.release()
     }
-    return nonDottedNameCacheKey
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.writeFlowCacheKey 76331012

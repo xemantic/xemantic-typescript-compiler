@@ -55,7 +55,34 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
 
     /** Lowers a function body whose frame (results) is already pushed. */
     fun body(stmts: List<Node>) {
-        for (s in stmts) stmt(s)
+        for ((i, s) in stmts.withIndex()) {
+            val pooled = pooledLocal(s)
+            if (pooled != null) {
+                // Program.pooledLocals: the value comes from this thread's pool and goes back when the rest of
+                // the body is left — by a return, the end, or a panic (docs/goport-lowering.md § 3).
+                val t = pc.obj(pooled).int("t")!!
+                val stack = fn.fresh("ls")
+                val n = fn.declare(pooled)
+                w.line("val $stack = ${tm.kt(t)}.POOL.stack()")
+                w.line("val $n: ${tm.kt(t)} = $stack.acquire()")
+                w.line("try {")
+                w.indent { body(stmts.subList(i + 1, stmts.size)) }
+                w.line("} finally {")
+                w.indent { w.line("$stack.release()") }
+                w.line("}")
+                return
+            }
+            stmt(s)
+        }
+    }
+
+    /** The pooled local ([Program.pooledLocals]) a `var b T` statement declares, or null. */
+    private fun pooledLocal(s: Node): Int? {
+        if (s.k != "DeclStmt") return null
+        val ids = prog.pooledLocals[pc.pkg.path] ?: return null
+        val specs = s.reqObj("decl").list("specs")
+        if (specs.size != 1 || specs[0].list("names").size != 1) return null
+        return specs[0].list("names")[0].int("obj")?.takeIf { it in ids }
     }
 
     /** Declares the named results (zero-initialized) of the current frame. */

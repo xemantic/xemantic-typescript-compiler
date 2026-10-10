@@ -3019,28 +3019,33 @@ fun Checker?.instantiateTypeWithAlias(t: Type?, m: TypeMapper?, alias: TypeAlias
     if (index == -1) {
         this.pushActiveMapper(m)
     }
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = com.xemantic.typescript.tsgo.checker.keyBuilder()
-    b.writeType(t)
-    b.writeAlias(alias)
-    val key: CacheHashKey = b.hash()
-    val cache: GoMap<CacheHashKey, Type?> = this!!.activeTypeMappersCaches[com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, index != -1, index, this!!.activeTypeMappersCaches.len - 1)]
-    val t0 = cache.probe(key)
-    val cachedType: Type? = goProbeValue<Type?>(t0) { null }
-    val ok: Boolean = t0 !== GoMapAbsent
-    if (ok) {
-        return cachedType
+    val ls0 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
+    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls0.acquire()
+    try {
+        b.writeType(t)
+        b.writeAlias(alias)
+        val key: CacheHashKey = b.hash()
+        val cache: GoMap<CacheHashKey, Type?> = this!!.activeTypeMappersCaches[com.xemantic.typescript.tsgo.core.ifElse<Int>(GoElem.INT, index != -1, index, this!!.activeTypeMappersCaches.len - 1)]
+        val t1 = cache.probe(key)
+        val cachedType: Type? = goProbeValue<Type?>(t1) { null }
+        val ok: Boolean = t1 !== GoMapAbsent
+        if (ok) {
+            return cachedType
+        }
+        this!!.totalInstantiationCount = this!!.totalInstantiationCount + 1u
+        this!!.instantiationCount = this!!.instantiationCount + 1u
+        this!!.instantiationDepth = this!!.instantiationDepth + 1u
+        val result: Type? = this.instantiateTypeWorker(t, m, alias)
+        if (index == -1) {
+            this.popActiveMapper()
+        } else {
+            cache[key] = result
+        }
+        this!!.instantiationDepth = this!!.instantiationDepth - 1u
+        return result
+    } finally {
+        ls0.release()
     }
-    this!!.totalInstantiationCount = this!!.totalInstantiationCount + 1u
-    this!!.instantiationCount = this!!.instantiationCount + 1u
-    this!!.instantiationDepth = this!!.instantiationDepth + 1u
-    val result: Type? = this.instantiateTypeWorker(t, m, alias)
-    if (index == -1) {
-        this.popActiveMapper()
-    } else {
-        cache[key] = result
-    }
-    this!!.instantiationDepth = this!!.instantiationDepth - 1u
-    return result
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.pushActiveMapper 8c7868bd

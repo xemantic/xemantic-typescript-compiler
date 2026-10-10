@@ -684,6 +684,16 @@ class PackageEmitter(
                     }
                 }
             }
+            if (qname in prog.pooledStructs) {
+                // Program.pooledLocals: back to Go's zero IN PLACE (a shim field keeps its buffers), for GoLocalPool.
+                w.line()
+                w.block("fun goReset()") {
+                    st.fields.forEachIndexed { i, f ->
+                        if (types.under(f.t) is StructType) w.line("${fieldNames[i]}.goReset()")
+                        else w.line("${fieldNames[i]} = ${tm.zero(f.t)}")
+                    }
+                }
+            }
             // A generic struct is comparable per instantiation (`Expected[string]` in a comparable struct).
             if (named.comparable || named.isGenericOrigin) {
                 w.line()
@@ -764,7 +774,8 @@ class PackageEmitter(
                     }
                 }
                 if (named.tparams.isEmpty()) w.line("val ELEM: GoElem<$self> = GoElem({ $self() }, { it.goCopy() })")
-                else {
+                if (qname in prog.pooledStructs) w.line("val POOL: GoLocalPool<$self> = GoLocalPool({ $self() }, { it.goReset() })")
+                if (named.tparams.isNotEmpty()) {
                     val ps = dict.joinToString(", ") { "goElem_$it: GoElem<${Naming.escape(it)}>" }
                     val pa = dict.joinToString(", ") { "goElem_$it = goElem_$it" }
                     w.line("fun $tpDecl elem($ps): GoElem<$self> = GoElem({ $self($pa) }, { it.goCopy() })")

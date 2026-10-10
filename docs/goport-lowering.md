@@ -357,6 +357,26 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   vtable instead of an itable scan (docs/goport-perf.md § 11). Refusals are printed by the porter; the non-struct
   emitters refuse the run if one would extend such a class. Pin: `LoweringRulesTest`.
 
+- **Pooled locals** ((TSGO.6-j), `Program.computePooledLocals`, `lower/PooledLocals.kt` `EscapeAnalysis`, `Stmts.body`,
+  `Decls.structClass`). A `var b T` local of a struct in `POOLED_LOCAL_CANDIDATES` (`checker.keyBuilder`) is taken from a
+  per-thread LIFO stack (`runtime.GoLocalPool`: `val s = T.POOL.stack(); val b = s.acquire(); try { <rest of the body> }
+  finally { s.release() }`) when the whole run PROVES it never outlives its function: declared with no value, alone,
+  at the top level of a top-level function's body with no `go` and no `defer`; and every occurrence is the receiver of a
+  pointer method whose receiver is NON-RETAINING, a field select that is the receiver of a `NON_RETAINING_SHIM_TYPES`
+  method (`b.h.Write`, the shim read by hand) or of a non-retaining method, or `&b.h` / `&b` passed straight to a
+  non-retaining parameter; an occurrence inside a function literal only when that literal is assigned to a local that is
+  otherwise only declared and called. A pointer parameter/receiver of a candidate or non-retaining shim type is
+  non-retaining by the same rules (where passing the pointer straight on also counts) — a greatest fixpoint over the
+  run. Everything else (return, store, copy, comparison, interface conversion, a call through a func value or an
+  interface, a variadic slot, a callee the run does not declare) refuses the local, which keeps `T()`. The struct gets
+  `goReset()` (basic fields zeroed, a shim struct field's own `goReset()`, which keeps its buffers) and a companion
+  `POOL`; a candidate with any other field kind is refused. Overrides of a non-retaining function (`hashWrite32`) are
+  trusted to keep Go's semantics, retention included. The stack is per THREAD and a goroutine runs on one thread to
+  completion, so nesting (the checker re-entering key building) takes the next slot and parallel checkers never share.
+  First run: 13 of 13 locals, 14 non-retaining parameters (docs/goport-perf.md § 12.1). Pins: `LoweringRulesTest` (the
+  13 sites, and a synthetic IR with a pooled local and three refused ones — `&b` into a retaining parameter, a `go`,
+  an escaping closure), `GoLocalPoolTest`.
+
 (TSGO.2) harness rules:
 
 - **A `switch` whose tag is an array or a comparable struct compares by VALUE**: the tag is bound

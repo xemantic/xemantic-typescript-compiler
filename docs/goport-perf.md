@@ -744,3 +744,57 @@ against 1,559 MB/rebuild (compiler single), none a small runtime-shim change wit
 | `TextRange` | 5.3% | three per node, two of them overwritten at once; needs `TextRange` immutable, which § 7.4 found refused (pointer type arguments, `goSet` locals in `ls`) — ~3.5% if the proof can be widened |
 | `compareSymbols` boxing (`Integer`) | 3.0% | a func-typed FIELD `func(*Symbol, *Symbol) int` is a `Function2`, so every call boxes its `Int`; a porter rule lowering a func-typed field/parameter with basic results to a primitive `fun interface` removes it (and part of the lambda's 2.7% of CPU) |
 | `atomic.Uint64` | 2.0% | one object per Node and Symbol; embedding it as a `@Volatile long` + field updater in the owner class is a porter rule |
+
+## 12. (TSGO.6-j) Two porter rules from § 11's allocation table (2026-10-10)
+
+### 12.1 Lever A: pooled `keyBuilder` locals (relation/cache-key hashing)
+
+**The change** is a porter rule (docs/goport-lowering.md § 3, "Pooled locals"; `Program.computePooledLocals`,
+`lower/PooledLocals.kt`): an ESCAPE PROOF over the Go IR shows that a `var b keyBuilder` local never outlives
+its function — every use is a call of a pointer method whose receiver is proved non-retaining, a field select
+feeding a non-retaining shim method (`b.h.Write`) or `&b.h` / `&b` handed straight to a parameter proved
+non-retaining (`hashWrite32`, `writeFlowCacheKey`), and a capture only by a LOCAL closure (assigned to a
+variable that is only called: `writeGenericTypeReferences`); the function has no `go` and no `defer`. Such a
+local is lowered to `val b = keyBuilder.POOL.stack().acquire()` + `try { … } finally { release() }`: a
+per-thread LIFO stack (`runtime.GoLocalPool`) of builders reset to Go's zero in place (`goReset()`, the Hasher
+keeping its buffer's capacity). The stack is per thread and LIFO, so the checker re-entering key building
+while a key is half written (`writeGenericTypeReferences` → `getConstraintOfTypeParameter` → … →
+`getRelationKey`) takes the next slot, and four parallel checkers never share one. First run: **13 of 13**
+`keyBuilder` locals pooled, none refused; 14 pointer parameters proved non-retaining (the 11 `keyBuilder` methods'
+receivers, `hashWrite32`/`hashWrite64`'s `h` and `writeFlowCacheKey`'s `b`).
+
+**Predicted before measuring** (against § 10's 1,559 MB/rebuild compiler single): the `keyBuilder` (0.8%), the
+`xxh3.Hasher` (2.3%) and its byte buffer (5.1% — 74% of `byte[]`) go, the `Uint128` result (1.8%) stays:
+**−7..−8% allocation** (≈ −120 MB/rebuild single, proportionally parallel/services); GC pause per rebuild
+**−3..−8%** (young collections ~8% rarer, each about as costly — the survivors are unchanged); on the thread a
+`ThreadLocal` lookup + a 4-field reset replace three allocations and the buffer's first `copyOf` growth, so the
+xxh3 shim's 2.6% shrinks a little: **wall −0.5..−2%, inside the ±3-5% process spread** — the receipt is the
+allocation, not the wall.
+
+**Measured** (A/B, each arm its own JVM, batch 1 `A B B A`, batch 2 `B A A B`, a third rotated batch `A B B A` for
+compiler single, date-fns and cold; warm = 6 + 10 rebuilds, Zulu 26, `-Xms2g -Xmx6g`; class md5 of the sorted `main`
+class files A `ca5f97c6` (= `32ef53e7e`), B `a47db82b`; every warm run one digest, every cold run byte-identical to
+tsgo 7.0.2; medians of process medians [range], B's paired wins):
+
+| regime | A | B (pooled) | Δ | B wins |
+|---|---:|---:|---:|---:|
+| allocation/rebuild, compiler single, MB | 1,563 | **1,439** | **−7.9%** | 6/6 |
+| allocation/rebuild, compiler parallel, MB | 1,729 | **1,570** | **−9.2%** | 4/4 |
+| allocation/rebuild, services parallel, MB | 2,410 | **2,219** | **−7.9%** | 4/4 |
+| allocation/rebuild, date-fns parallel, MB | 645 | 622 | −3.6% | 6/6 |
+| GC pause/rebuild, single / parallel / services, ms | 204 / 237 / 302 | 196 / 202 / 296 | −3.9% / **−14.8%** / −2.2% | 3/6, 4/4, 4/4 |
+| compiler single, ms | 3,350 [3,308-3,588] | 3,408 [3,296-3,575] | +1.7% | 2/6 |
+| compiler parallel, ms | 1,912 [1,890-1,945] | 1,855 [1,768-1,895] | −3.0% | 4/4 |
+| services parallel, ms | 2,547 [2,480-2,586] | 2,473 [2,406-2,551] | −2.9% | 3/4 |
+| date-fns parallel, ms | 452 [434-496] | 462 [426-484] | +2.2% | 3/6 |
+| compiler cold, ms (6 + 6) | 9,799 [8,960-10,315] | 9,894 [8,940-10,576] | +1.0% | 2/6 |
+| services cold, ms (6 + 6) | 11,491 [10,908-12,618] | 12,003 [11,306-12,537] | +4.5% | 1/6 |
+| date-fns cold, ms | 4,607 [4,489-4,740] | 4,483 [4,363-4,953] | −2.7% | 2/4 |
+
+**Reading.** The allocation moved exactly as predicted (−7.9% single, −8..−9% parallel; date-fns −3.6% because its
+checks build fewer keys per MB), GC pause follows it in the parallel regimes (−15% compiler parallel) and is inside
+noise single-threaded. The wall is inside the ±3-5% process spread in every regime and both directions (parallel
+−3%, single +1.7% at 2/6, cold mixed); the mechanism's own cost was profiled on the B arm (warm compiler single, bench
+thread, 37,532 samples): `GoLocalStack.acquire` + `ThreadLocal.get` + `GoLocalPool.stack` are **0.33%** of the thread,
+the `xxh3` shim fell 2.6% → 2.3%, so the single-threaded +1.7% is not the pool. Kept: −8% allocation at no measurable
+cost, every gate equal.

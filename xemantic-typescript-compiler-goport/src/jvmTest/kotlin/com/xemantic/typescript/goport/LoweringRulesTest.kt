@@ -26,10 +26,14 @@
 package com.xemantic.typescript.goport
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.typescript.goport.ir.IrPackage
 import com.xemantic.typescript.goport.lower.CallLowering
+import com.xemantic.typescript.goport.lower.EscapeAnalysis
+import com.xemantic.typescript.goport.lower.EscapeIr
 import com.xemantic.typescript.goport.lower.Literals
 import com.xemantic.typescript.goport.lower.TypeMapper
 import com.xemantic.typescript.goport.naming.Naming
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
@@ -307,5 +311,74 @@ class LoweringRulesTest {
             Regex("""\bnodeData[,{ ]|\bTypeData[,{ ]""").findAll(f.readText().lines().filter { it.startsWith(") : ") }.joinToString("\n")).count()
         }
         assert(bare == 0)
+    }
+
+    @Test
+    fun `every keyBuilder local is pooled - acquired from the thread's stack and released in a finally`() {
+        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val c6 = File(gen, "checker/Checker6.kt").readText()
+        assert(c6.contains("val POOL: GoLocalPool<keyBuilder> = GoLocalPool({ keyBuilder() }, { it.goReset() })"))
+        assert(c6.contains("    fun goReset() {\n        h.goReset()\n    }"))
+        val rel = genFunction("checker/Checker6.kt", "$checker.getRelationKey")
+        assert(rel.contains("val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls4.acquire()\n    try {"))
+        assert(rel.contains("    } finally {\n        ls4.release()\n    }\n}"))
+        // `&b` handed to writeFlowCacheKey (whose parameter is proved non-retaining) does not refuse the local.
+        assert(genFunction("checker/Flow.kt", "$checker.Checker.getFlowReferenceKey").contains("ls0.acquire()"))
+        // All 13 sites, and no keyBuilder is constructed anywhere but in the pool's zero.
+        val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.map { it.readText() }.toList()
+        assert(all.sumOf { Regex("""keyBuilder\.POOL\.stack\(\)""").findAll(it).count() } == 13)
+        assert(all.sumOf { Regex("""= com\.xemantic\.typescript\.tsgo\.checker\.keyBuilder\(\)""").findAll(it).count() } == 0)
+    }
+
+    /** A tiny synthetic IR: `type kb struct{ h xxh3.Hasher }` and functions using `var b kb` locals. */
+    private fun escapeAnalysisOf(decls: String): EscapeAnalysis {
+        val objs = listOf(
+            "pkg.kb", "pkg.kb.w", "", "pkg.kb.h", "xxh3.Hasher.Write", "pkg.keep", "", "pkg.sink",
+            "pkg.ok", "", "pkg.bad", "", "pkg.bad2", "", "pkg.bad3", "", "", "pkg.g",
+        ).mapIndexed { i, k ->
+            val t = when (i) { 2, 6 -> 2; 9, 11, 13, 15 -> 1; else -> 0 }
+            """{"id": $i, "key": ${if (k.isEmpty()) "null" else "\"$k\""}, "t": $t}"""
+        }
+        val json = Json.parseToJsonElement("""{"decls": [$decls]}""") as JsonObject
+        val objects = objs.map { Json.parseToJsonElement(it) as JsonObject }
+        val p = IrPackage("pkg", "pkg", listOf(json), emptyList(), objects, emptyList(), emptyList())
+        val ir = object : EscapeIr {
+            override fun objKey(p: IrPackage, id: Int): String? = (p.objects[id]["key"] as? JsonPrimitive)?.content?.takeIf { it != "null" }
+            override fun named(p: IrPackage, typeId: Int?): String? = if (typeId == 1) "pkg.kb" else null
+            override fun pointee(p: IrPackage, typeId: Int?): String? = if (typeId == 2) "pkg.kb" else null
+        }
+        return EscapeAnalysis(ir, listOf(p), setOf("pkg.kb"), setOf("xxh3.Hasher"))
+    }
+
+    private fun id(name: String, obj: Int, def: Boolean = false) = """{"k": "Ident", "name": "$name", "obj": $obj${if (def) ", \"def\": true" else ""}}"""
+    private fun varDecl(obj: Int) = """{"k": "DeclStmt", "decl": {"k": "GenDecl", "tok": "var", "specs": [{"k": "ValueSpec", "names": [${id("b", obj, true)}], "type": ${id("kb", 0)}}]}}"""
+    private fun callW(x: String) = """{"k": "ExprStmt", "x": {"k": "CallExpr", "call": "method", "fun": {"k": "SelectorExpr", "x": $x, "sel": ${id("w", 1)}, "selk": "method", "autoAddr": true, "callee": true}, "args": []}}"""
+    private fun func(obj: Int, body: String, params: String = "[]", recv: String? = null) =
+        """{"k": "FuncDecl", "obj": $obj${recv?.let { ", \"recv\": $it" } ?: ""}, "type": {"k": "FuncType", "params": {"k": "FieldList", "list": $params}}, "body": {"k": "BlockStmt", "list": [$body]}}"""
+
+    @Test
+    fun `the escape proof pools a local only when no pointer into it can outlive the function`() {
+        // func (b *kb) w() { b.h.Write(nil) } — the receiver reaches only a non-retaining shim method.
+        val w = func(1, """{"k": "ExprStmt", "x": {"k": "CallExpr", "call": "method", "fun": {"k": "SelectorExpr", "x": {"k": "SelectorExpr", "x": ${id("b", 2)}, "sel": ${id("h", 3)}, "selk": "field"}, "sel": ${id("Write", 4)}, "selk": "method", "autoAddr": true, "callee": true}, "args": []}}""",
+            recv = """{"k": "FieldList", "list": [{"k": "Field", "names": [${id("b", 2, true)}], "type": {"k": "StarExpr", "t": 2}}]}""")
+        // func keep(b *kb) { sink = b } — RETAINS its parameter.
+        val keep = func(5, """{"k": "AssignStmt", "tok": "=", "lhs": [${id("sink", 7)}], "rhs": [${id("b", 6)}]}""",
+            params = """[{"k": "Field", "names": [${id("b", 6, true)}], "type": {"k": "StarExpr", "t": 2}}]""")
+        // func ok() { var b kb; b.w() }
+        val ok = func(8, "${varDecl(9)}, ${callW(id("b", 9))}")
+        // func bad() { var b kb; keep(&b) }
+        val bad = func(10, """${varDecl(11)}, {"k": "ExprStmt", "x": {"k": "CallExpr", "call": "func", "fun": ${id("keep", 5)}, "args": [{"k": "UnaryExpr", "op": "&", "x": ${id("b", 11)}}]}}""")
+        // func bad2() { var b kb; go func() { b.w() }() }
+        val bad2 = func(12, """${varDecl(13)}, {"k": "GoStmt", "call": {"k": "CallExpr", "call": "dynamic", "fun": {"k": "FuncLit", "body": {"k": "BlockStmt", "list": [${callW(id("b", 13))}]}}, "args": []}}""")
+        // func bad3() { var b kb; f := func() { b.w() }; g(f) } — the closure escapes into g.
+        val bad3 = func(14, """${varDecl(15)}, {"k": "AssignStmt", "tok": ":=", "lhs": [${id("f", 16, true)}], "rhs": [{"k": "FuncLit", "body": {"k": "BlockStmt", "list": [${callW(id("b", 15))}]}}]}, {"k": "ExprStmt", "x": {"k": "CallExpr", "call": "func", "fun": ${id("g", 17)}, "args": [${id("f", 16)}]}}""")
+        val a = escapeAnalysisOf(listOf(w, keep, ok, bad, bad2, bad3).joinToString(", "))
+        assert("pkg.kb.w#-1" in a.nonRetaining)
+        assert("pkg.keep#0" !in a.nonRetaining)
+        assert(a.pooled["pkg"] == setOf(9))
+        assert(a.refusals.size == 3)
+        assert(a.refusals.any { it.startsWith("pkg.bad b:") && "escapes" in it })
+        assert(a.refusals.any { it.startsWith("pkg.bad2 b:") && "GoStmt" in it })
+        assert(a.refusals.any { it.startsWith("pkg.bad3 b:") && "function literal" in it })
     }
 }

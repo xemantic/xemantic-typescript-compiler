@@ -114,6 +114,17 @@ class Hasher {
         len = 0
     }
 
+    /**
+     * NOT Go API — back to Go's ZERO value in place, keeping the buffer's capacity (its bytes past
+     * `len` are never read): what a pooled `keyBuilder` local (`GoLocalPool`) is reset to on acquire.
+     */
+    fun goReset() {
+        acc = null
+        blk = 0
+        len = 0
+        keyed = false
+    }
+
     /** `h.BlockSize()`, `h.Size()`. */
     fun blockSize(): Int = STRIPE
     fun size(): Int = 8

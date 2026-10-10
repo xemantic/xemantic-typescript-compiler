@@ -177,6 +177,10 @@ fun main(argv: Array<String>) {
     prog.computeAbstractIfaces()
     for ((k, why) in prog.abstractIfaceRefusals) println("goport: abstract-class interface refused: $k — $why")
     prog.computeWindowFuncs(overrides.keys)
+    prog.computePooledLocals()
+    println("goport: pooled locals: ${prog.pooledLocals.values.sumOf { it.size }} of ${prog.pooledStructs.sorted()}")
+    for (why in prog.pooledRefusals) println("goport: pooled local refused: $why")
+    println("goport: non-retaining parameters: ${prog.pooledNonRetaining.size} ${prog.pooledNonRetaining.map { it.substringAfterLast('/') }}")
     val pinned = RenameTable.load(args.refuse).let { t -> t.entries() }
     val report = Report()
     for (m0 in prog.shadowedAliasMethods) report.collision("$m0 — add a rename to renames.txt")
