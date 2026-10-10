@@ -104,6 +104,7 @@ open class ExprLowering(val fn: FnCtx) {
      * IR's implicit operations — `copy` (Go value semantics) and `impl` (nil / interface).
      */
     fun flow(e: Node): Ex {
+        if (prog.primFuncFieldKey(pc.pkg, e) != null) return primFuncConsumer(e)
         // `&x.f` of an opaque type parameter T flowing into an interface (`json.Unmarshal(data, &e.Value)`):
         // T may be instantiated with a non-struct, so the "pointer is the reference" shortcut does not hold
         // — hand out a real pointer to the location.
@@ -592,11 +593,34 @@ open class ExprLowering(val fn: FnCtx) {
         if (mo.str("key") in prog.extensionMethods && mpkg != pc.pkg.path) fn.fc.importFun(naming(mpkg), name)
     }
 
-    fun methodValue(e: Node): Ex {
+    /** A method value; with [sam], the bound function is SAM-converted to that `fun interface` (Program.primFuncFields). */
+    fun methodValue(e: Node, sam: String? = null): Ex {
         val (r, name, _) = methodTarget(e)
         val sig = types.unalias(e.int("selt") ?: ty(e)) as? SignatureType ?: refuse("method-value-sig")
         val rv = fn.fresh("r")
-        return Ex.primary("run { val $rv = ${r.code}; ${wrapperFun(sig) { a -> "$rv.$name(${a.joinToString(", ")})" }} }")
+        val f = wrapperFun(sig) { a -> "$rv.$name(${a.joinToString(", ")})" }
+        return Ex.primary("run { val $rv = ${r.code}; ${if (sam == null) f else "$sam($f)"} }")
+    }
+
+    /**
+     * A value for a [Program.primFuncFields] field: nil, or a method value / function literal SAM-converted to the
+     * field's `fun interface` right here, so the lambda's own method returns the primitive.
+     */
+    fun primFuncProducer(key: String, r: Node): Ex {
+        val iface = fn.fc.typeRef(Naming.kotlinPackage(key.substringBeforeLast('.').substringBeforeLast('.')), prog.primFuncIfaceName(key))
+        return when {
+            r.mode == "nil" -> Ex.primary("null")
+            r.k == "FuncLit" -> Ex.primary("$iface(${lower(r).code})")
+            r.k == "SelectorExpr" && r.str("selk") == "method" -> methodValue(r, iface)
+            else -> refuse("prim-func-producer", r.k)
+        }
+    }
+
+    /** A [Program.primFuncFields] field read handed to a function: adapted back to a Kotlin function type (nil stays nil). */
+    private fun primFuncConsumer(e: Node): Ex {
+        val sig = types.unalias(ty(e)) as? SignatureType ?: refuse("prim-func-consumer-sig")
+        val g = fn.fresh("g")
+        return Ex.primary("${lower(e).at(PRIMARY)}?.let { $g -> ${wrapperFun(sig) { a -> "$g(${a.joinToString(", ")})" }} }")
     }
 
     fun methodExprValue(e: Node): Ex {

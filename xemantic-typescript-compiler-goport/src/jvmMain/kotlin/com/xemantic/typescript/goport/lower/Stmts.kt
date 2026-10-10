@@ -325,6 +325,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             lhs[0].int("obj")?.let { it in viewCandidates() } == true
         ) return declareView(lhs[0].int("obj")!!, rhs[0]) { w.line(it) }
         if (!define && lhs.size == 1 && rhs.size == 1 && isWindowField(lhs[0])) return windowStore(lhs[0], rhs[0])
+        if (!define && lhs.size == 1 && rhs.size == 1) prog.primFuncFieldKey(pc.pkg, lhs[0])?.let { return single(lhs[0], primFuncProducer(it, rhs[0]), false) }
         if (lhs.size == rhs.size) {
             if (lhs.size == 1) return single(lhs[0], flow(rhs[0]), define)
             // Parallel assignment: every right side is evaluated before any store.

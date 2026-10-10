@@ -73,6 +73,22 @@ val ABSTRACT_IFACE_CANDIDATES = setOf(
     "github.com/microsoft/typescript-go/internal/checker.TypeData",
 )
 
+/**
+ * Func-typed struct fields that may be lowered as a primitive `fun interface` ([Program.primFuncFields],
+ * docs/goport-perf.md § 12.2): `Checker.compareSymbols` (`func(*ast.Symbol, *ast.Symbol) int`, a "closure
+ * optimization" in tsgo) is called by every `compareTypes` of a union's members, and a Kotlin `Function2` returns
+ * `Object`, so each call boxed its `Int` — 85% of the boxed `Integer`s a check allocated.
+ */
+val PRIM_FUNC_FIELD_CANDIDATES = setOf(
+    "github.com/microsoft/typescript-go/internal/checker.Checker.compareSymbols",
+)
+
+/** Go basic result types a JVM method returns unboxed (not `string`, not `unsafe.Pointer`). */
+val PRIMITIVE_RESULTS = setOf(
+    "bool", "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+    "byte", "rune", "float32", "float64",
+)
+
 val OBJECT_MEMBERS = setOf("toString", "hashCode", "equals", "getClass", "wait", "notify", "notifyAll", "finalize", "clone")
 
 /**
@@ -1040,6 +1056,81 @@ class Program(
         immutableStructs += cand
     }
 
+    // ---- primitive func fields (docs/goport-lowering.md § 3, "Primitive func fields") ----
+
+    /** Func-typed struct fields lowered as a generated primitive `fun interface` ([computePrimFuncFields]), by field key. */
+    val primFuncFields = HashSet<String>()
+
+    /** Why each [PRIM_FUNC_FIELD_CANDIDATES] entry was refused (for the report and the pins). */
+    val primFuncRefusals = HashMap<String, String>()
+
+    /** The [primFuncFields] key a `SelectorExpr` selects in [p], or null. */
+    fun primFuncFieldKey(p: IrPackage, sel: Node): String? {
+        if (sel.str("k") == "ParenExpr") return sel.obj("x")?.let { primFuncFieldKey(p, it) }
+        if (sel.str("k") != "SelectorExpr" || sel.str("selk") != "field" || primFuncFields.isEmpty()) return null
+        val key = sel.obj("sel")?.int("obj")?.let { p.obj(it) }?.takeIf { it.str("k") == "field" }?.str("key") ?: return null
+        return key.takeIf { it in primFuncFields }
+    }
+
+    /** The Kotlin name of the `fun interface` standing for field [key] (`Checker_compareSymbols_Fn`). */
+    fun primFuncIfaceName(key: String): String {
+        val owner = key.substringBeforeLast('.')
+        return "${typeName(owner, owner.substringAfterLast('.'))}_${key.substringAfterLast('.')}_Fn".replace("`", "")
+    }
+
+    fun computePrimFuncFields() {
+        primFuncFields.clear()
+        primFuncRefusals.clear()
+        val cand = HashSet<String>()
+        for (k in PRIM_FUNC_FIELD_CANDIDATES) {
+            val owner = k.substringBeforeLast('.')
+            val p = byPath[owner.substringBeforeLast('.')]
+            if (p == null || owner !in structTypes || owner in reflectStructs) { primFuncRefusals[k] = "not a field of a plain struct declared in the run"; continue }
+            val tt = TypeTable(p)
+            var why: String? = "field not found"
+            for (i in 0 until tt.size) {
+                val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                if (n.key != owner || n.origin != null) continue
+                if (n.tparams.isNotEmpty()) { why = "a generic struct"; break }
+                val st = tt.under(n.id) as? com.xemantic.typescript.goport.types.StructType ?: break
+                val f = st.fields.firstOrNull { "$owner.${it.name}" == k } ?: break
+                if (f.embedded) { why = "embedded"; break }
+                val sig = tt.unalias(f.t) as? com.xemantic.typescript.goport.types.SignatureType
+                if (sig == null) { why = "not an unnamed func type"; break }
+                val res = sig.results.singleOrNull()?.let { tt.unalias(it.t) } as? com.xemantic.typescript.goport.types.BasicType
+                why = when {
+                    sig.variadic -> "variadic"
+                    res == null || res.untyped || res.name !in PRIMITIVE_RESULTS -> "result is not one primitive basic value"
+                    else -> null
+                }
+                break
+            }
+            if (why == null) cand += k else primFuncRefusals[k] = why
+        }
+        if (cand.isEmpty()) return
+        fun refuse(k: String, why: String) { if (cand.remove(k)) primFuncRefusals[k] = why }
+        for (p in packages) {
+            val chain = ArrayList<Pair<Node, String>>()
+            fun visit(n: Node) {
+                if (n.str("k") == "SelectorExpr" && n.str("selk") == "field") {
+                    val key = n.obj("sel")?.int("obj")?.let { p.objects.getOrNull(it) }?.takeIf { it.str("k") == "field" }?.str("key")
+                    if (key != null && key in cand) {
+                        val (q, qk) = chain.lastOrNull() ?: (n to "")
+                        val ok = primFuncUseAllowed(q, qk)
+                        if (!ok) refuse(key, "${q.str("k")}.$qk in ${p.path}")
+                    }
+                }
+                for ((k, v) in n) when (v) {
+                    is kotlinx.serialization.json.JsonObject -> { chain += n to k; visit(v); chain.removeAt(chain.size - 1) }
+                    is kotlinx.serialization.json.JsonArray -> for (e in v) if (e is kotlinx.serialization.json.JsonObject) { chain += n to k; visit(e); chain.removeAt(chain.size - 1) }
+                    else -> {}
+                }
+            }
+            for (f in p.files) visit(f)
+        }
+        primFuncFields += cand
+    }
+
     // ---- pooled locals (docs/goport-lowering.md § 3, "Pooled locals") ----
 
     /** Struct types given a per-thread `POOL` and an in-place `goReset()` ([computePooledLocals]), by key. */
@@ -1175,6 +1266,24 @@ class Program(
                 }
             }
             go(id)
+        }
+
+        /**
+         * Whether a [Program.primFuncFields] candidate's field read under [parent] (as its [key]) is one the porter
+         * lowers itself: a call of the field, the field handed to a function (adapted back to a Kotlin function type),
+         * a nil comparison, or an assignment of a method value, a function literal or nil (SAM-converted there).
+         */
+        fun primFuncUseAllowed(parent: Node, key: String): Boolean = when (parent.str("k")) {
+            "CallExpr" -> (key == "fun" && parent.str("call") == "dynamic") ||
+                (key == "args" && !parent.bool("ellipsis") && parent.int("variadicFrom") == null)
+            "BinaryExpr" -> (parent.str("op") == "==" || parent.str("op") == "!=") &&
+                (parent.obj("x")?.str("m") == "nil" || parent.obj("y")?.str("m") == "nil")
+            "AssignStmt" -> key == "lhs" && parent.str("tok") == "=" && parent.list("lhs").size == 1 && parent.list("rhs").size == 1 &&
+                parent.list("rhs")[0].let { r ->
+                    r.str("m") == "nil" || r.str("k") == "FuncLit" ||
+                        (r.str("k") == "SelectorExpr" && r.str("selk") == "method" && !r.bool("callee"))
+                }
+            else -> false
         }
 
         fun comparesToNil(body: Node, obj: Int): Boolean {

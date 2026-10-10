@@ -377,6 +377,19 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   13 sites, and a synthetic IR with a pooled local and three refused ones — `&b` into a retaining parameter, a `go`,
   an escaping closure), `GoLocalPoolTest`.
 
+- **Primitive func fields** ((TSGO.6-j), `Program.computePrimFuncFields`/`primFuncUseAllowed`, `Decls.structClass`,
+  `Exprs.primFuncProducer`/`flow`, `Stmts.assign`). A func-typed struct field in `PRIM_FUNC_FIELD_CANDIDATES`
+  (`checker.Checker.compareSymbols`) whose type is an UNNAMED, non-variadic signature with ONE result of a primitive
+  basic type (`PRIMITIVE_RESULTS`: not `string`) is typed as a generated `fun interface <Owner>_<field>_Fn { operator fun
+  invoke(…): R }` (emitted after the owner class) instead of a Kotlin function type, whose `invoke` returns `Object` and
+  boxes `R`, when the whole run proves the porter writes every producer and consumer: each read of the field is the
+  callee of a call (`f!!(a, b)` — `invoke` is an operator, so the call is unchanged and unboxed), a nil comparison, a
+  non-variadic call argument (adapted back where it is handed on: `f?.let { g -> fun(p0, p1): R = g(p0, p1) }`), or the
+  target of a plain `=` of a method value, a function literal or nil (SAM-converted there: `Iface(fun(…) = …)`, which
+  Kotlin compiles to `LambdaMetafactory` over the primitive signature). Any other read or write (a store of the value,
+  a return, a composite literal, a variadic slot, any other assigned value) refuses the field. Pins: `LoweringRulesTest`
+  (the generated field, interface, producer, call and adapter; the use classifier's allowed and refused shapes).
+
 (TSGO.2) harness rules:
 
 - **A `switch` whose tag is an array or a comparable struct compares by VALUE**: the tag is bound

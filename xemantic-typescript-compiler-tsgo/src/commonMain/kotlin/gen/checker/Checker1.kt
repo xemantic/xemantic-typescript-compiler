@@ -1833,7 +1833,7 @@ class Checker(
     @kotlin.jvm.JvmField var compilerOptions: CompilerOptions? = null
     @kotlin.jvm.JvmField var files: GoSlice<SourceFile?> = GoElem.ref<SourceFile?>().nilSlice
     @kotlin.jvm.JvmField var fileIndexMap: GoMap<SourceFile?, Int> = GoMap.nil<SourceFile?, Int>(GoElem.INT)
-    @kotlin.jvm.JvmField var compareSymbols: ((Symbol?, Symbol?) -> Int)? = null
+    @kotlin.jvm.JvmField var compareSymbols: Checker_compareSymbols_Fn? = null
     @kotlin.jvm.JvmField var compareSymbolChains: ((GoSlice<Symbol?>, GoSlice<Symbol?>) -> Int)? = null
     @get:kotlin.jvm.JvmName("goGet_typeCount") @set:kotlin.jvm.JvmName("goSet_typeCount") var typeCount: UInt = 0u
     @get:kotlin.jvm.JvmName("goGet_symbolCount") @set:kotlin.jvm.JvmName("goSet_symbolCount") var symbolCount: UInt = 0u
@@ -2806,6 +2806,10 @@ class Checker(
     }
 }
 
+fun interface Checker_compareSymbols_Fn {
+    operator fun invoke(p0: Symbol?, p1: Symbol?): Int
+}
+
 // go: github.com/microsoft/typescript-go/internal/checker.NewChecker 37d382be
 fun newChecker(program: Program?, tracer: Tracer?): Tuple2<Checker?, Mutex?> {
     program!!.bindSourceFiles()
@@ -2816,7 +2820,7 @@ fun newChecker(program: Program?, tracer: Tracer?): Tuple2<Checker?, Mutex?> {
     c!!.compilerOptions = program!!.options()
     c!!.files = program!!.sourceFiles()
     c!!.fileIndexMap = createFileIndexMap(c!!.files)
-    c!!.compareSymbols = run { val r1 = c; fun(p0: Symbol?, p1: Symbol?): Int = r1.compareSymbolsWorker(p0, p1) }
+    c!!.compareSymbols = run { val r1 = c; Checker_compareSymbols_Fn(fun(p0: Symbol?, p1: Symbol?): Int = r1.compareSymbolsWorker(p0, p1)) }
     c!!.compareSymbolChains = run { val r2 = c; fun(p0: GoSlice<Symbol?>, p1: GoSlice<Symbol?>): Int = r2.compareSymbolChainsWorker(p0, p1) }
     c!!.languageVersion = c!!.compilerOptions.getEmitScriptTarget()
     c!!.moduleKind = c!!.compilerOptions.getEmitModuleKind()
@@ -3650,7 +3654,7 @@ fun Checker?.getSpellingSuggestionForName(name: String, symbols: Seq<Symbol?>?, 
         }
         return ""
     }
-    return com.xemantic.typescript.tsgo.core.getSpellingSuggestion<Symbol?>(GoElem.ref<Symbol?>(), name, symbols, getCandidateName, this!!.compareSymbols)
+    return com.xemantic.typescript.tsgo.core.getSpellingSuggestion<Symbol?>(GoElem.ref<Symbol?>(), name, symbols, getCandidateName, this!!.compareSymbols?.let { g0 -> fun(p0: Symbol?, p1: Symbol?): Int = g0(p0, p1) })
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.onSuccessfullyResolvedSymbol 8ae008d0

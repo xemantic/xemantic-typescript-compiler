@@ -798,3 +798,48 @@ noise single-threaded. The wall is inside the ±3-5% process spread in every reg
 thread, 37,532 samples): `GoLocalStack.acquire` + `ThreadLocal.get` + `GoLocalPool.stack` are **0.33%** of the thread,
 the `xxh3` shim fell 2.6% → 2.3%, so the single-threaded +1.7% is not the pool. Kept: −8% allocation at no measurable
 cost, every gate equal.
+
+### 12.2 Lever B: a func-typed field with a basic result as a primitive `fun interface` (`compareSymbols`)
+
+**The change** is a porter rule (docs/goport-lowering.md § 3, "Primitive func fields"; `Program.computePrimFuncFields`):
+a func-typed struct field in `PRIM_FUNC_FIELD_CANDIDATES` (`checker.Checker.compareSymbols`, `func(*ast.Symbol,
+*ast.Symbol) int`) is lowered as a generated `fun interface Checker_compareSymbols_Fn { operator fun invoke(…): Int }`
+instead of a Kotlin `(Symbol?, Symbol?) -> Int` (a `Function2` whose `invoke` returns `Object`, so every call boxes
+the `Int` and unboxes it again) when the run proves the porter writes every producer and consumer of the field:
+assigned only a method value, a function literal or nil (each SAM-converted at the assignment, so the lambda's own
+method returns `int`), and read only as a callee, in a nil comparison, or as a call argument (adapted back to a Kotlin
+function type at that argument — `slices.SortFunc`, `core.GetSpellingSuggestion`, cold paths). Any other read or
+write refuses the field.
+
+**Predicted before measuring** (against § 12.1's B arm, 1,439 MB/rebuild compiler single): boxed `Integer` was 3.0%
+of § 10's allocation and 85% of it this field's results (`compareNodes` returns position differences, outside
+`Integer`'s cache): **−2..−2.5% allocation** (≈ −35 MB/rebuild single, less parallel — `compareTypes` runs while
+unions are interned, everywhere); GC pause inside noise; on the thread the `Function2` bridge + `Integer.valueOf` +
+`intValue` go from each comparison (the comparator lambda owned 2.7% single / 1.0% parallel, most of it the
+comparison itself): **wall −0.3..−1%, inside the ±3-5% spread**.
+
+**Measured** (same protocol as § 12.1, batches `A B B A` + `B A A B`; A = § 12.1's B arm, class md5 `a47db82b`
+(= `167e891c2`), B `0f4825e5`; every warm run one digest, every cold run byte-identical to tsgo 7.0.2; the
+`newChecker` lambda's bytecode is `LambdaMetafactory` over `(Symbol, Symbol)I` and `CompareTypes` calls
+`Checker_compareSymbols_Fn.invoke(…)I`, i.e. nothing is boxed on that path):
+
+| regime | A | B (fun interface) | Δ | B wins |
+|---|---:|---:|---:|---:|
+| allocation/rebuild, compiler single, MB | 1,437 | **1,394** | **−3.0%** | 4/4 |
+| allocation/rebuild, compiler parallel, MB | 1,584 | 1,573 | −0.7% | 3/4 |
+| allocation/rebuild, services parallel, MB | 2,258 | **2,128** | **−5.7%** | 4/4 |
+| allocation/rebuild, date-fns parallel, MB | 622 | 626 | **+0.7%** | 0/4 |
+| GC pause/rebuild, single / parallel / services, ms | 211 / 212 / 306 | 192 / 208 / 300 | noise | 2/4, 1/4, 2/4 |
+| compiler single, ms | 3,352 [3,304-3,456] | 3,342 [3,279-3,448] | −0.3% | 2/4 |
+| compiler parallel, ms | 1,848 [1,824-1,897] | 1,865 [1,797-1,957] | +0.9% | 1/4 |
+| services parallel, ms | 2,490 [2,439-2,505] | 2,439 [2,423-2,554] | −2.0% | 3/4 |
+| date-fns parallel, ms | 432 [421-450] | 448 [421-466] | +3.5% | 1/4 |
+| compiler / services / date-fns cold, ms | 9,813 / 11,785 / 4,337 | 9,598 / 11,907 / 4,560 | −2.2% / +1.0% / +5.2% | 3/4, 2/4, 1/4 |
+
+**Reading.** The boxing went where the field is CALLED (compiler single −3.0%, services −5.7% — more than predicted:
+services sorts more union members), and the wall is inside the spread everywhere. The cost is the CONSUMER adapter:
+`sortSymbols` (`slices.SortFunc`, not inline) and `getSpellingSuggestion` now wrap the interface in a fresh Kotlin
+function per call (and still box per comparison inside `SortFunc`, as before), which is date-fns' +0.7% (≈ +4 MB) and
+compiler parallel's smaller gain. Kept: the large projects gain 43-130 MB/rebuild, the small one loses 4 MB, every
+gate equal. The adapter is the next thing to remove (a comparator overload of the shim's `SortFunc` taking the
+interface would make both sites allocation-free).

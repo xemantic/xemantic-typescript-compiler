@@ -635,6 +635,10 @@ class PackageEmitter(
         // A struct with more fields than a JVM constructor takes arguments (255 slots: `checker.Checker`)
         // keeps its fields in the body; composite literals then assign them (Program.bigStruct).
         val big = prog.bigStruct(st)
+        // Program.primFuncFields: a func field with a primitive result is a generated `fun interface` (no boxing).
+        val primFn = st.fields.indices.filter { "$qname.${st.fields[it].name}" in prog.primFuncFields }.toSet()
+        fun fieldKt(i: Int): String = if (i in primFn) prog.primFuncIfaceName("$qname.${st.fields[i].name}") + "?" else tm.kt(st.fields[i].t)
+        fun fieldZero(i: Int): String = if (i in primFn) "null" else tm.zero(st.fields[i].t)
         val windowIdx = st.fields.indices.filter { "$qname.${st.fields[it].name}" in prog.windowFields }.toSet()
         if (big && windowIdx.isNotEmpty()) error("window field in a big struct: $qname")
         w.line("class $name$tpDecl(")
@@ -642,7 +646,7 @@ class PackageEmitter(
             for (tp in dict) w.line("@kotlin.jvm.JvmField val goElem_$tp: GoElem<${Naming.escape(tp)}>,")
             if (!big) st.fields.forEachIndexed { i, f ->
                 // @JvmField: no accessors (a Go `SetText` method would clash with `text`'s setter), and direct field access.
-                w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${tm.kt(f.t)} = ${tm.zero(f.t)},")
+                w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${fieldKt(i)} = ${fieldZero(i)},")
                 if (i in windowIdx) {
                     // A window field (Program.windowFields): offset and length into the base above.
                     w.line("@kotlin.jvm.JvmField var ${fieldNames[i]}_o: Int = 0,")
@@ -653,7 +657,7 @@ class PackageEmitter(
         w.line(")${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
         w.indent {
             if (big) st.fields.forEachIndexed { i, f ->
-                w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${tm.kt(f.t)} = ${tm.zero(f.t)}")
+                w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${fieldKt(i)} = ${fieldZero(i)}")
             }
             w.line()
             if (big) {
@@ -783,6 +787,14 @@ class PackageEmitter(
             }
         }
         w.line("}")
+        for (i in primFn.sorted()) {
+            // The field's type: `invoke` returns the primitive, so neither a call nor the SAM-converted lambda boxes it.
+            val sig = types.unalias(st.fields[i].t) as SignatureType
+            w.line()
+            w.block("fun interface ${prog.primFuncIfaceName("$qname.${st.fields[i].name}")}") {
+                w.line("operator fun invoke(${sig.params.mapIndexed { j, p -> "p$j: ${tm.kt(p.t)}" }.joinToString(", ")})${tm.returns(sig.results.map { it.t })}")
+            }
+        }
         return w.toString()
     }
 

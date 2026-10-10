@@ -31,6 +31,7 @@ import com.xemantic.typescript.goport.lower.CallLowering
 import com.xemantic.typescript.goport.lower.EscapeAnalysis
 import com.xemantic.typescript.goport.lower.EscapeIr
 import com.xemantic.typescript.goport.lower.Literals
+import com.xemantic.typescript.goport.lower.Program
 import com.xemantic.typescript.goport.lower.TypeMapper
 import com.xemantic.typescript.goport.naming.Naming
 import kotlinx.serialization.json.Json
@@ -380,5 +381,40 @@ class LoweringRulesTest {
         assert(a.refusals.any { it.startsWith("pkg.bad b:") && "escapes" in it })
         assert(a.refusals.any { it.startsWith("pkg.bad2 b:") && "GoStmt" in it })
         assert(a.refusals.any { it.startsWith("pkg.bad3 b:") && "function literal" in it })
+    }
+
+    @Test
+    fun `compareSymbols is a primitive fun interface - SAM-converted where assigned, called unboxed, adapted where handed on`() {
+        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val c1 = File(gen, "checker/Checker1.kt").readText()
+        assert(c1.contains("@kotlin.jvm.JvmField var compareSymbols: Checker_compareSymbols_Fn? = null"))
+        assert(c1.contains("fun interface Checker_compareSymbols_Fn {\n    operator fun invoke(p0: Symbol?, p1: Symbol?): Int\n}"))
+        // The producer: the method value is SAM-converted right at the assignment (its lambda returns int).
+        assert(genFunction("checker/Checker1.kt", "$checker.NewChecker").contains(
+            "c!!.compareSymbols = run { val r1 = c; Checker_compareSymbols_Fn(fun(p0: Symbol?, p1: Symbol?): Int = r1.compareSymbolsWorker(p0, p1)) }"))
+        // A call stays a call (`invoke` is an operator); a pass to a function is adapted back, nil kept.
+        assert(genFunction("checker/Utilities.kt", "$checker.CompareTypes").contains("t1!!.checker!!.compareSymbols!!(t1!!.symbol, t2!!.symbol)"))
+        assert(genFunction("checker/Utilities.kt", "$checker.Checker.sortSymbols").contains(
+            "this!!.compareSymbols?.let { g0 -> fun(p0: Symbol?, p1: Symbol?): Int = g0(p0, p1) }"))
+        // compareSymbolChains is not a candidate: still a Kotlin function type.
+        assert(c1.contains("var compareSymbolChains: ((GoSlice<Symbol?>, GoSlice<Symbol?>) -> Int)? = null"))
+    }
+
+    @Test
+    fun `a primitive func field read anywhere the porter does not lower itself refuses the field`() {
+        fun n(json: String) = Json.parseToJsonElement(json) as JsonObject
+        val field = """{"k": "SelectorExpr", "selk": "field"}"""
+        // Allowed: a call, an argument, a nil comparison, an assignment of a method value / literal / nil.
+        assert(Program.primFuncUseAllowed(n("""{"k": "CallExpr", "call": "dynamic"}"""), "fun"))
+        assert(Program.primFuncUseAllowed(n("""{"k": "CallExpr", "call": "func"}"""), "args"))
+        assert(Program.primFuncUseAllowed(n("""{"k": "BinaryExpr", "op": "!=", "x": $field, "y": {"k": "Ident", "m": "nil"}}"""), "x"))
+        assert(Program.primFuncUseAllowed(n("""{"k": "AssignStmt", "tok": "=", "lhs": [$field], "rhs": [{"k": "SelectorExpr", "selk": "method"}]}"""), "lhs"))
+        // Refused: a store of the field's value, a return, a local, a variadic argument, a composite literal, any other value assigned.
+        assert(!Program.primFuncUseAllowed(n("""{"k": "AssignStmt", "tok": "=", "lhs": [{"k": "Ident"}], "rhs": [$field]}"""), "rhs"))
+        assert(!Program.primFuncUseAllowed(n("""{"k": "ReturnStmt", "results": [$field]}"""), "results"))
+        assert(!Program.primFuncUseAllowed(n("""{"k": "AssignStmt", "tok": ":=", "lhs": [$field], "rhs": [{"k": "FuncLit"}]}"""), "lhs"))
+        assert(!Program.primFuncUseAllowed(n("""{"k": "CallExpr", "call": "func", "variadicFrom": 0}"""), "args"))
+        assert(!Program.primFuncUseAllowed(n("""{"k": "KeyValueExpr"}"""), "value"))
+        assert(!Program.primFuncUseAllowed(n("""{"k": "AssignStmt", "tok": "=", "lhs": [$field], "rhs": [{"k": "Ident", "m": "variable"}]}"""), "lhs"))
     }
 }

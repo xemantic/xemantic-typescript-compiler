@@ -466,7 +466,7 @@ fun createSymbolTable(symbols: GoSlice<Symbol?>): SymbolTable {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.sortSymbols e7a2cea0
 fun Checker?.sortSymbols(symbols: GoSlice<Symbol?>) {
-    com.xemantic.typescript.tsgo.go.slices.sortFunc<Symbol?>(symbols, (this!!.compareSymbols)!!)
+    com.xemantic.typescript.tsgo.go.slices.sortFunc<Symbol?>(symbols, (this!!.compareSymbols?.let { g0 -> fun(p0: Symbol?, p1: Symbol?): Int = g0(p0, p1) })!!)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.compareSymbolsWorker 7d7babf5
