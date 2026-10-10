@@ -39,7 +39,7 @@ import kotlin.time.TimeSource
  * `TSGO_IO_STATS=1` counts calls, nanoseconds and bytes per operation ([stats]). The call runs on the
  * calling goroutine, which KEEPS its run token: giving it back around the call (Go's eager P hand-off)
  * or handing the call to a dedicated IO pool — the "IO dispatcher / compute dispatcher" split — was
- * measured as a regression ((TSGO.6-h), docs/goport-perf.md § 9, experiment commit db02d0b84): a cached
+ * measured as a regression ((TSGO.6-h), docs/goport-perf.md § 9, experiment commit 1820a9de1): a cached
  * file-system call is kernel CPU work, not a wait, so there is no idle core to give away, and the
  * token churn multiplied tsgo's unsynchronised package.json reads 20x.
  */

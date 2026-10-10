@@ -33,7 +33,7 @@ it is the live Phase 18 queue.
   funnel; `TSGO_IO_STATS=1` counts calls/ns/bytes. `CheckBenchMain` gains `osfs` (tsgo's own osvfs, re-read per rebuild).
 - **IO share**: cold CLI 68-220 ms thread-summed of 4.6-11.9 s; warm default bench 0 (its `DiskFS` caches);
   only warm `osfs` date-fns is IO-heavy (~36,600 calls, ~244 ms per ~470 ms rebuild).
-- **A/B** (experiment commit `db02d0b84`, `TSGO_IO_DISPATCH=release|pool`, each arm its own JVM, two batches with
+- **A/B** (experiment commit `1820a9de1`, `TSGO_IO_DISPATCH=release|pool`, each arm its own JVM, two batches with
   reversed rotation, every run one digest / byte-identical to tsgo): date-fns warm 470 → 756 ms (release, 4/4 lost)
   → 1,122 ms (pool), allocation 752 → ~1,740 MB/rebuild; date-fns cold 4,601 → 4,931 / 4,956 ms; compiler cold and
   warm noise. Mechanism: a cached syscall is kernel CPU work (no idle core to give away); every call re-queues FIFO

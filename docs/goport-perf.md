@@ -606,7 +606,7 @@ prints `io: read=<calls>/<ms> stat=… list=… realpath=… write=… total=…
 So only the warm `osfs` date-fns case has a real IO share; everywhere else the upper bound of any overlap gain is the
 IO time over N ≈ 10-25 ms, under the ±3-5% process spread.
 
-**What was tried** (experiment commit `db02d0b84`, `TSGO_IO_DISPATCH`, same binary for every arm): `release` gives the
+**What was tried** (experiment commit `1820a9de1`, `TSGO_IO_DISPATCH`, same binary for every arm): `release` gives the
 run token back around each host call (`blockingWait`: Go's P hand-off, made EAGER), `pool` additionally runs the call
 on a dedicated unbounded IO thread pool while the goroutine waits without a token (the literal "Dispatchers.IO" split).
 

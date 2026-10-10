@@ -3,7 +3,7 @@
 **(TSGO.6-h) DONE — an IO dispatcher beside the compute one: REFUSED, measured (2026-10-10):** owner question. The
 port's goroutines are platform threads gated by `GoProcs` run tokens; host file calls kept the token. Releasing it around
 every host call (`TSGO_IO_DISPATCH=release`) or running the call on a dedicated IO pool (`pool`) — experiment commit
-`db02d0b84` — made date-fns warm (`osfs`, every rebuild re-reads) **470 → 756 / 1,122 ms** (4/4 lost, two reversed
+`1820a9de1` — made date-fns warm (`osfs`, every rebuild re-reads) **470 → 756 / 1,122 ms** (4/4 lost, two reversed
 batches) and cold 4.60 → 4.93 / 4.96 s; compiler noise. A cached syscall is kernel CPU work, so there is no idle core to
 give away; the token churn re-queued every call and made tsgo's loaders read `package.json` 174x per rebuild instead
 of 8. Kept: the `syscall()` funnel + `TSGO_IO_STATS` (docs/goport-perf.md § 9). Diag/Emit 13,127, CLI 105, LS, API
