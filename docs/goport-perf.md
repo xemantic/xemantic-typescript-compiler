@@ -1178,3 +1178,8 @@ the noise — the start-up read of the image heap does not scale with it the way
 them (date-fns 0 pauses at 1 g), but the wall does not follow — 3 runs per arm: date-fns default 399 / 463 / 415 / 440
 ms, compiler profile 1,650 / 1,636 / 1,780 / 1,752, services 2,367 / 2,173 / 2,136 / 2,409, hono 650 / 631 / 601 / 633,
 immer and mitt flat. First-touching the fresh young pages costs what the evacuations did; no setting wins everywhere.
+
+**Measured and refused: two allocations per AST node** (the second `TextRange` `ast.newNode` assigned over the fresh
+node's own, and `NodeFactory.newNode`'s per-node `hooks` copy). Young pauses on date-fns shrank a little (26.5 / 21.9 →
+19.2 / 17.1 ms for the last two) and the wall did not move: date-fns 512 / 513.5 ms, compiler profile 2,168 / 2,169,
+the others inside the noise — the standing lesson that an allocation-only change does not move the wall.
