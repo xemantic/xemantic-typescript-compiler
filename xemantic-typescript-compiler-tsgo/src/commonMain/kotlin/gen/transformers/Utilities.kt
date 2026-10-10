@@ -141,21 +141,21 @@ fun isIdentifierReference(name: Node?, parent: Node?): Boolean {
 fun convertBindingElementToArrayAssignmentElement(emitContext: EmitContext?, element: BindingElement?): Node? {
     if (element!!.name() == null) {
         val elision: Node? = emitContext!!.factory!!.nodeFactory.newOmittedExpression()
-        emitContext.setOriginal(elision, element!!.nodeBase.nodeDefault.asNode())
-        emitContext.assignCommentAndSourceMapRanges(elision, element!!.nodeBase.nodeDefault.asNode())
+        emitContext.setOriginal(elision, element!!.nodeBase.asNode())
+        emitContext.assignCommentAndSourceMapRanges(elision, element!!.nodeBase.asNode())
         return elision
     }
     if (element!!.dotDotDotToken != null) {
         val spread: Node? = emitContext!!.factory!!.nodeFactory.newSpreadElement(element!!.name())
-        emitContext.setOriginal(spread, element!!.nodeBase.nodeDefault.asNode())
-        emitContext.assignCommentAndSourceMapRanges(spread, element!!.nodeBase.nodeDefault.asNode())
+        emitContext.setOriginal(spread, element!!.nodeBase.asNode())
+        emitContext.assignCommentAndSourceMapRanges(spread, element!!.nodeBase.asNode())
         return spread
     }
     val expression: Node? = convertBindingNameToAssignmentElementTarget(emitContext, element!!.name())
     if (element!!.initializer != null) {
         val assignment: Node? = emitContext!!.factory.newAssignmentExpression(expression, element!!.initializer)
-        emitContext.setOriginal(assignment, element!!.nodeBase.nodeDefault.asNode())
-        emitContext.assignCommentAndSourceMapRanges(assignment, element!!.nodeBase.nodeDefault.asNode())
+        emitContext.setOriginal(assignment, element!!.nodeBase.asNode())
+        emitContext.assignCommentAndSourceMapRanges(assignment, element!!.nodeBase.asNode())
         return assignment
     }
     return expression
@@ -165,8 +165,8 @@ fun convertBindingElementToArrayAssignmentElement(emitContext: EmitContext?, ele
 fun convertBindingElementToObjectAssignmentElement(emitContext: EmitContext?, element: BindingElement?): Node? {
     if (element!!.dotDotDotToken != null) {
         val spread: Node? = emitContext!!.factory!!.nodeFactory.newSpreadAssignment(element!!.name())
-        emitContext.setOriginal(spread, element!!.nodeBase.nodeDefault.asNode())
-        emitContext.assignCommentAndSourceMapRanges(spread, element!!.nodeBase.nodeDefault.asNode())
+        emitContext.setOriginal(spread, element!!.nodeBase.asNode())
+        emitContext.assignCommentAndSourceMapRanges(spread, element!!.nodeBase.asNode())
         return spread
     }
     if (element!!.propertyName != null) {
@@ -175,8 +175,8 @@ fun convertBindingElementToObjectAssignmentElement(emitContext: EmitContext?, el
             expression = emitContext!!.factory.newAssignmentExpression(expression, element!!.initializer)
         }
         val assignment: Node? = emitContext!!.factory!!.nodeFactory.newPropertyAssignment(null, element!!.propertyName, null, null, expression)
-        emitContext.setOriginal(assignment, element!!.nodeBase.nodeDefault.asNode())
-        emitContext.assignCommentAndSourceMapRanges(assignment, element!!.nodeBase.nodeDefault.asNode())
+        emitContext.setOriginal(assignment, element!!.nodeBase.asNode())
+        emitContext.assignCommentAndSourceMapRanges(assignment, element!!.nodeBase.asNode())
         return assignment
     }
     var equalsToken: Node? = null
@@ -184,14 +184,14 @@ fun convertBindingElementToObjectAssignmentElement(emitContext: EmitContext?, el
         equalsToken = emitContext!!.factory!!.nodeFactory.newToken(Kind(63))
     }
     val assignment_1: Node? = emitContext!!.factory!!.nodeFactory.newShorthandPropertyAssignment(null, element!!.name(), null, null, equalsToken, element!!.initializer)
-    emitContext.setOriginal(assignment_1, element!!.nodeBase.nodeDefault.asNode())
-    emitContext.assignCommentAndSourceMapRanges(assignment_1, element!!.nodeBase.nodeDefault.asNode())
+    emitContext.setOriginal(assignment_1, element!!.nodeBase.asNode())
+    emitContext.assignCommentAndSourceMapRanges(assignment_1, element!!.nodeBase.asNode())
     return assignment_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers.ConvertBindingPatternToAssignmentPattern 7f12ddee
 fun convertBindingPatternToAssignmentPattern(emitContext: EmitContext?, element: BindingPattern?): Node? {
-    when (element!!.nodeBase.nodeDefault.node.kind.value) {
+    when (element!!.nodeBase.node.kind.value) {
         208 -> {
             return convertBindingElementToArrayAssignmentPattern(emitContext, element)
         }
@@ -216,8 +216,8 @@ fun convertBindingElementToObjectAssignmentPattern(emitContext: EmitContext?, el
     val propertyList: NodeList? = emitContext!!.factory!!.nodeFactory.newNodeList(properties)
     propertyList!!.loc = element!!.elements!!.loc.goCopy()
     val object_: Node? = emitContext!!.factory!!.nodeFactory.newObjectLiteralExpression(propertyList, false)
-    emitContext.setOriginal(object_, element!!.nodeBase.nodeDefault.asNode())
-    emitContext.assignCommentAndSourceMapRanges(object_, element!!.nodeBase.nodeDefault.asNode())
+    emitContext.setOriginal(object_, element!!.nodeBase.asNode())
+    emitContext.assignCommentAndSourceMapRanges(object_, element!!.nodeBase.asNode())
     return object_
 }
 
@@ -232,8 +232,8 @@ fun convertBindingElementToArrayAssignmentPattern(emitContext: EmitContext?, ele
     val elementList: NodeList? = emitContext!!.factory!!.nodeFactory.newNodeList(elements)
     elementList!!.loc = element!!.elements!!.loc.goCopy()
     val object_: Node? = emitContext!!.factory!!.nodeFactory.newArrayLiteralExpression(elementList, false)
-    emitContext.setOriginal(object_, element!!.nodeBase.nodeDefault.asNode())
-    emitContext.assignCommentAndSourceMapRanges(object_, element!!.nodeBase.nodeDefault.asNode())
+    emitContext.setOriginal(object_, element!!.nodeBase.asNode())
+    emitContext.assignCommentAndSourceMapRanges(object_, element!!.nodeBase.asNode())
     return object_
 }
 
@@ -252,8 +252,8 @@ fun convertVariableDeclarationToAssignmentExpression(emitContext: EmitContext?, 
     }
     val expression: Node? = convertBindingNameToAssignmentElementTarget(emitContext, element!!.name())
     val assignment: Node? = emitContext!!.factory.newAssignmentExpression(expression, element!!.initializer)
-    emitContext.setOriginal(assignment, element!!.nodeBase.nodeDefault.asNode())
-    emitContext.assignCommentAndSourceMapRanges(assignment, element!!.nodeBase.nodeDefault.asNode())
+    emitContext.setOriginal(assignment, element!!.nodeBase.asNode())
+    emitContext.assignCommentAndSourceMapRanges(assignment, element!!.nodeBase.asNode())
     return assignment
 }
 

@@ -383,7 +383,7 @@ fun NodeFactory?.createForOfBindingStatement(node: Node?, boundValue: Node?): No
     if (com.xemantic.typescript.tsgo.ast.isVariableDeclarationList(node)) {
         val firstDeclaration: Node? = node.asVariableDeclarationList()!!.declarations!!.nodes[0]
         val updatedDeclaration: Node? = this!!.nodeFactory.updateVariableDeclaration(firstDeclaration.asVariableDeclaration(), firstDeclaration.name(), null, null, boundValue)
-        val statement: Node? = this!!.nodeFactory.newVariableStatement(null, this!!.nodeFactory.updateVariableDeclarationList(node.asVariableDeclarationList(), this!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), updatedDeclaration)), node.asVariableDeclarationList()!!.nodeBase.nodeDefault.node.flags))
+        val statement: Node? = this!!.nodeFactory.newVariableStatement(null, this!!.nodeFactory.updateVariableDeclarationList(node.asVariableDeclarationList(), this!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), updatedDeclaration)), node.asVariableDeclarationList()!!.nodeBase.node.flags))
         statement!!.loc = node!!.loc.goCopy()
         return statement
     }

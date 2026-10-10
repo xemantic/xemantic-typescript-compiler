@@ -677,7 +677,7 @@ fun getSymbolScope(symbol: Symbol?): Node? {
         scope = container
     }
     if (exposedByParent) {
-        return com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(scope)!!.nodeBase.nodeDefault.asNode()
+        return com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(scope)!!.nodeBase.asNode()
     }
     return scope
 }
@@ -1082,7 +1082,7 @@ fun LanguageService?.definitionToReferencedSymbolDefinitionInfo(ctx: Context?, d
             if (def!!.tripleSlashFileRef == null || def!!.tripleSlashFileRef!!.file == null) {
                 return null
             }
-            val node_5: Node? = def!!.tripleSlashFileRef!!.file!!.nodeBase.nodeDefault.asNode()
+            val node_5: Node? = def!!.tripleSlashFileRef!!.file!!.nodeBase.asNode()
             val loc_5: Location = this.getLocationOfEntry(ReferenceEntry(kind = entryKindNode, node = node_5))
             return com.xemantic.typescript.tsgo.ls.referencedSymbolDefinitionInfo(node = node_5, location = loc_5.goCopy(), displayText = VSClassifiedTextElement(runs = GoSlice.of(GoElem.ref<VSClassifiedTextRun?>(), VSClassifiedTextRun(text = "\"" + def!!.tripleSlashFileRef!!.reference!!.fileName + "\"", classificationTypeName = "string"))))
         }
@@ -1546,7 +1546,7 @@ fun getReferencesForThisKeyword(thisOrSuperKeyword: Node?, sourceFiles: GoSlice<
         filesToSearch = GoSlice.of(GoElem.ref<SourceFile?>(), com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(searchSpaceNode))
     }
     val references: GoSlice<ReferenceEntry?> = com.xemantic.typescript.tsgo.core.map<Node?, ReferenceEntry?>(GoElem.ref<Node?>(), GoElem.ref<ReferenceEntry?>(), com.xemantic.typescript.tsgo.core.flatMap<SourceFile?, Node?>(GoElem.ref<SourceFile?>(), GoElem.ref<Node?>(), filesToSearch, fun(sourceFile: SourceFile?): GoSlice<Node?> {
-        return com.xemantic.typescript.tsgo.core.filter<Node?>(GoElem.ref<Node?>(), getPossibleSymbolReferenceNodes(sourceFile, "this", com.xemantic.typescript.tsgo.core.ifElse<Node?>(GoElem.ref<Node?>(), searchSpaceNode!!.kind.value == 307, sourceFile!!.nodeBase.nodeDefault.asNode(), searchSpaceNode)), fun(node_1: Node?): Boolean {
+        return com.xemantic.typescript.tsgo.core.filter<Node?>(GoElem.ref<Node?>(), getPossibleSymbolReferenceNodes(sourceFile, "this", com.xemantic.typescript.tsgo.core.ifElse<Node?>(GoElem.ref<Node?>(), searchSpaceNode!!.kind.value == 307, sourceFile!!.nodeBase.asNode(), searchSpaceNode)), fun(node_1: Node?): Boolean {
             if (!isThis(node_1)) {
                 return false
             }
@@ -1618,7 +1618,7 @@ fun getReferencesForSuperKeyword(superKeyword: Node?): GoSlice<SymbolAndEntries?
 // go: github.com/microsoft/typescript-go/internal/ls.getAllReferencesForImportMeta 22a02436
 fun getAllReferencesForImportMeta(sourceFiles: GoSlice<SourceFile?>): GoSlice<SymbolAndEntries?> {
     val references: GoSlice<ReferenceEntry?> = com.xemantic.typescript.tsgo.core.flatMap<SourceFile?, ReferenceEntry?>(GoElem.ref<SourceFile?>(), GoElem.ref<ReferenceEntry?>(), sourceFiles, fun(sourceFile: SourceFile?): GoSlice<ReferenceEntry?> {
-        return com.xemantic.typescript.tsgo.core.mapNonNil<Node?, ReferenceEntry?>(GoElem.ref<Node?>(), GoElem.ref<ReferenceEntry?>(), getPossibleSymbolReferenceNodes(sourceFile, "meta", sourceFile!!.nodeBase.nodeDefault.asNode()), fun(node: Node?): ReferenceEntry? {
+        return com.xemantic.typescript.tsgo.core.mapNonNil<Node?, ReferenceEntry?>(GoElem.ref<Node?>(), GoElem.ref<ReferenceEntry?>(), getPossibleSymbolReferenceNodes(sourceFile, "meta", sourceFile!!.nodeBase.asNode()), fun(node: Node?): ReferenceEntry? {
             val parent: Node? = node!!.parent
             if (com.xemantic.typescript.tsgo.ast.isImportMeta(parent)) {
                 return newNodeEntry(parent)
@@ -1635,7 +1635,7 @@ fun getAllReferencesForImportMeta(sourceFiles: GoSlice<SourceFile?>): GoSlice<Sy
 // go: github.com/microsoft/typescript-go/internal/ls.getAllReferencesForKeyword b4b1528d
 fun getAllReferencesForKeyword(sourceFiles: GoSlice<SourceFile?>, keywordKind: Kind, filterReadOnlyTypeOperator: Boolean): GoSlice<SymbolAndEntries?> {
     val references: GoSlice<ReferenceEntry?> = com.xemantic.typescript.tsgo.core.flatMap<SourceFile?, ReferenceEntry?>(GoElem.ref<SourceFile?>(), GoElem.ref<ReferenceEntry?>(), sourceFiles, fun(sourceFile: SourceFile?): GoSlice<ReferenceEntry?> {
-        return com.xemantic.typescript.tsgo.core.mapNonNil<Node?, ReferenceEntry?>(GoElem.ref<Node?>(), GoElem.ref<ReferenceEntry?>(), getPossibleSymbolReferenceNodes(sourceFile, com.xemantic.typescript.tsgo.scanner.tokenToString(keywordKind), sourceFile!!.nodeBase.nodeDefault.asNode()), fun(referenceLocation: Node?): ReferenceEntry? {
+        return com.xemantic.typescript.tsgo.core.mapNonNil<Node?, ReferenceEntry?>(GoElem.ref<Node?>(), GoElem.ref<ReferenceEntry?>(), getPossibleSymbolReferenceNodes(sourceFile, com.xemantic.typescript.tsgo.scanner.tokenToString(keywordKind), sourceFile!!.nodeBase.asNode()), fun(referenceLocation: Node?): ReferenceEntry? {
             if (referenceLocation!!.kind.value == keywordKind.value && (!filterReadOnlyTypeOperator || isReadonlyTypeOperator(referenceLocation))) {
                 return newNodeEntry(referenceLocation)
             }
@@ -1652,7 +1652,7 @@ fun getAllReferencesForKeyword(sourceFiles: GoSlice<SourceFile?>, keywordKind: K
 fun getPossibleSymbolReferenceNodes(sourceFile: SourceFile?, symbolName: String, container: Node?): GoSlice<Node?> {
     return com.xemantic.typescript.tsgo.core.mapNonNil<Int, Node?>(GoElem.INT, GoElem.ref<Node?>(), getPossibleSymbolReferencePositions(sourceFile, symbolName, container), fun(pos: Int): Node? {
         val referenceLocation: Node? = com.xemantic.typescript.tsgo.astnav.getTouchingPropertyName(sourceFile, pos)
-        if (referenceLocation !== sourceFile!!.nodeBase.nodeDefault.asNode()) {
+        if (referenceLocation !== sourceFile!!.nodeBase.asNode()) {
             return referenceLocation
         }
         return null
@@ -1670,7 +1670,7 @@ fun getPossibleSymbolReferencePositions(sourceFile: SourceFile?, symbolName: Str
     val sourceLength: Int = text.length
     val symbolNameLength: Int = symbolName.length
     if (container == null) {
-        container = sourceFile!!.nodeBase.nodeDefault.asNode()
+        container = sourceFile!!.nodeBase.asNode()
     }
     var position: Int = com.xemantic.typescript.tsgo.go.strings.indexAt(text, container!!.pos(), symbolName)
     val endPos: Int = container!!.end()
@@ -1764,13 +1764,13 @@ fun LanguageService?.getReferencedSymbolsForModule(ctx: Context?, program: Progr
                 2 -> {
                     var rangeNode: Node? = null
                     if (reference.literal.text() != "tslib") {
-                        rangeNode = findFirstJsxNode(reference.referencingFile!!.nodeBase.nodeDefault.asNode())
+                        rangeNode = findFirstJsxNode(reference.referencingFile!!.nodeBase.asNode())
                     }
                     if (rangeNode == null) {
                         if (reference.referencingFile!!.statements != null && reference.referencingFile!!.statements!!.nodes.len > 0) {
                             rangeNode = reference.referencingFile!!.statements!!.nodes[0]
                         } else {
-                            rangeNode = reference.referencingFile!!.nodeBase.nodeDefault.asNode()
+                            rangeNode = reference.referencingFile!!.nodeBase.asNode()
                         }
                     }
                     return newNodeEntry(rangeNode)
@@ -2223,7 +2223,7 @@ fun com.xemantic.typescript.tsgo.ls.refState?.getReferencesInContainerOrFiles(sy
 
 // go: github.com/microsoft/typescript-go/internal/ls.refState.getReferencesInSourceFile 9bbd189e
 fun com.xemantic.typescript.tsgo.ls.refState?.getReferencesInSourceFile(sourceFile: SourceFile?, search: com.xemantic.typescript.tsgo.ls.refSearch?, addReferencesHere: Boolean) {
-    this.getReferencesInContainer(sourceFile!!.nodeBase.nodeDefault.asNode(), sourceFile, search, addReferencesHere)
+    this.getReferencesInContainer(sourceFile!!.nodeBase.asNode(), sourceFile, search, addReferencesHere)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.refState.getReferencesInContainer ca04e855
@@ -2401,7 +2401,7 @@ fun com.xemantic.typescript.tsgo.ls.refState?.markSeenReExportRHS(node: Node?): 
 // go: github.com/microsoft/typescript-go/internal/ls.refState.getReferencesAtExportSpecifier 515d9d06
 fun com.xemantic.typescript.tsgo.ls.refState?.getReferencesAtExportSpecifier(referenceLocation: Node?, referenceSymbol: Symbol?, exportSpecifier: ExportSpecifier?, search: com.xemantic.typescript.tsgo.ls.refSearch?, addReferencesHere: Boolean, alwaysGetReferences: Boolean) {
     com.xemantic.typescript.tsgo.debug.assert(!alwaysGetReferences || this!!.options.useAliasesForRename, GoSlice.of(GoElem.ref<Any?>(), "If alwaysGetReferences is true, then prefix/suffix text must be enabled"))
-    val exportDeclaration: ExportDeclaration? = exportSpecifier!!.nodeBase.nodeDefault.node.parent!!.parent.asExportDeclaration()
+    val exportDeclaration: ExportDeclaration? = exportSpecifier!!.nodeBase.node.parent!!.parent.asExportDeclaration()
     val propertyName: Node? = exportSpecifier!!.propertyName
     val name: Node? = exportSpecifier!!.name()
     val localSymbol: Symbol? = getLocalSymbolForExportSpecifier(referenceLocation, referenceSymbol, exportSpecifier, this!!.checker)
@@ -2422,7 +2422,7 @@ fun com.xemantic.typescript.tsgo.ls.refState?.getReferencesAtExportSpecifier(ref
             addRef!!()
         }
         if (addReferencesHere && this!!.options.use.value != 3 && this.markSeenReExportRHS(name)) {
-            val exportSymbol: Symbol? = exportSpecifier!!.nodeBase.nodeDefault.asNode().symbol()
+            val exportSymbol: Symbol? = exportSpecifier!!.nodeBase.asNode().symbol()
             com.xemantic.typescript.tsgo.debug.assert(exportSymbol != null, GoSlice.of(GoElem.ref<Any?>(), "exportSpecifier.Symbol() should not be nil"))
             this.addReference(name, exportSymbol, entryKindNode)
         }
@@ -2437,7 +2437,7 @@ fun com.xemantic.typescript.tsgo.ls.refState?.getReferencesAtExportSpecifier(ref
         if (isDefaultExport) {
             exportKind = ExportKindDefault
         }
-        val exportSymbol_1: Symbol? = exportSpecifier!!.nodeBase.nodeDefault.asNode().symbol()
+        val exportSymbol_1: Symbol? = exportSpecifier!!.nodeBase.asNode().symbol()
         com.xemantic.typescript.tsgo.debug.assert(exportSymbol_1 != null, GoSlice.of(GoElem.ref<Any?>(), "exportSpecifier.Symbol() should not be nil"))
         val exportInfo: ExportInfo? = getExportInfo(exportSymbol_1, exportKind, this!!.checker)
         if (exportInfo != null) {
@@ -2445,7 +2445,7 @@ fun com.xemantic.typescript.tsgo.ls.refState?.getReferencesAtExportSpecifier(ref
         }
     }
     if (search!!.comingFrom.value != 2 && exportDeclaration!!.moduleSpecifier != null && propertyName == null && !isForRenameWithPrefixAndSuffixText(this!!.options.goCopy())) {
-        val imported: Symbol? = this!!.checker.getExportSpecifierLocalTargetSymbol(exportSpecifier!!.nodeBase.nodeDefault.asNode())
+        val imported: Symbol? = this!!.checker.getExportSpecifierLocalTargetSymbol(exportSpecifier!!.nodeBase.asNode())
         if (imported != null) {
             this.searchForImportedSymbol(imported)
         }

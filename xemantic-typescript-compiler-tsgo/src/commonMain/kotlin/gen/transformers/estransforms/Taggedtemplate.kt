@@ -114,7 +114,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.taggedTemplateTransfo
 fun com.xemantic.typescript.tsgo.transformers.estransforms.taggedTemplateTransformer?.visitSourceFile(node: SourceFile?): Node? {
     this!!.currentSourceFile = node
     this!!.taggedTemplateStringDeclarations = GoElem.ref<Node?>().nilSlice
-    var visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    var visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
     if (this!!.taggedTemplateStringDeclarations.len > 0) {
         val visitedSourceFile: SourceFile? = visited.asSourceFile()
         val statements: GoSlice<Node?> = visitedSourceFile!!.statements!!.nodes.slice3(0, visitedSourceFile!!.statements!!.nodes.len, visitedSourceFile!!.statements!!.nodes.len).append1(this!!.transformer.factory()!!.nodeFactory.newVariableStatement(null, this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(this!!.taggedTemplateStringDeclarations), NodeFlags(0u))))
@@ -136,7 +136,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.taggedTemplateTransfo
     val tag: Node? = this!!.transformer.visitor().visitNode(node!!.tag)
     val template: Node? = node!!.template
     if (!hasInvalidEscape(template)) {
-        return this!!.transformer.visitor().visitEachChild(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        return this!!.transformer.visitor().visitEachChild(node!!.memberExpressionBase.asNode())
     }
     val f: NodeFactory? = this!!.transformer.factory()
     var templateArguments: GoSlice<Node?> = GoSlice.of(GoElem.ref<Node?>(), null)
@@ -167,7 +167,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.taggedTemplateTransfo
         templateArguments[0] = helperCall
     }
     val call: Node? = f!!.nodeFactory.newCallExpression(tag, null, null, f!!.nodeFactory.newNodeList(templateArguments), NodeFlags(0u))
-    call!!.loc = node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+    call!!.loc = node!!.memberExpressionBase.node.loc.goCopy()
     return call
 }
 

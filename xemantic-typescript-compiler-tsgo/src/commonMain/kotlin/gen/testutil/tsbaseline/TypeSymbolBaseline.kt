@@ -303,14 +303,14 @@ class typeWriterResult(
 fun com.xemantic.typescript.tsgo.testutil.tsbaseline.typeWriterWalker?.getTypes(filename: String): GoSlice<com.xemantic.typescript.tsgo.testutil.tsbaseline.typeWriterResult?> {
     val sourceFile: SourceFile? = this!!.program!!.getSourceFile(filename)
     this!!.currentSourceFile = sourceFile
-    return this.visitNode(sourceFile!!.nodeBase.nodeDefault.asNode(), false)
+    return this.visitNode(sourceFile!!.nodeBase.asNode(), false)
 }
 
 // go: github.com/microsoft/typescript-go/internal/testutil/tsbaseline.typeWriterWalker.getSymbols f09c9b7d
 fun com.xemantic.typescript.tsgo.testutil.tsbaseline.typeWriterWalker?.getSymbols(filename: String): GoSlice<com.xemantic.typescript.tsgo.testutil.tsbaseline.typeWriterResult?> {
     val sourceFile: SourceFile? = this!!.program!!.getSourceFile(filename)
     this!!.currentSourceFile = sourceFile
-    return this.visitNode(sourceFile!!.nodeBase.nodeDefault.asNode(), true)
+    return this.visitNode(sourceFile!!.nodeBase.asNode(), true)
 }
 
 // go: github.com/microsoft/typescript-go/internal/testutil/tsbaseline.typeWriterWalker.visitNode 5c4be6b8

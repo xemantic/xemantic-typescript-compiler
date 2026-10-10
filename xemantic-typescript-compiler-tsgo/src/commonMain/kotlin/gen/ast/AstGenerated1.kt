@@ -168,51 +168,51 @@ class StatementBase(
 
     fun goHash(): Int = 31 * nodeBase.goHash() + 31 * flowNodeBase.goHash()
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<StatementBase> = GoElem({ StatementBase() }, { it.goCopy() })
@@ -236,51 +236,51 @@ class IterationStatementBase(
 
     fun goHash(): Int = 31 * statementBase.goHash() + 31 * statement.hashCode()
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.statementBase.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.statementBase.nodeBase.clone(p0)
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.statementBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.statementBase.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.statementBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.statementBase.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<IterationStatementBase> = GoElem({ IterationStatementBase() }, { it.goCopy() })
@@ -288,400 +288,28 @@ class IterationStatementBase(
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.ExpressionBase 84981a31
-class ExpressionBase(
-    @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
-
-    fun goCopy(): ExpressionBase = ExpressionBase(nodeBase = nodeBase.goCopy())
-
-    fun goSet(o: ExpressionBase) {
-        nodeBase = o.nodeBase.goCopy()
-    }
-
-    fun goEquals(o: ExpressionBase): Boolean = nodeBase.goEquals(o.nodeBase)
-
-    fun goHash(): Int = 31 * nodeBase.goHash()
-
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
-
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.nodeDefault.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
-
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
-
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
-
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
-
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
-
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
-
-    companion object {
-        val ELEM: GoElem<ExpressionBase> = GoElem({ ExpressionBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias ExpressionBase = NodeBase
 
 // go: github.com/microsoft/typescript-go/internal/ast.UnaryExpressionBase dba8e5c3
-class UnaryExpressionBase(
-    @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
-
-    fun goCopy(): UnaryExpressionBase = UnaryExpressionBase(expressionBase = expressionBase.goCopy())
-
-    fun goSet(o: UnaryExpressionBase) {
-        expressionBase = o.expressionBase.goCopy()
-    }
-
-    fun goEquals(o: UnaryExpressionBase): Boolean = expressionBase.goEquals(o.expressionBase)
-
-    fun goHash(): Int = 31 * expressionBase.goHash()
-
-    override fun asNode(): Node? = this.expressionBase.nodeBase.nodeDefault.asNode()
-
-    override fun bodyData(): BodyBase? = this.expressionBase.nodeBase.nodeDefault.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.expressionBase.nodeBase.nodeDefault.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.expressionBase.nodeBase.nodeDefault.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
-
-    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
-
-    override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.nodeBase.nodeDefault.functionLikeData()
-
-    override fun kindString(): String = this.expressionBase.nodeBase.nodeDefault.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.nodeBase.nodeDefault.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.expressionBase.nodeBase.nodeDefault.modifiers()
-
-    override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
-
-    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
-
-    companion object {
-        val ELEM: GoElem<UnaryExpressionBase> = GoElem({ UnaryExpressionBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias UnaryExpressionBase = ExpressionBase
 
 // go: github.com/microsoft/typescript-go/internal/ast.UpdateExpressionBase 789f91d6
-class UpdateExpressionBase(
-    @kotlin.jvm.JvmField var unaryExpressionBase: UnaryExpressionBase = UnaryExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
-
-    fun goCopy(): UpdateExpressionBase = UpdateExpressionBase(unaryExpressionBase = unaryExpressionBase.goCopy())
-
-    fun goSet(o: UpdateExpressionBase) {
-        unaryExpressionBase = o.unaryExpressionBase.goCopy()
-    }
-
-    fun goEquals(o: UpdateExpressionBase): Boolean = unaryExpressionBase.goEquals(o.unaryExpressionBase)
-
-    fun goHash(): Int = 31 * unaryExpressionBase.goHash()
-
-    override fun asNode(): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
-
-    override fun bodyData(): BodyBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
-
-    override fun end(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
-
-    override fun exportableData(): ExportableBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
-
-    override fun kindString(): String = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
-
-    override fun name(): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
-
-    override fun pos(): Int = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
-
-    companion object {
-        val ELEM: GoElem<UpdateExpressionBase> = GoElem({ UpdateExpressionBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias UpdateExpressionBase = UnaryExpressionBase
 
 // go: github.com/microsoft/typescript-go/internal/ast.LeftHandSideExpressionBase badd9fe3
-class LeftHandSideExpressionBase(
-    @kotlin.jvm.JvmField var updateExpressionBase: UpdateExpressionBase = UpdateExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
-
-    fun goCopy(): LeftHandSideExpressionBase = LeftHandSideExpressionBase(updateExpressionBase = updateExpressionBase.goCopy())
-
-    fun goSet(o: LeftHandSideExpressionBase) {
-        updateExpressionBase = o.updateExpressionBase.goCopy()
-    }
-
-    fun goEquals(o: LeftHandSideExpressionBase): Boolean = updateExpressionBase.goEquals(o.updateExpressionBase)
-
-    fun goHash(): Int = 31 * updateExpressionBase.goHash()
-
-    override fun asNode(): Node? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
-
-    override fun bodyData(): BodyBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
-
-    override fun end(): Int = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
-
-    override fun exportableData(): ExportableBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
-
-    override fun kindString(): String = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
-
-    override fun name(): Node? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
-
-    override fun pos(): Int = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
-
-    companion object {
-        val ELEM: GoElem<LeftHandSideExpressionBase> = GoElem({ LeftHandSideExpressionBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias LeftHandSideExpressionBase = UpdateExpressionBase
 
 // go: github.com/microsoft/typescript-go/internal/ast.MemberExpressionBase 32b055d5
-class MemberExpressionBase(
-    @kotlin.jvm.JvmField var leftHandSideExpressionBase: LeftHandSideExpressionBase = LeftHandSideExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
-
-    fun goCopy(): MemberExpressionBase = MemberExpressionBase(leftHandSideExpressionBase = leftHandSideExpressionBase.goCopy())
-
-    fun goSet(o: MemberExpressionBase) {
-        leftHandSideExpressionBase = o.leftHandSideExpressionBase.goCopy()
-    }
-
-    fun goEquals(o: MemberExpressionBase): Boolean = leftHandSideExpressionBase.goEquals(o.leftHandSideExpressionBase)
-
-    fun goHash(): Int = 31 * leftHandSideExpressionBase.goHash()
-
-    override fun asNode(): Node? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
-
-    override fun bodyData(): BodyBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
-
-    override fun end(): Int = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
-
-    override fun exportableData(): ExportableBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
-
-    override fun kindString(): String = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
-
-    override fun name(): Node? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
-
-    override fun pos(): Int = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
-
-    companion object {
-        val ELEM: GoElem<MemberExpressionBase> = GoElem({ MemberExpressionBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias MemberExpressionBase = LeftHandSideExpressionBase
 
 // go: github.com/microsoft/typescript-go/internal/ast.PrimaryExpressionBase a19acdad
-class PrimaryExpressionBase(
-    @kotlin.jvm.JvmField var memberExpressionBase: MemberExpressionBase = MemberExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
-
-    fun goCopy(): PrimaryExpressionBase = PrimaryExpressionBase(memberExpressionBase = memberExpressionBase.goCopy())
-
-    fun goSet(o: PrimaryExpressionBase) {
-        memberExpressionBase = o.memberExpressionBase.goCopy()
-    }
-
-    fun goEquals(o: PrimaryExpressionBase): Boolean = memberExpressionBase.goEquals(o.memberExpressionBase)
-
-    fun goHash(): Int = 31 * memberExpressionBase.goHash()
-
-    override fun asNode(): Node? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
-
-    override fun bodyData(): BodyBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
-
-    override fun end(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
-
-    override fun exportableData(): ExportableBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
-
-    override fun kindString(): String = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
-
-    override fun name(): Node? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
-
-    override fun pos(): Int = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
-
-    companion object {
-        val ELEM: GoElem<PrimaryExpressionBase> = GoElem({ PrimaryExpressionBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias PrimaryExpressionBase = MemberExpressionBase
 
 // go: github.com/microsoft/typescript-go/internal/ast.TypeNodeBase 0dce3b43
 class TypeNodeBase(
@@ -700,51 +328,51 @@ class TypeNodeBase(
 
     fun goHash(): Int = 31 * nodeBase.goHash() + 31 * typeSyntaxBase.hashCode()
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<TypeNodeBase> = GoElem({ TypeNodeBase() }, { it.goCopy() })
@@ -768,51 +396,51 @@ class NodeWithTypeArgumentsBase(
 
     fun goHash(): Int = 31 * typeNodeBase.goHash() + 31 * typeArguments.hashCode()
 
-    override fun asNode(): Node? = this.typeNodeBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.typeNodeBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.typeNodeBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.typeNodeBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.typeNodeBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.typeNodeBase.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.typeNodeBase.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.typeNodeBase.nodeBase.clone(p0)
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.typeNodeBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.typeNodeBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.typeNodeBase.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.typeNodeBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.typeNodeBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.typeNodeBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.typeNodeBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.typeNodeBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.typeNodeBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.typeNodeBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.typeNodeBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.typeNodeBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.typeNodeBase.nodeBase.name()
 
-    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.typeNodeBase.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.typeNodeBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.typeNodeBase.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<NodeWithTypeArgumentsBase> = GoElem({ NodeWithTypeArgumentsBase() }, { it.goCopy() })
@@ -820,70 +448,8 @@ class NodeWithTypeArgumentsBase(
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocTypeBase b2a64fee
-class JSDocTypeBase(
-    @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
-
-    fun goCopy(): JSDocTypeBase = JSDocTypeBase(typeNodeBase = typeNodeBase.goCopy())
-
-    fun goSet(o: JSDocTypeBase) {
-        typeNodeBase = o.typeNodeBase.goCopy()
-    }
-
-    fun goEquals(o: JSDocTypeBase): Boolean = typeNodeBase.goEquals(o.typeNodeBase)
-
-    fun goHash(): Int = 31 * typeNodeBase.goHash()
-
-    override fun asNode(): Node? = this.typeNodeBase.nodeBase.nodeDefault.asNode()
-
-    override fun bodyData(): BodyBase? = this.typeNodeBase.nodeBase.nodeDefault.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.typeNodeBase.nodeBase.nodeDefault.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.typeNodeBase.nodeBase.nodeDefault.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
-
-    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
-
-    override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.typeNodeBase.nodeBase.nodeDefault.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.typeNodeBase.nodeBase.nodeDefault.functionLikeData()
-
-    override fun kindString(): String = this.typeNodeBase.nodeBase.nodeDefault.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.typeNodeBase.nodeBase.nodeDefault.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.typeNodeBase.nodeBase.nodeDefault.modifiers()
-
-    override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
-
-    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.typeNodeBase.nodeBase.nodeDefault.visitEachChild(p0)
-
-    companion object {
-        val ELEM: GoElem<JSDocTypeBase> = GoElem({ JSDocTypeBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias JSDocTypeBase = TypeNodeBase
 
 // go: github.com/microsoft/typescript-go/internal/ast.DeclarationBase d2d22872
 class DeclarationBase(
@@ -1160,51 +726,51 @@ class LiteralExpressionBase(
 
     fun goHash(): Int = 31 * literalLikeNodeBase.goHash() + 31 * primaryExpressionBase.goHash()
 
-    override fun asNode(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.primaryExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.primaryExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.primaryExpressionBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.primaryExpressionBase.clone(p0)
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.declarationData()
 
-    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.primaryExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.primaryExpressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.primaryExpressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.primaryExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.primaryExpressionBase.node.kindString()
 
     override fun literalLikeData(): LiteralLikeNodeBase? = this.literalLikeNodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.primaryExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.primaryExpressionBase.modifiers()
 
-    override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.primaryExpressionBase.name()
 
-    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.primaryExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.primaryExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.primaryExpressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<LiteralExpressionBase> = GoElem({ LiteralExpressionBase() }, { it.goCopy() })
@@ -1352,32 +918,32 @@ class AccessorDeclarationBase(
 
     // go: github.com/microsoft/typescript-go/internal/ast.AccessorDeclarationBase.propagateSubtreeFacts c5944feb
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.nodeBase.nodeDefault.subtreeFacts().value and 4260970495u or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.namedMemberBase.name).value)
+        return SubtreeFacts(this.nodeBase.subtreeFacts().value and 4260970495u or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.namedMemberBase.name).value)
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
     override fun bodyData(): BodyBase? = this.functionLikeWithBodyBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
 
     override fun declarationData(): DeclarationBase? = this.namedMemberBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeWithBodyBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeWithBodyBase.localsContainerData()
 
@@ -1385,17 +951,17 @@ class AccessorDeclarationBase(
 
     override fun name(): Node? = this.namedMemberBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.namedMemberBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<AccessorDeclarationBase> = GoElem({ AccessorDeclarationBase() }, { it.goCopy() })
@@ -1422,49 +988,49 @@ class FunctionOrConstructorTypeNodeBase(
         return this.functionLikeBase.declarationBase.declarationData()
     }
 
-    override fun asNode(): Node? = this.typeNodeBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.typeNodeBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.typeNodeBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.typeNodeBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.typeNodeBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.typeNodeBase.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.typeNodeBase.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.typeNodeBase.nodeBase.clone(p0)
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.computeSubtreeFacts()
 
-    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.typeNodeBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.typeNodeBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.typeNodeBase.nodeBase.forEachChild(p0)
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeBase.functionLikeData()
 
-    override fun kindString(): String = this.typeNodeBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.typeNodeBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.typeNodeBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.typeNodeBase.nodeBase.name()
 
-    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.typeNodeBase.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.typeNodeBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.typeNodeBase.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<FunctionOrConstructorTypeNodeBase> = GoElem({ FunctionOrConstructorTypeNodeBase() }, { it.goCopy() })
@@ -1488,51 +1054,51 @@ class UnionOrIntersectionTypeNodeBase(
 
     fun goHash(): Int = 31 * typeNodeBase.goHash() + 31 * types.hashCode()
 
-    override fun asNode(): Node? = this.typeNodeBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.typeNodeBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.typeNodeBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.typeNodeBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.typeNodeBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.typeNodeBase.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.typeNodeBase.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.typeNodeBase.nodeBase.clone(p0)
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.typeNodeBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.typeNodeBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.typeNodeBase.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.typeNodeBase.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.typeNodeBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.typeNodeBase.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.typeNodeBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.typeNodeBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.typeNodeBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.typeNodeBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.typeNodeBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.typeNodeBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.typeNodeBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.typeNodeBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.typeNodeBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.typeNodeBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.typeNodeBase.nodeBase.name()
 
-    override fun pos(): Int = this.typeNodeBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.typeNodeBase.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeNodeBase.typeSyntaxBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.typeNodeBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.typeNodeBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.typeNodeBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.typeNodeBase.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.typeNodeBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.typeNodeBase.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<UnionOrIntersectionTypeNodeBase> = GoElem({ UnionOrIntersectionTypeNodeBase() }, { it.goCopy() })
@@ -1558,51 +1124,51 @@ class JSDocTagBase(
 
     fun goHash(): Int = 31 * nodeBase.goHash() + 31 * tagName.hashCode() + 31 * comment.hashCode()
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<JSDocTagBase> = GoElem({ JSDocTagBase() }, { it.goCopy() })
@@ -1622,51 +1188,51 @@ class JSDocCommentBase(
         text = o.text
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<JSDocCommentBase> = GoElem({ JSDocCommentBase() }, { it.goCopy() })
@@ -1690,7 +1256,7 @@ class Token(
 
     // go: github.com/microsoft/typescript-go/internal/ast.Token.computeSubtreeFacts d8e09a46
     override fun computeSubtreeFacts(): SubtreeFacts {
-        when (this.nodeBase.nodeDefault.node.kind.value) {
+        when (this.nodeBase.node.kind.value) {
             160 -> {
                 return SubtreeContainsUsing
             }
@@ -1727,50 +1293,50 @@ class Token(
 
     // go: github.com/microsoft/typescript-go/internal/ast.Token.Clone 3e24c02c
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newToken(this.nodeBase.nodeDefault.node.kind), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newToken(this.nodeBase.node.kind), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<Token> = GoElem({ Token() }, { it.goCopy() })
@@ -1819,50 +1385,50 @@ class Identifier(
 
     // go: github.com/microsoft/typescript-go/internal/ast.Identifier.Clone 9f07d420
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newIdentifier(this.text), this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newIdentifier(this.text), this.primaryExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.primaryExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.primaryExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.primaryExpressionBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.declarationData()
 
-    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.primaryExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.primaryExpressionBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.primaryExpressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.primaryExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.primaryExpressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.primaryExpressionBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.primaryExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.primaryExpressionBase.modifiers()
 
-    override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.primaryExpressionBase.name()
 
-    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.primaryExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.primaryExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.primaryExpressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<Identifier> = GoElem({ Identifier() }, { it.goCopy() })
@@ -1906,50 +1472,50 @@ class PrivateIdentifier(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PrivateIdentifier.Clone 439e0e98
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newPrivateIdentifier(this.text), this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newPrivateIdentifier(this.text), this.primaryExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.primaryExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.primaryExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.primaryExpressionBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.primaryExpressionBase.declarationData()
 
-    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.primaryExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.primaryExpressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.primaryExpressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.primaryExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.primaryExpressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.primaryExpressionBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.primaryExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.primaryExpressionBase.modifiers()
 
-    override fun name(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.primaryExpressionBase.name()
 
-    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.primaryExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.primaryExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.primaryExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.primaryExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.primaryExpressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<PrivateIdentifier> = GoElem({ PrivateIdentifier() }, { it.goCopy() })
@@ -2004,7 +1570,7 @@ class QualifiedName(
 
     // go: github.com/microsoft/typescript-go/internal/ast.QualifiedName.Clone 28800833
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newQualifiedName(this.left, this.right), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newQualifiedName(this.left, this.right), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.QualifiedName.computeSubtreeFacts d29b57e9
@@ -2012,43 +1578,43 @@ class QualifiedName(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.left).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.right).value)
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<QualifiedName> = GoElem({ QualifiedName() }, { it.goCopy() })
@@ -2066,9 +1632,9 @@ fun NodeFactory?.newQualifiedName(left: Node?, right: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateQualifiedName 7ae07731
 fun NodeFactory?.updateQualifiedName(node: QualifiedName?, left: Node?, right: Node?): Node? {
     if (left !== node!!.left || right !== node!!.right) {
-        return updateNode(this.newQualifiedName(left, right), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newQualifiedName(left, right), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsQualifiedName 948f3828
@@ -2107,7 +1673,7 @@ class ComputedPropertyName(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ComputedPropertyName.Clone 56adac84
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newComputedPropertyName(this.expression), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newComputedPropertyName(this.expression), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ComputedPropertyName.computeSubtreeFacts e0297864
@@ -2115,43 +1681,43 @@ class ComputedPropertyName(
         return com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression)
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ComputedPropertyName> = GoElem({ ComputedPropertyName() }, { it.goCopy() })
@@ -2168,9 +1734,9 @@ fun NodeFactory?.newComputedPropertyName(expression: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateComputedPropertyName 4edf7139
 fun NodeFactory?.updateComputedPropertyName(node: ComputedPropertyName?, expression: Node?): Node? {
     if (expression !== node!!.expression) {
-        return updateNode(this.newComputedPropertyName(expression), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newComputedPropertyName(expression), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsComputedPropertyName a84f5896
@@ -2214,46 +1780,46 @@ class Decorator(
 
     // go: github.com/microsoft/typescript-go/internal/ast.Decorator.Clone d589b0d2
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newDecorator(this.expression), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newDecorator(this.expression), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<Decorator> = GoElem({ Decorator() }, { it.goCopy() })
@@ -2270,9 +1836,9 @@ fun NodeFactory?.newDecorator(expression: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateDecorator 4b5cca2a
 fun NodeFactory?.updateDecorator(node: Decorator?, expression: Node?): Node? {
     if (expression !== node!!.expression) {
-        return updateNode(this.newDecorator(expression), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newDecorator(expression), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsDecorator 21ce0ba4
@@ -2297,52 +1863,52 @@ class EmptyStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.EmptyStatement.Clone 966742cd
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newEmptyStatement(), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newEmptyStatement(), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.statementBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.statementBase.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.statementBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.statementBase.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<EmptyStatement> = GoElem({ EmptyStatement() }, { it.goCopy() })
@@ -2395,7 +1961,7 @@ class IfStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.IfStatement.Clone cdff4882
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newIfStatement(this.expression, this.thenStatement, this.elseStatement), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newIfStatement(this.expression, this.thenStatement, this.elseStatement), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.IfStatement.computeSubtreeFacts 997cd639
@@ -2403,43 +1969,43 @@ class IfStatement(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.thenStatement).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.elseStatement).value)
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<IfStatement> = GoElem({ IfStatement() }, { it.goCopy() })
@@ -2458,9 +2024,9 @@ fun NodeFactory?.newIfStatement(expression: Node?, thenStatement: Node?, elseSta
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateIfStatement 4dded6a2
 fun NodeFactory?.updateIfStatement(node: IfStatement?, expression: Node?, thenStatement: Node?, elseStatement: Node?): Node? {
     if (expression !== node!!.expression || thenStatement !== node!!.thenStatement || elseStatement !== node!!.elseStatement) {
-        return updateNode(this.newIfStatement(expression, thenStatement, elseStatement), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newIfStatement(expression, thenStatement, elseStatement), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsIfStatement 1a857d49
@@ -2499,7 +2065,7 @@ class DoStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.DoStatement.Clone 4e62c739
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newDoStatement(this.iterationStatementBase.statement, this.expression), this.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newDoStatement(this.iterationStatementBase.statement, this.expression), this.iterationStatementBase.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.DoStatement.computeSubtreeFacts a1de21c5
@@ -2507,43 +2073,43 @@ class DoStatement(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.iterationStatementBase.statement).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression).value)
     }
 
-    override fun asNode(): Node? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.iterationStatementBase.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.iterationStatementBase.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.iterationStatementBase.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.iterationStatementBase.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.iterationStatementBase.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.iterationStatementBase.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.iterationStatementBase.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.iterationStatementBase.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.iterationStatementBase.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.iterationStatementBase.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.iterationStatementBase.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.iterationStatementBase.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.iterationStatementBase.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.iterationStatementBase.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<DoStatement> = GoElem({ DoStatement() }, { it.goCopy() })
@@ -2561,9 +2127,9 @@ fun NodeFactory?.newDoStatement(statement: Node?, expression: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateDoStatement 7f727d30
 fun NodeFactory?.updateDoStatement(node: DoStatement?, statement: Node?, expression: Node?): Node? {
     if (statement !== node!!.iterationStatementBase.statement || expression !== node!!.expression) {
-        return updateNode(this.newDoStatement(statement, expression), node!!.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newDoStatement(statement, expression), node!!.iterationStatementBase.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.iterationStatementBase.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsDoStatement 5a7f546b
@@ -2602,7 +2168,7 @@ class WhileStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.WhileStatement.Clone 0b6561ec
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newWhileStatement(this.expression, this.iterationStatementBase.statement), this.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newWhileStatement(this.expression, this.iterationStatementBase.statement), this.iterationStatementBase.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.WhileStatement.computeSubtreeFacts 23360472
@@ -2610,43 +2176,43 @@ class WhileStatement(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.iterationStatementBase.statement).value)
     }
 
-    override fun asNode(): Node? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.iterationStatementBase.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.iterationStatementBase.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.iterationStatementBase.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.iterationStatementBase.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.iterationStatementBase.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.iterationStatementBase.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.iterationStatementBase.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.iterationStatementBase.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.iterationStatementBase.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.iterationStatementBase.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.iterationStatementBase.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.iterationStatementBase.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.iterationStatementBase.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.iterationStatementBase.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<WhileStatement> = GoElem({ WhileStatement() }, { it.goCopy() })
@@ -2664,9 +2230,9 @@ fun NodeFactory?.newWhileStatement(expression: Node?, statement: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateWhileStatement 3b4309ec
 fun NodeFactory?.updateWhileStatement(node: WhileStatement?, expression: Node?, statement: Node?): Node? {
     if (expression !== node!!.expression || statement !== node!!.iterationStatementBase.statement) {
-        return updateNode(this.newWhileStatement(expression, statement), node!!.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newWhileStatement(expression, statement), node!!.iterationStatementBase.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.iterationStatementBase.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsWhileStatement 02bbfeb8
@@ -2707,7 +2273,7 @@ class ForStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ForStatement.Clone a0a49533
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newForStatement(this.initializer, this.condition, this.incrementor, this.iterationStatementBase.statement), this.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newForStatement(this.initializer, this.condition, this.incrementor, this.iterationStatementBase.statement), this.iterationStatementBase.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ForStatement.computeSubtreeFacts 448cbc35
@@ -2715,43 +2281,43 @@ class ForStatement(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.initializer).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.condition).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.incrementor).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.iterationStatementBase.statement).value)
     }
 
-    override fun asNode(): Node? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.iterationStatementBase.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.iterationStatementBase.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.iterationStatementBase.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.iterationStatementBase.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.iterationStatementBase.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.iterationStatementBase.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.iterationStatementBase.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.iterationStatementBase.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.iterationStatementBase.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.iterationStatementBase.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.iterationStatementBase.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.iterationStatementBase.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.iterationStatementBase.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.iterationStatementBase.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.iterationStatementBase.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ForStatement> = GoElem({ ForStatement() }, { it.goCopy() })
@@ -2771,9 +2337,9 @@ fun NodeFactory?.newForStatement(initializer: Node?, condition: Node?, increment
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateForStatement 36ce3583
 fun NodeFactory?.updateForStatement(node: ForStatement?, initializer: Node?, condition: Node?, incrementor: Node?, statement: Node?): Node? {
     if (initializer !== node!!.initializer || condition !== node!!.condition || incrementor !== node!!.incrementor || statement !== node!!.iterationStatementBase.statement) {
-        return updateNode(this.newForStatement(initializer, condition, incrementor, statement), node!!.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newForStatement(initializer, condition, incrementor, statement), node!!.iterationStatementBase.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.iterationStatementBase.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsForStatement 42929fb2
@@ -2821,46 +2387,46 @@ class ForInOrOfStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ForInOrOfStatement.Clone a63bd805
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newForInOrOfStatement(this.statementBase.nodeBase.nodeDefault.node.kind, this.awaitModifier, this.initializer, this.expression, this.statement), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newForInOrOfStatement(this.statementBase.nodeBase.node.kind, this.awaitModifier, this.initializer, this.expression, this.statement), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ForInOrOfStatement> = GoElem({ ForInOrOfStatement() }, { it.goCopy() })
@@ -2880,9 +2446,9 @@ fun NodeFactory?.newForInOrOfStatement(kind: Kind, awaitModifier: Node?, initial
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateForInOrOfStatement 71bb0af0
 fun NodeFactory?.updateForInOrOfStatement(node: ForInOrOfStatement?, awaitModifier: Node?, initializer: Node?, expression: Node?, statement: Node?): Node? {
     if (awaitModifier !== node!!.awaitModifier || initializer !== node!!.initializer || expression !== node!!.expression || statement !== node!!.statement) {
-        return updateNode(this.newForInOrOfStatement(node!!.statementBase.nodeBase.nodeDefault.node.kind, awaitModifier, initializer, expression, statement), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newForInOrOfStatement(node!!.statementBase.nodeBase.node.kind, awaitModifier, initializer, expression, statement), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsForInStatement 93311345
@@ -2924,48 +2490,48 @@ class BreakStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.BreakStatement.Clone c9832381
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newBreakStatement(this.label), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newBreakStatement(this.label), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<BreakStatement> = GoElem({ BreakStatement() }, { it.goCopy() })
@@ -2982,9 +2548,9 @@ fun NodeFactory?.newBreakStatement(label: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateBreakStatement 434a0033
 fun NodeFactory?.updateBreakStatement(node: BreakStatement?, label: Node?): Node? {
     if (label !== node!!.label) {
-        return updateNode(this.newBreakStatement(label), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newBreakStatement(label), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsBreakStatement 01ac2416
@@ -3021,48 +2587,48 @@ class ContinueStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ContinueStatement.Clone 859d403a
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newContinueStatement(this.label), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newContinueStatement(this.label), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ContinueStatement> = GoElem({ ContinueStatement() }, { it.goCopy() })
@@ -3079,9 +2645,9 @@ fun NodeFactory?.newContinueStatement(label: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateContinueStatement 75685fd7
 fun NodeFactory?.updateContinueStatement(node: ContinueStatement?, label: Node?): Node? {
     if (label !== node!!.label) {
-        return updateNode(this.newContinueStatement(label), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newContinueStatement(label), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsContinueStatement f25de62c
@@ -3125,46 +2691,46 @@ class ReturnStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ReturnStatement.Clone 3ce08a26
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newReturnStatement(this.expression), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newReturnStatement(this.expression), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ReturnStatement> = GoElem({ ReturnStatement() }, { it.goCopy() })
@@ -3181,9 +2747,9 @@ fun NodeFactory?.newReturnStatement(expression: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateReturnStatement 756186d1
 fun NodeFactory?.updateReturnStatement(node: ReturnStatement?, expression: Node?): Node? {
     if (expression !== node!!.expression) {
-        return updateNode(this.newReturnStatement(expression), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newReturnStatement(expression), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsReturnStatement ea211243
@@ -3224,7 +2790,7 @@ class WithStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.WithStatement.Clone 66ff3191
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newWithStatement(this.expression, this.statement), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newWithStatement(this.expression, this.statement), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.WithStatement.computeSubtreeFacts fd40774f
@@ -3232,43 +2798,43 @@ class WithStatement(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.statement).value)
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<WithStatement> = GoElem({ WithStatement() }, { it.goCopy() })
@@ -3286,9 +2852,9 @@ fun NodeFactory?.newWithStatement(expression: Node?, statement: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateWithStatement 7320649b
 fun NodeFactory?.updateWithStatement(node: WithStatement?, expression: Node?, statement: Node?): Node? {
     if (expression !== node!!.expression || statement !== node!!.statement) {
-        return updateNode(this.newWithStatement(expression, statement), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newWithStatement(expression, statement), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsWithStatement a3d90c47
@@ -3329,7 +2895,7 @@ class SwitchStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SwitchStatement.Clone 17396840
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newSwitchStatement(this.expression, this.caseBlock), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newSwitchStatement(this.expression, this.caseBlock), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SwitchStatement.computeSubtreeFacts de3e6494
@@ -3337,43 +2903,43 @@ class SwitchStatement(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.caseBlock).value)
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<SwitchStatement> = GoElem({ SwitchStatement() }, { it.goCopy() })
@@ -3391,9 +2957,9 @@ fun NodeFactory?.newSwitchStatement(expression: Node?, caseBlock: Node?): Node? 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateSwitchStatement cabdebc3
 fun NodeFactory?.updateSwitchStatement(node: SwitchStatement?, expression: Node?, caseBlock: Node?): Node? {
     if (expression !== node!!.expression || caseBlock !== node!!.caseBlock) {
-        return updateNode(this.newSwitchStatement(expression, caseBlock), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newSwitchStatement(expression, caseBlock), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsSwitchStatement 3f540900
@@ -3430,7 +2996,7 @@ class CaseBlock(
 
     // go: github.com/microsoft/typescript-go/internal/ast.CaseBlock.Clone 22ac9fd7
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newCaseBlock(this.clauses), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newCaseBlock(this.clauses), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.CaseBlock.computeSubtreeFacts e38f750b
@@ -3438,43 +3004,43 @@ class CaseBlock(
         return propagateNodeListSubtreeFacts(this.clauses, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0))
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<CaseBlock> = GoElem({ CaseBlock() }, { it.goCopy() })
@@ -3491,9 +3057,9 @@ fun NodeFactory?.newCaseBlock(clauses: NodeList?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateCaseBlock 0895c518
 fun NodeFactory?.updateCaseBlock(node: CaseBlock?, clauses: NodeList?): Node? {
     if (clauses !== node!!.clauses) {
-        return updateNode(this.newCaseBlock(clauses), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newCaseBlock(clauses), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsCaseBlock 13aa8c6d
@@ -3536,7 +3102,7 @@ class CaseOrDefaultClause(
 
     // go: github.com/microsoft/typescript-go/internal/ast.CaseOrDefaultClause.Clone 8317e4aa
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newCaseOrDefaultClause(this.nodeBase.nodeDefault.node.kind, this.expression, this.statements), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newCaseOrDefaultClause(this.nodeBase.node.kind, this.expression, this.statements), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.CaseOrDefaultClause.computeSubtreeFacts 12c6c1fd
@@ -3544,43 +3110,43 @@ class CaseOrDefaultClause(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression).value or propagateNodeListSubtreeFacts(this.statements, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0)).value)
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<CaseOrDefaultClause> = GoElem({ CaseOrDefaultClause() }, { it.goCopy() })
@@ -3598,9 +3164,9 @@ fun NodeFactory?.newCaseOrDefaultClause(kind: Kind, expression: Node?, statement
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateCaseOrDefaultClause 007b054b
 fun NodeFactory?.updateCaseOrDefaultClause(node: CaseOrDefaultClause?, expression: Node?, statements: NodeList?): Node? {
     if (expression !== node!!.expression || statements !== node!!.statements) {
-        return updateNode(this.newCaseOrDefaultClause(node!!.nodeBase.nodeDefault.node.kind, expression, statements), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newCaseOrDefaultClause(node!!.nodeBase.node.kind, expression, statements), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsCaseClause 058b6c23
@@ -3644,7 +3210,7 @@ class ThrowStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ThrowStatement.Clone 94498e08
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newThrowStatement(this.expression), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newThrowStatement(this.expression), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ThrowStatement.computeSubtreeFacts eb9aebed
@@ -3652,43 +3218,43 @@ class ThrowStatement(
         return com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression)
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ThrowStatement> = GoElem({ ThrowStatement() }, { it.goCopy() })
@@ -3705,9 +3271,9 @@ fun NodeFactory?.newThrowStatement(expression: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateThrowStatement 375f8327
 fun NodeFactory?.updateThrowStatement(node: ThrowStatement?, expression: Node?): Node? {
     if (expression !== node!!.expression) {
-        return updateNode(this.newThrowStatement(expression), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newThrowStatement(expression), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsThrowStatement aa2d5bd9
@@ -3750,7 +3316,7 @@ class TryStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TryStatement.Clone 0444bcd0
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newTryStatement(this.tryBlock, this.catchClause, this.finallyBlock), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newTryStatement(this.tryBlock, this.catchClause, this.finallyBlock), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.TryStatement.computeSubtreeFacts bb4365bc
@@ -3758,43 +3324,43 @@ class TryStatement(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.tryBlock).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.catchClause).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.finallyBlock).value)
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<TryStatement> = GoElem({ TryStatement() }, { it.goCopy() })
@@ -3813,9 +3379,9 @@ fun NodeFactory?.newTryStatement(tryBlock: Node?, catchClause: Node?, finallyBlo
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateTryStatement 3c438995
 fun NodeFactory?.updateTryStatement(node: TryStatement?, tryBlock: Node?, catchClause: Node?, finallyBlock: Node?): Node? {
     if (tryBlock !== node!!.tryBlock || catchClause !== node!!.catchClause || finallyBlock !== node!!.finallyBlock) {
-        return updateNode(this.newTryStatement(tryBlock, catchClause, finallyBlock), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newTryStatement(tryBlock, catchClause, finallyBlock), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsTryStatement bb8e9b93
@@ -3853,7 +3419,7 @@ class CatchClause(
 
     // go: github.com/microsoft/typescript-go/internal/ast.CatchClause.propagateSubtreeFacts 03499d53
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.nodeBase.nodeDefault.subtreeFacts().value and 4261281791u)
+        return SubtreeFacts(this.nodeBase.subtreeFacts().value and 4261281791u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.CatchClause.ForEachChild a3c62e14
@@ -3868,44 +3434,44 @@ class CatchClause(
 
     // go: github.com/microsoft/typescript-go/internal/ast.CatchClause.Clone ee13e048
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newCatchClause(this.variableDeclaration, this.block), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newCatchClause(this.variableDeclaration, this.block), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<CatchClause> = GoElem({ CatchClause() }, { it.goCopy() })
@@ -3923,9 +3489,9 @@ fun NodeFactory?.newCatchClause(variableDeclaration: Node?, block: Node?): Node?
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateCatchClause d3194274
 fun NodeFactory?.updateCatchClause(node: CatchClause?, variableDeclaration: Node?, block: Node?): Node? {
     if (variableDeclaration !== node!!.variableDeclaration || block !== node!!.block) {
-        return updateNode(this.newCatchClause(variableDeclaration, block), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newCatchClause(variableDeclaration, block), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsCatchClause 694ff593
@@ -3950,52 +3516,52 @@ class DebuggerStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.DebuggerStatement.Clone 03d7a35c
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newDebuggerStatement(), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newDebuggerStatement(), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.statementBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.statementBase.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.statementBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.statementBase.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<DebuggerStatement> = GoElem({ DebuggerStatement() }, { it.goCopy() })
@@ -4044,7 +3610,7 @@ class LabeledStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.LabeledStatement.Clone 07df3418
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newLabeledStatement(this.label, this.statement), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newLabeledStatement(this.label, this.statement), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.LabeledStatement.computeSubtreeFacts d68da1e8
@@ -4052,43 +3618,43 @@ class LabeledStatement(
         return SubtreeFacts(com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.label).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.statement).value)
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<LabeledStatement> = GoElem({ LabeledStatement() }, { it.goCopy() })
@@ -4106,9 +3672,9 @@ fun NodeFactory?.newLabeledStatement(label: Node?, statement: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateLabeledStatement 3476d208
 fun NodeFactory?.updateLabeledStatement(node: LabeledStatement?, label: Node?, statement: Node?): Node? {
     if (label !== node!!.label || statement !== node!!.statement) {
-        return updateNode(this.newLabeledStatement(label, statement), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newLabeledStatement(label, statement), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsLabeledStatement ffae10ae
@@ -4145,7 +3711,7 @@ class ExpressionStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExpressionStatement.Clone bf548312
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newExpressionStatement(this.expression), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newExpressionStatement(this.expression), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExpressionStatement.computeSubtreeFacts 2ba7c224
@@ -4153,43 +3719,43 @@ class ExpressionStatement(
         return com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression)
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ExpressionStatement> = GoElem({ ExpressionStatement() }, { it.goCopy() })
@@ -4206,9 +3772,9 @@ fun NodeFactory?.newExpressionStatement(expression: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateExpressionStatement ee79366e
 fun NodeFactory?.updateExpressionStatement(node: ExpressionStatement?, expression: Node?): Node? {
     if (expression !== node!!.expression) {
-        return updateNode(this.newExpressionStatement(expression), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newExpressionStatement(expression), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsExpressionStatement fc9ec305
@@ -4247,7 +3813,7 @@ class Block(
 
     // go: github.com/microsoft/typescript-go/internal/ast.Block.Clone abf62088
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newBlock(this.statements, this.multiLine), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newBlock(this.statements, this.multiLine), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.Block.computeSubtreeFacts a07b115a
@@ -4255,43 +3821,43 @@ class Block(
         return propagateNodeListSubtreeFacts(this.statements, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0))
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<Block> = GoElem({ Block() }, { it.goCopy() })
@@ -4309,9 +3875,9 @@ fun NodeFactory?.newBlock(statements: NodeList?, multiLine: Boolean): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateBlock e2a1e194
 fun NodeFactory?.updateBlock(node: Block?, statements: NodeList?, multiLine: Boolean): Node? {
     if (statements !== node!!.statements || multiLine != node!!.multiLine) {
-        return updateNode(this.newBlock(statements, multiLine), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newBlock(statements, multiLine), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsBlock dc3b6db8
@@ -4362,46 +3928,46 @@ class VariableStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.VariableStatement.Clone d404b40c
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newVariableStatement(this.modifiersBase.modifiers(), this.declarationList), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newVariableStatement(this.modifiersBase.modifiers(), this.declarationList), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<VariableStatement> = GoElem({ VariableStatement() }, { it.goCopy() })
@@ -4419,9 +3985,9 @@ fun NodeFactory?.newVariableStatement(modifiers: ModifierList?, declarationList:
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateVariableStatement d38bf545
 fun NodeFactory?.updateVariableStatement(node: VariableStatement?, modifiers: ModifierList?, declarationList: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || declarationList !== node!!.declarationList) {
-        return updateNode(this.newVariableStatement(modifiers, declarationList), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newVariableStatement(modifiers, declarationList), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsVariableStatement 9f6fbaaf
@@ -4475,7 +4041,7 @@ class VariableDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.VariableDeclaration.Clone 916d115d
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newVariableDeclaration(this.name, this.exclamationToken, this.type, this.initializer), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newVariableDeclaration(this.name, this.exclamationToken, this.type, this.initializer), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.VariableDeclaration.Name a6c9bbfb
@@ -4483,41 +4049,41 @@ class VariableDeclaration(
         return this.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.exportableBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<VariableDeclaration> = GoElem({ VariableDeclaration() }, { it.goCopy() })
@@ -4537,9 +4103,9 @@ fun NodeFactory?.newVariableDeclaration(name: Node?, exclamationToken: Node?, ty
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateVariableDeclaration aa866897
 fun NodeFactory?.updateVariableDeclaration(node: VariableDeclaration?, name: Node?, exclamationToken: Node?, typeNode: Node?, initializer: Node?): Node? {
     if (name !== node!!.name || exclamationToken !== node!!.exclamationToken || typeNode !== node!!.type || initializer !== node!!.initializer) {
-        return updateNode(this.newVariableDeclaration(name, exclamationToken, typeNode, initializer), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newVariableDeclaration(name, exclamationToken, typeNode, initializer), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsVariableDeclaration fcc36ecd
@@ -4568,12 +4134,12 @@ class VariableDeclarationList(
 
     // go: github.com/microsoft/typescript-go/internal/ast.VariableDeclarationList.computeSubtreeFacts 9e21b188
     override fun computeSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(propagateNodeListSubtreeFacts(this.declarations, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0)).value or com.xemantic.typescript.tsgo.core.ifElse<SubtreeFacts>(SubtreeFacts.ELEM, this.nodeBase.nodeDefault.node.flags.value and 4u != 0u, SubtreeContainsUsing, SubtreeFactsNone).value)
+        return SubtreeFacts(propagateNodeListSubtreeFacts(this.declarations, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0)).value or com.xemantic.typescript.tsgo.core.ifElse<SubtreeFacts>(SubtreeFacts.ELEM, this.nodeBase.node.flags.value and 4u != 0u, SubtreeContainsUsing, SubtreeFactsNone).value)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.VariableDeclarationList.propagateSubtreeFacts 20f03cf5
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.nodeBase.nodeDefault.subtreeFacts().value and 4261281791u)
+        return SubtreeFacts(this.nodeBase.subtreeFacts().value and 4261281791u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.VariableDeclarationList.ForEachChild ec6ff2f0
@@ -4583,49 +4149,49 @@ class VariableDeclarationList(
 
     // go: github.com/microsoft/typescript-go/internal/ast.VariableDeclarationList.VisitEachChild 0e871a95
     override fun visitEachChild(v: NodeVisitor?): Node? {
-        return v!!.factory.updateVariableDeclarationList(this, v.visitNodesImpl(this.declarations), this.nodeBase.nodeDefault.node.flags)
+        return v!!.factory.updateVariableDeclarationList(this, v.visitNodesImpl(this.declarations), this.nodeBase.node.flags)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.VariableDeclarationList.Clone a4bb9362
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newVariableDeclarationList(this.declarations, this.nodeBase.nodeDefault.node.flags), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newVariableDeclarationList(this.declarations, this.nodeBase.node.flags), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<VariableDeclarationList> = GoElem({ VariableDeclarationList() }, { it.goCopy() })
@@ -4643,10 +4209,10 @@ fun NodeFactory?.newVariableDeclarationList(declarations: NodeList?, flags: Node
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateVariableDeclarationList 755c482e
 fun NodeFactory?.updateVariableDeclarationList(node: VariableDeclarationList?, declarations: NodeList?, flags: NodeFlags): Node? {
-    if (declarations !== node!!.declarations || flags.value != node!!.nodeBase.nodeDefault.node.flags.value) {
-        return updateNode(this.newVariableDeclarationList(declarations, flags), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+    if (declarations !== node!!.declarations || flags.value != node!!.nodeBase.node.flags.value) {
+        return updateNode(this.newVariableDeclarationList(declarations, flags), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsVariableDeclarationList f1c48bd8
@@ -4675,7 +4241,7 @@ class BindingPattern(
 
     // go: github.com/microsoft/typescript-go/internal/ast.BindingPattern.computeSubtreeFacts 9d94f77c
     override fun computeSubtreeFacts(): SubtreeFacts {
-        when (this.nodeBase.nodeDefault.node.kind.value) {
+        when (this.nodeBase.node.kind.value) {
             207 -> {
                 return propagateNodeListSubtreeFacts(this.elements, fun(p0: Node?): SubtreeFacts = propagateObjectBindingElementSubtreeFacts(p0))
             }
@@ -4691,7 +4257,7 @@ class BindingPattern(
 
     // go: github.com/microsoft/typescript-go/internal/ast.BindingPattern.propagateSubtreeFacts a2013d6d
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.nodeBase.nodeDefault.subtreeFacts().value and 4261347327u)
+        return SubtreeFacts(this.nodeBase.subtreeFacts().value and 4261347327u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.BindingPattern.ForEachChild 873574c2
@@ -4706,44 +4272,44 @@ class BindingPattern(
 
     // go: github.com/microsoft/typescript-go/internal/ast.BindingPattern.Clone 226fb7a7
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newBindingPattern(this.nodeBase.nodeDefault.node.kind, this.elements), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newBindingPattern(this.nodeBase.node.kind, this.elements), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<BindingPattern> = GoElem({ BindingPattern() }, { it.goCopy() })
@@ -4760,9 +4326,9 @@ fun NodeFactory?.newBindingPattern(kind: Kind, elements: NodeList?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateBindingPattern 8b0b78ba
 fun NodeFactory?.updateBindingPattern(node: BindingPattern?, elements: NodeList?): Node? {
     if (elements !== node!!.elements) {
-        return updateNode(this.newBindingPattern(node!!.nodeBase.nodeDefault.node.kind, elements), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newBindingPattern(node!!.nodeBase.node.kind, elements), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsObjectBindingPattern a623267b
@@ -4818,7 +4384,7 @@ class ParameterDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ParameterDeclaration.propagateSubtreeFacts 22cc800f
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.nodeBase.nodeDefault.subtreeFacts().value and 4261412863u)
+        return SubtreeFacts(this.nodeBase.subtreeFacts().value and 4261412863u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ParameterDeclaration.ForEachChild b850a49d
@@ -4833,7 +4399,7 @@ class ParameterDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ParameterDeclaration.Clone 9cc6ae91
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newParameterDeclaration(this.modifiersBase.modifiers(), this.dotDotDotToken, this.name, this.questionToken, this.type, this.initializer), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newParameterDeclaration(this.modifiersBase.modifiers(), this.dotDotDotToken, this.name, this.questionToken, this.type, this.initializer), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ParameterDeclaration.Name 535f0029
@@ -4841,39 +4407,39 @@ class ParameterDeclaration(
         return this.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ParameterDeclaration> = GoElem({ ParameterDeclaration() }, { it.goCopy() })
@@ -4895,9 +4461,9 @@ fun NodeFactory?.newParameterDeclaration(modifiers: ModifierList?, dotDotDotToke
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateParameterDeclaration fbe08bfe
 fun NodeFactory?.updateParameterDeclaration(node: ParameterDeclaration?, modifiers: ModifierList?, dotDotDotToken: Node?, name: Node?, questionToken: Node?, typeNode: Node?, initializer: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || dotDotDotToken !== node!!.dotDotDotToken || name !== node!!.name || questionToken !== node!!.questionToken || typeNode !== node!!.type || initializer !== node!!.initializer) {
-        return updateNode(this.newParameterDeclaration(modifiers, dotDotDotToken, name, questionToken, typeNode, initializer), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newParameterDeclaration(modifiers, dotDotDotToken, name, questionToken, typeNode, initializer), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsParameterDeclaration 8aaa23e9
@@ -4953,7 +4519,7 @@ class BindingElement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.BindingElement.Clone dbc30215
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newBindingElement(this.dotDotDotToken, this.propertyName, this.name, this.initializer), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newBindingElement(this.dotDotDotToken, this.propertyName, this.name, this.initializer), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.BindingElement.Name 816d39dc
@@ -4961,41 +4527,41 @@ class BindingElement(
         return this.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.exportableBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<BindingElement> = GoElem({ BindingElement() }, { it.goCopy() })
@@ -5015,9 +4581,9 @@ fun NodeFactory?.newBindingElement(dotDotDotToken: Node?, propertyName: Node?, n
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateBindingElement 5f0cee4f
 fun NodeFactory?.updateBindingElement(node: BindingElement?, dotDotDotToken: Node?, propertyName: Node?, name: Node?, initializer: Node?): Node? {
     if (dotDotDotToken !== node!!.dotDotDotToken || propertyName !== node!!.propertyName || name !== node!!.name || initializer !== node!!.initializer) {
-        return updateNode(this.newBindingElement(dotDotDotToken, propertyName, name, initializer), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newBindingElement(dotDotDotToken, propertyName, name, initializer), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsBindingElement 8c6b9eb6
@@ -5056,48 +4622,48 @@ class MissingDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.MissingDeclaration.Clone 37811c4d
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newMissingDeclaration(this.modifiersBase.modifiers()), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newMissingDeclaration(this.modifiersBase.modifiers()), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<MissingDeclaration> = GoElem({ MissingDeclaration() }, { it.goCopy() })
@@ -5114,9 +4680,9 @@ fun NodeFactory?.newMissingDeclaration(modifiers: ModifierList?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateMissingDeclaration 2e2430e9
 fun NodeFactory?.updateMissingDeclaration(node: MissingDeclaration?, modifiers: ModifierList?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers) {
-        return updateNode(this.newMissingDeclaration(modifiers), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newMissingDeclaration(modifiers), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsMissingDeclaration 16f2f70c
@@ -5151,10 +4717,10 @@ class FunctionDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionDeclaration.computeSubtreeFacts 011078a9
     override fun computeSubtreeFacts(): SubtreeFacts {
-        if (this.functionLikeWithBodyBase.bodyBase.body == null || this.statementBase.nodeBase.nodeDefault.node.modifierFlags().value and 128u != 0u) {
+        if (this.functionLikeWithBodyBase.bodyBase.body == null || this.statementBase.nodeBase.node.modifierFlags().value and 128u != 0u) {
             return SubtreeContainsTypeScript
         } else {
-            val isAsync: Boolean = this.statementBase.nodeBase.nodeDefault.node.modifierFlags().value and 1024u != 0u
+            val isAsync: Boolean = this.statementBase.nodeBase.node.modifierFlags().value and 1024u != 0u
             val isGenerator: Boolean = this.functionLikeWithBodyBase.bodyBase.asteriskToken != null
             return SubtreeFacts(propagateModifierListSubtreeFacts(this.modifiersBase.modifiers).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.functionLikeWithBodyBase.bodyBase.asteriskToken).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.name).value or propagateEraseableSyntaxListSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.typeParameters).value or propagateNodeListSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.parameters, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0)).value or propagateEraseableSyntaxSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.type).value or propagateEraseableSyntaxSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.fullSignature).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.functionLikeWithBodyBase.bodyBase.body).value or com.xemantic.typescript.tsgo.core.ifElse<SubtreeFacts>(SubtreeFacts.ELEM, isAsync && isGenerator, SubtreeContainsForAwaitOrAsyncGenerator, SubtreeFactsNone).value or com.xemantic.typescript.tsgo.core.ifElse<SubtreeFacts>(SubtreeFacts.ELEM, isAsync && !isGenerator, SubtreeContainsAnyAwait, SubtreeFactsNone).value)
         }
@@ -5163,7 +4729,7 @@ class FunctionDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionDeclaration.propagateSubtreeFacts 38ad45d3
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.statementBase.nodeBase.nodeDefault.subtreeFacts().value and 4260970495u)
+        return SubtreeFacts(this.statementBase.nodeBase.subtreeFacts().value and 4260970495u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionDeclaration.ForEachChild aef504b5
@@ -5178,7 +4744,7 @@ class FunctionDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionDeclaration.Clone 8fc35544
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newFunctionDeclaration(this.modifiersBase.modifiers(), this.functionLikeWithBodyBase.bodyBase.asteriskToken, this.name, this.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.functionLikeWithBodyBase.functionLikeBase.parameters, this.functionLikeWithBodyBase.functionLikeBase.type, this.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.functionLikeWithBodyBase.bodyBase.body), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newFunctionDeclaration(this.modifiersBase.modifiers(), this.functionLikeWithBodyBase.bodyBase.asteriskToken, this.name, this.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.functionLikeWithBodyBase.functionLikeBase.parameters, this.functionLikeWithBodyBase.functionLikeBase.type, this.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.functionLikeWithBodyBase.bodyBase.body), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.FunctionDeclaration.Name 18b372a7
@@ -5186,15 +4752,15 @@ class FunctionDeclaration(
         return this.name
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
     override fun bodyData(): BodyBase? = this.functionLikeWithBodyBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.exportableBase.exportableData()
 
@@ -5202,23 +4768,23 @@ class FunctionDeclaration(
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeWithBodyBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeWithBodyBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<FunctionDeclaration> = GoElem({ FunctionDeclaration() }, { it.goCopy() })
@@ -5242,9 +4808,9 @@ fun NodeFactory?.newFunctionDeclaration(modifiers: ModifierList?, asteriskToken:
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateFunctionDeclaration 738f17a7
 fun NodeFactory?.updateFunctionDeclaration(node: FunctionDeclaration?, modifiers: ModifierList?, asteriskToken: Node?, name: Node?, typeParameters: NodeList?, parameters: NodeList?, typeNode: Node?, fullSignature: Node?, body: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || asteriskToken !== node!!.functionLikeWithBodyBase.bodyBase.asteriskToken || name !== node!!.name || typeParameters !== node!!.functionLikeWithBodyBase.functionLikeBase.typeParameters || parameters !== node!!.functionLikeWithBodyBase.functionLikeBase.parameters || typeNode !== node!!.functionLikeWithBodyBase.functionLikeBase.type || fullSignature !== node!!.functionLikeWithBodyBase.functionLikeBase.fullSignature || body !== node!!.functionLikeWithBodyBase.bodyBase.body) {
-        return updateNode(this.newFunctionDeclaration(modifiers, asteriskToken, name, typeParameters, parameters, typeNode, fullSignature, body), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newFunctionDeclaration(modifiers, asteriskToken, name, typeParameters, parameters, typeNode, fullSignature, body), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsFunctionDeclaration 52421c33
@@ -5269,7 +4835,7 @@ class ClassDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassDeclaration.propagateSubtreeFacts b6e2264e
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.statementBase.nodeBase.nodeDefault.subtreeFacts().value and 4261412863u)
+        return SubtreeFacts(this.statementBase.nodeBase.subtreeFacts().value and 4261412863u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassDeclaration.ForEachChild 7ff2fa6c
@@ -5284,7 +4850,7 @@ class ClassDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassDeclaration.Clone 6befb483
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newClassDeclaration(this.classLikeBase.modifiersBase.modifiers(), this.classLikeBase.name, this.classLikeBase.typeParameters, this.classLikeBase.heritageClauses, this.classLikeBase.members), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newClassDeclaration(this.classLikeBase.modifiersBase.modifiers(), this.classLikeBase.name, this.classLikeBase.typeParameters, this.classLikeBase.heritageClauses, this.classLikeBase.members), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassDeclaration.Name 18a206cc
@@ -5292,9 +4858,9 @@ class ClassDeclaration(
         return this.classLikeBase.name
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
     override fun classLikeData(): ClassLikeBase? = this.classLikeBase.classLikeData()
 
@@ -5302,31 +4868,31 @@ class ClassDeclaration(
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.classLikeBase.exportableBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.classLikeBase.localsContainerBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.classLikeBase.modifiersBase.modifiers()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.classLikeBase.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.classLikeBase.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ClassDeclaration> = GoElem({ ClassDeclaration() }, { it.goCopy() })
@@ -5347,9 +4913,9 @@ fun NodeFactory?.newClassDeclaration(modifiers: ModifierList?, name: Node?, type
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateClassDeclaration fbd1a2e2
 fun NodeFactory?.updateClassDeclaration(node: ClassDeclaration?, modifiers: ModifierList?, name: Node?, typeParameters: NodeList?, heritageClauses: NodeList?, members: NodeList?): Node? {
     if (modifiers !== node!!.classLikeBase.modifiersBase.modifiers || name !== node!!.classLikeBase.name || typeParameters !== node!!.classLikeBase.typeParameters || heritageClauses !== node!!.classLikeBase.heritageClauses || members !== node!!.classLikeBase.members) {
-        return updateNode(this.newClassDeclaration(modifiers, name, typeParameters, heritageClauses, members), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newClassDeclaration(modifiers, name, typeParameters, heritageClauses, members), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsClassDeclaration 72a66d46
@@ -5372,7 +4938,7 @@ class ClassExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassExpression.propagateSubtreeFacts 1f4a1618
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts().value and 4261412863u)
+        return SubtreeFacts(this.primaryExpressionBase.subtreeFacts().value and 4261412863u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassExpression.ForEachChild ef8cbd45
@@ -5387,7 +4953,7 @@ class ClassExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassExpression.Clone 5a09990a
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newClassExpression(this.classLikeBase.modifiersBase.modifiers(), this.classLikeBase.name, this.classLikeBase.typeParameters, this.classLikeBase.heritageClauses, this.classLikeBase.members), this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newClassExpression(this.classLikeBase.modifiersBase.modifiers(), this.classLikeBase.name, this.classLikeBase.typeParameters, this.classLikeBase.heritageClauses, this.classLikeBase.members), this.primaryExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassExpression.Name bd9d366c
@@ -5395,9 +4961,9 @@ class ClassExpression(
         return this.classLikeBase.name
     }
 
-    override fun asNode(): Node? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.primaryExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.primaryExpressionBase.bodyData()
 
     override fun classLikeData(): ClassLikeBase? = this.classLikeBase.classLikeData()
 
@@ -5405,31 +4971,31 @@ class ClassExpression(
 
     override fun declarationData(): DeclarationBase? = this.classLikeBase.declarationBase.declarationData()
 
-    override fun end(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.primaryExpressionBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.classLikeBase.exportableBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.primaryExpressionBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.primaryExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.primaryExpressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.primaryExpressionBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.classLikeBase.localsContainerBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.classLikeBase.modifiersBase.modifiers()
 
-    override fun pos(): Int = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.primaryExpressionBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.classLikeBase.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.primaryExpressionBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.classLikeBase.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.primaryExpressionBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ClassExpression> = GoElem({ ClassExpression() }, { it.goCopy() })
@@ -5450,9 +5016,9 @@ fun NodeFactory?.newClassExpression(modifiers: ModifierList?, name: Node?, typeP
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateClassExpression a4a02197
 fun NodeFactory?.updateClassExpression(node: ClassExpression?, modifiers: ModifierList?, name: Node?, typeParameters: NodeList?, heritageClauses: NodeList?, members: NodeList?): Node? {
     if (modifiers !== node!!.classLikeBase.modifiersBase.modifiers || name !== node!!.classLikeBase.name || typeParameters !== node!!.classLikeBase.typeParameters || heritageClauses !== node!!.classLikeBase.heritageClauses || members !== node!!.classLikeBase.members) {
-        return updateNode(this.newClassExpression(modifiers, name, typeParameters, heritageClauses, members), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newClassExpression(modifiers, name, typeParameters, heritageClauses, members), node!!.primaryExpressionBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.primaryExpressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsClassExpression f7e71698
@@ -5509,46 +5075,46 @@ class HeritageClause(
 
     // go: github.com/microsoft/typescript-go/internal/ast.HeritageClause.Clone 51570cf1
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newHeritageClause(this.token, this.types), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newHeritageClause(this.token, this.types), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<HeritageClause> = GoElem({ HeritageClause() }, { it.goCopy() })
@@ -5566,9 +5132,9 @@ fun NodeFactory?.newHeritageClause(token: Kind, types: NodeList?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateHeritageClause b85d0a85
 fun NodeFactory?.updateHeritageClause(node: HeritageClause?, token: Kind, types: NodeList?): Node? {
     if (token.value != node!!.token.value || types !== node!!.types) {
-        return updateNode(this.newHeritageClause(token, types), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newHeritageClause(token, types), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsHeritageClause 4f2546ac
@@ -5619,7 +5185,7 @@ class InterfaceDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.InterfaceDeclaration.Clone ed53f0b7
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newInterfaceDeclaration(this.modifiersBase.modifiers(), this.name, this.typeParameters, this.heritageClauses, this.members), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newInterfaceDeclaration(this.modifiersBase.modifiers(), this.name, this.typeParameters, this.heritageClauses, this.members), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.InterfaceDeclaration.Name b43ccbbd
@@ -5627,43 +5193,43 @@ class InterfaceDeclaration(
         return this.name
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.exportableBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<InterfaceDeclaration> = GoElem({ InterfaceDeclaration() }, { it.goCopy() })
@@ -5684,9 +5250,9 @@ fun NodeFactory?.newInterfaceDeclaration(modifiers: ModifierList?, name: Node?, 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateInterfaceDeclaration 8ef8b0f8
 fun NodeFactory?.updateInterfaceDeclaration(node: InterfaceDeclaration?, modifiers: ModifierList?, name: Node?, typeParameters: NodeList?, heritageClauses: NodeList?, members: NodeList?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || name !== node!!.name || typeParameters !== node!!.typeParameters || heritageClauses !== node!!.heritageClauses || members !== node!!.members) {
-        return updateNode(this.newInterfaceDeclaration(modifiers, name, typeParameters, heritageClauses, members), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newInterfaceDeclaration(modifiers, name, typeParameters, heritageClauses, members), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsInterfaceDeclaration 567ee94e
@@ -5733,15 +5299,15 @@ class TypeAliasDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.TypeAliasDeclaration.Clone f8a1a677
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        when (this.statementBase.nodeBase.nodeDefault.node.kind.value) {
+        when (this.statementBase.nodeBase.node.kind.value) {
             266 -> {
-                return cloneNode(f!!.asNodeFactory().newTypeAliasDeclaration(this.modifiersBase.modifiers(), this.name, this.typeParameters, this.type), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+                return cloneNode(f!!.asNodeFactory().newTypeAliasDeclaration(this.modifiersBase.modifiers(), this.name, this.typeParameters, this.type), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
             }
             345 -> {
-                return cloneNode(f!!.asNodeFactory().newJSTypeAliasDeclaration(this.modifiersBase.modifiers(), this.name, this.typeParameters, this.type), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+                return cloneNode(f!!.asNodeFactory().newJSTypeAliasDeclaration(this.modifiersBase.modifiers(), this.name, this.typeParameters, this.type), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
             }
             else -> {
-                goPanic("unexpected kind in TypeAliasDeclaration.Clone: " + this.statementBase.nodeBase.nodeDefault.node.kind.string())
+                goPanic("unexpected kind in TypeAliasDeclaration.Clone: " + this.statementBase.nodeBase.node.kind.string())
             }
         }
         goUnreachable()
@@ -5752,43 +5318,43 @@ class TypeAliasDeclaration(
         return this.name
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.exportableBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<TypeAliasDeclaration> = GoElem({ TypeAliasDeclaration() }, { it.goCopy() })
@@ -5818,19 +5384,19 @@ fun NodeFactory?.newJSTypeAliasDeclaration(modifiers: ModifierList?, name: Node?
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateTypeAliasDeclaration 18c4abff
 fun NodeFactory?.updateTypeAliasDeclaration(node: TypeAliasDeclaration?, modifiers: ModifierList?, name: Node?, typeParameters: NodeList?, typeNode: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || name !== node!!.name || typeParameters !== node!!.typeParameters || typeNode !== node!!.type) {
-        when (node!!.statementBase.nodeBase.nodeDefault.node.kind.value) {
+        when (node!!.statementBase.nodeBase.node.kind.value) {
             266 -> {
-                return updateNode(this.newTypeAliasDeclaration(modifiers, name, typeParameters, typeNode), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+                return updateNode(this.newTypeAliasDeclaration(modifiers, name, typeParameters, typeNode), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
             }
             345 -> {
-                return updateNode(this.newJSTypeAliasDeclaration(modifiers, name, typeParameters, typeNode), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+                return updateNode(this.newJSTypeAliasDeclaration(modifiers, name, typeParameters, typeNode), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
             }
             else -> {
-                goPanic("unexpected kind in UpdateTypeAliasDeclaration: " + node!!.statementBase.nodeBase.nodeDefault.node.kind.string())
+                goPanic("unexpected kind in UpdateTypeAliasDeclaration: " + node!!.statementBase.nodeBase.node.kind.string())
             }
         }
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsTypeAliasDeclaration d3f5ffd9
@@ -5881,7 +5447,7 @@ class EnumMember(
 
     // go: github.com/microsoft/typescript-go/internal/ast.EnumMember.Clone 0db2d17d
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newEnumMember(this.namedMemberBase.name, this.initializer), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newEnumMember(this.namedMemberBase.name, this.initializer), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.EnumMember.Name fe6452b6
@@ -5889,41 +5455,41 @@ class EnumMember(
         return this.namedMemberBase.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.namedMemberBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.namedMemberBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.namedMemberBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<EnumMember> = GoElem({ EnumMember() }, { it.goCopy() })
@@ -5941,9 +5507,9 @@ fun NodeFactory?.newEnumMember(name: Node?, initializer: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateEnumMember a8ae39ff
 fun NodeFactory?.updateEnumMember(node: EnumMember?, name: Node?, initializer: Node?): Node? {
     if (name !== node!!.namedMemberBase.name || initializer !== node!!.initializer) {
-        return updateNode(this.newEnumMember(name, initializer), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newEnumMember(name, initializer), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsEnumMember 25547a72
@@ -6000,7 +5566,7 @@ class EnumDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.EnumDeclaration.Clone beadfc0e
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newEnumDeclaration(this.modifiersBase.modifiers(), this.name, this.members), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newEnumDeclaration(this.modifiersBase.modifiers(), this.name, this.members), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.EnumDeclaration.Name 7191f8ca
@@ -6008,41 +5574,41 @@ class EnumDeclaration(
         return this.name
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.exportableBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<EnumDeclaration> = GoElem({ EnumDeclaration() }, { it.goCopy() })
@@ -6061,9 +5627,9 @@ fun NodeFactory?.newEnumDeclaration(modifiers: ModifierList?, name: Node?, membe
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateEnumDeclaration f2f1595b
 fun NodeFactory?.updateEnumDeclaration(node: EnumDeclaration?, modifiers: ModifierList?, name: Node?, members: NodeList?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || name !== node!!.name || members !== node!!.members) {
-        return updateNode(this.newEnumDeclaration(modifiers, name, members), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newEnumDeclaration(modifiers, name, members), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsEnumDeclaration 177138c1
@@ -6102,7 +5668,7 @@ class ModuleBlock(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ModuleBlock.Clone 4de997d2
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newModuleBlock(this.statements), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newModuleBlock(this.statements), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ModuleBlock.computeSubtreeFacts 91f67e91
@@ -6110,43 +5676,43 @@ class ModuleBlock(
         return propagateNodeListSubtreeFacts(this.statements, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0))
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ModuleBlock> = GoElem({ ModuleBlock() }, { it.goCopy() })
@@ -6163,9 +5729,9 @@ fun NodeFactory?.newModuleBlock(statements: NodeList?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateModuleBlock bc6fd3ee
 fun NodeFactory?.updateModuleBlock(node: ModuleBlock?, statements: NodeList?): Node? {
     if (statements !== node!!.statements) {
-        return updateNode(this.newModuleBlock(statements), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newModuleBlock(statements), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsModuleBlock 0a5eec5b
@@ -6190,52 +5756,52 @@ class NotEmittedStatement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NotEmittedStatement.Clone f7414486
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNotEmittedStatement(), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNotEmittedStatement(), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.statementBase.nodeBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.statementBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.statementBase.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.statementBase.nodeBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.statementBase.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.statementBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.statementBase.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<NotEmittedStatement> = GoElem({ NotEmittedStatement() }, { it.goCopy() })
@@ -6272,52 +5838,52 @@ class NotEmittedTypeElement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NotEmittedTypeElement.Clone bcb099c1
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNotEmittedTypeElement(), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNotEmittedTypeElement(), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<NotEmittedTypeElement> = GoElem({ NotEmittedTypeElement() }, { it.goCopy() })
@@ -6374,15 +5940,15 @@ class ImportDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ImportDeclaration.Clone f63662ef
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        when (this.statementBase.nodeBase.nodeDefault.node.kind.value) {
+        when (this.statementBase.nodeBase.node.kind.value) {
             273 -> {
-                return cloneNode(f!!.asNodeFactory().newImportDeclaration(this.modifiersBase.modifiers(), this.importClause, this.moduleSpecifier, this.attributes), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+                return cloneNode(f!!.asNodeFactory().newImportDeclaration(this.modifiersBase.modifiers(), this.importClause, this.moduleSpecifier, this.attributes), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
             }
             346 -> {
-                return cloneNode(f!!.asNodeFactory().newJSImportDeclaration(this.modifiersBase.modifiers(), this.importClause, this.moduleSpecifier, this.attributes), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+                return cloneNode(f!!.asNodeFactory().newJSImportDeclaration(this.modifiersBase.modifiers(), this.importClause, this.moduleSpecifier, this.attributes), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
             }
             else -> {
-                goPanic("unexpected kind in ImportDeclaration.Clone: " + this.statementBase.nodeBase.nodeDefault.node.kind.string())
+                goPanic("unexpected kind in ImportDeclaration.Clone: " + this.statementBase.nodeBase.node.kind.string())
             }
         }
         goUnreachable()
@@ -6393,43 +5959,43 @@ class ImportDeclaration(
         return SubtreeFacts(propagateModifierListSubtreeFacts(this.modifiersBase.modifiers).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.importClause).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.moduleSpecifier).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.attributes).value)
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ImportDeclaration> = GoElem({ ImportDeclaration() }, { it.goCopy() })
@@ -6459,19 +6025,19 @@ fun NodeFactory?.newJSImportDeclaration(modifiers: ModifierList?, importClause: 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateImportDeclaration f78ccaab
 fun NodeFactory?.updateImportDeclaration(node: ImportDeclaration?, modifiers: ModifierList?, importClause: Node?, moduleSpecifier: Node?, attributes: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || importClause !== node!!.importClause || moduleSpecifier !== node!!.moduleSpecifier || attributes !== node!!.attributes) {
-        when (node!!.statementBase.nodeBase.nodeDefault.node.kind.value) {
+        when (node!!.statementBase.nodeBase.node.kind.value) {
             273 -> {
-                return updateNode(this.newImportDeclaration(modifiers, importClause, moduleSpecifier, attributes), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+                return updateNode(this.newImportDeclaration(modifiers, importClause, moduleSpecifier, attributes), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
             }
             346 -> {
-                return updateNode(this.newJSImportDeclaration(modifiers, importClause, moduleSpecifier, attributes), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+                return updateNode(this.newJSImportDeclaration(modifiers, importClause, moduleSpecifier, attributes), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
             }
             else -> {
-                goPanic("unexpected kind in UpdateImportDeclaration: " + node!!.statementBase.nodeBase.nodeDefault.node.kind.string())
+                goPanic("unexpected kind in UpdateImportDeclaration: " + node!!.statementBase.nodeBase.node.kind.string())
             }
         }
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsImportDeclaration 392c5729
@@ -6513,7 +6079,7 @@ class ExternalModuleReference(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExternalModuleReference.Clone ee7dab82
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newExternalModuleReference(this.expression), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newExternalModuleReference(this.expression), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExternalModuleReference.computeSubtreeFacts bfb4605d
@@ -6521,43 +6087,43 @@ class ExternalModuleReference(
         return com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.expression)
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ExternalModuleReference> = GoElem({ ExternalModuleReference() }, { it.goCopy() })
@@ -6574,9 +6140,9 @@ fun NodeFactory?.newExternalModuleReference(expression: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateExternalModuleReference 3103712a
 fun NodeFactory?.updateExternalModuleReference(node: ExternalModuleReference?, expression: Node?): Node? {
     if (expression !== node!!.expression) {
-        return updateNode(this.newExternalModuleReference(expression), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newExternalModuleReference(expression), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsExternalModuleReference 962c348c
@@ -6617,7 +6183,7 @@ class NamespaceImport(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamespaceImport.Clone d5b6ac0d
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNamespaceImport(this.name), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNamespaceImport(this.name), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamespaceImport.computeSubtreeFacts b914220f
@@ -6630,41 +6196,41 @@ class NamespaceImport(
         return this.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.exportableBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<NamespaceImport> = GoElem({ NamespaceImport() }, { it.goCopy() })
@@ -6681,9 +6247,9 @@ fun NodeFactory?.newNamespaceImport(name: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateNamespaceImport e36b2ac9
 fun NodeFactory?.updateNamespaceImport(node: NamespaceImport?, name: Node?): Node? {
     if (name !== node!!.name) {
-        return updateNode(this.newNamespaceImport(name), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newNamespaceImport(name), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsNamespaceImport 422bf784
@@ -6722,7 +6288,7 @@ class NamedImports(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamedImports.Clone fd09768a
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNamedImports(this.elements), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNamedImports(this.elements), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamedImports.computeSubtreeFacts d69f4451
@@ -6730,43 +6296,43 @@ class NamedImports(
         return propagateNodeListSubtreeFacts(this.elements, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0))
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<NamedImports> = GoElem({ NamedImports() }, { it.goCopy() })
@@ -6783,9 +6349,9 @@ fun NodeFactory?.newNamedImports(elements: NodeList?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateNamedImports 156ade47
 fun NodeFactory?.updateNamedImports(node: NamedImports?, elements: NodeList?): Node? {
     if (elements !== node!!.elements) {
-        return updateNode(this.newNamedImports(elements), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newNamedImports(elements), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsNamedImports dbe76b0c
@@ -6837,46 +6403,46 @@ class ExportAssignment(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExportAssignment.Clone 2ad9dcb1
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newExportAssignment(this.modifiersBase.modifiers(), this.isExportEquals, this.type, this.expression), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newExportAssignment(this.modifiersBase.modifiers(), this.isExportEquals, this.type, this.expression), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.statementBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.statementBase.nodeBase.name()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ExportAssignment> = GoElem({ ExportAssignment() }, { it.goCopy() })
@@ -6896,9 +6462,9 @@ fun NodeFactory?.newExportAssignment(modifiers: ModifierList?, isExportEquals: B
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateExportAssignment 1a34adb0
 fun NodeFactory?.updateExportAssignment(node: ExportAssignment?, modifiers: ModifierList?, isExportEquals: Boolean, typeNode: Node?, expression: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || isExportEquals != node!!.isExportEquals || typeNode !== node!!.type || expression !== node!!.expression) {
-        return updateNode(this.newExportAssignment(modifiers, isExportEquals, typeNode, expression), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newExportAssignment(modifiers, isExportEquals, typeNode, expression), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsExportAssignment 3f2094e8
@@ -6941,7 +6507,7 @@ class NamespaceExportDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamespaceExportDeclaration.Clone 45d53318
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNamespaceExportDeclaration(this.modifiersBase.modifiers(), this.name), this.statementBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNamespaceExportDeclaration(this.modifiersBase.modifiers(), this.name), this.statementBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamespaceExportDeclaration.Name 991d7010
@@ -6949,43 +6515,43 @@ class NamespaceExportDeclaration(
         return this.name
     }
 
-    override fun asNode(): Node? = this.statementBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.statementBase.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.statementBase.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.statementBase.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.statementBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.statementBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.statementBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.statementBase.flowNodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.statementBase.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.statementBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.statementBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.statementBase.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.statementBase.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun pos(): Int = this.statementBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.statementBase.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.statementBase.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.statementBase.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.statementBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<NamespaceExportDeclaration> = GoElem({ NamespaceExportDeclaration() }, { it.goCopy() })
@@ -7003,9 +6569,9 @@ fun NodeFactory?.newNamespaceExportDeclaration(modifiers: ModifierList?, name: N
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateNamespaceExportDeclaration 3213ac7b
 fun NodeFactory?.updateNamespaceExportDeclaration(node: NamespaceExportDeclaration?, modifiers: ModifierList?, name: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || name !== node!!.name) {
-        return updateNode(this.newNamespaceExportDeclaration(modifiers, name), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newNamespaceExportDeclaration(modifiers, name), node!!.statementBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.statementBase.nodeBase.nodeDefault.asNode()
+    return node!!.statementBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsNamespaceExportDeclaration 5bf07cff
@@ -7044,7 +6610,7 @@ class NamespaceExport(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamespaceExport.Clone 82522cc9
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNamespaceExport(this.name), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNamespaceExport(this.name), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamespaceExport.computeSubtreeFacts 348ec5e1
@@ -7057,41 +6623,41 @@ class NamespaceExport(
         return this.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<NamespaceExport> = GoElem({ NamespaceExport() }, { it.goCopy() })
@@ -7108,9 +6674,9 @@ fun NodeFactory?.newNamespaceExport(name: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateNamespaceExport c94ab584
 fun NodeFactory?.updateNamespaceExport(node: NamespaceExport?, name: Node?): Node? {
     if (name !== node!!.name) {
-        return updateNode(this.newNamespaceExport(name), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newNamespaceExport(name), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsNamespaceExport 76b18445
@@ -7149,7 +6715,7 @@ class NamedExports(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamedExports.Clone ca64b3f9
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNamedExports(this.elements), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNamedExports(this.elements), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NamedExports.computeSubtreeFacts 8115cc23
@@ -7157,43 +6723,43 @@ class NamedExports(
         return propagateNodeListSubtreeFacts(this.elements, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0))
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<NamedExports> = GoElem({ NamedExports() }, { it.goCopy() })
@@ -7210,9 +6776,9 @@ fun NodeFactory?.newNamedExports(elements: NodeList?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateNamedExports 38771d8d
 fun NodeFactory?.updateNamedExports(node: NamedExports?, elements: NodeList?): Node? {
     if (elements !== node!!.elements) {
-        return updateNode(this.newNamedExports(elements), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newNamedExports(elements), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsNamedExports 8e7684b6
@@ -7269,7 +6835,7 @@ class ExportSpecifier(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExportSpecifier.Clone 822fa319
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newExportSpecifier(this.isTypeOnly, this.propertyName, this.name), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newExportSpecifier(this.isTypeOnly, this.propertyName, this.name), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ExportSpecifier.Name 91262c81
@@ -7277,41 +6843,41 @@ class ExportSpecifier(
         return this.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
     override fun exportableData(): ExportableBase? = this.exportableBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ExportSpecifier> = GoElem({ ExportSpecifier() }, { it.goCopy() })
@@ -7330,9 +6896,9 @@ fun NodeFactory?.newExportSpecifier(isTypeOnly: Boolean, propertyName: Node?, na
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateExportSpecifier 747ba23f
 fun NodeFactory?.updateExportSpecifier(node: ExportSpecifier?, isTypeOnly: Boolean, propertyName: Node?, name: Node?): Node? {
     if (isTypeOnly != node!!.isTypeOnly || propertyName !== node!!.propertyName || name !== node!!.name) {
-        return updateNode(this.newExportSpecifier(isTypeOnly, propertyName, name), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newExportSpecifier(isTypeOnly, propertyName, name), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsExportSpecifier 6c389234
@@ -7371,48 +6937,48 @@ class CallSignatureDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.CallSignatureDeclaration.Clone 4d8539b6
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newCallSignatureDeclaration(this.functionLikeBase.typeParameters, this.functionLikeBase.parameters, this.functionLikeBase.type), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newCallSignatureDeclaration(this.functionLikeBase.typeParameters, this.functionLikeBase.parameters, this.functionLikeBase.type), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<CallSignatureDeclaration> = GoElem({ CallSignatureDeclaration() }, { it.goCopy() })
@@ -7431,9 +6997,9 @@ fun NodeFactory?.newCallSignatureDeclaration(typeParameters: NodeList?, paramete
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateCallSignatureDeclaration 28e7704c
 fun NodeFactory?.updateCallSignatureDeclaration(node: CallSignatureDeclaration?, typeParameters: NodeList?, parameters: NodeList?, typeNode: Node?): Node? {
     if (typeParameters !== node!!.functionLikeBase.typeParameters || parameters !== node!!.functionLikeBase.parameters || typeNode !== node!!.functionLikeBase.type) {
-        return updateNode(this.newCallSignatureDeclaration(typeParameters, parameters, typeNode), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newCallSignatureDeclaration(typeParameters, parameters, typeNode), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsCallSignatureDeclaration f32bcce8
@@ -7472,48 +7038,48 @@ class ConstructSignatureDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConstructSignatureDeclaration.Clone dff9ada4
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newConstructSignatureDeclaration(this.functionLikeBase.typeParameters, this.functionLikeBase.parameters, this.functionLikeBase.type), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newConstructSignatureDeclaration(this.functionLikeBase.typeParameters, this.functionLikeBase.parameters, this.functionLikeBase.type), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ConstructSignatureDeclaration> = GoElem({ ConstructSignatureDeclaration() }, { it.goCopy() })
@@ -7532,9 +7098,9 @@ fun NodeFactory?.newConstructSignatureDeclaration(typeParameters: NodeList?, par
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateConstructSignatureDeclaration d6213398
 fun NodeFactory?.updateConstructSignatureDeclaration(node: ConstructSignatureDeclaration?, typeParameters: NodeList?, parameters: NodeList?, typeNode: Node?): Node? {
     if (typeParameters !== node!!.functionLikeBase.typeParameters || parameters !== node!!.functionLikeBase.parameters || typeNode !== node!!.functionLikeBase.type) {
-        return updateNode(this.newConstructSignatureDeclaration(typeParameters, parameters, typeNode), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newConstructSignatureDeclaration(typeParameters, parameters, typeNode), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsConstructSignatureDeclaration 3b9a43ed
@@ -7577,7 +7143,7 @@ class ConstructorDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConstructorDeclaration.propagateSubtreeFacts d832268d
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.nodeBase.nodeDefault.subtreeFacts().value and 4260970495u)
+        return SubtreeFacts(this.nodeBase.subtreeFacts().value and 4260970495u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConstructorDeclaration.ForEachChild 54c1218f
@@ -7592,44 +7158,44 @@ class ConstructorDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ConstructorDeclaration.Clone 7ce2b74f
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newConstructorDeclaration(this.modifiersBase.modifiers(), this.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.functionLikeWithBodyBase.functionLikeBase.parameters, this.functionLikeWithBodyBase.functionLikeBase.type, this.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.functionLikeWithBodyBase.bodyBase.body), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newConstructorDeclaration(this.modifiersBase.modifiers(), this.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.functionLikeWithBodyBase.functionLikeBase.parameters, this.functionLikeWithBodyBase.functionLikeBase.type, this.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.functionLikeWithBodyBase.bodyBase.body), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
     override fun bodyData(): BodyBase? = this.functionLikeWithBodyBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeWithBodyBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeWithBodyBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ConstructorDeclaration> = GoElem({ ConstructorDeclaration() }, { it.goCopy() })
@@ -7651,9 +7217,9 @@ fun NodeFactory?.newConstructorDeclaration(modifiers: ModifierList?, typeParamet
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateConstructorDeclaration 7fa9cd15
 fun NodeFactory?.updateConstructorDeclaration(node: ConstructorDeclaration?, modifiers: ModifierList?, typeParameters: NodeList?, parameters: NodeList?, typeNode: Node?, fullSignature: Node?, body: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || typeParameters !== node!!.functionLikeWithBodyBase.functionLikeBase.typeParameters || parameters !== node!!.functionLikeWithBodyBase.functionLikeBase.parameters || typeNode !== node!!.functionLikeWithBodyBase.functionLikeBase.type || fullSignature !== node!!.functionLikeWithBodyBase.functionLikeBase.fullSignature || body !== node!!.functionLikeWithBodyBase.bodyBase.body) {
-        return updateNode(this.newConstructorDeclaration(modifiers, typeParameters, parameters, typeNode, fullSignature, body), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newConstructorDeclaration(modifiers, typeParameters, parameters, typeNode, fullSignature, body), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsConstructorDeclaration 40697759
@@ -7684,7 +7250,7 @@ class GetAccessorDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.GetAccessorDeclaration.Clone 68f39e4c
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newGetAccessorDeclaration(this.accessorDeclarationBase.namedMemberBase.modifiers(), this.accessorDeclarationBase.namedMemberBase.name, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body), this.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newGetAccessorDeclaration(this.accessorDeclarationBase.namedMemberBase.modifiers(), this.accessorDeclarationBase.namedMemberBase.name, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body), this.accessorDeclarationBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.GetAccessorDeclaration.Name 45b05ebf
@@ -7692,43 +7258,43 @@ class GetAccessorDeclaration(
         return this.accessorDeclarationBase.namedMemberBase.name
     }
 
-    override fun asNode(): Node? = this.accessorDeclarationBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.accessorDeclarationBase.nodeBase.asNode()
 
     override fun bodyData(): BodyBase? = this.accessorDeclarationBase.functionLikeWithBodyBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.accessorDeclarationBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.accessorDeclarationBase.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.accessorDeclarationBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.accessorDeclarationBase.namedMemberBase.declarationData()
 
-    override fun end(): Int = this.accessorDeclarationBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.accessorDeclarationBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.accessorDeclarationBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.accessorDeclarationBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.accessorDeclarationBase.flowNodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeData()
 
-    override fun kindString(): String = this.accessorDeclarationBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.accessorDeclarationBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.accessorDeclarationBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.accessorDeclarationBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.accessorDeclarationBase.functionLikeWithBodyBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.accessorDeclarationBase.namedMemberBase.modifiers()
 
-    override fun pos(): Int = this.accessorDeclarationBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.accessorDeclarationBase.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.accessorDeclarationBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.accessorDeclarationBase.namedMemberBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.accessorDeclarationBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.accessorDeclarationBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.accessorDeclarationBase.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.accessorDeclarationBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.accessorDeclarationBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<GetAccessorDeclaration> = GoElem({ GetAccessorDeclaration() }, { it.goCopy() })
@@ -7751,9 +7317,9 @@ fun NodeFactory?.newGetAccessorDeclaration(modifiers: ModifierList?, name: Node?
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateGetAccessorDeclaration 0bbe8c11
 fun NodeFactory?.updateGetAccessorDeclaration(node: GetAccessorDeclaration?, modifiers: ModifierList?, name: Node?, typeParameters: NodeList?, parameters: NodeList?, typeNode: Node?, fullSignature: Node?, body: Node?): Node? {
     if (modifiers !== node!!.accessorDeclarationBase.namedMemberBase.modifiersBase.modifiers || name !== node!!.accessorDeclarationBase.namedMemberBase.name || typeParameters !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters || parameters !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters || typeNode !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type || fullSignature !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature || body !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body) {
-        return updateNode(this.newGetAccessorDeclaration(modifiers, name, typeParameters, parameters, typeNode, fullSignature, body), node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newGetAccessorDeclaration(modifiers, name, typeParameters, parameters, typeNode, fullSignature, body), node!!.accessorDeclarationBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()
+    return node!!.accessorDeclarationBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsGetAccessorDeclaration 71baea90
@@ -7784,7 +7350,7 @@ class SetAccessorDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SetAccessorDeclaration.Clone 5a3255e7
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newSetAccessorDeclaration(this.accessorDeclarationBase.namedMemberBase.modifiers(), this.accessorDeclarationBase.namedMemberBase.name, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body), this.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newSetAccessorDeclaration(this.accessorDeclarationBase.namedMemberBase.modifiers(), this.accessorDeclarationBase.namedMemberBase.name, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type, this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body), this.accessorDeclarationBase.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SetAccessorDeclaration.Name f7924243
@@ -7792,43 +7358,43 @@ class SetAccessorDeclaration(
         return this.accessorDeclarationBase.namedMemberBase.name
     }
 
-    override fun asNode(): Node? = this.accessorDeclarationBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.accessorDeclarationBase.nodeBase.asNode()
 
     override fun bodyData(): BodyBase? = this.accessorDeclarationBase.functionLikeWithBodyBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.accessorDeclarationBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.accessorDeclarationBase.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.accessorDeclarationBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.accessorDeclarationBase.namedMemberBase.declarationData()
 
-    override fun end(): Int = this.accessorDeclarationBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.accessorDeclarationBase.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.accessorDeclarationBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.accessorDeclarationBase.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.accessorDeclarationBase.flowNodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeData()
 
-    override fun kindString(): String = this.accessorDeclarationBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.accessorDeclarationBase.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.accessorDeclarationBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.accessorDeclarationBase.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.accessorDeclarationBase.functionLikeWithBodyBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.accessorDeclarationBase.namedMemberBase.modifiers()
 
-    override fun pos(): Int = this.accessorDeclarationBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.accessorDeclarationBase.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.accessorDeclarationBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.accessorDeclarationBase.namedMemberBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.accessorDeclarationBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.accessorDeclarationBase.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.accessorDeclarationBase.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.accessorDeclarationBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.accessorDeclarationBase.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<SetAccessorDeclaration> = GoElem({ SetAccessorDeclaration() }, { it.goCopy() })
@@ -7851,9 +7417,9 @@ fun NodeFactory?.newSetAccessorDeclaration(modifiers: ModifierList?, name: Node?
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateSetAccessorDeclaration 74d8091d
 fun NodeFactory?.updateSetAccessorDeclaration(node: SetAccessorDeclaration?, modifiers: ModifierList?, name: Node?, typeParameters: NodeList?, parameters: NodeList?, typeNode: Node?, fullSignature: Node?, body: Node?): Node? {
     if (modifiers !== node!!.accessorDeclarationBase.namedMemberBase.modifiersBase.modifiers || name !== node!!.accessorDeclarationBase.namedMemberBase.name || typeParameters !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters || parameters !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters || typeNode !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type || fullSignature !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature || body !== node!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body) {
-        return updateNode(this.newSetAccessorDeclaration(modifiers, name, typeParameters, parameters, typeNode, fullSignature, body), node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newSetAccessorDeclaration(modifiers, name, typeParameters, parameters, typeNode, fullSignature, body), node!!.accessorDeclarationBase.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()
+    return node!!.accessorDeclarationBase.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsSetAccessorDeclaration 6f29e98d
@@ -7896,48 +7462,48 @@ class IndexSignatureDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.IndexSignatureDeclaration.Clone 4a670e4a
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newIndexSignatureDeclaration(this.modifiersBase.modifiers(), this.functionLikeBase.parameters, this.functionLikeBase.type), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newIndexSignatureDeclaration(this.modifiersBase.modifiers(), this.functionLikeBase.parameters, this.functionLikeBase.type), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<IndexSignatureDeclaration> = GoElem({ IndexSignatureDeclaration() }, { it.goCopy() })
@@ -7956,9 +7522,9 @@ fun NodeFactory?.newIndexSignatureDeclaration(modifiers: ModifierList?, paramete
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateIndexSignatureDeclaration 8b8a9198
 fun NodeFactory?.updateIndexSignatureDeclaration(node: IndexSignatureDeclaration?, modifiers: ModifierList?, parameters: NodeList?, typeNode: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || parameters !== node!!.functionLikeBase.parameters || typeNode !== node!!.functionLikeBase.type) {
-        return updateNode(this.newIndexSignatureDeclaration(modifiers, parameters, typeNode), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newIndexSignatureDeclaration(modifiers, parameters, typeNode), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsIndexSignatureDeclaration c43732d5
@@ -7997,7 +7563,7 @@ class MethodSignatureDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.MethodSignatureDeclaration.Clone 467c22bb
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newMethodSignatureDeclaration(this.namedMemberBase.modifiers(), this.namedMemberBase.name, this.namedMemberBase.postfixToken, this.functionLikeBase.typeParameters, this.functionLikeBase.parameters, this.functionLikeBase.type), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newMethodSignatureDeclaration(this.namedMemberBase.modifiers(), this.namedMemberBase.name, this.namedMemberBase.postfixToken, this.functionLikeBase.typeParameters, this.functionLikeBase.parameters, this.functionLikeBase.type), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.MethodSignatureDeclaration.Name bcec5e40
@@ -8005,43 +7571,43 @@ class MethodSignatureDeclaration(
         return this.namedMemberBase.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.namedMemberBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.namedMemberBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.namedMemberBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<MethodSignatureDeclaration> = GoElem({ MethodSignatureDeclaration() }, { it.goCopy() })
@@ -8063,9 +7629,9 @@ fun NodeFactory?.newMethodSignatureDeclaration(modifiers: ModifierList?, name: N
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateMethodSignatureDeclaration 328c1811
 fun NodeFactory?.updateMethodSignatureDeclaration(node: MethodSignatureDeclaration?, modifiers: ModifierList?, name: Node?, postfixToken: Node?, typeParameters: NodeList?, parameters: NodeList?, typeNode: Node?): Node? {
     if (modifiers !== node!!.namedMemberBase.modifiersBase.modifiers || name !== node!!.namedMemberBase.name || postfixToken !== node!!.namedMemberBase.postfixToken || typeParameters !== node!!.functionLikeBase.typeParameters || parameters !== node!!.functionLikeBase.parameters || typeNode !== node!!.functionLikeBase.type) {
-        return updateNode(this.newMethodSignatureDeclaration(modifiers, name, postfixToken, typeParameters, parameters, typeNode), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newMethodSignatureDeclaration(modifiers, name, postfixToken, typeParameters, parameters, typeNode), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsMethodSignatureDeclaration 958f5e25
@@ -8110,7 +7676,7 @@ class MethodDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.MethodDeclaration.propagateSubtreeFacts c09ad8fd
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.nodeBase.nodeDefault.subtreeFacts().value and 4260970495u or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.namedMemberBase.name).value)
+        return SubtreeFacts(this.nodeBase.subtreeFacts().value and 4260970495u or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.namedMemberBase.name).value)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.MethodDeclaration.ForEachChild b03425ba
@@ -8125,7 +7691,7 @@ class MethodDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.MethodDeclaration.Clone f4d67388
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newMethodDeclaration(this.namedMemberBase.modifiers(), this.functionLikeWithBodyBase.bodyBase.asteriskToken, this.namedMemberBase.name, this.namedMemberBase.postfixToken, this.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.functionLikeWithBodyBase.functionLikeBase.parameters, this.functionLikeWithBodyBase.functionLikeBase.type, this.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.functionLikeWithBodyBase.bodyBase.body), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newMethodDeclaration(this.namedMemberBase.modifiers(), this.functionLikeWithBodyBase.bodyBase.asteriskToken, this.namedMemberBase.name, this.namedMemberBase.postfixToken, this.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.functionLikeWithBodyBase.functionLikeBase.parameters, this.functionLikeWithBodyBase.functionLikeBase.type, this.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.functionLikeWithBodyBase.bodyBase.body), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.MethodDeclaration.Name 743860f2
@@ -8133,39 +7699,39 @@ class MethodDeclaration(
         return this.namedMemberBase.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
     override fun bodyData(): BodyBase? = this.functionLikeWithBodyBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.namedMemberBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeWithBodyBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeWithBodyBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.namedMemberBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.namedMemberBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<MethodDeclaration> = GoElem({ MethodDeclaration() }, { it.goCopy() })
@@ -8190,9 +7756,9 @@ fun NodeFactory?.newMethodDeclaration(modifiers: ModifierList?, asteriskToken: N
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateMethodDeclaration 17a3ae36
 fun NodeFactory?.updateMethodDeclaration(node: MethodDeclaration?, modifiers: ModifierList?, asteriskToken: Node?, name: Node?, postfixToken: Node?, typeParameters: NodeList?, parameters: NodeList?, typeNode: Node?, fullSignature: Node?, body: Node?): Node? {
     if (modifiers !== node!!.namedMemberBase.modifiersBase.modifiers || asteriskToken !== node!!.functionLikeWithBodyBase.bodyBase.asteriskToken || name !== node!!.namedMemberBase.name || postfixToken !== node!!.namedMemberBase.postfixToken || typeParameters !== node!!.functionLikeWithBodyBase.functionLikeBase.typeParameters || parameters !== node!!.functionLikeWithBodyBase.functionLikeBase.parameters || typeNode !== node!!.functionLikeWithBodyBase.functionLikeBase.type || fullSignature !== node!!.functionLikeWithBodyBase.functionLikeBase.fullSignature || body !== node!!.functionLikeWithBodyBase.bodyBase.body) {
-        return updateNode(this.newMethodDeclaration(modifiers, asteriskToken, name, postfixToken, typeParameters, parameters, typeNode, fullSignature, body), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newMethodDeclaration(modifiers, asteriskToken, name, postfixToken, typeParameters, parameters, typeNode, fullSignature, body), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsMethodDeclaration c720d930
@@ -8237,7 +7803,7 @@ class PropertySignatureDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertySignatureDeclaration.Clone f3b55f6c
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newPropertySignatureDeclaration(this.namedMemberBase.modifiers(), this.namedMemberBase.name, this.namedMemberBase.postfixToken, this.type, this.initializer), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newPropertySignatureDeclaration(this.namedMemberBase.modifiers(), this.namedMemberBase.name, this.namedMemberBase.postfixToken, this.type, this.initializer), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertySignatureDeclaration.Name a9c57224
@@ -8245,43 +7811,43 @@ class PropertySignatureDeclaration(
         return this.namedMemberBase.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun computeSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.namedMemberBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.namedMemberBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun propagateSubtreeFacts(): SubtreeFacts = this.typeSyntaxBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.namedMemberBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<PropertySignatureDeclaration> = GoElem({ PropertySignatureDeclaration() }, { it.goCopy() })
@@ -8302,9 +7868,9 @@ fun NodeFactory?.newPropertySignatureDeclaration(modifiers: ModifierList?, name:
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdatePropertySignatureDeclaration 938f20e5
 fun NodeFactory?.updatePropertySignatureDeclaration(node: PropertySignatureDeclaration?, modifiers: ModifierList?, name: Node?, postfixToken: Node?, typeNode: Node?, initializer: Node?): Node? {
     if (modifiers !== node!!.namedMemberBase.modifiersBase.modifiers || name !== node!!.namedMemberBase.name || postfixToken !== node!!.namedMemberBase.postfixToken || typeNode !== node!!.type || initializer !== node!!.initializer) {
-        return updateNode(this.newPropertySignatureDeclaration(modifiers, name, postfixToken, typeNode, initializer), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newPropertySignatureDeclaration(modifiers, name, postfixToken, typeNode, initializer), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsPropertySignatureDeclaration 033fe3cd
@@ -8344,7 +7910,7 @@ class PropertyDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertyDeclaration.propagateSubtreeFacts 1ffc400b
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.nodeBase.nodeDefault.subtreeFacts().value and 4261363711u or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.namedMemberBase.name).value)
+        return SubtreeFacts(this.nodeBase.subtreeFacts().value and 4261363711u or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.namedMemberBase.name).value)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertyDeclaration.ForEachChild 6c405709
@@ -8359,7 +7925,7 @@ class PropertyDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertyDeclaration.Clone fb339414
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newPropertyDeclaration(this.namedMemberBase.modifiers(), this.namedMemberBase.name, this.namedMemberBase.postfixToken, this.type, this.initializer), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newPropertyDeclaration(this.namedMemberBase.modifiers(), this.namedMemberBase.name, this.namedMemberBase.postfixToken, this.type, this.initializer), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.PropertyDeclaration.Name b1575f8d
@@ -8367,39 +7933,39 @@ class PropertyDeclaration(
         return this.namedMemberBase.name
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.namedMemberBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.namedMemberBase.modifiers()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.namedMemberBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<PropertyDeclaration> = GoElem({ PropertyDeclaration() }, { it.goCopy() })
@@ -8420,9 +7986,9 @@ fun NodeFactory?.newPropertyDeclaration(modifiers: ModifierList?, name: Node?, p
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdatePropertyDeclaration c5339c75
 fun NodeFactory?.updatePropertyDeclaration(node: PropertyDeclaration?, modifiers: ModifierList?, name: Node?, postfixToken: Node?, typeNode: Node?, initializer: Node?): Node? {
     if (modifiers !== node!!.namedMemberBase.modifiersBase.modifiers || name !== node!!.namedMemberBase.name || postfixToken !== node!!.namedMemberBase.postfixToken || typeNode !== node!!.type || initializer !== node!!.initializer) {
-        return updateNode(this.newPropertyDeclaration(modifiers, name, postfixToken, typeNode, initializer), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newPropertyDeclaration(modifiers, name, postfixToken, typeNode, initializer), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsPropertyDeclaration 59a06351
@@ -8451,52 +8017,52 @@ class SemicolonClassElement(
 
     // go: github.com/microsoft/typescript-go/internal/ast.SemicolonClassElement.Clone 1e9ba2d6
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newSemicolonClassElement(), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newSemicolonClassElement(), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<SemicolonClassElement> = GoElem({ SemicolonClassElement() }, { it.goCopy() })
@@ -8556,46 +8122,46 @@ class ClassStaticBlockDeclaration(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ClassStaticBlockDeclaration.Clone 40eef2ba
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newClassStaticBlockDeclaration(this.modifiersBase.modifiers(), this.body), this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newClassStaticBlockDeclaration(this.modifiersBase.modifiers(), this.body), this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ClassStaticBlockDeclaration> = GoElem({ ClassStaticBlockDeclaration() }, { it.goCopy() })
@@ -8613,9 +8179,9 @@ fun NodeFactory?.newClassStaticBlockDeclaration(modifiers: ModifierList?, body: 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateClassStaticBlockDeclaration 93c270b9
 fun NodeFactory?.updateClassStaticBlockDeclaration(node: ClassStaticBlockDeclaration?, modifiers: ModifierList?, body: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || body !== node!!.body) {
-        return updateNode(this.newClassStaticBlockDeclaration(modifiers, body), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newClassStaticBlockDeclaration(modifiers, body), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsClassStaticBlockDeclaration 7b51f565
@@ -8640,52 +8206,52 @@ class OmittedExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.OmittedExpression.Clone 6f987a6a
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newOmittedExpression(), this.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newOmittedExpression(), this.expressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.expressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.expressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.expressionBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.expressionBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.expressionBase.declarationData()
 
-    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.expressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.expressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.expressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.functionLikeData()
 
-    override fun kindString(): String = this.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.expressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.expressionBase.modifiers()
 
-    override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.expressionBase.name()
 
-    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.expressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.expressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.expressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<OmittedExpression> = GoElem({ OmittedExpression() }, { it.goCopy() })
@@ -8722,7 +8288,7 @@ class KeywordExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.KeywordExpression.computeSubtreeFacts 537d6d01
     override fun computeSubtreeFacts(): SubtreeFacts {
-        when (this.expressionBase.nodeBase.nodeDefault.node.kind.value) {
+        when (this.expressionBase.node.kind.value) {
             109 -> {
                 return SubtreeContainsLexicalThis
             }
@@ -8735,50 +8301,50 @@ class KeywordExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.KeywordExpression.Clone 85ab2e14
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newKeywordExpression(this.expressionBase.nodeBase.nodeDefault.node.kind), this.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newKeywordExpression(this.expressionBase.node.kind), this.expressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.expressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.expressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.expressionBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.expressionBase.declarationData()
 
-    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.expressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.expressionBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.expressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.functionLikeData()
 
-    override fun kindString(): String = this.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.expressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.expressionBase.modifiers()
 
-    override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.expressionBase.name()
 
-    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.expressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.expressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.expressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<KeywordExpression> = GoElem({ KeywordExpression() }, { it.goCopy() })
@@ -8818,52 +8384,52 @@ class StringLiteral(
 
     // go: github.com/microsoft/typescript-go/internal/ast.StringLiteral.Clone 1bd7bda5
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newStringLiteral(this.literalExpressionBase.literalLikeNodeBase.text, this.literalExpressionBase.literalLikeNodeBase.tokenFlags), this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newStringLiteral(this.literalExpressionBase.literalLikeNodeBase.text, this.literalExpressionBase.literalLikeNodeBase.tokenFlags), this.literalExpressionBase.primaryExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.literalExpressionBase.primaryExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.literalExpressionBase.primaryExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.literalExpressionBase.primaryExpressionBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.literalExpressionBase.primaryExpressionBase.declarationData()
 
-    override fun end(): Int = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.literalExpressionBase.primaryExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.literalExpressionBase.primaryExpressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.literalExpressionBase.primaryExpressionBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.literalExpressionBase.primaryExpressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.literalExpressionBase.primaryExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.literalExpressionBase.primaryExpressionBase.node.kindString()
 
     override fun literalLikeData(): LiteralLikeNodeBase? = this.literalExpressionBase.literalLikeNodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.literalExpressionBase.primaryExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.literalExpressionBase.primaryExpressionBase.modifiers()
 
-    override fun name(): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.literalExpressionBase.primaryExpressionBase.name()
 
-    override fun pos(): Int = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.literalExpressionBase.primaryExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.literalExpressionBase.primaryExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.literalExpressionBase.primaryExpressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.literalExpressionBase.primaryExpressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<StringLiteral> = GoElem({ StringLiteral() }, { it.goCopy() })
@@ -8901,52 +8467,52 @@ class NumericLiteral(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NumericLiteral.Clone c9c077d2
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNumericLiteral(this.literalExpressionBase.literalLikeNodeBase.text, this.literalExpressionBase.literalLikeNodeBase.tokenFlags), this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNumericLiteral(this.literalExpressionBase.literalLikeNodeBase.text, this.literalExpressionBase.literalLikeNodeBase.tokenFlags), this.literalExpressionBase.primaryExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.literalExpressionBase.primaryExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.literalExpressionBase.primaryExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.literalExpressionBase.primaryExpressionBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.literalExpressionBase.primaryExpressionBase.declarationData()
 
-    override fun end(): Int = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.literalExpressionBase.primaryExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.literalExpressionBase.primaryExpressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.literalExpressionBase.primaryExpressionBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.literalExpressionBase.primaryExpressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.literalExpressionBase.primaryExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.literalExpressionBase.primaryExpressionBase.node.kindString()
 
     override fun literalLikeData(): LiteralLikeNodeBase? = this.literalExpressionBase.literalLikeNodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.literalExpressionBase.primaryExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.literalExpressionBase.primaryExpressionBase.modifiers()
 
-    override fun name(): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.literalExpressionBase.primaryExpressionBase.name()
 
-    override fun pos(): Int = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.literalExpressionBase.primaryExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.literalExpressionBase.primaryExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.literalExpressionBase.primaryExpressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.literalExpressionBase.primaryExpressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<NumericLiteral> = GoElem({ NumericLiteral() }, { it.goCopy() })
@@ -8989,50 +8555,50 @@ class BigIntLiteral(
 
     // go: github.com/microsoft/typescript-go/internal/ast.BigIntLiteral.Clone 32df9493
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newBigIntLiteral(this.literalExpressionBase.literalLikeNodeBase.text, this.literalExpressionBase.literalLikeNodeBase.tokenFlags), this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newBigIntLiteral(this.literalExpressionBase.literalLikeNodeBase.text, this.literalExpressionBase.literalLikeNodeBase.tokenFlags), this.literalExpressionBase.primaryExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.literalExpressionBase.primaryExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.literalExpressionBase.primaryExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.literalExpressionBase.primaryExpressionBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.literalExpressionBase.primaryExpressionBase.declarationData()
 
-    override fun end(): Int = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.literalExpressionBase.primaryExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.literalExpressionBase.primaryExpressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.literalExpressionBase.primaryExpressionBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.literalExpressionBase.primaryExpressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.literalExpressionBase.primaryExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.literalExpressionBase.primaryExpressionBase.node.kindString()
 
     override fun literalLikeData(): LiteralLikeNodeBase? = this.literalExpressionBase.literalLikeNodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.literalExpressionBase.primaryExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.literalExpressionBase.primaryExpressionBase.modifiers()
 
-    override fun name(): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.literalExpressionBase.primaryExpressionBase.name()
 
-    override fun pos(): Int = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.literalExpressionBase.primaryExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.literalExpressionBase.primaryExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.literalExpressionBase.primaryExpressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.literalExpressionBase.primaryExpressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<BigIntLiteral> = GoElem({ BigIntLiteral() }, { it.goCopy() })
@@ -9070,52 +8636,52 @@ class RegularExpressionLiteral(
 
     // go: github.com/microsoft/typescript-go/internal/ast.RegularExpressionLiteral.Clone 6c3bdc72
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newRegularExpressionLiteral(this.literalExpressionBase.literalLikeNodeBase.text, this.literalExpressionBase.literalLikeNodeBase.tokenFlags), this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newRegularExpressionLiteral(this.literalExpressionBase.literalLikeNodeBase.text, this.literalExpressionBase.literalLikeNodeBase.tokenFlags), this.literalExpressionBase.primaryExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.literalExpressionBase.primaryExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.literalExpressionBase.primaryExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.literalExpressionBase.primaryExpressionBase.classLikeData()
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.literalExpressionBase.primaryExpressionBase.declarationData()
 
-    override fun end(): Int = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.literalExpressionBase.primaryExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.literalExpressionBase.primaryExpressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.literalExpressionBase.primaryExpressionBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.literalExpressionBase.primaryExpressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.literalExpressionBase.primaryExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.literalExpressionBase.primaryExpressionBase.node.kindString()
 
     override fun literalLikeData(): LiteralLikeNodeBase? = this.literalExpressionBase.literalLikeNodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.literalExpressionBase.primaryExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.literalExpressionBase.primaryExpressionBase.modifiers()
 
-    override fun name(): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.literalExpressionBase.primaryExpressionBase.name()
 
-    override fun pos(): Int = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.literalExpressionBase.primaryExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.literalExpressionBase.primaryExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.literalExpressionBase.primaryExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.literalExpressionBase.primaryExpressionBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.literalExpressionBase.primaryExpressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<RegularExpressionLiteral> = GoElem({ RegularExpressionLiteral() }, { it.goCopy() })
@@ -9165,50 +8731,50 @@ class NoSubstitutionTemplateLiteral(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NoSubstitutionTemplateLiteral.Clone c240c6ce
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newNoSubstitutionTemplateLiteral(this.templateLiteralLikeNodeBase.literalLikeNodeBase.text, this.templateLiteralLikeNodeBase.templateFlags), this.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newNoSubstitutionTemplateLiteral(this.templateLiteralLikeNodeBase.literalLikeNodeBase.text, this.templateLiteralLikeNodeBase.templateFlags), this.expressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.expressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.expressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.expressionBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.expressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.expressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.expressionBase.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.expressionBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.functionLikeData()
 
-    override fun kindString(): String = this.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.expressionBase.node.kindString()
 
     override fun literalLikeData(): LiteralLikeNodeBase? = this.templateLiteralLikeNodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.expressionBase.modifiers()
 
-    override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.expressionBase.name()
 
-    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.expressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.expressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.subtreeFactsWorker(p0)
 
     override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.templateLiteralLikeNodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.expressionBase.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.expressionBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<NoSubstitutionTemplateLiteral> = GoElem({ NoSubstitutionTemplateLiteral() }, { it.goCopy() })
@@ -9286,44 +8852,44 @@ class BinaryExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.BinaryExpression.Clone cc45ef45
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newBinaryExpression(this.modifiersBase.modifiers(), this.left, this.type, this.operatorToken, this.right), this.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newBinaryExpression(this.modifiersBase.modifiers(), this.left, this.type, this.operatorToken, this.right), this.expressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.expressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.expressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.expressionBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.expressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.expressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.functionLikeData()
 
-    override fun kindString(): String = this.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.expressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.expressionBase.name()
 
-    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.expressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.propagateSubtreeFacts()
 
-    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<BinaryExpression> = GoElem({ BinaryExpression() }, { it.goCopy() })
@@ -9344,9 +8910,9 @@ fun NodeFactory?.newBinaryExpression(modifiers: ModifierList?, left: Node?, type
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateBinaryExpression 3a9bf533
 fun NodeFactory?.updateBinaryExpression(node: BinaryExpression?, modifiers: ModifierList?, left: Node?, typeNode: Node?, operatorToken: Node?, right: Node?): Node? {
     if (modifiers !== node!!.modifiersBase.modifiers || left !== node!!.left || typeNode !== node!!.type || operatorToken !== node!!.operatorToken || right !== node!!.right) {
-        return updateNode(this.newBinaryExpression(modifiers, left, typeNode, operatorToken, right), node!!.expressionBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newBinaryExpression(modifiers, left, typeNode, operatorToken, right), node!!.expressionBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.expressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsBinaryExpression 0373e1fa
@@ -9385,7 +8951,7 @@ class PrefixUnaryExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PrefixUnaryExpression.Clone fc8c1ebc
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newPrefixUnaryExpression(this.operator, this.operand), this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newPrefixUnaryExpression(this.operator, this.operand), this.updateExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.PrefixUnaryExpression.computeSubtreeFacts 4866199b
@@ -9393,43 +8959,43 @@ class PrefixUnaryExpression(
         return com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.operand)
     }
 
-    override fun asNode(): Node? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.updateExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.updateExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.updateExpressionBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.updateExpressionBase.declarationData()
 
-    override fun end(): Int = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.updateExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.updateExpressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.updateExpressionBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.updateExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.updateExpressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.updateExpressionBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.updateExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.updateExpressionBase.modifiers()
 
-    override fun name(): Node? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.updateExpressionBase.name()
 
-    override fun pos(): Int = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.updateExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.updateExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.updateExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.updateExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.updateExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.updateExpressionBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<PrefixUnaryExpression> = GoElem({ PrefixUnaryExpression() }, { it.goCopy() })
@@ -9447,9 +9013,9 @@ fun NodeFactory?.newPrefixUnaryExpression(operator: Kind, operand: Node?): Node?
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdatePrefixUnaryExpression eb47abb4
 fun NodeFactory?.updatePrefixUnaryExpression(node: PrefixUnaryExpression?, operator: Kind, operand: Node?): Node? {
     if (operator.value != node!!.operator.value || operand !== node!!.operand) {
-        return updateNode(this.newPrefixUnaryExpression(operator, operand), node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newPrefixUnaryExpression(operator, operand), node!!.updateExpressionBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.updateExpressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsPrefixUnaryExpression 1d174d7e
@@ -9488,7 +9054,7 @@ class PostfixUnaryExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.PostfixUnaryExpression.Clone 962c2abf
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newPostfixUnaryExpression(this.operand, this.operator), this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newPostfixUnaryExpression(this.operand, this.operator), this.updateExpressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.PostfixUnaryExpression.computeSubtreeFacts e6b5bb7a
@@ -9496,43 +9062,43 @@ class PostfixUnaryExpression(
         return com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.operand)
     }
 
-    override fun asNode(): Node? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.updateExpressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.updateExpressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.updateExpressionBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.updateExpressionBase.declarationData()
 
-    override fun end(): Int = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.updateExpressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.updateExpressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.updateExpressionBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.updateExpressionBase.functionLikeData()
 
-    override fun kindString(): String = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.updateExpressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.updateExpressionBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.updateExpressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.updateExpressionBase.modifiers()
 
-    override fun name(): Node? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.updateExpressionBase.name()
 
-    override fun pos(): Int = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.updateExpressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.updateExpressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.updateExpressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.updateExpressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.updateExpressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.updateExpressionBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<PostfixUnaryExpression> = GoElem({ PostfixUnaryExpression() }, { it.goCopy() })
@@ -9550,9 +9116,9 @@ fun NodeFactory?.newPostfixUnaryExpression(operand: Node?, operator: Kind): Node
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdatePostfixUnaryExpression d8b31f10
 fun NodeFactory?.updatePostfixUnaryExpression(node: PostfixUnaryExpression?, operand: Node?, operator: Kind): Node? {
     if (operand !== node!!.operand || operator.value != node!!.operator.value) {
-        return updateNode(this.newPostfixUnaryExpression(operand, operator), node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newPostfixUnaryExpression(operand, operator), node!!.updateExpressionBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.updateExpressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsPostfixUnaryExpression 3c595c0e
@@ -9596,46 +9162,46 @@ class YieldExpression(
 
     // go: github.com/microsoft/typescript-go/internal/ast.YieldExpression.Clone 50638369
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newYieldExpression(this.asteriskToken, this.expression), this.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newYieldExpression(this.asteriskToken, this.expression), this.expressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.expressionBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.expressionBase.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.expressionBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.expressionBase.classLikeData()
 
-    override fun declarationData(): DeclarationBase? = this.expressionBase.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.expressionBase.declarationData()
 
-    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.expressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.expressionBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.expressionBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.expressionBase.functionLikeData()
 
-    override fun kindString(): String = this.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.expressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.expressionBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.expressionBase.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.expressionBase.modifiers()
 
-    override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.expressionBase.name()
 
-    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.expressionBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.expressionBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.expressionBase.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.expressionBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.expressionBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<YieldExpression> = GoElem({ YieldExpression() }, { it.goCopy() })
@@ -9653,9 +9219,9 @@ fun NodeFactory?.newYieldExpression(asteriskToken: Node?, expression: Node?): No
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateYieldExpression ffcc2880
 fun NodeFactory?.updateYieldExpression(node: YieldExpression?, asteriskToken: Node?, expression: Node?): Node? {
     if (asteriskToken !== node!!.asteriskToken || expression !== node!!.expression) {
-        return updateNode(this.newYieldExpression(asteriskToken, expression), node!!.expressionBase.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(this.newYieldExpression(asteriskToken, expression), node!!.expressionBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.expressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsYieldExpression 7b4397b6
@@ -9688,12 +9254,12 @@ class ArrowFunction(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ArrowFunction.computeSubtreeFacts e826c67d
     override fun computeSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(propagateModifierListSubtreeFacts(this.modifiersBase.modifiers).value or propagateEraseableSyntaxListSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.typeParameters).value or propagateNodeListSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.parameters, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0)).value or propagateEraseableSyntaxSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.type).value or propagateEraseableSyntaxSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.fullSignature).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.functionLikeWithBodyBase.bodyBase.body).value or com.xemantic.typescript.tsgo.core.ifElse<SubtreeFacts>(SubtreeFacts.ELEM, this.expressionBase.nodeBase.nodeDefault.node.modifierFlags().value and 1024u != 0u, SubtreeContainsAnyAwait, SubtreeFactsNone).value)
+        return SubtreeFacts(propagateModifierListSubtreeFacts(this.modifiersBase.modifiers).value or propagateEraseableSyntaxListSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.typeParameters).value or propagateNodeListSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.parameters, fun(p0: Node?): SubtreeFacts = com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(p0)).value or propagateEraseableSyntaxSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.type).value or propagateEraseableSyntaxSubtreeFacts(this.functionLikeWithBodyBase.functionLikeBase.fullSignature).value or com.xemantic.typescript.tsgo.ast.propagateSubtreeFacts(this.functionLikeWithBodyBase.bodyBase.body).value or com.xemantic.typescript.tsgo.core.ifElse<SubtreeFacts>(SubtreeFacts.ELEM, this.expressionBase.node.modifierFlags().value and 1024u != 0u, SubtreeContainsAnyAwait, SubtreeFactsNone).value)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ArrowFunction.propagateSubtreeFacts 0905d070
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.expressionBase.nodeBase.nodeDefault.subtreeFacts().value and 4261019647u)
+        return SubtreeFacts(this.expressionBase.subtreeFacts().value and 4261019647u)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.ArrowFunction.ForEachChild f36426d5
@@ -9708,44 +9274,44 @@ class ArrowFunction(
 
     // go: github.com/microsoft/typescript-go/internal/ast.ArrowFunction.Clone a5f94af4
     override fun clone(f: NodeFactoryCoercible?): Node? {
-        return cloneNode(f!!.asNodeFactory().newArrowFunction(this.modifiersBase.modifiers(), this.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.functionLikeWithBodyBase.functionLikeBase.parameters, this.functionLikeWithBodyBase.functionLikeBase.type, this.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.equalsGreaterThanToken, this.functionLikeWithBodyBase.bodyBase.body), this.expressionBase.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(f!!.asNodeFactory().newArrowFunction(this.modifiersBase.modifiers(), this.functionLikeWithBodyBase.functionLikeBase.typeParameters, this.functionLikeWithBodyBase.functionLikeBase.parameters, this.functionLikeWithBodyBase.functionLikeBase.type, this.functionLikeWithBodyBase.functionLikeBase.fullSignature, this.equalsGreaterThanToken, this.functionLikeWithBodyBase.bodyBase.body), this.expressionBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
-    override fun asNode(): Node? = this.expressionBase.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.expressionBase.asNode()
 
     override fun bodyData(): BodyBase? = this.functionLikeWithBodyBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.expressionBase.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.expressionBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.expressionBase.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.expressionBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.expressionBase.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.expressionBase.exportableData()
 
     override fun flowNodeData(): FlowNodeBase? = this.flowNodeBase.flowNodeData()
 
     override fun functionLikeData(): FunctionLikeBase? = this.functionLikeWithBodyBase.functionLikeData()
 
-    override fun kindString(): String = this.expressionBase.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.expressionBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.expressionBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.functionLikeWithBodyBase.localsContainerData()
 
     override fun modifiers(): ModifierList? = this.modifiersBase.modifiers()
 
-    override fun name(): Node? = this.expressionBase.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.expressionBase.name()
 
-    override fun pos(): Int = this.expressionBase.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.expressionBase.node.pos()
 
     override fun setModifiers(p0: ModifierList?) = this.modifiersBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.expressionBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.expressionBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<ArrowFunction> = GoElem({ ArrowFunction() }, { it.goCopy() })

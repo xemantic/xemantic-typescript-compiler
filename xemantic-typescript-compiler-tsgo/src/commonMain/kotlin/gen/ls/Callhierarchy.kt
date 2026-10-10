@@ -598,10 +598,10 @@ fun convertEntryToCallSite(entry: ReferenceEntry?): com.xemantic.typescript.tsgo
     val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
     var ancestor: Node? = com.xemantic.typescript.tsgo.ast.findAncestor(node, fun(p0: Node?): Boolean = isValidCallHierarchyDeclaration(p0))
     if (ancestor == null) {
-        ancestor = sourceFile!!.nodeBase.nodeDefault.asNode()
+        ancestor = sourceFile!!.nodeBase.asNode()
     }
     val start: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile!!.text(), node!!.pos())
-    return com.xemantic.typescript.tsgo.ls.callSite(declaration = ancestor, textRange = com.xemantic.typescript.tsgo.core.newTextRange(start, node!!.end()), sourceFile = sourceFile!!.nodeBase.nodeDefault.asNode())
+    return com.xemantic.typescript.tsgo.ls.callSite(declaration = ancestor, textRange = com.xemantic.typescript.tsgo.core.newTextRange(start, node!!.end()), sourceFile = sourceFile!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.getCallSiteGroupKey 5f2732c0
@@ -808,14 +808,14 @@ fun com.xemantic.typescript.tsgo.ls.callSiteCollector?.recordCallSite(node: Node
     when {
         x0 is Node -> {
             val decl: Node? = x0 as Node
-            this!!.callSites = this!!.callSites.append1(com.xemantic.typescript.tsgo.ls.callSite(declaration = decl, textRange = textRange.goCopy(), sourceFile = sourceFile!!.nodeBase.nodeDefault.asNode()))
+            this!!.callSites = this!!.callSites.append1(com.xemantic.typescript.tsgo.ls.callSite(declaration = decl, textRange = textRange.goCopy(), sourceFile = sourceFile!!.nodeBase.asNode()))
         }
         x0 is com.xemantic.typescript.tsgo.runtime.GoSlice<*> -> {
             val decl_1: GoSlice<Node?> = x0 as GoSlice<Node?>
             val s1 = decl_1
             l2@ for (i2 in 0 until s1.len) {
                 val d: Node? = s1[i2]
-                this!!.callSites = this!!.callSites.append1(com.xemantic.typescript.tsgo.ls.callSite(declaration = d, textRange = textRange.goCopy(), sourceFile = sourceFile!!.nodeBase.nodeDefault.asNode()))
+                this!!.callSites = this!!.callSites.append1(com.xemantic.typescript.tsgo.ls.callSite(declaration = d, textRange = textRange.goCopy(), sourceFile = sourceFile!!.nodeBase.asNode()))
             }
         }
     }
@@ -1105,7 +1105,7 @@ fun LanguageService?.provideCallHierarchyIncomingCalls(ctx: Context?, item: Call
     val pos: Int = this!!.converters.lineAndCharacterToPosition(file, item!!.selectionRange.start.goCopy()).value
     var node: Node? = null
     if (pos == 0) {
-        node = file!!.nodeBase.nodeDefault.asNode()
+        node = file!!.nodeBase.asNode()
     } else {
         node = com.xemantic.typescript.tsgo.astnav.getTouchingPropertyName(file, pos)
     }
@@ -1147,7 +1147,7 @@ fun LanguageService?.provideCallHierarchyOutgoingCalls(ctx: Context?, item: Call
     val pos: Int = this!!.converters.lineAndCharacterToPosition(file, item!!.selectionRange.start.goCopy()).value
     var node: Node? = null
     if (pos == 0) {
-        node = file!!.nodeBase.nodeDefault.asNode()
+        node = file!!.nodeBase.asNode()
     } else {
         node = com.xemantic.typescript.tsgo.astnav.getTouchingPropertyName(file, pos)
     }

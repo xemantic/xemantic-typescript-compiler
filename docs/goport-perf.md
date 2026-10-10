@@ -1015,3 +1015,25 @@ after § 17 ("final"), with tsgo 7.0.2, one rotated batch, 3 runs per arm, every
 objects per AST node against Go's one) — and the check phase matches tsgo's under PGO. What is left on small projects
 is per-file fixed cost: config (a Java listing needs an `lstat` per entry where Go reads `d_type`), parse code quality
 in the AOT image, and process start.
+
+## 19. (TSGO.6-n) Transparent wrappers: an `ast.Identifier` is 6 objects, not 13 (2026-10-10)
+
+Go embeds by value: `Identifier{PrimaryExpressionBase{MemberExpressionBase{…ExpressionBase{NodeBase{NodeDefault{Node}}}}}}`
+is ONE allocation. The port made every level its own object — Identifier, seven `*Base` wrappers, NodeDefault, Node, its
+TextRange and atomic id, FlowNodeBase: 13 objects, and seven pointer hops (`this.primaryExpressionBase.memberExpressionBase
+…nodeBase.nodeDefault`) on every promoted call. Nine wrapper structs have no field and no method of their own; a porter
+rule lowers each as a `typealias` of what it wraps (docs/goport-lowering.md § 3, "Transparent wrappers"), so the chain is
+one `NodeDefault` object and a selection through a wrapper is no step.
+
+Measured (`scripts/tsgo-ab-warm.sh`, ABBA + BAAB, `-Xmx4g` both arms; every run one digest; all parity gates green):
+
+| regime | A | B | Δ | B wins |
+|---|---:|---:|---:|---:|
+| compiler single, ms | 3,370 [3,340-3,631] | 3,176 [3,082-3,234] | **−5.8%** | 4/4 |
+| compiler parallel, ms | 1,932 [1,863-1,984] | 1,880 [1,796-1,893] | −2.6% | 3/4 |
+| services parallel, ms | 2,545 [2,461-2,748] | 2,412 [2,307-2,483] | **−5.2%** | 4/4 |
+| allocation/rebuild, single / parallel / services, MB | 1,200 / 1,356 / 1,880 | 1,135 / 1,288 / 1,789 | −5.4% / −5.0% / −4.8% | 4/4 each |
+
+What remains per node is NodeDefault + Node + TextRange + atomic id (+ FlowNodeBase and the node's own data struct): a
+second rule of the same kind — embedding the Node itself, i.e. making the data struct and its Node one object — would
+need Kotlin inheritance for the first embedded field and is the next representation step.

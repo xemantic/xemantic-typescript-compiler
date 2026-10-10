@@ -127,8 +127,8 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.optionalChainTransfor
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.optionalChainTransformer.visitCallExpression 5ec36c9e
 fun com.xemantic.typescript.tsgo.transformers.estransforms.optionalChainTransformer?.visitCallExpression(node: CallExpression?, captureThisArg: Boolean): Node? {
-    if (node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags.value and 32u != 0u) {
-        return this.visitOptionalExpression(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), captureThisArg, false)
+    if (node!!.leftHandSideExpressionBase.node.flags.value and 32u != 0u) {
+        return this.visitOptionalExpression(node!!.leftHandSideExpressionBase.asNode(), captureThisArg, false)
     }
     if (com.xemantic.typescript.tsgo.ast.isParenthesizedExpression(node!!.expression)) {
         val unwrapped: Node? = com.xemantic.typescript.tsgo.ast.skipParentheses(node!!.expression)
@@ -137,14 +137,14 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.optionalChainTransfor
             val args: NodeList? = this!!.transformer.visitor().visitNodes(node!!.arguments)
             if (com.xemantic.typescript.tsgo.ast.isSyntheticReferenceExpression(expression)) {
                 val res: Node? = this!!.transformer.factory().newFunctionCallCall(expression.asSyntheticReferenceExpression()!!.expression, expression.asSyntheticReferenceExpression()!!.thisArg, args!!.nodes)
-                res!!.loc = node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
-                this!!.transformer.emitContext().setOriginal(res, node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+                res!!.loc = node!!.leftHandSideExpressionBase.node.loc.goCopy()
+                this!!.transformer.emitContext().setOriginal(res, node!!.leftHandSideExpressionBase.asNode())
                 return res
             }
-            return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, expression, null, null, args, node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+            return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, expression, null, null, args, node!!.leftHandSideExpressionBase.node.flags)
         }
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.optionalChainTransformer.visitParenthesizedExpression f16caa26
@@ -153,7 +153,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.optionalChainTransfor
     if (com.xemantic.typescript.tsgo.ast.isSyntheticReferenceExpression(expr)) {
         val synth: SyntheticReferenceExpression? = expr.asSyntheticReferenceExpression()
         val res: Node? = this!!.transformer.factory()!!.nodeFactory.newSyntheticReferenceExpression(this!!.transformer.factory()!!.nodeFactory.updateParenthesizedExpression(node, synth!!.expression), synth!!.thisArg)
-        this!!.transformer.emitContext().setOriginal(res, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(res, node!!.primaryExpressionBase.asNode())
         return res
     }
     return this!!.transformer.factory()!!.nodeFactory.updateParenthesizedExpression(node, expr)
@@ -178,10 +178,10 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.optionalChainTransfor
     }
     if (node!!.kind.value == 212) {
         val p: PropertyAccessExpression? = node.asPropertyAccessExpression()
-        expression = this!!.transformer.factory()!!.nodeFactory.updatePropertyAccessExpression(p, expression, null, this!!.transformer.visitor().visitNode(p!!.name()), p!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        expression = this!!.transformer.factory()!!.nodeFactory.updatePropertyAccessExpression(p, expression, null, this!!.transformer.visitor().visitNode(p!!.name()), p!!.memberExpressionBase.node.flags)
     } else {
         val p_1: ElementAccessExpression? = node.asElementAccessExpression()
-        expression = this!!.transformer.factory()!!.nodeFactory.updateElementAccessExpression(p_1, expression, null, this!!.transformer.visitor().visitNode(p_1!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.asElementAccessExpression()!!.argumentExpression), p_1!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        expression = this!!.transformer.factory()!!.nodeFactory.updateElementAccessExpression(p_1, expression, null, this!!.transformer.visitor().visitNode(p_1!!.memberExpressionBase.node.asElementAccessExpression()!!.argumentExpression), p_1!!.memberExpressionBase.node.flags)
     }
     if (thisArg != null) {
         val res: Node? = this!!.transformer.factory()!!.nodeFactory.newSyntheticReferenceExpression(expression, thisArg)
@@ -197,7 +197,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.optionalChainTransfor
     if (unwrapped!!.flags.value and 32u != 0u) {
         return this.visitNonOptionalExpression(node!!.expression, false, true)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.unaryExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.optionalChainTransformer.visitNonOptionalExpression ed923f74

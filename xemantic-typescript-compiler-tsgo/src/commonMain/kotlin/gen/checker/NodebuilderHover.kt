@@ -285,11 +285,11 @@ fun typeElementsToClassElements(f: NodeFactory?, members: GoSlice<Node?>): GoSli
         when (m!!.kind.value) {
             172 -> {
                 val ps: PropertySignatureDeclaration? = m.asPropertySignatureDeclaration()
-                members[i] = f.newPropertyDeclaration(m.modifiers(), ps!!.name(), ps!!.nodeBase.nodeDefault.node.questionToken(), ps!!.type, null)
+                members[i] = f.newPropertyDeclaration(m.modifiers(), ps!!.name(), ps!!.nodeBase.node.questionToken(), ps!!.type, null)
             }
             174 -> {
                 val ms: MethodSignatureDeclaration? = m.asMethodSignatureDeclaration()
-                members[i] = f.newMethodDeclaration(m.modifiers(), null, ms!!.name(), ms!!.nodeBase.nodeDefault.node.questionToken(), ms!!.functionLikeBase.typeParameters, ms!!.functionLikeBase.parameters, ms!!.functionLikeBase.type, null, null)
+                members[i] = f.newMethodDeclaration(m.modifiers(), null, ms!!.name(), ms!!.nodeBase.node.questionToken(), ms!!.functionLikeBase.typeParameters, ms!!.functionLikeBase.parameters, ms!!.functionLikeBase.type, null, null)
             }
         }
     }

@@ -432,7 +432,7 @@ fun Checker?.getUnionTypeEx(types: GoSlice<Type?>, unionReduction: UnionReductio
 fun Checker?.requiresAddingImplicitUndefined(node: Node?): Boolean {
     var enclosingDeclaration: Node? = com.xemantic.typescript.tsgo.ast.findAncestor(node, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isDeclaration(p0))
     if (enclosingDeclaration == null) {
-        enclosingDeclaration = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)!!.nodeBase.nodeDefault.asNode()
+        enclosingDeclaration = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)!!.nodeBase.asNode()
     }
     val symbol: Symbol? = node.symbol()
     if (symbol == null) {

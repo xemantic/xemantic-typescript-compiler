@@ -340,13 +340,13 @@ fun getSortedSpecifiers(m: GoMap<String, Node?>): GoSlice<Node?> {
 // go: github.com/microsoft/typescript-go/internal/transformers/jsxtransforms.JSXTransformer.visitSourceFile 60a11176
 fun JSXTransformer?.visitSourceFile(file: SourceFile?): Node? {
     if (file!!.isDeclarationFile) {
-        return file!!.nodeBase.nodeDefault.asNode()
+        return file!!.nodeBase.asNode()
     }
     this!!.currentSourceFile = file
     this!!.importSpecifier = com.xemantic.typescript.tsgo.ast.getJSXImplicitImportBase(this!!.compilerOptions, file)
     this!!.filenameDeclaration = null
     this!!.utilizedImplicitRuntimeImports.clear()
-    var visited: Node? = this!!.transformer.visitor().visitEachChild(file!!.nodeBase.nodeDefault.asNode())
+    var visited: Node? = this!!.transformer.visitor().visitEachChild(file!!.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitHelper(visited.asNode(), this!!.transformer.emitContext().readEmitHelpers())
     var statements: GoSlice<Node?> = visited.statements()
     var statementsUpdated: Boolean = false
@@ -410,21 +410,21 @@ fun JSXTransformer?.visitSourceFile(file: SourceFile?): Node? {
 // go: github.com/microsoft/typescript-go/internal/transformers/jsxtransforms.JSXTransformer.visitJsxElement b6632afa
 fun JSXTransformer?.visitJsxElement(element: JsxElement?): Node? {
     var tagTransform: ((JSXTransformer?, Node?, NodeList?, TextRange) -> Node?)? = fun(p0: JSXTransformer?, p1: Node?, p2: NodeList?, p3: TextRange): Node? = p0.visitJsxOpeningLikeElementJSX(p1, p2, p3)
-    if (this.shouldUseCreateElement(element!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())) {
+    if (this.shouldUseCreateElement(element!!.primaryExpressionBase.asNode())) {
         tagTransform = fun(p0: JSXTransformer?, p1: Node?, p2: NodeList?, p3: TextRange): Node? = p0.visitJsxOpeningLikeElementCreateElement(p1, p2, p3)
     }
-    val location: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.currentSourceFile!!.text(), element!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()), element!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end())
+    val location: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.currentSourceFile!!.text(), element!!.primaryExpressionBase.node.pos()), element!!.primaryExpressionBase.node.end())
     return tagTransform!!(this, element!!.openingElement, element!!.children, location.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/jsxtransforms.JSXTransformer.visitJsxSelfClosingElement ad08192f
 fun JSXTransformer?.visitJsxSelfClosingElement(element: JsxSelfClosingElement?): Node? {
     var tagTransform: ((JSXTransformer?, Node?, NodeList?, TextRange) -> Node?)? = fun(p0: JSXTransformer?, p1: Node?, p2: NodeList?, p3: TextRange): Node? = p0.visitJsxOpeningLikeElementJSX(p1, p2, p3)
-    if (this.shouldUseCreateElement(element!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())) {
+    if (this.shouldUseCreateElement(element!!.primaryExpressionBase.asNode())) {
         tagTransform = fun(p0: JSXTransformer?, p1: Node?, p2: NodeList?, p3: TextRange): Node? = p0.visitJsxOpeningLikeElementCreateElement(p1, p2, p3)
     }
-    val location: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.currentSourceFile!!.text(), element!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()), element!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end())
-    return tagTransform!!(this, element!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), null, location.goCopy())
+    val location: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.currentSourceFile!!.text(), element!!.primaryExpressionBase.node.pos()), element!!.primaryExpressionBase.node.end())
+    return tagTransform!!(this, element!!.primaryExpressionBase.asNode(), null, location.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/jsxtransforms.JSXTransformer.visitJsxFragment 165ababa
@@ -433,7 +433,7 @@ fun JSXTransformer?.visitJsxFragment(fragment: JsxFragment?): Node? {
     if (this!!.importSpecifier.length == 0) {
         tagTransform = fun(p0: JSXTransformer?, p1: JsxOpeningFragment?, p2: NodeList?, p3: TextRange): Node? = p0.visitJsxOpeningFragmentCreateElement(p1, p2, p3)
     }
-    val location: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.currentSourceFile!!.text(), fragment!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos()), fragment!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end())
+    val location: TextRange = com.xemantic.typescript.tsgo.core.newTextRange(com.xemantic.typescript.tsgo.scanner.skipTrivia(this!!.currentSourceFile!!.text(), fragment!!.primaryExpressionBase.node.pos()), fragment!!.primaryExpressionBase.node.end())
     return tagTransform!!(this, fragment!!.openingFragment.asJsxOpeningFragment(), fragment!!.children, location.goCopy())
 }
 
@@ -700,7 +700,7 @@ fun JSXTransformer?.visitJsxOpeningLikeElementOrFragmentJSX(tagName: Node?, obje
         args = args.append1(this.transformJsxAttributeInitializer(keyAttr.initializer()))
     }
     if (this!!.compilerOptions!!.jsx.value == 5) {
-        val originalFile: Node? = this!!.transformer.emitContext().mostOriginal(this!!.currentSourceFile!!.nodeBase.nodeDefault.asNode())
+        val originalFile: Node? = this!!.transformer.emitContext().mostOriginal(this!!.currentSourceFile!!.nodeBase.asNode())
         if (originalFile != null && com.xemantic.typescript.tsgo.ast.isSourceFile(originalFile)) {
             if (keyAttr == null) {
                 args = args.append1(this!!.transformer.factory().newVoidZeroExpression())
@@ -777,13 +777,13 @@ fun JSXTransformer?.createJsxPseudoFactoryExpression(parent: Node?, e: Node?, ta
 
 // go: github.com/microsoft/typescript-go/internal/transformers/jsxtransforms.JSXTransformer.createJsxFactoryExpression 71ccc239
 fun JSXTransformer?.createJsxFactoryExpression(parent: Node?): Node? {
-    val e: Node? = this!!.emitResolver!!.getJsxFactoryEntity(this!!.currentSourceFile!!.nodeBase.nodeDefault.asNode())
+    val e: Node? = this!!.emitResolver!!.getJsxFactoryEntity(this!!.currentSourceFile!!.nodeBase.asNode())
     return this.createJsxPseudoFactoryExpression(parent, e, "createElement")
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/jsxtransforms.JSXTransformer.createJsxFragmentFactoryExpression c61c6a13
 fun JSXTransformer?.createJsxFragmentFactoryExpression(parent: Node?): Node? {
-    val e: Node? = this!!.emitResolver!!.getJsxFragmentFactoryEntity(this!!.currentSourceFile!!.nodeBase.nodeDefault.asNode())
+    val e: Node? = this!!.emitResolver!!.getJsxFragmentFactoryEntity(this!!.currentSourceFile!!.nodeBase.asNode())
     return this.createJsxPseudoFactoryExpression(parent, e, "Fragment")
 }
 
@@ -835,8 +835,8 @@ fun JSXTransformer?.visitJsxOpeningLikeElementCreateElement(element: Node?, chil
 
 // go: github.com/microsoft/typescript-go/internal/transformers/jsxtransforms.JSXTransformer.visitJsxOpeningFragmentCreateElement 89f3ad0e
 fun JSXTransformer?.visitJsxOpeningFragmentCreateElement(fragment: JsxOpeningFragment?, children: NodeList?, location: TextRange): Node? {
-    val tagName: Node? = this.createJsxFragmentFactoryExpression(fragment!!.expressionBase.nodeBase.nodeDefault.asNode())
-    val callee: Node? = this.createJsxFactoryExpression(fragment!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val tagName: Node? = this.createJsxFragmentFactoryExpression(fragment!!.expressionBase.asNode())
+    val callee: Node? = this.createJsxFactoryExpression(fragment!!.expressionBase.asNode())
     var newChildren: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
     if (children != null && children!!.nodes.len > 0) {
         val s0 = children!!.nodes

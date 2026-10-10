@@ -90,7 +90,7 @@ fun isUnclosedTag(node: JsxElement?): Boolean {
     if (!com.xemantic.typescript.tsgo.ast.tagNamesAreEquivalent(openingElement.tagName(), closingElement.tagName())) {
         return true
     }
-    val parent: Node? = node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent
+    val parent: Node? = node!!.primaryExpressionBase.node.parent
     if (com.xemantic.typescript.tsgo.ast.isJsxElement(parent)) {
         val parent_1: JsxElement? = parent.asJsxElement()
         return com.xemantic.typescript.tsgo.ast.tagNamesAreEquivalent(openingElement.tagName(), parent_1!!.openingElement.tagName()) && isUnclosedTag(parent_1)
@@ -104,7 +104,7 @@ fun isUnclosedFragment(node: JsxFragment?): Boolean {
     if (closingFragment!!.flags.value and 32768u != 0u) {
         return true
     }
-    val parent: Node? = node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent
+    val parent: Node? = node!!.primaryExpressionBase.node.parent
     if (com.xemantic.typescript.tsgo.ast.isJsxFragment(parent) && isUnclosedFragment(parent.asJsxFragment())) {
         return true
     }

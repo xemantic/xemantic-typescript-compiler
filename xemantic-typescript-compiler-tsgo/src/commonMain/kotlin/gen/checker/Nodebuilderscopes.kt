@@ -227,7 +227,7 @@ fun NodeBuilderImpl?.enterNewScope(declaration: Node?, expandedParams: GoSlice<S
                                 bindPattern!!(e_1!!.name().asBindingPattern())
                                 return
                             }
-                            val symbol_1: Symbol? = this!!.ch.getSymbolOfDeclaration(e_1!!.nodeBase.nodeDefault.asNode())
+                            val symbol_1: Symbol? = this!!.ch.getSymbolOfDeclaration(e_1!!.nodeBase.asNode())
                             if (symbol_1 != null) {
                                 add!!(symbol_1!!.name, symbol_1)
                             }

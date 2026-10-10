@@ -199,7 +199,7 @@ fun getModuleTransformer(opts: TransformOptions?): Transformer? {
 fun getScriptTransformers(emitContext: EmitContext?, host: com.xemantic.typescript.tsgo.printer.EmitHost?, sourceFile: SourceFile?): GoSlice<Transformer?> {
     var tx: GoSlice<Transformer?> = GoElem.ref<Transformer?>().nilSlice
     val options: CompilerOptions? = host!!.options()
-    val importElisionEnabled: Boolean = !options!!.verbatimModuleSyntax.isTrue() && !com.xemantic.typescript.tsgo.ast.isInJSFile(sourceFile!!.nodeBase.nodeDefault.asNode())
+    val importElisionEnabled: Boolean = !options!!.verbatimModuleSyntax.isTrue() && !com.xemantic.typescript.tsgo.ast.isInJSFile(sourceFile!!.nodeBase.asNode())
     val jsxTransformEnabled: Boolean = options.getJSXTransformEnabled() && sourceFile!!.languageVariant.value == 1
     val emitResolver: EmitResolver? = host!!.getEmitResolver()
     var referenceResolver: ReferenceResolver? = null
@@ -311,7 +311,7 @@ fun com.xemantic.typescript.tsgo.compiler.emitter?.printSourceFile(jsFilePath: S
     if (shouldEmitSourceMaps_1) {
         sourceMapGenerator = com.xemantic.typescript.tsgo.sourcemap.newGenerator(com.xemantic.typescript.tsgo.tspath.getBaseFileName(com.xemantic.typescript.tsgo.tspath.normalizeSlashes(jsFilePath)), getSourceRoot(mapOptions), this.getSourceMapDirectory(mapOptions, jsFilePath, sourceFile), ComparePathsOptions(useCaseSensitiveFileNames = this!!.host!!.useCaseSensitiveFileNames(), currentDirectory = this!!.host!!.getCurrentDirectory()))
     }
-    printer_.write(sourceFile!!.nodeBase.nodeDefault.asNode(), sourceFile, this!!.writer, sourceMapGenerator)
+    printer_.write(sourceFile!!.nodeBase.asNode(), sourceFile, this!!.writer, sourceMapGenerator)
     var sourceMapUrlPos: Int = -1
     if (sourceMapGenerator != null) {
         if (mapOptions!!.sourceMap.isTrue() || mapOptions!!.inlineSourceMap.isTrue()) {

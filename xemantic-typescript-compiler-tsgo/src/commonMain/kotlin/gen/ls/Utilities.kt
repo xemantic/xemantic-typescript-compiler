@@ -167,7 +167,7 @@ fun getNonModuleSymbolOfMergedModuleSymbol(symbol: Symbol?): Symbol? {
 // go: github.com/microsoft/typescript-go/internal/ls.getLocalSymbolForExportSpecifier f2422b49
 fun getLocalSymbolForExportSpecifier(referenceLocation: Node?, referenceSymbol: Symbol?, exportSpecifier: ExportSpecifier?, ch: Checker?): Symbol? {
     if (isExportSpecifierAlias(referenceLocation, exportSpecifier)) {
-        val symbol: Symbol? = ch.getExportSpecifierLocalTargetSymbol(exportSpecifier!!.nodeBase.nodeDefault.asNode())
+        val symbol: Symbol? = ch.getExportSpecifierLocalTargetSymbol(exportSpecifier!!.nodeBase.asNode())
         if (symbol != null) {
             return symbol
         }
@@ -182,7 +182,7 @@ fun isExportSpecifierAlias(referenceLocation: Node?, exportSpecifier: ExportSpec
     if (propertyName != null) {
         return propertyName === referenceLocation
     } else {
-        return exportSpecifier!!.nodeBase.nodeDefault.node.parent!!.parent.moduleSpecifier() == null
+        return exportSpecifier!!.nodeBase.node.parent!!.parent.moduleSpecifier() == null
     }
     goUnreachable()
 }

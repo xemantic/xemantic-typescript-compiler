@@ -425,6 +425,17 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   per-store `GoLinkTable` and any other key in the map, so a store keeps its Go semantics (values from the arena, `Has`
   is presence) and its lifetime (one checker). Pins: `LoweringRulesTest` (the supertypes), `GoLinkTableTest`.
 
+- **Transparent wrappers** ((TSGO.6-n), `Program.computeTransparentWrappers`/`wrapperTarget`, `Decls.typeSpec`/
+  `promotedDelegate`, `Exprs.walkPath`/`composite`/`fieldOwner`). A named struct whose only field is one embedded named
+  struct (`type ExpressionBase struct { NodeBase }`), with no method of its own and the same method set as what it
+  wraps, is lowered as `typealias W = E`: Go embeds by value, so to every operation the run performs on it a `W` is its
+  `E`. A selection through a wrapper is no step (`x.primaryExpressionBase.memberExpressionBase…nodeBase` is
+  `x.primaryExpressionBase`), `W{E: v}` is `v`, `W{}` is `E()`. Refused: generic, reflected or map-key wrappers, one that
+  declares methods, and any chain whose wrapper or wrapped type a type assertion or a type-switch case names (an alias
+  would make `x.(*NodeDefault)` succeed on what Go holds as another type). A store or address of a wrapper's own field
+  fails the run (`fieldOwner`). First run: 9 wrappers — the expression chain `PrimaryExpressionBase … NodeBase` onto
+  `NodeDefault` (an `ast.Identifier` 13 objects → 6), `JSDocTypeBase`, `PseudoTypeBase`. Pin: `LoweringRulesTest`.
+
 (TSGO.2) harness rules:
 
 - **A `switch` whose tag is an array or a comparable struct compares by VALUE**: the tag is bound

@@ -978,7 +978,7 @@ fun Checker?.narrowTypeByInstanceof(f: FlowState?, t: Type?, expr: BinaryExpress
         return t
     }
     var predicate: TypePredicate? = null
-    val signature: Signature? = this.getEffectsSignature(expr!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val signature: Signature? = this.getEffectsSignature(expr!!.expressionBase.asNode())
     if (signature != null) {
         predicate = this.getTypePredicateOfSignatureImpl(signature)
     }
@@ -2978,7 +2978,7 @@ fun Checker?.markNodeAssignmentsWorker(node: Node?): Boolean {
             return false
         }
         282 -> {
-            val exportDeclaration: ExportDeclaration? = node.asExportSpecifier()!!.nodeBase.nodeDefault.node.parent!!.parent.asExportDeclaration()
+            val exportDeclaration: ExportDeclaration? = node.asExportSpecifier()!!.nodeBase.node.parent!!.parent.asExportDeclaration()
             val name: Node? = node.propertyNameOrName()
             if (!node.isTypeOnly() && !exportDeclaration!!.isTypeOnly && exportDeclaration!!.moduleSpecifier == null && !com.xemantic.typescript.tsgo.ast.isStringLiteral(name)) {
                 val symbol_1: Symbol? = this.resolveEntityName(name, SymbolFlags(111551u), true, true, null)

@@ -416,7 +416,7 @@ fun LanguageService?.findSignatureHelpFromNamedDeclarations(ctx: Context?, sourc
         })
         return result != null
     }
-    visit!!(sourceFile!!.nodeBase.nodeDefault.asNode())
+    visit!!(sourceFile!!.nodeBase.asNode())
     return result
 }
 
@@ -441,7 +441,7 @@ fun LanguageService?.createSignatureHelpItems(ctx: Context?, candidates: GoSlice
     val callTargetDisplayParts: Builder = Builder()
     if (callTargetSymbol != null && !com.xemantic.typescript.tsgo.go.strings.hasPrefix(callTargetSymbol!!.name, "\u00FE")) {
         if (useFullPrefix) {
-            callTargetDisplayParts.writeString(c.symbolToStringEx(callTargetSymbol, sourceFile!!.nodeBase.nodeDefault.asNode(), SymbolFlags(0u), SymbolFormatFlags(8u)))
+            callTargetDisplayParts.writeString(c.symbolToStringEx(callTargetSymbol, sourceFile!!.nodeBase.asNode(), SymbolFlags(0u), SymbolFormatFlags(8u)))
         } else {
             callTargetDisplayParts.writeString(c.symbolToString(callTargetSymbol))
         }
@@ -849,7 +849,7 @@ fun getEnclosingDeclarationFromInvocation(invocation: com.xemantic.typescript.ts
     if (invocation!!.callInvocation != null) {
         return invocation!!.callInvocation!!.node
     } else if (invocation!!.typeArgsInvocation != null) {
-        return invocation!!.typeArgsInvocation!!.called!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+        return invocation!!.typeArgsInvocation!!.called!!.primaryExpressionBase.asNode()
     } else {
         return invocation!!.contextualInvocation!!.node
     }
@@ -861,7 +861,7 @@ fun getExpressionFromInvocation(argumentInfo: com.xemantic.typescript.tsgo.ls.ar
     if (argumentInfo!!.invocation!!.callInvocation != null) {
         return com.xemantic.typescript.tsgo.ast.getInvokedExpression(argumentInfo!!.invocation!!.callInvocation!!.node)
     }
-    return argumentInfo!!.invocation!!.typeArgsInvocation!!.called!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    return argumentInfo!!.invocation!!.typeArgsInvocation!!.called!!.primaryExpressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.candidateInfo 0749296c
@@ -919,7 +919,7 @@ fun getCandidateOrTypeInfo(info: com.xemantic.typescript.tsgo.ls.argumentListInf
         return CandidateOrTypeInfo(candidateInfo = com.xemantic.typescript.tsgo.ls.candidateInfo(candidates = candidates, resolvedSignature = resolvedSignature))
     }
     if (info!!.invocation!!.typeArgsInvocation != null) {
-        val called: Node? = info!!.invocation!!.typeArgsInvocation!!.called!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+        val called: Node? = info!!.invocation!!.typeArgsInvocation!!.called!!.primaryExpressionBase.asNode()
         var container: Node? = called
         if (com.xemantic.typescript.tsgo.ast.isIdentifier(called)) {
             container = called!!.parent
@@ -1068,7 +1068,7 @@ fun getImmediatelyContainingArgumentInfo(node: Node?, position: Int, sourceFile:
         return null
     } else if (isTemplateHead(node) && parent!!.parent!!.kind.value == 216) {
         val templateExpression: TemplateExpression? = parent.asTemplateExpression()
-        val tagExpression: TaggedTemplateExpression? = templateExpression!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent.asTaggedTemplateExpression()
+        val tagExpression: TaggedTemplateExpression? = templateExpression!!.primaryExpressionBase.node.parent.asTaggedTemplateExpression()
         var argumentIndex_1: Int = 1
         if (isInsideTemplateLiteral(node, position, sourceFile)) {
             argumentIndex_1 = 0
@@ -1334,13 +1334,13 @@ fun getChildListThatStartsWithOpenerToken(parent: Node?, openerToken: Node?): No
     if (com.xemantic.typescript.tsgo.ast.isCallExpression(parent)) {
         val parentCallExpression: CallExpression? = parent.asCallExpression()
         if (openerToken!!.kind.value == 29) {
-            return parentCallExpression!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.typeArgumentList()
+            return parentCallExpression!!.leftHandSideExpressionBase.node.typeArgumentList()
         }
         return parentCallExpression!!.arguments
     } else if (com.xemantic.typescript.tsgo.ast.isNewExpression(parent)) {
         val parentNewExpression: NewExpression? = parent.asNewExpression()
         if (openerToken!!.kind.value == 29) {
-            return parentNewExpression!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.typeArgumentList()
+            return parentNewExpression!!.primaryExpressionBase.node.typeArgumentList()
         }
         return parentNewExpression!!.arguments
     }
@@ -1413,7 +1413,7 @@ fun getContextualSignatureLocationInfo(node: Node?, sourceFile: SourceFile?, c: 
         }
         227 -> {
             val highestBinary: BinaryExpression? = getHighestBinary(parent.asBinaryExpression())
-            val contextualType_1: Type? = c.getContextualType(highestBinary!!.expressionBase.nodeBase.nodeDefault.asNode(), ContextFlags(0u))
+            val contextualType_1: Type? = c.getContextualType(highestBinary!!.expressionBase.asNode(), ContextFlags(0u))
             var argumentIndex_1: Int = 0
             if (node!!.kind.value != 20) {
                 argumentIndex_1 = countBinaryExpressionParameters(parent.asBinaryExpression()) - 1
@@ -1430,8 +1430,8 @@ fun getContextualSignatureLocationInfo(node: Node?, sourceFile: SourceFile?, c: 
 
 // go: github.com/microsoft/typescript-go/internal/ls.getHighestBinary d27067f8
 fun getHighestBinary(b: BinaryExpression?): BinaryExpression? {
-    if (com.xemantic.typescript.tsgo.ast.isBinaryExpression(b!!.expressionBase.nodeBase.nodeDefault.node.parent)) {
-        return getHighestBinary(b!!.expressionBase.nodeBase.nodeDefault.node.parent.asBinaryExpression())
+    if (com.xemantic.typescript.tsgo.ast.isBinaryExpression(b!!.expressionBase.node.parent)) {
+        return getHighestBinary(b!!.expressionBase.node.parent.asBinaryExpression())
     }
     return b
 }
@@ -1478,7 +1478,7 @@ fun getArgumentListInfoForTemplate(tagExpression: TaggedTemplateExpression?, arg
     if (argumentIndex != 0) {
         com.xemantic.typescript.tsgo.debug.assert(argumentIndex < argumentCount, GoElem.ref<Any?>().nilSlice)
     }
-    return com.xemantic.typescript.tsgo.ls.argumentListInfo(isTypeParameterList = false, invocation = com.xemantic.typescript.tsgo.ls.invocation(callInvocation = com.xemantic.typescript.tsgo.ls.callInvocation(node = tagExpression!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())), argumentIndex = argumentIndex, argumentCount = argumentCount, argumentsSpan = getApplicableRangeForTaggedTemplate(tagExpression, sourceFile))
+    return com.xemantic.typescript.tsgo.ls.argumentListInfo(isTypeParameterList = false, invocation = com.xemantic.typescript.tsgo.ls.invocation(callInvocation = com.xemantic.typescript.tsgo.ls.callInvocation(node = tagExpression!!.memberExpressionBase.asNode())), argumentIndex = argumentIndex, argumentCount = argumentCount, argumentsSpan = getApplicableRangeForTaggedTemplate(tagExpression, sourceFile))
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.getApplicableRangeForTaggedTemplate d2a44da3

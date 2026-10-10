@@ -152,7 +152,7 @@ fun unwrapParenthesizedExpression(o_0: Node?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.isPrivateMethodTypeParameter 6f5f3c7f
 fun isPrivateMethodTypeParameter(host: DeclarationEmitHost?, node: TypeParameterDeclaration?): Boolean {
-    return node!!.nodeBase.nodeDefault.asNode()!!.parent!!.kind.value == 175 && host!!.getEffectiveDeclarationFlags(node!!.nodeBase.nodeDefault.asNode()!!.parent, ModifierFlags(2u)).value != 0u
+    return node!!.nodeBase.asNode()!!.parent!!.kind.value == 175 && host!!.getEffectiveDeclarationFlags(node!!.nodeBase.asNode()!!.parent, ModifierFlags(2u)).value != 0u
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.shouldEmitFunctionProperties c899400d

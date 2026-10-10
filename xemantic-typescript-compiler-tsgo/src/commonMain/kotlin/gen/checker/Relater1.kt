@@ -1084,7 +1084,7 @@ fun getRecursionIdentity(t_0: Type?): RecursionId {
         return asRecursionId<Type?>(GoElem.ref<Type?>(), t)
     }
     if (t!!.flags.value and 67108864u != 0u) {
-        return asRecursionId<Node?>(GoElem.ref<Node?>(), t.asConditionalType()!!.root!!.node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+        return asRecursionId<Node?>(GoElem.ref<Node?>(), t.asConditionalType()!!.root!!.node!!.typeNodeBase.nodeBase.asNode())
     }
     return asRecursionId<Type?>(GoElem.ref<Type?>(), t)
 }

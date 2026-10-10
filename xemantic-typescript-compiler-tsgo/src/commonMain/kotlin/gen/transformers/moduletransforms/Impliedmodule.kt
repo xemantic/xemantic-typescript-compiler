@@ -81,7 +81,7 @@ fun ImpliedModuleTransformer?.visit(node_0: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ImpliedModuleTransformer.visitSourceFile 285f0291
 fun ImpliedModuleTransformer?.visitSourceFile(node: SourceFile?): Node? {
     if (node!!.isDeclarationFile) {
-        return node!!.nodeBase.nodeDefault.asNode()
+        return node!!.nodeBase.asNode()
     }
     val format: ModuleKind = this!!.getEmitModuleFormatOfFile!!(node)
     var transformer: Transformer? = null
@@ -96,6 +96,6 @@ fun ImpliedModuleTransformer?.visitSourceFile(node: SourceFile?): Node? {
         }
         transformer = this!!.cjsTransformer
     }
-    return transformer.transformSourceFile(node)!!.nodeBase.nodeDefault.asNode()
+    return transformer.transformSourceFile(node)!!.nodeBase.asNode()
 }
 

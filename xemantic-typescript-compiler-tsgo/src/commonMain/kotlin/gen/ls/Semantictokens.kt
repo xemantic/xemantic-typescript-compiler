@@ -286,7 +286,7 @@ class semanticToken(
 
 // go: github.com/microsoft/typescript-go/internal/ls.LanguageService.collectSemanticTokens c75faeb4
 fun LanguageService?.collectSemanticTokens(ctx: Context?, c: Checker?, file: SourceFile?, program: Program?): GoSlice<com.xemantic.typescript.tsgo.ls.semanticToken> {
-    return this.collectSemanticTokensInRange(ctx, c, file, program, file!!.nodeBase.nodeDefault.node.pos(), file!!.nodeBase.nodeDefault.node.end())
+    return this.collectSemanticTokensInRange(ctx, c, file, program, file!!.nodeBase.node.pos(), file!!.nodeBase.node.end())
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.LanguageService.collectSemanticTokensInRange adbe0955
@@ -377,7 +377,7 @@ fun LanguageService?.collectSemanticTokensInRange(ctx: Context?, c: Checker?, fi
         inJSXElement = prevInJSXElement
         return false
     }
-    visit!!(file!!.nodeBase.nodeDefault.asNode())
+    visit!!(file!!.nodeBase.asNode())
     if (ctx!!.err() != null) {
         return com.xemantic.typescript.tsgo.ls.semanticToken.ELEM.nilSlice
     }

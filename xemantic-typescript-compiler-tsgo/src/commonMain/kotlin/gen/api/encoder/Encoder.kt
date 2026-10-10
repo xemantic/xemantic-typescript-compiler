@@ -251,7 +251,7 @@ fun buildNodeIndexTable(sourceFile: SourceFile?): NodeIndexTable? {
         }
         return node
     }
-    val rootNode: Node? = sourceFile!!.nodeBase.nodeDefault.asNode()
+    val rootNode: Node? = sourceFile!!.nodeBase.asNode()
     nodeCount = nodeCount + 1u
     nodeTable = nodeTable.append1(rootNode)
     visitor_2.visitEachChild(rootNode)
@@ -270,7 +270,7 @@ fun getNodeIndexTable(sourceFile: SourceFile?): NodeIndexTable? {
 
 // go: github.com/microsoft/typescript-go/internal/api/encoder.EncodeSourceFile 079db099
 fun encodeSourceFile(sourceFile: SourceFile?): Tuple3<GoSlice<Int>, NodeIndexTable?, GoError?> {
-    val t0 = encodeTree(sourceFile!!.nodeBase.nodeDefault.asNode(), sourceFile)
+    val t0 = encodeTree(sourceFile!!.nodeBase.asNode(), sourceFile)
     val data: GoSlice<Int> = t0.first
     var nodeTable: NodeIndexTable? = t0.second
     val err: GoError? = t0.third
@@ -505,7 +505,7 @@ fun getNodeData(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stri
 // go: github.com/microsoft/typescript-go/internal/api/encoder.recordExtendedData_SourceFile ab0aff46
 fun recordExtendedData_SourceFile(node: Node?, strs: com.xemantic.typescript.tsgo.api.encoder.stringTable?, positionMap: PositionMap?, extendedData: GoPtr<GoSlice<Int>>?, structuredData: GoPtr<GoSlice<Int>>?) {
     val sf: SourceFile? = node.asSourceFile()
-    val textIndex: UInt = strs.add(sf!!.text(), sf!!.nodeBase.nodeDefault.node.kind, sf!!.nodeBase.nodeDefault.node.pos(), sf!!.nodeBase.nodeDefault.node.end())
+    val textIndex: UInt = strs.add(sf!!.text(), sf!!.nodeBase.node.kind, sf!!.nodeBase.node.pos(), sf!!.nodeBase.node.end())
     val fileNameIndex: UInt = strs.add(sf!!.fileName(), Kind(0), 0, 0)
     val pathIndex: UInt = strs.add(sf!!.path().value, Kind(0), 0, 0)
     val referencedFilesOffset: UInt = encodeFileReferences(sf!!.referencedFiles, positionMap, structuredData)

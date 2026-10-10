@@ -1459,7 +1459,7 @@ fun Checker?.checkImportMetaProperty(node: Node?): Type? {
         this.error(node, com.xemantic.typescript.tsgo.diagnostics.the_import_meta_meta_property_is_only_allowed_when_the_module_option_is_es2020_es2022_esnext_system_node16_node18_node20_or_nodenext, GoElem.ref<Any?>().nilSlice)
     }
     val file: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
-    com.xemantic.typescript.tsgo.debug.assert(file!!.nodeBase.nodeDefault.node.flags.value and 1048576u != 0u, GoSlice.of(GoElem.ref<Any?>(), "Containing file is missing import meta node flag."))
+    com.xemantic.typescript.tsgo.debug.assert(file!!.nodeBase.node.flags.value and 1048576u != 0u, GoSlice.of(GoElem.ref<Any?>(), "Containing file is missing import meta node flag."))
     if (node.name().text() == "meta") {
         return this!!.getGlobalImportMetaType!!()
     }

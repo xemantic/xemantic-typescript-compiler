@@ -163,26 +163,8 @@ class PseudoTypeDefault(
 }
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoTypeBase 24bd15f7
-class PseudoTypeBase(
-    @kotlin.jvm.JvmField var pseudoTypeDefault: PseudoTypeDefault = PseudoTypeDefault(),
-) : com.xemantic.typescript.tsgo.pseudochecker.pseudoTypeData {
-
-    fun goCopy(): PseudoTypeBase = PseudoTypeBase(pseudoTypeDefault = pseudoTypeDefault.goCopy())
-
-    fun goSet(o: PseudoTypeBase) {
-        pseudoTypeDefault = o.pseudoTypeDefault.goCopy()
-    }
-
-    fun goEquals(o: PseudoTypeBase): Boolean = pseudoTypeDefault.goEquals(o.pseudoTypeDefault)
-
-    fun goHash(): Int = 31 * pseudoTypeDefault.goHash()
-
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeDefault.asPseudoType()
-
-    companion object {
-        val ELEM: GoElem<PseudoTypeBase> = GoElem({ PseudoTypeBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias PseudoTypeBase = PseudoTypeDefault
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoTypeDirect 2b3e97e8
 class PseudoTypeDirect(
@@ -201,7 +183,7 @@ class PseudoTypeDirect(
 
     fun goHash(): Int = 31 * pseudoTypeBase.goHash() + 31 * typeNode.hashCode()
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeDirect> = GoElem({ PseudoTypeDirect() }, { it.goCopy() })
@@ -235,7 +217,7 @@ class PseudoTypeInferred(
         isSignatureReturn = o.isSignatureReturn
     }
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeInferred> = GoElem({ PseudoTypeInferred() }, { it.goCopy() })
@@ -274,7 +256,7 @@ class PseudoTypeNoResult(
 
     fun goHash(): Int = 31 * pseudoTypeBase.goHash() + 31 * declaration.hashCode()
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeNoResult> = GoElem({ PseudoTypeNoResult() }, { it.goCopy() })
@@ -312,7 +294,7 @@ class PseudoTypeMaybeConstLocation(
 
     fun goHash(): Int = 31 * pseudoTypeBase.goHash() + 31 * node.hashCode() + 31 * constType.hashCode() + 31 * regularType.hashCode()
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeMaybeConstLocation> = GoElem({ PseudoTypeMaybeConstLocation() }, { it.goCopy() })
@@ -342,7 +324,7 @@ class PseudoTypeUnion(
         types = o.types
     }
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeUnion> = GoElem({ PseudoTypeUnion() }, { it.goCopy() })
@@ -409,7 +391,7 @@ class PseudoTypeSingleCallSignature(
         returnType = o.returnType
     }
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeSingleCallSignature> = GoElem({ PseudoTypeSingleCallSignature() }, { it.goCopy() })
@@ -439,7 +421,7 @@ class PseudoTypeTuple(
         elements = o.elements
     }
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeTuple> = GoElem({ PseudoTypeTuple() }, { it.goCopy() })
@@ -705,7 +687,7 @@ class PseudoTypeObjectLiteral(
         elements = o.elements
     }
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeObjectLiteral> = GoElem({ PseudoTypeObjectLiteral() }, { it.goCopy() })
@@ -739,7 +721,7 @@ class PseudoTypeLiteral(
 
     fun goHash(): Int = 31 * pseudoTypeBase.goHash() + 31 * node.hashCode()
 
-    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.pseudoTypeDefault.asPseudoType()
+    override fun asPseudoType(): PseudoType? = this.pseudoTypeBase.asPseudoType()
 
     companion object {
         val ELEM: GoElem<PseudoTypeLiteral> = GoElem({ PseudoTypeLiteral() }, { it.goCopy() })

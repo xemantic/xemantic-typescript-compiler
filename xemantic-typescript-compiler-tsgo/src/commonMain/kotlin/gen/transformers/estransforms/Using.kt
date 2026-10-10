@@ -207,7 +207,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.visitSourceFile ddb5f409
 fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTransformer?.visitSourceFile(node: SourceFile?): Node? {
     if (node!!.isDeclarationFile) {
-        return node!!.nodeBase.nodeDefault.asNode()
+        return node!!.nodeBase.asNode()
     }
     var visited: Node? = null
     val usingKind: com.xemantic.typescript.tsgo.transformers.estransforms.usingKind = getUsingKindOfStatements(node!!.statements!!.nodes)
@@ -257,7 +257,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
         }
         visited = this!!.transformer.factory()!!.nodeFactory.updateSourceFile(node, this!!.transformer.factory()!!.nodeFactory.newNodeList(topLevelStatements.value), node!!.endOfFileToken)
     } else {
-        visited = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+        visited = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
     }
     this!!.transformer.emitContext().addEmitHelper(visited, this!!.transformer.emitContext().readEmitHelpers())
     this!!.exportVars = GoElem.ref<Node?>().nilSlice
@@ -283,7 +283,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
         statementList!!.loc = node!!.statements!!.loc.goCopy()
         return this!!.transformer.factory()!!.nodeFactory.updateBlock(node, statementList, node!!.multiLine)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.visitForStatement dc658e2e
@@ -291,7 +291,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
     if (node!!.initializer != null && isUsingVariableDeclarationList(node!!.initializer)) {
         return this!!.transformer.visitor().visitNode(this!!.transformer.factory()!!.nodeFactory.newBlock(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newVariableStatement(null, node!!.initializer), this!!.transformer.factory()!!.nodeFactory.updateForStatement(node, null, node!!.condition, node!!.incrementor, node!!.iterationStatementBase.statement))), false))
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.iterationStatementBase.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.iterationStatementBase.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.visitForOfStatement e62affdf
@@ -318,7 +318,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
         }
         return this!!.transformer.visitor().visitNode(this!!.transformer.factory()!!.nodeFactory.updateForInOrOfStatement(node, node!!.awaitModifier, this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(temp, null, null, null))), NodeFlags(2u)), node!!.expression, statement))
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.transformUsingDeclarations ba74124a
@@ -418,10 +418,10 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.hoistExportDefault 9e75b01a
 fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTransformer?.hoistExportDefault(node: ExportAssignment?): Node? {
     if (this!!.defaultExportBinding != null) {
-        return node!!.statementBase.nodeBase.nodeDefault.asNode()
+        return node!!.statementBase.nodeBase.asNode()
     }
     this!!.defaultExportBinding = this!!.transformer.factory().newUniqueNameEx("_default", AutoGenerateOptions(flags = GeneratedIdentifierFlags(56)))
-    this.hoistBindingIdentifier(this!!.defaultExportBinding, true, this!!.transformer.factory()!!.nodeFactory.newIdentifier("default"), node!!.statementBase.nodeBase.nodeDefault.asNode())
+    this.hoistBindingIdentifier(this!!.defaultExportBinding, true, this!!.transformer.factory()!!.nodeFactory.newIdentifier("default"), node!!.statementBase.nodeBase.asNode())
     var expression: Node? = node!!.expression
     var innerExpression: Node? = com.xemantic.typescript.tsgo.ast.skipOuterExpressions(expression, OuterExpressionKinds(63))
     if (isNamedEvaluation(this!!.transformer.emitContext(), innerExpression)) {
@@ -435,7 +435,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.hoistExportEquals f89a512b
 fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTransformer?.hoistExportEquals(node: ExportAssignment?): Node? {
     if (this!!.exportEqualsBinding != null) {
-        return node!!.statementBase.nodeBase.nodeDefault.asNode()
+        return node!!.statementBase.nodeBase.asNode()
     }
     this!!.exportEqualsBinding = this!!.transformer.factory().newUniqueNameEx("_default", AutoGenerateOptions(flags = GeneratedIdentifierFlags(56)))
     this!!.transformer.emitContext().addVariableDeclaration(this!!.exportEqualsBinding)
@@ -446,26 +446,26 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.hoistClassDeclaration 556b162f
 fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTransformer?.hoistClassDeclaration(node: ClassDeclaration?): Node? {
     if (node!!.name() == null && this!!.defaultExportBinding != null) {
-        return node!!.statementBase.nodeBase.nodeDefault.asNode()
+        return node!!.statementBase.nodeBase.asNode()
     }
-    val isExported: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(32u))
-    val isDefault: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(2048u))
+    val isExported: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(32u))
+    val isDefault: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(2048u))
     var expression: Node? = convertClassDeclarationToClassExpression(this!!.transformer.emitContext(), node)
     if (node!!.name() != null) {
-        this.hoistBindingIdentifier(this!!.transformer.factory().getLocalName(node!!.statementBase.nodeBase.nodeDefault.asNode()), isExported && !isDefault, null, node!!.statementBase.nodeBase.nodeDefault.asNode())
-        expression = this!!.transformer.factory().newAssignmentExpression(this!!.transformer.factory().getDeclarationName(node!!.statementBase.nodeBase.nodeDefault.asNode()), expression)
-        this!!.transformer.emitContext().setOriginal(expression, node!!.statementBase.nodeBase.nodeDefault.asNode())
-        this!!.transformer.emitContext().setSourceMapRange(expression, node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy())
-        this!!.transformer.emitContext().setCommentRange(expression, node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy())
+        this.hoistBindingIdentifier(this!!.transformer.factory().getLocalName(node!!.statementBase.nodeBase.asNode()), isExported && !isDefault, null, node!!.statementBase.nodeBase.asNode())
+        expression = this!!.transformer.factory().newAssignmentExpression(this!!.transformer.factory().getDeclarationName(node!!.statementBase.nodeBase.asNode()), expression)
+        this!!.transformer.emitContext().setOriginal(expression, node!!.statementBase.nodeBase.asNode())
+        this!!.transformer.emitContext().setSourceMapRange(expression, node!!.statementBase.nodeBase.node.loc.goCopy())
+        this!!.transformer.emitContext().setCommentRange(expression, node!!.statementBase.nodeBase.node.loc.goCopy())
         if (isNamedEvaluation(this!!.transformer.emitContext(), expression)) {
             expression = transformNamedEvaluation(this!!.transformer.emitContext(), expression, false, "")
         }
     }
     if (isDefault && this!!.defaultExportBinding == null) {
         this!!.defaultExportBinding = this!!.transformer.factory().newUniqueNameEx("_default", AutoGenerateOptions(flags = GeneratedIdentifierFlags(56)))
-        this.hoistBindingIdentifier(this!!.defaultExportBinding, true, this!!.transformer.factory()!!.nodeFactory.newIdentifier("default"), node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this.hoistBindingIdentifier(this!!.defaultExportBinding, true, this!!.transformer.factory()!!.nodeFactory.newIdentifier("default"), node!!.statementBase.nodeBase.asNode())
         expression = this!!.transformer.factory().newAssignmentExpression(this!!.defaultExportBinding, expression)
-        this!!.transformer.emitContext().setOriginal(expression, node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(expression, node!!.statementBase.nodeBase.asNode())
         if (isNamedEvaluation(this!!.transformer.emitContext(), expression)) {
             expression = transformNamedEvaluation(this!!.transformer.emitContext(), expression, false, "default")
         }
@@ -476,7 +476,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.usingDeclarationTransformer.hoistVariableStatement cebdb31e
 fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTransformer?.hoistVariableStatement(node: VariableStatement?): Node? {
     var expressions: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
-    val isExported: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(32u))
+    val isExported: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(32u))
     val s0 = node!!.declarationList.asVariableDeclarationList()!!.declarations!!.nodes
     l0@ for (i1 in 0 until s0.len) {
         val variable: Node? = s0[i1]
@@ -487,9 +487,9 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
     }
     if (expressions.len > 0) {
         val statement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(this!!.transformer.factory().inlineExpressions(expressions))
-        this!!.transformer.emitContext().setOriginal(statement, node!!.statementBase.nodeBase.nodeDefault.asNode())
-        this!!.transformer.emitContext().setCommentRange(statement, node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy())
-        this!!.transformer.emitContext().setSourceMapRange(statement, node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy())
+        this!!.transformer.emitContext().setOriginal(statement, node!!.statementBase.nodeBase.asNode())
+        this!!.transformer.emitContext().setCommentRange(statement, node!!.statementBase.nodeBase.node.loc.goCopy())
+        this!!.transformer.emitContext().setSourceMapRange(statement, node!!.statementBase.nodeBase.node.loc.goCopy())
         return statement
     }
     return null
@@ -508,9 +508,9 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.usingDeclarationTrans
         target = com.xemantic.typescript.tsgo.transformers.convertBindingPatternToAssignmentPattern(this!!.transformer.emitContext(), node!!.name().asBindingPattern())
     }
     val assignment: Node? = this!!.transformer.factory().newAssignmentExpression(target, node!!.initializer)
-    this!!.transformer.emitContext().setOriginal(assignment, node!!.nodeBase.nodeDefault.asNode())
-    this!!.transformer.emitContext().setCommentRange(assignment, node!!.nodeBase.nodeDefault.node.loc.goCopy())
-    this!!.transformer.emitContext().setSourceMapRange(assignment, node!!.nodeBase.nodeDefault.node.loc.goCopy())
+    this!!.transformer.emitContext().setOriginal(assignment, node!!.nodeBase.asNode())
+    this!!.transformer.emitContext().setCommentRange(assignment, node!!.nodeBase.node.loc.goCopy())
+    this!!.transformer.emitContext().setSourceMapRange(assignment, node!!.nodeBase.node.loc.goCopy())
     return assignment
 }
 
@@ -604,7 +604,7 @@ fun isUsingVariableDeclarationList(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.getUsingKindOfVariableDeclarationList 418b4c96
 fun getUsingKindOfVariableDeclarationList(node: VariableDeclarationList?): com.xemantic.typescript.tsgo.transformers.estransforms.usingKind {
-    when (node!!.nodeBase.nodeDefault.node.flags.value and 7u) {
+    when (node!!.nodeBase.node.flags.value and 7u) {
         6u -> {
             return usingKindAsync
         }

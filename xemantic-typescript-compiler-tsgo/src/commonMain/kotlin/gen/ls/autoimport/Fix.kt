@@ -349,7 +349,7 @@ fun addToExistingImport(ct: Tracker?, file: SourceFile?, importClauseOrBindingPa
         }
         274 -> {
             val importClause: ImportClause? = importClauseOrBindingPattern.asImportClause()
-            val promoteFromTypeOnly_1: Boolean = importClause!!.nodeBase.nodeDefault.node.isTypeOnly() && com.xemantic.typescript.tsgo.core.some<com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?>(GoElem.ref<com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?>(), namedImports.append1(defaultImport), fun(i: com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?): Boolean {
+            val promoteFromTypeOnly_1: Boolean = importClause!!.nodeBase.node.isTypeOnly() && com.xemantic.typescript.tsgo.core.some<com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?>(GoElem.ref<com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?>(), namedImports.append1(defaultImport), fun(i: com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?): Boolean {
                 if (i == null) {
                     return false
                 }
@@ -361,18 +361,18 @@ fun addToExistingImport(ct: Tracker?, file: SourceFile?, importClauseOrBindingPa
             }
             if (defaultImport != null) {
                 com.xemantic.typescript.tsgo.debug.assert(importClause!!.name() == null, GoSlice.of(GoElem.ref<Any?>(), "Cannot add a default import to an import clause that already has one"))
-                ct.insertNodeAt(file, TextPos(com.xemantic.typescript.tsgo.astnav.getStartOfNode(importClause!!.nodeBase.nodeDefault.asNode(), file, false)), ct!!.nodeFactory.newIdentifier(defaultImport!!.name), NodeOptions(suffix = ", "))
+                ct.insertNodeAt(file, TextPos(com.xemantic.typescript.tsgo.astnav.getStartOfNode(importClause!!.nodeBase.asNode(), file, false)), ct!!.nodeFactory.newIdentifier(defaultImport!!.name), NodeOptions(suffix = ", "))
             }
             if (namedImports.len > 0) {
-                val t2 = com.xemantic.typescript.tsgo.ls.lsutil.getNamedImportSpecifierComparerWithDetection(importClause!!.nodeBase.nodeDefault.node.parent, file, preferences.goCopy())
+                val t2 = com.xemantic.typescript.tsgo.ls.lsutil.getNamedImportSpecifierComparerWithDetection(importClause!!.nodeBase.node.parent, file, preferences.goCopy())
                 val specifierComparer: ((Node?, Node?) -> Int)? = t2.first
                 val isSorted: Tristate = t2.second
                 val newSpecifiers: GoSlice<Node?> = com.xemantic.typescript.tsgo.core.map<com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?, Node?>(GoElem.ref<com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?>(), GoElem.ref<Node?>(), namedImports, fun(namedImport_1: com.xemantic.typescript.tsgo.ls.autoimport.newImportBinding?): Node? {
                     var identifier: Node? = null
                     if (namedImport_1!!.propertyName != "") {
-                        identifier = ct!!.nodeFactory.newIdentifier(namedImport_1!!.propertyName).asIdentifier()!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+                        identifier = ct!!.nodeFactory.newIdentifier(namedImport_1!!.propertyName).asIdentifier()!!.primaryExpressionBase.asNode()
                     }
-                    return ct!!.nodeFactory.newImportSpecifier((!importClause!!.nodeBase.nodeDefault.node.isTypeOnly() || promoteFromTypeOnly_1) && shouldUseTypeOnly(namedImport_1!!.addAsTypeOnly, preferences.goCopy()), identifier, ct!!.nodeFactory.newIdentifier(namedImport_1!!.name))
+                    return ct!!.nodeFactory.newImportSpecifier((!importClause!!.nodeBase.node.isTypeOnly() || promoteFromTypeOnly_1) && shouldUseTypeOnly(namedImport_1!!.addAsTypeOnly, preferences.goCopy()), identifier, ct!!.nodeFactory.newIdentifier(namedImport_1!!.name))
                 })
                 com.xemantic.typescript.tsgo.go.slices.sortFunc<Node?>(newSpecifiers, (specifierComparer)!!)
                 if (existingSpecifiers.len > 0 && isSorted.value != 1) {
@@ -436,8 +436,8 @@ fun addToExistingImport(ct: Tracker?, file: SourceFile?, importClauseOrBindingPa
 
 // go: github.com/microsoft/typescript-go/internal/ls/autoimport.getTypeKeywordOfTypeOnlyImport fa311e92
 fun getTypeKeywordOfTypeOnlyImport(importClause: ImportClause?, sourceFile: SourceFile?): Node? {
-    com.xemantic.typescript.tsgo.debug.assert(importClause!!.nodeBase.nodeDefault.node.isTypeOnly(), GoSlice.of(GoElem.ref<Any?>(), "import clause must be type-only"))
-    val typeKeyword: Node? = com.xemantic.typescript.tsgo.astnav.findChildOfKind(importClause!!.nodeBase.nodeDefault.asNode(), Kind(156), sourceFile)
+    com.xemantic.typescript.tsgo.debug.assert(importClause!!.nodeBase.node.isTypeOnly(), GoSlice.of(GoElem.ref<Any?>(), "import clause must be type-only"))
+    val typeKeyword: Node? = com.xemantic.typescript.tsgo.astnav.findChildOfKind(importClause!!.nodeBase.asNode(), Kind(156), sourceFile)
     com.xemantic.typescript.tsgo.debug.assert(typeKeyword != null, GoSlice.of(GoElem.ref<Any?>(), "type-only import clause should have a type keyword"))
     return typeKeyword
 }
@@ -448,7 +448,7 @@ fun addElementToBindingPattern(ct: Tracker?, file: SourceFile?, bindingPattern: 
     if (bindingPattern!!.elements!!.nodes.len > 0) {
         ct.insertNodeInListAfter(file, bindingPattern!!.elements!!.nodes[bindingPattern!!.elements!!.nodes.len - 1], element, bindingPattern!!.elements)
     } else {
-        ct.replaceNode(file, bindingPattern!!.nodeBase.nodeDefault.asNode(), ct!!.nodeFactory.newBindingPattern(Kind(207), ct!!.nodeFactory!!.asNodeFactory().newNodeList(GoSlice.of(GoElem.ref<Node?>(), element))), null)
+        ct.replaceNode(file, bindingPattern!!.nodeBase.asNode(), ct!!.nodeFactory.newBindingPattern(Kind(207), ct!!.nodeFactory!!.asNodeFactory().newNodeList(GoSlice.of(GoElem.ref<Node?>(), element))), null)
     }
 }
 
@@ -718,7 +718,7 @@ fun View?.tryAddToExistingImport(ctx: Context?, export: Export?, isValidTypeOnly
         }
         val importClause: ImportClause? = importClauseNode.asImportClause()
         val namedBindings: Node? = importClause!!.namedBindings
-        if (importClause!!.nodeBase.nodeDefault.node.isTypeOnly() && !(importKind.value == 0 && namedBindings != null)) {
+        if (importClause!!.nodeBase.node.isTypeOnly() && !(importKind.value == 0 && namedBindings != null)) {
             continue@l0
         }
         if (importKind.value == 1 && (importClause!!.name() != null || addAsTypeOnly.value == 2 && namedBindings != null)) {
@@ -728,7 +728,7 @@ fun View?.tryAddToExistingImport(ctx: Context?, export: Export?, isValidTypeOnly
             continue@l0
         }
         val fix_1: Fix? = Fix(autoImportFix = AutoImportFix(kind = AutoImportFixKind(2), name = export!!.name(), importKind = importKind, importIndex = existingImport.index, moduleSpecifier = existingImport.moduleSpecifier, addAsTypeOnly = addAsTypeOnly))
-        val isTypeOnly: Boolean = importClause!!.nodeBase.nodeDefault.node.isTypeOnly()
+        val isTypeOnly: Boolean = importClause!!.nodeBase.node.isTypeOnly()
         if ((addAsTypeOnly.value != 4 && isTypeOnly) || (addAsTypeOnly.value == 4 && !isTypeOnly)) {
             return fix_1
         }
@@ -916,7 +916,7 @@ fun detectSyntaxIndicators(file: SourceFile?, options: CompilerOptions?): Tuple2
         hasESM = file!!.externalModuleIndicator != null
         return Tuple2<Boolean, Boolean>(hasESM, hasCJS)
     }
-    if (file!!.externalModuleIndicator != null && file!!.externalModuleIndicator !== file!!.nodeBase.nodeDefault.asNode()) {
+    if (file!!.externalModuleIndicator != null && file!!.externalModuleIndicator !== file!!.nodeBase.asNode()) {
         return Tuple2<Boolean, Boolean>(true, hasCJS)
     }
     val s0 = file!!.imports()
@@ -1118,22 +1118,22 @@ fun promoteFromTypeOnly(changes: Tracker?, aliasDeclaration: Node?, compilerOpti
         277 -> {
             val spec: ImportSpecifier? = aliasDeclaration.asImportSpecifier()
             if (spec!!.isTypeOnly) {
-                if (spec!!.nodeBase.nodeDefault.node.parent != null && spec!!.nodeBase.nodeDefault.node.parent!!.kind.value == 276) {
-                    val namedImportsNode: NamedImports? = spec!!.nodeBase.nodeDefault.node.parent.asNamedImports()
+                if (spec!!.nodeBase.node.parent != null && spec!!.nodeBase.node.parent!!.kind.value == 276) {
+                    val namedImportsNode: NamedImports? = spec!!.nodeBase.node.parent.asNamedImports()
                     val elements: GoSlice<Node?> = namedImportsNode!!.elements!!.nodes
                     if (elements.len > 1) {
                         var propertyName: Node? = null
                         if (spec!!.propertyName != null) {
-                            propertyName = changes!!.nodeFactory.newIdentifier(spec!!.propertyName.text()).asIdentifier()!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+                            propertyName = changes!!.nodeFactory.newIdentifier(spec!!.propertyName.text()).asIdentifier()!!.primaryExpressionBase.asNode()
                         }
                         val newSpecifier: Node? = changes!!.nodeFactory.newImportSpecifier(false, propertyName, changes!!.nodeFactory.newIdentifier(spec!!.name().text()))
-                        val t0 = com.xemantic.typescript.tsgo.ls.lsutil.getNamedImportSpecifierComparerWithDetection(spec!!.nodeBase.nodeDefault.node.parent!!.parent!!.parent, sourceFile, preferences.goCopy())
+                        val t0 = com.xemantic.typescript.tsgo.ls.lsutil.getNamedImportSpecifierComparerWithDetection(spec!!.nodeBase.node.parent!!.parent!!.parent, sourceFile, preferences.goCopy())
                         val specifierComparer: ((Node?, Node?) -> Int)? = t0.first
                         val insertionIndex: Int = com.xemantic.typescript.tsgo.ls.lsutil.getImportSpecifierInsertionIndex(elements, newSpecifier, specifierComparer)
                         val currentIndex: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(elements, aliasDeclaration)
                         if (insertionIndex != currentIndex) {
                             changes.delete(sourceFile, aliasDeclaration)
-                            changes.insertImportSpecifierAtIndex(sourceFile, newSpecifier, spec!!.nodeBase.nodeDefault.node.parent, insertionIndex)
+                            changes.insertImportSpecifierAtIndex(sourceFile, newSpecifier, spec!!.nodeBase.node.parent, insertionIndex)
                             return aliasDeclaration
                         }
                     }
@@ -1150,14 +1150,14 @@ fun promoteFromTypeOnly(changes: Tracker?, aliasDeclaration: Node?, compilerOpti
                 }
                 return aliasDeclaration
             } else {
-                if (spec!!.nodeBase.nodeDefault.node.parent == null || spec!!.nodeBase.nodeDefault.node.parent!!.kind.value != 276) {
+                if (spec!!.nodeBase.node.parent == null || spec!!.nodeBase.node.parent!!.kind.value != 276) {
                     goPanic("ImportSpecifier parent must be NamedImports")
                 }
-                if (spec!!.nodeBase.nodeDefault.node.parent!!.parent == null || spec!!.nodeBase.nodeDefault.node.parent!!.parent!!.kind.value != 274) {
+                if (spec!!.nodeBase.node.parent!!.parent == null || spec!!.nodeBase.node.parent!!.parent!!.kind.value != 274) {
                     goPanic("NamedImports parent must be ImportClause")
                 }
-                promoteImportClause(changes, spec!!.nodeBase.nodeDefault.node.parent!!.parent.asImportClause(), compilerOptions, sourceFile, preferences.goCopy(), convertExistingToTypeOnly, aliasDeclaration)
-                return spec!!.nodeBase.nodeDefault.node.parent!!.parent
+                promoteImportClause(changes, spec!!.nodeBase.node.parent!!.parent.asImportClause(), compilerOptions, sourceFile, preferences.goCopy(), convertExistingToTypeOnly, aliasDeclaration)
+                return spec!!.nodeBase.node.parent!!.parent
             }
         }
         274 -> {
@@ -1173,7 +1173,7 @@ fun promoteFromTypeOnly(changes: Tracker?, aliasDeclaration: Node?, compilerOpti
         }
         272 -> {
             val importEqDecl: ImportEqualsDeclaration? = aliasDeclaration.asImportEqualsDeclaration()
-            val scan: Scanner? = com.xemantic.typescript.tsgo.scanner.getScannerForSourceFile(sourceFile, importEqDecl!!.statementBase.nodeBase.nodeDefault.node.pos())
+            val scan: Scanner? = com.xemantic.typescript.tsgo.scanner.getScannerForSourceFile(sourceFile, importEqDecl!!.statementBase.nodeBase.node.pos())
             scan.scan()
             deleteTypeKeyword(changes, sourceFile, scan.tokenStart())
             return aliasDeclaration
@@ -1188,10 +1188,10 @@ fun promoteFromTypeOnly(changes: Tracker?, aliasDeclaration: Node?, compilerOpti
 // go: github.com/microsoft/typescript-go/internal/ls/autoimport.promoteImportClause 9761075c
 fun promoteImportClause(changes: Tracker?, importClause: ImportClause?, compilerOptions: CompilerOptions?, sourceFile: SourceFile?, preferences: UserPreferences, convertExistingToTypeOnly: Tristate, aliasDeclaration: Node?) {
     if (importClause!!.phaseModifier.value == 156) {
-        deleteTypeKeyword(changes, sourceFile, importClause!!.nodeBase.nodeDefault.node.pos())
+        deleteTypeKeyword(changes, sourceFile, importClause!!.nodeBase.node.pos())
     }
     if (compilerOptions!!.allowImportingTsExtensions.isFalse()) {
-        val moduleSpecifier: Node? = com.xemantic.typescript.tsgo.checker.tryGetModuleSpecifierFromDeclaration(importClause!!.nodeBase.nodeDefault.node.parent)
+        val moduleSpecifier: Node? = com.xemantic.typescript.tsgo.checker.tryGetModuleSpecifierFromDeclaration(importClause!!.nodeBase.node.parent)
         if (moduleSpecifier != null) {
         }
     }
@@ -1200,7 +1200,7 @@ fun promoteImportClause(changes: Tracker?, importClause: ImportClause?, compiler
         if (namedImports != null && namedImports!!.kind.value == 276) {
             val namedImportsData: NamedImports? = namedImports.asNamedImports()
             if (namedImportsData!!.elements!!.nodes.len > 1) {
-                val t0 = com.xemantic.typescript.tsgo.ls.lsutil.getNamedImportSpecifierComparerWithDetection(importClause!!.nodeBase.nodeDefault.node.parent, sourceFile, preferences.goCopy())
+                val t0 = com.xemantic.typescript.tsgo.ls.lsutil.getNamedImportSpecifierComparerWithDetection(importClause!!.nodeBase.node.parent, sourceFile, preferences.goCopy())
                 val isSorted: Tristate = t0.second
                 if (isSorted.isFalse() == false && aliasDeclaration != null && aliasDeclaration!!.kind.value == 277) {
                     var aliasIndex: Int = -1

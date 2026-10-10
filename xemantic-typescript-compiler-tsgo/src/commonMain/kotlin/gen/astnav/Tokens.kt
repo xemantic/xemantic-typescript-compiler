@@ -81,7 +81,7 @@ fun getTokenAtPosition(sourceFile: SourceFile?, position: Int): Node? {
 fun getTokenAtPositionImpl(sourceFile: SourceFile?, position: Int, allowPositionInLeadingTrivia: Boolean, includePrecedingTokenAtEndPosition: ((Node?) -> Boolean)?): Node? {
     var next: Node? = null
     var prevSubtree: Node? = null
-    var current: Node? = sourceFile!!.nodeBase.nodeDefault.asNode()
+    var current: Node? = sourceFile!!.nodeBase.asNode()
     var left: Int = 0
     var nodeAfterLeft: Node? = null
     val testNode: ((Node?) -> Int)? = fun(node: Node?): Int {
@@ -427,7 +427,7 @@ fun findPrecedingTokenEx(sourceFile: SourceFile?, position: Int, startNode: Node
     if (startNode != null) {
         node_1 = startNode
     } else {
-        node_1 = sourceFile!!.nodeBase.nodeDefault.asNode()
+        node_1 = sourceFile!!.nodeBase.asNode()
     }
     val result: Node? = find!!(node_1)
     if (result != null && com.xemantic.typescript.tsgo.ast.isWhitespaceOnlyJsxText(result)) {

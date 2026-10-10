@@ -343,7 +343,7 @@ fun TypeEraserTransformer?.visit(node: Node?): Node? {
             }
             214 -> {
                 val n_15: CallExpression? = node.asCallExpression()
-                return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(n_15, this!!.transformer.visitor().visitNode(n_15!!.expression), n_15!!.questionDotToken, null, this!!.transformer.visitor().visitNodes(n_15!!.arguments), n_15!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+                return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(n_15, this!!.transformer.visitor().visitNode(n_15!!.expression), n_15!!.questionDotToken, null, this!!.transformer.visitor().visitNodes(n_15!!.arguments), n_15!!.leftHandSideExpressionBase.node.flags)
             }
             215 -> {
                 val n_16: NewExpression? = node.asNewExpression()
@@ -351,7 +351,7 @@ fun TypeEraserTransformer?.visit(node: Node?): Node? {
             }
             216 -> {
                 val n_17: TaggedTemplateExpression? = node.asTaggedTemplateExpression()
-                return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(n_17, this!!.transformer.visitor().visitNode(n_17!!.tag), n_17!!.questionDotToken, null, this!!.transformer.visitor().visitNode(n_17!!.template), n_17!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+                return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(n_17, this!!.transformer.visitor().visitNode(n_17!!.tag), n_17!!.questionDotToken, null, this!!.transformer.visitor().visitNode(n_17!!.template), n_17!!.memberExpressionBase.node.flags)
             }
             236, 217, 235, 239 -> {
                 val partial: Node? = this!!.transformer.factory()!!.nodeFactory.newPartiallyEmittedExpression(this!!.transformer.visitor().visitNode(node.expression()))
@@ -400,7 +400,7 @@ fun TypeEraserTransformer?.visit(node: Node?): Node? {
             }
             274 -> {
                 val n_23: ImportClause? = node.asImportClause()
-                if (n_23!!.nodeBase.nodeDefault.node.isTypeOnly()) {
+                if (n_23!!.nodeBase.node.isTypeOnly()) {
                     return null
                 }
                 val name: Node? = n_23!!.name()

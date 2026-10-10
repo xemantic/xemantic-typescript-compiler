@@ -40,7 +40,7 @@ fun collectExternalModuleReferences(file: SourceFile?) {
         val node: Node? = s0[i1]
         collectModuleReferences(file, node, false)
     }
-    if (file!!.nodeBase.nodeDefault.node.flags.value and 524288u != 0u || com.xemantic.typescript.tsgo.ast.isInJSFile(file!!.nodeBase.nodeDefault.asNode())) {
+    if (file!!.nodeBase.node.flags.value and 524288u != 0u || com.xemantic.typescript.tsgo.ast.isInJSFile(file!!.nodeBase.asNode())) {
         com.xemantic.typescript.tsgo.ast.forEachDynamicImportOrRequireCall(file, true, true, fun(node_1: Node?, moduleSpecifier: Node?): Boolean {
             com.xemantic.typescript.tsgo.ast.setImportsOfSourceFile(file, file!!.imports().append1(moduleSpecifier))
             return false

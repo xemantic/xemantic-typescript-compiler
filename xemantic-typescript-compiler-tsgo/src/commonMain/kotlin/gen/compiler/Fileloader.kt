@@ -732,7 +732,7 @@ fun com.xemantic.typescript.tsgo.compiler.fileLoader?.createSyntheticImport(text
         val externalHelpersModuleReference: Node? = this!!.factory.newStringLiteral(text, TokenFlags(0))
         val importDecl: Node? = this!!.factory.newImportDeclaration(null, null, externalHelpersModuleReference, null)
         externalHelpersModuleReference!!.parent = importDecl
-        importDecl!!.parent = file!!.nodeBase.nodeDefault.asNode()
+        importDecl!!.parent = file!!.nodeBase.asNode()
         return externalHelpersModuleReference
     }
 }

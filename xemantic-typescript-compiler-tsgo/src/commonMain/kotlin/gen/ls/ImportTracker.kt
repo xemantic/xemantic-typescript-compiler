@@ -310,7 +310,7 @@ fun forEachImport(program: Program?, sourceFile: SourceFile?, action: ((Node?, N
             action!!(com.xemantic.typescript.tsgo.ast.importFromModuleSpecifier(i_1), i_1)
         }
     } else {
-        forEachPossibleImportOrExportStatement(sourceFile!!.nodeBase.nodeDefault.asNode(), fun(node: Node?): Boolean {
+        forEachPossibleImportOrExportStatement(sourceFile!!.nodeBase.asNode(), fun(node: Node?): Boolean {
             when (node!!.kind.value) {
                 279, 273, 346 -> {
                     val specifier: Node? = node.moduleSpecifier()
@@ -344,7 +344,7 @@ fun forEachPossibleImportOrExportStatement(sourceFileLike: Node?, action: ((Node
 // go: github.com/microsoft/typescript-go/internal/ls.getSourceFileLikeForImportDeclaration 94d8a566
 fun getSourceFileLikeForImportDeclaration(node: Node?): Node? {
     if (com.xemantic.typescript.tsgo.ast.isCallExpression(node) || com.xemantic.typescript.tsgo.ast.isJSDocImportTag(node)) {
-        return com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)!!.nodeBase.nodeDefault.asNode()
+        return com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)!!.nodeBase.asNode()
     }
     val parent: Node? = node!!.parent
     if (com.xemantic.typescript.tsgo.ast.isSourceFile(parent)) {
@@ -419,7 +419,7 @@ fun getImportersForExport(sourceFiles: GoSlice<SourceFile?>, sourceFilesSet: com
     val handleImportCall: ((Node?) -> Unit)? = fun(importCall: Node?) {
         var top: Node? = com.xemantic.typescript.tsgo.ast.findAncestor(importCall, fun(p0: Node?): Boolean = isAmbientModuleDeclaration(p0))
         if (top == null) {
-            top = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(importCall)!!.nodeBase.nodeDefault.asNode()
+            top = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(importCall)!!.nodeBase.asNode()
         }
         addIndirectUser!!(top, isExported!!(importCall, true))
     }
@@ -489,7 +489,7 @@ fun getImportersForExport(sourceFiles: GoSlice<SourceFile?>, sourceFilesSet: com
                     }
                     206 -> {
                         if (!isAvailableThroughGlobal && direct.asImportTypeNode()!!.isTypeOf && direct.asImportTypeNode()!!.qualifier == null && isExported!!(direct, false)) {
-                            addIndirectUser!!(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(direct)!!.nodeBase.nodeDefault.asNode(), true)
+                            addIndirectUser!!(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(direct)!!.nodeBase.asNode(), true)
                         }
                         directImports = directImports.append1(direct)
                     }

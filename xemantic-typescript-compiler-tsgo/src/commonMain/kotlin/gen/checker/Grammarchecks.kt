@@ -205,7 +205,7 @@ fun getIdentifierFromEntityNameExpression(node: Node?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarRegularExpressionLiteral aa0032df
 fun Checker?.checkGrammarRegularExpressionLiteral(node: RegularExpressionLiteral?): Boolean {
-    val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node!!.literalExpressionBase.primaryExpressionBase.asNode())
     if (!this.hasParseDiagnostics(sourceFile)) {
         var lastError: Diagnostic? = null
         if (this!!.regExpScanner == null) {
@@ -223,7 +223,7 @@ fun Checker?.checkGrammarRegularExpressionLiteral(node: RegularExpressionLiteral
             }
         })
         this!!.regExpScanner.setText(sourceFile!!.text())
-        this!!.regExpScanner.resetTokenState(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()!!.pos())
+        this!!.regExpScanner.resetTokenState(node!!.literalExpressionBase.primaryExpressionBase.asNode()!!.pos())
         this!!.regExpScanner.scan()
         val tokenIsRegularExpressionLiteral: Boolean = this!!.regExpScanner.reScanSlashToken(GoSlice.of(GoElem.BOOL, true)).value == 13
         this!!.regExpScanner.setText("")
@@ -236,15 +236,15 @@ fun Checker?.checkGrammarRegularExpressionLiteral(node: RegularExpressionLiteral
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarPrivateIdentifierExpression bdaa0f30
 fun Checker?.checkGrammarPrivateIdentifierExpression(privId: PrivateIdentifier?): Boolean {
-    val privIdAsNode: Node? = privId!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
-    if (com.xemantic.typescript.tsgo.ast.getContainingClass(privId!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()) == null) {
-        return this.grammarErrorOnNode(privId!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.private_identifiers_are_not_allowed_outside_class_bodies, GoElem.ref<Any?>().nilSlice)
+    val privIdAsNode: Node? = privId!!.primaryExpressionBase.asNode()
+    if (com.xemantic.typescript.tsgo.ast.getContainingClass(privId!!.primaryExpressionBase.asNode()) == null) {
+        return this.grammarErrorOnNode(privId!!.primaryExpressionBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.private_identifiers_are_not_allowed_outside_class_bodies, GoElem.ref<Any?>().nilSlice)
     }
-    if (!com.xemantic.typescript.tsgo.ast.isForInStatement(privId!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent)) {
+    if (!com.xemantic.typescript.tsgo.ast.isForInStatement(privId!!.primaryExpressionBase.node.parent)) {
         if (!com.xemantic.typescript.tsgo.ast.isExpressionNode(privIdAsNode)) {
             return this.grammarErrorOnNode(privIdAsNode, com.xemantic.typescript.tsgo.diagnostics.private_identifiers_are_only_allowed_in_class_bodies_and_may_only_be_used_as_part_of_a_class_member_declaration_property_access_or_on_the_left_hand_side_of_an_in_expression, GoElem.ref<Any?>().nilSlice)
         }
-        val isInOperation: Boolean = com.xemantic.typescript.tsgo.ast.isBinaryExpression(privId!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent) && privId!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent.asBinaryExpression()!!.operatorToken!!.kind.value == 102
+        val isInOperation: Boolean = com.xemantic.typescript.tsgo.ast.isBinaryExpression(privId!!.primaryExpressionBase.node.parent) && privId!!.primaryExpressionBase.node.parent.asBinaryExpression()!!.operatorToken!!.kind.value == 102
         if (this.getSymbolForPrivateIdentifierExpression(privIdAsNode) == null && !isInOperation) {
             return this.grammarErrorOnNode(privIdAsNode, com.xemantic.typescript.tsgo.diagnostics.cannot_find_name_0, GoSlice.of(GoElem.ref<Any?>(), privId!!.text))
         }
@@ -262,7 +262,7 @@ fun Checker?.checkGrammarMappedType(node: MappedTypeNode?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarDecorator 4b4d2995
 fun Checker?.checkGrammarDecorator(decorator: Decorator?): Boolean {
-    val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(decorator!!.nodeBase.nodeDefault.asNode())
+    val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(decorator!!.nodeBase.asNode())
     if (!this.hasParseDiagnostics(sourceFile)) {
         var node: Node? = decorator!!.expression
         if (com.xemantic.typescript.tsgo.ast.isParenthesizedExpression(node)) {
@@ -777,7 +777,7 @@ fun Checker?.checkGrammarTypeParameterList(typeParameters: NodeList?, file: Sour
     if (typeParameters != null && typeParameters!!.nodes.len == 0) {
         val start: Int = typeParameters!!.pos() - 1
         val end: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(file!!.text(), typeParameters!!.end()) + 1
-        return this.grammarErrorAtPos(file!!.nodeBase.nodeDefault.asNode(), start, end - start, com.xemantic.typescript.tsgo.diagnostics.type_parameter_list_cannot_be_empty, GoElem.ref<Any?>().nilSlice)
+        return this.grammarErrorAtPos(file!!.nodeBase.asNode(), start, end - start, com.xemantic.typescript.tsgo.diagnostics.type_parameter_list_cannot_be_empty, GoElem.ref<Any?>().nilSlice)
     }
     return false
 }
@@ -793,7 +793,7 @@ fun Checker?.checkGrammarParameterList(parameters: NodeList?): Boolean {
             if (i != parameterCount - 1) {
                 return this.grammarErrorOnNode(parameter!!.dotDotDotToken, com.xemantic.typescript.tsgo.diagnostics.a_rest_parameter_must_be_last_in_a_parameter_list, GoElem.ref<Any?>().nilSlice)
             }
-            if (parameter!!.nodeBase.nodeDefault.node.flags.value and 8388608u == 0u) {
+            if (parameter!!.nodeBase.node.flags.value and 8388608u == 0u) {
                 this.checkGrammarForDisallowedTrailingComma(parameters, com.xemantic.typescript.tsgo.diagnostics.a_rest_parameter_or_binding_pattern_may_not_have_a_trailing_comma)
             }
             if (parameter!!.questionToken != null) {
@@ -802,7 +802,7 @@ fun Checker?.checkGrammarParameterList(parameters: NodeList?): Boolean {
             if (parameter!!.initializer != null) {
                 return this.grammarErrorOnNode(parameter!!.name(), com.xemantic.typescript.tsgo.diagnostics.a_rest_parameter_cannot_have_an_initializer, GoElem.ref<Any?>().nilSlice)
             }
-        } else if (isOptionalDeclaration(parameter!!.nodeBase.nodeDefault.asNode())) {
+        } else if (isOptionalDeclaration(parameter!!.nodeBase.asNode())) {
             seenOptionalParameter = true
             if (parameter!!.questionToken != null && parameter!!.questionToken!!.flags.value and 8u == 0u && parameter!!.initializer != null) {
                 return this.grammarErrorOnNode(parameter!!.name(), com.xemantic.typescript.tsgo.diagnostics.parameter_cannot_have_question_mark_and_initializer, GoElem.ref<Any?>().nilSlice)
@@ -825,7 +825,7 @@ fun Checker?.checkGrammarForUseStrictSimpleParameterList(node: Node?): Boolean {
         if (useStrictDirective != null) {
             val nonSimpleParameters: GoSlice<Node?> = com.xemantic.typescript.tsgo.core.filter<Node?>(GoElem.ref<Node?>(), node.parameters(), fun(n: Node?): Boolean {
                 val parameter: ParameterDeclaration? = n.asParameterDeclaration()
-                return parameter!!.initializer != null || com.xemantic.typescript.tsgo.ast.isBindingPattern(parameter!!.name()) || isRestParameter(parameter!!.nodeBase.nodeDefault.asNode())
+                return parameter!!.initializer != null || com.xemantic.typescript.tsgo.ast.isBindingPattern(parameter!!.name()) || isRestParameter(parameter!!.nodeBase.asNode())
             })
             if (nonSimpleParameters.len != 0) {
                 val s0 = nonSimpleParameters
@@ -893,7 +893,7 @@ fun Checker?.checkGrammarArrowFunction(node: Node?, file: SourceFile?): Boolean 
 fun Checker?.checkGrammarIndexSignatureParameters(node: IndexSignatureDeclaration?): Boolean {
     val paramNodes: GoSlice<Node?> = node!!.functionLikeBase.parameters!!.nodes
     if (paramNodes.len == 0) {
-        return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.an_index_signature_must_have_exactly_one_parameter, GoElem.ref<Any?>().nilSlice)
+        return this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.an_index_signature_must_have_exactly_one_parameter, GoElem.ref<Any?>().nilSlice)
     }
     val parameter: ParameterDeclaration? = paramNodes[0].asParameterDeclaration()
     if (paramNodes.len != 1) {
@@ -926,14 +926,14 @@ fun Checker?.checkGrammarIndexSignatureParameters(node: IndexSignatureDeclaratio
         return this.grammarErrorOnNode(parameter!!.name(), com.xemantic.typescript.tsgo.diagnostics.an_index_signature_parameter_type_must_be_string_number_symbol_or_a_template_literal_type, GoElem.ref<Any?>().nilSlice)
     }
     if (node!!.functionLikeBase.type == null) {
-        return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.an_index_signature_must_have_a_type_annotation, GoElem.ref<Any?>().nilSlice)
+        return this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.an_index_signature_must_have_a_type_annotation, GoElem.ref<Any?>().nilSlice)
     }
     return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarIndexSignature 92de9f71
 fun Checker?.checkGrammarIndexSignature(node: IndexSignatureDeclaration?): Boolean {
-    return this.checkGrammarModifiers(node!!.nodeBase.nodeDefault.asNode()) || this.checkGrammarIndexSignatureParameters(node)
+    return this.checkGrammarModifiers(node!!.nodeBase.asNode()) || this.checkGrammarIndexSignatureParameters(node)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarForAtLeastOneTypeArgument 68aade49
@@ -942,7 +942,7 @@ fun Checker?.checkGrammarForAtLeastOneTypeArgument(node: Node?, typeArguments: N
         val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
         val start: Int = typeArguments!!.pos() - 1
         val end: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile!!.text(), typeArguments!!.end()) + 1
-        return this.grammarErrorAtPos(sourceFile!!.nodeBase.nodeDefault.asNode(), start, end - start, com.xemantic.typescript.tsgo.diagnostics.type_argument_list_cannot_be_empty, GoElem.ref<Any?>().nilSlice)
+        return this.grammarErrorAtPos(sourceFile!!.nodeBase.asNode(), start, end - start, com.xemantic.typescript.tsgo.diagnostics.type_argument_list_cannot_be_empty, GoElem.ref<Any?>().nilSlice)
     }
     return false
 }
@@ -954,7 +954,7 @@ fun Checker?.checkGrammarTypeArguments(node: Node?, typeArguments: NodeList?): B
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarTaggedTemplateChain 8168c582
 fun Checker?.checkGrammarTaggedTemplateChain(node: TaggedTemplateExpression?): Boolean {
-    if (node!!.questionDotToken != null || node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags.value and 32u != 0u) {
+    if (node!!.questionDotToken != null || node!!.memberExpressionBase.node.flags.value and 32u != 0u) {
         return this.grammarErrorOnNode(node!!.template, com.xemantic.typescript.tsgo.diagnostics.tagged_template_expressions_are_not_permitted_in_an_optional_chain, GoElem.ref<Any?>().nilSlice)
     }
     return false
@@ -968,7 +968,7 @@ fun Checker?.checkGrammarHeritageClause(node: HeritageClause?): Boolean {
     }
     if (types != null && types!!.nodes.len == 0) {
         val listType: String = com.xemantic.typescript.tsgo.scanner.tokenToString(node!!.token)
-        return this.grammarErrorAtPos(node!!.nodeBase.nodeDefault.asNode(), types!!.pos(), 0, com.xemantic.typescript.tsgo.diagnostics.x_0_list_cannot_be_empty, GoSlice.of(GoElem.ref<Any?>(), listType))
+        return this.grammarErrorAtPos(node!!.nodeBase.asNode(), types!!.pos(), 0, com.xemantic.typescript.tsgo.diagnostics.x_0_list_cannot_be_empty, GoSlice.of(GoElem.ref<Any?>(), listType))
     }
     val s0 = types!!.nodes
     l0@ for (i1 in 0 until s0.len) {
@@ -1286,12 +1286,12 @@ fun Checker?.checkGrammarJsxExpression(node: JsxExpression?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarForInOrForOfStatement 5b2bd7ba
 fun Checker?.checkGrammarForInOrForOfStatement(forInOrOfStatement: ForInOrOfStatement?): Boolean {
-    val asNode: Node? = forInOrOfStatement!!.statementBase.nodeBase.nodeDefault.asNode()
+    val asNode: Node? = forInOrOfStatement!!.statementBase.nodeBase.asNode()
     if (this.checkGrammarStatementInAmbientContext(asNode)) {
         return true
     }
-    if (forInOrOfStatement!!.statementBase.nodeBase.nodeDefault.node.kind.value == 251 && forInOrOfStatement!!.awaitModifier != null) {
-        if (forInOrOfStatement!!.statementBase.nodeBase.nodeDefault.node.flags.value and 8192u == 0u) {
+    if (forInOrOfStatement!!.statementBase.nodeBase.node.kind.value == 251 && forInOrOfStatement!!.awaitModifier != null) {
+        if (forInOrOfStatement!!.statementBase.nodeBase.node.flags.value and 8192u == 0u) {
             val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(asNode)
             if (com.xemantic.typescript.tsgo.ast.isInTopLevelContext(asNode)) {
                 if (!this.hasParseDiagnostics(sourceFile)) {
@@ -1326,7 +1326,7 @@ fun Checker?.checkGrammarForInOrForOfStatement(forInOrOfStatement: ForInOrOfStat
             } else {
                 if (!this.hasParseDiagnostics(sourceFile)) {
                     val diagnostic: Diagnostic? = createDiagnosticForNode(forInOrOfStatement!!.awaitModifier, com.xemantic.typescript.tsgo.diagnostics.x_for_await_loops_are_only_allowed_within_async_functions_and_at_the_top_levels_of_modules, GoElem.ref<Any?>().nilSlice)
-                    val containingFunc: Node? = com.xemantic.typescript.tsgo.ast.getContainingFunction(forInOrOfStatement!!.statementBase.nodeBase.nodeDefault.asNode())
+                    val containingFunc: Node? = com.xemantic.typescript.tsgo.ast.getContainingFunction(forInOrOfStatement!!.statementBase.nodeBase.asNode())
                     if (containingFunc != null && containingFunc!!.kind.value != 177) {
                         com.xemantic.typescript.tsgo.debug.assert(com.xemantic.typescript.tsgo.ast.getFunctionFlags(containingFunc).value and 2u == 0u, GoSlice.of(GoElem.ref<Any?>(), "Enclosing function should never be an async function."))
                         val relatedInfo: Diagnostic? = createDiagnosticForNode(containingFunc, com.xemantic.typescript.tsgo.diagnostics.did_you_mean_to_mark_this_function_as_async, GoElem.ref<Any?>().nilSlice)
@@ -1338,7 +1338,7 @@ fun Checker?.checkGrammarForInOrForOfStatement(forInOrOfStatement: ForInOrOfStat
             }
         }
     }
-    if (com.xemantic.typescript.tsgo.ast.isForOfStatement(asNode) && forInOrOfStatement!!.statementBase.nodeBase.nodeDefault.node.flags.value and 8192u == 0u && com.xemantic.typescript.tsgo.ast.isIdentifier(forInOrOfStatement!!.initializer) && forInOrOfStatement!!.initializer.text() == "async") {
+    if (com.xemantic.typescript.tsgo.ast.isForOfStatement(asNode) && forInOrOfStatement!!.statementBase.nodeBase.node.flags.value and 8192u == 0u && com.xemantic.typescript.tsgo.ast.isIdentifier(forInOrOfStatement!!.initializer) && forInOrOfStatement!!.initializer.text() == "async") {
         this.grammarErrorOnNode(forInOrOfStatement!!.initializer, com.xemantic.typescript.tsgo.diagnostics.the_left_hand_side_of_a_for_of_statement_may_not_be_async, GoElem.ref<Any?>().nilSlice)
         return false
     }
@@ -1351,7 +1351,7 @@ fun Checker?.checkGrammarForInOrForOfStatement(forInOrOfStatement: ForInOrOfStat
             }
             if (declarations!!.nodes.len > 1) {
                 var diagnostic_1: Message? = null
-                if (forInOrOfStatement!!.statementBase.nodeBase.nodeDefault.node.kind.value == 250) {
+                if (forInOrOfStatement!!.statementBase.nodeBase.node.kind.value == 250) {
                     diagnostic_1 = com.xemantic.typescript.tsgo.diagnostics.only_a_single_variable_declaration_is_allowed_in_a_for_in_statement
                 } else {
                     diagnostic_1 = com.xemantic.typescript.tsgo.diagnostics.only_a_single_variable_declaration_is_allowed_in_a_for_of_statement
@@ -1361,7 +1361,7 @@ fun Checker?.checkGrammarForInOrForOfStatement(forInOrOfStatement: ForInOrOfStat
             val firstVariableDeclaration: VariableDeclaration? = declarations!!.nodes[0].asVariableDeclaration()
             if (firstVariableDeclaration!!.initializer != null) {
                 var diagnostic_2: Message? = null
-                if (forInOrOfStatement!!.statementBase.nodeBase.nodeDefault.node.kind.value == 250) {
+                if (forInOrOfStatement!!.statementBase.nodeBase.node.kind.value == 250) {
                     diagnostic_2 = com.xemantic.typescript.tsgo.diagnostics.the_variable_declaration_of_a_for_in_statement_cannot_have_an_initializer
                 } else {
                     diagnostic_2 = com.xemantic.typescript.tsgo.diagnostics.the_variable_declaration_of_a_for_of_statement_cannot_have_an_initializer
@@ -1370,12 +1370,12 @@ fun Checker?.checkGrammarForInOrForOfStatement(forInOrOfStatement: ForInOrOfStat
             }
             if (firstVariableDeclaration!!.type != null) {
                 var diagnostic_3: Message? = null
-                if (forInOrOfStatement!!.statementBase.nodeBase.nodeDefault.node.kind.value == 250) {
+                if (forInOrOfStatement!!.statementBase.nodeBase.node.kind.value == 250) {
                     diagnostic_3 = com.xemantic.typescript.tsgo.diagnostics.the_left_hand_side_of_a_for_in_statement_cannot_use_a_type_annotation
                 } else {
                     diagnostic_3 = com.xemantic.typescript.tsgo.diagnostics.the_left_hand_side_of_a_for_of_statement_cannot_use_a_type_annotation
                 }
-                return this.grammarErrorOnNode(firstVariableDeclaration!!.nodeBase.nodeDefault.asNode(), diagnostic_3, GoElem.ref<Any?>().nilSlice)
+                return this.grammarErrorOnNode(firstVariableDeclaration!!.nodeBase.asNode(), diagnostic_3, GoElem.ref<Any?>().nilSlice)
             }
         }
     }
@@ -1443,17 +1443,17 @@ fun Checker?.checkGrammarTypeOperatorNode(node: TypeOperatorNode?): Boolean {
         if (innerType!!.kind.value != 155) {
             return this.grammarErrorOnNode(innerType, com.xemantic.typescript.tsgo.diagnostics.x_0_expected, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.tokenToString(Kind(155))))
         }
-        val parent: Node? = com.xemantic.typescript.tsgo.ast.walkUpParenthesizedTypes(node!!.typeNodeBase.nodeBase.nodeDefault.node.parent)
+        val parent: Node? = com.xemantic.typescript.tsgo.ast.walkUpParenthesizedTypes(node!!.typeNodeBase.nodeBase.node.parent)
         when (parent!!.kind.value) {
             261 -> {
                 val decl: VariableDeclaration? = parent.asVariableDeclaration()
                 if (decl!!.name()!!.kind.value != 79) {
-                    return this.grammarErrorOnNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_unique_symbol_types_may_not_be_used_on_a_variable_declaration_with_a_binding_name, GoElem.ref<Any?>().nilSlice)
+                    return this.grammarErrorOnNode(node!!.typeNodeBase.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_unique_symbol_types_may_not_be_used_on_a_variable_declaration_with_a_binding_name, GoElem.ref<Any?>().nilSlice)
                 }
-                if (!isVariableDeclarationInVariableStatement(decl!!.nodeBase.nodeDefault.asNode())) {
-                    return this.grammarErrorOnNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_unique_symbol_types_are_only_allowed_on_variables_in_a_variable_statement, GoElem.ref<Any?>().nilSlice)
+                if (!isVariableDeclarationInVariableStatement(decl!!.nodeBase.asNode())) {
+                    return this.grammarErrorOnNode(node!!.typeNodeBase.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_unique_symbol_types_are_only_allowed_on_variables_in_a_variable_statement, GoElem.ref<Any?>().nilSlice)
                 }
-                if (decl!!.nodeBase.nodeDefault.node.parent!!.flags.value and 2u == 0u) {
+                if (decl!!.nodeBase.node.parent!!.flags.value and 2u == 0u) {
                     return this.grammarErrorOnNode(parent.asVariableDeclaration()!!.name(), com.xemantic.typescript.tsgo.diagnostics.a_variable_whose_type_is_a_unique_symbol_type_must_be_const, GoElem.ref<Any?>().nilSlice)
                 }
             }
@@ -1468,13 +1468,13 @@ fun Checker?.checkGrammarTypeOperatorNode(node: TypeOperatorNode?): Boolean {
                 }
             }
             else -> {
-                return this.grammarErrorOnNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_unique_symbol_types_are_not_allowed_here, GoElem.ref<Any?>().nilSlice)
+                return this.grammarErrorOnNode(node!!.typeNodeBase.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_unique_symbol_types_are_not_allowed_here, GoElem.ref<Any?>().nilSlice)
             }
         }
     } else if (node!!.operator.value == 148) {
         val innerType_1: Node? = node!!.type
         if (innerType_1!!.kind.value != 189 && innerType_1!!.kind.value != 190) {
-            return this.grammarErrorOnFirstToken(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_readonly_type_modifier_is_only_permitted_on_array_and_tuple_literal_types, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.tokenToString(Kind(155))))
+            return this.grammarErrorOnFirstToken(node!!.typeNodeBase.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_readonly_type_modifier_is_only_permitted_on_array_and_tuple_literal_types, GoSlice.of(GoElem.ref<Any?>(), com.xemantic.typescript.tsgo.scanner.tokenToString(Kind(155))))
         }
     }
     return false
@@ -1596,9 +1596,9 @@ fun Checker?.checkGrammarBreakOrContinueStatement(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarBindingElement 4cfe19c2
 fun Checker?.checkGrammarBindingElement(node: BindingElement?): Boolean {
     if (node!!.dotDotDotToken != null) {
-        val elements: NodeList? = node!!.nodeBase.nodeDefault.node.parent.elementList()
-        if (node!!.nodeBase.nodeDefault.asNode() !== com.xemantic.typescript.tsgo.core.lastOrNil<Node?>(GoElem.ref<Node?>(), elements!!.nodes)) {
-            return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.node, com.xemantic.typescript.tsgo.diagnostics.a_rest_element_must_be_last_in_a_destructuring_pattern, GoElem.ref<Any?>().nilSlice)
+        val elements: NodeList? = node!!.nodeBase.node.parent.elementList()
+        if (node!!.nodeBase.asNode() !== com.xemantic.typescript.tsgo.core.lastOrNil<Node?>(GoElem.ref<Node?>(), elements!!.nodes)) {
+            return this.grammarErrorOnNode(node!!.nodeBase.node, com.xemantic.typescript.tsgo.diagnostics.a_rest_element_must_be_last_in_a_destructuring_pattern, GoElem.ref<Any?>().nilSlice)
         }
         this.checkGrammarForDisallowedTrailingComma(elements, com.xemantic.typescript.tsgo.diagnostics.a_rest_parameter_or_binding_pattern_may_not_have_a_trailing_comma)
         if (node!!.propertyName != null) {
@@ -1606,46 +1606,46 @@ fun Checker?.checkGrammarBindingElement(node: BindingElement?): Boolean {
         }
     }
     if (node!!.dotDotDotToken != null && node!!.initializer != null) {
-        return this.grammarErrorAtPos(node!!.nodeBase.nodeDefault.asNode(), node!!.initializer!!.pos() - 1, 1, com.xemantic.typescript.tsgo.diagnostics.a_rest_element_cannot_have_an_initializer, GoElem.ref<Any?>().nilSlice)
+        return this.grammarErrorAtPos(node!!.nodeBase.asNode(), node!!.initializer!!.pos() - 1, 1, com.xemantic.typescript.tsgo.diagnostics.a_rest_element_cannot_have_an_initializer, GoElem.ref<Any?>().nilSlice)
     }
     return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarVariableDeclaration 141af76f
 fun Checker?.checkGrammarVariableDeclaration(node: VariableDeclaration?): Boolean {
-    val nodeFlags: NodeFlags = this.getCombinedNodeFlagsCached(node!!.nodeBase.nodeDefault.asNode())
+    val nodeFlags: NodeFlags = this.getCombinedNodeFlagsCached(node!!.nodeBase.asNode())
     val blockScopeKind: NodeFlags = NodeFlags(nodeFlags.value and 7u)
     if (com.xemantic.typescript.tsgo.ast.isBindingPattern(node!!.name())) {
         when (blockScopeKind.value) {
             6u -> {
-                return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_may_not_have_binding_patterns, GoSlice.of(GoElem.ref<Any?>(), "await using"))
+                return this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_may_not_have_binding_patterns, GoSlice.of(GoElem.ref<Any?>(), "await using"))
             }
             4u -> {
-                return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_may_not_have_binding_patterns, GoSlice.of(GoElem.ref<Any?>(), "using"))
+                return this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_may_not_have_binding_patterns, GoSlice.of(GoElem.ref<Any?>(), "using"))
             }
         }
     }
-    if (node!!.nodeBase.nodeDefault.node.parent!!.parent!!.kind.value != 250 && node!!.nodeBase.nodeDefault.node.parent!!.parent!!.kind.value != 251) {
+    if (node!!.nodeBase.node.parent!!.parent!!.kind.value != 250 && node!!.nodeBase.node.parent!!.parent!!.kind.value != 251) {
         if (nodeFlags.value and 8388608u != 0u) {
-            this.checkAmbientInitializer(node!!.nodeBase.nodeDefault.asNode())
+            this.checkAmbientInitializer(node!!.nodeBase.asNode())
         } else if (node!!.initializer == null) {
-            if (com.xemantic.typescript.tsgo.ast.isBindingPattern(node!!.name()) && !com.xemantic.typescript.tsgo.ast.isBindingPattern(node!!.nodeBase.nodeDefault.node.parent)) {
-                return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.a_destructuring_declaration_must_have_an_initializer, GoElem.ref<Any?>().nilSlice)
+            if (com.xemantic.typescript.tsgo.ast.isBindingPattern(node!!.name()) && !com.xemantic.typescript.tsgo.ast.isBindingPattern(node!!.nodeBase.node.parent)) {
+                return this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.a_destructuring_declaration_must_have_an_initializer, GoElem.ref<Any?>().nilSlice)
             }
             when (blockScopeKind.value) {
                 6u -> {
-                    return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_must_be_initialized, GoSlice.of(GoElem.ref<Any?>(), "await using"))
+                    return this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_must_be_initialized, GoSlice.of(GoElem.ref<Any?>(), "await using"))
                 }
                 4u -> {
-                    return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_must_be_initialized, GoSlice.of(GoElem.ref<Any?>(), "using"))
+                    return this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_must_be_initialized, GoSlice.of(GoElem.ref<Any?>(), "using"))
                 }
                 2u -> {
-                    return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_must_be_initialized, GoSlice.of(GoElem.ref<Any?>(), "const"))
+                    return this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_must_be_initialized, GoSlice.of(GoElem.ref<Any?>(), "const"))
                 }
             }
         }
     }
-    if (node!!.exclamationToken != null && (node!!.nodeBase.nodeDefault.node.parent!!.parent!!.kind.value != 244 || node!!.type == null || node!!.initializer != null || nodeFlags.value and 8388608u != 0u)) {
+    if (node!!.exclamationToken != null && (node!!.nodeBase.node.parent!!.parent!!.kind.value != 244 || node!!.type == null || node!!.initializer != null || nodeFlags.value and 8388608u != 0u)) {
         var message: Message? = null
         when {
             node!!.initializer != null -> {
@@ -1660,7 +1660,7 @@ fun Checker?.checkGrammarVariableDeclaration(node: VariableDeclaration?): Boolea
         }
         return this.grammarErrorOnNode(node!!.exclamationToken, message, GoElem.ref<Any?>().nilSlice)
     }
-    if (this!!.program!!.getEmitModuleFormatOfFile(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node!!.nodeBase.nodeDefault.asNode())).value < 4 && (node!!.nodeBase.nodeDefault.node.parent!!.parent!!.flags.value and 8388608u == 0u) && com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.nodeBase.nodeDefault.node.parent!!.parent, ModifierFlags(32u))) {
+    if (this!!.program!!.getEmitModuleFormatOfFile(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node!!.nodeBase.asNode())).value < 4 && (node!!.nodeBase.node.parent!!.parent!!.flags.value and 8388608u == 0u) && com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.nodeBase.node.parent!!.parent, ModifierFlags(32u))) {
         this.checkGrammarForEsModuleMarkerInBindingName(node!!.name())
     }
     return blockScopeKind.value != 0u && this.checkGrammarNameInLetOrConstDeclarations(node!!.name())
@@ -1711,22 +1711,22 @@ fun Checker?.checkGrammarVariableDeclarationList(declarationList: VariableDeclar
         return true
     }
     if (declarations!!.nodes.len == 0) {
-        return this.grammarErrorAtPos(declarationList!!.nodeBase.nodeDefault.asNode(), declarations!!.pos(), declarations!!.end() - declarations!!.pos(), com.xemantic.typescript.tsgo.diagnostics.variable_declaration_list_cannot_be_empty, GoElem.ref<Any?>().nilSlice)
+        return this.grammarErrorAtPos(declarationList!!.nodeBase.asNode(), declarations!!.pos(), declarations!!.end() - declarations!!.pos(), com.xemantic.typescript.tsgo.diagnostics.variable_declaration_list_cannot_be_empty, GoElem.ref<Any?>().nilSlice)
     }
-    val blockScopeFlags: NodeFlags = NodeFlags(declarationList!!.nodeBase.nodeDefault.node.flags.value and 7u)
+    val blockScopeFlags: NodeFlags = NodeFlags(declarationList!!.nodeBase.node.flags.value and 7u)
     if (blockScopeFlags.value == 4u || blockScopeFlags.value == 6u) {
-        if (com.xemantic.typescript.tsgo.ast.isForInStatement(declarationList!!.nodeBase.nodeDefault.node.parent)) {
-            return this.grammarErrorOnNode(declarationList!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), blockScopeFlags.value == 4u, com.xemantic.typescript.tsgo.diagnostics.the_left_hand_side_of_a_for_in_statement_cannot_be_a_using_declaration, com.xemantic.typescript.tsgo.diagnostics.the_left_hand_side_of_a_for_in_statement_cannot_be_an_await_using_declaration), GoElem.ref<Any?>().nilSlice)
+        if (com.xemantic.typescript.tsgo.ast.isForInStatement(declarationList!!.nodeBase.node.parent)) {
+            return this.grammarErrorOnNode(declarationList!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), blockScopeFlags.value == 4u, com.xemantic.typescript.tsgo.diagnostics.the_left_hand_side_of_a_for_in_statement_cannot_be_a_using_declaration, com.xemantic.typescript.tsgo.diagnostics.the_left_hand_side_of_a_for_in_statement_cannot_be_an_await_using_declaration), GoElem.ref<Any?>().nilSlice)
         }
-        if (declarationList!!.nodeBase.nodeDefault.node.flags.value and 8388608u != 0u) {
-            return this.grammarErrorOnNode(declarationList!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), blockScopeFlags.value == 4u, com.xemantic.typescript.tsgo.diagnostics.x_using_declarations_are_not_allowed_in_ambient_contexts, com.xemantic.typescript.tsgo.diagnostics.x_await_using_declarations_are_not_allowed_in_ambient_contexts), GoElem.ref<Any?>().nilSlice)
+        if (declarationList!!.nodeBase.node.flags.value and 8388608u != 0u) {
+            return this.grammarErrorOnNode(declarationList!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), blockScopeFlags.value == 4u, com.xemantic.typescript.tsgo.diagnostics.x_using_declarations_are_not_allowed_in_ambient_contexts, com.xemantic.typescript.tsgo.diagnostics.x_await_using_declarations_are_not_allowed_in_ambient_contexts), GoElem.ref<Any?>().nilSlice)
         }
-        if (com.xemantic.typescript.tsgo.ast.isVariableStatement(declarationList!!.nodeBase.nodeDefault.node.parent) && (com.xemantic.typescript.tsgo.ast.isCaseClause(declarationList!!.nodeBase.nodeDefault.node.parent!!.parent) || com.xemantic.typescript.tsgo.ast.isDefaultClause(declarationList!!.nodeBase.nodeDefault.node.parent!!.parent))) {
-            return this.grammarErrorOnNode(declarationList!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), blockScopeFlags.value == 4u, com.xemantic.typescript.tsgo.diagnostics.x_using_declarations_are_not_allowed_in_case_or_default_clauses_unless_contained_within_a_block, com.xemantic.typescript.tsgo.diagnostics.x_await_using_declarations_are_not_allowed_in_case_or_default_clauses_unless_contained_within_a_block), GoElem.ref<Any?>().nilSlice)
+        if (com.xemantic.typescript.tsgo.ast.isVariableStatement(declarationList!!.nodeBase.node.parent) && (com.xemantic.typescript.tsgo.ast.isCaseClause(declarationList!!.nodeBase.node.parent!!.parent) || com.xemantic.typescript.tsgo.ast.isDefaultClause(declarationList!!.nodeBase.node.parent!!.parent))) {
+            return this.grammarErrorOnNode(declarationList!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.core.ifElse<Message?>(GoElem.ref<Message?>(), blockScopeFlags.value == 4u, com.xemantic.typescript.tsgo.diagnostics.x_using_declarations_are_not_allowed_in_case_or_default_clauses_unless_contained_within_a_block, com.xemantic.typescript.tsgo.diagnostics.x_await_using_declarations_are_not_allowed_in_case_or_default_clauses_unless_contained_within_a_block), GoElem.ref<Any?>().nilSlice)
         }
     }
     if (blockScopeFlags.value == 6u) {
-        return this.checkGrammarAwaitOrAwaitUsing(declarationList!!.nodeBase.nodeDefault.asNode())
+        return this.checkGrammarAwaitOrAwaitUsing(declarationList!!.nodeBase.asNode())
     }
     return false
 }
@@ -1865,7 +1865,7 @@ fun Checker?.checkGrammarYieldExpression(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarForDisallowedBlockScopedVariableStatement 1d7e37c0
 fun Checker?.checkGrammarForDisallowedBlockScopedVariableStatement(node: VariableStatement?): Boolean {
-    if (!this.containerAllowsBlockScopedVariable(node!!.statementBase.nodeBase.nodeDefault.node.parent)) {
+    if (!this.containerAllowsBlockScopedVariable(node!!.statementBase.nodeBase.node.parent)) {
         val blockScopeKind: NodeFlags = NodeFlags(this.getCombinedNodeFlagsCached(node!!.declarationList).value and 7u)
         if (blockScopeKind.value != 0u) {
             var keyword: String = ""
@@ -1886,7 +1886,7 @@ fun Checker?.checkGrammarForDisallowedBlockScopedVariableStatement(node: Variabl
                     goPanic("Unknown BlockScope flag")
                 }
             }
-            this.error(node!!.statementBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_can_only_be_declared_inside_a_block, GoSlice.of(GoElem.ref<Any?>(), keyword))
+            this.error(node!!.statementBase.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.x_0_declarations_can_only_be_declared_inside_a_block, GoSlice.of(GoElem.ref<Any?>(), keyword))
         }
     }
     return false
@@ -1917,10 +1917,10 @@ fun Checker?.checkGrammarMetaProperty(node: MetaProperty?): Boolean {
         }
         101 -> {
             if (nameText != "meta") {
-                val isCallee: Boolean = com.xemantic.typescript.tsgo.ast.isCallExpression(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent) && node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent.expression() === node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+                val isCallee: Boolean = com.xemantic.typescript.tsgo.ast.isCallExpression(node!!.primaryExpressionBase.node.parent) && node!!.primaryExpressionBase.node.parent.expression() === node!!.primaryExpressionBase.asNode()
                 if (nameText == "defer") {
                     if (!isCallee) {
-                        return this.grammarErrorAtPos(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()!!.end(), 0, com.xemantic.typescript.tsgo.diagnostics.x_0_expected, GoSlice.of(GoElem.ref<Any?>(), "("))
+                        return this.grammarErrorAtPos(node!!.primaryExpressionBase.asNode(), node!!.primaryExpressionBase.asNode()!!.end(), 0, com.xemantic.typescript.tsgo.diagnostics.x_0_expected, GoSlice.of(GoElem.ref<Any?>(), "("))
                     }
                 } else {
                     if (isCallee) {
@@ -1942,9 +1942,9 @@ fun Checker?.checkGrammarConstructorTypeParameters(node: ConstructorDeclaration?
         if (range_!!.pos() == range_!!.end()) {
             pos = range_!!.pos()
         } else {
-            pos = com.xemantic.typescript.tsgo.scanner.skipTrivia(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node!!.nodeBase.nodeDefault.asNode())!!.text(), range_!!.pos())
+            pos = com.xemantic.typescript.tsgo.scanner.skipTrivia(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node!!.nodeBase.asNode())!!.text(), range_!!.pos())
         }
-        return this.grammarErrorAtPos(node!!.nodeBase.nodeDefault.asNode(), pos, range_!!.end() - pos, com.xemantic.typescript.tsgo.diagnostics.type_parameters_cannot_appear_on_a_constructor_declaration, GoElem.ref<Any?>().nilSlice)
+        return this.grammarErrorAtPos(node!!.nodeBase.asNode(), pos, range_!!.end() - pos, com.xemantic.typescript.tsgo.diagnostics.type_parameters_cannot_appear_on_a_constructor_declaration, GoElem.ref<Any?>().nilSlice)
     }
     return false
 }
@@ -2111,7 +2111,7 @@ fun Checker?.checkGrammarTopLevelElementsForRequiredDeclareModifier(file: Source
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarSourceFile 59604fcf
 fun Checker?.checkGrammarSourceFile(node: SourceFile?): Boolean {
-    return node!!.nodeBase.nodeDefault.node.flags.value and 8388608u != 0u && this.checkGrammarTopLevelElementsForRequiredDeclareModifier(node)
+    return node!!.nodeBase.node.flags.value and 8388608u != 0u && this.checkGrammarTopLevelElementsForRequiredDeclareModifier(node)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarStatementInAmbientContext 575257d1
@@ -2136,7 +2136,7 @@ fun Checker?.checkGrammarStatementInAmbientContext(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarNumericLiteral a9765a21
 fun Checker?.checkGrammarNumericLiteral(node: NumericLiteral?) {
-    val nodeText: String = com.xemantic.typescript.tsgo.scanner.getTextOfNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val nodeText: String = com.xemantic.typescript.tsgo.scanner.getTextOfNode(node!!.literalExpressionBase.primaryExpressionBase.asNode())
     val isFractional: Boolean = com.xemantic.typescript.tsgo.go.strings.containsRune(nodeText, 46)
     val isScientific: Boolean = node!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value and 16 != 0
     if (isFractional || isScientific) {
@@ -2146,15 +2146,15 @@ fun Checker?.checkGrammarNumericLiteral(node: NumericLiteral?) {
     if (value_1.value <= 9.007199254740991E15) {
         return
     }
-    this.addErrorOrSuggestion(false, createDiagnosticForNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.numeric_literals_with_absolute_values_equal_to_2_53_or_greater_are_too_large_to_be_represented_accurately_as_integers, GoElem.ref<Any?>().nilSlice))
+    this.addErrorOrSuggestion(false, createDiagnosticForNode(node!!.literalExpressionBase.primaryExpressionBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.numeric_literals_with_absolute_values_equal_to_2_53_or_greater_are_too_large_to_be_represented_accurately_as_integers, GoElem.ref<Any?>().nilSlice))
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.checkGrammarBigIntLiteral cf2f15b2
 fun Checker?.checkGrammarBigIntLiteral(node: BigIntLiteral?): Boolean {
-    val literalType: Boolean = com.xemantic.typescript.tsgo.ast.isLiteralTypeNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent) || com.xemantic.typescript.tsgo.ast.isPrefixUnaryExpression(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent) && com.xemantic.typescript.tsgo.ast.isLiteralTypeNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.parent!!.parent)
+    val literalType: Boolean = com.xemantic.typescript.tsgo.ast.isLiteralTypeNode(node!!.literalExpressionBase.primaryExpressionBase.node.parent) || com.xemantic.typescript.tsgo.ast.isPrefixUnaryExpression(node!!.literalExpressionBase.primaryExpressionBase.node.parent) && com.xemantic.typescript.tsgo.ast.isLiteralTypeNode(node!!.literalExpressionBase.primaryExpressionBase.node.parent!!.parent)
     if (!literalType) {
-        if (node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags.value and 8388608u == 0u && this!!.languageVersion.value < 7) {
-            if (this.grammarErrorOnNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.bigInt_literals_are_not_available_when_targeting_lower_than_ES2020, GoElem.ref<Any?>().nilSlice)) {
+        if (node!!.literalExpressionBase.primaryExpressionBase.node.flags.value and 8388608u == 0u && this!!.languageVersion.value < 7) {
+            if (this.grammarErrorOnNode(node!!.literalExpressionBase.primaryExpressionBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.bigInt_literals_are_not_available_when_targeting_lower_than_ES2020, GoElem.ref<Any?>().nilSlice)) {
                 return true
             }
         }
@@ -2166,8 +2166,8 @@ fun Checker?.checkGrammarBigIntLiteral(node: BigIntLiteral?): Boolean {
 fun Checker?.checkGrammarImportClause(node: ImportClause?): Boolean {
     when (node!!.phaseModifier.value) {
         156 -> {
-            if (node!!.nodeBase.nodeDefault.node.flags.value and 4194304u == 0u && node!!.name() != null && node!!.namedBindings != null) {
-                return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.node, com.xemantic.typescript.tsgo.diagnostics.a_type_only_import_can_specify_a_default_import_or_named_bindings_but_not_both, GoElem.ref<Any?>().nilSlice)
+            if (node!!.nodeBase.node.flags.value and 4194304u == 0u && node!!.name() != null && node!!.namedBindings != null) {
+                return this.grammarErrorOnNode(node!!.nodeBase.node, com.xemantic.typescript.tsgo.diagnostics.a_type_only_import_can_specify_a_default_import_or_named_bindings_but_not_both, GoElem.ref<Any?>().nilSlice)
             }
             if (node!!.namedBindings != null && node!!.namedBindings!!.kind.value == 276) {
                 return this.checkGrammarTypeOnlyNamedImportsOrExports(node!!.namedBindings)
@@ -2175,13 +2175,13 @@ fun Checker?.checkGrammarImportClause(node: ImportClause?): Boolean {
         }
         166 -> {
             if (node!!.name() != null) {
-                return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.node, com.xemantic.typescript.tsgo.diagnostics.default_imports_are_not_allowed_in_a_deferred_import, GoElem.ref<Any?>().nilSlice)
+                return this.grammarErrorOnNode(node!!.nodeBase.node, com.xemantic.typescript.tsgo.diagnostics.default_imports_are_not_allowed_in_a_deferred_import, GoElem.ref<Any?>().nilSlice)
             }
             if (node!!.namedBindings != null && node!!.namedBindings!!.kind.value == 276) {
-                return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.node, com.xemantic.typescript.tsgo.diagnostics.named_imports_are_not_allowed_in_a_deferred_import, GoElem.ref<Any?>().nilSlice)
+                return this.grammarErrorOnNode(node!!.nodeBase.node, com.xemantic.typescript.tsgo.diagnostics.named_imports_are_not_allowed_in_a_deferred_import, GoElem.ref<Any?>().nilSlice)
             }
             if (this!!.moduleKind.value != 99 && this!!.moduleKind.value != 200) {
-                return this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.node, com.xemantic.typescript.tsgo.diagnostics.deferred_imports_are_only_supported_when_the_module_flag_is_set_to_esnext_or_preserve, GoElem.ref<Any?>().nilSlice)
+                return this.grammarErrorOnNode(node!!.nodeBase.node, com.xemantic.typescript.tsgo.diagnostics.deferred_imports_are_only_supported_when_the_module_flag_is_set_to_esnext_or_preserve, GoElem.ref<Any?>().nilSlice)
             }
         }
     }

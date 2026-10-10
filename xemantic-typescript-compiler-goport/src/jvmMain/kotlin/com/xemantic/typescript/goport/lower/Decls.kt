@@ -481,7 +481,11 @@ class PackageEmitter(
         probeMode = probe
         return try {
             val text = when (tm.namedKind(named)) {
-                TypeMapper.NamedKind.STRUCT -> structClass(s, named, fc)
+                TypeMapper.NamedKind.STRUCT -> if (named.key in prog.transparentWrappers) {
+                    // Program.transparentWrappers: the wrapper IS the struct it wraps (one allocation, as in Go).
+                    val inner = (types.under(named.id) as StructType).fields[0].t
+                    "${traceLine(qname, s.str("hash"))}\n// goport: transparent wrapper (docs/goport-lowering.md § 3)\ntypealias ${prog.typeName(qname, named.name)} = ${tm.kt(inner)}\n"
+                } else structClass(s, named, fc)
                 TypeMapper.NamedKind.IFACE -> ifaceDecl(s, named, fc)
                 TypeMapper.NamedKind.CONSTRAINT -> "${traceLine(qname, s.str("hash"))}\n// constraint-only interface ${named.name}: erased to its bound at each use\n"
                 TypeMapper.NamedKind.VALUE -> valueClass(s, named, fc)
@@ -858,7 +862,8 @@ class PackageEmitter(
             val f = st.fields[idx]
             val owner = types.unalias(target) as NamedType
             val origin = owner.origin?.let { types.unalias(it) as NamedType } ?: owner
-            code += "." + prog.fieldName(origin.key + "." + f.name, f.name, idx)
+            // A transparent wrapper's only field is the wrapper itself (Program.transparentWrappers): no step.
+            if (origin.key !in prog.transparentWrappers) code += "." + prog.fieldName(origin.key + "." + f.name, f.name, idx)
             cur = f.t
         }
         if (types.under(cur) is PointerType || types.under(cur) is InterfaceType) {

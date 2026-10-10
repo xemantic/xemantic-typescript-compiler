@@ -178,7 +178,7 @@ fun Checker?.getAlternativeContainingModules(symbol: Symbol?, enclosingDeclarati
         return GoElem.ref<Symbol?>().nilSlice
     }
     val containingFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(enclosingDeclaration)
-    val id: NodeId = com.xemantic.typescript.tsgo.ast.getNodeId(containingFile!!.nodeBase.nodeDefault.asNode())
+    val id: NodeId = com.xemantic.typescript.tsgo.ast.getNodeId(containingFile!!.nodeBase.asNode())
     val links: ContainingSymbolLinks? = this!!.symbolContainerLinks.get(symbol)
     if (links!!.extendedContainersByFile.isNil) {
         links!!.extendedContainersByFile = GoMap.make<NodeId, GoSlice<Symbol?>>(GoElem.slice(GoElem.ref<Symbol?>()))
@@ -222,7 +222,7 @@ fun Checker?.getAlternativeContainingModules(symbol: Symbol?, enclosingDeclarati
         if (!com.xemantic.typescript.tsgo.ast.isExternalModule(file)) {
             continue@l1
         }
-        val sym: Symbol? = this.getSymbolOfDeclaration(file!!.nodeBase.nodeDefault.asNode())
+        val sym: Symbol? = this.getSymbolOfDeclaration(file!!.nodeBase.asNode())
         val ref_1: Symbol? = this.getAliasForSymbolInContainer(sym, symbol)
         if (ref_1 == null) {
             continue@l1
@@ -314,7 +314,7 @@ fun Checker?.getContainersOfSymbol(symbol: Symbol?, enclosingDeclaration: Node?,
         }
         if (com.xemantic.typescript.tsgo.ast.isClassExpression(d) && com.xemantic.typescript.tsgo.ast.isBinaryExpression(d!!.parent) && d!!.parent.asBinaryExpression()!!.operatorToken!!.kind.value == 63 && com.xemantic.typescript.tsgo.ast.isAccessExpression(d!!.parent.asBinaryExpression()!!.left) && com.xemantic.typescript.tsgo.ast.isEntityNameExpression(d!!.parent.asBinaryExpression()!!.left.expression())) {
             if (com.xemantic.typescript.tsgo.ast.isModuleExportsAccessExpression(d!!.parent.asBinaryExpression()!!.left) || com.xemantic.typescript.tsgo.ast.isExportsIdentifier(d!!.parent.asBinaryExpression()!!.left.expression())) {
-                val sym_2: Symbol? = this.getSymbolOfDeclaration(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(d)!!.nodeBase.nodeDefault.asNode())
+                val sym_2: Symbol? = this.getSymbolOfDeclaration(com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(d)!!.nodeBase.asNode())
                 if (sym_2 != null && !com.xemantic.typescript.tsgo.go.slices.contains<Symbol?>(candidates, sym_2)) {
                     candidates = candidates.append1(sym_2)
                 }

@@ -526,8 +526,12 @@ open class ExprLowering(val fn: FnCtx) {
             }
             if (tm.isValueClass(target)) refuse("field-of-value-class")
             val st = types.under(target) as? StructType ?: refuse("path-through-non-struct", types[target].key)
-            val name = fieldNameOf(target, i)
-            code = Ex.primary("${code.at(PRIMARY)}.$name")
+            // A transparent wrapper's only field is the wrapper itself (Program.transparentWrappers): no step.
+            val ownerKey = (types.unalias(target) as? NamedType)?.let { n -> n.origin?.let { (types.unalias(it) as NamedType).key } ?: n.key }
+            if (ownerKey !in prog.transparentWrappers) {
+                val name = fieldNameOf(target, i)
+                code = Ex.primary("${code.at(PRIMARY)}.$name")
+            }
             cur = st.fields[i].t
         }
         return code to cur
@@ -556,6 +560,9 @@ open class ExprLowering(val fn: FnCtx) {
         if (p is PointerType) {
             o = nn(o)
             t = p.elem
+        }
+        (types.unalias(t) as? NamedType)?.takeIf { it.key in prog.transparentWrappers }?.let {
+            error("goport: a store or address of a transparent wrapper's field (${it.key}) — refuse the wrapper in Program.computeTransparentWrappers")
         }
         return o to fieldNameOf(t, path.last())
     }
@@ -834,6 +841,11 @@ open class ExprLowering(val fn: FnCtx) {
                 // `struct{}` is Unit; a NAMED empty struct (`type star struct{}`) is its class (it implements interfaces).
                 if (u.fields.isEmpty() && types.unalias(t) is StructType) return Ex.primary("Unit")
                 if (tm.isValueClass(t)) refuse("struct-value-class")
+                (types.unalias(t) as? NamedType)?.takeIf { it.key in prog.transparentWrappers }?.let { _ ->
+                    // Program.transparentWrappers: `W{E: v}` is `v` (a value copy), `W{}` the wrapped struct's zero.
+                    val el = elts.singleOrNull() ?: return Ex.primary("${tm.kt(t).removeSuffix("?")}()")
+                    return flow(if (el.k == "KeyValueExpr") el.reqObj("value") else el)
+                }
                 if (types.unalias(t) is StructType) {
                     val args = elts.map { el ->
                         if (el.k == "KeyValueExpr") {

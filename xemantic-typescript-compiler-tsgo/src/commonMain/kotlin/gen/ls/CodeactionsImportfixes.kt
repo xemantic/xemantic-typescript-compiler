@@ -398,7 +398,7 @@ class symbolNameInfo(
 fun getSymbolNamesToImport(sourceFile: SourceFile?, ch: Checker?, symbolToken: Node?, compilerOptions: CompilerOptions?): GoSlice<com.xemantic.typescript.tsgo.ls.symbolNameInfo> {
     val parent: Node? = symbolToken!!.parent
     if ((com.xemantic.typescript.tsgo.ast.isJsxOpeningLikeElement(parent) || com.xemantic.typescript.tsgo.ast.isJsxClosingElement(parent)) && parent.tagName() === symbolToken && jsxModeNeedsExplicitImport(compilerOptions!!.jsx)) {
-        val jsxNamespace: String = ch.getJsxNamespace(sourceFile!!.nodeBase.nodeDefault.asNode())
+        val jsxNamespace: String = ch.getJsxNamespace(sourceFile!!.nodeBase.asNode())
         if (needsJsxNamespaceFix(jsxNamespace, symbolToken, ch)) {
             var result: GoSlice<com.xemantic.typescript.tsgo.ls.symbolNameInfo> = com.xemantic.typescript.tsgo.ls.symbolNameInfo.ELEM.nilSlice
             if (!com.xemantic.typescript.tsgo.scanner.isIntrinsicJsxName(symbolToken.text())) {

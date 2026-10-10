@@ -585,8 +585,8 @@ fun Checker?.getSymbolsOfParameterPropertyDeclaration(parameter: Node?, paramete
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.IsDeclarationUsed 85d89c6a
 fun Checker?.isDeclarationUsed(sourceFile: SourceFile?, identifier: Identifier?, jsxElementsPresent: Boolean, jsxModeNeedsExplicitImport: Boolean): Boolean {
     if (jsxElementsPresent && jsxModeNeedsExplicitImport) {
-        val jsxNamespace: String = this.getJsxNamespaceImpl(sourceFile!!.nodeBase.nodeDefault.asNode())
-        val jsxFragmentFactory: String = this.getJsxFragmentFactory(sourceFile!!.nodeBase.nodeDefault.asNode())
+        val jsxNamespace: String = this.getJsxNamespaceImpl(sourceFile!!.nodeBase.asNode())
+        val jsxFragmentFactory: String = this.getJsxFragmentFactory(sourceFile!!.nodeBase.asNode())
         val identifierText: String = identifier!!.text
         if (identifierText == jsxNamespace) {
             return true
@@ -595,7 +595,7 @@ fun Checker?.isDeclarationUsed(sourceFile: SourceFile?, identifier: Identifier?,
             return true
         }
     }
-    val symbol: Symbol? = this!!.getSymbolAtLocation(identifier!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val symbol: Symbol? = this!!.getSymbolAtLocation(identifier!!.primaryExpressionBase.asNode())
     if (symbol == null) {
         return true
     }
@@ -605,7 +605,7 @@ fun Checker?.isDeclarationUsed(sourceFile: SourceFile?, identifier: Identifier?,
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.IsSymbolReferencedInFile c468e86c
 fun Checker?.isSymbolReferencedInFile(sourceFile: SourceFile?, definition: Identifier?, symbol: Symbol?): Boolean {
     val identifierText: String = definition!!.text
-    val s0 = getPossibleSymbolReferenceNodes(sourceFile, identifierText, sourceFile!!.nodeBase.nodeDefault.asNode())
+    val s0 = getPossibleSymbolReferenceNodes(sourceFile, identifierText, sourceFile!!.nodeBase.asNode())
     l0@ for (i1 in 0 until s0.len) {
         val token: Node? = s0[i1]
         if (!com.xemantic.typescript.tsgo.ast.isIdentifier(token)) {
@@ -639,7 +639,7 @@ fun Checker?.isSymbolReferencedInFile(sourceFile: SourceFile?, definition: Ident
 fun Checker?.getReferencesToSymbolInFile(sourceFile: SourceFile?, symbol: Symbol?): GoSlice<Node?> {
     val identifierText: String = symbol!!.name
     var result: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
-    val s0 = getPossibleSymbolReferenceNodes(sourceFile, identifierText, sourceFile!!.nodeBase.nodeDefault.asNode())
+    val s0 = getPossibleSymbolReferenceNodes(sourceFile, identifierText, sourceFile!!.nodeBase.asNode())
     l0@ for (i1 in 0 until s0.len) {
         val token: Node? = s0[i1]
         if (!com.xemantic.typescript.tsgo.ast.isIdentifier(token)) {
@@ -675,7 +675,7 @@ fun Checker?.getReferencesToSymbolInFile(sourceFile: SourceFile?, symbol: Symbol
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.getLocalSymbolForExportSpecifier b1a7c80a
 fun Checker?.getLocalSymbolForExportSpecifier(referenceLocation: Identifier?, referenceSymbol: Symbol?, exportSpecifier: ExportSpecifier?): Symbol? {
     if (isExportSpecifierAlias(referenceLocation, exportSpecifier)) {
-        val symbol: Symbol? = this.getExportSpecifierLocalTargetSymbol(exportSpecifier!!.nodeBase.nodeDefault.asNode())
+        val symbol: Symbol? = this.getExportSpecifierLocalTargetSymbol(exportSpecifier!!.nodeBase.asNode())
         if (symbol != null) {
             return symbol
         }
@@ -685,12 +685,12 @@ fun Checker?.getLocalSymbolForExportSpecifier(referenceLocation: Identifier?, re
 
 // go: github.com/microsoft/typescript-go/internal/checker.isExportSpecifierAlias 04ea8dc4
 fun isExportSpecifierAlias(referenceLocation: Identifier?, exportSpecifier: ExportSpecifier?): Boolean {
-    com.xemantic.typescript.tsgo.debug.assert(exportSpecifier!!.propertyName === referenceLocation!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode() || exportSpecifier!!.name() === referenceLocation!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), GoSlice.of(GoElem.ref<Any?>(), "referenceLocation is not export specifier name or property name"))
+    com.xemantic.typescript.tsgo.debug.assert(exportSpecifier!!.propertyName === referenceLocation!!.primaryExpressionBase.asNode() || exportSpecifier!!.name() === referenceLocation!!.primaryExpressionBase.asNode(), GoSlice.of(GoElem.ref<Any?>(), "referenceLocation is not export specifier name or property name"))
     val propertyName: Node? = exportSpecifier!!.propertyName
     if (propertyName != null) {
-        return propertyName === referenceLocation!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+        return propertyName === referenceLocation!!.primaryExpressionBase.asNode()
     } else {
-        return exportSpecifier!!.nodeBase.nodeDefault.node.parent!!.parent.moduleSpecifier() == null
+        return exportSpecifier!!.nodeBase.node.parent!!.parent.moduleSpecifier() == null
     }
     goUnreachable()
 }
@@ -699,7 +699,7 @@ fun isExportSpecifierAlias(referenceLocation: Identifier?, exportSpecifier: Expo
 fun getPossibleSymbolReferenceNodes(sourceFile: SourceFile?, symbolName: String, container: Node?): GoSlice<Node?> {
     return com.xemantic.typescript.tsgo.core.mapNonNil<Int, Node?>(GoElem.INT, GoElem.ref<Node?>(), getPossibleSymbolReferencePositions(sourceFile, symbolName, container), fun(pos: Int): Node? {
         val referenceLocation: Node? = com.xemantic.typescript.tsgo.astnav.getTouchingPropertyName(sourceFile, pos)
-        if (referenceLocation !== sourceFile!!.nodeBase.nodeDefault.asNode()) {
+        if (referenceLocation !== sourceFile!!.nodeBase.asNode()) {
             return referenceLocation
         }
         return null
@@ -717,7 +717,7 @@ fun getPossibleSymbolReferencePositions(sourceFile: SourceFile?, symbolName: Str
     val sourceLength: Int = text.length
     val symbolNameLength: Int = symbolName.length
     if (container == null) {
-        container = sourceFile!!.nodeBase.nodeDefault.asNode()
+        container = sourceFile!!.nodeBase.asNode()
     }
     var position: Int = com.xemantic.typescript.tsgo.go.strings.indexAt(text, container!!.pos(), symbolName)
     val endPos: Int = container!!.end()

@@ -753,7 +753,7 @@ fun com.xemantic.typescript.tsgo.ls.isolatedDeclarationsFixer?.transformDestruct
             }
         }
         if (remainingDecls.len > 0) {
-            newNodes.value = newNodes.value.append1(factory.updateVariableStatement(enclosingVarStmt.asVariableStatement(), enclosingVarStmt.asVariableStatement()!!.modifiersBase.modifiers(), factory.updateVariableDeclarationList(declList, factory.newNodeList(remainingDecls), declList!!.nodeBase.nodeDefault.node.flags)))
+            newNodes.value = newNodes.value.append1(factory.updateVariableStatement(enclosingVarStmt.asVariableStatement(), enclosingVarStmt.asVariableStatement()!!.modifiersBase.modifiers(), factory.updateVariableDeclarationList(declList, factory.newNodeList(remainingDecls), declList!!.nodeBase.node.flags)))
         }
     }
     this!!.changeTracker.replaceNodeWithNodes(this!!.sourceFile, enclosingVarStmt, newNodes.value, null)
@@ -871,7 +871,7 @@ fun com.xemantic.typescript.tsgo.ls.isolatedDeclarationsFixer?.inferType(node: N
                 }
                 var enclosingDecl: Node? = com.xemantic.typescript.tsgo.ast.findAncestor(node, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isDeclaration(p0))
                 if (enclosingDecl == null) {
-                    enclosingDecl = this!!.sourceFile!!.nodeBase.nodeDefault.asNode()
+                    enclosingDecl = this!!.sourceFile!!.nodeBase.asNode()
                 }
                 var flags: Flags = declarationEmitNodeBuilderFlags
                 if (typePredicate.type().flags().value and 16384u != 0u) {
@@ -903,7 +903,7 @@ fun com.xemantic.typescript.tsgo.ls.isolatedDeclarationsFixer?.inferType(node: N
     }
     var enclosingDecl_1: Node? = com.xemantic.typescript.tsgo.ast.findAncestor(node, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isDeclaration(p0))
     if (enclosingDecl_1 == null) {
-        enclosingDecl_1 = this!!.sourceFile!!.nodeBase.nodeDefault.asNode()
+        enclosingDecl_1 = this!!.sourceFile!!.nodeBase.asNode()
     }
     val flags_1: Flags = Flags(declarationEmitNodeBuilderFlags.value or this.getExtraFlags(node, t).value)
     if (com.xemantic.typescript.tsgo.ast.isParameterDeclaration(node) && this!!.checker.requiresAddingImplicitUndefined(node)) {
@@ -929,7 +929,7 @@ fun com.xemantic.typescript.tsgo.ls.isolatedDeclarationsFixer?.createTypeOfFromE
 // go: github.com/microsoft/typescript-go/internal/ls.isolatedDeclarationsFixer.typeFromArraySpreadElements ee3caafc
 fun com.xemantic.typescript.tsgo.ls.isolatedDeclarationsFixer?.typeFromArraySpreadElements(node: ArrayLiteralExpression?, name_0: String): Node? {
     var name: String = name_0
-    val isInConstContext: Boolean = com.xemantic.typescript.tsgo.ast.findAncestor(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), fun(p0: Node?): Boolean = isConstAssertion(p0)) != null
+    val isInConstContext: Boolean = com.xemantic.typescript.tsgo.ast.findAncestor(node!!.primaryExpressionBase.asNode(), fun(p0: Node?): Boolean = isConstAssertion(p0)) != null
     if (!isInConstContext) {
         return null
     }
@@ -937,7 +937,7 @@ fun com.xemantic.typescript.tsgo.ls.isolatedDeclarationsFixer?.typeFromArraySpre
         name = "temp"
     }
     val factory: NodeFactory? = this!!.changeTracker!!.nodeFactory
-    return this.typeFromSpreads(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), name, isInConstContext, fun(n: Node?): GoSlice<Node?> {
+    return this.typeFromSpreads(node!!.primaryExpressionBase.asNode(), name, isInConstContext, fun(n: Node?): GoSlice<Node?> {
         return n.asArrayLiteralExpression()!!.elements!!.nodes
     }, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isSpreadElement(p0), fun(expr: Node?): Node? {
         return factory.newSpreadElement(expr)
@@ -958,12 +958,12 @@ fun com.xemantic.typescript.tsgo.ls.isolatedDeclarationsFixer?.typeFromArraySpre
 // go: github.com/microsoft/typescript-go/internal/ls.isolatedDeclarationsFixer.typeFromObjectSpreadAssignment 34631f69
 fun com.xemantic.typescript.tsgo.ls.isolatedDeclarationsFixer?.typeFromObjectSpreadAssignment(node: ObjectLiteralExpression?, name_0: String): Node? {
     var name: String = name_0
-    val isInConstContext: Boolean = com.xemantic.typescript.tsgo.ast.findAncestor(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), fun(p0: Node?): Boolean = isConstAssertion(p0)) != null
+    val isInConstContext: Boolean = com.xemantic.typescript.tsgo.ast.findAncestor(node!!.primaryExpressionBase.asNode(), fun(p0: Node?): Boolean = isConstAssertion(p0)) != null
     if (name == "") {
         name = "temp"
     }
     val factory: NodeFactory? = this!!.changeTracker!!.nodeFactory
-    return this.typeFromSpreads(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), name, isInConstContext, fun(n: Node?): GoSlice<Node?> {
+    return this.typeFromSpreads(node!!.primaryExpressionBase.asNode(), name, isInConstContext, fun(n: Node?): GoSlice<Node?> {
         if (n.asObjectLiteralExpression()!!.properties != null) {
             return n.asObjectLiteralExpression()!!.properties!!.nodes
         }

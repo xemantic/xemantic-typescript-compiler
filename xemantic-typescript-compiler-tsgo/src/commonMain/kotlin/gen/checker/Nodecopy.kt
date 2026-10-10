@@ -487,7 +487,7 @@ fun getExistingNodeTreeVisitor(b: NodeBuilderImpl?, bound: com.xemantic.typescri
                 if (sym != null) {
                     type_ = b!!.ch.getDeclaredTypeOfSymbolImpl(sym)
                     if (sym!!.flags.value and 262144u != 0u) {
-                        name = b.typeParameterToName(type_)!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+                        name = b.typeParameterToName(type_)!!.primaryExpressionBase.asNode()
                     }
                 }
                 if (name == null) {

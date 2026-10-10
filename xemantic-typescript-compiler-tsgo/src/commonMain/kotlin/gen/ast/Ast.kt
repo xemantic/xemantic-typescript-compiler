@@ -1891,70 +1891,8 @@ class NodeDefault(
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeBase 5f5f4a35
-class NodeBase(
-    @kotlin.jvm.JvmField var nodeDefault: NodeDefault = NodeDefault(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
-
-    fun goCopy(): NodeBase = NodeBase(nodeDefault = nodeDefault.goCopy())
-
-    fun goSet(o: NodeBase) {
-        nodeDefault = o.nodeDefault.goCopy()
-    }
-
-    fun goEquals(o: NodeBase): Boolean = nodeDefault.goEquals(o.nodeDefault)
-
-    fun goHash(): Int = 31 * nodeDefault.goHash()
-
-    override fun asNode(): Node? = this.nodeDefault.asNode()
-
-    override fun bodyData(): BodyBase? = this.nodeDefault.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.nodeDefault.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeDefault.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeDefault.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.nodeDefault.declarationData()
-
-    override fun end(): Int = this.nodeDefault.node.end()
-
-    override fun exportableData(): ExportableBase? = this.nodeDefault.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.nodeDefault.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeDefault.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeDefault.functionLikeData()
-
-    override fun kindString(): String = this.nodeDefault.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeDefault.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeDefault.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.nodeDefault.modifiers()
-
-    override fun name(): Node? = this.nodeDefault.name()
-
-    override fun pos(): Int = this.nodeDefault.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeDefault.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.nodeDefault.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.nodeDefault.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeDefault.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeDefault.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeDefault.visitEachChild(p0)
-
-    companion object {
-        val ELEM: GoElem<NodeBase> = GoElem({ NodeBase() }, { it.goCopy() })
-    }
-}
+// goport: transparent wrapper (docs/goport-lowering.md § 3)
+typealias NodeBase = NodeDefault
 
 // go: github.com/microsoft/typescript-go/internal/ast.IsWriteOnlyAccess d84c58d7
 fun isWriteOnlyAccess(node: Node?): Boolean {
@@ -2894,7 +2832,7 @@ class SourceFile(
         val updated: Node? = f!!.asNodeFactory().newSourceFile(this.parseOptions.goCopy(), this.text, this.statements, this.endOfFileToken)
         val newFile: SourceFile? = updated.asSourceFile()
         newFile.copyFrom(this)
-        return cloneNode(updated, this.nodeBase.nodeDefault.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(updated, this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.computeSubtreeFacts 6281e5de
@@ -2922,43 +2860,43 @@ class SourceFile(
         }
     }
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<SourceFile> = GoElem({ SourceFile() }, { it.goCopy() })
@@ -3086,7 +3024,7 @@ fun SourceFile?.copyFrom(other: SourceFile?) {
     this!!.libReferenceDirectives = other!!.libReferenceDirectives
     this!!.commonJSModuleIndicator = other!!.commonJSModuleIndicator
     this!!.externalModuleIndicator = other!!.externalModuleIndicator
-    this!!.nodeBase.nodeDefault.node.flags = NodeFlags(this!!.nodeBase.nodeDefault.node.flags.value or other!!.nodeBase.nodeDefault.node.flags.value)
+    this!!.nodeBase.node.flags = NodeFlags(this!!.nodeBase.node.flags.value or other!!.nodeBase.node.flags.value)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateSourceFile faaa6213
@@ -3094,9 +3032,9 @@ fun NodeFactory?.updateSourceFile(node: SourceFile?, statements: NodeList?, endO
     if (statements !== node!!.statements || endOfFileToken !== node!!.endOfFileToken) {
         val updated: SourceFile? = this.newSourceFile(node!!.parseOptions.goCopy(), node!!.text, statements, endOfFileToken).asSourceFile()
         updated.copyFrom(node)
-        return updateNode(updated!!.nodeBase.nodeDefault.asNode(), node!!.nodeBase.nodeDefault.asNode(), this!!.hooks.goCopy())
+        return updateNode(updated!!.nodeBase.asNode(), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.nodeDefault.asNode()
+    return node!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.GetNameTable c1ec8490

@@ -373,11 +373,11 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.
 fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.visitAwaitExpression(node: AwaitExpression?): Node? {
     if (this!!.enclosingFunctionFlags.value and 2u != 0u && this!!.enclosingFunctionFlags.value and 1u != 0u) {
         val result: Node? = this!!.transformer.factory()!!.nodeFactory.newYieldExpression(null, this!!.transformer.factory().newAwaitHelper(this!!.transformer.visitor().visitNode(node!!.expression)))
-        result!!.loc = node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
-        this!!.transformer.emitContext().setOriginal(result, node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        result!!.loc = node!!.unaryExpressionBase.node.loc.goCopy()
+        this!!.transformer.emitContext().setOriginal(result, node!!.unaryExpressionBase.asNode())
         return result
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.unaryExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.forawaitTransformer.visitYieldExpression 386f44ce
@@ -392,8 +392,8 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.
             val innerYield: Node? = this!!.transformer.factory()!!.nodeFactory.updateYieldExpression(node, node!!.asteriskToken, asyncDelegatorResult)
             val awaitedYield: Node? = this!!.transformer.factory().newAwaitHelper(innerYield)
             val result: Node? = this!!.transformer.factory()!!.nodeFactory.newYieldExpression(null, awaitedYield)
-            result!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
-            this!!.transformer.emitContext().setOriginal(result, node!!.expressionBase.nodeBase.nodeDefault.asNode())
+            result!!.loc = node!!.expressionBase.node.loc.goCopy()
+            this!!.transformer.emitContext().setOriginal(result, node!!.expressionBase.asNode())
             return result
         }
         var innerExpression: Node? = null
@@ -403,11 +403,11 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.
             innerExpression = this!!.transformer.factory().newVoidZeroExpression()
         }
         val result_1: Node? = this!!.transformer.factory()!!.nodeFactory.newYieldExpression(null, this.createDownlevelAwait(innerExpression))
-        result_1!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
-        this!!.transformer.emitContext().setOriginal(result_1, node!!.expressionBase.nodeBase.nodeDefault.asNode())
+        result_1!!.loc = node!!.expressionBase.node.loc.goCopy()
+        this!!.transformer.emitContext().setOriginal(result_1, node!!.expressionBase.asNode())
         return result_1
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.forawaitTransformer.visitReturnStatement e11661b4
@@ -421,7 +421,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.
         }
         return this!!.transformer.factory()!!.nodeFactory.updateReturnStatement(node, this.createDownlevelAwait(expression))
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.forawaitTransformer.visitLabeledStatement dcccee1d
@@ -433,7 +433,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.
         }
         return this!!.transformer.factory().restoreEnclosingLabel(this!!.transformer.visitor().visitNode(statement), node)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.unwrapInnermostStatementOfLabel 73c26311
@@ -452,7 +452,7 @@ fun unwrapInnermostStatementOfLabel(node_0: LabeledStatement?): Node? {
 fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.visitSourceFile(node: SourceFile?): Node? {
     val ancestorFacts: com.xemantic.typescript.tsgo.transformers.estransforms.forAwaitHierarchyFacts = this.enterSubtree(forAwaitHierarchyFactsSourceFileExcludes, forAwaitHierarchyFactsStrictModeSourceFileIncludes)
     this!!.exportedVariableStatement = false
-    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitHelper(visited, this!!.transformer.emitContext().readEmitHelpers())
     this.exitSubtree(ancestorFacts)
     return visited
@@ -465,7 +465,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.
     if (node!!.awaitModifier != null) {
         result = this.transformForAwaitOfStatement(node, outermostLabeledStatement, ancestorFacts)
     } else {
-        result = this!!.transformer.factory().restoreEnclosingLabel(this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode()), outermostLabeledStatement)
+        result = this!!.transformer.factory().restoreEnclosingLabel(this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode()), outermostLabeledStatement)
     }
     this.exitSubtree(ancestorFacts)
     return result
@@ -553,9 +553,9 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.forawaitTransformer?.
     val condition: Node? = f.inlineExpressions(GoSlice.of(GoElem.ref<Node?>(), f.newAssignmentExpression(result, this.createDownlevelAwait(callNext)), f.newAssignmentExpression(done, getDone), f!!.nodeFactory.newPrefixUnaryExpression(Kind(53), done)))
     val incrementor: Node? = f.newAssignmentExpression(nonUserCode, f!!.nodeFactory.newKeywordExpression(Kind(111)))
     val forStatement: Node? = f!!.nodeFactory.newForStatement(varDeclList, condition, incrementor, this.convertForOfStatementHead(node, getValue, nonUserCode))
-    forStatement!!.loc = node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy()
+    forStatement!!.loc = node!!.statementBase.nodeBase.node.loc.goCopy()
     this!!.transformer.emitContext().addEmitFlags(forStatement, EmitFlags(64u))
-    this!!.transformer.emitContext().setOriginal(forStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(forStatement, node!!.statementBase.nodeBase.asNode())
     val tryBlock: Node? = f!!.nodeFactory.newBlock(f!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), f.restoreEnclosingLabel(forStatement, outermostLabeledStatement))), true)
     val catchBody: Node? = f!!.nodeFactory.newBlock(f!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), f!!.nodeFactory.newExpressionStatement(f.newAssignmentExpression(errorRecord, f!!.nodeFactory.newObjectLiteralExpression(f!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), f!!.nodeFactory.newPropertyAssignment(null, f!!.nodeFactory.newIdentifier("error"), null, null, catchVariable))), false))))), false)
     this!!.transformer.emitContext().addEmitFlags(catchBody, EmitFlags(1u))

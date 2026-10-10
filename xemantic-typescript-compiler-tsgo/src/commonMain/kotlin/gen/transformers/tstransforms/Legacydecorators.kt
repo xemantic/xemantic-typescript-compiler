@@ -219,22 +219,22 @@ fun LegacyDecoratorsTransformer?.visitIdentifier(node: Identifier?): Node? {
     val s0 = this!!.enclosingClasses
     l0@ for (i1 in 0 until s0.len) {
         val d: ClassDeclaration? = s0[i1]
-        val t2 = this!!.classAliases.probe(d!!.statementBase.nodeBase.nodeDefault.asNode())
+        val t2 = this!!.classAliases.probe(d!!.statementBase.nodeBase.asNode())
         val ok: Boolean = t2 !== GoMapAbsent
-        if (ok && this!!.referenceResolver!!.getReferencedValueDeclaration(this!!.transformer.emitContext().mostOriginal(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())) === this!!.transformer.emitContext().mostOriginal(d!!.statementBase.nodeBase.nodeDefault.asNode())) {
-            return this!!.classAliases[d!!.statementBase.nodeBase.nodeDefault.asNode()]
+        if (ok && this!!.referenceResolver!!.getReferencedValueDeclaration(this!!.transformer.emitContext().mostOriginal(node!!.primaryExpressionBase.asNode())) === this!!.transformer.emitContext().mostOriginal(d!!.statementBase.nodeBase.asNode())) {
+            return this!!.classAliases[d!!.statementBase.nodeBase.asNode()]
         }
     }
-    return node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.primaryExpressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.visitPropertyAccessExpression 4bfb0b4c
 fun LegacyDecoratorsTransformer?.visitPropertyAccessExpression(node: PropertyAccessExpression?): Node? {
     val expression: Node? = this!!.transformer.visitor().visitNode(node!!.expression)
     if (expression !== node!!.expression) {
-        return this!!.transformer.factory()!!.nodeFactory.updatePropertyAccessExpression(node, expression, node!!.questionDotToken, node!!.name(), node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        return this!!.transformer.factory()!!.nodeFactory.updatePropertyAccessExpression(node, expression, node!!.questionDotToken, node!!.name(), node!!.memberExpressionBase.node.flags)
     }
-    return node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.memberExpressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.elideNodes 943394f2
@@ -275,9 +275,9 @@ fun LegacyDecoratorsTransformer?.finishClassElement(updated: Node?, original: No
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.visitParamerDeclaration 368a0fae
 fun LegacyDecoratorsTransformer?.visitParamerDeclaration(node: ParameterDeclaration?): Node? {
     val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateParameterDeclaration(node, elideModifiers(this!!.transformer.factory(), node!!.modifiersBase.modifiers()), node!!.dotDotDotToken, this!!.transformer.visitor().visitNode(node!!.name()), null, null, this!!.transformer.visitor().visitNode(node!!.initializer))
-    if (updated !== node!!.nodeBase.nodeDefault.asNode()) {
-        this!!.transformer.emitContext().setCommentRange(updated, node!!.nodeBase.nodeDefault.node.loc.goCopy())
-        val newLoc: TextRange = com.xemantic.typescript.tsgo.transformers.moveRangePastModifiers(node!!.nodeBase.nodeDefault.asNode())
+    if (updated !== node!!.nodeBase.asNode()) {
+        this!!.transformer.emitContext().setCommentRange(updated, node!!.nodeBase.node.loc.goCopy())
+        val newLoc: TextRange = com.xemantic.typescript.tsgo.transformers.moveRangePastModifiers(node!!.nodeBase.asNode())
         updated!!.loc = newLoc.goCopy()
         this!!.transformer.emitContext().setSourceMapRange(updated, newLoc.goCopy())
         this!!.transformer.emitContext().setEmitFlags(updated.name(), EmitFlags(8u))
@@ -302,28 +302,28 @@ fun LegacyDecoratorsTransformer?.visitPropertyNameOfClassElement(member: Node?):
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.visitPropertyDeclaration 7f59367c
 fun LegacyDecoratorsTransformer?.visitPropertyDeclaration(node: PropertyDeclaration?): Node? {
-    if (node!!.nodeBase.nodeDefault.node.flags.value and 8388608u != 0u) {
+    if (node!!.nodeBase.node.flags.value and 8388608u != 0u) {
         return null
     }
-    if (com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.nodeBase.nodeDefault.asNode(), ModifierFlags(192u))) {
+    if (com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.nodeBase.asNode(), ModifierFlags(192u))) {
         return null
     }
-    return this.finishClassElement(this!!.transformer.factory()!!.nodeFactory.updatePropertyDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), this.visitPropertyNameOfClassElement(node!!.nodeBase.nodeDefault.asNode()), null, null, this!!.transformer.visitor().visitNode(node!!.initializer)), node!!.nodeBase.nodeDefault.asNode())
+    return this.finishClassElement(this!!.transformer.factory()!!.nodeFactory.updatePropertyDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), this.visitPropertyNameOfClassElement(node!!.nodeBase.asNode()), null, null, this!!.transformer.visitor().visitNode(node!!.initializer)), node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.visitGetAccessorDeclaration c50a0446
 fun LegacyDecoratorsTransformer?.visitGetAccessorDeclaration(node: GetAccessorDeclaration?): Node? {
-    return this.finishClassElement(this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.accessorDeclarationBase.namedMemberBase.modifiers()), this.visitPropertyNameOfClassElement(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()), null, this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body)), node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode())
+    return this.finishClassElement(this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.accessorDeclarationBase.namedMemberBase.modifiers()), this.visitPropertyNameOfClassElement(node!!.accessorDeclarationBase.nodeBase.asNode()), null, this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body)), node!!.accessorDeclarationBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.visitSetAccessorDeclaration aebacbe5
 fun LegacyDecoratorsTransformer?.visitSetAccessorDeclaration(node: SetAccessorDeclaration?): Node? {
-    return this.finishClassElement(this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.accessorDeclarationBase.namedMemberBase.modifiers()), this.visitPropertyNameOfClassElement(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()), null, this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body)), node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode())
+    return this.finishClassElement(this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.accessorDeclarationBase.namedMemberBase.modifiers()), this.visitPropertyNameOfClassElement(node!!.accessorDeclarationBase.nodeBase.asNode()), null, this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body)), node!!.accessorDeclarationBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.visitMethodDeclaration bcdb608c
 fun LegacyDecoratorsTransformer?.visitMethodDeclaration(node: MethodDeclaration?): Node? {
-    return this.finishClassElement(this!!.transformer.factory()!!.nodeFactory.updateMethodDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this.visitPropertyNameOfClassElement(node!!.nodeBase.nodeDefault.asNode()), null, null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this!!.transformer.visitor().visitNode(node!!.functionLikeWithBodyBase.bodyBase.body)), node!!.nodeBase.nodeDefault.asNode())
+    return this.finishClassElement(this!!.transformer.factory()!!.nodeFactory.updateMethodDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this.visitPropertyNameOfClassElement(node!!.nodeBase.asNode()), null, null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this!!.transformer.visitor().visitNode(node!!.functionLikeWithBodyBase.bodyBase.body)), node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.visitConstructorDeclaration 05c0792c
@@ -338,9 +338,9 @@ fun LegacyDecoratorsTransformer?.visitClassExpression(node: ClassExpression?): N
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.visitClassDeclaration b76dc8a9
 fun LegacyDecoratorsTransformer?.visitClassDeclaration(node: ClassDeclaration?): Node? {
-    val decorated: Boolean = com.xemantic.typescript.tsgo.ast.classOrConstructorParameterIsDecorated(true, node!!.statementBase.nodeBase.nodeDefault.asNode())
-    if (!(decorated || com.xemantic.typescript.tsgo.ast.childIsDecorated(true, node!!.statementBase.nodeBase.nodeDefault.asNode(), null))) {
-        return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val decorated: Boolean = com.xemantic.typescript.tsgo.ast.classOrConstructorParameterIsDecorated(true, node!!.statementBase.nodeBase.asNode())
+    if (!(decorated || com.xemantic.typescript.tsgo.ast.childIsDecorated(true, node!!.statementBase.nodeBase.asNode(), null))) {
+        return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
     }
     if (decorated) {
         return this.transformClassDeclarationWithClassDecorators(node, node!!.name())
@@ -358,7 +358,7 @@ fun LegacyDecoratorsTransformer?.transformClassDeclarationWithoutClassDecorators
     val members: NodeList? = t1.first
     val decorationStatements: GoSlice<Node?> = t1.second
     if (name == null && decorationStatements.len > 0) {
-        name = this!!.transformer.factory().newGeneratedNameForNode(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        name = this!!.transformer.factory().newGeneratedNameForNode(node!!.statementBase.nodeBase.asNode())
     }
     val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateClassDeclaration(node, modifiers, name, null, heritageClauses, members)
     if (decorationStatements.len == 0) {
@@ -380,8 +380,8 @@ fun LegacyDecoratorsTransformer?.pushEnclosingClass(cls: ClassDeclaration?) {
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.transformClassDeclarationWithClassDecorators 98788d60
 fun LegacyDecoratorsTransformer?.transformClassDeclarationWithClassDecorators(node: ClassDeclaration?, name: Node?): Node? {
     return withDefers({ null }) { df0 ->
-        val isExport: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(32u))
-        val isDefault: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(2048u))
+        val isExport: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(32u))
+        val isDefault: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(2048u))
         var modifiers: ModifierList? = null
         if (node!!.classLikeBase.modifiersBase.modifiers() != null && node!!.classLikeBase.modifiersBase.modifiers()!!.nodeList.nodes.len > 0) {
             val modifierNodes: GoSlice<Node?> = com.xemantic.typescript.tsgo.core.filter<Node?>(GoElem.ref<Node?>(), node!!.classLikeBase.modifiersBase.modifiers()!!.nodeList.nodes, fun(p0: Node?): Boolean = isNotExportOrDefaultOrDecorator(p0))
@@ -392,14 +392,14 @@ fun LegacyDecoratorsTransformer?.transformClassDeclarationWithClassDecorators(no
                 modifiers = node!!.classLikeBase.modifiersBase.modifiers()
             }
         }
-        val location: TextRange = com.xemantic.typescript.tsgo.transformers.moveRangePastModifiers(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        val location: TextRange = com.xemantic.typescript.tsgo.transformers.moveRangePastModifiers(node!!.statementBase.nodeBase.asNode())
         val classAlias: Node? = this.getClassAliasIfNeeded(node)
         if (classAlias != null) {
             this.pushEnclosingClass(node)
             val dr1 = this
             df0.defer { dr1.popEnclosingClass() }
         }
-        val declName: Node? = this!!.transformer.factory().getLocalNameEx(node!!.statementBase.nodeBase.nodeDefault.asNode(), AssignedNameOptions(allowComments = false, allowSourceMaps = true))
+        val declName: Node? = this!!.transformer.factory().getLocalNameEx(node!!.statementBase.nodeBase.asNode(), AssignedNameOptions(allowComments = false, allowSourceMaps = true))
         val heritageClauses: NodeList? = this!!.transformer.visitor().visitNodes(node!!.classLikeBase.heritageClauses)
         var members: NodeList? = this!!.transformer.visitor().visitNodes(node!!.classLikeBase.members)
         val t2 = this.transformDecoratorsOfClassElements(node, members)
@@ -419,19 +419,19 @@ fun LegacyDecoratorsTransformer?.transformClassDeclarationWithClassDecorators(no
             exprName = null
         }
         val classExpression: Node? = this!!.transformer.factory()!!.nodeFactory.newClassExpression(modifiers, exprName, null, heritageClauses, members)
-        this!!.transformer.emitContext().setOriginal(classExpression, node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(classExpression, node!!.statementBase.nodeBase.asNode())
         classExpression!!.loc = location.goCopy()
         var varInitializer: Node? = classExpression
         if (classAlias != null && !assignClassAliasInStaticBlock) {
             varInitializer = this!!.transformer.factory().newAssignmentExpression(classAlias, classExpression)
         }
         val varDecl: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(declName, null, null, varInitializer)
-        this!!.transformer.emitContext().setOriginal(varDecl, node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(varDecl, node!!.statementBase.nodeBase.asNode())
         val varDeclList: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), varDecl)), NodeFlags(1u))
         val varStatement: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableStatement(null, varDeclList)
-        this!!.transformer.emitContext().setOriginal(varStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(varStatement, node!!.statementBase.nodeBase.asNode())
         varStatement!!.loc = location.goCopy()
-        this!!.transformer.emitContext().setCommentRange(varStatement, node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy())
+        this!!.transformer.emitContext().setCommentRange(varStatement, node!!.statementBase.nodeBase.node.loc.goCopy())
         var statements: GoSlice<Node?> = GoSlice.of(GoElem.ref<Node?>(), varStatement)
         statements = statements.appendSlice(decorationStatements)
         statements = statements.append1(this.getConstructorDecorationStatement(node))
@@ -440,7 +440,7 @@ fun LegacyDecoratorsTransformer?.transformClassDeclarationWithClassDecorators(no
             if (isDefault) {
                 exportStatement = this!!.transformer.factory().newExportDefault(declName)
             } else {
-                exportStatement = this!!.transformer.factory().newExternalModuleExport(this!!.transformer.factory().getDeclarationName(node!!.statementBase.nodeBase.nodeDefault.asNode()))
+                exportStatement = this!!.transformer.factory().newExternalModuleExport(this!!.transformer.factory().getDeclarationName(node!!.statementBase.nodeBase.asNode()))
             }
             statements = statements.append1(exportStatement)
         }
@@ -453,7 +453,7 @@ fun LegacyDecoratorsTransformer?.transformClassDeclarationWithClassDecorators(no
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.hasInternalStaticReference 64575dfb
 fun LegacyDecoratorsTransformer?.hasInternalStaticReference(node: ClassDeclaration?): Boolean {
-    val classNode: Node? = this!!.transformer.emitContext().mostOriginal(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val classNode: Node? = this!!.transformer.emitContext().mostOriginal(node!!.statementBase.nodeBase.asNode())
     var isOrContainsStaticSelfReference: ((Node?) -> Boolean)? = null
     isOrContainsStaticSelfReference = fun(n: Node?): Boolean {
         if (com.xemantic.typescript.tsgo.ast.isIdentifier(n) && this!!.referenceResolver!!.getReferencedValueDeclaration(this!!.transformer.emitContext().mostOriginal(n)) === classNode) {
@@ -485,7 +485,7 @@ fun LegacyDecoratorsTransformer?.getClassAliasIfNeeded(node: ClassDeclaration?):
     }
     val classAlias: Node? = this!!.transformer.factory().newUniqueName(nameText)
     this!!.transformer.emitContext().addVariableDeclaration(classAlias)
-    this!!.classAliases[node!!.statementBase.nodeBase.nodeDefault.asNode()] = classAlias
+    this!!.classAliases[node!!.statementBase.nodeBase.asNode()] = classAlias
     return classAlias
 }
 
@@ -494,7 +494,7 @@ fun LegacyDecoratorsTransformer?.getConstructorDecorationStatement(node: ClassDe
     val expression: Node? = this.generateConstructorDecorationExpression(node)
     if (expression != null) {
         val result: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(expression)
-        this!!.transformer.emitContext().setOriginal(result, node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(result, node!!.statementBase.nodeBase.asNode())
         return result
     }
     return null
@@ -516,10 +516,10 @@ fun LegacyDecoratorsTransformer?.generateConstructorDecorationExpression(node: C
     }
     var classAlias: Node? = null
     if (!this!!.classAliases.isNil) {
-        val t0 = this!!.classAliases.probe(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        val t0 = this!!.classAliases.probe(node!!.statementBase.nodeBase.asNode())
         classAlias = goProbeValue<Node?>(t0) { null }
     }
-    val localName: Node? = this!!.transformer.factory().getDeclarationNameEx(node!!.statementBase.nodeBase.nodeDefault.asNode(), NameOptions(allowComments = false, allowSourceMaps = true))
+    val localName: Node? = this!!.transformer.factory().getDeclarationNameEx(node!!.statementBase.nodeBase.asNode(), NameOptions(allowComments = false, allowSourceMaps = true))
     val decorate: Node? = this!!.transformer.factory().newDecorateHelper(decoratorExpressions, localName, null, null)
     var assignmentTarget: Node? = decorate
     if (classAlias != null) {
@@ -527,7 +527,7 @@ fun LegacyDecoratorsTransformer?.generateConstructorDecorationExpression(node: C
     }
     val expression: Node? = this!!.transformer.factory().newAssignmentExpression(localName, assignmentTarget)
     this!!.transformer.emitContext().setEmitFlags(expression, EmitFlags(384u))
-    this!!.transformer.emitContext().setSourceMapRange(expression, com.xemantic.typescript.tsgo.transformers.moveRangePastModifiers(node!!.statementBase.nodeBase.nodeDefault.asNode()))
+    this!!.transformer.emitContext().setSourceMapRange(expression, com.xemantic.typescript.tsgo.transformers.moveRangePastModifiers(node!!.statementBase.nodeBase.asNode()))
     return expression
 }
 
@@ -596,10 +596,10 @@ class allDecorators(
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.getAllDecoratorsOfClass 97cac87d
 fun getAllDecoratorsOfClass(node: ClassDeclaration?, useLegacyDecorators: Boolean): com.xemantic.typescript.tsgo.transformers.tstransforms.allDecorators? {
-    val decorators: GoSlice<Node?> = node!!.statementBase.nodeBase.nodeDefault.node.decorators()
+    val decorators: GoSlice<Node?> = node!!.statementBase.nodeBase.node.decorators()
     var parameters: GoSlice<GoSlice<Node?>> = GoElem.slice(GoElem.ref<Node?>()).nilSlice
     if (useLegacyDecorators) {
-        parameters = getDecoratorsOfParameters(com.xemantic.typescript.tsgo.ast.getFirstConstructorWithBody(node!!.statementBase.nodeBase.nodeDefault.asNode()))
+        parameters = getDecoratorsOfParameters(com.xemantic.typescript.tsgo.ast.getFirstConstructorWithBody(node!!.statementBase.nodeBase.asNode()))
     }
     if (decorators.len == 0 && parameters.len == 0) {
         return null
@@ -647,7 +647,7 @@ fun getAllDecoratorsOfAccessors(accessor: Node?, parent: ClassDeclaration?, useL
     val decorators: GoSlice<Node?> = firstAccessorWithDecorators.decorators()
     var parameters: GoSlice<GoSlice<Node?>> = GoElem.slice(GoElem.ref<Node?>()).nilSlice
     if (useLegacyDecorators && decls.setAccessor != null) {
-        parameters = getDecoratorsOfParameters(decls.setAccessor!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode())
+        parameters = getDecoratorsOfParameters(decls.setAccessor!!.accessorDeclarationBase.nodeBase.asNode())
     }
     if (decorators.len == 0 && parameters.len == 0) {
         return null
@@ -737,7 +737,7 @@ fun LegacyDecoratorsTransformer?.getClassElementDecorationStatements(node: Class
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.isDecoratedClassElement 773555fb
 fun isDecoratedClassElement(member: Node?, isStaticElement: Boolean, parent: ClassDeclaration?): Boolean {
-    return isStaticElement == com.xemantic.typescript.tsgo.ast.isStatic(member) && com.xemantic.typescript.tsgo.ast.nodeOrChildIsDecorated(true, member, parent!!.statementBase.nodeBase.nodeDefault.asNode(), null)
+    return isStaticElement == com.xemantic.typescript.tsgo.ast.isStatic(member) && com.xemantic.typescript.tsgo.ast.nodeOrChildIsDecorated(true, member, parent!!.statementBase.nodeBase.asNode(), null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.getDecoratedClassElements b1216b4c
@@ -846,14 +846,14 @@ fun LegacyDecoratorsTransformer?.transformDecorators(decorators: GoSlice<Node?>)
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.getClassMemberPrefix 9fcc0e9b
 fun LegacyDecoratorsTransformer?.getClassMemberPrefix(node: ClassDeclaration?, member: Node?): Node? {
     if (com.xemantic.typescript.tsgo.ast.isStatic(member)) {
-        return this!!.transformer.factory().getDeclarationName(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        return this!!.transformer.factory().getDeclarationName(node!!.statementBase.nodeBase.asNode())
     }
     return this.getClassPrototype(node)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.getClassPrototype cd008d54
 fun LegacyDecoratorsTransformer?.getClassPrototype(node: ClassDeclaration?): Node? {
-    return this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(this!!.transformer.factory().getDeclarationName(node!!.statementBase.nodeBase.nodeDefault.asNode()), null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("prototype"), NodeFlags(0u))
+    return this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(this!!.transformer.factory().getDeclarationName(node!!.statementBase.nodeBase.asNode()), null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("prototype"), NodeFlags(0u))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.LegacyDecoratorsTransformer.getExpressionForPropertyName 71a4186d

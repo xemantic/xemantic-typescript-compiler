@@ -2847,7 +2847,7 @@ fun isParseTreeNode(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.GetNodeAtPosition f2ca68b5
 fun getNodeAtPosition(file: SourceFile?, position: Int, includeJSDoc: Boolean): Node? {
-    var current: Node? = file!!.nodeBase.nodeDefault.asNode()
+    var current: Node? = file!!.nodeBase.asNode()
     l0@ while (true) {
         var child: Node? = null
         if (includeJSDoc) {
@@ -2912,7 +2912,7 @@ fun findImportOrRequire(text: String, start: Int): Tuple2<Int, Int> {
 
 // go: github.com/microsoft/typescript-go/internal/ast.ForEachDynamicImportOrRequireCall 528604c4
 fun forEachDynamicImportOrRequireCall(file: SourceFile?, includeTypeSpaceImports: Boolean, requireStringLiteralLikeArgument: Boolean, cb: ((Node?, Node?) -> Boolean)?): Boolean {
-    val isJavaScriptFile: Boolean = isInJSFile(file!!.nodeBase.nodeDefault.asNode())
+    val isJavaScriptFile: Boolean = isInJSFile(file!!.nodeBase.asNode())
     val t0 = findImportOrRequire(file!!.text(), 0)
     var lastIndex: Int = t0.first
     var size: Int = t0.second
@@ -3152,13 +3152,13 @@ fun isExclusivelyTypeOnlyImportOrExport(node: Node?): Boolean {
         273, 346 -> {
             val importClause: Node? = node.importClause()
             if (importClause != null) {
-                return importClause.asImportClause()!!.nodeBase.nodeDefault.node.isTypeOnly()
+                return importClause.asImportClause()!!.nodeBase.node.isTypeOnly()
             }
         }
         343 -> {
             val importClause_1: Node? = node.importClause()
             if (importClause_1 != null) {
-                return importClause_1.asImportClause()!!.nodeBase.nodeDefault.node.isTypeOnly()
+                return importClause_1.asImportClause()!!.nodeBase.node.isTypeOnly()
             }
         }
     }

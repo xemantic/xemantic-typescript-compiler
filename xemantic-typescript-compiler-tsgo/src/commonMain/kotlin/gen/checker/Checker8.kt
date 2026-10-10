@@ -2132,7 +2132,7 @@ fun Checker?.getConditionalType(root_0: ConditionalRoot?, mapper_1: TypeMapper?,
                 val falseType: Type? = this.getTypeFromTypeNodeImpl(root!!.node!!.falseType)
                 if (falseType!!.flags.value and 67108864u != 0u) {
                     val newRoot: ConditionalRoot? = falseType.asConditionalType()!!.root
-                    if (newRoot!!.node!!.typeNodeBase.nodeBase.nodeDefault.node.parent === root!!.node!!.typeNodeBase.nodeBase.nodeDefault.asNode() && (!newRoot!!.isDistributive || newRoot!!.checkType === root!!.checkType)) {
+                    if (newRoot!!.node!!.typeNodeBase.nodeBase.node.parent === root!!.node!!.typeNodeBase.nodeBase.asNode() && (!newRoot!!.isDistributive || newRoot!!.checkType === root!!.checkType)) {
                         root = newRoot
                         continue@l0
                     }

@@ -93,7 +93,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.exponentiationTransfo
             return this.visitExponentiationExpression(node)
         }
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.exponentiationTransformer.visitExponentiationAssignmentExpression cbe78eb0
@@ -128,9 +128,9 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.exponentiationTransfo
         value_1 = left
     }
     val rhs: Node? = this!!.transformer.factory().newGlobalMethodCall("Math", "pow", GoSlice.of(GoElem.ref<Node?>(), value_1, right))
-    rhs!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+    rhs!!.loc = node!!.expressionBase.node.loc.goCopy()
     val result: Node? = this!!.transformer.factory().newAssignmentExpression(target, rhs)
-    result!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+    result!!.loc = node!!.expressionBase.node.loc.goCopy()
     return result
 }
 
@@ -139,7 +139,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.exponentiationTransfo
     val left: Node? = this!!.transformer.visitor().visitNode(node!!.left)
     val right: Node? = this!!.transformer.visitor().visitNode(node!!.right)
     val result: Node? = this!!.transformer.factory().newGlobalMethodCall("Math", "pow", GoSlice.of(GoElem.ref<Node?>(), left, right))
-    result!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+    result!!.loc = node!!.expressionBase.node.loc.goCopy()
     return result
 }
 

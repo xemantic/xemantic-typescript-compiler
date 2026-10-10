@@ -902,7 +902,7 @@ fun EmitContext?.getEmitHelpers(node: Node?): GoSlice<EmitHelper?> {
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.GetExternalHelpersModuleName 321fa49a
 fun EmitContext?.getExternalHelpersModuleName(node: SourceFile?): Node? {
-    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
+    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.asNode())
     if (parseNode_1 != null) {
         val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(parseNode_1)
         if (emitNode != null) {
@@ -914,7 +914,7 @@ fun EmitContext?.getExternalHelpersModuleName(node: SourceFile?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.SetExternalHelpersModuleName 7c2110a2
 fun EmitContext?.setExternalHelpersModuleName(node: SourceFile?, name: Node?) {
-    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
+    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.asNode())
     if (parseNode_1 == null) {
         goPanic("Node must be a parse tree node or have an Original pointer to a parse tree node.")
     }
@@ -924,7 +924,7 @@ fun EmitContext?.setExternalHelpersModuleName(node: SourceFile?, name: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.HasRecordedExternalHelpers a2c4fd31
 fun EmitContext?.hasRecordedExternalHelpers(node: SourceFile?): Boolean {
-    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.nodeDefault.asNode())
+    val parseNode_1: Node? = this.parseNode(node!!.nodeBase.asNode())
     if (parseNode_1 != null) {
         val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(parseNode_1)
         return emitNode != null && (emitNode!!.externalHelpersModuleName != null || emitNode!!.emitFlags.value and 262144u != 0u)
@@ -988,25 +988,25 @@ fun EmitContext?.addDefaultValueAssignmentsIfNeeded(nodeList: NodeList?): NodeLi
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.addDefaultValueAssignmentIfNeeded 2abddb15
 fun EmitContext?.addDefaultValueAssignmentIfNeeded(parameter: ParameterDeclaration?): Node? {
     if (parameter!!.dotDotDotToken != null) {
-        return parameter!!.nodeBase.nodeDefault.asNode()
+        return parameter!!.nodeBase.asNode()
     } else if (com.xemantic.typescript.tsgo.ast.isBindingPattern(parameter!!.name())) {
         return this.addDefaultValueAssignmentForBindingPattern(parameter)
     } else if (parameter!!.initializer != null) {
         return this.addDefaultValueAssignmentForInitializer(parameter, parameter!!.name(), parameter!!.initializer)
     }
-    return parameter!!.nodeBase.nodeDefault.asNode()
+    return parameter!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.addDefaultValueAssignmentForBindingPattern efb46cdc
 fun EmitContext?.addDefaultValueAssignmentForBindingPattern(parameter: ParameterDeclaration?): Node? {
     var initNode: Node? = null
     if (parameter!!.initializer != null) {
-        initNode = this!!.factory!!.nodeFactory.newConditionalExpression(this!!.factory.newStrictEqualityExpression(this!!.factory.newGeneratedNameForNode(parameter!!.nodeBase.nodeDefault.asNode()), this!!.factory.newVoidZeroExpression()), this!!.factory!!.nodeFactory.newToken(Kind(57)), parameter!!.initializer, this!!.factory!!.nodeFactory.newToken(Kind(58)), this!!.factory.newGeneratedNameForNode(parameter!!.nodeBase.nodeDefault.asNode()))
+        initNode = this!!.factory!!.nodeFactory.newConditionalExpression(this!!.factory.newStrictEqualityExpression(this!!.factory.newGeneratedNameForNode(parameter!!.nodeBase.asNode()), this!!.factory.newVoidZeroExpression()), this!!.factory!!.nodeFactory.newToken(Kind(57)), parameter!!.initializer, this!!.factory!!.nodeFactory.newToken(Kind(58)), this!!.factory.newGeneratedNameForNode(parameter!!.nodeBase.asNode()))
     } else {
-        initNode = this!!.factory.newGeneratedNameForNode(parameter!!.nodeBase.nodeDefault.asNode())
+        initNode = this!!.factory.newGeneratedNameForNode(parameter!!.nodeBase.asNode())
     }
     this.addInitializationStatement(this!!.factory!!.nodeFactory.newVariableStatement(null, this!!.factory!!.nodeFactory.newVariableDeclarationList(this!!.factory!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.factory!!.nodeFactory.newVariableDeclaration(parameter!!.name(), null, parameter!!.type, initNode))), NodeFlags(0u))))
-    return this!!.factory!!.nodeFactory.updateParameterDeclaration(parameter, parameter!!.modifiersBase.modifiers(), parameter!!.dotDotDotToken, this!!.factory.newGeneratedNameForNode(parameter!!.nodeBase.nodeDefault.asNode()), parameter!!.questionToken, parameter!!.type, null)
+    return this!!.factory!!.nodeFactory.updateParameterDeclaration(parameter, parameter!!.modifiersBase.modifiers(), parameter!!.dotDotDotToken, this!!.factory.newGeneratedNameForNode(parameter!!.nodeBase.asNode()), parameter!!.questionToken, parameter!!.type, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.addDefaultValueAssignmentForInitializer 0d2a94b9
@@ -1015,10 +1015,10 @@ fun EmitContext?.addDefaultValueAssignmentForInitializer(parameter: ParameterDec
     val nameClone: Node? = name.clone(this!!.factory)
     this.addEmitFlags(nameClone, EFNoSourceMap)
     val initAssignment: Node? = this!!.factory.newAssignmentExpression(nameClone, initializer)
-    initAssignment!!.loc = parameter!!.nodeBase.nodeDefault.node.loc.goCopy()
+    initAssignment!!.loc = parameter!!.nodeBase.node.loc.goCopy()
     this.addEmitFlags(initAssignment, EFNoComments)
     val initBlock: Node? = this!!.factory!!.nodeFactory.newBlock(this!!.factory!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.factory!!.nodeFactory.newExpressionStatement(initAssignment))), false)
-    initBlock!!.loc = parameter!!.nodeBase.nodeDefault.node.loc.goCopy()
+    initBlock!!.loc = parameter!!.nodeBase.node.loc.goCopy()
     this.addEmitFlags(initBlock, EmitFlags(489u))
     this.addInitializationStatement(this!!.factory!!.nodeFactory.newIfStatement(this!!.factory.newTypeCheck(name.clone(this!!.factory), "undefined"), initBlock, null))
     return this!!.factory!!.nodeFactory.updateParameterDeclaration(parameter, parameter!!.modifiersBase.modifiers(), parameter!!.dotDotDotToken, parameter!!.name(), parameter!!.questionToken, parameter!!.type, null)

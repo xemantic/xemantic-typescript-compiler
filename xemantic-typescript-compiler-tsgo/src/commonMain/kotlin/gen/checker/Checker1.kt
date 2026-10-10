@@ -3852,14 +3852,14 @@ fun Checker?.isUsedInFunctionOrInstanceProperty(usage: Node?, declaration: Node?
         if (current!!.parent != null && com.xemantic.typescript.tsgo.ast.isDecorator(current!!.parent)) {
             val decorator: Decorator? = current!!.parent.asDecorator()
             if (decorator!!.expression === current) {
-                if (com.xemantic.typescript.tsgo.ast.isParameterDeclaration(decorator!!.nodeBase.nodeDefault.node.parent)) {
-                    if (this.isUsedInFunctionOrInstanceProperty(decorator!!.nodeBase.nodeDefault.node.parent!!.parent!!.parent, declaration, declContainer)) {
+                if (com.xemantic.typescript.tsgo.ast.isParameterDeclaration(decorator!!.nodeBase.node.parent)) {
+                    if (this.isUsedInFunctionOrInstanceProperty(decorator!!.nodeBase.node.parent!!.parent!!.parent, declaration, declContainer)) {
                         return FindAncestorResult(1)
                     }
                     return FindAncestorResult(2)
                 }
-                if (com.xemantic.typescript.tsgo.ast.isMethodDeclaration(decorator!!.nodeBase.nodeDefault.node.parent)) {
-                    if (this.isUsedInFunctionOrInstanceProperty(decorator!!.nodeBase.nodeDefault.node.parent!!.parent, declaration, declContainer)) {
+                if (com.xemantic.typescript.tsgo.ast.isMethodDeclaration(decorator!!.nodeBase.node.parent)) {
+                    if (this.isUsedInFunctionOrInstanceProperty(decorator!!.nodeBase.node.parent!!.parent, declaration, declContainer)) {
                         return FindAncestorResult(1)
                     }
                     return FindAncestorResult(2)
@@ -4010,8 +4010,8 @@ fun Checker?.checkSourceFile(ctx: Context?, sourceFile: SourceFile?, checkUnused
             this.checkSourceElements(sourceFile!!.statements!!.nodes)
             this.checkDeferredNodes(sourceFile)
             if (com.xemantic.typescript.tsgo.ast.isExternalOrCommonJSModule(sourceFile)) {
-                this.checkExternalModuleExports(sourceFile!!.nodeBase.nodeDefault.asNode())
-                this.registerForUnusedIdentifiersCheck(sourceFile!!.nodeBase.nodeDefault.asNode())
+                this.checkExternalModuleExports(sourceFile!!.nodeBase.asNode())
+                this.registerForUnusedIdentifiersCheck(sourceFile!!.nodeBase.asNode())
             }
             if (!sourceFile!!.isDeclarationFile && !this.isCanceled()) {
                 this.checkUnusedRenamedBindingElements()
@@ -5231,7 +5231,7 @@ fun Checker?.checkImportType(node: Node?) {
 fun Checker?.getResolutionModeOverrideImpl(node: ImportAttributes?, reportErrors: Boolean): ModuleKind {
     if (node!!.attributes!!.nodes.len != 1) {
         if (reportErrors) {
-            this.grammarErrorOnNode(node!!.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.type_import_attributes_should_have_exactly_one_key_resolution_mode_with_value_import_or_require, GoElem.ref<Any?>().nilSlice)
+            this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.type_import_attributes_should_have_exactly_one_key_resolution_mode_with_value_import_or_require, GoElem.ref<Any?>().nilSlice)
         }
         return ModuleKind(0)
     }

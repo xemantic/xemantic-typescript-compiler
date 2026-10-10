@@ -967,7 +967,7 @@ fun Parser?.finishSourceFile(result: SourceFile?, isDeclarationFile: Boolean) {
     result!!.isDeclarationFile = isDeclarationFile
     result!!.languageVariant = this!!.languageVariant
     result!!.scriptKind = this!!.scriptKind
-    result!!.nodeBase.nodeDefault.node.flags = NodeFlags(result!!.nodeBase.nodeDefault.node.flags.value or this!!.sourceFlags.value)
+    result!!.nodeBase.node.flags = NodeFlags(result!!.nodeBase.node.flags.value or this!!.sourceFlags.value)
     result!!.identifiers = this!!.identifiers
     result!!.nodeCount = this!!.factory.nodeCount()
     result!!.textCount = this!!.factory.textCount()

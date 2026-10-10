@@ -652,15 +652,15 @@ fun isSnippetScope(scopeNode: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ls.isProbablyGlobalType 42148b5a
 fun isProbablyGlobalType(t: Type?, file: SourceFile?, typeChecker: Checker?): Boolean {
     val selfSymbol: Symbol? = typeChecker.getGlobalSymbol("self", SymbolFlags(111551u), null)
-    if (selfSymbol != null && typeChecker.getTypeOfSymbolAtLocation(selfSymbol, file!!.nodeBase.nodeDefault.asNode()) === t) {
+    if (selfSymbol != null && typeChecker.getTypeOfSymbolAtLocation(selfSymbol, file!!.nodeBase.asNode()) === t) {
         return true
     }
     val globalSymbol: Symbol? = typeChecker.getGlobalSymbol("global", SymbolFlags(111551u), null)
-    if (globalSymbol != null && typeChecker.getTypeOfSymbolAtLocation(globalSymbol, file!!.nodeBase.nodeDefault.asNode()) === t) {
+    if (globalSymbol != null && typeChecker.getTypeOfSymbolAtLocation(globalSymbol, file!!.nodeBase.asNode()) === t) {
         return true
     }
     val globalThisSymbol: Symbol? = typeChecker.getGlobalSymbol("globalThis", SymbolFlags(111551u), null)
-    if (globalThisSymbol != null && typeChecker.getTypeOfSymbolAtLocation(globalThisSymbol, file!!.nodeBase.nodeDefault.asNode()) === t) {
+    if (globalThisSymbol != null && typeChecker.getTypeOfSymbolAtLocation(globalThisSymbol, file!!.nodeBase.asNode()) === t) {
         return true
     }
     return false
@@ -2186,7 +2186,7 @@ fun getJSDocParameterNameCompletions(tag: JSDocParameterOrPropertyTag?): GoSlice
         return GoElem.ref<CompletionItem?>().nilSlice
     }
     val nameThusFar: String = tag!!.name().text()
-    val jsDoc: Node? = tag!!.jsDocTagBase.nodeBase.nodeDefault.node.parent
+    val jsDoc: Node? = tag!!.jsDocTagBase.nodeBase.node.parent
     val fn: Node? = jsDoc!!.parent
     if (!com.xemantic.typescript.tsgo.ast.isFunctionLike(fn)) {
         return GoElem.ref<CompletionItem?>().nilSlice
@@ -2201,7 +2201,7 @@ fun getJSDocParameterNameCompletions(tag: JSDocParameterOrPropertyTag?): GoSlice
         }
         val name: String = param.name().text()
         if (com.xemantic.typescript.tsgo.core.some<Node?>(GoElem.ref<Node?>(), tags, fun(t: Node?): Boolean {
-            return t !== tag!!.jsDocTagBase.nodeBase.nodeDefault.asNode() && com.xemantic.typescript.tsgo.ast.isJSDocParameterTag(t) && com.xemantic.typescript.tsgo.ast.isIdentifier(t.name()) && t.name().text() == name
+            return t !== tag!!.jsDocTagBase.nodeBase.asNode() && com.xemantic.typescript.tsgo.ast.isJSDocParameterTag(t) && com.xemantic.typescript.tsgo.ast.isIdentifier(t.name()) && t.name().text() == name
         }) || nameThusFar != "" && !com.xemantic.typescript.tsgo.go.strings.hasPrefix(name, nameThusFar)) {
             return null
         }
@@ -2212,7 +2212,7 @@ fun getJSDocParameterNameCompletions(tag: JSDocParameterOrPropertyTag?): GoSlice
 // go: github.com/microsoft/typescript-go/internal/ls.LanguageService.getExhaustiveCaseSnippets 5c021433
 fun LanguageService?.getExhaustiveCaseSnippets(ctx: Context?, caseBlock: CaseBlock?, file: SourceFile?, position: Int, options: CompilerOptions?, program: Program?, c: Checker?): Tuple2<com.xemantic.typescript.tsgo.lsp.lsproto.CompletionItem?, GoError?> {
     val clauses: GoSlice<Node?> = caseBlock!!.clauses!!.nodes
-    val switchType: Type? = c.getTypeAtLocation(caseBlock!!.nodeBase.nodeDefault.asNode()!!.parent.expression())
+    val switchType: Type? = c.getTypeAtLocation(caseBlock!!.nodeBase.asNode()!!.parent.expression())
     if (switchType != null && switchType.isUnion() && com.xemantic.typescript.tsgo.core.every<Type?>(GoElem.ref<Type?>(), switchType.types(), fun(p0: Type?): Boolean = isLiteral(p0))) {
         val tracker: com.xemantic.typescript.tsgo.ls.caseClauseTracker? = newCaseClauseTracker(c, clauses)
         val target: ScriptTarget = options.getEmitScriptTarget()
@@ -2247,7 +2247,7 @@ fun LanguageService?.getExhaustiveCaseSnippets(ctx: Context?, caseBlock: CaseBlo
                     }
                     tracker!!.addValue(enumValue)
                 }
-                val typeNode: Node? = com.xemantic.typescript.tsgo.ls.autoimport.typeToAutoImportableTypeNode(c, importAdder, t, caseBlock!!.nodeBase.nodeDefault.asNode())
+                val typeNode: Node? = com.xemantic.typescript.tsgo.ls.autoimport.typeToAutoImportableTypeNode(c, importAdder, t, caseBlock!!.nodeBase.asNode())
                 if (typeNode == null) {
                     return Tuple2<com.xemantic.typescript.tsgo.lsp.lsproto.CompletionItem?, GoError?>(null, null)
                 }

@@ -113,7 +113,7 @@ class referenceResolver(
                     if (symbolIsUmdExport) {
                         return null
                     }
-                    return symbolFile!!.nodeBase.nodeDefault.asNode()
+                    return symbolFile!!.nodeBase.asNode()
                 }
                 val isMatchingContainer: ((Node?) -> Boolean)? = fun(n: Node?): Boolean {
                     return (n!!.kind.value == 268 || n!!.kind.value == 267) && this.getSymbolOfDeclaration(n) === parentSymbol

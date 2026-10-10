@@ -491,7 +491,7 @@ fun Checker?.checkAliasSymbol(node: Node?) {
         com.xemantic.typescript.tsgo.debug.assert(node!!.kind.value != 281, GoElem.ref<Any?>().nilSlice)
         if (com.xemantic.typescript.tsgo.ast.isExportSpecifier(node)) {
             val diag: Diagnostic? = this.error(errorNode, com.xemantic.typescript.tsgo.diagnostics.types_cannot_appear_in_export_declarations_in_JavaScript_files, GoElem.ref<Any?>().nilSlice)
-            val sourceSymbol: Symbol? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)!!.nodeBase.nodeDefault.asNode().symbol()
+            val sourceSymbol: Symbol? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)!!.nodeBase.asNode().symbol()
             if (sourceSymbol != null) {
                 val alreadyExportedSymbol: Symbol? = sourceSymbol!!.exports[node.propertyNameOrName().text()]
                 if (alreadyExportedSymbol === target) {

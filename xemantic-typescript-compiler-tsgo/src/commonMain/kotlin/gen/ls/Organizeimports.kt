@@ -305,7 +305,7 @@ fun groupByModuleSpecifier(imports: GoSlice<Node?>): GoSlice<GoSlice<Node?>> {
 // go: github.com/microsoft/typescript-go/internal/ls.removeUnusedImports 62b5127b
 fun removeUnusedImports(oldImports: GoSlice<Node?>, sourceFile: SourceFile?, typeChecker: Checker?, program: Program?, changeTracker: Tracker?): GoSlice<Node?> {
     val compilerOptions: CompilerOptions? = program!!.options()
-    val jsxElementsPresent: Boolean = sourceFile!!.nodeBase.nodeDefault.asNode().subtreeFacts().value and 2u != 0u
+    val jsxElementsPresent: Boolean = sourceFile!!.nodeBase.asNode().subtreeFacts().value and 2u != 0u
     val jsxModeNeedsExplicitImport_1: Boolean = compilerOptions!!.jsx.value == 3 || compilerOptions!!.jsx.value == 2
     val factory: NodeFactory? = com.xemantic.typescript.tsgo.ast.newNodeFactory(NodeFactoryHooks())
     var usedImports: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0, oldImports.len)
@@ -689,7 +689,7 @@ fun getCategorizedImports(importDecls: GoSlice<Node?>): com.xemantic.typescript.
         }
         val clause: ImportClause? = importDecl.asImportDeclaration()!!.importClause.asImportClause()
         var group: com.xemantic.typescript.tsgo.ls.importGroup? = regularImports
-        if (clause!!.nodeBase.nodeDefault.node.isTypeOnly()) {
+        if (clause!!.nodeBase.node.isTypeOnly()) {
             group = typeOnlyImports
         }
         val name: Node? = clause!!.name()
@@ -895,7 +895,7 @@ fun coalesceExportsWorker(exportGroup: GoSlice<Node?>, specifierComparer: ((Node
                     val namedExports_1: NamedExports? = exportDecl_2!!.exportClause.asNamedExports()
                     val sortedList: NodeList? = factory.newNodeList(newExportSpecifiers)
                     updatedExportClause = factory.updateNamedExports(namedExports_1, sortedList)
-                    if (sourceFile != null && !com.xemantic.typescript.tsgo.ast.nodeIsSynthesized(namedExports_1!!.nodeBase.nodeDefault.asNode()) && !com.xemantic.typescript.tsgo.printer.rangeIsOnSingleLine(namedExports_1!!.nodeBase.nodeDefault.node.loc.goCopy(), sourceFile)) {
+                    if (sourceFile != null && !com.xemantic.typescript.tsgo.ast.nodeIsSynthesized(namedExports_1!!.nodeBase.asNode()) && !com.xemantic.typescript.tsgo.printer.rangeIsOnSingleLine(namedExports_1!!.nodeBase.node.loc.goCopy(), sourceFile)) {
                         changeTracker!!.emitContext.setEmitFlags(updatedExportClause.asNode(), EmitFlags(2u))
                     }
                 } else {

@@ -278,7 +278,7 @@ fun NodeBuilderImpl?.pseudoTypeToNode(t: PseudoType?): Node? {
                     val s8 = d_1!!.typeParameters
                     l4@ for (i9 in 0 until s8.len) {
                         val tp: TypeParameterDeclaration? = s8[i9]
-                        res_1 = res_1.append1(this.reuseNode(tp!!.nodeBase.nodeDefault.asNode()))
+                        res_1 = res_1.append1(this.reuseNode(tp!!.nodeBase.asNode()))
                     }
                     typeParams = this!!.f.newNodeList(res_1)
                 }
@@ -333,7 +333,7 @@ fun NodeBuilderImpl?.pseudoTypeToNode(t: PseudoType?): Node? {
                                     val s14 = d_2!!.typeParameters
                                     l8@ for (i15 in 0 until s14.len) {
                                         val tp_1: TypeParameterDeclaration? = s14[i15]
-                                        res_3 = res_3.append1(this.reuseNode(tp_1!!.nodeBase.nodeDefault.asNode()))
+                                        res_3 = res_3.append1(this.reuseNode(tp_1!!.nodeBase.asNode()))
                                     }
                                     typeParams_1 = this!!.f.newNodeList(res_3)
                                 }

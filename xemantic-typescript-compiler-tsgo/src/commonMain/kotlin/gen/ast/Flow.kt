@@ -156,51 +156,51 @@ class FlowSwitchClauseData(
 
     fun goHash(): Int = 31 * nodeBase.goHash() + 31 * switchStatement.hashCode() + 31 * clauseStart.hashCode() + 31 * clauseEnd.hashCode()
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<FlowSwitchClauseData> = GoElem({ FlowSwitchClauseData() }, { it.goCopy() })
@@ -240,51 +240,51 @@ class FlowReduceLabelData(
 
     fun goHash(): Int = 31 * nodeBase.goHash() + 31 * target.hashCode() + 31 * antecedents.hashCode()
 
-    override fun asNode(): Node? = this.nodeBase.nodeDefault.asNode()
+    override fun asNode(): Node? = this.nodeBase.asNode()
 
-    override fun bodyData(): BodyBase? = this.nodeBase.nodeDefault.bodyData()
+    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
 
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.nodeDefault.classLikeData()
+    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
 
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.nodeDefault.clone(p0)
+    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
 
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.computeSubtreeFacts()
+    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
 
-    override fun declarationData(): DeclarationBase? = this.nodeBase.nodeDefault.declarationData()
+    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
 
-    override fun end(): Int = this.nodeBase.nodeDefault.node.end()
+    override fun end(): Int = this.nodeBase.node.end()
 
-    override fun exportableData(): ExportableBase? = this.nodeBase.nodeDefault.exportableData()
+    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
 
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.nodeDefault.flowNodeData()
+    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
 
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.nodeDefault.forEachChild(p0)
+    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
 
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.nodeDefault.functionLikeData()
+    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
 
-    override fun kindString(): String = this.nodeBase.nodeDefault.node.kindString()
+    override fun kindString(): String = this.nodeBase.node.kindString()
 
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.nodeDefault.literalLikeData()
+    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.nodeDefault.localsContainerData()
+    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.nodeDefault.modifiers()
+    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
 
-    override fun name(): Node? = this.nodeBase.nodeDefault.name()
+    override fun name(): Node? = this.nodeBase.name()
 
-    override fun pos(): Int = this.nodeBase.nodeDefault.node.pos()
+    override fun pos(): Int = this.nodeBase.node.pos()
 
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.propagateSubtreeFacts()
+    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
 
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.nodeDefault.setModifiers(p0)
+    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
 
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFacts()
+    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
 
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.nodeDefault.subtreeFactsWorker(p0)
+    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
 
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.nodeDefault.templateLiteralLikeData()
+    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.nodeDefault.visitEachChild(p0)
+    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
 
     companion object {
         val ELEM: GoElem<FlowReduceLabelData> = GoElem({ FlowReduceLabelData() }, { it.goCopy() })

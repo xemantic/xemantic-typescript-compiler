@@ -88,7 +88,7 @@ fun newNodeVisitor(visit_1: ((Node?) -> Node?)?, factory_0: NodeFactory?, hooks:
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeVisitor.VisitSourceFile 644ddda4
 fun NodeVisitor?.visitSourceFile(node: SourceFile?): SourceFile? {
-    return this.visitNode(node!!.nodeBase.nodeDefault.asNode()).asSourceFile()
+    return this.visitNode(node!!.nodeBase.asNode()).asSourceFile()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeVisitor.VisitNode dc7f597b

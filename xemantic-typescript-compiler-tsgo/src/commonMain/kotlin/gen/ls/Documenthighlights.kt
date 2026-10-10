@@ -356,17 +356,17 @@ fun LanguageService?.getIfElseOccurrences(ifStatement: IfStatement?, sourceFile:
 // go: github.com/microsoft/typescript-go/internal/ls.getIfElseKeywords a42f4b8f
 fun getIfElseKeywords(ifStatement_0: IfStatement?, sourceFile: SourceFile?): GoSlice<Node?> {
     var ifStatement: IfStatement? = ifStatement_0
-    l0@ while (com.xemantic.typescript.tsgo.ast.isIfStatement(ifStatement!!.statementBase.nodeBase.nodeDefault.node.parent)) {
-        val parentingIf: IfStatement? = ifStatement!!.statementBase.nodeBase.nodeDefault.node.parent.asIfStatement()
+    l0@ while (com.xemantic.typescript.tsgo.ast.isIfStatement(ifStatement!!.statementBase.nodeBase.node.parent)) {
+        val parentingIf: IfStatement? = ifStatement!!.statementBase.nodeBase.node.parent.asIfStatement()
         val elseStatement: Node? = parentingIf!!.elseStatement
-        if (elseStatement !== ifStatement!!.statementBase.nodeBase.nodeDefault.asNode()) {
+        if (elseStatement !== ifStatement!!.statementBase.nodeBase.asNode()) {
             break@l0
         }
         ifStatement = parentingIf
     }
     var keywords: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
     l1@ while (true) {
-        val children: GoSlice<Node?> = getChildrenFromNonJSDocNode(ifStatement!!.statementBase.nodeBase.nodeDefault.asNode(), sourceFile)
+        val children: GoSlice<Node?> = getChildrenFromNonJSDocNode(ifStatement!!.statementBase.nodeBase.asNode(), sourceFile)
         if (children.len > 0 && children[0]!!.kind.value == 100) {
             keywords = keywords.append1(children[0])
         }
@@ -546,7 +546,7 @@ fun getSwitchCaseDefaultOccurrences(node: Node?, sourceFile: SourceFile?): GoSli
         val s2 = breakAndContinueStatements
         l1@ for (i3 in 0 until s2.len) {
             val statement: Node? = s2[i3]
-            if (statement!!.kind.value == 253 && ownsBreakOrContinueStatement(switchStatement!!.statementBase.nodeBase.nodeDefault.asNode(), statement)) {
+            if (statement!!.kind.value == 253 && ownsBreakOrContinueStatement(switchStatement!!.statementBase.nodeBase.asNode(), statement)) {
                 keywords = keywords.append1(com.xemantic.typescript.tsgo.ls.lsutil.getFirstToken(statement, sourceFile))
             }
         }

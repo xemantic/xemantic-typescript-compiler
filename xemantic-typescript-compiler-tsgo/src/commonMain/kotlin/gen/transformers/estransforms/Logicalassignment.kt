@@ -100,7 +100,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.logicalAssignmentTran
             nonAssignmentOperator = Kind(60)
         }
         else -> {
-            return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+            return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.asNode())
         }
     }
     var left: Node? = com.xemantic.typescript.tsgo.ast.skipParentheses(this!!.transformer.visitor().visitNode(node!!.left))

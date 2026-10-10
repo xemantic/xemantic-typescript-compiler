@@ -222,7 +222,7 @@ fun LanguageService?.convertStringLiteralCompletions(ctx: Context?, completion: 
         }
         completion!!.fromProperties != null -> {
             val completion_2: com.xemantic.typescript.tsgo.ls.completionsFromProperties? = completion!!.fromProperties
-            val data: com.xemantic.typescript.tsgo.ls.completionDataData? = com.xemantic.typescript.tsgo.ls.completionDataData(symbols = completion_2!!.symbols, completionKind = CompletionKindString, isNewIdentifierLocation = completion_2!!.hasIndexSignature, location = file!!.nodeBase.nodeDefault.asNode(), contextToken = contextToken)
+            val data: com.xemantic.typescript.tsgo.ls.completionDataData? = com.xemantic.typescript.tsgo.ls.completionDataData(symbols = completion_2!!.symbols, completionKind = CompletionKindString, isNewIdentifierLocation = completion_2!!.hasIndexSignature, location = file!!.nodeBase.asNode(), contextToken = contextToken)
             val t0 = this.getCompletionEntriesFromSymbols(ctx, typeChecker, data, contextToken, position, file, options, includeSymbols)
             val items: GoSlice<CompletionItem?> = t0.second
             val defaultCommitCharacters: GoBox<GoSlice<String>> = GoBox(getDefaultCommitCharacters(completion_2!!.hasIndexSignature))

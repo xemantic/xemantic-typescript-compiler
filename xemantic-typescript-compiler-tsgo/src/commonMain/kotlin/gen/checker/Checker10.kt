@@ -829,7 +829,7 @@ fun Checker?.getContextualTypeForBinaryOperand(node: Node?, contextFlags: Contex
             }
         }
         56, 60 -> {
-            val t_1: Type? = this.getContextualTypeImpl(binary!!.expressionBase.nodeBase.nodeDefault.asNode(), contextFlags)
+            val t_1: Type? = this.getContextualTypeImpl(binary!!.expressionBase.asNode(), contextFlags)
             if (node === binary!!.right && (t_1 == null || this!!.patternForType[t_1] != null)) {
                 return this.getTypeOfExpression(binary!!.left)
             }
@@ -837,7 +837,7 @@ fun Checker?.getContextualTypeForBinaryOperand(node: Node?, contextFlags: Contex
         }
         55, 27 -> {
             if (node === binary!!.right) {
-                return this.getContextualTypeImpl(binary!!.expressionBase.nodeBase.nodeDefault.asNode(), contextFlags)
+                return this.getContextualTypeImpl(binary!!.expressionBase.asNode(), contextFlags)
             }
         }
     }

@@ -139,7 +139,7 @@ fun LanguageService?.provideInlayHint(ctx: Context?, params: InlayHintParams?): 
         val df3 = done
         df0.defer { df3!!() }
         val inlayHintState: com.xemantic.typescript.tsgo.ls.inlayHintState? = com.xemantic.typescript.tsgo.ls.inlayHintState(ctx = ctx, span = this!!.converters.fromLSPRange(file, params!!.range.goCopy()), preferences = inlayHintPreferences.goCopy(), quotePreference = quotePreference, file = file, checker = checker, converters = this!!.converters)
-        inlayHintState.visit(file!!.nodeBase.nodeDefault.asNode())
+        inlayHintState.visit(file!!.nodeBase.asNode())
         return Tuple2<InlayHintsOrNull, GoError?>(InlayHintsOrNull(inlayHints = run { val o4 = inlayHintState!!; GoFieldPtr(o4, 7, { o4.result }, { o4.result = it }) }), null)
     }
 }

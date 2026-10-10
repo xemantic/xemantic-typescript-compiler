@@ -406,7 +406,7 @@ fun RuntimeSyntaxTransformer?.getExpressionForPropertyName(member: EnumMember?):
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.getEnumQualifiedElement d7d16e45
 fun RuntimeSyntaxTransformer?.getEnumQualifiedElement(enum: EnumDeclaration?, member: EnumMember?): Node? {
-    val prop: Node? = this.getNamespaceQualifiedElement(this.getNamespaceContainerName(enum!!.statementBase.nodeBase.nodeDefault.asNode()), this.getExpressionForPropertyName(member))
+    val prop: Node? = this.getNamespaceQualifiedElement(this.getNamespaceContainerName(enum!!.statementBase.nodeBase.asNode()), this.getExpressionForPropertyName(member))
     this!!.transformer.emitContext().addEmitFlags(prop, EmitFlags(924u))
     return prop
 }
@@ -469,30 +469,30 @@ fun RuntimeSyntaxTransformer?.addVarForDeclaration(statements_0: GoSlice<Node?>,
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitEnumDeclaration b7c6101e
 fun RuntimeSyntaxTransformer?.visitEnumDeclaration(node: EnumDeclaration?): Node? {
     if (!this.shouldEmitEnumDeclaration(node)) {
-        return this!!.transformer.emitContext().newNotEmittedStatement(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        return this!!.transformer.emitContext().newNotEmittedStatement(node!!.statementBase.nodeBase.asNode())
     }
     var statements: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0)
-    val t0 = this.addVarForDeclaration(statements, node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val t0 = this.addVarForDeclaration(statements, node!!.statementBase.nodeBase.asNode())
     statements = t0.first
     val varAdded: Boolean = t0.second
     var emitFlags: EmitFlags = EmitFlags(0u)
     if (varAdded && (this!!.compilerOptions.getEmitModuleKind().value != 4 || this!!.currentScope !== this!!.currentSourceFile)) {
         emitFlags = EmitFlags(emitFlags.value or 128u)
     }
-    var enumArg: Node? = this!!.transformer.factory().newLogicalORExpression(this.getExportQualifiedReferenceToDeclaration(node!!.statementBase.nodeBase.nodeDefault.asNode()), this!!.transformer.factory().newAssignmentExpression(this.getExportQualifiedReferenceToDeclaration(node!!.statementBase.nodeBase.nodeDefault.asNode()), this!!.transformer.factory()!!.nodeFactory.newObjectLiteralExpression(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.make(GoElem.ref<Node?>(), 0)), false)))
-    if (this.isExportOfNamespace(node!!.statementBase.nodeBase.nodeDefault.asNode())) {
-        val localName: Node? = this!!.transformer.factory().getLocalNameEx(node!!.statementBase.nodeBase.nodeDefault.asNode(), AssignedNameOptions(allowSourceMaps = true))
+    var enumArg: Node? = this!!.transformer.factory().newLogicalORExpression(this.getExportQualifiedReferenceToDeclaration(node!!.statementBase.nodeBase.asNode()), this!!.transformer.factory().newAssignmentExpression(this.getExportQualifiedReferenceToDeclaration(node!!.statementBase.nodeBase.asNode()), this!!.transformer.factory()!!.nodeFactory.newObjectLiteralExpression(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.make(GoElem.ref<Node?>(), 0)), false)))
+    if (this.isExportOfNamespace(node!!.statementBase.nodeBase.asNode())) {
+        val localName: Node? = this!!.transformer.factory().getLocalNameEx(node!!.statementBase.nodeBase.asNode(), AssignedNameOptions(allowSourceMaps = true))
         enumArg = this!!.transformer.factory().newAssignmentExpression(localName, enumArg)
     }
-    val enumParamName: Node? = this!!.transformer.factory().newGeneratedNameForNode(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val enumParamName: Node? = this!!.transformer.factory().newGeneratedNameForNode(node!!.statementBase.nodeBase.asNode())
     this!!.transformer.emitContext().setSourceMapRange(enumParamName, node!!.name()!!.loc.goCopy())
     val enumParam: Node? = this!!.transformer.factory()!!.nodeFactory.newParameterDeclaration(null, null, enumParamName, null, null, null)
     val enumBody: Node? = this.transformEnumBody(node)
     val enumFunc: Node? = this!!.transformer.factory()!!.nodeFactory.newFunctionExpression(null, null, null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), enumParam)), null, null, enumBody)
     val enumCall: Node? = this!!.transformer.factory()!!.nodeFactory.newCallExpression(this!!.transformer.factory()!!.nodeFactory.newParenthesizedExpression(enumFunc), null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), enumArg)), NodeFlags(0u))
     val enumStatement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(enumCall)
-    this!!.transformer.emitContext().setOriginal(enumStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
-    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(enumStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(enumStatement, node!!.statementBase.nodeBase.asNode())
+    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(enumStatement, node!!.statementBase.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitFlags(enumStatement, emitFlags)
     return this!!.transformer.factory()!!.nodeFactory.newSyntaxList(statements.append1(enumStatement))
 }
@@ -501,8 +501,8 @@ fun RuntimeSyntaxTransformer?.visitEnumDeclaration(node: EnumDeclaration?): Node
 fun RuntimeSyntaxTransformer?.transformEnumBody(node_0: EnumDeclaration?): Node? {
     var node: EnumDeclaration? = node_0
     val savedCurrentEnum: Node? = this!!.currentEnum
-    this!!.currentEnum = node!!.statementBase.nodeBase.nodeDefault.asNode()
-    node = this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode()).asEnumDeclaration()
+    this!!.currentEnum = node!!.statementBase.nodeBase.asNode()
+    node = this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode()).asEnumDeclaration()
     var statements: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0)
     l0@ for (i1 in 0 until node!!.members!!.nodes.len) {
         val i: Int = i1
@@ -546,11 +546,11 @@ fun RuntimeSyntaxTransformer?.transformEnumMember(statements_0: GoSlice<Node?>, 
     }
     expression = this!!.transformer.factory().newAssignmentExpression(this.getEnumQualifiedElement(enum, member), expression)
     if (useExplicitReverseMapping) {
-        expression = this!!.transformer.factory().newAssignmentExpression(this!!.transformer.factory()!!.nodeFactory.newElementAccessExpression(this.getNamespaceContainerName(enum!!.statementBase.nodeBase.nodeDefault.asNode()), null, expression, NodeFlags(0u)), this.getExpressionForPropertyName(member))
+        expression = this!!.transformer.factory().newAssignmentExpression(this!!.transformer.factory()!!.nodeFactory.newElementAccessExpression(this.getNamespaceContainerName(enum!!.statementBase.nodeBase.asNode()), null, expression, NodeFlags(0u)), this.getExpressionForPropertyName(member))
     }
     val memberStatement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(expression)
-    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(expression, member!!.nodeBase.nodeDefault.asNode())
-    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(memberStatement, member!!.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(expression, member!!.nodeBase.asNode())
+    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(memberStatement, member!!.nodeBase.asNode())
     statements = statements.append1(memberStatement)
     this!!.currentNode = this!!.parentNode
     this!!.parentNode = savedParent
@@ -560,30 +560,30 @@ fun RuntimeSyntaxTransformer?.transformEnumMember(statements_0: GoSlice<Node?>, 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitModuleDeclaration a4f6d0aa
 fun RuntimeSyntaxTransformer?.visitModuleDeclaration(node: ModuleDeclaration?): Node? {
     if (!this.shouldEmitModuleDeclaration(node)) {
-        return this!!.transformer.emitContext().newNotEmittedStatement(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        return this!!.transformer.emitContext().newNotEmittedStatement(node!!.statementBase.nodeBase.asNode())
     }
     var statements: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0)
-    val t0 = this.addVarForDeclaration(statements, node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val t0 = this.addVarForDeclaration(statements, node!!.statementBase.nodeBase.asNode())
     statements = t0.first
     val varAdded: Boolean = t0.second
     var emitFlags: EmitFlags = EmitFlags(0u)
     if (varAdded && (this!!.compilerOptions.getEmitModuleKind().value != 4 || this!!.currentScope !== this!!.currentSourceFile)) {
         emitFlags = EmitFlags(emitFlags.value or 128u)
     }
-    var moduleArg: Node? = this!!.transformer.factory().newLogicalORExpression(this.getExportQualifiedReferenceToDeclaration(node!!.statementBase.nodeBase.nodeDefault.asNode()), this!!.transformer.factory().newAssignmentExpression(this.getExportQualifiedReferenceToDeclaration(node!!.statementBase.nodeBase.nodeDefault.asNode()), this!!.transformer.factory()!!.nodeFactory.newObjectLiteralExpression(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.make(GoElem.ref<Node?>(), 0)), false)))
-    if (this.isExportOfNamespace(node!!.statementBase.nodeBase.nodeDefault.asNode())) {
-        val localName: Node? = this!!.transformer.factory().getLocalNameEx(node!!.statementBase.nodeBase.nodeDefault.asNode(), AssignedNameOptions(allowSourceMaps = true))
+    var moduleArg: Node? = this!!.transformer.factory().newLogicalORExpression(this.getExportQualifiedReferenceToDeclaration(node!!.statementBase.nodeBase.asNode()), this!!.transformer.factory().newAssignmentExpression(this.getExportQualifiedReferenceToDeclaration(node!!.statementBase.nodeBase.asNode()), this!!.transformer.factory()!!.nodeFactory.newObjectLiteralExpression(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.make(GoElem.ref<Node?>(), 0)), false)))
+    if (this.isExportOfNamespace(node!!.statementBase.nodeBase.asNode())) {
+        val localName: Node? = this!!.transformer.factory().getLocalNameEx(node!!.statementBase.nodeBase.asNode(), AssignedNameOptions(allowSourceMaps = true))
         moduleArg = this!!.transformer.factory().newAssignmentExpression(localName, moduleArg)
     }
-    val moduleParamName: Node? = this!!.transformer.factory().newGeneratedNameForNode(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val moduleParamName: Node? = this!!.transformer.factory().newGeneratedNameForNode(node!!.statementBase.nodeBase.asNode())
     this!!.transformer.emitContext().setSourceMapRange(moduleParamName, node!!.name()!!.loc.goCopy())
     val moduleParam: Node? = this!!.transformer.factory()!!.nodeFactory.newParameterDeclaration(null, null, moduleParamName, null, null, null)
-    val moduleBody: Node? = this.transformModuleBody(node, this.getNamespaceContainerName(node!!.statementBase.nodeBase.nodeDefault.asNode()))
+    val moduleBody: Node? = this.transformModuleBody(node, this.getNamespaceContainerName(node!!.statementBase.nodeBase.asNode()))
     val moduleFunc: Node? = this!!.transformer.factory()!!.nodeFactory.newFunctionExpression(null, null, null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), moduleParam)), null, null, moduleBody)
     val moduleCall: Node? = this!!.transformer.factory()!!.nodeFactory.newCallExpression(this!!.transformer.factory()!!.nodeFactory.newParenthesizedExpression(moduleFunc), null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), moduleArg)), NodeFlags(0u))
     val moduleStatement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(moduleCall)
-    this!!.transformer.emitContext().setOriginal(moduleStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
-    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(moduleStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(moduleStatement, node!!.statementBase.nodeBase.asNode())
+    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(moduleStatement, node!!.statementBase.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitFlags(moduleStatement, emitFlags)
     return this!!.transformer.factory()!!.nodeFactory.newSyntaxList(statements.append1(moduleStatement))
 }
@@ -594,7 +594,7 @@ fun RuntimeSyntaxTransformer?.transformModuleBody(node_0: ModuleDeclaration?, na
     val savedCurrentNamespace: Node? = this!!.currentNamespace
     val savedCurrentScope: Node? = this!!.currentScope
     val savedCurrentScopeFirstDeclarationsOfName: GoMap<String, Node?> = this!!.currentScopeFirstDeclarationsOfName
-    this!!.currentNamespace = node!!.statementBase.nodeBase.nodeDefault.asNode()
+    this!!.currentNamespace = node!!.statementBase.nodeBase.asNode()
     this!!.currentScopeFirstDeclarationsOfName = GoMap.nil<String, Node?>(GoElem.ref<Node?>())
     var statements: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
     this!!.transformer.emitContext().startVariableEnvironment()
@@ -602,11 +602,11 @@ fun RuntimeSyntaxTransformer?.transformModuleBody(node_0: ModuleDeclaration?, na
     var blockLocation: TextRange = TextRange()
     if (node!!.bodyBase.body != null) {
         if (node!!.bodyBase.body!!.kind.value == 269) {
-            node = this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode()).asModuleDeclaration()
+            node = this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode()).asModuleDeclaration()
             val body: ModuleBlock? = node!!.bodyBase.body.asModuleBlock()
             statements = body!!.statements!!.nodes
             statementsLocation = body!!.statements!!.loc.goCopy()
-            blockLocation = body!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy()
+            blockLocation = body!!.statementBase.nodeBase.node.loc.goCopy()
         } else {
             val t1 = this!!.transformer.visitor().visitSlice(GoSlice.of(GoElem.ref<Node?>(), node!!.bodyBase.body))
             statements = t1.first
@@ -631,22 +631,22 @@ fun RuntimeSyntaxTransformer?.transformModuleBody(node_0: ModuleDeclaration?, na
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitImportEqualsDeclaration 621090e5
 fun RuntimeSyntaxTransformer?.visitImportEqualsDeclaration(node: ImportEqualsDeclaration?): Node? {
     if (node!!.moduleReference!!.kind.value == 284) {
-        return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
     }
     val moduleReference: Node? = this!!.transformer.factory().createExpressionFromEntityName(node!!.moduleReference)
     this!!.transformer.emitContext().setEmitFlags(moduleReference, EmitFlags(896u))
-    if (!this.isExportOfNamespace(node!!.statementBase.nodeBase.nodeDefault.asNode())) {
+    if (!this.isExportOfNamespace(node!!.statementBase.nodeBase.asNode())) {
         val varDecl: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(node!!.name(), null, null, moduleReference)
-        this!!.transformer.emitContext().setOriginal(varDecl, node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(varDecl, node!!.statementBase.nodeBase.asNode())
         val varList: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), varDecl)), NodeFlags(0u))
         val varModifiers: ModifierList? = com.xemantic.typescript.tsgo.transformers.extractModifiers(this!!.transformer.emitContext(), node!!.modifiersBase.modifiers(), ModifierFlags(32u))
         val varStatement: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableStatement(varModifiers, varList)
-        this!!.transformer.emitContext().setOriginal(varStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
-        this!!.transformer.emitContext().assignCommentAndSourceMapRanges(varStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(varStatement, node!!.statementBase.nodeBase.asNode())
+        this!!.transformer.emitContext().assignCommentAndSourceMapRanges(varStatement, node!!.statementBase.nodeBase.asNode())
         return varStatement
     } else {
-        val statement: Node? = this.createExportStatement(node!!.name(), moduleReference, node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy(), node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy(), node!!.statementBase.nodeBase.nodeDefault.asNode())
-        statement!!.loc = node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy()
+        val statement: Node? = this.createExportStatement(node!!.name(), moduleReference, node!!.statementBase.nodeBase.node.loc.goCopy(), node!!.statementBase.nodeBase.node.loc.goCopy(), node!!.statementBase.nodeBase.asNode())
+        statement!!.loc = node!!.statementBase.nodeBase.node.loc.goCopy()
         return statement
     }
     goUnreachable()
@@ -654,7 +654,7 @@ fun RuntimeSyntaxTransformer?.visitImportEqualsDeclaration(node: ImportEqualsDec
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitVariableStatement 08031ab4
 fun RuntimeSyntaxTransformer?.visitVariableStatement(node: VariableStatement?): Node? {
-    if (this.isExportOfNamespace(node!!.statementBase.nodeBase.nodeDefault.asNode())) {
+    if (this.isExportOfNamespace(node!!.statementBase.nodeBase.asNode())) {
         var expressions: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0)
         val s0 = node!!.declarationList.asVariableDeclarationList()!!.declarations!!.nodes
         l0@ for (i1 in 0 until s0.len) {
@@ -680,15 +680,15 @@ fun RuntimeSyntaxTransformer?.visitVariableStatement(node: VariableStatement?): 
         }
         val expression_2: Node? = this!!.transformer.factory().inlineExpressions(expressions)
         var statement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(expression_2)
-        this!!.transformer.emitContext().setOriginal(statement, node!!.statementBase.nodeBase.nodeDefault.asNode())
-        this!!.transformer.emitContext().assignCommentAndSourceMapRanges(statement, node!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(statement, node!!.statementBase.nodeBase.asNode())
+        this!!.transformer.emitContext().assignCommentAndSourceMapRanges(statement, node!!.statementBase.nodeBase.asNode())
         val savedCurrent: Node? = this!!.currentNode
         this!!.currentNode = statement
         statement = this!!.transformer.visitor().visitEachChild(statement)
         this!!.currentNode = savedCurrent
         return statement
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.createNamespaceExportExpression 073f9205
@@ -703,15 +703,15 @@ fun RuntimeSyntaxTransformer?.createNamespaceExportExpression(exportName: Node?,
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitFunctionDeclaration 6af57e0b
 fun RuntimeSyntaxTransformer?.visitFunctionDeclaration(node: FunctionDeclaration?): Node? {
-    if (this.isExportOfNamespace(node!!.statementBase.nodeBase.nodeDefault.asNode())) {
+    if (this.isExportOfNamespace(node!!.statementBase.nodeBase.asNode())) {
         val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateFunctionDeclaration(node, this!!.transformer.visitor().visitModifiers(com.xemantic.typescript.tsgo.transformers.extractModifiers(this!!.transformer.emitContext(), node!!.modifiersBase.modifiers(), ModifierFlags(4294967263u))), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this!!.transformer.visitor().visitNode(node!!.functionLikeWithBodyBase.bodyBase.body))
-        val export: Node? = this.createExportStatementForDeclaration(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        val export: Node? = this.createExportStatementForDeclaration(node!!.statementBase.nodeBase.asNode())
         if (export != null) {
             return this!!.transformer.factory()!!.nodeFactory.newSyntaxList(GoSlice.of(GoElem.ref<Node?>(), updated, export))
         }
         return updated
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.getParameterProperties fc07721c
@@ -731,7 +731,7 @@ fun RuntimeSyntaxTransformer?.getParameterProperties(constructor: Node?): GoSlic
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitClassDeclaration 76be234a
 fun RuntimeSyntaxTransformer?.visitClassDeclaration(node: ClassDeclaration?): Node? {
-    val exported: Boolean = this.isExportOfNamespace(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val exported: Boolean = this.isExportOfNamespace(node!!.statementBase.nodeBase.asNode())
     var modifiers: ModifierList? = null
     if (exported) {
         modifiers = this!!.transformer.visitor().visitModifiers(com.xemantic.typescript.tsgo.transformers.extractModifiers(this!!.transformer.emitContext(), node!!.classLikeBase.modifiersBase.modifiers(), ModifierFlags(4294965215u)))
@@ -739,8 +739,8 @@ fun RuntimeSyntaxTransformer?.visitClassDeclaration(node: ClassDeclaration?): No
         modifiers = this!!.transformer.visitor().visitModifiers(node!!.classLikeBase.modifiersBase.modifiers())
     }
     var name: Node? = this!!.transformer.visitor().visitNode(node!!.name())
-    if (name == null && (exported || com.xemantic.typescript.tsgo.ast.childIsDecorated(this!!.compilerOptions!!.experimentalDecorators.isTrue(), node!!.statementBase.nodeBase.nodeDefault.asNode(), null))) {
-        name = this!!.transformer.factory().newGeneratedNameForNode(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    if (name == null && (exported || com.xemantic.typescript.tsgo.ast.childIsDecorated(this!!.compilerOptions!!.experimentalDecorators.isTrue(), node!!.statementBase.nodeBase.asNode(), null))) {
+        name = this!!.transformer.factory().newGeneratedNameForNode(node!!.statementBase.nodeBase.asNode())
     }
     val heritageClauses: NodeList? = this!!.transformer.visitor().visitNodes(node!!.classLikeBase.heritageClauses)
     var members: NodeList? = this!!.transformer.visitor().visitNodes(node!!.classLikeBase.members)
@@ -752,7 +752,7 @@ fun RuntimeSyntaxTransformer?.visitClassDeclaration(node: ClassDeclaration?): No
             val parameter: ParameterDeclaration? = s0[i1]
             if (com.xemantic.typescript.tsgo.ast.isIdentifier(parameter!!.name())) {
                 val parameterProperty: Node? = this!!.transformer.factory()!!.nodeFactory.newPropertyDeclaration(null, parameter!!.name().clone(this!!.transformer.factory()), null, null, null)
-                this!!.transformer.emitContext().setOriginal(parameterProperty, parameter!!.nodeBase.nodeDefault.asNode())
+                this!!.transformer.emitContext().setOriginal(parameterProperty, parameter!!.nodeBase.asNode())
                 newMembers = newMembers.append1(parameterProperty)
             }
         }
@@ -764,7 +764,7 @@ fun RuntimeSyntaxTransformer?.visitClassDeclaration(node: ClassDeclaration?): No
     }
     val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateClassDeclaration(node, modifiers, name, null, heritageClauses, members)
     if (exported) {
-        val export: Node? = this.createExportStatementForDeclaration(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        val export: Node? = this.createExportStatementForDeclaration(node!!.statementBase.nodeBase.asNode())
         if (export != null) {
             return this!!.transformer.factory()!!.nodeFactory.newSyntaxList(GoSlice.of(GoElem.ref<Node?>(), updated, export))
         }
@@ -786,7 +786,7 @@ fun RuntimeSyntaxTransformer?.visitClassExpression(node: ClassExpression?): Node
             val parameter: ParameterDeclaration? = s0[i1]
             if (com.xemantic.typescript.tsgo.ast.isIdentifier(parameter!!.name())) {
                 val parameterProperty: Node? = this!!.transformer.factory()!!.nodeFactory.newPropertyDeclaration(null, parameter!!.name().clone(this!!.transformer.factory()), null, null, null)
-                this!!.transformer.emitContext().setOriginal(parameterProperty, parameter!!.nodeBase.nodeDefault.asNode())
+                this!!.transformer.emitContext().setOriginal(parameterProperty, parameter!!.nodeBase.asNode())
                 newMembers = newMembers.append1(parameterProperty)
             }
         }
@@ -802,8 +802,8 @@ fun RuntimeSyntaxTransformer?.visitClassExpression(node: ClassExpression?): Node
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.visitConstructorDeclaration 85d27135
 fun RuntimeSyntaxTransformer?.visitConstructorDeclaration(node: ConstructorDeclaration?): Node? {
     val modifiers: ModifierList? = this!!.transformer.visitor().visitModifiers(node!!.modifiersBase.modifiers())
-    val parameters: NodeList? = this!!.transformer.emitContext().visitParameters(node!!.nodeBase.nodeDefault.node.parameterList(), this!!.transformer.visitor())
-    val body: Node? = this.visitConstructorBody(node!!.functionLikeWithBodyBase.bodyBase.body.asBlock(), node!!.nodeBase.nodeDefault.asNode())
+    val parameters: NodeList? = this!!.transformer.emitContext().visitParameters(node!!.nodeBase.node.parameterList(), this!!.transformer.visitor())
+    val body: Node? = this.visitConstructorBody(node!!.functionLikeWithBodyBase.bodyBase.body.asBlock(), node!!.nodeBase.asNode())
     return this!!.transformer.factory()!!.nodeFactory.updateConstructorDeclaration(node, modifiers, null, parameters, null, null, body)
 }
 
@@ -811,10 +811,10 @@ fun RuntimeSyntaxTransformer?.visitConstructorDeclaration(node: ConstructorDecla
 fun RuntimeSyntaxTransformer?.visitConstructorBody(body: Block?, constructor: Node?): Node? {
     val parameterProperties: GoSlice<ParameterDeclaration?> = this.getParameterProperties(constructor)
     if (parameterProperties.len == 0) {
-        return this!!.transformer.emitContext().visitFunctionBody(body!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.transformer.visitor())
+        return this!!.transformer.emitContext().visitFunctionBody(body!!.statementBase.nodeBase.asNode(), this!!.transformer.visitor())
     }
-    val grandparentOfBody: Node? = this.pushNode(body!!.statementBase.nodeBase.nodeDefault.asNode())
-    val t0 = this.pushScope(body!!.statementBase.nodeBase.nodeDefault.asNode())
+    val grandparentOfBody: Node? = this.pushNode(body!!.statementBase.nodeBase.asNode())
+    val t0 = this.pushScope(body!!.statementBase.nodeBase.asNode())
     val savedCurrentScope: Node? = t0.first
     val savedCurrentScopeFirstDeclarationsOfName: GoMap<String, Node?> = t0.second
     this!!.transformer.emitContext().startVariableEnvironment()
@@ -834,7 +834,7 @@ fun RuntimeSyntaxTransformer?.visitConstructorBody(body: Block?, constructor: No
             localName!!.parent = parameter!!.name()!!.parent
             this!!.transformer.emitContext().addEmitFlags(localName, EmitFlags(384u))
             val parameterProperty: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(this!!.transformer.factory().newAssignmentExpression(this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(this!!.transformer.factory().newThisExpression(), null, propertyName, NodeFlags(0u)), localName))
-            this!!.transformer.emitContext().setOriginal(parameterProperty, parameter!!.nodeBase.nodeDefault.asNode())
+            this!!.transformer.emitContext().setOriginal(parameterProperty, parameter!!.nodeBase.asNode())
             this!!.transformer.emitContext().addEmitFlags(parameterProperty, EmitFlags(524288u))
             parameterPropertyAssignments = parameterPropertyAssignments.append1(parameterProperty)
         }
@@ -852,8 +852,8 @@ fun RuntimeSyntaxTransformer?.visitConstructorBody(body: Block?, constructor: No
     this.popScope(savedCurrentScope, savedCurrentScopeFirstDeclarationsOfName)
     this.popNode(grandparentOfBody)
     val updated: Node? = this!!.transformer.factory()!!.nodeFactory.newBlock(statementList, true)
-    this!!.transformer.emitContext().setOriginal(updated, body!!.statementBase.nodeBase.nodeDefault.asNode())
-    updated!!.loc = body!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy()
+    this!!.transformer.emitContext().setOriginal(updated, body!!.statementBase.nodeBase.asNode())
+    updated!!.loc = body!!.statementBase.nodeBase.node.loc.goCopy()
     return updated
 }
 
@@ -866,9 +866,9 @@ fun RuntimeSyntaxTransformer?.transformConstructorBodyWorker(statementsIn: GoSli
     if (com.xemantic.typescript.tsgo.ast.isTryStatement(superStatement)) {
         val tryStatement: TryStatement? = superStatement.asTryStatement()
         val tryBlock: Block? = tryStatement!!.tryBlock.asBlock()
-        val grandparentOfTryStatement: Node? = this.pushNode(tryStatement!!.statementBase.nodeBase.nodeDefault.asNode())
-        val grandparentOfTryBlock: Node? = this.pushNode(tryBlock!!.statementBase.nodeBase.nodeDefault.asNode())
-        val t1 = this.pushScope(tryBlock!!.statementBase.nodeBase.nodeDefault.asNode())
+        val grandparentOfTryStatement: Node? = this.pushNode(tryStatement!!.statementBase.nodeBase.asNode())
+        val grandparentOfTryBlock: Node? = this.pushNode(tryBlock!!.statementBase.nodeBase.asNode())
+        val t1 = this.pushScope(tryBlock!!.statementBase.nodeBase.asNode())
         val savedCurrentScope: Node? = t1.first
         val savedCurrentScopeFirstDeclarationsOfName: GoMap<String, Node?> = t1.second
         val tryBlockStatements: GoSlice<Node?> = this.transformConstructorBodyWorker(tryBlock!!.statements!!.nodes, superPath.slice(1), initializerStatements)
@@ -900,9 +900,9 @@ fun RuntimeSyntaxTransformer?.visitShorthandPropertyAssignment(node: ShorthandPr
             expression = this!!.transformer.factory()!!.nodeFactory.newBinaryExpression(null, expression, null, equalsToken, this!!.transformer.visitor().visitNode(node!!.objectAssignmentInitializer))
         }
         val updated: Node? = this!!.transformer.factory()!!.nodeFactory.newPropertyAssignment(null, node!!.name(), null, null, expression)
-        updated!!.loc = node!!.nodeBase.nodeDefault.node.loc.goCopy()
-        this!!.transformer.emitContext().setOriginal(updated, node!!.nodeBase.nodeDefault.asNode())
-        this!!.transformer.emitContext().assignCommentAndSourceMapRanges(updated, node!!.nodeBase.nodeDefault.asNode())
+        updated!!.loc = node!!.nodeBase.node.loc.goCopy()
+        this!!.transformer.emitContext().setOriginal(updated, node!!.nodeBase.asNode())
+        this!!.transformer.emitContext().assignCommentAndSourceMapRanges(updated, node!!.nodeBase.asNode())
         return updated
     }
     return this!!.transformer.factory()!!.nodeFactory.updateShorthandPropertyAssignment(node, null, exportedOrImportedName, null, null, node!!.equalsToken, this!!.transformer.visitor().visitNode(node!!.objectAssignmentInitializer))
@@ -968,12 +968,12 @@ fun RuntimeSyntaxTransformer?.createExportStatement(name: Node?, expression: Nod
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.shouldEmitEnumDeclaration 54fb4053
 fun RuntimeSyntaxTransformer?.shouldEmitEnumDeclaration(node: EnumDeclaration?): Boolean {
-    return !com.xemantic.typescript.tsgo.ast.isEnumConst(node!!.statementBase.nodeBase.nodeDefault.asNode()) || this!!.compilerOptions.shouldPreserveConstEnums()
+    return !com.xemantic.typescript.tsgo.ast.isEnumConst(node!!.statementBase.nodeBase.asNode()) || this!!.compilerOptions.shouldPreserveConstEnums()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.shouldEmitModuleDeclaration 93b0f573
 fun RuntimeSyntaxTransformer?.shouldEmitModuleDeclaration(node: ModuleDeclaration?): Boolean {
-    val pn: Node? = this!!.transformer.emitContext().parseNode(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val pn: Node? = this!!.transformer.emitContext().parseNode(node!!.statementBase.nodeBase.asNode())
     if (pn == null) {
         return true
     }

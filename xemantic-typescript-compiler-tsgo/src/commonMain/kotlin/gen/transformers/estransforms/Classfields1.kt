@@ -532,13 +532,13 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitSourceFile 9d2c8f2d
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitSourceFile(node: SourceFile?): Node? {
     if (node!!.isDeclarationFile) {
-        return node!!.nodeBase.nodeDefault.asNode()
+        return node!!.nodeBase.asNode()
     }
     this!!.lexicalEnvironment = null
-    this!!.shouldTransformPrivateStaticElementsInFile = this!!.transformer.emitContext().emitFlags(node!!.nodeBase.nodeDefault.asNode()).value and 8388608u != 0u
+    this!!.shouldTransformPrivateStaticElementsInFile = this!!.transformer.emitContext().emitFlags(node!!.nodeBase.asNode()).value and 8388608u != 0u
     this!!.classAliases = GoMap.make<Node?, Node?>(GoElem.ref<Node?>())
     this!!.enclosingClassDeclarations.clear()
-    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitHelper(visited, this!!.transformer.emitContext().readEmitHelpers())
     this!!.classAliases = GoMap.nil<Node?, Node?>(GoElem.ref<Node?>())
     this!!.enclosingClassDeclarations.clear()
@@ -815,19 +815,19 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitIdentifier be07c47d
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitIdentifier(node: Identifier?): Node? {
-    val declaration: Node? = this!!.resolver!!.getReferencedValueDeclaration(this!!.transformer.emitContext().mostOriginal(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()))
+    val declaration: Node? = this!!.resolver!!.getReferencedValueDeclaration(this!!.transformer.emitContext().mostOriginal(node!!.primaryExpressionBase.asNode()))
     if (declaration != null) {
         val t0 = this!!.classAliases.probe(declaration)
         val alias: Node? = goProbeValue<Node?>(t0) { null }
         val ok: Boolean = t0 !== GoMapAbsent
         if (ok && this!!.enclosingClassDeclarations.has(declaration)) {
             val clone: Node? = alias.clone(this!!.transformer.factory())
-            this!!.transformer.emitContext().setSourceMapRange(clone, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy())
-            this!!.transformer.emitContext().setCommentRange(clone, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy())
+            this!!.transformer.emitContext().setSourceMapRange(clone, node!!.primaryExpressionBase.node.loc.goCopy())
+            this!!.transformer.emitContext().setCommentRange(clone, node!!.primaryExpressionBase.node.loc.goCopy())
             return clone
         }
     }
-    return node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.primaryExpressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitPrivateIdentifier 2550c696
@@ -849,26 +849,26 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
     if (info != null) {
         val receiver: Node? = this!!.transformer.visitor().visitNode(node!!.right)
         val result: Node? = this!!.transformer.factory().newClassPrivateFieldInHelper(info!!.brandCheckIdentifier, receiver)
-        this!!.transformer.emitContext().setOriginal(result, node!!.expressionBase.nodeBase.nodeDefault.asNode())
+        this!!.transformer.emitContext().setOriginal(result, node!!.expressionBase.asNode())
         return result
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitPropertyAssignment 6c585790
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitPropertyAssignment(node_0: PropertyAssignment?): Node? {
     var node: PropertyAssignment? = node_0
-    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
-        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), false, "").asPropertyAssignment()
+    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
+        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), false, "").asPropertyAssignment()
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitVariableStatement 07bb107e
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitVariableStatement(node: VariableStatement?): Node? {
     val savedPendingStatements: GoSlice<Node?> = this!!.pendingStatements
     this!!.pendingStatements = GoElem.ref<Node?>().nilSlice
-    val visitedNode: Node? = this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val visitedNode: Node? = this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
     if (this!!.pendingStatements.len > 0) {
         var result: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0, 1 + this!!.pendingStatements.len)
         result = result.append1(visitedNode)
@@ -883,41 +883,41 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitVariableDeclaration 4320c9d7
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitVariableDeclaration(node_0: VariableDeclaration?): Node? {
     var node: VariableDeclaration? = node_0
-    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
-        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), false, "").asVariableDeclaration()
+    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
+        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), false, "").asVariableDeclaration()
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitParameterDeclaration 6848e712
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitParameterDeclaration(node_0: ParameterDeclaration?): Node? {
     var node: ParameterDeclaration? = node_0
-    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
-        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), false, "").asParameterDeclaration()
+    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
+        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), false, "").asParameterDeclaration()
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitBindingElement d88727df
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitBindingElement(node_0: BindingElement?): Node? {
     var node: BindingElement? = node_0
-    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
-        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), false, "").asBindingElement()
+    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
+        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), false, "").asBindingElement()
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitExportAssignment 83bfbe0e
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitExportAssignment(node_0: ExportAssignment?): Node? {
     var node: ExportAssignment? = node_0
-    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.statementBase.nodeBase.nodeDefault.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
+    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.statementBase.nodeBase.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
         var assignedName: String = ""
         if (!node!!.isExportEquals) {
             assignedName = "default"
         }
-        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.statementBase.nodeBase.nodeDefault.asNode(), true, assignedName).asExportAssignment()
+        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.statementBase.nodeBase.asNode(), true, assignedName).asExportAssignment()
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.injectPendingExpressions 7066a41f
@@ -1109,8 +1109,8 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.transformAutoAccessor 1fc8de00
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.transformAutoAccessor(node: PropertyDeclaration?): Node? {
-    val commentRange: TextRange = this!!.transformer.emitContext().commentRange(node!!.nodeBase.nodeDefault.asNode())
-    val sourceMapRange: TextRange = this!!.transformer.emitContext().sourceMapRange(node!!.nodeBase.nodeDefault.asNode())
+    val commentRange: TextRange = this!!.transformer.emitContext().commentRange(node!!.nodeBase.asNode())
+    val sourceMapRange: TextRange = this!!.transformer.emitContext().sourceMapRange(node!!.nodeBase.asNode())
     val name: Node? = node!!.name()
     var getterName: Node? = name
     var setterName: Node? = name
@@ -1132,11 +1132,11 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
     }
     val modifiers: ModifierList? = this!!.modifierVisitor.visitModifiers(node!!.namedMemberBase.modifiers())
     val backingField: Node? = createAccessorPropertyBackingField(this!!.transformer.factory(), node, modifiers, node!!.initializer)
-    this!!.transformer.emitContext().setOriginal(backingField, node!!.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(backingField, node!!.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitFlags(backingField, EmitFlags(384u))
     this!!.transformer.emitContext().setSourceMapRange(backingField, sourceMapRange.goCopy())
     var receiver: Node? = null
-    if (com.xemantic.typescript.tsgo.ast.isStatic(node!!.nodeBase.nodeDefault.asNode())) {
+    if (com.xemantic.typescript.tsgo.ast.isStatic(node!!.nodeBase.asNode())) {
         receiver = this.tryGetClassThis()
         if (receiver == null) {
             receiver = this!!.transformer.factory().newThisExpression()
@@ -1145,7 +1145,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
         receiver = this!!.transformer.factory().newThisExpression()
     }
     val getter: Node? = this.createAccessorPropertyGetRedirector(node, modifiers, getterName, receiver)
-    this!!.transformer.emitContext().setOriginal(getter, node!!.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(getter, node!!.nodeBase.asNode())
     this!!.transformer.emitContext().setCommentRange(getter, commentRange.goCopy())
     this!!.transformer.emitContext().setSourceMapRange(getter, sourceMapRange.goCopy())
     var setterModifiers: ModifierList? = null
@@ -1153,7 +1153,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
         setterModifiers = this!!.transformer.factory()!!.nodeFactory.newModifierList(com.xemantic.typescript.tsgo.ast.createModifiersFromModifierFlags(modifiers!!.modifierFlags, run { val r0 = this!!.transformer.factory()!!.nodeFactory; fun(p0: Kind): Node? = r0.newModifier(p0) }))
     }
     val setter: Node? = this.createAccessorPropertySetRedirector(node, setterModifiers, setterName, receiver)
-    this!!.transformer.emitContext().setOriginal(setter, node!!.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(setter, node!!.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitFlags(setter, EmitFlags(384u))
     this!!.transformer.emitContext().setSourceMapRange(setter, sourceMapRange.goCopy())
     val t1 = this!!.accessorFieldResultVisitor.visitSlice(GoSlice.of(GoElem.ref<Node?>(), backingField, getter, setter))
@@ -1164,32 +1164,32 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.transformPrivateFieldInitializer 3916a4a8
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.transformPrivateFieldInitializer(node_0: PropertyDeclaration?): Node? {
     var node: PropertyDeclaration? = node_0
-    if (this.shouldTransformClassElementToWeakMap(node!!.nodeBase.nodeDefault.asNode())) {
+    if (this.shouldTransformClassElementToWeakMap(node!!.nodeBase.asNode())) {
         val info: com.xemantic.typescript.tsgo.transformers.estransforms.privateIdentifierInfo? = this.accessPrivateIdentifier(node!!.name())
         com.xemantic.typescript.tsgo.debug.assert(info != null, GoSlice.of(GoElem.ref<Any?>(), "Undeclared private name for property declaration."))
         if (!info!!.isValid) {
-            return node!!.nodeBase.nodeDefault.asNode()
+            return node!!.nodeBase.asNode()
         }
         if (info!!.isStatic && !this!!.shouldTransformPrivateElementsOrClassStaticBlocks) {
-            val statement: Node? = this.transformPropertyOrClassStaticBlock(node!!.nodeBase.nodeDefault.asNode(), this!!.transformer.factory().newThisExpression())
+            val statement: Node? = this.transformPropertyOrClassStaticBlock(node!!.nodeBase.asNode(), this!!.transformer.factory().newThisExpression())
             if (statement != null) {
                 return this!!.transformer.factory()!!.nodeFactory.newClassStaticBlockDeclaration(null, this!!.transformer.factory()!!.nodeFactory.newBlock(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), statement)), true))
             }
         }
         return null
     }
-    if (this!!.shouldTransformInitializersUsingSet && !com.xemantic.typescript.tsgo.ast.hasStaticModifier(node!!.nodeBase.nodeDefault.asNode()) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null && this!!.lexicalEnvironment!!.data!!.facts.value and 16 != 0) {
+    if (this!!.shouldTransformInitializersUsingSet && !com.xemantic.typescript.tsgo.ast.hasStaticModifier(node!!.nodeBase.asNode()) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null && this!!.lexicalEnvironment!!.data!!.facts.value and 16 != 0) {
         return this!!.transformer.factory()!!.nodeFactory.updatePropertyDeclaration(node, this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), node!!.name(), null, null, null)
     }
-    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
-        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.nodeDefault.asNode(), false, "").asPropertyDeclaration()
+    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
+        node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.nodeBase.asNode(), false, "").asPropertyDeclaration()
     }
     return this!!.transformer.factory()!!.nodeFactory.updatePropertyDeclaration(node, this!!.modifierVisitor.visitModifiers(node!!.namedMemberBase.modifiers()), this.visitPropertyName(node!!.name()), null, null, this!!.transformer.visitor().visitNode(node!!.initializer))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.transformPublicFieldInitializer 4f6a40ac
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.transformPublicFieldInitializer(node: PropertyDeclaration?): Node? {
-    if (this!!.shouldTransformInitializers && !com.xemantic.typescript.tsgo.ast.isAutoAccessorPropertyDeclaration(node!!.nodeBase.nodeDefault.asNode())) {
+    if (this!!.shouldTransformInitializers && !com.xemantic.typescript.tsgo.ast.isAutoAccessorPropertyDeclaration(node!!.nodeBase.asNode())) {
         val expr: Node? = this.getPropertyNameExpressionIfNeeded(node!!.name(), node!!.initializer != null || this!!.compilerOptions.getUseDefineForClassFields())
         if (expr != null) {
             flattenCommaList(expr)!!(fun(y0: Node?): Boolean {
@@ -1198,12 +1198,12 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
                             return true
             })
         }
-        if (com.xemantic.typescript.tsgo.ast.isStatic(node!!.nodeBase.nodeDefault.asNode()) && !this!!.shouldTransformPrivateElementsOrClassStaticBlocks) {
-            val initializerStatement: Node? = this.transformPropertyOrClassStaticBlock(node!!.nodeBase.nodeDefault.asNode(), this!!.transformer.factory().newThisExpression())
+        if (com.xemantic.typescript.tsgo.ast.isStatic(node!!.nodeBase.asNode()) && !this!!.shouldTransformPrivateElementsOrClassStaticBlocks) {
+            val initializerStatement: Node? = this.transformPropertyOrClassStaticBlock(node!!.nodeBase.asNode(), this!!.transformer.factory().newThisExpression())
             if (initializerStatement != null) {
                 val staticBlock: Node? = this!!.transformer.factory()!!.nodeFactory.newClassStaticBlockDeclaration(null, this!!.transformer.factory()!!.nodeFactory.newBlock(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), initializerStatement)), false))
-                this!!.transformer.emitContext().setOriginal(staticBlock, node!!.nodeBase.nodeDefault.asNode())
-                this!!.transformer.emitContext().setCommentRange(staticBlock, node!!.nodeBase.nodeDefault.node.loc.goCopy())
+                this!!.transformer.emitContext().setOriginal(staticBlock, node!!.nodeBase.asNode())
+                this!!.transformer.emitContext().setCommentRange(staticBlock, node!!.nodeBase.node.loc.goCopy())
                 this!!.transformer.emitContext().addEmitFlags(initializerStatement, EmitFlags(384u))
                 return staticBlock
             }
@@ -1215,8 +1215,8 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.transformFieldInitializer 2b1c2ac6
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.transformFieldInitializer(node: PropertyDeclaration?): Node? {
-    com.xemantic.typescript.tsgo.debug.assert(!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.nodeBase.nodeDefault.asNode()), GoSlice.of(GoElem.ref<Any?>(), "Decorators should already have been transformed and elided."))
-    if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifierClassElementDeclaration(node!!.nodeBase.nodeDefault.asNode())) {
+    com.xemantic.typescript.tsgo.debug.assert(!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.nodeBase.asNode()), GoSlice.of(GoElem.ref<Any?>(), "Decorators should already have been transformed and elided."))
+    if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifierClassElementDeclaration(node!!.nodeBase.asNode())) {
         return this.transformPrivateFieldInitializer(node)
     }
     return this.transformPublicFieldInitializer(node)
@@ -1278,15 +1278,15 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
         val info: com.xemantic.typescript.tsgo.transformers.estransforms.privateIdentifierInfo? = this.accessPrivateIdentifier(node!!.name())
         if (info != null) {
             val result: Node? = this.createPrivateIdentifierAccess(info, node!!.expression)
-            this!!.transformer.emitContext().setOriginal(result, node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-            result!!.loc = node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+            this!!.transformer.emitContext().setOriginal(result, node!!.memberExpressionBase.asNode())
+            result!!.loc = node!!.memberExpressionBase.node.loc.goCopy()
             return result
         }
     }
-    if (this!!.shouldTransformSuperInStaticInitializers && this!!.currentClassElement != null && com.xemantic.typescript.tsgo.ast.isSuperProperty(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()) && com.xemantic.typescript.tsgo.ast.isIdentifier(node!!.name()) && isStaticPropertyDeclarationOrClassStaticBlock(this!!.currentClassElement) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null) {
+    if (this!!.shouldTransformSuperInStaticInitializers && this!!.currentClassElement != null && com.xemantic.typescript.tsgo.ast.isSuperProperty(node!!.memberExpressionBase.asNode()) && com.xemantic.typescript.tsgo.ast.isIdentifier(node!!.name()) && isStaticPropertyDeclarationOrClassStaticBlock(this!!.currentClassElement) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null) {
         val data: com.xemantic.typescript.tsgo.transformers.estransforms.classLexicalEnvironment? = this!!.lexicalEnvironment!!.data
         if (data!!.facts.value and 1 != 0) {
-            return this.visitInvalidSuperProperty(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+            return this.visitInvalidSuperProperty(node!!.memberExpressionBase.asNode())
         }
         if (data!!.classConstructor != null && data!!.superClassReference != null) {
             val superProperty: Node? = this!!.transformer.factory().newReflectGetCall(data!!.superClassReference, this!!.transformer.factory().newStringLiteralFromNode(node!!.name()), data!!.classConstructor)
@@ -1298,24 +1298,24 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
     if (com.xemantic.typescript.tsgo.ast.isIdentifier(node!!.name())) {
         return this.visitPropertyAccessExpressionForSubstitution(node)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.memberExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitPropertyAccessExpressionForSubstitution 5773cd0d
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitPropertyAccessExpressionForSubstitution(node: PropertyAccessExpression?): Node? {
     val expression: Node? = this!!.transformer.visitor().visitNode(node!!.expression)
     if (expression !== node!!.expression) {
-        return this!!.transformer.factory()!!.nodeFactory.updatePropertyAccessExpression(node, expression, node!!.questionDotToken, node!!.name(), node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        return this!!.transformer.factory()!!.nodeFactory.updatePropertyAccessExpression(node, expression, node!!.questionDotToken, node!!.name(), node!!.memberExpressionBase.node.flags)
     }
-    return node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+    return node!!.memberExpressionBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitElementAccessExpression 9f8794fd
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitElementAccessExpression(node: ElementAccessExpression?): Node? {
-    if (this!!.shouldTransformSuperInStaticInitializers && this!!.currentClassElement != null && com.xemantic.typescript.tsgo.ast.isSuperProperty(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()) && isStaticPropertyDeclarationOrClassStaticBlock(this!!.currentClassElement) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null) {
+    if (this!!.shouldTransformSuperInStaticInitializers && this!!.currentClassElement != null && com.xemantic.typescript.tsgo.ast.isSuperProperty(node!!.memberExpressionBase.asNode()) && isStaticPropertyDeclarationOrClassStaticBlock(this!!.currentClassElement) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null) {
         val data: com.xemantic.typescript.tsgo.transformers.estransforms.classLexicalEnvironment? = this!!.lexicalEnvironment!!.data
         if (data!!.facts.value and 1 != 0) {
-            return this.visitInvalidSuperProperty(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+            return this.visitInvalidSuperProperty(node!!.memberExpressionBase.asNode())
         }
         if (data!!.classConstructor != null && data!!.superClassReference != null) {
             val superProperty: Node? = this!!.transformer.factory().newReflectGetCall(data!!.superClassReference, this!!.transformer.visitor().visitNode(node!!.argumentExpression), data!!.classConstructor)
@@ -1324,7 +1324,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
             return superProperty
         }
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.memberExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitPreOrPostfixUnaryExpression 37e2d9b6
@@ -1433,7 +1433,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitExpressionStatement 1bf50353
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitExpressionStatement(node: ExpressionStatement?): Node? {
     if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(node!!.expression) && this!!.shouldTransformPrivateElementsOrClassStaticBlocks) {
-        return node!!.statementBase.nodeBase.nodeDefault.asNode()
+        return node!!.statementBase.nodeBase.asNode()
     }
     return this!!.transformer.factory()!!.nodeFactory.updateExpressionStatement(node, this!!.discardedValueVisitor.visitNode(node!!.expression))
 }
@@ -1467,18 +1467,18 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
         var allArgs: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0, 1 + visitedArgs!!.nodes.len)
         allArgs = allArgs.append1(visitedThisArg)
         allArgs = allArgs.appendSlice(visitedArgs!!.nodes)
-        if (node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags.value and 32u != 0u) {
-            return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(visitedTarget, node!!.questionDotToken, this!!.transformer.factory()!!.nodeFactory.newIdentifier("call"), NodeFlags(32u)), null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(allArgs), node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        if (node!!.leftHandSideExpressionBase.node.flags.value and 32u != 0u) {
+            return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(visitedTarget, node!!.questionDotToken, this!!.transformer.factory()!!.nodeFactory.newIdentifier("call"), NodeFlags(32u)), null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(allArgs), node!!.leftHandSideExpressionBase.node.flags)
         }
-        return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(visitedTarget, null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("call"), NodeFlags(0u)), null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(allArgs), node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(visitedTarget, null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("call"), NodeFlags(0u)), null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(allArgs), node!!.leftHandSideExpressionBase.node.flags)
     }
     if (this!!.shouldTransformSuperInStaticInitializers && this!!.currentClassElement != null && com.xemantic.typescript.tsgo.ast.isSuperProperty(node!!.expression) && isStaticPropertyDeclarationOrClassStaticBlock(this!!.currentClassElement) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null && this!!.lexicalEnvironment!!.data!!.classConstructor != null) {
         val invocation: Node? = this!!.transformer.factory().newFunctionCallCall(this!!.transformer.visitor().visitNode(node!!.expression), this!!.lexicalEnvironment!!.data!!.classConstructor, this!!.transformer.visitor().visitNodes(node!!.arguments)!!.nodes)
-        this!!.transformer.emitContext().setOriginal(invocation, node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-        invocation!!.loc = node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+        this!!.transformer.emitContext().setOriginal(invocation, node!!.leftHandSideExpressionBase.asNode())
+        invocation!!.loc = node!!.leftHandSideExpressionBase.node.loc.goCopy()
         return invocation
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitTaggedTemplateExpression 64e4fd72
@@ -1488,15 +1488,15 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
         val thisArg: Node? = t0.first
         val target: Node? = t0.second
         val bindExpr: Node? = this!!.transformer.factory()!!.nodeFactory.newCallExpression(this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(this!!.transformer.visitor().visitNode(target), null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("bind"), NodeFlags(0u)), null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.visitor().visitNode(thisArg))), NodeFlags(0u))
-        return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(node, bindExpr, null, null, this!!.transformer.visitor().visitNode(node!!.template), node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(node, bindExpr, null, null, this!!.transformer.visitor().visitNode(node!!.template), node!!.memberExpressionBase.node.flags)
     }
     if (this!!.shouldTransformSuperInStaticInitializers && this!!.currentClassElement != null && com.xemantic.typescript.tsgo.ast.isSuperProperty(node!!.tag) && isStaticPropertyDeclarationOrClassStaticBlock(this!!.currentClassElement) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null && this!!.lexicalEnvironment!!.data!!.classConstructor != null) {
         val invocation: Node? = this!!.transformer.factory().newFunctionBindCall(this!!.transformer.visitor().visitNode(node!!.tag), this!!.lexicalEnvironment!!.data!!.classConstructor, GoElem.ref<Node?>().nilSlice)
-        this!!.transformer.emitContext().setOriginal(invocation, node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-        invocation!!.loc = node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
-        return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(node, invocation, null, null, this!!.transformer.visitor().visitNode(node!!.template), node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        this!!.transformer.emitContext().setOriginal(invocation, node!!.memberExpressionBase.asNode())
+        invocation!!.loc = node!!.memberExpressionBase.node.loc.goCopy()
+        return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(node, invocation, null, null, this!!.transformer.visitor().visitNode(node!!.template), node!!.memberExpressionBase.node.flags)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.memberExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.transformClassStaticBlockDeclaration f7676370
@@ -1561,7 +1561,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitBinaryExpression f463cbde
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitBinaryExpression(node_0: BinaryExpression?, discarded: Boolean): Node? {
     var node: BinaryExpression? = node_0
-    if (com.xemantic.typescript.tsgo.ast.isDestructuringAssignment(node!!.expressionBase.nodeBase.nodeDefault.asNode())) {
+    if (com.xemantic.typescript.tsgo.ast.isDestructuringAssignment(node!!.expressionBase.asNode())) {
         val savedPendingExpressions: GoSlice<Node?> = this!!.pendingExpressions
         this!!.pendingExpressions = GoElem.ref<Node?>().nilSlice
         val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateBinaryExpression(node, null, this!!.assignmentTargetVisitor.visitNode(node!!.left), null, node!!.operatorToken, this!!.transformer.visitor().visitNode(node!!.right))
@@ -1575,18 +1575,18 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
         this!!.pendingExpressions = savedPendingExpressions
         return result
     }
-    if (com.xemantic.typescript.tsgo.ast.isAssignmentExpression(node!!.expressionBase.nodeBase.nodeDefault.asNode(), false)) {
-        if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.expressionBase.nodeBase.nodeDefault.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
-            node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.expressionBase.nodeBase.nodeDefault.asNode(), false, "").asBinaryExpression()
-            com.xemantic.typescript.tsgo.debug.assert(node!!.expressionBase.nodeBase.nodeDefault.asNode() != null && com.xemantic.typescript.tsgo.ast.isAssignmentExpression(node!!.expressionBase.nodeBase.nodeDefault.asNode(), false), GoElem.ref<Any?>().nilSlice)
+    if (com.xemantic.typescript.tsgo.ast.isAssignmentExpression(node!!.expressionBase.asNode(), false)) {
+        if (isNamedEvaluationAnd(this!!.transformer.emitContext(), node!!.expressionBase.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
+            node = transformNamedEvaluation(this!!.transformer.emitContext(), node!!.expressionBase.asNode(), false, "").asBinaryExpression()
+            com.xemantic.typescript.tsgo.debug.assert(node!!.expressionBase.asNode() != null && com.xemantic.typescript.tsgo.ast.isAssignmentExpression(node!!.expressionBase.asNode(), false), GoElem.ref<Any?>().nilSlice)
         }
         val left: Node? = com.xemantic.typescript.tsgo.ast.skipOuterExpressions(node!!.left, OuterExpressionKinds(9))
         if (com.xemantic.typescript.tsgo.ast.isPropertyAccessExpression(left) && com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(left.name())) {
             val info: com.xemantic.typescript.tsgo.transformers.estransforms.privateIdentifierInfo? = this.accessPrivateIdentifier(left.name())
             if (info != null) {
                 val result_1: Node? = this.createPrivateIdentifierAssignment(info, left.expression(), node!!.right, node!!.operatorToken!!.kind)
-                this!!.transformer.emitContext().setOriginal(result_1, node!!.expressionBase.nodeBase.nodeDefault.asNode())
-                result_1!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+                this!!.transformer.emitContext().setOriginal(result_1, node!!.expressionBase.asNode())
+                result_1!!.loc = node!!.expressionBase.node.loc.goCopy()
                 return result_1
             }
         } else if (this!!.shouldTransformSuperInStaticInitializers && this!!.currentClassElement != null && com.xemantic.typescript.tsgo.ast.isSuperProperty(node!!.left) && isStaticPropertyDeclarationOrClassStaticBlock(this!!.currentClassElement) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null) {
@@ -1614,7 +1614,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
                         this!!.transformer.emitContext().setOriginal(superPropertyGet, node!!.left)
                         superPropertyGet!!.loc = node!!.left!!.loc.goCopy()
                         expression = this!!.transformer.factory()!!.nodeFactory.newBinaryExpression(null, superPropertyGet, null, this!!.transformer.factory()!!.nodeFactory.newToken(com.xemantic.typescript.tsgo.transformers.getNonAssignmentOperatorForCompoundAssignment(node!!.operatorToken!!.kind)), expression)
-                        expression!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+                        expression!!.loc = node!!.expressionBase.node.loc.goCopy()
                     }
                     var temp: Node? = null
                     if (!discarded) {
@@ -1623,14 +1623,14 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
                     }
                     if (temp != null) {
                         expression = this!!.transformer.factory().newAssignmentExpression(temp, expression)
-                        expression!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+                        expression!!.loc = node!!.expressionBase.node.loc.goCopy()
                     }
                     expression = this!!.transformer.factory().newReflectSetCall(data!!.superClassReference, setterName, expression, data!!.classConstructor)
-                    this!!.transformer.emitContext().setOriginal(expression, node!!.expressionBase.nodeBase.nodeDefault.asNode())
-                    expression!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+                    this!!.transformer.emitContext().setOriginal(expression, node!!.expressionBase.asNode())
+                    expression!!.loc = node!!.expressionBase.node.loc.goCopy()
                     if (temp != null) {
                         expression = this!!.transformer.factory().newCommaExpression(expression, temp)
-                        expression!!.loc = node!!.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+                        expression!!.loc = node!!.expressionBase.node.loc.goCopy()
                     }
                     return expression
                 }
@@ -1640,7 +1640,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
     if (node!!.operatorToken!!.kind.value == 102 && com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(node!!.left)) {
         return this.transformPrivateIdentifierInInExpression(node)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitParenthesizedExpression 4c2bc09b
@@ -1818,7 +1818,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
         this.getClassLexicalEnvironment()!!.superClassReference = temp
         return this!!.transformer.factory()!!.nodeFactory.updateExpressionWithTypeArguments(node, this!!.transformer.factory().newAssignmentExpression(temp, this!!.transformer.visitor().visitNode(node!!.expression)), null)
     }
-    return this!!.heritageClauseVisitor.visitEachChild(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.heritageClauseVisitor.visitEachChild(node!!.memberExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitInNewClassLexicalEnvironment 6bcd0ad5
@@ -1872,7 +1872,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitClassDeclaration 4cd39a4b
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitClassDeclaration(node: ClassDeclaration?): Node? {
-    return this.visitInNewClassLexicalEnvironment(node!!.statementBase.nodeBase.nodeDefault.asNode(), fun(p0: com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, p1: Node?, p2: com.xemantic.typescript.tsgo.transformers.estransforms.classFacts): Node? = p0.visitClassDeclarationInNewClassLexicalEnvironment(p1, p2))
+    return this.visitInNewClassLexicalEnvironment(node!!.statementBase.nodeBase.asNode(), fun(p0: com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, p1: Node?, p2: com.xemantic.typescript.tsgo.transformers.estransforms.classFacts): Node? = p0.visitClassDeclarationInNewClassLexicalEnvironment(p1, p2))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitClassDeclarationInNewClassLexicalEnvironment 633ccaf7
@@ -1940,7 +1940,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitClassExpression a5850a55
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.visitClassExpression(node: ClassExpression?): Node? {
-    return this.visitInNewClassLexicalEnvironment(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), fun(p0: com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, p1: Node?, p2: com.xemantic.typescript.tsgo.transformers.estransforms.classFacts): Node? = p0.visitClassExpressionInNewClassLexicalEnvironment(p1, p2))
+    return this.visitInNewClassLexicalEnvironment(node!!.primaryExpressionBase.asNode(), fun(p0: com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?, p1: Node?, p2: com.xemantic.typescript.tsgo.transformers.estransforms.classFacts): Node? = p0.visitClassExpressionInNewClassLexicalEnvironment(p1, p2))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.classFieldsTransformer.visitClassExpressionInNewClassLexicalEnvironment f3e48b02
@@ -2199,7 +2199,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.transformConstructor(constructor: ConstructorDeclaration?, container: Node?): Node? {
     if (this!!.lexicalEnvironment == null || this!!.lexicalEnvironment!!.data == null || this!!.lexicalEnvironment!!.data!!.facts.value and 16 == 0) {
         if (constructor != null) {
-            return this!!.transformer.visitor().visitEachChild(constructor!!.nodeBase.nodeDefault.asNode())
+            return this!!.transformer.visitor().visitEachChild(constructor!!.nodeBase.asNode())
         }
         return null
     }
@@ -2212,7 +2212,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
     val body: Node? = this.transformConstructorBody(container, constructor, isDerivedClass)
     if (body == null) {
         if (constructor != null) {
-            return this!!.transformer.visitor().visitEachChild(constructor!!.nodeBase.nodeDefault.asNode())
+            return this!!.transformer.visitor().visitEachChild(constructor!!.nodeBase.asNode())
         }
         return null
     }
@@ -2254,7 +2254,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
         l0@ while (statementOffset < statementsIn.len) {
             val stmt: Node? = statementsIn[statementOffset]
             val orig: Node? = this!!.transformer.emitContext().mostOriginal(stmt)
-            if (com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(orig, constructor!!.nodeBase.nodeDefault.asNode())) {
+            if (com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(orig, constructor!!.nodeBase.asNode())) {
                 statementOffset++
             } else {
                 break@l0
@@ -2290,10 +2290,10 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
     initializerStatements = this.addInstanceMethodStatements(initializerStatements, privateMethodsAndAccessors, receiver)
     if (constructor != null) {
         val parameterProperties: GoSlice<Node?> = com.xemantic.typescript.tsgo.core.filter<Node?>(GoElem.ref<Node?>(), instanceProperties, fun(prop_1: Node?): Boolean {
-            return com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(this!!.transformer.emitContext().mostOriginal(prop_1), constructor!!.nodeBase.nodeDefault.asNode())
+            return com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(this!!.transformer.emitContext().mostOriginal(prop_1), constructor!!.nodeBase.asNode())
         })
         val nonParameterProperties: GoSlice<Node?> = com.xemantic.typescript.tsgo.core.filter<Node?>(GoElem.ref<Node?>(), properties, fun(prop_2: Node?): Boolean {
-            return !com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(this!!.transformer.emitContext().mostOriginal(prop_2), constructor!!.nodeBase.nodeDefault.asNode())
+            return !com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(this!!.transformer.emitContext().mostOriginal(prop_2), constructor!!.nodeBase.asNode())
         })
         initializerStatements = this.addPropertyOrClassStaticBlockStatements(initializerStatements, parameterProperties, receiver)
         initializerStatements = this.addPropertyOrClassStaticBlockStatements(initializerStatements, nonParameterProperties, receiver)
@@ -2319,7 +2319,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
             l1@ while (statementOffset < body!!.statements!!.nodes.len) {
                 val stmt_1: Node? = body!!.statements!!.nodes[statementOffset]
                 val orig: Node? = this!!.transformer.emitContext().mostOriginal(stmt_1)
-                if (com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(orig, constructor!!.nodeBase.nodeDefault.asNode())) {
+                if (com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(orig, constructor!!.nodeBase.asNode())) {
                     statementOffset++
                 } else {
                     break@l1
@@ -2433,11 +2433,11 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.transformProperty(property: PropertyDeclaration?, receiver: Node?): Node? {
     val savedCurrentClassElement: Node? = this!!.currentClassElement
     val transformed: Node? = this.transformPropertyWorker(property, receiver)
-    if (transformed != null && com.xemantic.typescript.tsgo.ast.hasStaticModifier(property!!.nodeBase.nodeDefault.asNode())) {
+    if (transformed != null && com.xemantic.typescript.tsgo.ast.hasStaticModifier(property!!.nodeBase.asNode())) {
         this!!.transformer.emitContext().addEmitFlags(transformed, EmitFlags(16777216u))
     }
-    if (transformed != null && com.xemantic.typescript.tsgo.ast.hasStaticModifier(property!!.nodeBase.nodeDefault.asNode()) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null && this!!.lexicalEnvironment!!.data!!.facts.value != 0) {
-        this!!.transformer.emitContext().setOriginal(transformed, property!!.nodeBase.nodeDefault.asNode())
+    if (transformed != null && com.xemantic.typescript.tsgo.ast.hasStaticModifier(property!!.nodeBase.asNode()) && this!!.lexicalEnvironment != null && this!!.lexicalEnvironment!!.data != null && this!!.lexicalEnvironment!!.data!!.facts.value != 0) {
+        this!!.transformer.emitContext().setOriginal(transformed, property!!.nodeBase.asNode())
         this!!.transformer.emitContext().setSourceMapRange(transformed, this!!.transformer.emitContext().sourceMapRange(property!!.name()))
     }
     this!!.currentClassElement = savedCurrentClassElement
@@ -2448,19 +2448,19 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
 fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransformer?.transformPropertyWorker(property_0: PropertyDeclaration?, receiver: Node?): Node? {
     var property: PropertyDeclaration? = property_0
     val emitAssignment: Boolean = !this!!.compilerOptions.getUseDefineForClassFields()
-    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), property!!.nodeBase.nodeDefault.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
-        property = transformNamedEvaluation(this!!.transformer.emitContext(), property!!.nodeBase.nodeDefault.asNode(), false, "").asPropertyDeclaration()
+    if (isNamedEvaluationAnd(this!!.transformer.emitContext(), property!!.nodeBase.asNode(), this!!.isAnonymousClassNeedingAssignedName)) {
+        property = transformNamedEvaluation(this!!.transformer.emitContext(), property!!.nodeBase.asNode(), false, "").asPropertyDeclaration()
     }
     var propertyName: Node? = property!!.name()
-    if (com.xemantic.typescript.tsgo.ast.hasAccessorModifier(property!!.nodeBase.nodeDefault.asNode())) {
+    if (com.xemantic.typescript.tsgo.ast.hasAccessorModifier(property!!.nodeBase.asNode())) {
         propertyName = this!!.transformer.factory().newGeneratedPrivateNameForNodeEx(property!!.name(), AutoGenerateOptions(suffix = "_accessor_storage"))
     } else if (com.xemantic.typescript.tsgo.ast.isComputedPropertyName(propertyName) && !com.xemantic.typescript.tsgo.transformers.isSimpleInlineableExpression(propertyName.expression())) {
         propertyName = this!!.transformer.factory()!!.nodeFactory.updateComputedPropertyName(propertyName.asComputedPropertyName(), this!!.transformer.factory().newGeneratedNameForNode(propertyName))
     }
-    if (com.xemantic.typescript.tsgo.ast.hasStaticModifier(property!!.nodeBase.nodeDefault.asNode())) {
-        this!!.currentClassElement = property!!.nodeBase.nodeDefault.asNode()
+    if (com.xemantic.typescript.tsgo.ast.hasStaticModifier(property!!.nodeBase.asNode())) {
+        this!!.currentClassElement = property!!.nodeBase.asNode()
     }
-    if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(propertyName) && this.shouldTransformClassElementToWeakMap(property!!.nodeBase.nodeDefault.asNode())) {
+    if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(propertyName) && this.shouldTransformClassElementToWeakMap(property!!.nodeBase.asNode())) {
         val info: com.xemantic.typescript.tsgo.transformers.estransforms.privateIdentifierInfo? = this.accessPrivateIdentifier(propertyName)
         if (info != null) {
             if (info!!.kind.value == "f") {
@@ -2474,14 +2474,14 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.classFieldsTransforme
             com.xemantic.typescript.tsgo.debug.fail("Undeclared private name for property declaration.")
         }
     }
-    if ((com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(propertyName) || com.xemantic.typescript.tsgo.ast.hasStaticModifier(property!!.nodeBase.nodeDefault.asNode())) && property!!.initializer == null) {
+    if ((com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(propertyName) || com.xemantic.typescript.tsgo.ast.hasStaticModifier(property!!.nodeBase.asNode())) && property!!.initializer == null) {
         return null
     }
-    if (com.xemantic.typescript.tsgo.ast.hasAbstractModifier(this!!.transformer.emitContext().mostOriginal(property!!.nodeBase.nodeDefault.asNode()))) {
+    if (com.xemantic.typescript.tsgo.ast.hasAbstractModifier(this!!.transformer.emitContext().mostOriginal(property!!.nodeBase.asNode()))) {
         return null
     }
     var initializer: Node? = this!!.transformer.visitor().visitNode(property!!.initializer)
-    val propertyOriginalNode: Node? = this!!.transformer.emitContext().mostOriginal(property!!.nodeBase.nodeDefault.asNode())
+    val propertyOriginalNode: Node? = this!!.transformer.emitContext().mostOriginal(property!!.nodeBase.asNode())
     if (com.xemantic.typescript.tsgo.ast.isParameterPropertyDeclaration(propertyOriginalNode, propertyOriginalNode!!.parent) && com.xemantic.typescript.tsgo.ast.isIdentifier(propertyName)) {
         val localName: Node? = propertyName.clone(this!!.transformer.factory())
         if (initializer != null) {

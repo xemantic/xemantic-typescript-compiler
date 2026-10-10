@@ -568,7 +568,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransforme
 fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransformer?.visitSourceFile(node: SourceFile?): Node? {
     this!!.top = null
     this!!.shouldTransformPrivateStaticElementsInFile = false
-    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitHelper(visited, this!!.transformer.emitContext().readEmitHelpers())
     if (this!!.shouldTransformPrivateStaticElementsInFile) {
         this!!.transformer.emitContext().addEmitFlags(visited, EmitFlags(8388608u))
@@ -1137,13 +1137,13 @@ fun isDecoratedClassLike(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.esDecoratorTransformer.visitClassDeclaration 626030f9
 fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransformer?.visitClassDeclaration(node: ClassDeclaration?): Node? {
-    if (isDecoratedClassLike(node!!.statementBase.nodeBase.nodeDefault.asNode())) {
+    if (isDecoratedClassLike(node!!.statementBase.nodeBase.asNode())) {
         val f: NodeFactory? = this!!.transformer.factory()
         val ec: EmitContext? = this!!.transformer.emitContext()
         var statements: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0)
-        var originalClass: Node? = ec.mostOriginal(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        var originalClass: Node? = ec.mostOriginal(node!!.statementBase.nodeBase.asNode())
         if (!com.xemantic.typescript.tsgo.ast.isClassLike(originalClass)) {
-            originalClass = node!!.statementBase.nodeBase.nodeDefault.asNode()
+            originalClass = node!!.statementBase.nodeBase.asNode()
         }
         var className: Node? = null
         if (originalClass.name() != null) {
@@ -1151,9 +1151,9 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransforme
         } else {
             className = f!!.nodeFactory.newStringLiteral("default", TokenFlags(0))
         }
-        val isExport: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(32u))
-        val isDefault: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(2048u))
-        var classNode: Node? = node!!.statementBase.nodeBase.nodeDefault.asNode()
+        val isExport: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(32u))
+        val isDefault: Boolean = com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(2048u))
+        var classNode: Node? = node!!.statementBase.nodeBase.asNode()
         if (node!!.name() == null) {
             classNode = injectClassNamedEvaluationHelperBlockIfMissing(ec, classNode, className, null)
         }
@@ -1207,9 +1207,9 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransforme
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.esDecoratorTransformer.visitClassExpression 83c97856
 fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransformer?.visitClassExpression(node: ClassExpression?): Node? {
-    if (isDecoratedClassLike(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())) {
-        val iife: Node? = this.transformClassLike(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-        this!!.transformer.emitContext().setOriginal(iife, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    if (isDecoratedClassLike(node!!.primaryExpressionBase.asNode())) {
+        val iife: Node? = this.transformClassLike(node!!.primaryExpressionBase.asNode())
+        this!!.transformer.emitContext().setOriginal(iife, node!!.primaryExpressionBase.asNode())
         return iife
     }
     val modifiers: ModifierList? = this!!.modifierVisitor.visitModifiers(node!!.classLikeBase.modifiersBase.modifiers())
@@ -1730,7 +1730,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransforme
         this!!.transformer.emitContext().setOriginal(boundTag, node)
         boundTag!!.loc = node!!.loc.goCopy()
         val template: Node? = this!!.transformer.visitor().visitNode(tte!!.template)
-        return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(tte, boundTag, null, null, template, tte!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+        return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(tte, boundTag, null, null, template, tte!!.memberExpressionBase.node.flags)
     }
     return this!!.transformer.visitor().visitEachChild(node)
 }
@@ -1764,7 +1764,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransforme
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.esDecoratorTransformer.visitParameterDeclaration d6b36cbe
 fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransformer?.visitParameterDeclaration(node_0: ParameterDeclaration?): Node? {
     var node: ParameterDeclaration? = node_0
-    var paramNode: Node? = node!!.nodeBase.nodeDefault.asNode()
+    var paramNode: Node? = node!!.nodeBase.asNode()
     if (isNamedEvaluationAnd(this!!.transformer.emitContext(), paramNode, fun(p0: Node?): Boolean = isAnonymousClassNeedingAssignedName(p0))) {
         paramNode = transformNamedEvaluation(this!!.transformer.emitContext(), paramNode, canIgnoreEmptyStringLiteralInAssignedName(paramNode.initializer()), "")
         node = paramNode.asParameterDeclaration()

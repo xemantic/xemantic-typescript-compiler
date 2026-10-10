@@ -79,7 +79,7 @@ fun LanguageService?.provideDocumentSymbols(ctx: Context?, documentURI: Document
     val t0 = this.getProgramAndFile(documentURI)
     val file: SourceFile? = t0.second
     if (com.xemantic.typescript.tsgo.lsp.lsproto.getClientCapabilities(ctx)!!.textDocument.documentSymbol.hierarchicalDocumentSymbolSupport) {
-        val symbols: GoBox<GoSlice<DocumentSymbol?>> = GoBox(this.getDocumentSymbolsForChildren(ctx, file!!.nodeBase.nodeDefault.asNode(), file))
+        val symbols: GoBox<GoSlice<DocumentSymbol?>> = GoBox(this.getDocumentSymbolsForChildren(ctx, file!!.nodeBase.asNode(), file))
         return Tuple2<SymbolInformationsOrDocumentSymbolsOrNull, GoError?>(SymbolInformationsOrDocumentSymbolsOrNull(documentSymbols = symbols), null)
     }
     val symbolInfos: GoSlice<SymbolInformation> = this.getDocumentSymbolInformations(ctx, file, documentURI)
@@ -94,7 +94,7 @@ fun LanguageService?.provideDocumentSymbols(ctx: Context?, documentURI: Document
 
 // go: github.com/microsoft/typescript-go/internal/ls.LanguageService.getDocumentSymbolInformations 63f03998
 fun LanguageService?.getDocumentSymbolInformations(ctx: Context?, file: SourceFile?, documentURI: DocumentUri): GoSlice<SymbolInformation> {
-    val docSymbols: GoSlice<DocumentSymbol?> = this.getDocumentSymbolsForChildren(ctx, file!!.nodeBase.nodeDefault.asNode(), file)
+    val docSymbols: GoSlice<DocumentSymbol?> = this.getDocumentSymbolsForChildren(ctx, file!!.nodeBase.asNode(), file)
     var result: GoSlice<SymbolInformation> = SymbolInformation.ELEM.nilSlice
     var flatten: ((GoSlice<DocumentSymbol?>, GoPtr<String>?) -> Unit)? = null
     flatten = fun(symbols: GoSlice<DocumentSymbol?>, containerName: GoPtr<String>?) {

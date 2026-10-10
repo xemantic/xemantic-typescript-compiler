@@ -79,7 +79,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.optionalCatchTransfor
     if (node!!.variableDeclaration == null) {
         return this!!.transformer.factory()!!.nodeFactory.newCatchClause(this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(this!!.transformer.factory().newTempVariable(), null, null, null), this!!.transformer.visitor()!!.visit!!(node!!.block))
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.newOptionalCatchTransformer 8f059b9e

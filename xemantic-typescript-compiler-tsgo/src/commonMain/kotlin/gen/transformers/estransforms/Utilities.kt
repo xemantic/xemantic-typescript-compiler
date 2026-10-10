@@ -79,8 +79,8 @@ import com.xemantic.typescript.tsgo.printer.setOriginal
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.convertClassDeclarationToClassExpression 23a03d78
 fun convertClassDeclarationToClassExpression(emitContext: EmitContext?, node: ClassDeclaration?): Node? {
     val updated: Node? = emitContext!!.factory!!.nodeFactory.newClassExpression(com.xemantic.typescript.tsgo.transformers.extractModifiers(emitContext, node!!.classLikeBase.modifiersBase.modifiers(), ModifierFlags(4294965215u)), node!!.name(), node!!.classLikeBase.typeParameters, node!!.classLikeBase.heritageClauses, node!!.classLikeBase.members)
-    emitContext.setOriginal(updated, node!!.statementBase.nodeBase.nodeDefault.asNode())
-    updated!!.loc = node!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy()
+    emitContext.setOriginal(updated, node!!.statementBase.nodeBase.asNode())
+    updated!!.loc = node!!.statementBase.nodeBase.node.loc.goCopy()
     return updated
 }
 
@@ -179,7 +179,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.superAccessState?.sub
     } else if (com.xemantic.typescript.tsgo.ast.isElementAccessExpression(expression)) {
         target = this.createSuperElementAccessInAsyncMethod(expression.asElementAccessExpression()!!.argumentExpression)
     } else {
-        return visitor.visitEachChild(call!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        return visitor.visitEachChild(call!!.leftHandSideExpressionBase.asNode())
     }
     val callTarget: Node? = this!!.factory!!.nodeFactory.newPropertyAccessExpression(target, null, this!!.factory!!.nodeFactory.newIdentifier("call"), NodeFlags(0u))
     var allArgs: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
@@ -191,7 +191,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.superAccessState?.sub
         }
     }
     val result: Node? = this!!.factory!!.nodeFactory.newCallExpression(callTarget, null, null, this!!.factory!!.nodeFactory.newNodeList(allArgs), NodeFlags(0u))
-    result!!.loc = call!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.loc.goCopy()
+    result!!.loc = call!!.leftHandSideExpressionBase.node.loc.goCopy()
     return result
 }
 

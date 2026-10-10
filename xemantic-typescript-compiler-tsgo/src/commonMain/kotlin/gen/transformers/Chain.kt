@@ -63,7 +63,7 @@ fun com.xemantic.typescript.tsgo.transformers.chainedTransformer?.visit(node: No
         val t: Transformer? = s0[i1]
         result = t.transformSourceFile(result)
     }
-    return result!!.nodeBase.nodeDefault.asNode()
+    return result!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers.TransformOptions 9ff84ab5

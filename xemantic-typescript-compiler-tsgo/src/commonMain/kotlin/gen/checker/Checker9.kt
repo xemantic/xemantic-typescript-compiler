@@ -2467,7 +2467,7 @@ fun Checker?.getModifiersTypeFromMappedType(t: Type?): Type? {
         if (this.isMappedTypeWithKeyofConstraintDeclaration(t)) {
             m!!.modifiersType = this.instantiateType(this.getTypeFromTypeNodeImpl(this.getConstraintDeclarationForMappedType(t).type()), m!!.objectType.mapper)
         } else {
-            val declaredType: Type? = this.getTypeFromMappedTypeNode(m!!.declaration!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+            val declaredType: Type? = this.getTypeFromMappedTypeNode(m!!.declaration!!.typeNodeBase.nodeBase.asNode())
             val constraint: Type? = this.getConstraintTypeFromMappedType(declaredType)
             var extendedConstraint: Type? = constraint
             if (constraint != null && constraint!!.flags.value and 524288u != 0u) {
@@ -2790,7 +2790,7 @@ fun Checker?.markJsxAliasReferenced(node: Node?) {
     }
     if (com.xemantic.typescript.tsgo.ast.isJsxOpeningFragment(node)) {
         val file: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
-        val entity: Node? = this.getJsxFactoryEntity(file!!.nodeBase.nodeDefault.asNode())
+        val entity: Node? = this.getJsxFactoryEntity(file!!.nodeBase.asNode())
         if (entity != null) {
             val localJsxNamespace: String = com.xemantic.typescript.tsgo.ast.getFirstIdentifier(entity).text()
             var flags_1: SymbolFlags = SymbolFlags(111551u)

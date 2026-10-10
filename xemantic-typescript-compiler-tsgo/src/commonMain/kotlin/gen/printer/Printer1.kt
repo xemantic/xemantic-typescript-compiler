@@ -713,7 +713,7 @@ fun Printer?.getTextOfNode(node: Node?, includeTrivia: Boolean): String {
     val canUseSourceFile: Boolean = this!!.currentSourceFile != null && node!!.parent != null && !com.xemantic.typescript.tsgo.ast.nodeIsSynthesized(node)
     when (node!!.kind.value) {
         79, 80, 296 -> {
-            if (!canUseSourceFile || com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node) !== this!!.emitContext.mostOriginal(this!!.currentSourceFile!!.nodeBase.nodeDefault.asNode()).asSourceFile()) {
+            if (!canUseSourceFile || com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node) !== this!!.emitContext.mostOriginal(this!!.currentSourceFile!!.nodeBase.asNode()).asSourceFile()) {
                 return node.text()
             }
         }
@@ -1201,16 +1201,16 @@ fun Printer?.shouldEmitOnMultipleLines(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.shouldEmitBlockFunctionBodyOnSingleLine 4a913aae
 fun Printer?.shouldEmitBlockFunctionBodyOnSingleLine(body: Block?): Boolean {
-    if (this.shouldEmitOnSingleLine(body!!.statementBase.nodeBase.nodeDefault.asNode())) {
+    if (this.shouldEmitOnSingleLine(body!!.statementBase.nodeBase.asNode())) {
         return true
     }
     if (body!!.multiLine) {
         return false
     }
-    if (!com.xemantic.typescript.tsgo.ast.nodeIsSynthesized(body!!.statementBase.nodeBase.nodeDefault.asNode()) && this!!.currentSourceFile != null && !rangeIsOnSingleLine(body!!.statementBase.nodeBase.nodeDefault.node.loc.goCopy(), this!!.currentSourceFile)) {
+    if (!com.xemantic.typescript.tsgo.ast.nodeIsSynthesized(body!!.statementBase.nodeBase.asNode()) && this!!.currentSourceFile != null && !rangeIsOnSingleLine(body!!.statementBase.nodeBase.node.loc.goCopy(), this!!.currentSourceFile)) {
         return false
     }
-    if (this.getLeadingLineTerminatorCount(body!!.statementBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.core.firstOrNil<Node?>(GoElem.ref<Node?>(), body!!.statements!!.nodes), LFPreserveLines) > 0 || this.getClosingLineTerminatorCount(body!!.statementBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.core.lastOrNil<Node?>(GoElem.ref<Node?>(), body!!.statements!!.nodes), LFPreserveLines, body!!.statements!!.loc.goCopy()) > 0) {
+    if (this.getLeadingLineTerminatorCount(body!!.statementBase.nodeBase.asNode(), com.xemantic.typescript.tsgo.core.firstOrNil<Node?>(GoElem.ref<Node?>(), body!!.statements!!.nodes), LFPreserveLines) > 0 || this.getClosingLineTerminatorCount(body!!.statementBase.nodeBase.asNode(), com.xemantic.typescript.tsgo.core.lastOrNil<Node?>(GoElem.ref<Node?>(), body!!.statements!!.nodes), LFPreserveLines, body!!.statements!!.loc.goCopy()) > 0) {
         return false
     }
     var previousStatement: Node? = null
@@ -1422,58 +1422,58 @@ fun Printer?.emitLiteral(node: Node?, flags_0: com.xemantic.typescript.tsgo.prin
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitNumericLiteral 57d79380
 fun Printer?.emitNumericLiteral(node: NumericLiteral?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitLiteral(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), getLiteralTextFlagsNone)
-    this.exitNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.literalExpressionBase.primaryExpressionBase.asNode())
+    this.emitLiteral(node!!.literalExpressionBase.primaryExpressionBase.asNode(), getLiteralTextFlagsNone)
+    this.exitNode(node!!.literalExpressionBase.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitBigIntLiteral b2ec709d
 fun Printer?.emitBigIntLiteral(node: BigIntLiteral?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitLiteral(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), getLiteralTextFlagsNone)
-    this.exitNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.literalExpressionBase.primaryExpressionBase.asNode())
+    this.emitLiteral(node!!.literalExpressionBase.primaryExpressionBase.asNode(), getLiteralTextFlagsNone)
+    this.exitNode(node!!.literalExpressionBase.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitStringLiteral 2c425e79
 fun Printer?.emitStringLiteral(node: StringLiteral?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitLiteral(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), getLiteralTextFlagsNone)
-    this.exitNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.literalExpressionBase.primaryExpressionBase.asNode())
+    this.emitLiteral(node!!.literalExpressionBase.primaryExpressionBase.asNode(), getLiteralTextFlagsNone)
+    this.exitNode(node!!.literalExpressionBase.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitNoSubstitutionTemplateLiteral df8aade7
 fun Printer?.emitNoSubstitutionTemplateLiteral(node: NoSubstitutionTemplateLiteral?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitLiteral(node!!.expressionBase.nodeBase.nodeDefault.asNode(), getLiteralTextFlagsNone)
-    this.exitNode(node!!.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.asNode())
+    this.emitLiteral(node!!.expressionBase.asNode(), getLiteralTextFlagsNone)
+    this.exitNode(node!!.expressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitRegularExpressionLiteral a4974748
 fun Printer?.emitRegularExpressionLiteral(node: RegularExpressionLiteral?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitLiteral(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), getLiteralTextFlagsNone)
-    this.exitNode(node!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.literalExpressionBase.primaryExpressionBase.asNode())
+    this.emitLiteral(node!!.literalExpressionBase.primaryExpressionBase.asNode(), getLiteralTextFlagsNone)
+    this.exitNode(node!!.literalExpressionBase.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateHead 83f9ae3b
 fun Printer?.emitTemplateHead(node: TemplateHead?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitLiteral(node!!.nodeBase.nodeDefault.asNode(), getLiteralTextFlagsNone)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitLiteral(node!!.nodeBase.asNode(), getLiteralTextFlagsNone)
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateMiddle 8a5bc62a
 fun Printer?.emitTemplateMiddle(node: TemplateMiddle?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitLiteral(node!!.nodeBase.nodeDefault.asNode(), getLiteralTextFlagsNone)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitLiteral(node!!.nodeBase.asNode(), getLiteralTextFlagsNone)
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateTail e0a2de35
 fun Printer?.emitTemplateTail(node: TemplateTail?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitLiteral(node!!.nodeBase.nodeDefault.asNode(), getLiteralTextFlagsNone)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitLiteral(node!!.nodeBase.asNode(), getLiteralTextFlagsNone)
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateMiddleTail 1a0a8ea1
@@ -1490,11 +1490,11 @@ fun Printer?.emitTemplateMiddleTail(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitIdentifierText d3721137
 fun Printer?.emitIdentifierText(node: Identifier?) {
-    val f: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val f: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node!!.primaryExpressionBase.asNode())
     com.xemantic.typescript.tsgo.debug.assert(f == null || this!!.currentSourceFile == null || f!!.fileName() == this!!.currentSourceFile!!.fileName(), GoElem.ref<Any?>().nilSlice)
-    val text: String = this.getTextOfNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), false)
+    val text: String = this.getTextOfNode(node!!.primaryExpressionBase.asNode(), false)
     if (!this!!.idToSymbol.isNil) {
-        val t0 = this!!.idToSymbol.probe(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        val t0 = this!!.idToSymbol.probe(node!!.primaryExpressionBase.asNode())
         val symbol: Symbol? = goProbeValue<Symbol?>(t0) { null }
         val ok: Boolean = t0 !== GoMapAbsent
         if (ok) {
@@ -1507,9 +1507,9 @@ fun Printer?.emitIdentifierText(node: Identifier?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitIdentifierName d2075ecf
 fun Printer?.emitIdentifierName(node: Identifier?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
     this.emitIdentifierText(node)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitIdentifierNameNode 5e180f75
@@ -1535,67 +1535,67 @@ fun Printer?.getUniqueHelperName(name: String): Node? {
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitIdentifierReference f0938b2d
 fun Printer?.emitIdentifierReference(node_0: Identifier?) {
     var node: Identifier? = node_0
-    if ((this!!.externalHelpersModuleName != null || !this!!.uniqueHelperNames.isNil) && this!!.emitContext.emitFlags(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()).value and 1024u != 0u) {
+    if ((this!!.externalHelpersModuleName != null || !this!!.uniqueHelperNames.isNil) && this!!.emitContext.emitFlags(node!!.primaryExpressionBase.asNode()).value and 1024u != 0u) {
         if (this!!.externalHelpersModuleName != null) {
             val helper: Node? = this!!.emitContext!!.factory!!.nodeFactory.newPropertyAccessExpression(this!!.externalHelpersModuleName.clone(this!!.emitContext!!.factory), null, node!!.clone(this!!.emitContext!!.factory), NodeFlags(0u))
-            this!!.emitContext.assignCommentAndSourceMapRanges(helper, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+            this!!.emitContext.assignCommentAndSourceMapRanges(helper, node!!.primaryExpressionBase.asNode())
             this.emitPropertyAccessExpression(helper.asPropertyAccessExpression())
             return
         }
         if (!this!!.uniqueHelperNames.isNil) {
             val helperName: Node? = this.getUniqueHelperName(node!!.text)
-            this!!.emitContext.assignCommentAndSourceMapRanges(helperName, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+            this!!.emitContext.assignCommentAndSourceMapRanges(helperName, node!!.primaryExpressionBase.asNode())
             node = helperName.asIdentifier()
         }
     }
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
     this.emitIdentifierText(node)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitBindingIdentifier 989a0956
 fun Printer?.emitBindingIdentifier(node_0: Identifier?) {
     var node: Identifier? = node_0
-    if (!this!!.uniqueHelperNames.isNil && this!!.emitContext.emitFlags(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()).value and 1024u != 0u) {
+    if (!this!!.uniqueHelperNames.isNil && this!!.emitContext.emitFlags(node!!.primaryExpressionBase.asNode()).value and 1024u != 0u) {
         val helperName: Node? = this.getUniqueHelperName(node!!.text)
-        this!!.emitContext.assignCommentAndSourceMapRanges(helperName, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        this!!.emitContext.assignCommentAndSourceMapRanges(helperName, node!!.primaryExpressionBase.asNode())
         node = helperName.asIdentifier()
     }
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
     this.emitIdentifierText(node)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitLabelIdentifier e3b57a9d
 fun Printer?.emitLabelIdentifier(node: Identifier?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
     this.emitIdentifierText(node)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPrivateIdentifier 826d8f35
 fun Printer?.emitPrivateIdentifier(node: PrivateIdentifier?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.writeImpl(this.getTextOfNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), false))
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
+    this.writeImpl(this.getTextOfNode(node!!.primaryExpressionBase.asNode(), false))
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitQualifiedName e8a6e835
 fun Printer?.emitQualifiedName(node: QualifiedName?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.emitEntityName(node!!.left)
     this.writePunctuation(".")
     this.emitIdentifierName(node!!.right.asIdentifier())
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitComputedPropertyName 805c7451
 fun Printer?.emitComputedPropertyName(node: ComputedPropertyName?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.writePunctuation("[")
     this.emitExpression(node!!.expression, OperatorPrecedence(2))
     this.writePunctuation("]")
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitEntityName 2f728e5a
@@ -1834,8 +1834,8 @@ value class Mode_Printer_emitModifierList(val value: Int) : Comparable<Mode_Prin
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeParameter dc8d8246
 fun Printer?.emitTypeParameter(node: TypeParameterDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.modifiersBase.modifiers(), false)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitModifierList(node!!.nodeBase.asNode(), node!!.modifiersBase.modifiers(), false)
     this.emitBindingIdentifier(node!!.name().asIdentifier())
     if (node!!.constraint != null) {
         this.writeSpace()
@@ -1849,7 +1849,7 @@ fun Printer?.emitTypeParameter(node: TypeParameterDeclaration?) {
         this.writeSpace()
         this.emitTypeNodeOutsideExtends(node!!.defaultType)
     }
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeParameterDeclarationNode fccdb033
@@ -1871,14 +1871,14 @@ fun Printer?.emitParameterName(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitParameter 1d16fc40
 fun Printer?.emitParameter(node: ParameterDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.modifiersBase.modifiers(), true)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitModifierList(node!!.nodeBase.asNode(), node!!.modifiersBase.modifiers(), true)
     this.emitTokenNode(node!!.dotDotDotToken)
     this.emitParameterName(node!!.name())
     this.emitTokenNode(node!!.questionToken)
     this.emitTypeAnnotation(node!!.type)
-    this.emitInitializer(node!!.initializer, greatestEnd(node!!.nodeBase.nodeDefault.node.pos(), GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), node!!.type, node!!.questionToken, node!!.name(), node!!.modifiersBase.modifiers())), node!!.nodeBase.nodeDefault.asNode())
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitInitializer(node!!.initializer, greatestEnd(node!!.nodeBase.node.pos(), GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), node!!.type, node!!.questionToken, node!!.name(), node!!.modifiersBase.modifiers())), node!!.nodeBase.asNode())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitParameterDeclarationNode 3201dcd4
@@ -1888,10 +1888,10 @@ fun Printer?.emitParameterDeclarationNode(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitDecorator 3cfa389e
 fun Printer?.emitDecorator(node: Decorator?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.writePunctuation("@")
     this.emitExpression(node!!.expression, OperatorPrecedence(18))
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitModifierLike a98626c8
@@ -1951,7 +1951,7 @@ fun canEmitSimpleArrowHead(parentNode: Node?, parameters: NodeList?): Boolean {
     }
     val parent: ArrowFunction? = parentNode.asArrowFunction()
     val parameter: ParameterDeclaration? = parameters!!.nodes[0].asParameterDeclaration()
-    return parameter!!.nodeBase.nodeDefault.node.pos() == parent!!.expressionBase.nodeBase.nodeDefault.node.pos() && parent!!.functionLikeWithBodyBase.functionLikeBase.typeParameters == null && parent!!.functionLikeWithBodyBase.functionLikeBase.type == null && (parent!!.modifiersBase.modifiers() == null || parent!!.modifiersBase.modifiers()!!.nodeList.nodes.len == 0) && !parameters.hasTrailingComma() && parameter!!.modifiersBase.modifiers() == null && parameter!!.dotDotDotToken == null && parameter!!.questionToken == null && parameter!!.type == null && parameter!!.initializer == null && com.xemantic.typescript.tsgo.ast.isIdentifier(parameter!!.name())
+    return parameter!!.nodeBase.node.pos() == parent!!.expressionBase.node.pos() && parent!!.functionLikeWithBodyBase.functionLikeBase.typeParameters == null && parent!!.functionLikeWithBodyBase.functionLikeBase.type == null && (parent!!.modifiersBase.modifiers() == null || parent!!.modifiersBase.modifiers()!!.nodeList.nodes.len == 0) && !parameters.hasTrailingComma() && parameter!!.modifiersBase.modifiers() == null && parameter!!.dotDotDotToken == null && parameter!!.questionToken == null && parameter!!.type == null && parameter!!.initializer == null && com.xemantic.typescript.tsgo.ast.isIdentifier(parameter!!.name())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitParametersForArrow 5bbcc45d
@@ -1980,29 +1980,29 @@ fun Printer?.emitSignature(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitFunctionBody 61b424dc
 fun Printer?.emitFunctionBody(body: Block?) {
-    this!!.emitContext.addEmitFlags(body!!.statementBase.nodeBase.nodeDefault.asNode(), EFNoSourceMap)
+    this!!.emitContext.addEmitFlags(body!!.statementBase.nodeBase.asNode(), EFNoSourceMap)
     if (this!!.printHandlers.onBeforeEmitNode != null) {
-        this!!.printHandlers.onBeforeEmitNode!!(body!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.printHandlers.onBeforeEmitNode!!(body!!.statementBase.nodeBase.asNode())
     }
-    this.generateNames(body!!.statementBase.nodeBase.nodeDefault.asNode())
+    this.generateNames(body!!.statementBase.nodeBase.asNode())
     this.writePunctuation("{")
     this.increaseIndent()
-    val detachedState: com.xemantic.typescript.tsgo.printer.commentState? = this.emitDetachedCommentsBeforeStatementList(body!!.statementBase.nodeBase.nodeDefault.asNode(), body!!.statements!!.loc.goCopy())
+    val detachedState: com.xemantic.typescript.tsgo.printer.commentState? = this.emitDetachedCommentsBeforeStatementList(body!!.statementBase.nodeBase.asNode(), body!!.statements!!.loc.goCopy())
     val statementOffset: Int = this.emitPrologueDirectives(body!!.statements)
     val pos: Int = this!!.writer!!.getTextPos()
-    this.emitHelpers(body!!.statementBase.nodeBase.nodeDefault.asNode())
+    this.emitHelpers(body!!.statementBase.nodeBase.asNode())
     if (this.shouldEmitBlockFunctionBodyOnSingleLine(body) && statementOffset == 0 && pos == this!!.writer!!.getTextPos()) {
         this.decreaseIndent()
-        this.emitListRange(fun(p0: Printer?, p1: Node?) = p0.emitStatement(p1), body!!.statementBase.nodeBase.nodeDefault.asNode(), body!!.statements, LFSingleLineFunctionBodyStatements, statementOffset, -1)
+        this.emitListRange(fun(p0: Printer?, p1: Node?) = p0.emitStatement(p1), body!!.statementBase.nodeBase.asNode(), body!!.statements, LFSingleLineFunctionBodyStatements, statementOffset, -1)
         this.increaseIndent()
     } else {
-        this.emitListRange(fun(p0: Printer?, p1: Node?) = p0.emitStatement(p1), body!!.statementBase.nodeBase.nodeDefault.asNode(), body!!.statements, LFMultiLineFunctionBodyStatements, statementOffset, -1)
+        this.emitListRange(fun(p0: Printer?, p1: Node?) = p0.emitStatement(p1), body!!.statementBase.nodeBase.asNode(), body!!.statements, LFMultiLineFunctionBodyStatements, statementOffset, -1)
     }
-    this.emitDetachedCommentsAfterStatementList(body!!.statementBase.nodeBase.nodeDefault.asNode(), body!!.statements!!.loc.goCopy(), detachedState)
+    this.emitDetachedCommentsAfterStatementList(body!!.statementBase.nodeBase.asNode(), body!!.statements!!.loc.goCopy(), detachedState)
     this.decreaseIndent()
-    this.emitTokenEx(Kind(19), body!!.statements!!.end(), WriteKindPunctuation, body!!.statementBase.nodeBase.nodeDefault.asNode(), tefNoComments)
+    this.emitTokenEx(Kind(19), body!!.statements!!.end(), WriteKindPunctuation, body!!.statementBase.nodeBase.asNode(), tefNoComments)
     if (this!!.printHandlers.onAfterEmitNode != null) {
-        this!!.printHandlers.onAfterEmitNode!!(body!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.printHandlers.onAfterEmitNode!!(body!!.statementBase.nodeBase.asNode())
     }
 }
 
@@ -2018,100 +2018,100 @@ fun Printer?.emitFunctionBodyNode(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPropertySignature 2281d4c2
 fun Printer?.emitPropertySignature(node: PropertySignatureDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.namedMemberBase.modifiers(), false)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitModifierList(node!!.nodeBase.asNode(), node!!.namedMemberBase.modifiers(), false)
     this.emitPropertyName(node!!.name())
     this.emitTokenNode(node!!.namedMemberBase.postfixToken)
     this.emitTypeAnnotation(node!!.type)
     this.writeTrailingSemicolon()
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPropertyDeclaration b5e8571c
 fun Printer?.emitPropertyDeclaration(node: PropertyDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.namedMemberBase.modifiers(), true)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitModifierList(node!!.nodeBase.asNode(), node!!.namedMemberBase.modifiers(), true)
     this.emitPropertyName(node!!.name())
     this.emitTokenNode(node!!.namedMemberBase.postfixToken)
     this.emitTypeAnnotation(node!!.type)
-    this.emitInitializer(node!!.initializer, greatestEnd(node!!.name()!!.end(), GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), node!!.type, node!!.namedMemberBase.postfixToken)), node!!.nodeBase.nodeDefault.asNode())
+    this.emitInitializer(node!!.initializer, greatestEnd(node!!.name()!!.end(), GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), node!!.type, node!!.namedMemberBase.postfixToken)), node!!.nodeBase.asNode())
     this.writeTrailingSemicolon()
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitMethodSignature 8c5ce814
 fun Printer?.emitMethodSignature(node: MethodSignatureDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.namedMemberBase.modifiers(), false)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitModifierList(node!!.nodeBase.asNode(), node!!.namedMemberBase.modifiers(), false)
     this.emitPropertyName(node!!.name())
     this.emitTokenNode(node!!.namedMemberBase.postfixToken)
-    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.nodeDefault.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
-    this.emitSignature(node!!.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.nodeBase.asNode())
+    this.emitSignature(node!!.nodeBase.asNode())
     this.writeTrailingSemicolon()
-    this.popNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitMethodDeclaration 9bb8c9c4
 fun Printer?.emitMethodDeclaration(node: MethodDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.namedMemberBase.modifiers(), true)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitModifierList(node!!.nodeBase.asNode(), node!!.namedMemberBase.modifiers(), true)
     this.emitTokenNode(node!!.functionLikeWithBodyBase.bodyBase.asteriskToken)
     this.emitPropertyName(node!!.name())
     this.emitTokenNode(node!!.namedMemberBase.postfixToken)
-    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.nodeDefault.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
-    this.emitSignature(node!!.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.nodeBase.asNode())
+    this.emitSignature(node!!.nodeBase.asNode())
     this.emitFunctionBodyNode(node!!.functionLikeWithBodyBase.bodyBase.body)
-    this.popNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitClassStaticBlockDeclaration 7efbb3df
 fun Printer?.emitClassStaticBlockDeclaration(node: ClassStaticBlockDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.writeKeyword("static")
-    this.pushNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.nodeBase.asNode())
     this.emitFunctionBodyNode(node!!.body)
-    this.popNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.popNameGenerationScope(node!!.nodeBase.asNode())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitConstructor 487027b8
 fun Printer?.emitConstructor(node: ConstructorDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.modifiersBase.modifiers(), false)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitModifierList(node!!.nodeBase.asNode(), node!!.modifiersBase.modifiers(), false)
     this.writeKeyword("constructor")
-    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.nodeDefault.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
-    this.emitSignature(node!!.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.nodeBase.asNode())
+    this.emitSignature(node!!.nodeBase.asNode())
     this.emitFunctionBodyNode(node!!.functionLikeWithBodyBase.bodyBase.body)
-    this.popNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitAccessorDeclaration a297a0c1
 fun Printer?.emitAccessorDeclaration(token: Kind, node: AccessorDeclarationBase?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    val pos: Int = this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.namedMemberBase.modifiers(), true)
-    this.emitToken(token, pos, WriteKindKeyword, node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    val pos: Int = this.emitModifierList(node!!.nodeBase.asNode(), node!!.namedMemberBase.modifiers(), true)
+    this.emitToken(token, pos, WriteKindKeyword, node!!.nodeBase.asNode())
     this.writeSpace()
     this.emitPropertyName(node!!.namedMemberBase.name())
-    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.nodeDefault.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
-    this.emitSignature(node!!.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.nodeBase.asNode())
+    this.emitSignature(node!!.nodeBase.asNode())
     this.emitFunctionBodyNode(node!!.functionLikeWithBodyBase.bodyBase.body)
-    this.popNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitGetAccessorDeclaration c33aad56
@@ -2126,45 +2126,45 @@ fun Printer?.emitSetAccessorDeclaration(node: SetAccessorDeclaration?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitCallSignature f2c2ff1d
 fun Printer?.emitCallSignature(node: CallSignatureDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
-    this.emitSignature(node!!.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.nodeBase.asNode())
+    this.emitSignature(node!!.nodeBase.asNode())
     this.writeTrailingSemicolon()
-    this.popNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitConstructSignature a89fbbc6
 fun Printer?.emitConstructSignature(node: ConstructSignatureDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.writeKeyword("new")
     this.writeSpace()
-    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.nodeDefault.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
-    this.emitSignature(node!!.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.nodeBase.asNode())
+    this.emitSignature(node!!.nodeBase.asNode())
     this.writeTrailingSemicolon()
-    this.popNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitIndexSignature 84622146
 fun Printer?.emitIndexSignature(node: IndexSignatureDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.nodeBase.nodeDefault.asNode(), node!!.modifiersBase.modifiers(), false)
-    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
+    this.emitModifierList(node!!.nodeBase.asNode(), node!!.modifiersBase.modifiers(), false)
+    val indented: Boolean = this.shouldEmitIndented(node!!.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
-    this.emitParametersForIndexSignature(node!!.nodeBase.nodeDefault.asNode(), node!!.functionLikeBase.parameters)
+    this.pushNameGenerationScope(node!!.nodeBase.asNode())
+    this.emitParametersForIndexSignature(node!!.nodeBase.asNode(), node!!.functionLikeBase.parameters)
     this.emitTypeAnnotation(node!!.functionLikeBase.type)
     this.writeTrailingSemicolon()
-    this.popNameGenerationScope(node!!.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitClassElement efbe6ecc
@@ -2268,7 +2268,7 @@ fun Printer?.emitObjectLiteralElement(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitKeywordTypeNode 392eee2b
 fun Printer?.emitKeywordTypeNode(node: KeywordTypeNode?) {
-    this.emitKeywordNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this.emitKeywordNode(node!!.typeNodeBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypePredicateParameterName 34f975ea
@@ -2288,7 +2288,7 @@ fun Printer?.emitTypePredicateParameterName(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypePredicate b2ec92b1
 fun Printer?.emitTypePredicate(node: TypePredicateNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     if (node!!.assertsModifier != null) {
         this.emitTokenNode(node!!.assertsModifier)
         this.writeSpace()
@@ -2300,7 +2300,7 @@ fun Printer?.emitTypePredicate(node: TypePredicateNode?) {
         this.writeSpace()
         this.emitTypeNodeOutsideExtends(node!!.type)
     }
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeArgument 518f9b3e
@@ -2318,10 +2318,10 @@ fun Printer?.emitTypeArguments(parentNode: Node?, nodes: NodeList?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeReference d609ae89
 fun Printer?.emitTypeReference(node: TypeReferenceNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode())
     this.emitEntityName(node!!.typeName)
-    this.emitTypeArguments(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.nodeWithTypeArgumentsBase.typeArguments)
-    this.exitNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitTypeArguments(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode(), node!!.nodeWithTypeArgumentsBase.typeArguments)
+    this.exitNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitReturnType 0c1faf83
@@ -2340,67 +2340,67 @@ fun Printer?.emitReturnType(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitFunctionType 6fe0136c
 fun Printer?.emitFunctionType(node: FunctionTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    val indented: Boolean = this.shouldEmitIndented(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.typeNodeBase.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitTypeParameters(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters)
-    this.emitParameters(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.functionOrConstructorTypeNodeBase.functionLikeBase.parameters)
+    this.pushNameGenerationScope(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitTypeParameters(node!!.typeNodeBase.nodeBase.asNode(), node!!.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters)
+    this.emitParameters(node!!.typeNodeBase.nodeBase.asNode(), node!!.functionOrConstructorTypeNodeBase.functionLikeBase.parameters)
     this.writeSpace()
     this.emitReturnType(node!!.functionOrConstructorTypeNodeBase.functionLikeBase.type)
-    this.popNameGenerationScope(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.typeNodeBase.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitConstructorType 81ed76b4
 fun Printer?.emitConstructorType(node: ConstructorTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.functionOrConstructorTypeNodeBase.modifiersBase.modifiers(), false)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitModifierList(node!!.typeNodeBase.nodeBase.asNode(), node!!.functionOrConstructorTypeNodeBase.modifiersBase.modifiers(), false)
     this.writeKeyword("new")
     this.writeSpace()
-    val indented: Boolean = this.shouldEmitIndented(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.typeNodeBase.nodeBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitTypeParameters(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters)
-    this.emitParameters(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.functionOrConstructorTypeNodeBase.functionLikeBase.parameters)
+    this.pushNameGenerationScope(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitTypeParameters(node!!.typeNodeBase.nodeBase.asNode(), node!!.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters)
+    this.emitParameters(node!!.typeNodeBase.nodeBase.asNode(), node!!.functionOrConstructorTypeNodeBase.functionLikeBase.parameters)
     this.writeSpace()
     this.emitReturnType(node!!.functionOrConstructorTypeNodeBase.functionLikeBase.type)
-    this.popNameGenerationScope(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.typeNodeBase.nodeBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeQuery 2d003c55
 fun Printer?.emitTypeQuery(node: TypeQueryNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode())
     this.writeKeyword("typeof")
     this.writeSpace()
     this.emitEntityName(node!!.exprName)
-    this.emitTypeArguments(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.nodeWithTypeArgumentsBase.typeArguments)
-    this.exitNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitTypeArguments(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode(), node!!.nodeWithTypeArgumentsBase.typeArguments)
+    this.exitNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeLiteral 95aa14b3
 fun Printer?.emitTypeLiteral(node: TypeLiteralNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.pushNameGenerationScope(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.pushNameGenerationScope(node!!.typeNodeBase.nodeBase.asNode())
     this.generateAllMemberNames(node!!.members)
     this.writePunctuation("{")
-    val flags: ListFormat = com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, this.shouldEmitOnSingleLine(node!!.typeNodeBase.nodeBase.nodeDefault.asNode()), LFSingleLineTypeLiteralMembers, LFMultiLineTypeLiteralMembers)
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTypeElement(p1), node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.members, ListFormat(flags.value or 524288))
+    val flags: ListFormat = com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, this.shouldEmitOnSingleLine(node!!.typeNodeBase.nodeBase.asNode()), LFSingleLineTypeLiteralMembers, LFMultiLineTypeLiteralMembers)
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTypeElement(p1), node!!.typeNodeBase.nodeBase.asNode(), node!!.members, ListFormat(flags.value or 524288))
     this.writePunctuation("}")
-    this.popNameGenerationScope(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.popNameGenerationScope(node!!.typeNodeBase.nodeBase.asNode())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitArrayType 9e510adc
 fun Printer?.emitArrayType(node: ArrayTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitPostfixTypeOperand(node!!.elementType, node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitPostfixTypeOperand(node!!.elementType, node!!.typeNodeBase.nodeBase.asNode())
     this.writePunctuation("[")
     this.writePunctuation("]")
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPostfixTypeOperand 9a43eb4c
@@ -2419,40 +2419,40 @@ fun Printer?.emitTupleElementType(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTupleType 0bc110a6
 fun Printer?.emitTupleType(node: TupleTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(Kind(22), node!!.typeNodeBase.nodeBase.nodeDefault.node.pos(), WriteKindPunctuation, node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    val flags: ListFormat = com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, this.shouldEmitOnSingleLine(node!!.typeNodeBase.nodeBase.nodeDefault.asNode()), LFSingleLineTupleTypeElements, LFMultiLineTupleTypeElements)
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTupleElementType(p1), node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.elements, ListFormat(flags.value or 524288))
-    this.emitToken(Kind(23), node!!.elements!!.end(), WriteKindPunctuation, node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitToken(Kind(22), node!!.typeNodeBase.nodeBase.node.pos(), WriteKindPunctuation, node!!.typeNodeBase.nodeBase.asNode())
+    val flags: ListFormat = com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, this.shouldEmitOnSingleLine(node!!.typeNodeBase.nodeBase.asNode()), LFSingleLineTupleTypeElements, LFMultiLineTupleTypeElements)
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTupleElementType(p1), node!!.typeNodeBase.nodeBase.asNode(), node!!.elements, ListFormat(flags.value or 524288))
+    this.emitToken(Kind(23), node!!.elements!!.end(), WriteKindPunctuation, node!!.typeNodeBase.nodeBase.asNode())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitRestType 6a40383b
 fun Printer?.emitRestType(node: RestTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.writePunctuation("...")
     this.emitTypeNodeOutsideExtends(node!!.type)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitOptionalType 77fb282b
 fun Printer?.emitOptionalType(node: OptionalTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitPostfixTypeOperand(node!!.type, node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitPostfixTypeOperand(node!!.type, node!!.typeNodeBase.nodeBase.asNode())
     this.writePunctuation("?")
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitNamedTupleMember 51d6547a
 fun Printer?.emitNamedTupleMember(node: NamedTupleMember?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.emitPunctuationNode(node!!.dotDotDotToken)
     this.emitIdentifierName(node!!.name().asIdentifier())
     this.emitPunctuationNode(node!!.questionToken)
-    this.emitToken(Kind(58), greatestEnd(node!!.name()!!.end(), GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), node!!.questionToken)), WriteKindPunctuation, node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this.emitToken(Kind(58), greatestEnd(node!!.name()!!.end(), GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), node!!.questionToken)), WriteKindPunctuation, node!!.typeNodeBase.nodeBase.asNode())
     this.writeSpace()
     this.emitTypeNodeOutsideExtends(node!!.type)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitUnionTypeConstituent da365dee
@@ -2462,9 +2462,9 @@ fun Printer?.emitUnionTypeConstituent(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitUnionType 5c257601
 fun Printer?.emitUnionType(node: UnionTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitUnionTypeConstituent(p1), node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.unionOrIntersectionTypeNodeBase.types, LFUnionTypeConstituents)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitUnionTypeConstituent(p1), node!!.typeNodeBase.nodeBase.asNode(), node!!.unionOrIntersectionTypeNodeBase.types, LFUnionTypeConstituents)
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitIntersectionTypeConstituent ccbbe5c1
@@ -2474,14 +2474,14 @@ fun Printer?.emitIntersectionTypeConstituent(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitIntersectionType 210740e9
 fun Printer?.emitIntersectionType(node: IntersectionTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitIntersectionTypeConstituent(p1), node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.unionOrIntersectionTypeNodeBase.types, LFIntersectionTypeConstituents)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitIntersectionTypeConstituent(p1), node!!.typeNodeBase.nodeBase.asNode(), node!!.unionOrIntersectionTypeNodeBase.types, LFIntersectionTypeConstituents)
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitConditionalType f83e60c0
 fun Printer?.emitConditionalType(node: ConditionalTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.emitTypeNode(node!!.checkType, TypePrecedence(3))
     this.writeSpace()
     this.writeKeyword("extends")
@@ -2495,12 +2495,12 @@ fun Printer?.emitConditionalType(node: ConditionalTypeNode?) {
     this.writePunctuation(":")
     this.writeSpace()
     this.emitTypeNodeOutsideExtends(node!!.falseType)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitInferTypeParameter c8bddd2e
 fun Printer?.emitInferTypeParameter(node: TypeParameterDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.emitBindingIdentifier(node!!.name().asIdentifier())
     if (node!!.constraint != null) {
         this.writeSpace()
@@ -2508,68 +2508,68 @@ fun Printer?.emitInferTypeParameter(node: TypeParameterDeclaration?) {
         this.writeSpace()
         this.emitTypeNodeInExtends(node!!.constraint)
     }
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitInferType 3ed2f139
 fun Printer?.emitInferType(node: InferTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.writeKeyword("infer")
     this.writeSpace()
     this.emitInferTypeParameter(node!!.typeParameter.asTypeParameterDeclaration())
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitParenthesizedType 44d668c9
 fun Printer?.emitParenthesizedType(node: ParenthesizedTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.writePunctuation("(")
     this.emitTypeNodeOutsideExtends(node!!.type)
     this.writePunctuation(")")
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitThisType 0f5429ea
 fun Printer?.emitThisType(node: ThisTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.writeKeyword("this")
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeOperator 249eeaf8
 fun Printer?.emitTypeOperator(node: TypeOperatorNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(node!!.operator, node!!.typeNodeBase.nodeBase.nodeDefault.node.pos(), WriteKindKeyword, node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitToken(node!!.operator, node!!.typeNodeBase.nodeBase.node.pos(), WriteKindKeyword, node!!.typeNodeBase.nodeBase.asNode())
     this.writeSpace()
     this.emitTypeNode(node!!.type, com.xemantic.typescript.tsgo.core.ifElse<TypePrecedence>(TypePrecedence.ELEM, node!!.operator.value == 148, TypePrecedence(6), TypePrecedence(5)))
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitIndexedAccessType 951963c0
 fun Printer?.emitIndexedAccessType(node: IndexedAccessTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    this.emitPostfixTypeOperand(node!!.objectType, node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    this.emitPostfixTypeOperand(node!!.objectType, node!!.typeNodeBase.nodeBase.asNode())
     this.writePunctuation("[")
     this.emitTypeNodeOutsideExtends(node!!.indexType)
     this.writePunctuation("]")
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitMappedTypeParameter 596952cf
 fun Printer?.emitMappedTypeParameter(node: TypeParameterDeclaration?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.emitBindingIdentifier(node!!.name().asIdentifier())
     this.writeSpace()
     this.writeKeyword("in")
     this.writeSpace()
     this.emitTypeNodeOutsideExtends(node!!.constraint)
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitMappedType cc25c665
 fun Printer?.emitMappedType(node: MappedTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
-    val singleLine: Boolean = this.shouldEmitOnSingleLine(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
+    val singleLine: Boolean = this.shouldEmitOnSingleLine(node!!.typeNodeBase.nodeBase.asNode())
     this.writePunctuation("{")
     if (singleLine) {
         this.writeSpace()
@@ -2610,7 +2610,7 @@ fun Printer?.emitMappedType(node: MappedTypeNode?) {
             } else {
                 this.writeLine()
             }
-            this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTypeElement(p1), node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.members, LFPreserveLines)
+            this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTypeElement(p1), node!!.typeNodeBase.nodeBase.asNode(), node!!.members, LFPreserveLines)
         }
     }
     if (singleLine) {
@@ -2620,22 +2620,22 @@ fun Printer?.emitMappedType(node: MappedTypeNode?) {
         this.decreaseIndent()
     }
     this.writePunctuation("}")
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitLiteralType 5bc17e62
 fun Printer?.emitLiteralType(node: LiteralTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.emitExpression(node!!.literal, OperatorPrecedence(0))
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateTypeSpan 9272faa7
 fun Printer?.emitTemplateTypeSpan(node: TemplateLiteralTypeSpan?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.emitTypeNodeOutsideExtends(node!!.type)
     this.emitTemplateMiddleTail(node!!.literal)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateTypeSpanNode 46f56382
@@ -2645,29 +2645,29 @@ fun Printer?.emitTemplateTypeSpanNode(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateType ad7886aa
 fun Printer?.emitTemplateType(node: TemplateLiteralTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.typeNodeBase.nodeBase.asNode())
     this.emitTemplateHead(node!!.head.asTemplateHead())
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTemplateTypeSpanNode(p1), node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.templateSpans, LFTemplateExpressionSpans)
-    this.exitNode(node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTemplateTypeSpanNode(p1), node!!.typeNodeBase.nodeBase.asNode(), node!!.templateSpans, LFTemplateExpressionSpans)
+    this.exitNode(node!!.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitImportTypeNodeAttributes 7b58be39
 fun Printer?.emitImportTypeNodeAttributes(node: ImportAttributes?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.writePunctuation("{")
     this.writeSpace()
     this.writeKeyword(com.xemantic.typescript.tsgo.core.ifElse<String>(GoElem.STRING, node!!.token.value == 131, "assert", "with"))
     this.writePunctuation(":")
     this.writeSpace()
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitImportAttributeNode(p1), node!!.nodeBase.nodeDefault.asNode(), node!!.attributes, LFImportAttributes)
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitImportAttributeNode(p1), node!!.nodeBase.asNode(), node!!.attributes, LFImportAttributes)
     this.writeSpace()
     this.writePunctuation("}")
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitImportTypeNode ed5f8f7d
 fun Printer?.emitImportTypeNode(node: ImportTypeNode?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode())
     if (node!!.isTypeOf) {
         this.writeKeyword("typeof")
         this.writeSpace()
@@ -2685,8 +2685,8 @@ fun Printer?.emitImportTypeNode(node: ImportTypeNode?) {
         this.writePunctuation(".")
         this.emitEntityName(node!!.qualifier)
     }
-    this.emitTypeArguments(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode(), node!!.nodeWithTypeArgumentsBase.typeArguments)
-    this.exitNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitTypeArguments(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode(), node!!.nodeWithTypeArgumentsBase.typeArguments)
+    this.exitNode(node!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeNodeInExtends 2c6f0b39
@@ -2831,25 +2831,25 @@ fun Printer?.emitTypeNode(node: Node?, precedence_0: TypePrecedence) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitObjectBindingPattern 8b949e05
 fun Printer?.emitObjectBindingPattern(node: BindingPattern?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.writePunctuation("{")
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitBindingElementNode(p1), node!!.nodeBase.nodeDefault.asNode(), node!!.elements, LFObjectBindingPatternElements)
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitBindingElementNode(p1), node!!.nodeBase.asNode(), node!!.elements, LFObjectBindingPatternElements)
     this.writePunctuation("}")
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitArrayBindingPattern 21e1b871
 fun Printer?.emitArrayBindingPattern(node: BindingPattern?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.writePunctuation("[")
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitBindingElementNode(p1), node!!.nodeBase.nodeDefault.asNode(), node!!.elements, LFArrayBindingPatternElements)
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitBindingElementNode(p1), node!!.nodeBase.asNode(), node!!.elements, LFArrayBindingPatternElements)
     this.writePunctuation("]")
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitBindingElement a6a55576
 fun Printer?.emitBindingElement(node: BindingElement?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.nodeBase.asNode())
     this.emitTokenNode(node!!.dotDotDotToken)
     if (node!!.propertyName != null) {
         this.emitPropertyName(node!!.propertyName)
@@ -2859,9 +2859,9 @@ fun Printer?.emitBindingElement(node: BindingElement?) {
     val name: Node? = node!!.name()
     if (name != null) {
         this.emitBindingName(name)
-        this.emitInitializer(node!!.initializer, node!!.name()!!.end(), node!!.nodeBase.nodeDefault.asNode())
+        this.emitInitializer(node!!.initializer, node!!.name()!!.end(), node!!.nodeBase.asNode())
     }
-    this.exitNode(node!!.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitBindingElementNode 5a318008
@@ -2876,39 +2876,39 @@ fun Printer?.emitJSDocAllType(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitJSDocNonNullableType ca486061
 fun Printer?.emitJSDocNonNullableType(node: JSDocNonNullableType?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.jsDocTypeBase.nodeBase.asNode())
     this.writePunctuation("!")
     this.emitTypeNode(node!!.type, TypePrecedence(7))
-    this.exitNode(node!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.jsDocTypeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitJSDocNullableType 1a28a4fe
 fun Printer?.emitJSDocNullableType(node: JSDocNullableType?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.jsDocTypeBase.nodeBase.asNode())
     this.writePunctuation("?")
     this.emitTypeNode(node!!.type, TypePrecedence(7))
-    this.exitNode(node!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.jsDocTypeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitJSDocOptionalType 25fbb368
 fun Printer?.emitJSDocOptionalType(node: JSDocOptionalType?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.jsDocTypeBase.nodeBase.asNode())
     this.emitTypeNode(node!!.type, TypePrecedence(1))
     this.writePunctuation("=")
-    this.exitNode(node!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.jsDocTypeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitJSDocVariadicType 002580a5
 fun Printer?.emitJSDocVariadicType(node: JSDocVariadicType?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.jsDocTypeBase.nodeBase.asNode())
     this.writePunctuation("...")
     this.emitTypeNode(node!!.type, TypePrecedence(1))
-    this.exitNode(node!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.jsDocTypeBase.nodeBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitKeywordExpression e714ef7c
 fun Printer?.emitKeywordExpression(node: KeywordExpression?) {
-    this.emitKeywordNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    this.emitKeywordNode(node!!.expressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitArrayLiteralExpressionElement 8b98f8b5
@@ -2918,22 +2918,22 @@ fun Printer?.emitArrayLiteralExpressionElement(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitArrayLiteralExpression 0bd8bc1a
 fun Printer?.emitArrayLiteralExpression(node: ArrayLiteralExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitArrayLiteralExpressionElement(p1), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.elements, ListFormat(8914 or com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, node!!.multiLine, LFPreferNewLine, LFNone).value))
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitArrayLiteralExpressionElement(p1), node!!.primaryExpressionBase.asNode(), node!!.elements, ListFormat(8914 or com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, node!!.multiLine, LFPreferNewLine, LFNone).value))
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitObjectLiteralExpression 9d407cfc
 fun Printer?.emitObjectLiteralExpression(node: ObjectLiteralExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    val indented: Boolean = this.shouldEmitIndented(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.primaryExpressionBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.primaryExpressionBase.asNode())
     this.generateAllMemberNames(node!!.properties)
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitObjectLiteralElement(p1), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.properties, ListFormat(526226 or com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, node!!.multiLine, LFPreferNewLine, LFNone).value or com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, this.shouldAllowTrailingComma(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.properties), LFAllowTrailingComma, LFNone).value))
-    this.popNameGenerationScope(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitObjectLiteralElement(p1), node!!.primaryExpressionBase.asNode(), node!!.properties, ListFormat(526226 or com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, node!!.multiLine, LFPreferNewLine, LFNone).value or com.xemantic.typescript.tsgo.core.ifElse<ListFormat>(ListFormat.ELEM, this.shouldAllowTrailingComma(node!!.primaryExpressionBase.asNode(), node!!.properties), LFAllowTrailingComma, LFNone).value))
+    this.popNameGenerationScope(node!!.primaryExpressionBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.mayNeedDotDotForPropertyAccess 6ce3834f
@@ -2949,15 +2949,15 @@ fun Printer?.mayNeedDotDotForPropertyAccess(expression_0: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPropertyAccessExpression 384b421c
 fun Printer?.emitPropertyAccessExpression(node: PropertyAccessExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitExpression(node!!.expression, com.xemantic.typescript.tsgo.core.ifElse<OperatorPrecedence>(OperatorPrecedence.ELEM, com.xemantic.typescript.tsgo.ast.isOptionalChain(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()), OperatorPrecedence(19), OperatorPrecedence(20)))
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.memberExpressionBase.asNode())
+    this.emitExpression(node!!.expression, com.xemantic.typescript.tsgo.core.ifElse<OperatorPrecedence>(OperatorPrecedence.ELEM, com.xemantic.typescript.tsgo.ast.isOptionalChain(node!!.memberExpressionBase.asNode()), OperatorPrecedence(19), OperatorPrecedence(20)))
     var token: Node? = node!!.questionDotToken
     if (token == null) {
         token = this!!.emitContext!!.factory!!.nodeFactory.newToken(Kind(24))
         token!!.loc = com.xemantic.typescript.tsgo.core.newTextRange(node!!.expression!!.end(), node!!.name()!!.pos())
         this!!.emitContext.addEmitFlags(token, EFNoSourceMap)
     }
-    val linesBeforeDot: Int = this.getLinesBetweenNodes(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.expression, token)
+    val linesBeforeDot: Int = this.getLinesBetweenNodes(node!!.memberExpressionBase.asNode(), node!!.expression, token)
     this.writeLineRepeat(linesBeforeDot)
     this.increaseIndentIf(linesBeforeDot > 0)
     val shouldEmitDotDot: Boolean = token!!.kind.value != 28 && this.mayNeedDotDotForPropertyAccess(node!!.expression) && !this!!.writer!!.hasTrailingComment() && !this!!.writer!!.hasTrailingWhitespace()
@@ -2967,26 +2967,26 @@ fun Printer?.emitPropertyAccessExpression(node: PropertyAccessExpression?) {
     if (node!!.questionDotToken != null) {
         this.emitTokenNode(token)
     } else {
-        this.emitToken(Kind(24), node!!.expression!!.end(), WriteKindPunctuation, node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        this.emitToken(Kind(24), node!!.expression!!.end(), WriteKindPunctuation, node!!.memberExpressionBase.asNode())
     }
-    val linesAfterDot: Int = this.getLinesBetweenNodes(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), token, node!!.name())
+    val linesAfterDot: Int = this.getLinesBetweenNodes(node!!.memberExpressionBase.asNode(), token, node!!.name())
     this.writeLineRepeat(linesAfterDot)
     this.increaseIndentIf(linesAfterDot > 0)
     this.emitMemberName(node!!.name())
     this.decreaseIndentIf(linesAfterDot > 0)
     this.decreaseIndentIf(linesBeforeDot > 0)
-    this.exitNode(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.memberExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitElementAccessExpression 3db341c0
 fun Printer?.emitElementAccessExpression(node: ElementAccessExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitExpression(node!!.expression, com.xemantic.typescript.tsgo.core.ifElse<OperatorPrecedence>(OperatorPrecedence.ELEM, com.xemantic.typescript.tsgo.ast.isOptionalChain(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()), OperatorPrecedence(19), OperatorPrecedence(20)))
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.memberExpressionBase.asNode())
+    this.emitExpression(node!!.expression, com.xemantic.typescript.tsgo.core.ifElse<OperatorPrecedence>(OperatorPrecedence.ELEM, com.xemantic.typescript.tsgo.ast.isOptionalChain(node!!.memberExpressionBase.asNode()), OperatorPrecedence(19), OperatorPrecedence(20)))
     this.emitTokenNode(node!!.questionDotToken)
-    this.emitToken(Kind(22), greatestEnd(-1, GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), node!!.expression, node!!.questionDotToken)), WriteKindPunctuation, node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.emitToken(Kind(22), greatestEnd(-1, GoSlice.of(GoElem.ref<Iface_End_22b3828e?>(), node!!.expression, node!!.questionDotToken)), WriteKindPunctuation, node!!.memberExpressionBase.asNode())
     this.emitExpression(node!!.argumentExpression, OperatorPrecedence(0))
-    this.emitToken(Kind(23), node!!.argumentExpression!!.end(), WriteKindPunctuation, node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.exitNode(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitToken(Kind(23), node!!.argumentExpression!!.end(), WriteKindPunctuation, node!!.memberExpressionBase.asNode())
+    this.exitNode(node!!.memberExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitArgument 62abd1d5
@@ -3012,27 +3012,27 @@ fun Printer?.emitCallee(callee: Node?, parentNode: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitCallExpression d5aee93b
 fun Printer?.emitCallExpression(node: CallExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitCallee(node!!.expression, node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.leftHandSideExpressionBase.asNode())
+    this.emitCallee(node!!.expression, node!!.leftHandSideExpressionBase.asNode())
     this.emitTokenNode(node!!.questionDotToken)
-    this.emitTypeArguments(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.typeArguments)
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitArgument(p1), node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.arguments, LFCallExpressionArguments)
-    this.exitNode(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitTypeArguments(node!!.leftHandSideExpressionBase.asNode(), node!!.typeArguments)
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitArgument(p1), node!!.leftHandSideExpressionBase.asNode(), node!!.arguments, LFCallExpressionArguments)
+    this.exitNode(node!!.leftHandSideExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitNewExpression a717ef82
 fun Printer?.emitNewExpression(node: NewExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(Kind(104), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindKeyword, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
+    this.emitToken(Kind(104), node!!.primaryExpressionBase.node.pos(), WriteKindKeyword, node!!.primaryExpressionBase.asNode())
     this.writeSpace()
     if (com.xemantic.typescript.tsgo.ast.skipPartiallyEmittedExpressions(node!!.expression)!!.kind.value == 214) {
         this.emitExpression(node!!.expression, OperatorPrecedence(22))
     } else {
         this.emitExpression(node!!.expression, OperatorPrecedence(20))
     }
-    this.emitTypeArguments(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.typeArguments)
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitArgument(p1), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.arguments, LFNewExpressionArguments)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitTypeArguments(node!!.primaryExpressionBase.asNode(), node!!.typeArguments)
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitArgument(p1), node!!.primaryExpressionBase.asNode(), node!!.arguments, LFNewExpressionArguments)
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateLiteral 3f997ad7
@@ -3052,57 +3052,57 @@ fun Printer?.emitTemplateLiteral(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTaggedTemplateExpression be1d11e8
 fun Printer?.emitTaggedTemplateExpression(node: TaggedTemplateExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitCallee(node!!.tag, node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitTypeArguments(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.typeArguments)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.memberExpressionBase.asNode())
+    this.emitCallee(node!!.tag, node!!.memberExpressionBase.asNode())
+    this.emitTypeArguments(node!!.memberExpressionBase.asNode(), node!!.typeArguments)
     this.writeSpace()
     this.emitTemplateLiteral(node!!.template)
-    this.exitNode(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.memberExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeAssertionExpression 6d3ef438
 fun Printer?.emitTypeAssertionExpression(node: TypeAssertion?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.asNode())
     this.writePunctuation("<")
     this.emitTypeNodeOutsideExtends(node!!.type)
     this.writePunctuation(">")
     this.emitExpression(node!!.expression, OperatorPrecedence(17))
-    this.exitNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.unaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitParenthesizedExpression 345c5e0d
 fun Printer?.emitParenthesizedExpression(node: ParenthesizedExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    val openParenPos: Int = this.emitToken(Kind(20), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindPunctuation, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    val indented: Boolean = this.writeLineSeparatorsAndIndentBefore(node!!.expression, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
+    val openParenPos: Int = this.emitToken(Kind(20), node!!.primaryExpressionBase.node.pos(), WriteKindPunctuation, node!!.primaryExpressionBase.asNode())
+    val indented: Boolean = this.writeLineSeparatorsAndIndentBefore(node!!.expression, node!!.primaryExpressionBase.asNode())
     this.emitExpression(node!!.expression, OperatorPrecedence(0))
-    this.writeLineSeparatorsAfter(node!!.expression, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.writeLineSeparatorsAfter(node!!.expression, node!!.primaryExpressionBase.asNode())
     this.decreaseIndentIf(indented)
     var closeParenPos: Int = openParenPos
     if (node!!.expression != null) {
         closeParenPos = node!!.expression!!.end()
     }
-    this.emitToken(Kind(21), closeParenPos, WriteKindPunctuation, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitToken(Kind(21), closeParenPos, WriteKindPunctuation, node!!.primaryExpressionBase.asNode())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitFunctionExpression c7b2ede2
 fun Printer?.emitFunctionExpression(node: FunctionExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
     this.generateNameIfNeeded(node!!.name())
-    this.emitModifierList(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.modifiersBase.modifiers(), false)
+    this.emitModifierList(node!!.primaryExpressionBase.asNode(), node!!.modifiersBase.modifiers(), false)
     this.writeKeyword("function")
     this.emitTokenNode(node!!.functionLikeWithBodyBase.bodyBase.asteriskToken)
     this.writeSpace()
     this.emitIdentifierNameNode(node!!.name())
-    val indented: Boolean = this.shouldEmitIndented(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.primaryExpressionBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitSignature(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.primaryExpressionBase.asNode())
+    this.emitSignature(node!!.primaryExpressionBase.asNode())
     this.emitFunctionBodyNode(node!!.functionLikeWithBodyBase.bodyBase.body)
-    this.popNameGenerationScope(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.primaryExpressionBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitConciseBody 0dd156f0
@@ -3127,65 +3127,65 @@ fun Printer?.emitConciseBody(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitArrowFunction e9f6ba7f
 fun Printer?.emitArrowFunction(node: ArrowFunction?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitModifierList(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.modifiersBase.modifiers(), false)
-    val indented: Boolean = this.shouldEmitIndented(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.asNode())
+    this.emitModifierList(node!!.expressionBase.asNode(), node!!.modifiersBase.modifiers(), false)
+    val indented: Boolean = this.shouldEmitIndented(node!!.expressionBase.asNode())
     this.increaseIndentIf(indented)
-    this.pushNameGenerationScope(node!!.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitTypeParameters(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.functionLikeWithBodyBase.functionLikeBase.typeParameters)
-    this.emitParametersForArrow(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.functionLikeWithBodyBase.functionLikeBase.parameters)
+    this.pushNameGenerationScope(node!!.expressionBase.asNode())
+    this.emitTypeParameters(node!!.expressionBase.asNode(), node!!.functionLikeWithBodyBase.functionLikeBase.typeParameters)
+    this.emitParametersForArrow(node!!.expressionBase.asNode(), node!!.functionLikeWithBodyBase.functionLikeBase.parameters)
     this.emitTypeAnnotation(node!!.functionLikeWithBodyBase.functionLikeBase.type)
     this.writeSpace()
     this.emitTokenNode(node!!.equalsGreaterThanToken)
     this.writeSpace()
     this.emitConciseBody(node!!.functionLikeWithBodyBase.bodyBase.body)
-    this.popNameGenerationScope(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    this.popNameGenerationScope(node!!.expressionBase.asNode())
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.expressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitDeleteExpression b7c0927d
 fun Printer?.emitDeleteExpression(node: DeleteExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(Kind(90), node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindKeyword, node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.asNode())
+    this.emitToken(Kind(90), node!!.unaryExpressionBase.node.pos(), WriteKindKeyword, node!!.unaryExpressionBase.asNode())
     this.writeSpace()
     this.emitExpression(node!!.expression, OperatorPrecedence(16))
-    this.exitNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.unaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTypeOfExpression 54967aa9
 fun Printer?.emitTypeOfExpression(node: TypeOfExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(Kind(113), node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindKeyword, node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.asNode())
+    this.emitToken(Kind(113), node!!.unaryExpressionBase.node.pos(), WriteKindKeyword, node!!.unaryExpressionBase.asNode())
     this.writeSpace()
     this.emitExpression(node!!.expression, OperatorPrecedence(16))
-    this.exitNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.unaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitVoidExpression fb37725a
 fun Printer?.emitVoidExpression(node: VoidExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(Kind(115), node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindKeyword, node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.asNode())
+    this.emitToken(Kind(115), node!!.unaryExpressionBase.node.pos(), WriteKindKeyword, node!!.unaryExpressionBase.asNode())
     this.writeSpace()
     this.emitExpression(node!!.expression, OperatorPrecedence(16))
-    this.exitNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.unaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitAwaitExpression 36861526
 fun Printer?.emitAwaitExpression(node: AwaitExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(Kind(134), node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindKeyword, node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.unaryExpressionBase.asNode())
+    this.emitToken(Kind(134), node!!.unaryExpressionBase.node.pos(), WriteKindKeyword, node!!.unaryExpressionBase.asNode())
     this.writeSpace()
     this.emitExpression(node!!.expression, OperatorPrecedence(16))
-    this.exitNode(node!!.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.unaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPrefixUnaryExpression 05c26245
 fun Printer?.emitPrefixUnaryExpression(node: PrefixUnaryExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.updateExpressionBase.asNode())
     val operator: Kind = node!!.operator
     val operand: Node? = node!!.operand
-    this.emitToken(operator, node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindOperator, node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.emitToken(operator, node!!.updateExpressionBase.node.pos(), WriteKindOperator, node!!.updateExpressionBase.asNode())
     if (operand!!.kind.value == 225) {
         val inner: Kind = operand.asPrefixUnaryExpression()!!.operator
         if ((operator.value == 39 && (inner.value == 39 || inner.value == 45)) || (operator.value == 40 && (inner.value == 40 || inner.value == 46))) {
@@ -3193,15 +3193,15 @@ fun Printer?.emitPrefixUnaryExpression(node: PrefixUnaryExpression?) {
         }
     }
     this.emitExpression(node!!.operand, OperatorPrecedence(16))
-    this.exitNode(node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.updateExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPostfixUnaryExpression ffc6d7ec
 fun Printer?.emitPostfixUnaryExpression(node: PostfixUnaryExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.updateExpressionBase.asNode())
     this.emitExpression(node!!.operand, OperatorPrecedence(18))
-    this.emitToken(node!!.operator, node!!.operand!!.end(), WriteKindOperator, node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.exitNode(node!!.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitToken(node!!.operator, node!!.operand!!.end(), WriteKindOperator, node!!.updateExpressionBase.asNode())
+    this.exitNode(node!!.updateExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.getLiteralKindOfBinaryPlusOperand 47a1e797
@@ -3229,7 +3229,7 @@ fun Printer?.getLiteralKindOfBinaryPlusOperand(node_0: Node?): Kind {
 fun Printer?.getBinaryExpressionPrecedence(node: BinaryExpression?): Tuple2<OperatorPrecedence, OperatorPrecedence> {
     var leftPrec: OperatorPrecedence = OperatorPrecedence(0)
     var rightPrec: OperatorPrecedence = OperatorPrecedence(0)
-    val precedence: OperatorPrecedence = com.xemantic.typescript.tsgo.ast.getExpressionPrecedence(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val precedence: OperatorPrecedence = com.xemantic.typescript.tsgo.ast.getExpressionPrecedence(node!!.expressionBase.asNode())
     leftPrec = precedence
     rightPrec = precedence
     run sw0@{
@@ -3304,17 +3304,17 @@ fun Printer?.emitBinaryExpression(node: BinaryExpression?) {
     if (com.xemantic.typescript.tsgo.ast.nodeIsSynthesized(emittedRight) && emittedRight!!.kind.value == 227 && mixingBinaryOperatorsRequiresParentheses(node!!.operatorToken!!.kind, emittedRight.asBinaryExpression()!!.operatorToken!!.kind)) {
         rightPrec = OperatorPrecedence(22)
     }
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.asNode())
     this.emitExpression(node!!.left, leftPrec)
-    val linesBeforeOperator: Int = this.getLinesBetweenNodes(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.left, node!!.operatorToken)
-    val linesAfterOperator: Int = this.getLinesBetweenNodes(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.operatorToken, node!!.right)
+    val linesBeforeOperator: Int = this.getLinesBetweenNodes(node!!.expressionBase.asNode(), node!!.left, node!!.operatorToken)
+    val linesAfterOperator: Int = this.getLinesBetweenNodes(node!!.expressionBase.asNode(), node!!.operatorToken, node!!.right)
     this.writeLinesAndIndent(linesBeforeOperator, node!!.operatorToken!!.kind.value != 27)
     this.emitTokenNodeEx(node!!.operatorToken, tefNoSourceMaps)
     this.writeLinesAndIndent(linesAfterOperator, true)
     this.emitExpression(node!!.right, rightPrec)
     this.decreaseIndentIf(linesAfterOperator > 0)
     this.decreaseIndentIf(linesBeforeOperator > 0)
-    this.exitNode(node!!.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.expressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitShortCircuitExpression 3d80cc07
@@ -3328,11 +3328,11 @@ fun Printer?.emitShortCircuitExpression(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitConditionalExpression 38835631
 fun Printer?.emitConditionalExpression(node: ConditionalExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
-    val linesBeforeQuestion: Int = this.getLinesBetweenNodes(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.condition, node!!.questionToken)
-    val linesAfterQuestion: Int = this.getLinesBetweenNodes(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.questionToken, node!!.whenTrue)
-    val linesBeforeColon: Int = this.getLinesBetweenNodes(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.whenTrue, node!!.colonToken)
-    val linesAfterColon: Int = this.getLinesBetweenNodes(node!!.expressionBase.nodeBase.nodeDefault.asNode(), node!!.colonToken, node!!.whenFalse)
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.asNode())
+    val linesBeforeQuestion: Int = this.getLinesBetweenNodes(node!!.expressionBase.asNode(), node!!.condition, node!!.questionToken)
+    val linesAfterQuestion: Int = this.getLinesBetweenNodes(node!!.expressionBase.asNode(), node!!.questionToken, node!!.whenTrue)
+    val linesBeforeColon: Int = this.getLinesBetweenNodes(node!!.expressionBase.asNode(), node!!.whenTrue, node!!.colonToken)
+    val linesAfterColon: Int = this.getLinesBetweenNodes(node!!.expressionBase.asNode(), node!!.colonToken, node!!.whenFalse)
     this.emitShortCircuitExpression(node!!.condition)
     this.writeLinesAndIndent(linesBeforeQuestion, true)
     this.emitPunctuationNode(node!!.questionToken)
@@ -3346,60 +3346,60 @@ fun Printer?.emitConditionalExpression(node: ConditionalExpression?) {
     this.emitExpression(node!!.whenFalse, OperatorPrecedence(2))
     this.decreaseIndentIf(linesAfterColon > 0)
     this.decreaseIndentIf(linesBeforeColon > 0)
-    this.exitNode(node!!.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.expressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitTemplateExpression f33e4e16
 fun Printer?.emitTemplateExpression(node: TemplateExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
     this.emitTemplateHead(node!!.head.asTemplateHead())
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTemplateSpanNode(p1), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.templateSpans, LFTemplateExpressionSpans)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitTemplateSpanNode(p1), node!!.primaryExpressionBase.asNode(), node!!.templateSpans, LFTemplateExpressionSpans)
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitYieldExpression 73e29d4c
 fun Printer?.emitYieldExpression(node: YieldExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(Kind(126), node!!.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindKeyword, node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.asNode())
+    this.emitToken(Kind(126), node!!.expressionBase.node.pos(), WriteKindKeyword, node!!.expressionBase.asNode())
     this.emitPunctuationNode(node!!.asteriskToken)
     if (node!!.expression != null) {
         this.writeSpace()
         this.emitExpressionNoASI(node!!.expression, OperatorPrecedence(2))
     }
-    this.exitNode(node!!.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.expressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitSpreadElement 6b1251f6
 fun Printer?.emitSpreadElement(node: SpreadElement?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(Kind(25), node!!.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindPunctuation, node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.asNode())
+    this.emitToken(Kind(25), node!!.expressionBase.node.pos(), WriteKindPunctuation, node!!.expressionBase.asNode())
     this.emitExpression(node!!.expression, OperatorPrecedence(2))
-    this.exitNode(node!!.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.expressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitClassExpression 47bda208
 fun Printer?.emitClassExpression(node: ClassExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
     this.generateNameIfNeeded(node!!.name())
-    val pos: Int = this.emitModifierList(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.classLikeBase.modifiersBase.modifiers(), true)
-    this.emitToken(Kind(85), pos, WriteKindKeyword, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val pos: Int = this.emitModifierList(node!!.primaryExpressionBase.asNode(), node!!.classLikeBase.modifiersBase.modifiers(), true)
+    this.emitToken(Kind(85), pos, WriteKindKeyword, node!!.primaryExpressionBase.asNode())
     if (node!!.name() != null) {
         this.writeSpace()
         this.emitIdentifierName(node!!.name().asIdentifier())
     }
-    val indented: Boolean = this.shouldEmitIndented(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val indented: Boolean = this.shouldEmitIndented(node!!.primaryExpressionBase.asNode())
     this.increaseIndentIf(indented)
-    this.emitTypeParameters(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.classLikeBase.typeParameters)
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitHeritageClauseNode(p1), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.classLikeBase.heritageClauses, LFClassHeritageClauses)
+    this.emitTypeParameters(node!!.primaryExpressionBase.asNode(), node!!.classLikeBase.typeParameters)
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitHeritageClauseNode(p1), node!!.primaryExpressionBase.asNode(), node!!.classLikeBase.heritageClauses, LFClassHeritageClauses)
     this.writeSpace()
     this.writePunctuation("{")
-    this.pushNameGenerationScope(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.pushNameGenerationScope(node!!.primaryExpressionBase.asNode())
     this.generateAllMemberNames(node!!.classLikeBase.members)
-    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitClassElement(p1), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.classLikeBase.members, LFClassMembers)
-    this.popNameGenerationScope(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    this.emitList(fun(p0: Printer?, p1: Node?) = p0.emitClassElement(p1), node!!.primaryExpressionBase.asNode(), node!!.classLikeBase.members, LFClassMembers)
+    this.popNameGenerationScope(node!!.primaryExpressionBase.asNode())
     this.writePunctuation("}")
     this.decreaseIndentIf(indented)
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitOmittedExpression 91adcc35
@@ -3409,10 +3409,10 @@ fun Printer?.emitOmittedExpression(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitExpressionWithTypeArguments e7e095c1
 fun Printer?.emitExpressionWithTypeArguments(node: ExpressionWithTypeArguments?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.memberExpressionBase.asNode())
     this.emitExpression(node!!.expression, OperatorPrecedence(20))
-    this.emitTypeArguments(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), node!!.typeArguments)
-    this.exitNode(node!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.emitTypeArguments(node!!.memberExpressionBase.asNode(), node!!.typeArguments)
+    this.exitNode(node!!.memberExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitExpressionWithTypeArgumentsNode a1c76f53
@@ -3422,41 +3422,41 @@ fun Printer?.emitExpressionWithTypeArgumentsNode(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitAsExpression a74da5c2
 fun Printer?.emitAsExpression(node: AsExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.asNode())
     this.emitExpression(node!!.expression, OperatorPrecedence(11))
     this.writeSpace()
     this.writeKeyword("as")
     this.writeSpace()
     this.emitTypeNodeOutsideExtends(node!!.type)
-    this.exitNode(node!!.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.expressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitSatisfiesExpression b3fb60c9
 fun Printer?.emitSatisfiesExpression(node: SatisfiesExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.expressionBase.asNode())
     this.emitExpression(node!!.expression, OperatorPrecedence(11))
     this.writeSpace()
     this.writeKeyword("satisfies")
     this.writeSpace()
     this.emitTypeNodeOutsideExtends(node!!.type)
-    this.exitNode(node!!.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.expressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitNonNullExpression 45458c0a
 fun Printer?.emitNonNullExpression(node: NonNullExpression?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.leftHandSideExpressionBase.asNode())
     this.emitExpression(node!!.expression, OperatorPrecedence(20))
     this.writeOperator("!")
-    this.exitNode(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.leftHandSideExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitMetaProperty 03c9cb3f
 fun Printer?.emitMetaProperty(node: MetaProperty?) {
-    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-    this.emitToken(node!!.keywordToken, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos(), WriteKindPunctuation, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.primaryExpressionBase.asNode())
+    this.emitToken(node!!.keywordToken, node!!.primaryExpressionBase.node.pos(), WriteKindPunctuation, node!!.primaryExpressionBase.asNode())
     this.writePunctuation(".")
     this.emitIdentifierName(node!!.name().asIdentifier())
-    this.exitNode(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), state.goCopy())
+    this.exitNode(node!!.primaryExpressionBase.asNode(), state.goCopy())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.Printer.emitPartiallyEmittedExpression 877e4d3a
@@ -3464,9 +3464,9 @@ fun Printer?.emitPartiallyEmittedExpression(node_0: PartiallyEmittedExpression?)
     var node: PartiallyEmittedExpression? = node_0
     val stack: Stack<com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression> = Stack<com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression>(goElem_T = com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression.ELEM)
     l0@ while (true) {
-        val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-        val emitFlags: EmitFlags = this!!.emitContext.emitFlags(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-        if (emitFlags.value and 128u == 0u && node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.pos() != node!!.expression!!.pos()) {
+        val state: com.xemantic.typescript.tsgo.printer.printerState = this.enterNode(node!!.leftHandSideExpressionBase.asNode())
+        val emitFlags: EmitFlags = this!!.emitContext.emitFlags(node!!.leftHandSideExpressionBase.asNode())
+        if (emitFlags.value and 128u == 0u && node!!.leftHandSideExpressionBase.node.pos() != node!!.expression!!.pos()) {
             this.emitTrailingCommentsOfPosition(node!!.expression!!.pos(), false, false)
         }
         stack.push(com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression(node = node, state = state.goCopy()))
@@ -3478,11 +3478,11 @@ fun Printer?.emitPartiallyEmittedExpression(node_0: PartiallyEmittedExpression?)
     this.emitExpression(node!!.expression, OperatorPrecedence(0))
     l1@ while (stack.len() > 0) {
         val entry: com.xemantic.typescript.tsgo.printer.entry_Printer_emitPartiallyEmittedExpression = stack.pop()
-        val emitFlags_1: EmitFlags = this!!.emitContext.emitFlags(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
-        if (emitFlags_1.value and 256u == 0u && node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.end() != node!!.expression!!.end()) {
+        val emitFlags_1: EmitFlags = this!!.emitContext.emitFlags(node!!.leftHandSideExpressionBase.asNode())
+        if (emitFlags_1.value and 256u == 0u && node!!.leftHandSideExpressionBase.node.end() != node!!.expression!!.end()) {
             this.emitLeadingCommentsOfPosition(node!!.expression!!.end())
         }
-        this.exitNode(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), entry.state.goCopy())
+        this.exitNode(node!!.leftHandSideExpressionBase.asNode(), entry.state.goCopy())
         node = entry.node
     }
 }
@@ -3588,19 +3588,19 @@ fun Printer?.parenthesizeExpressionForNoAsi(node: Node?): Node? {
             }
             212 -> {
                 val pae: PropertyAccessExpression? = node.asPropertyAccessExpression()
-                return this!!.emitContext!!.factory!!.nodeFactory.updatePropertyAccessExpression(pae, this.parenthesizeExpressionForNoAsi(pae!!.expression), pae!!.questionDotToken, pae!!.name(), pae!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+                return this!!.emitContext!!.factory!!.nodeFactory.updatePropertyAccessExpression(pae, this.parenthesizeExpressionForNoAsi(pae!!.expression), pae!!.questionDotToken, pae!!.name(), pae!!.memberExpressionBase.node.flags)
             }
             213 -> {
                 val eae: ElementAccessExpression? = node.asElementAccessExpression()
-                return this!!.emitContext!!.factory!!.nodeFactory.updateElementAccessExpression(eae, this.parenthesizeExpressionForNoAsi(eae!!.expression), eae!!.questionDotToken, eae!!.argumentExpression, eae!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+                return this!!.emitContext!!.factory!!.nodeFactory.updateElementAccessExpression(eae, this.parenthesizeExpressionForNoAsi(eae!!.expression), eae!!.questionDotToken, eae!!.argumentExpression, eae!!.memberExpressionBase.node.flags)
             }
             214 -> {
                 val ce: CallExpression? = node.asCallExpression()
-                return this!!.emitContext!!.factory!!.nodeFactory.updateCallExpression(ce, this.parenthesizeExpressionForNoAsi(ce!!.expression), ce!!.questionDotToken, ce!!.typeArguments, ce!!.arguments, ce!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+                return this!!.emitContext!!.factory!!.nodeFactory.updateCallExpression(ce, this.parenthesizeExpressionForNoAsi(ce!!.expression), ce!!.questionDotToken, ce!!.typeArguments, ce!!.arguments, ce!!.leftHandSideExpressionBase.node.flags)
             }
             216 -> {
                 val tte: TaggedTemplateExpression? = node.asTaggedTemplateExpression()
-                return this!!.emitContext!!.factory!!.nodeFactory.updateTaggedTemplateExpression(tte, this.parenthesizeExpressionForNoAsi(tte!!.tag), tte!!.questionDotToken, tte!!.typeArguments, tte!!.template, tte!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+                return this!!.emitContext!!.factory!!.nodeFactory.updateTaggedTemplateExpression(tte, this.parenthesizeExpressionForNoAsi(tte!!.tag), tte!!.questionDotToken, tte!!.typeArguments, tte!!.template, tte!!.memberExpressionBase.node.flags)
             }
             226 -> {
                 val pue: PostfixUnaryExpression? = node.asPostfixUnaryExpression()
@@ -3624,7 +3624,7 @@ fun Printer?.parenthesizeExpressionForNoAsi(node: Node?): Node? {
             }
             236 -> {
                 val nne: NonNullExpression? = node.asNonNullExpression()
-                return this!!.emitContext!!.factory!!.nodeFactory.updateNonNullExpression(nne, this.parenthesizeExpressionForNoAsi(nne!!.expression), nne!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+                return this!!.emitContext!!.factory!!.nodeFactory.updateNonNullExpression(nne, this.parenthesizeExpressionForNoAsi(nne!!.expression), nne!!.leftHandSideExpressionBase.node.flags)
             }
         }
     }

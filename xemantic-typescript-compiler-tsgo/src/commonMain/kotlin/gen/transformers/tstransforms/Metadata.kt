@@ -185,14 +185,14 @@ fun MetadataTransformer?.setCurrentLexicalScope(node: Node?) {
 fun MetadataTransformer?.visitClassExpression(node: ClassExpression?): Node? {
     return withDefers({ null }) { df0 ->
         val oldParent: Node? = this!!.parent
-        this!!.parent = node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()
+        this!!.parent = node!!.primaryExpressionBase.asNode()
         val da1 = oldParent
         val dr2 = this
         df0.defer { dr2.setParent(da1) }
-        if (!com.xemantic.typescript.tsgo.ast.classOrConstructorParameterIsDecorated(this!!.legacyDecorators, node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())) {
-            return this!!.transformer.visitor().visitEachChild(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        if (!com.xemantic.typescript.tsgo.ast.classOrConstructorParameterIsDecorated(this!!.legacyDecorators, node!!.primaryExpressionBase.asNode())) {
+            return this!!.transformer.visitor().visitEachChild(node!!.primaryExpressionBase.asNode())
         }
-        val modifiers: ModifierList? = this.injectClassTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.classLikeBase.modifiersBase.modifiers()), node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        val modifiers: ModifierList? = this.injectClassTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.classLikeBase.modifiersBase.modifiers()), node!!.primaryExpressionBase.asNode())
         return this!!.transformer.factory()!!.nodeFactory.updateClassExpression(node, modifiers, this!!.transformer.visitor().visitNode(node!!.name()), this!!.transformer.visitor().visitNodes(node!!.classLikeBase.typeParameters), this!!.transformer.visitor().visitNodes(node!!.classLikeBase.heritageClauses), this!!.transformer.visitor().visitNodes(node!!.classLikeBase.members))
     }
 }
@@ -201,51 +201,51 @@ fun MetadataTransformer?.visitClassExpression(node: ClassExpression?): Node? {
 fun MetadataTransformer?.visitClassDeclaration(node: ClassDeclaration?): Node? {
     return withDefers({ null }) { df0 ->
         val oldParent: Node? = this!!.parent
-        this!!.parent = node!!.statementBase.nodeBase.nodeDefault.asNode()
+        this!!.parent = node!!.statementBase.nodeBase.asNode()
         val da1 = oldParent
         val dr2 = this
         df0.defer { dr2.setParent(da1) }
-        if (!com.xemantic.typescript.tsgo.ast.classOrConstructorParameterIsDecorated(this!!.legacyDecorators, node!!.statementBase.nodeBase.nodeDefault.asNode())) {
-            return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        if (!com.xemantic.typescript.tsgo.ast.classOrConstructorParameterIsDecorated(this!!.legacyDecorators, node!!.statementBase.nodeBase.asNode())) {
+            return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
         }
-        val modifiers: ModifierList? = this.injectClassTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.classLikeBase.modifiersBase.modifiers()), node!!.statementBase.nodeBase.nodeDefault.asNode())
+        val modifiers: ModifierList? = this.injectClassTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.classLikeBase.modifiersBase.modifiers()), node!!.statementBase.nodeBase.asNode())
         return this!!.transformer.factory()!!.nodeFactory.updateClassDeclaration(node, modifiers, this!!.transformer.visitor().visitNode(node!!.name()), this!!.transformer.visitor().visitNodes(node!!.classLikeBase.typeParameters), this!!.transformer.visitor().visitNodes(node!!.classLikeBase.heritageClauses), this!!.transformer.visitor().visitNodes(node!!.classLikeBase.members))
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.MetadataTransformer.visitPropertyDeclaration f823d9fc
 fun MetadataTransformer?.visitPropertyDeclaration(node: PropertyDeclaration?): Node? {
-    if (!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.nodeBase.nodeDefault.asNode())) {
-        return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    if (!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.nodeBase.asNode())) {
+        return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
     }
-    val modifiers: ModifierList? = this.injectClassElementTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), node!!.nodeBase.nodeDefault.asNode(), this!!.parent)
+    val modifiers: ModifierList? = this.injectClassElementTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), node!!.nodeBase.asNode(), this!!.parent)
     return this!!.transformer.factory()!!.nodeFactory.updatePropertyDeclaration(node, modifiers, this!!.transformer.visitor().visitNode(node!!.name()), this!!.transformer.visitor().visitNode(node!!.namedMemberBase.postfixToken), this!!.transformer.visitor().visitNode(node!!.type), this!!.transformer.visitor().visitNode(node!!.initializer))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.MetadataTransformer.visitMethodDeclaration 82408e49
 fun MetadataTransformer?.visitMethodDeclaration(node: MethodDeclaration?): Node? {
-    if (!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.nodeBase.nodeDefault.asNode()) && getDecoratorsOfParameters(node!!.nodeBase.nodeDefault.asNode()).len == 0) {
-        return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    if (!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.nodeBase.asNode()) && getDecoratorsOfParameters(node!!.nodeBase.asNode()).len == 0) {
+        return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
     }
-    val modifiers: ModifierList? = this.injectClassElementTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), node!!.nodeBase.nodeDefault.asNode(), this!!.parent)
+    val modifiers: ModifierList? = this.injectClassElementTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.namedMemberBase.modifiers()), node!!.nodeBase.asNode(), this!!.parent)
     return this!!.transformer.factory()!!.nodeFactory.updateMethodDeclaration(node, modifiers, this!!.transformer.visitor().visitNode(node!!.functionLikeWithBodyBase.bodyBase.asteriskToken), this!!.transformer.visitor().visitNode(node!!.name()), this!!.transformer.visitor().visitNode(node!!.namedMemberBase.postfixToken), this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.typeParameters), this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), this!!.transformer.visitor().visitNode(node!!.functionLikeWithBodyBase.functionLikeBase.type), this!!.transformer.visitor().visitNode(node!!.functionLikeWithBodyBase.functionLikeBase.fullSignature), this!!.transformer.visitor().visitNode(node!!.functionLikeWithBodyBase.bodyBase.body))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.MetadataTransformer.visitSetAccessor b65fe62a
 fun MetadataTransformer?.visitSetAccessor(node: SetAccessorDeclaration?): Node? {
-    if (!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()) && getDecoratorsOfParameters(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()).len == 0) {
-        return this!!.transformer.visitor().visitEachChild(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode())
+    if (!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.accessorDeclarationBase.nodeBase.asNode()) && getDecoratorsOfParameters(node!!.accessorDeclarationBase.nodeBase.asNode()).len == 0) {
+        return this!!.transformer.visitor().visitEachChild(node!!.accessorDeclarationBase.nodeBase.asNode())
     }
-    val modifiers: ModifierList? = this.injectClassElementTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.accessorDeclarationBase.namedMemberBase.modifiers()), node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), this!!.parent)
+    val modifiers: ModifierList? = this.injectClassElementTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.accessorDeclarationBase.namedMemberBase.modifiers()), node!!.accessorDeclarationBase.nodeBase.asNode(), this!!.parent)
     return this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(node, modifiers, this!!.transformer.visitor().visitNode(node!!.name()), this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters), this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type), this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature), this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.MetadataTransformer.visitGetAccessor e7ca94f8
 fun MetadataTransformer?.visitGetAccessor(node: GetAccessorDeclaration?): Node? {
-    if (!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode())) {
-        return this!!.transformer.visitor().visitEachChild(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode())
+    if (!com.xemantic.typescript.tsgo.ast.hasDecorators(node!!.accessorDeclarationBase.nodeBase.asNode())) {
+        return this!!.transformer.visitor().visitEachChild(node!!.accessorDeclarationBase.nodeBase.asNode())
     }
-    val modifiers: ModifierList? = this.injectClassElementTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.accessorDeclarationBase.namedMemberBase.modifiers()), node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), this!!.parent)
+    val modifiers: ModifierList? = this.injectClassElementTypeMetadata(this!!.transformer.visitor().visitModifiers(node!!.accessorDeclarationBase.namedMemberBase.modifiers()), node!!.accessorDeclarationBase.nodeBase.asNode(), this!!.parent)
     return this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(node, modifiers, this!!.transformer.visitor().visitNode(node!!.name()), this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters), this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type), this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature), this!!.transformer.visitor().visitNode(node!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body))
 }
 

@@ -667,7 +667,7 @@ fun compareTypes(t1: Type?, t2: Type?): Int {
             }
         }
         t1!!.flags.value and 67108864u != 0u -> {
-            val c_20: Int = t1!!.checker.compareNodes(t1.asConditionalType()!!.root!!.node!!.typeNodeBase.nodeBase.nodeDefault.asNode(), t2.asConditionalType()!!.root!!.node!!.typeNodeBase.nodeBase.nodeDefault.asNode())
+            val c_20: Int = t1!!.checker.compareNodes(t1.asConditionalType()!!.root!!.node!!.typeNodeBase.nodeBase.asNode(), t2.asConditionalType()!!.root!!.node!!.typeNodeBase.nodeBase.asNode())
             if (c_20 != 0) {
                 return c_20
             }
@@ -1727,7 +1727,7 @@ fun Checker?.isUncheckedJSSuggestion(node: Node?, suggestion: Symbol?, excludeCl
                 }
             }
             val suggestionHasNoExtendsOrDecorators: Boolean = suggestion == null || suggestion!!.valueDeclaration == null || !com.xemantic.typescript.tsgo.ast.isClassLike(suggestion!!.valueDeclaration) || com.xemantic.typescript.tsgo.ast.getExtendsHeritageClauseElements(suggestion!!.valueDeclaration).len != 0 || com.xemantic.typescript.tsgo.ast.classOrConstructorParameterIsDecorated(false, suggestion!!.valueDeclaration)
-            return !(file !== declarationFile && declarationFile != null && com.xemantic.typescript.tsgo.ast.isGlobalSourceFile(declarationFile!!.nodeBase.nodeDefault.asNode())) && !(excludeClasses && suggestion != null && suggestion!!.flags.value and 32u != 0u && suggestionHasNoExtendsOrDecorators) && !(node != null && excludeClasses && com.xemantic.typescript.tsgo.ast.isPropertyAccessExpression(node) && node.expression()!!.kind.value == 109 && suggestionHasNoExtendsOrDecorators)
+            return !(file !== declarationFile && declarationFile != null && com.xemantic.typescript.tsgo.ast.isGlobalSourceFile(declarationFile!!.nodeBase.asNode())) && !(excludeClasses && suggestion != null && suggestion!!.flags.value and 32u != 0u && suggestionHasNoExtendsOrDecorators) && !(node != null && excludeClasses && com.xemantic.typescript.tsgo.ast.isPropertyAccessExpression(node) && node.expression()!!.kind.value == 109 && suggestionHasNoExtendsOrDecorators)
         }
     }
     return false

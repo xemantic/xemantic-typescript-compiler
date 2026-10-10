@@ -439,7 +439,7 @@ fun FileIncludeReason?.toRelatedInfo(program: Program?): Diagnostic? {
             if (matchedFileSpec != "") {
                 val filesNode: StringLiteral? = com.xemantic.typescript.tsgo.tsoptions.getTsConfigPropArrayElementValue(config!!.configFile!!.sourceFile, "files", matchedFileSpec)
                 if (filesNode != null) {
-                    return com.xemantic.typescript.tsgo.tsoptions.createDiagnosticForNodeInSourceFile(config!!.configFile!!.sourceFile, filesNode!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.file_is_matched_by_files_list_specified_here, GoElem.ref<Any?>().nilSlice)
+                    return com.xemantic.typescript.tsgo.tsoptions.createDiagnosticForNodeInSourceFile(config!!.configFile!!.sourceFile, filesNode!!.literalExpressionBase.primaryExpressionBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.file_is_matched_by_files_list_specified_here, GoElem.ref<Any?>().nilSlice)
                 }
             } else {
                 val t0 = config.getMatchedIncludeSpec(fileName)
@@ -448,7 +448,7 @@ fun FileIncludeReason?.toRelatedInfo(program: Program?): Diagnostic? {
                 if (matchedIncludeSpec != "" && !isDefaultIncludeSpec) {
                     val includeNode: StringLiteral? = com.xemantic.typescript.tsgo.tsoptions.getTsConfigPropArrayElementValue(config!!.configFile!!.sourceFile, "include", matchedIncludeSpec)
                     if (includeNode != null) {
-                        return com.xemantic.typescript.tsgo.tsoptions.createDiagnosticForNodeInSourceFile(config!!.configFile!!.sourceFile, includeNode!!.literalExpressionBase.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.file_is_matched_by_include_pattern_specified_here, GoElem.ref<Any?>().nilSlice)
+                        return com.xemantic.typescript.tsgo.tsoptions.createDiagnosticForNodeInSourceFile(config!!.configFile!!.sourceFile, includeNode!!.literalExpressionBase.primaryExpressionBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.file_is_matched_by_include_pattern_specified_here, GoElem.ref<Any?>().nilSlice)
                     }
                 }
             }

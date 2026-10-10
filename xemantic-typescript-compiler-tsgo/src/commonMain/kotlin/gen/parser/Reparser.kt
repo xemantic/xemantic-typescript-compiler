@@ -249,7 +249,7 @@ fun Parser?.reparseUnhosted(tag: Node?, parent: Node?, jsDoc: Node?) {
                 }
                 val importClause: Node? = this.addDeepCloneReparse(importTag!!.importClause)
                 importClause.asImportClause()!!.phaseModifier = Kind(156)
-                val importDeclaration: Node? = this!!.factory.newJSImportDeclaration(this!!.factory.deepCloneReparseModifiers(importTag!!.jsDocTagBase.nodeBase.nodeDefault.modifiers()), importClause, this.addDeepCloneReparse(importTag!!.moduleSpecifier), this.addDeepCloneReparse(importTag!!.attributes))
+                val importDeclaration: Node? = this!!.factory.newJSImportDeclaration(this!!.factory.deepCloneReparseModifiers(importTag!!.jsDocTagBase.nodeBase.modifiers()), importClause, this.addDeepCloneReparse(importTag!!.moduleSpecifier), this.addDeepCloneReparse(importTag!!.attributes))
                 this.finishReparsedNode(importDeclaration, tag)
                 this!!.reparseList = this!!.reparseList.append1(importDeclaration)
             }
@@ -295,7 +295,7 @@ fun Parser?.reparseJSDocSignature(jsSignature: Node?, fun_: Node?, jsDoc: Node?,
         if (param!!.kind.value == 335) {
             val thisTag: JSDocThisTag? = param.asJSDocThisTag()
             val thisIdent: Node? = this!!.factory.newIdentifier("this")
-            thisIdent!!.loc = thisTag!!.jsDocTagBase.nodeBase.nodeDefault.node.loc.goCopy()
+            thisIdent!!.loc = thisTag!!.jsDocTagBase.nodeBase.node.loc.goCopy()
             thisIdent!!.flags = NodeFlags(this!!.contextFlags.value or 8u)
             parameter = this!!.factory.newParameterDeclaration(null, null, thisIdent, null, null, null)
             if (thisTag!!.typeExpression != null) {
@@ -311,7 +311,7 @@ fun Parser?.reparseJSDocSignature(jsSignature: Node?, fun_: Node?, jsDoc: Node?,
             if (jsparam!!.typeExpression != null) {
                 if (jsparam!!.typeExpression.type()!!.kind.value == 314) {
                     dotDotDotToken = this!!.factory.newToken(Kind(25))
-                    dotDotDotToken!!.loc = jsparam!!.jsDocTagBase.nodeBase.nodeDefault.node.loc.goCopy()
+                    dotDotDotToken!!.loc = jsparam!!.jsDocTagBase.nodeBase.node.loc.goCopy()
                     dotDotDotToken!!.flags = NodeFlags(this!!.contextFlags.value or 8u)
                     val variadicType: JSDocVariadicType? = jsparam!!.typeExpression.type().asJSDocVariadicType()
                     paramType = this.reparseJSDocTypeLiteral(variadicType!!.type)
@@ -403,12 +403,12 @@ fun Parser?.reparseJSDocTypeLiteral(t_0: Node?): Node? {
             properties = properties.append1(property)
             this.reparseJSDocComment(property, prop)
         }
-        t = this!!.factory.newTypeLiteralNode(this.newNodeList(jstypeliteral!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.node.loc.goCopy(), properties))
+        t = this!!.factory.newTypeLiteralNode(this.newNodeList(jstypeliteral!!.jsDocTypeBase.nodeBase.node.loc.goCopy(), properties))
         if (isArrayType) {
-            this.finishReparsedNode(t, jstypeliteral!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+            this.finishReparsedNode(t, jstypeliteral!!.jsDocTypeBase.nodeBase.asNode())
             t = this!!.factory.newArrayTypeNode(t)
         }
-        this.finishReparsedNode(t, jstypeliteral!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+        this.finishReparsedNode(t, jstypeliteral!!.jsDocTypeBase.nodeBase.asNode())
         return t
     }
     return this.addDeepCloneReparse(t)
@@ -511,10 +511,10 @@ fun Parser?.reparseHosted(tag: Node?, parent_0: Node?, jsDoc: Node?) {
                 245 -> {
                     if (parent.expression()!!.kind.value == 227) {
                         val bin: BinaryExpression? = parent.expression().asBinaryExpression()
-                        val kind: JSDeclarationKind = com.xemantic.typescript.tsgo.ast.getAssignmentDeclarationKind(bin!!.expressionBase.nodeBase.nodeDefault.asNode())
+                        val kind: JSDeclarationKind = com.xemantic.typescript.tsgo.ast.getAssignmentDeclarationKind(bin!!.expressionBase.asNode())
                         if (kind.value != 0 && tag.typeExpression() != null) {
-                            bin!!.expressionBase.nodeBase.nodeDefault.node.asMutable().setType(this.addDeepCloneReparse(tag.typeExpression().type()))
-                            this.finishMutatedNode(bin!!.expressionBase.nodeBase.nodeDefault.asNode())
+                            bin!!.expressionBase.node.asMutable().setType(this.addDeepCloneReparse(tag.typeExpression().type()))
+                            this.finishMutatedNode(bin!!.expressionBase.asNode())
                             return
                         }
                     }
@@ -575,10 +575,10 @@ fun Parser?.reparseHosted(tag: Node?, parent_0: Node?, jsDoc: Node?) {
                 245 -> {
                     if (parent.expression()!!.kind.value == 227) {
                         val bin_1: BinaryExpression? = parent.expression().asBinaryExpression()
-                        val kind_1: JSDeclarationKind = com.xemantic.typescript.tsgo.ast.getAssignmentDeclarationKind(bin_1!!.expressionBase.nodeBase.nodeDefault.asNode())
+                        val kind_1: JSDeclarationKind = com.xemantic.typescript.tsgo.ast.getAssignmentDeclarationKind(bin_1!!.expressionBase.asNode())
                         if (kind_1.value != 0 && tag.typeExpression() != null) {
                             bin_1!!.right = this.makeNewCast(this.addDeepCloneReparse(tag.typeExpression().type()), bin_1!!.right, false)
-                            this.finishMutatedNode(bin_1!!.expressionBase.nodeBase.nodeDefault.asNode())
+                            this.finishMutatedNode(bin_1!!.expressionBase.asNode())
                         }
                     }
                 }
@@ -614,7 +614,7 @@ fun Parser?.reparseHosted(tag: Node?, parent_0: Node?, jsDoc: Node?) {
                 val ok: Boolean = t5.second
                 if (ok) {
                     if (param_1!!.type == null && parameterTag!!.typeExpression != null) {
-                        param_1!!.nodeBase.nodeDefault.node.asParameterDeclaration()!!.type = this.reparseJSDocTypeLiteral(parameterTag!!.typeExpression.type())
+                        param_1!!.nodeBase.node.asParameterDeclaration()!!.type = this.reparseJSDocTypeLiteral(parameterTag!!.typeExpression.type())
                     }
                     if (param_1!!.questionToken == null) {
                         val question: Node? = this.makeQuestionIfOptional(parameterTag)
@@ -622,7 +622,7 @@ fun Parser?.reparseHosted(tag: Node?, parent_0: Node?, jsDoc: Node?) {
                             param_1!!.questionToken = question
                         }
                     }
-                    this.finishMutatedNode(param_1!!.nodeBase.nodeDefault.asNode())
+                    this.finishMutatedNode(param_1!!.nodeBase.asNode())
                 }
             }
         }
@@ -783,7 +783,7 @@ fun Parser?.reparseHosted(tag: Node?, parent_0: Node?, jsDoc: Node?) {
                                 newArguments[i_1] = this.addDeepCloneReparse(arg)
                             }
                             target!!.typeArguments = this.newNodeList(source!!.typeArguments!!.loc.goCopy(), newArguments)
-                            this.finishMutatedNode(target!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+                            this.finishMutatedNode(target!!.memberExpressionBase.asNode())
                         }
                     }
                 }
@@ -797,7 +797,7 @@ fun Parser?.makeQuestionIfOptional(parameter: JSDocParameterOrPropertyTag?): Nod
     var questionToken: Node? = null
     if (parameter!!.isBracketed || parameter!!.typeExpression != null && parameter!!.typeExpression.type()!!.kind.value == 313) {
         questionToken = this!!.factory.newToken(Kind(57))
-        questionToken!!.loc = parameter!!.jsDocTagBase.nodeBase.nodeDefault.node.loc.goCopy()
+        questionToken!!.loc = parameter!!.jsDocTagBase.nodeBase.node.loc.goCopy()
         questionToken!!.flags = NodeFlags(this!!.contextFlags.value or 8u)
     }
     return questionToken

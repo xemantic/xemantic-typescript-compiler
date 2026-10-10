@@ -1800,7 +1800,7 @@ fun LanguageService?.getCompletionData(ctx: Context?, typeChecker: Checker?, fil
         }
         var scopeNode: Node? = getScopeNode(contextToken, adjustedPosition, file)
         if (scopeNode == null) {
-            scopeNode = file!!.nodeBase.nodeDefault.asNode()
+            scopeNode = file!!.nodeBase.asNode()
         }
         isInSnippetScope = isSnippetScope(scopeNode)
         val symbolMeanings: SymbolFlags = SymbolFlags(com.xemantic.typescript.tsgo.core.ifElse<SymbolFlags>(SymbolFlags.ELEM, isTypeOnlyLocation, SymbolFlags(0u), SymbolFlags(111551u)).value or 788968u or 1920u or 2097152u)
@@ -2434,7 +2434,7 @@ fun getLineEndOfPosition(file: SourceFile?, pos: Int): Int {
     val lineStarts: GoSlice<TextPos> = com.xemantic.typescript.tsgo.scanner.getECMALineStarts(file)
     var lastCharPos: Int = 0
     if (line + 1 >= lineStarts.len) {
-        lastCharPos = file!!.nodeBase.nodeDefault.node.end()
+        lastCharPos = file!!.nodeBase.node.end()
     } else {
         lastCharPos = lineStarts[line + 1].value - 1
     }
@@ -2491,7 +2491,7 @@ fun shouldIncludeSymbol(symbol: Symbol?, data: com.xemantic.typescript.tsgo.ls.c
         }
     }
     val symbolOrigin: Symbol? = com.xemantic.typescript.tsgo.checker.skipAlias(symbol, typeChecker)
-    if (file!!.nodeBase.nodeDefault.node.asSourceFile()!!.externalModuleIndicator != null && compilerOptions!!.allowUmdGlobalAccess.value != 2 && symbol !== symbolOrigin && data!!.symbolToSortTextMap[com.xemantic.typescript.tsgo.ast.getSymbolId(symbol)].value == "15" && symbol!!.parent != null && com.xemantic.typescript.tsgo.checker.isExternalModuleSymbol(symbol!!.parent)) {
+    if (file!!.nodeBase.node.asSourceFile()!!.externalModuleIndicator != null && compilerOptions!!.allowUmdGlobalAccess.value != 2 && symbol !== symbolOrigin && data!!.symbolToSortTextMap[com.xemantic.typescript.tsgo.ast.getSymbolId(symbol)].value == "15" && symbol!!.parent != null && com.xemantic.typescript.tsgo.checker.isExternalModuleSymbol(symbol!!.parent)) {
         return false
     }
     allFlags = SymbolFlags(allFlags.value or symbolOrigin.combinedLocalAndExportSymbolFlags().value)

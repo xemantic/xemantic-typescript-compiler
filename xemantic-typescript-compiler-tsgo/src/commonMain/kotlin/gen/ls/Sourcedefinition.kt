@@ -310,7 +310,7 @@ fun getSourceDefinitionEntryNode(sourceFile: SourceFile?): Node? {
     if (sourceFile!!.statements!!.nodes.len != 0) {
         return sourceFile!!.statements!!.nodes[0].asNode()
     }
-    return sourceFile!!.nodeBase.nodeDefault.asNode()
+    return sourceFile!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.getSourceDefinitionEntryDeclarations 52b07282
@@ -597,7 +597,7 @@ fun findDeclarationNodesByName(sourceFile: SourceFile?, names_0: GoSlice<String>
         }
         return node.forEachChild(visit)
     }
-    sourceFile!!.nodeBase.nodeDefault.asNode().forEachChild(visit)
+    sourceFile!!.nodeBase.asNode().forEachChild(visit)
     var declarations: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
     val s3 = candidates
     l1@ for (i4 in 0 until s3.len) {

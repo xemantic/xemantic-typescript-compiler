@@ -609,12 +609,12 @@ fun throwDiagnostic(result: SymbolAccessibilityResult): SymbolAccessibilityDiagn
 fun DeclarationTransformer?.visitSourceFile(node: SourceFile?): Node? {
     this!!.cjsExportAssignmentName = null
     if (node!!.isDeclarationFile) {
-        return node!!.nodeBase.nodeDefault.asNode()
+        return node!!.nodeBase.asNode()
     }
     this!!.needsDeclare = true
     this!!.needsScopeFixMarker = false
     this!!.resultHasScopeMarker = false
-    this!!.enclosingDeclaration = node!!.nodeBase.nodeDefault.asNode()
+    this!!.enclosingDeclaration = node!!.nodeBase.asNode()
     this!!.state!!.getSymbolAccessibilityDiagnostic = fun(p0: SymbolAccessibilityResult): SymbolAccessibilityDiagnostic? = throwDiagnostic(p0)
     this!!.resultHasExternalModuleIndicator = false
     this!!.suppressNewDiagnosticContexts = false
@@ -628,7 +628,7 @@ fun DeclarationTransformer?.visitSourceFile(node: SourceFile?): Node? {
     this!!.witnessedCjsExports.clear()
     this!!.state!!.currentSourceFile = node
     this.collectFileReferences(node)
-    this!!.resolver!!.precalculateDeclarationEmitVisibility(this!!.transformer.emitContext().mostOriginal(node!!.nodeBase.nodeDefault.asNode()).asSourceFile())
+    this!!.resolver!!.precalculateDeclarationEmitVisibility(this!!.transformer.emitContext().mostOriginal(node!!.nodeBase.asNode()).asSourceFile())
     val updated: Node? = this.transformSourceFile(node)
     this!!.state!!.currentSourceFile = null
     return updated
@@ -683,15 +683,15 @@ fun DeclarationTransformer?.transformSourceFile(node: SourceFile?): Node? {
             this!!.cjsExportAssignmentName = null
             this!!.cjsExportMembers = GoElem.ref<Node?>().nilSlice
         })
-        this!!.cjsExportAssignmentVisitor.visitNode(node!!.nodeBase.nodeDefault.asNode())
-        this!!.expressionVisitor.visitNode(node!!.nodeBase.nodeDefault.asNode())
+        this!!.cjsExportAssignmentVisitor.visitNode(node!!.nodeBase.asNode())
+        this!!.expressionVisitor.visitNode(node!!.nodeBase.asNode())
         var combinedStatements: NodeList? = null
         val statements: NodeList? = this!!.transformer.visitor().visitNodes(node!!.statements)
         combinedStatements = this.transformAndReplaceLatePaintedStatements(statements)
         combinedStatements = this.appendCjsExports(combinedStatements)
         combinedStatements!!.loc = statements!!.loc.goCopy()
         if (com.xemantic.typescript.tsgo.ast.isExternalOrCommonJSModule(node)) {
-            if (com.xemantic.typescript.tsgo.ast.isInJSFile(node!!.nodeBase.nodeDefault.asNode())) {
+            if (com.xemantic.typescript.tsgo.ast.isInJSFile(node!!.nodeBase.asNode())) {
                 val exportEquals: Symbol? = node!!.declarationBase.symbol!!.exports["export="]
                 if (exportEquals != null && exportEquals!!.declarations.len > 1) {
                     val s1 = exportEquals!!.declarations
@@ -1062,27 +1062,27 @@ fun DeclarationTransformer?.transformHeritageClause(clause: HeritageClause?): No
         return null
     }
     if (retainedClauses.len == clause!!.types!!.nodes.len) {
-        return this!!.transformer.visitor().visitEachChild(clause!!.nodeBase.nodeDefault.asNode())
+        return this!!.transformer.visitor().visitEachChild(clause!!.nodeBase.asNode())
     }
     return this!!.transformer.factory()!!.nodeFactory.updateHeritageClause(clause, clause!!.token, this!!.transformer.visitor().visitNodes(this!!.transformer.factory()!!.nodeFactory.newNodeList(retainedClauses)))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformImportTypeNode 3ccd6fa5
 fun DeclarationTransformer?.transformImportTypeNode(input: ImportTypeNode?): Node? {
-    if (!com.xemantic.typescript.tsgo.ast.isLiteralImportTypeNode(input!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode())) {
-        return input!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode()
+    if (!com.xemantic.typescript.tsgo.ast.isLiteralImportTypeNode(input!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode())) {
+        return input!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode()
     }
-    return this!!.transformer.factory()!!.nodeFactory.updateImportTypeNode(input, input!!.isTypeOf, this!!.transformer.factory()!!.nodeFactory.updateLiteralTypeNode(input!!.argument.asLiteralTypeNode(), this.rewriteModuleSpecifier(input!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode(), input!!.argument.asLiteralTypeNode()!!.literal)), input!!.attributes, input!!.qualifier, this!!.transformer.visitor().visitNodes(input!!.nodeWithTypeArgumentsBase.typeArguments))
+    return this!!.transformer.factory()!!.nodeFactory.updateImportTypeNode(input, input!!.isTypeOf, this!!.transformer.factory()!!.nodeFactory.updateLiteralTypeNode(input!!.argument.asLiteralTypeNode(), this.rewriteModuleSpecifier(input!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode(), input!!.argument.asLiteralTypeNode()!!.literal)), input!!.attributes, input!!.qualifier, this!!.transformer.visitor().visitNodes(input!!.nodeWithTypeArgumentsBase.typeArguments))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformConstructorTypeNode 4c49c435
 fun DeclarationTransformer?.transformConstructorTypeNode(input: ConstructorTypeNode?): Node? {
-    return this!!.transformer.factory()!!.nodeFactory.updateConstructorTypeNode(input, this.ensureModifiers(input!!.typeNodeBase.nodeBase.nodeDefault.asNode()), this!!.transformer.visitor().visitNodes(input!!.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters), this.updateParamList(input!!.typeNodeBase.nodeBase.nodeDefault.asNode(), input!!.functionOrConstructorTypeNodeBase.functionLikeBase.parameters), this!!.transformer.visitor()!!.visit!!(input!!.functionOrConstructorTypeNodeBase.functionLikeBase.type))
+    return this!!.transformer.factory()!!.nodeFactory.updateConstructorTypeNode(input, this.ensureModifiers(input!!.typeNodeBase.nodeBase.asNode()), this!!.transformer.visitor().visitNodes(input!!.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters), this.updateParamList(input!!.typeNodeBase.nodeBase.asNode(), input!!.functionOrConstructorTypeNodeBase.functionLikeBase.parameters), this!!.transformer.visitor()!!.visit!!(input!!.functionOrConstructorTypeNodeBase.functionLikeBase.type))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformFunctionTypeNode 618a72bc
 fun DeclarationTransformer?.transformFunctionTypeNode(input: FunctionTypeNode?): Node? {
-    return this!!.transformer.factory()!!.nodeFactory.updateFunctionTypeNode(input, this!!.transformer.visitor().visitNodes(input!!.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters), this.updateParamList(input!!.typeNodeBase.nodeBase.nodeDefault.asNode(), input!!.functionOrConstructorTypeNodeBase.functionLikeBase.parameters), this!!.transformer.visitor()!!.visit!!(input!!.functionOrConstructorTypeNodeBase.functionLikeBase.type))
+    return this!!.transformer.factory()!!.nodeFactory.updateFunctionTypeNode(input, this!!.transformer.visitor().visitNodes(input!!.functionOrConstructorTypeNodeBase.functionLikeBase.typeParameters), this.updateParamList(input!!.typeNodeBase.nodeBase.asNode(), input!!.functionOrConstructorTypeNodeBase.functionLikeBase.parameters), this!!.transformer.visitor()!!.visit!!(input!!.functionOrConstructorTypeNodeBase.functionLikeBase.type))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformConditionalTypeNode 71e5eeaf
@@ -1100,7 +1100,7 @@ fun DeclarationTransformer?.transformConditionalTypeNode(input: ConditionalTypeN
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformTypeReference de415f23
 fun DeclarationTransformer?.transformTypeReference(input: TypeReferenceNode?): Node? {
     this.checkEntityNameVisibility(input!!.typeName, this!!.enclosingDeclaration)
-    return this!!.transformer.visitor().visitEachChild(input!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(input!!.nodeWithTypeArgumentsBase.typeNodeBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformExpressionWithTypeArguments 800e5465
@@ -1108,7 +1108,7 @@ fun DeclarationTransformer?.transformExpressionWithTypeArguments(input: Expressi
     if (com.xemantic.typescript.tsgo.ast.isEntityName(input!!.expression) || com.xemantic.typescript.tsgo.ast.isEntityNameExpression(input!!.expression)) {
         this.checkEntityNameVisibility(input!!.expression, this!!.enclosingDeclaration)
     }
-    return this!!.transformer.visitor().visitEachChild(input!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(input!!.memberExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformTypeParameterDeclaration d322b5f1
@@ -1116,24 +1116,24 @@ fun DeclarationTransformer?.transformTypeParameterDeclaration(input: TypeParamet
     if (isPrivateMethodTypeParameter(this!!.host, input) && (input!!.defaultType != null || input!!.constraint != null)) {
         return this!!.transformer.factory()!!.nodeFactory.updateTypeParameterDeclaration(input, input!!.modifiersBase.modifiers(), input!!.name(), null, input!!.expression, null)
     }
-    return this!!.transformer.visitor().visitEachChild(input!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(input!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformVariableDeclaration 22bf06f5
 fun DeclarationTransformer?.transformVariableDeclaration(input: VariableDeclaration?): Node? {
-    if (this!!.state!!.currentSourceFile!!.commonJSModuleIndicator != null && com.xemantic.typescript.tsgo.ast.isVariableDeclarationInitializedToRequire(input!!.nodeBase.nodeDefault.asNode())) {
+    if (this!!.state!!.currentSourceFile!!.commonJSModuleIndicator != null && com.xemantic.typescript.tsgo.ast.isVariableDeclarationInitializedToRequire(input!!.nodeBase.asNode())) {
         return this.transformCjsRequireVariableDeclaration(input)
     }
     if (com.xemantic.typescript.tsgo.ast.isBindingPattern(input!!.name())) {
         return this.recreateBindingPattern(input!!.name().asBindingPattern())
     }
     this!!.suppressNewDiagnosticContexts = true
-    return this!!.transformer.factory()!!.nodeFactory.updateVariableDeclaration(input, input!!.name(), null, this.ensureType(input!!.nodeBase.nodeDefault.asNode(), false), this.ensureNoInitializer(input!!.nodeBase.nodeDefault.asNode()))
+    return this!!.transformer.factory()!!.nodeFactory.updateVariableDeclaration(input, input!!.name(), null, this.ensureType(input!!.nodeBase.asNode(), false), this.ensureNoInitializer(input!!.nodeBase.asNode()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformCjsRequireVariableDeclaration 06e831c7
 fun DeclarationTransformer?.transformCjsRequireVariableDeclaration(input: VariableDeclaration?): Node? {
-    val specifier: Node? = this.rewriteModuleSpecifier(input!!.nodeBase.nodeDefault.asNode(), input!!.initializer.asCallExpression()!!.arguments!!.nodes[0])
+    val specifier: Node? = this.rewriteModuleSpecifier(input!!.nodeBase.asNode(), input!!.initializer.asCallExpression()!!.arguments!!.nodes[0])
     if (com.xemantic.typescript.tsgo.ast.isIdentifier(input!!.name())) {
         return this!!.transformer.factory()!!.nodeFactory.newImportEqualsDeclaration(null, false, input!!.name(), this!!.transformer.factory()!!.nodeFactory.newExternalModuleReference(specifier))
     } else if (com.xemantic.typescript.tsgo.ast.isArrayBindingPattern(input!!.name())) {
@@ -1184,13 +1184,13 @@ fun DeclarationTransformer?.recreateBindingElement(e: BindingElement?): Node? {
     if (e!!.name() == null) {
         return null
     }
-    if (!getBindingNameVisible(this!!.resolver, e!!.nodeBase.nodeDefault.asNode())) {
+    if (!getBindingNameVisible(this!!.resolver, e!!.nodeBase.asNode())) {
         return null
     }
     if (com.xemantic.typescript.tsgo.ast.isBindingPattern(e!!.name())) {
         return this.recreateBindingPattern(e!!.name().asBindingPattern())
     }
-    return this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(e!!.name(), null, this.ensureType(e!!.nodeBase.nodeDefault.asNode(), false), null)
+    return this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(e!!.name(), null, this.ensureType(e!!.nodeBase.asNode(), false), null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformIndexSignatureDeclaration 117a692f
@@ -1199,12 +1199,12 @@ fun DeclarationTransformer?.transformIndexSignatureDeclaration(input: IndexSigna
     if (t == null) {
         t = this!!.transformer.factory()!!.nodeFactory.newKeywordTypeNode(Kind(132))
     }
-    return this!!.transformer.factory()!!.nodeFactory.updateIndexSignatureDeclaration(input, this.ensureModifiers(input!!.nodeBase.nodeDefault.asNode()), this.updateParamList(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeBase.parameters), t)
+    return this!!.transformer.factory()!!.nodeFactory.updateIndexSignatureDeclaration(input, this.ensureModifiers(input!!.nodeBase.asNode()), this.updateParamList(input!!.nodeBase.asNode(), input!!.functionLikeBase.parameters), t)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformCallSignatureDeclaration eaa31467
 fun DeclarationTransformer?.transformCallSignatureDeclaration(input: CallSignatureDeclaration?): Node? {
-    return this!!.transformer.factory()!!.nodeFactory.updateCallSignatureDeclaration(input, this.ensureTypeParams(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeBase.typeParameters), this.updateParamList(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeBase.parameters), this.ensureType(input!!.nodeBase.nodeDefault.asNode(), false))
+    return this!!.transformer.factory()!!.nodeFactory.updateCallSignatureDeclaration(input, this.ensureTypeParams(input!!.nodeBase.asNode(), input!!.functionLikeBase.typeParameters), this.updateParamList(input!!.nodeBase.asNode(), input!!.functionLikeBase.parameters), this.ensureType(input!!.nodeBase.asNode(), false))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformPropertySignatureDeclaration 3bebcaa4
@@ -1212,8 +1212,8 @@ fun DeclarationTransformer?.transformPropertySignatureDeclaration(input: Propert
     if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(input!!.name())) {
         return null
     }
-    val result: Node? = this!!.transformer.factory()!!.nodeFactory.updatePropertySignatureDeclaration(input, this.ensureModifiers(input!!.nodeBase.nodeDefault.asNode()), input!!.name(), input!!.namedMemberBase.postfixToken, this.ensureType(input!!.nodeBase.nodeDefault.asNode(), false), this.ensureNoInitializer(input!!.nodeBase.nodeDefault.asNode()))
-    this.preservePartialJsDoc(result, input!!.nodeBase.nodeDefault.asNode())
+    val result: Node? = this!!.transformer.factory()!!.nodeFactory.updatePropertySignatureDeclaration(input, this.ensureModifiers(input!!.nodeBase.asNode()), input!!.name(), input!!.namedMemberBase.postfixToken, this.ensureType(input!!.nodeBase.asNode(), false), this.ensureNoInitializer(input!!.nodeBase.asNode()))
+    this.preservePartialJsDoc(result, input!!.nodeBase.asNode())
     return result
 }
 
@@ -1226,7 +1226,7 @@ fun DeclarationTransformer?.transformPropertyDeclaration(input: PropertyDeclarat
     if (postfixToken != null && postfixToken!!.kind.value == 53) {
         postfixToken = null
     }
-    return this!!.transformer.factory()!!.nodeFactory.updatePropertyDeclaration(input, this.ensureModifiers(input!!.nodeBase.nodeDefault.asNode()), input!!.name(), postfixToken, this.ensureType(input!!.nodeBase.nodeDefault.asNode(), false), this.ensureNoInitializer(input!!.nodeBase.nodeDefault.asNode()))
+    return this!!.transformer.factory()!!.nodeFactory.updatePropertyDeclaration(input, this.ensureModifiers(input!!.nodeBase.asNode()), input!!.name(), postfixToken, this.ensureType(input!!.nodeBase.asNode(), false), this.ensureNoInitializer(input!!.nodeBase.asNode()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformSetAccessorDeclaration 81afd333
@@ -1234,7 +1234,7 @@ fun DeclarationTransformer?.transformSetAccessorDeclaration(input: SetAccessorDe
     if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(input!!.name())) {
         return null
     }
-    return this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(input, this.ensureModifiers(input!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()), input!!.name(), null, this.updateAccessorParamList(input!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), this!!.host!!.getEffectiveDeclarationFlags(this!!.transformer.emitContext().parseNode(input!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()), ModifierFlags(2u)).value != 0u), null, null, null)
+    return this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(input, this.ensureModifiers(input!!.accessorDeclarationBase.nodeBase.asNode()), input!!.name(), null, this.updateAccessorParamList(input!!.accessorDeclarationBase.nodeBase.asNode(), this!!.host!!.getEffectiveDeclarationFlags(this!!.transformer.emitContext().parseNode(input!!.accessorDeclarationBase.nodeBase.asNode()), ModifierFlags(2u)).value != 0u), null, null, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformGetAccesorDeclaration b5b9a177
@@ -1242,7 +1242,7 @@ fun DeclarationTransformer?.transformGetAccesorDeclaration(input: GetAccessorDec
     if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(input!!.name())) {
         return null
     }
-    return this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(input, this.ensureModifiers(input!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()), input!!.name(), null, this.updateAccessorParamList(input!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), this!!.host!!.getEffectiveDeclarationFlags(this!!.transformer.emitContext().parseNode(input!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()), ModifierFlags(2u)).value != 0u), this.ensureType(input!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode(), false), null, null)
+    return this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(input, this.ensureModifiers(input!!.accessorDeclarationBase.nodeBase.asNode()), input!!.name(), null, this.updateAccessorParamList(input!!.accessorDeclarationBase.nodeBase.asNode(), this!!.host!!.getEffectiveDeclarationFlags(this!!.transformer.emitContext().parseNode(input!!.accessorDeclarationBase.nodeBase.asNode()), ModifierFlags(2u)).value != 0u), this.ensureType(input!!.accessorDeclarationBase.nodeBase.asNode(), false), null, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.updateAccessorParamList 48aa5953
@@ -1277,12 +1277,12 @@ fun DeclarationTransformer?.updateAccessorParamList(input: Node?, isPrivate: Boo
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformConstructorDeclaration 8c53a06e
 fun DeclarationTransformer?.transformConstructorDeclaration(input: ConstructorDeclaration?): Node? {
-    return this!!.transformer.factory()!!.nodeFactory.updateConstructorDeclaration(input, this.ensureModifiers(input!!.nodeBase.nodeDefault.asNode()), null, this.updateParamList(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, null)
+    return this!!.transformer.factory()!!.nodeFactory.updateConstructorDeclaration(input, this.ensureModifiers(input!!.nodeBase.asNode()), null, this.updateParamList(input!!.nodeBase.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformConstructSignatureDeclaration f5666081
 fun DeclarationTransformer?.transformConstructSignatureDeclaration(input: ConstructSignatureDeclaration?): Node? {
-    return this!!.transformer.factory()!!.nodeFactory.updateConstructSignatureDeclaration(input, this.ensureTypeParams(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeBase.typeParameters), this.updateParamList(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeBase.parameters), this.ensureType(input!!.nodeBase.nodeDefault.asNode(), false))
+    return this!!.transformer.factory()!!.nodeFactory.updateConstructSignatureDeclaration(input, this.ensureTypeParams(input!!.nodeBase.asNode(), input!!.functionLikeBase.typeParameters), this.updateParamList(input!!.nodeBase.asNode(), input!!.functionLikeBase.parameters), this.ensureType(input!!.nodeBase.asNode(), false))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.omitPrivateMethodType dc2baeed
@@ -1297,24 +1297,24 @@ fun DeclarationTransformer?.omitPrivateMethodType(input: Node?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformMethodSignatureDeclaration d02c163a
 fun DeclarationTransformer?.transformMethodSignatureDeclaration(input: MethodSignatureDeclaration?): Node? {
-    if (this!!.host!!.getEffectiveDeclarationFlags(this!!.transformer.emitContext().parseNode(input!!.nodeBase.nodeDefault.asNode()), ModifierFlags(2u)).value != 0u) {
-        return this.omitPrivateMethodType(input!!.nodeBase.nodeDefault.asNode())
+    if (this!!.host!!.getEffectiveDeclarationFlags(this!!.transformer.emitContext().parseNode(input!!.nodeBase.asNode()), ModifierFlags(2u)).value != 0u) {
+        return this.omitPrivateMethodType(input!!.nodeBase.asNode())
     } else if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(input!!.name())) {
         return null
     } else {
-        return this!!.transformer.factory()!!.nodeFactory.updateMethodSignatureDeclaration(input, this.ensureModifiers(input!!.nodeBase.nodeDefault.asNode()), input!!.name(), input!!.namedMemberBase.postfixToken, this.ensureTypeParams(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeBase.typeParameters), this.updateParamList(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeBase.parameters), this.ensureType(input!!.nodeBase.nodeDefault.asNode(), false))
+        return this!!.transformer.factory()!!.nodeFactory.updateMethodSignatureDeclaration(input, this.ensureModifiers(input!!.nodeBase.asNode()), input!!.name(), input!!.namedMemberBase.postfixToken, this.ensureTypeParams(input!!.nodeBase.asNode(), input!!.functionLikeBase.typeParameters), this.updateParamList(input!!.nodeBase.asNode(), input!!.functionLikeBase.parameters), this.ensureType(input!!.nodeBase.asNode(), false))
     }
     goUnreachable()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformMethodDeclaration cfe70f47
 fun DeclarationTransformer?.transformMethodDeclaration(input: MethodDeclaration?): Node? {
-    if (this!!.host!!.getEffectiveDeclarationFlags(this!!.transformer.emitContext().parseNode(input!!.nodeBase.nodeDefault.asNode()), ModifierFlags(2u)).value != 0u) {
-        return this.omitPrivateMethodType(input!!.nodeBase.nodeDefault.asNode())
+    if (this!!.host!!.getEffectiveDeclarationFlags(this!!.transformer.emitContext().parseNode(input!!.nodeBase.asNode()), ModifierFlags(2u)).value != 0u) {
+        return this.omitPrivateMethodType(input!!.nodeBase.asNode())
     } else if (com.xemantic.typescript.tsgo.ast.isPrivateIdentifier(input!!.name())) {
         return null
     } else {
-        return this!!.transformer.factory()!!.nodeFactory.updateMethodDeclaration(input, this.ensureModifiers(input!!.nodeBase.nodeDefault.asNode()), null, input!!.name(), input!!.namedMemberBase.postfixToken, this.ensureTypeParams(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.typeParameters), this.updateParamList(input!!.nodeBase.nodeDefault.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.parameters), this.ensureType(input!!.nodeBase.nodeDefault.asNode(), false), null, null)
+        return this!!.transformer.factory()!!.nodeFactory.updateMethodDeclaration(input, this.ensureModifiers(input!!.nodeBase.asNode()), null, input!!.name(), input!!.namedMemberBase.postfixToken, this.ensureTypeParams(input!!.nodeBase.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.typeParameters), this.updateParamList(input!!.nodeBase.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.parameters), this.ensureType(input!!.nodeBase.asNode(), false), null, null)
     }
     goUnreachable()
 }
@@ -1853,25 +1853,25 @@ fun DeclarationTransformer?.transformTopLevelDeclaration(input: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformTypeAliasDeclaration 46f4b998
 fun DeclarationTransformer?.transformTypeAliasDeclaration(input: TypeAliasDeclaration?): Node? {
     this!!.needsDeclare = false
-    return this!!.transformer.factory()!!.nodeFactory.updateTypeAliasDeclaration(input, this.ensureModifiers(input!!.statementBase.nodeBase.nodeDefault.asNode()), input!!.name(), this!!.transformer.visitor().visitNodes(input!!.typeParameters), this!!.transformer.visitor()!!.visit!!(input!!.type))
+    return this!!.transformer.factory()!!.nodeFactory.updateTypeAliasDeclaration(input, this.ensureModifiers(input!!.statementBase.nodeBase.asNode()), input!!.name(), this!!.transformer.visitor().visitNodes(input!!.typeParameters), this!!.transformer.visitor()!!.visit!!(input!!.type))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformInterfaceDeclaration a5f9ac10
 fun DeclarationTransformer?.transformInterfaceDeclaration(input: InterfaceDeclaration?): Node? {
-    return this!!.transformer.factory()!!.nodeFactory.updateInterfaceDeclaration(input, this.ensureModifiers(input!!.statementBase.nodeBase.nodeDefault.asNode()), input!!.name(), this!!.transformer.visitor().visitNodes(input!!.typeParameters), this!!.transformer.visitor().visitNodes(input!!.heritageClauses), this!!.transformer.visitor().visitNodes(input!!.members))
+    return this!!.transformer.factory()!!.nodeFactory.updateInterfaceDeclaration(input, this.ensureModifiers(input!!.statementBase.nodeBase.asNode()), input!!.name(), this!!.transformer.visitor().visitNodes(input!!.typeParameters), this!!.transformer.visitor().visitNodes(input!!.heritageClauses), this!!.transformer.visitor().visitNodes(input!!.members))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformFunctionDeclaration c3b066d6
 fun DeclarationTransformer?.transformFunctionDeclaration(input: FunctionDeclaration?): Node? {
-    if (this!!.resolver!!.isExpandoFunctionDeclaration(input!!.statementBase.nodeBase.nodeDefault.asNode())) {
-        this!!.state!!.reportExpandoFunctionErrors!!(input!!.statementBase.nodeBase.nodeDefault.asNode())
+    if (this!!.resolver!!.isExpandoFunctionDeclaration(input!!.statementBase.nodeBase.asNode())) {
+        this!!.state!!.reportExpandoFunctionErrors!!(input!!.statementBase.nodeBase.asNode())
     }
-    return this!!.transformer.factory()!!.nodeFactory.updateFunctionDeclaration(input, this.ensureModifiers(input!!.statementBase.nodeBase.nodeDefault.asNode()), null, input!!.name(), this.ensureTypeParams(input!!.statementBase.nodeBase.nodeDefault.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.typeParameters), this.updateParamList(input!!.statementBase.nodeBase.nodeDefault.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.parameters), this.ensureType(input!!.statementBase.nodeBase.nodeDefault.asNode(), false), null, null)
+    return this!!.transformer.factory()!!.nodeFactory.updateFunctionDeclaration(input, this.ensureModifiers(input!!.statementBase.nodeBase.asNode()), null, input!!.name(), this.ensureTypeParams(input!!.statementBase.nodeBase.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.typeParameters), this.updateParamList(input!!.statementBase.nodeBase.asNode(), input!!.functionLikeWithBodyBase.functionLikeBase.parameters), this.ensureType(input!!.statementBase.nodeBase.asNode(), false), null, null)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformModuleDeclaration 4f9748eb
 fun DeclarationTransformer?.transformModuleDeclaration(input: ModuleDeclaration?): Node? {
-    val mods: ModifierList? = this.ensureModifiers(input!!.statementBase.nodeBase.nodeDefault.asNode())
+    val mods: ModifierList? = this.ensureModifiers(input!!.statementBase.nodeBase.asNode())
     val saveNeedsDeclare: Boolean = this!!.needsDeclare
     this!!.needsDeclare = false
     val inner: Node? = input!!.bodyBase.body
@@ -1886,10 +1886,10 @@ fun DeclarationTransformer?.transformModuleDeclaration(input: ModuleDeclaration?
         this!!.needsScopeFixMarker = false
         val statements: NodeList? = this!!.transformer.visitor().visitNodes(inner.statementList())
         var lateStatements: NodeList? = this.transformAndReplaceLatePaintedStatements(statements)
-        if (input!!.statementBase.nodeBase.nodeDefault.node.flags.value and 8388608u != 0u) {
+        if (input!!.statementBase.nodeBase.node.flags.value and 8388608u != 0u) {
             this!!.needsScopeFixMarker = false
         }
-        if (!com.xemantic.typescript.tsgo.ast.isGlobalScopeAugmentation(input!!.statementBase.nodeBase.nodeDefault.asNode()) && !this!!.resultHasScopeMarker && !hasScopeMarker(lateStatements)) {
+        if (!com.xemantic.typescript.tsgo.ast.isGlobalScopeAugmentation(input!!.statementBase.nodeBase.asNode()) && !this!!.resultHasScopeMarker && !hasScopeMarker(lateStatements)) {
             if (this!!.needsScopeFixMarker) {
                 lateStatements = this!!.transformer.factory()!!.nodeFactory.newNodeList(lateStatements!!.nodes.append1(createEmptyExports(this!!.transformer.factory()!!.nodeFactory.asNodeFactory())))
             } else {
@@ -1980,22 +1980,22 @@ fun DeclarationTransformer?.buildClassMembers(classNode: Node?, extraMembers: Go
 fun DeclarationTransformer?.transformClassDeclaration(input: ClassDeclaration?): Node? {
     return withDefers({ null }) { df0 ->
         val previousEnclosingDeclaration: Node? = this!!.enclosingDeclaration
-        this!!.enclosingDeclaration = input!!.statementBase.nodeBase.nodeDefault.asNode()
+        this!!.enclosingDeclaration = input!!.statementBase.nodeBase.asNode()
         df0.defer(fun() {
             this!!.enclosingDeclaration = previousEnclosingDeclaration
         })
         this!!.state!!.errorNameNode = input!!.name()
-        this!!.tracker!!.pushErrorFallbackNode(input!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.tracker!!.pushErrorFallbackNode(input!!.statementBase.nodeBase.asNode())
         val dr1 = this!!.tracker!!
         df0.defer { dr1.popErrorFallbackNode() }
-        val modifiers: ModifierList? = this.ensureModifiers(input!!.statementBase.nodeBase.nodeDefault.asNode())
-        val typeParameters: NodeList? = this.ensureTypeParams(input!!.statementBase.nodeBase.nodeDefault.asNode(), input!!.classLikeBase.typeParameters)
+        val modifiers: ModifierList? = this.ensureModifiers(input!!.statementBase.nodeBase.asNode())
+        val typeParameters: NodeList? = this.ensureTypeParams(input!!.statementBase.nodeBase.asNode(), input!!.classLikeBase.typeParameters)
         var extraMembers: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
-        if (com.xemantic.typescript.tsgo.ast.isInJSFile(input!!.statementBase.nodeBase.nodeDefault.asNode())) {
-            extraMembers = this.collectThisPropertyAssignments(input!!.statementBase.nodeBase.nodeDefault.asNode())
+        if (com.xemantic.typescript.tsgo.ast.isInJSFile(input!!.statementBase.nodeBase.asNode())) {
+            extraMembers = this.collectThisPropertyAssignments(input!!.statementBase.nodeBase.asNode())
         }
-        val members: NodeList? = this.buildClassMembers(input!!.statementBase.nodeBase.nodeDefault.asNode(), extraMembers)
-        val extendsClause: Node? = getEffectiveBaseTypeNode(input!!.statementBase.nodeBase.nodeDefault.asNode())
+        val members: NodeList? = this.buildClassMembers(input!!.statementBase.nodeBase.asNode(), extraMembers)
+        val extendsClause: Node? = getEffectiveBaseTypeNode(input!!.statementBase.nodeBase.asNode())
         if (extendsClause != null && !com.xemantic.typescript.tsgo.ast.isEntityNameExpression(extendsClause.asExpressionWithTypeArguments()!!.expression) && extendsClause.asExpressionWithTypeArguments()!!.expression!!.kind.value != 105) {
             this!!.tracker!!.reportInferenceFallback(extendsClause.asExpressionWithTypeArguments()!!.expression)
             var oldId: String = "default"
@@ -2006,7 +2006,7 @@ fun DeclarationTransformer?.transformClassDeclaration(input: ClassDeclaration?):
             this!!.state!!.getSymbolAccessibilityDiagnostic = fun(unused2: SymbolAccessibilityResult): SymbolAccessibilityDiagnostic? {
                 return SymbolAccessibilityDiagnostic(diagnosticMessage = com.xemantic.typescript.tsgo.diagnostics.x_extends_clause_of_exported_class_0_has_or_is_using_private_name_1, errorNode = extendsClause, typeName = input!!.name())
             }
-            val varDecl: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(newId, null, this!!.resolver!!.createTypeOfExpression(this!!.transformer.emitContext(), extendsClause.expression(), input!!.statementBase.nodeBase.nodeDefault.asNode(), declarationEmitNodeBuilderFlags, declarationEmitInternalNodeBuilderFlags, this!!.tracker), null)
+            val varDecl: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(newId, null, this!!.resolver!!.createTypeOfExpression(this!!.transformer.emitContext(), extendsClause.expression(), input!!.statementBase.nodeBase.asNode(), declarationEmitNodeBuilderFlags, declarationEmitInternalNodeBuilderFlags, this!!.tracker), null)
             var mods: ModifierList? = null
             if (this!!.needsDeclare) {
                 mods = this!!.transformer.factory()!!.nodeFactory.newModifierList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newModifier(Kind(137))))
@@ -2195,7 +2195,7 @@ fun DeclarationTransformer?.transformVariableStatement(input: VariableStatement?
         return null
     }
     val nodeList: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(nodes)
-    val modifiers: ModifierList? = this.ensureModifiers(input!!.statementBase.nodeBase.nodeDefault.asNode())
+    val modifiers: ModifierList? = this.ensureModifiers(input!!.statementBase.nodeBase.asNode())
     var declList: Node? = null
     if (com.xemantic.typescript.tsgo.ast.isVarUsing(input!!.declarationList) || com.xemantic.typescript.tsgo.ast.isVarAwaitUsing(input!!.declarationList)) {
         declList = this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(nodeList, NodeFlags(2u))
@@ -2214,7 +2214,7 @@ fun DeclarationTransformer?.transformVariableStatement(input: VariableStatement?
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformEnumDeclaration ad243648
 fun DeclarationTransformer?.transformEnumDeclaration(input: EnumDeclaration?): Node? {
-    return this!!.transformer.factory()!!.nodeFactory.updateEnumDeclaration(input, this.ensureModifiers(input!!.statementBase.nodeBase.nodeDefault.asNode()), input!!.name(), this!!.transformer.factory()!!.nodeFactory.newNodeList(com.xemantic.typescript.tsgo.core.mapNonNil<Node?, Node?>(GoElem.ref<Node?>(), GoElem.ref<Node?>(), input!!.members!!.nodes, fun(m: Node?): Node? {
+    return this!!.transformer.factory()!!.nodeFactory.updateEnumDeclaration(input, this.ensureModifiers(input!!.statementBase.nodeBase.asNode()), input!!.name(), this!!.transformer.factory()!!.nodeFactory.newNodeList(com.xemantic.typescript.tsgo.core.mapNonNil<Node?, Node?>(GoElem.ref<Node?>(), GoElem.ref<Node?>(), input!!.members!!.nodes, fun(m: Node?): Node? {
         if (this.shouldStripInternal(m)) {
             return null
         }
@@ -2345,17 +2345,17 @@ fun DeclarationTransformer?.updateParamList(node: Node?, params: NodeList?): Nod
 fun DeclarationTransformer?.ensureParameter(p: ParameterDeclaration?): Node? {
     val oldDiag: ((SymbolAccessibilityResult) -> SymbolAccessibilityDiagnostic?)? = this!!.state!!.getSymbolAccessibilityDiagnostic
     if (!this!!.suppressNewDiagnosticContexts) {
-        this!!.state!!.getSymbolAccessibilityDiagnostic = createGetSymbolAccessibilityDiagnosticForNode(p!!.nodeBase.nodeDefault.asNode())
+        this!!.state!!.getSymbolAccessibilityDiagnostic = createGetSymbolAccessibilityDiagnosticForNode(p!!.nodeBase.asNode())
     }
     var questionToken: Node? = null
-    if (this!!.resolver!!.isOptionalParameter(p!!.nodeBase.nodeDefault.asNode())) {
+    if (this!!.resolver!!.isOptionalParameter(p!!.nodeBase.asNode())) {
         if (p!!.questionToken != null) {
             questionToken = p!!.questionToken
         } else {
             questionToken = this!!.transformer.factory()!!.nodeFactory.newToken(Kind(57))
         }
     }
-    val result: Node? = this!!.transformer.factory()!!.nodeFactory.updateParameterDeclaration(p, null, p!!.dotDotDotToken, this!!.bindingNameVisitor.visitNode(p!!.name()), questionToken, this.ensureType(p!!.nodeBase.nodeDefault.asNode(), true), this.ensureNoInitializer(p!!.nodeBase.nodeDefault.asNode()))
+    val result: Node? = this!!.transformer.factory()!!.nodeFactory.updateParameterDeclaration(p, null, p!!.dotDotDotToken, this!!.bindingNameVisitor.visitNode(p!!.name()), questionToken, this.ensureType(p!!.nodeBase.asNode(), true), this.ensureNoInitializer(p!!.nodeBase.asNode()))
     this!!.state!!.getSymbolAccessibilityDiagnostic = oldDiag
     return result
 }
@@ -2396,18 +2396,18 @@ fun DeclarationTransformer?.visitBindingName(node: Node?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformImportEqualsDeclaration d8a9477e
 fun DeclarationTransformer?.transformImportEqualsDeclaration(decl: ImportEqualsDeclaration?): Node? {
-    if (!this!!.resolver!!.isDeclarationVisible(decl!!.statementBase.nodeBase.nodeDefault.asNode())) {
+    if (!this!!.resolver!!.isDeclarationVisible(decl!!.statementBase.nodeBase.asNode())) {
         return null
     }
     if (decl!!.moduleReference!!.kind.value == 284) {
-        val specifier: Node? = com.xemantic.typescript.tsgo.ast.getExternalModuleImportEqualsDeclarationExpression(decl!!.statementBase.nodeBase.nodeDefault.asNode())
-        return this!!.transformer.factory()!!.nodeFactory.updateImportEqualsDeclaration(decl, decl!!.modifiersBase.modifiers(), decl!!.isTypeOnly, decl!!.name(), this!!.transformer.factory()!!.nodeFactory.updateExternalModuleReference(decl!!.moduleReference.asExternalModuleReference(), this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.nodeDefault.asNode(), specifier)))
+        val specifier: Node? = com.xemantic.typescript.tsgo.ast.getExternalModuleImportEqualsDeclarationExpression(decl!!.statementBase.nodeBase.asNode())
+        return this!!.transformer.factory()!!.nodeFactory.updateImportEqualsDeclaration(decl, decl!!.modifiersBase.modifiers(), decl!!.isTypeOnly, decl!!.name(), this!!.transformer.factory()!!.nodeFactory.updateExternalModuleReference(decl!!.moduleReference.asExternalModuleReference(), this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.asNode(), specifier)))
     } else {
         val oldDiag: ((SymbolAccessibilityResult) -> SymbolAccessibilityDiagnostic?)? = this!!.state!!.getSymbolAccessibilityDiagnostic
-        this!!.state!!.getSymbolAccessibilityDiagnostic = createGetSymbolAccessibilityDiagnosticForNode(decl!!.statementBase.nodeBase.nodeDefault.asNode())
+        this!!.state!!.getSymbolAccessibilityDiagnostic = createGetSymbolAccessibilityDiagnosticForNode(decl!!.statementBase.nodeBase.asNode())
         this.checkEntityNameVisibility(decl!!.moduleReference, this!!.enclosingDeclaration)
         this!!.state!!.getSymbolAccessibilityDiagnostic = oldDiag
-        return decl!!.statementBase.nodeBase.nodeDefault.asNode()
+        return decl!!.statementBase.nodeBase.asNode()
     }
     goUnreachable()
 }
@@ -2415,7 +2415,7 @@ fun DeclarationTransformer?.transformImportEqualsDeclaration(decl: ImportEqualsD
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformImportDeclaration 292208ea
 fun DeclarationTransformer?.transformImportDeclaration(decl: ImportDeclaration?): Node? {
     if (decl!!.importClause == null) {
-        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), decl!!.importClause, this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.nodeDefault.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
+        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), decl!!.importClause, this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
     }
     var phaseModifier: Kind = decl!!.importClause.asImportClause()!!.phaseModifier
     if (phaseModifier.value == 166) {
@@ -2429,7 +2429,7 @@ fun DeclarationTransformer?.transformImportDeclaration(decl: ImportDeclaration?)
         if (visibleDefaultBinding == null) {
             return null
         }
-        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), this!!.transformer.factory()!!.nodeFactory.updateImportClause(decl!!.importClause.asImportClause(), phaseModifier, visibleDefaultBinding, null), this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.nodeDefault.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
+        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), this!!.transformer.factory()!!.nodeFactory.updateImportClause(decl!!.importClause.asImportClause(), phaseModifier, visibleDefaultBinding, null), this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
     }
     if (decl!!.importClause.asImportClause()!!.namedBindings!!.kind.value == 275) {
         var namedBindings: Node? = null
@@ -2439,7 +2439,7 @@ fun DeclarationTransformer?.transformImportDeclaration(decl: ImportDeclaration?)
         if (visibleDefaultBinding == null && namedBindings == null) {
             return null
         }
-        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), this!!.transformer.factory()!!.nodeFactory.updateImportClause(decl!!.importClause.asImportClause(), phaseModifier, visibleDefaultBinding, namedBindings), this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.nodeDefault.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
+        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), this!!.transformer.factory()!!.nodeFactory.updateImportClause(decl!!.importClause.asImportClause(), phaseModifier, visibleDefaultBinding, namedBindings), this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
     }
     val bindingList: GoSlice<Node?> = com.xemantic.typescript.tsgo.core.filter<Node?>(GoElem.ref<Node?>(), decl!!.importClause.asImportClause()!!.namedBindings.elements(), fun(b: Node?): Boolean {
         return this!!.resolver!!.isDeclarationVisible(b)
@@ -2449,13 +2449,13 @@ fun DeclarationTransformer?.transformImportDeclaration(decl: ImportDeclaration?)
         if (bindingList.len > 0) {
             namedImports = this!!.transformer.factory()!!.nodeFactory.updateNamedImports(decl!!.importClause.asImportClause()!!.namedBindings.asNamedImports(), this!!.transformer.factory()!!.nodeFactory.newNodeList(bindingList))
         }
-        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), this!!.transformer.factory()!!.nodeFactory.updateImportClause(decl!!.importClause.asImportClause(), phaseModifier, visibleDefaultBinding, namedImports), this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.nodeDefault.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
+        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), this!!.transformer.factory()!!.nodeFactory.updateImportClause(decl!!.importClause.asImportClause(), phaseModifier, visibleDefaultBinding, namedImports), this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
     }
     if (this!!.resolver!!.isImportRequiredByAugmentation(decl)) {
         if (this!!.state!!.isolatedDeclarations) {
-            this!!.state.addDiagnostic(createDiagnosticForNode(decl!!.statementBase.nodeBase.nodeDefault.asNode(), com.xemantic.typescript.tsgo.diagnostics.declaration_emit_for_this_file_requires_preserving_this_import_for_augmentations_This_is_not_supported_with_isolatedDeclarations, GoElem.ref<Any?>().nilSlice))
+            this!!.state.addDiagnostic(createDiagnosticForNode(decl!!.statementBase.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.declaration_emit_for_this_file_requires_preserving_this_import_for_augmentations_This_is_not_supported_with_isolatedDeclarations, GoElem.ref<Any?>().nilSlice))
         }
-        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), null, this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.nodeDefault.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
+        return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(decl, decl!!.modifiersBase.modifiers(), null, this.rewriteModuleSpecifier(decl!!.statementBase.nodeBase.asNode(), decl!!.moduleSpecifier), this.tryGetResolutionModeOverride(decl!!.attributes))
     }
     return null
 }
@@ -2470,28 +2470,28 @@ fun DeclarationTransformer?.transformJSDocTypeLiteral(input: JSDocTypeLiteral?):
     val t0 = this!!.transformer.visitor().visitSlice(input!!.jsDocPropertyTags)
     val members: GoSlice<Node?> = t0.first
     val replacement: Node? = this!!.transformer.factory()!!.nodeFactory.newTypeLiteralNode(this!!.transformer.factory()!!.nodeFactory.newNodeList(members))
-    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.nodeBase.asNode())
     return replacement
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformJSDocPropertyTag f81cd348
 fun DeclarationTransformer?.transformJSDocPropertyTag(input: JSDocParameterOrPropertyTag?): Node? {
     val replacement: Node? = this!!.transformer.factory()!!.nodeFactory.newPropertySignatureDeclaration(null, this!!.transformer.visitor()!!.visit!!(input!!.jsDocTagBase.tagName), null, this!!.transformer.visitor()!!.visit!!(input!!.typeExpression), null)
-    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTagBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTagBase.nodeBase.asNode())
     return replacement
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformJSDocAllType 936544d7
 fun DeclarationTransformer?.transformJSDocAllType(input: JSDocAllType?): Node? {
     val replacement: Node? = this!!.transformer.factory()!!.nodeFactory.newKeywordTypeNode(Kind(132))
-    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.nodeBase.asNode())
     return replacement
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformJSDocNullableType f1601fc1
 fun DeclarationTransformer?.transformJSDocNullableType(input: JSDocNullableType?): Node? {
     val replacement: Node? = this!!.transformer.factory()!!.nodeFactory.newUnionTypeNode(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.visitor()!!.visit!!(input!!.type), this!!.transformer.factory()!!.nodeFactory.newLiteralTypeNode(this!!.transformer.factory()!!.nodeFactory.newKeywordExpression(Kind(105))))))
-    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.nodeBase.asNode())
     return replacement
 }
 
@@ -2503,14 +2503,14 @@ fun DeclarationTransformer?.transformJSDocNonNullableType(input: JSDocNonNullabl
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformJSDocVariadicType 1c11f1b7
 fun DeclarationTransformer?.transformJSDocVariadicType(input: JSDocVariadicType?): Node? {
     val replacement: Node? = this!!.transformer.factory()!!.nodeFactory.newArrayTypeNode(this!!.transformer.visitor()!!.visit!!(input!!.type))
-    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.nodeBase.asNode())
     return replacement
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/declarations.DeclarationTransformer.transformJSDocOptionalType ac9fb8f4
 fun DeclarationTransformer?.transformJSDocOptionalType(input: JSDocOptionalType?): Node? {
     val replacement: Node? = this!!.transformer.factory()!!.nodeFactory.newUnionTypeNode(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.visitor()!!.visit!!(input!!.type), this!!.transformer.factory()!!.nodeFactory.newKeywordTypeNode(Kind(157)))))
-    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.typeNodeBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(replacement, input!!.jsDocTypeBase.nodeBase.asNode())
     return replacement
 }
 
@@ -2659,20 +2659,20 @@ fun DeclarationTransformer?.transformExpandoAssignment(node: BinaryExpression?) 
         }
         this.transformExpandoHost(name, declaration)
         val exportName: Node? = this!!.transformer.factory()!!.nodeFactory.newIdentifier(property)
-        var localName: Node? = this.tryGetNameOfAssignedExpression(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+        var localName: Node? = this.tryGetNameOfAssignedExpression(node!!.expressionBase.asNode())
         if (localName == null && !this!!.resolver!!.isNameResolvable(this!!.enclosingDeclaration, property) && !com.xemantic.typescript.tsgo.ast.isNonContextualKeyword(com.xemantic.typescript.tsgo.scanner.stringToToken(exportName.text()))) {
             localName = exportName
         }
         if (localName == null || com.xemantic.typescript.tsgo.ast.isNonContextualKeyword(com.xemantic.typescript.tsgo.scanner.stringToToken(localName.text()))) {
-            localName = this!!.transformer.factory().newGeneratedNameForNode(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+            localName = this!!.transformer.factory().newGeneratedNameForNode(node!!.expressionBase.asNode())
         }
         val hostId: NodeId = this.getExpandoHostId(declaration)
-        val t1 = this.setupDiagnosticContext(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+        val t1 = this.setupDiagnosticContext(node!!.expressionBase.asNode())
         val cleanupDiagnosticContext: (() -> Unit)? = t1.second
         val df2 = cleanupDiagnosticContext
         df0.defer { df2!!() }
         if (com.xemantic.typescript.tsgo.ast.isIdentifier(node!!.right)) {
-            val result: Node? = this.transformBinaryExpressionToExportDeclaration(node!!.expressionBase.nodeBase.nodeDefault.asNode(), exportName)
+            val result: Node? = this.transformBinaryExpressionToExportDeclaration(node!!.expressionBase.asNode(), exportName)
             this!!.expandoMembers[hostId] = this!!.expandoMembers[hostId].append1(result)
             return
         }
@@ -2693,7 +2693,7 @@ fun DeclarationTransformer?.transformExpandoAssignment(node: BinaryExpression?) 
         df0.defer(fun() {
             this!!.enclosingDeclaration = oldEnclosing
         })
-        var statements: GoSlice<Node?> = GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newVariableStatement(varModifiers, this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(localName, null, this.ensureType(node!!.expressionBase.nodeBase.nodeDefault.asNode(), false), null))), NodeFlags(0u))))
+        var statements: GoSlice<Node?> = GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newVariableStatement(varModifiers, this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(localName, null, this.ensureType(node!!.expressionBase.asNode(), false), null))), NodeFlags(0u))))
         if (localName.text() != exportName.text()) {
             val namedExports: Node? = this!!.transformer.factory()!!.nodeFactory.newNamedExports(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newExportSpecifier(false, localName, exportName))))
             statements = statements.append1(this!!.transformer.factory()!!.nodeFactory.newExportDeclaration(null, false, namedExports, null, null))
@@ -2788,7 +2788,7 @@ fun DeclarationTransformer?.createFullExpandoBlock(id: NodeId): Node? {
         var name: Node? = null
         var host: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
         if (n != null && n!!.kind.value == 344) {
-            n.asSyntaxList()!!.nodeBase.nodeDefault.node.iterChildren()!!(fun(y1: Node?): Boolean {
+            n.asSyntaxList()!!.nodeBase.node.iterChildren()!!(fun(y1: Node?): Boolean {
                             val c: Node? = y1
                             if (c.name() != null) {
                                 name = c.name().clone(this!!.transformer.factory())

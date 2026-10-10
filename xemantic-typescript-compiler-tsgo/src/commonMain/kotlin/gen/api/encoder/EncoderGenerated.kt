@@ -1268,16 +1268,16 @@ fun recordNodeStrings(node: Node?, strs: com.xemantic.typescript.tsgo.api.encode
             return strs.add(node.asJsxText()!!.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
         }
         316 -> {
-            return strs.add(node.asJSDocText()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node!!.pos(), node!!.end())
+            return strs.add(node.asJSDocText()!!.jsDocCommentBase.nodeBase.node.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         319 -> {
-            return strs.add(node.asJSDocLink()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node!!.pos(), node!!.end())
+            return strs.add(node.asJSDocLink()!!.jsDocCommentBase.nodeBase.node.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         321 -> {
-            return strs.add(node.asJSDocLinkPlain()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node!!.pos(), node!!.end())
+            return strs.add(node.asJSDocLinkPlain()!!.jsDocCommentBase.nodeBase.node.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         320 -> {
-            return strs.add(node.asJSDocLinkCode()!!.jsDocCommentBase.nodeBase.nodeDefault.node.text(), node!!.kind, node!!.pos(), node!!.end())
+            return strs.add(node.asJSDocLinkCode()!!.jsDocCommentBase.nodeBase.node.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         else -> {
             goPanic(com.xemantic.typescript.tsgo.go.fmt.sprintf("Unexpected node kind %v", node!!.kind))

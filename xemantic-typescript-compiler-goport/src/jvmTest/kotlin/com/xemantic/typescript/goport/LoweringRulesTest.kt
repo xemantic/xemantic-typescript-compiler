@@ -363,6 +363,19 @@ class LoweringRulesTest {
     }
 
     @Test
+    fun `a wrapper struct is an alias of what it wraps and a selection through it is no step - Identifier`() {
+        val ast1 = File(gen, "ast/AstGenerated1.kt").readText()
+        assert(ast1.contains("typealias ExpressionBase = NodeBase\n"))
+        assert(ast1.contains("typealias PrimaryExpressionBase = MemberExpressionBase\n"))
+        assert(File(gen, "ast/Ast.kt").readText().contains("typealias NodeBase = NodeDefault\n"))
+        // Identifier → PrimaryExpressionBase → … → NodeDefault was seven objects; now its field IS the NodeDefault.
+        assert(ast1.contains("    override fun asNode(): Node? = this.primaryExpressionBase.asNode()\n"))
+        assert(!ast1.contains("primaryExpressionBase.memberExpressionBase"))
+        // NodeDefault declares methods (AsNode, ForEachChild, …): it stays a class.
+        assert(!File(gen, "ast/Ast.kt").readText().contains("typealias NodeDefault ="))
+    }
+
+    @Test
     fun `every keyBuilder local is pooled - acquired from the thread's stack and released in a finally`() {
         val checker = "github.com/microsoft/typescript-go/internal/checker"
         val c6 = File(gen, "checker/Checker6.kt").readText()

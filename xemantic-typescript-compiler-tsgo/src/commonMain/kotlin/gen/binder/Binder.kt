@@ -390,7 +390,7 @@ fun bindSourceFileImpl(file: SourceFile?) {
             df0.defer { putBinder(da1) }
             b!!.file = file
             b!!.unreachableFlow = b.newFlowNode(FlowFlags(1u))
-            b.bind(file!!.nodeBase.nodeDefault.asNode())
+            b.bind(file!!.nodeBase.asNode())
             b.bindDeferredExpandoAssignments()
             file!!.symbolCount = b!!.symbolCount
             file!!.classifiableNames = b!!.classifiableNames.goCopy()
@@ -643,7 +643,7 @@ fun Binder?.declareSourceFileMember(node: Node?, symbolFlags: SymbolFlags, symbo
     if (com.xemantic.typescript.tsgo.ast.isExternalModule(this!!.file)) {
         return this.declareModuleMember(node, symbolFlags, symbolExcludes)
     }
-    return this.declareSymbol(com.xemantic.typescript.tsgo.ast.getLocals(this!!.file!!.nodeBase.nodeDefault.asNode()), null, node, symbolFlags, symbolExcludes)
+    return this.declareSymbol(com.xemantic.typescript.tsgo.ast.getLocals(this!!.file!!.nodeBase.asNode()), null, node, symbolFlags, symbolExcludes)
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.declareSymbolAndAddToSymbolTable cc35ad99
@@ -1021,20 +1021,20 @@ fun Binder?.bindPropertyWorker(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.bindSourceFileIfExternalModule ea2ab48a
 fun Binder?.bindSourceFileIfExternalModule() {
-    this.setExportContextFlag(this!!.file!!.nodeBase.nodeDefault.asNode())
+    this.setExportContextFlag(this!!.file!!.nodeBase.asNode())
     if (com.xemantic.typescript.tsgo.ast.isExternalOrCommonJSModule(this!!.file)) {
         this.bindSourceFileAsExternalModule()
     } else if (com.xemantic.typescript.tsgo.ast.isJsonSourceFile(this!!.file)) {
         this.bindSourceFileAsExternalModule()
         val originalSymbol: Symbol? = this!!.file!!.declarationBase.symbol
-        this.declareSymbol(com.xemantic.typescript.tsgo.ast.getSymbolTable(run { val o0 = this!!.file!!.declarationBase.symbol!!; GoFieldPtr(o0, 6, { o0.exports }, { o0.exports = it }) }), this!!.file!!.declarationBase.symbol, this!!.file!!.nodeBase.nodeDefault.asNode(), SymbolFlags(4u), SymbolFlags(1073741823u))
+        this.declareSymbol(com.xemantic.typescript.tsgo.ast.getSymbolTable(run { val o0 = this!!.file!!.declarationBase.symbol!!; GoFieldPtr(o0, 6, { o0.exports }, { o0.exports = it }) }), this!!.file!!.declarationBase.symbol, this!!.file!!.nodeBase.asNode(), SymbolFlags(4u), SymbolFlags(1073741823u))
         this!!.file!!.declarationBase.symbol = originalSymbol
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.bindSourceFileAsExternalModule ce99177e
 fun Binder?.bindSourceFileAsExternalModule() {
-    this.bindAnonymousDeclaration(this!!.file!!.nodeBase.nodeDefault.asNode(), SymbolFlags(512u), "\"" + com.xemantic.typescript.tsgo.tspath.removeFileExtension(this!!.file!!.fileName()) + "\"")
+    this.bindAnonymousDeclaration(this!!.file!!.nodeBase.asNode(), SymbolFlags(512u), "\"" + com.xemantic.typescript.tsgo.tspath.removeFileExtension(this!!.file!!.fileName()) + "\"")
 }
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.bindModuleDeclaration 9b0c22bd
@@ -1196,7 +1196,7 @@ fun Binder?.bindCallExpression(node: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.setCommonJSModuleIndicator 16114a4d
 fun Binder?.setCommonJSModuleIndicator(node: Node?): Boolean {
-    if (this!!.file!!.externalModuleIndicator != null && this!!.file!!.externalModuleIndicator !== this!!.file!!.nodeBase.nodeDefault.asNode()) {
+    if (this!!.file!!.externalModuleIndicator != null && this!!.file!!.externalModuleIndicator !== this!!.file!!.nodeBase.asNode()) {
         return false
     }
     if (this!!.file!!.commonJSModuleIndicator == null) {
@@ -1273,7 +1273,7 @@ fun Binder?.addLateBoundAssignmentDeclarationToSymbol(node: Node?, symbol: Symbo
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.bindModuleExportsAssignment be81113e
 fun Binder?.bindModuleExportsAssignment(node: Node?) {
     if (this.setCommonJSModuleIndicator(node)) {
-        val container: Node? = this!!.file!!.nodeBase.nodeDefault.asNode()
+        val container: Node? = this!!.file!!.nodeBase.asNode()
         val flags: SymbolFlags = com.xemantic.typescript.tsgo.core.ifElse<SymbolFlags>(SymbolFlags.ELEM, com.xemantic.typescript.tsgo.ast.expressionIsAlias(node.asBinaryExpression()!!.right), SymbolFlags(2097152u), SymbolFlags(4u))
         val symbol: Symbol? = this.declareSymbol(com.xemantic.typescript.tsgo.ast.getExports(container.symbol()), container.symbol(), node, flags, SymbolFlags(0u))
         setValueDeclaration(symbol, node)
@@ -1350,7 +1350,7 @@ fun getParentOfPropertyAssignment(node: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.bindExportsOrObjectDefineProperty f15d3346
 fun Binder?.bindExportsOrObjectDefineProperty(node: Node?) {
     if (this.setCommonJSModuleIndicator(node)) {
-        val container: Node? = this!!.file!!.nodeBase.nodeDefault.asNode()
+        val container: Node? = this!!.file!!.nodeBase.asNode()
         val flags: SymbolFlags = com.xemantic.typescript.tsgo.core.ifElse<SymbolFlags>(SymbolFlags.ELEM, com.xemantic.typescript.tsgo.ast.isBinaryExpression(node) && com.xemantic.typescript.tsgo.ast.expressionIsAlias(node.asBinaryExpression()!!.right), SymbolFlags(2097152u), SymbolFlags(1u))
         this.declareSymbol(com.xemantic.typescript.tsgo.ast.getExports(container.symbol()), container.symbol(), node, flags, SymbolFlags(111550u))
     }
@@ -1865,10 +1865,10 @@ fun Binder?.bindContainer(node: Node?, containerFlags: ContainerFlags) {
 
 // go: github.com/microsoft/typescript-go/internal/binder.Binder.declareCommonJSVariable 4a350d29
 fun Binder?.declareCommonJSVariable(name: String) {
-    val locals: SymbolTable = com.xemantic.typescript.tsgo.ast.getLocals(this!!.file!!.nodeBase.nodeDefault.asNode())
+    val locals: SymbolTable = com.xemantic.typescript.tsgo.ast.getLocals(this!!.file!!.nodeBase.asNode())
     if (locals[name] == null) {
         val symbol: Symbol? = this.newSymbol(SymbolFlags(134217729u), name)
-        symbol!!.declarations = this.newSingleDeclaration(this!!.file!!.nodeBase.nodeDefault.asNode())
+        symbol!!.declarations = this.newSingleDeclaration(this!!.file!!.nodeBase.asNode())
         symbol!!.valueDeclaration = symbol!!.declarations[0]
         if (name == "module") {
             val exportsProperty: Symbol? = this.newSymbol(SymbolFlags(134217732u), "exports")

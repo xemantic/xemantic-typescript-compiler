@@ -314,13 +314,13 @@ fun com.xemantic.typescript.tsgo.transformers.moduletransforms.externalModuleInf
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.externalModuleInfoCollector.addExportedFunctionDeclaration c1fd7b50
 fun com.xemantic.typescript.tsgo.transformers.moduletransforms.externalModuleInfoCollector?.addExportedFunctionDeclaration(node: FunctionDeclaration?, name_0: Node?, isDefault: Boolean) {
     var name: Node? = name_0
-    this!!.output!!.exportedFunctions.add(this!!.emitContext.mostOriginal(node!!.statementBase.nodeBase.nodeDefault.asNode()))
+    this!!.output!!.exportedFunctions.add(this!!.emitContext.mostOriginal(node!!.statementBase.nodeBase.asNode()))
     if (isDefault) {
         if (!this!!.hasExportDefault) {
             if (name == null) {
-                name = this!!.emitContext!!.factory.newGeneratedNameForNode(node!!.statementBase.nodeBase.nodeDefault.asNode())
+                name = this!!.emitContext!!.factory.newGeneratedNameForNode(node!!.statementBase.nodeBase.asNode())
             }
-            this.addExportedBinding(node!!.statementBase.nodeBase.nodeDefault.asNode(), name)
+            this.addExportedBinding(node!!.statementBase.nodeBase.asNode(), name)
             this!!.hasExportDefault = true
         }
     } else {
@@ -329,7 +329,7 @@ fun com.xemantic.typescript.tsgo.transformers.moduletransforms.externalModuleInf
         }
         val nameText: String = name.text()
         if (this.addUniqueExport(nameText)) {
-            this.addExportedBinding(node!!.statementBase.nodeBase.nodeDefault.asNode(), name)
+            this.addExportedBinding(node!!.statementBase.nodeBase.asNode(), name)
         }
     }
 }
@@ -392,7 +392,7 @@ fun createExternalHelpersImportDeclarationIfNeeded(emitContext: EmitContext?, so
                     goUnreachable()
                 })
                 val namedBindings: Node? = emitContext!!.factory!!.nodeFactory.newNamedImports(emitContext!!.factory!!.nodeFactory.newNodeList(importSpecifiers))
-                val parseNode: Node? = emitContext.mostOriginal(sourceFile!!.nodeBase.nodeDefault.asNode())
+                val parseNode: Node? = emitContext.mostOriginal(sourceFile!!.nodeBase.asNode())
                 emitContext.addEmitFlags(parseNode, EmitFlags(262144u))
                 val externalHelpersImportDeclaration_1: Node? = emitContext!!.factory!!.nodeFactory.newImportDeclaration(null, emitContext!!.factory!!.nodeFactory.newImportClause(Kind(0), null, namedBindings), emitContext!!.factory!!.nodeFactory.newStringLiteral("tslib", TokenFlags(0)), null)
                 emitContext.addEmitFlags(externalHelpersImportDeclaration_1, EmitFlags(65536u))
@@ -406,7 +406,7 @@ fun createExternalHelpersImportDeclarationIfNeeded(emitContext: EmitContext?, so
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.getImportedHelpers ae061b50
 fun getImportedHelpers(emitContext: EmitContext?, sourceFile: SourceFile?): GoSlice<EmitHelper?> {
     var helpers: GoSlice<EmitHelper?> = GoElem.ref<EmitHelper?>().nilSlice
-    val s0 = emitContext.getEmitHelpers(sourceFile!!.nodeBase.nodeDefault.asNode())
+    val s0 = emitContext.getEmitHelpers(sourceFile!!.nodeBase.asNode())
     l0@ for (i1 in 0 until s0.len) {
         val helper: EmitHelper? = s0[i1]
         if (!helper!!.scoped) {
@@ -442,12 +442,12 @@ fun containsDefaultReference(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.getExportNeedsImportStarHelper 727ee745
 fun getExportNeedsImportStarHelper(node: ExportDeclaration?): Boolean {
-    return com.xemantic.typescript.tsgo.ast.getNamespaceDeclarationNode(node!!.statementBase.nodeBase.nodeDefault.asNode()) != null
+    return com.xemantic.typescript.tsgo.ast.getNamespaceDeclarationNode(node!!.statementBase.nodeBase.asNode()) != null
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.getImportNeedsImportStarHelper 5e3cdbd0
 fun getImportNeedsImportStarHelper(node: ImportDeclaration?): Boolean {
-    if (com.xemantic.typescript.tsgo.ast.getNamespaceDeclarationNode(node!!.statementBase.nodeBase.nodeDefault.asNode()) != null) {
+    if (com.xemantic.typescript.tsgo.ast.getNamespaceDeclarationNode(node!!.statementBase.nodeBase.asNode()) != null) {
         return true
     }
     if (node!!.importClause == null) {
@@ -469,11 +469,11 @@ fun getImportNeedsImportStarHelper(node: ImportDeclaration?): Boolean {
             defaultRefCount++
         }
     }
-    return (defaultRefCount > 0 && defaultRefCount != namedImports!!.elements!!.nodes.len) || ((namedImports!!.elements!!.nodes.len - defaultRefCount) != 0 && com.xemantic.typescript.tsgo.ast.isDefaultImport(node!!.statementBase.nodeBase.nodeDefault.asNode()))
+    return (defaultRefCount > 0 && defaultRefCount != namedImports!!.elements!!.nodes.len) || ((namedImports!!.elements!!.nodes.len - defaultRefCount) != 0 && com.xemantic.typescript.tsgo.ast.isDefaultImport(node!!.statementBase.nodeBase.asNode()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.getImportNeedsImportDefaultHelper 2e4c6cec
 fun getImportNeedsImportDefaultHelper(node: ImportDeclaration?): Boolean {
-    return !getImportNeedsImportStarHelper(node) && (com.xemantic.typescript.tsgo.ast.isDefaultImport(node!!.statementBase.nodeBase.nodeDefault.asNode()) || (node!!.importClause != null && com.xemantic.typescript.tsgo.ast.isNamedImports(node!!.importClause.asImportClause()!!.namedBindings) && containsDefaultReference(node!!.importClause.asImportClause()!!.namedBindings)))
+    return !getImportNeedsImportStarHelper(node) && (com.xemantic.typescript.tsgo.ast.isDefaultImport(node!!.statementBase.nodeBase.asNode()) || (node!!.importClause != null && com.xemantic.typescript.tsgo.ast.isNamedImports(node!!.importClause.asImportClause()!!.namedBindings) && containsDefaultReference(node!!.importClause.asImportClause()!!.namedBindings)))
 }
 

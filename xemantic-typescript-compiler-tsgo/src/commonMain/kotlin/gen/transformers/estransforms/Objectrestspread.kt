@@ -223,7 +223,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTrans
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitSourceFile 1789b079
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitSourceFile(node: SourceFile?): Node? {
-    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
     this!!.transformer.emitContext().addEmitHelper(visited.asNode(), this!!.transformer.emitContext().readEmitHelpers())
     return visited
 }
@@ -231,20 +231,20 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTrans
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitParameter 0d8c73f3
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitParameter(node: ParameterDeclaration?): Node? {
     if (!this!!.parametersWithPrecedingObjectRestOrSpread.isNil) {
-        val t0 = this!!.parametersWithPrecedingObjectRestOrSpread.probe(node!!.nodeBase.nodeDefault.asNode())
+        val t0 = this!!.parametersWithPrecedingObjectRestOrSpread.probe(node!!.nodeBase.asNode())
         val ok: Boolean = t0 !== GoMapAbsent
         if (ok) {
             var name: Node? = node!!.name()
             if (com.xemantic.typescript.tsgo.ast.isBindingPattern(name)) {
-                name = this!!.transformer.factory().newGeneratedNameForNode(node!!.nodeBase.nodeDefault.asNode())
+                name = this!!.transformer.factory().newGeneratedNameForNode(node!!.nodeBase.asNode())
             }
             return this!!.transformer.factory()!!.nodeFactory.updateParameterDeclaration(node, null, node!!.dotDotDotToken, name, null, null, null)
         }
     }
-    if (node!!.nodeBase.nodeDefault.subtreeFacts().value and 131072u != 0u) {
-        return this!!.transformer.factory()!!.nodeFactory.updateParameterDeclaration(node, null, node!!.dotDotDotToken, this!!.transformer.factory().newGeneratedNameForNode(node!!.nodeBase.nodeDefault.asNode()), null, null, this!!.transformer.visitor().visitNode(node!!.initializer))
+    if (node!!.nodeBase.subtreeFacts().value and 131072u != 0u) {
+        return this!!.transformer.factory()!!.nodeFactory.updateParameterDeclaration(node, null, node!!.dotDotDotToken, this!!.transformer.factory().newGeneratedNameForNode(node!!.nodeBase.asNode()), null, null, this!!.transformer.visitor().visitNode(node!!.initializer))
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.collectParametersWithPrecedingObjectRestOrSpread 2261f4ce
@@ -280,77 +280,77 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTrans
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitContructorDeclaration 5f8fe658
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitContructorDeclaration(node: ConstructorDeclaration?): Node? {
     return withDefers({ null }) { df0 ->
-        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.nodeBase.nodeDefault.asNode())
+        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.nodeBase.asNode())
         val da1 = old
         val dr2 = this
         df0.defer { dr2.exitParameterListContext(da1) }
-        return this!!.transformer.factory()!!.nodeFactory.updateConstructorDeclaration(node, node!!.modifiersBase.modifiers(), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.nodeBase.nodeDefault.asNode()))
+        return this!!.transformer.factory()!!.nodeFactory.updateConstructorDeclaration(node, node!!.modifiersBase.modifiers(), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.nodeBase.asNode()))
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitGetAccessorDeclaration 32ba064d
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitGetAccessorDeclaration(node: GetAccessorDeclaration?): Node? {
     return withDefers({ null }) { df0 ->
-        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode())
+        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.accessorDeclarationBase.nodeBase.asNode())
         val da1 = old
         val dr2 = this
         df0.defer { dr2.exitParameterListContext(da1) }
-        return this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(node, node!!.accessorDeclarationBase.namedMemberBase.modifiers(), this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()))
+        return this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(node, node!!.accessorDeclarationBase.namedMemberBase.modifiers(), this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.accessorDeclarationBase.nodeBase.asNode()))
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitSetAccessorDeclaration bef62cad
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitSetAccessorDeclaration(node: SetAccessorDeclaration?): Node? {
     return withDefers({ null }) { df0 ->
-        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode())
+        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.accessorDeclarationBase.nodeBase.asNode())
         val da1 = old
         val dr2 = this
         df0.defer { dr2.exitParameterListContext(da1) }
-        return this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(node, node!!.accessorDeclarationBase.namedMemberBase.modifiers(), this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.accessorDeclarationBase.nodeBase.nodeDefault.asNode()))
+        return this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(node, node!!.accessorDeclarationBase.namedMemberBase.modifiers(), this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.accessorDeclarationBase.nodeBase.asNode()))
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitMethodDeclaration c083a6b3
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitMethodDeclaration(node: MethodDeclaration?): Node? {
     return withDefers({ null }) { df0 ->
-        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.nodeBase.nodeDefault.asNode())
+        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.nodeBase.asNode())
         val da1 = old
         val dr2 = this
         df0.defer { dr2.exitParameterListContext(da1) }
-        return this!!.transformer.factory()!!.nodeFactory.updateMethodDeclaration(node, node!!.namedMemberBase.modifiers(), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this!!.transformer.visitor().visitNode(node!!.name()), node!!.namedMemberBase.postfixToken, null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.nodeBase.nodeDefault.asNode()))
+        return this!!.transformer.factory()!!.nodeFactory.updateMethodDeclaration(node, node!!.namedMemberBase.modifiers(), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this!!.transformer.visitor().visitNode(node!!.name()), node!!.namedMemberBase.postfixToken, null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.nodeBase.asNode()))
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitFunctionDeclaration 2f9cca58
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitFunctionDeclaration(node: FunctionDeclaration?): Node? {
     return withDefers({ null }) { df0 ->
-        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.statementBase.nodeBase.asNode())
         val da1 = old
         val dr2 = this
         df0.defer { dr2.exitParameterListContext(da1) }
-        return this!!.transformer.factory()!!.nodeFactory.updateFunctionDeclaration(node, node!!.modifiersBase.modifiers(), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.statementBase.nodeBase.nodeDefault.asNode()))
+        return this!!.transformer.factory()!!.nodeFactory.updateFunctionDeclaration(node, node!!.modifiersBase.modifiers(), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.statementBase.nodeBase.asNode()))
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitArrowFunction fd5ca639
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitArrowFunction(node: ArrowFunction?): Node? {
     return withDefers({ null }) { df0 ->
-        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.expressionBase.asNode())
         val da1 = old
         val dr2 = this
         df0.defer { dr2.exitParameterListContext(da1) }
-        return this!!.transformer.factory()!!.nodeFactory.updateArrowFunction(node, node!!.modifiersBase.modifiers(), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, node!!.equalsGreaterThanToken, this.transformFunctionBody(node!!.expressionBase.nodeBase.nodeDefault.asNode()))
+        return this!!.transformer.factory()!!.nodeFactory.updateArrowFunction(node, node!!.modifiersBase.modifiers(), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, node!!.equalsGreaterThanToken, this.transformFunctionBody(node!!.expressionBase.asNode()))
     }
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitFunctionExpression 07382ddf
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitFunctionExpression(node: FunctionExpression?): Node? {
     return withDefers({ null }) { df0 ->
-        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        val old: com.xemantic.typescript.tsgo.transformers.estransforms.oldParamScope = this.enterParameterListContext(node!!.primaryExpressionBase.asNode())
         val da1 = old
         val dr2 = this
         df0.defer { dr2.exitParameterListContext(da1) }
-        return this!!.transformer.factory()!!.nodeFactory.updateFunctionExpression(node, node!!.modifiersBase.modifiers(), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()))
+        return this!!.transformer.factory()!!.nodeFactory.updateFunctionExpression(node, node!!.modifiersBase.modifiers(), node!!.functionLikeWithBodyBase.bodyBase.asteriskToken, this!!.transformer.visitor().visitNode(node!!.name()), null, this!!.transformer.visitor().visitNodes(node!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, this.transformFunctionBody(node!!.primaryExpressionBase.asNode()))
     }
 }
 
@@ -489,19 +489,19 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTrans
         }
         return this!!.transformer.factory()!!.nodeFactory.updateCatchClause(node, this!!.transformer.factory()!!.nodeFactory.updateVariableDeclaration(node!!.variableDeclaration.asVariableDeclaration(), name, null, null, null), block)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitVariableStatement 3f2870d8
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitVariableStatement(node: VariableStatement?): Node? {
-    if (com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(32u))) {
+    if (com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(32u))) {
         val oldInExportedVariableStatement: Boolean = this!!.inExportedVariableStatement
         this!!.inExportedVariableStatement = true
-        val result: Node? = this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        val result: Node? = this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
         this!!.inExportedVariableStatement = oldInExportedVariableStatement
         return result
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitVariableDeclaration 48145c13
@@ -517,10 +517,10 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTrans
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitVariableDeclarationWorker 6fdc5bd4
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitVariableDeclarationWorker(node: VariableDeclaration?, exported: Boolean): Node? {
-    if (com.xemantic.typescript.tsgo.ast.isBindingPattern(node!!.name()) && node!!.nodeBase.nodeDefault.subtreeFacts().value and 131072u != 0u) {
-        return com.xemantic.typescript.tsgo.transformers.flattenDestructuringBinding(this!!.transformer, node!!.nodeBase.nodeDefault.asNode(), null, FlattenLevel(1), exported, false)
+    if (com.xemantic.typescript.tsgo.ast.isBindingPattern(node!!.name()) && node!!.nodeBase.subtreeFacts().value and 131072u != 0u) {
+        return com.xemantic.typescript.tsgo.transformers.flattenDestructuringBinding(this!!.transformer, node!!.nodeBase.asNode(), null, FlattenLevel(1), exported, false)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitForOftatement d3b8e109
@@ -562,13 +562,13 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTrans
             return this!!.transformer.factory()!!.nodeFactory.updateForInOrOfStatement(node, node!!.awaitModifier, list, expr, block)
         }
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitBinaryExpression 17e4b591
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitBinaryExpression(node: BinaryExpression?, expressionResultIsUnused: Boolean): Node? {
-    if (com.xemantic.typescript.tsgo.ast.isDestructuringAssignment(node!!.expressionBase.nodeBase.nodeDefault.asNode()) && com.xemantic.typescript.tsgo.ast.containsObjectRestOrSpread(node!!.left)) {
-        return com.xemantic.typescript.tsgo.transformers.flattenDestructuringAssignment(this!!.transformer, node!!.expressionBase.nodeBase.nodeDefault.asNode(), !expressionResultIsUnused, FlattenLevel(1), null)
+    if (com.xemantic.typescript.tsgo.ast.isDestructuringAssignment(node!!.expressionBase.asNode()) && com.xemantic.typescript.tsgo.ast.containsObjectRestOrSpread(node!!.left)) {
+        return com.xemantic.typescript.tsgo.transformers.flattenDestructuringAssignment(this!!.transformer, node!!.expressionBase.asNode(), !expressionResultIsUnused, FlattenLevel(1), null)
     }
     if (node!!.operatorToken!!.kind.value == 27) {
         this!!.expressionResultIsUnused = true
@@ -577,13 +577,13 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTrans
         val right: Node? = this!!.transformer.visitor().visitNode(node!!.right)
         return this!!.transformer.factory()!!.nodeFactory.updateBinaryExpression(node, null, left, null, node!!.operatorToken, right)
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.objectRestSpreadTransformer.visitObjectLiteralExpression 2a9d3c61
 fun com.xemantic.typescript.tsgo.transformers.estransforms.objectRestSpreadTransformer?.visitObjectLiteralExpression(node: ObjectLiteralExpression?): Node? {
-    if (node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.subtreeFacts().value and 131072u == 0u) {
-        return this!!.transformer.visitor().visitEachChild(node!!.primaryExpressionBase.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    if (node!!.primaryExpressionBase.subtreeFacts().value and 131072u == 0u) {
+        return this!!.transformer.visitor().visitEachChild(node!!.primaryExpressionBase.asNode())
     }
     var objects: GoSlice<Node?> = this.chunkObjectLiteralElements(node!!.properties)
     if (objects.len > 0 && objects[0]!!.kind.value != 211) {

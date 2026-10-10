@@ -66,7 +66,7 @@ fun findEnclosingNode(r: TextRange, sourceFile: SourceFile?): Node? {
         }
         return n
     }
-    return find!!(sourceFile!!.nodeBase.nodeDefault.asNode())
+    return find!!(sourceFile!!.nodeBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/format.getScanStartPosition ac62d756

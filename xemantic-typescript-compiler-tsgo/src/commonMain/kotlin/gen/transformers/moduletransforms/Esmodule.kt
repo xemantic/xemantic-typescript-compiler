@@ -182,12 +182,12 @@ fun ESModuleTransformer?.visit(node_0: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.visitSourceFile 0c1090d7
 fun ESModuleTransformer?.visitSourceFile(node: SourceFile?): Node? {
     if (node!!.isDeclarationFile || !(com.xemantic.typescript.tsgo.ast.isExternalModule(node) || this!!.compilerOptions.getIsolatedModules())) {
-        return node!!.nodeBase.nodeDefault.asNode()
+        return node!!.nodeBase.asNode()
     }
     this!!.currentSourceFile = node
     this!!.importRequireStatements = null
-    var result: SourceFile? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.nodeDefault.asNode()).asSourceFile()
-    this!!.transformer.emitContext().addEmitHelper(result!!.nodeBase.nodeDefault.asNode(), this!!.transformer.emitContext().readEmitHelpers())
+    var result: SourceFile? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode()).asSourceFile()
+    this!!.transformer.emitContext().addEmitHelper(result!!.nodeBase.asNode(), this!!.transformer.emitContext().readEmitHelpers())
     val externalHelpersImportDeclaration: Node? = createExternalHelpersImportDeclarationIfNeeded(this!!.transformer.emitContext(), result, this!!.compilerOptions, this!!.getEmitModuleFormatOfFile!!(node), false, false, false)
     if (externalHelpersImportDeclaration != null || this!!.importRequireStatements != null) {
         val t0 = this!!.transformer.factory().splitStandardPrologue(result!!.statements!!.nodes)
@@ -218,13 +218,13 @@ fun ESModuleTransformer?.visitSourceFile(node: SourceFile?): Node? {
     }
     this!!.importRequireStatements = null
     this!!.currentSourceFile = null
-    return result!!.nodeBase.nodeDefault.asNode()
+    return result!!.nodeBase.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.visitImportDeclaration da4d65fa
 fun ESModuleTransformer?.visitImportDeclaration(node: ImportDeclaration?): Node? {
     if (!this!!.compilerOptions!!.rewriteRelativeImportExtensions.isTrue()) {
-        return node!!.statementBase.nodeBase.nodeDefault.asNode()
+        return node!!.statementBase.nodeBase.asNode()
     }
     val updatedModuleSpecifier: Node? = rewriteModuleSpecifier(this!!.transformer.emitContext(), node!!.moduleSpecifier, this!!.compilerOptions)
     return this!!.transformer.factory()!!.nodeFactory.updateImportDeclaration(node, null, this!!.transformer.visitor().visitNode(node!!.importClause), updatedModuleSpecifier, this!!.transformer.visitor().visitNode(node!!.attributes))
@@ -235,12 +235,12 @@ fun ESModuleTransformer?.visitImportEqualsDeclaration(node: ImportEqualsDeclarat
     if (this!!.compilerOptions.getEmitModuleKind().value < 100) {
         return null
     }
-    if (!com.xemantic.typescript.tsgo.ast.isExternalModuleImportEqualsDeclaration(node!!.statementBase.nodeBase.nodeDefault.asNode())) {
+    if (!com.xemantic.typescript.tsgo.ast.isExternalModuleImportEqualsDeclaration(node!!.statementBase.nodeBase.asNode())) {
         goPanic("import= for internal module references should be handled in an earlier transformer.")
     }
-    val varStatement: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableStatement(null, this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(node!!.name().clone(this!!.transformer.factory()), null, null, this.createRequireCall(node!!.statementBase.nodeBase.nodeDefault.asNode())))), NodeFlags(2u)))
-    this!!.transformer.emitContext().setOriginal(varStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
-    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(varStatement, node!!.statementBase.nodeBase.nodeDefault.asNode())
+    val varStatement: Node? = this!!.transformer.factory()!!.nodeFactory.newVariableStatement(null, this!!.transformer.factory()!!.nodeFactory.newVariableDeclarationList(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newVariableDeclaration(node!!.name().clone(this!!.transformer.factory()), null, null, this.createRequireCall(node!!.statementBase.nodeBase.asNode())))), NodeFlags(2u)))
+    this!!.transformer.emitContext().setOriginal(varStatement, node!!.statementBase.nodeBase.asNode())
+    this!!.transformer.emitContext().assignCommentAndSourceMapRanges(varStatement, node!!.statementBase.nodeBase.asNode())
     var statements: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
     statements = statements.append1(varStatement)
     statements = this.appendExportsOfImportEqualsDeclaration(statements, node)
@@ -250,7 +250,7 @@ fun ESModuleTransformer?.visitImportEqualsDeclaration(node: ImportEqualsDeclarat
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.appendExportsOfImportEqualsDeclaration d5569151
 fun ESModuleTransformer?.appendExportsOfImportEqualsDeclaration(statements_0: GoSlice<Node?>, node: ImportEqualsDeclaration?): GoSlice<Node?> {
     var statements: GoSlice<Node?> = statements_0
-    if (com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.nodeDefault.asNode(), ModifierFlags(32u))) {
+    if (com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(32u))) {
         statements = statements.append1(this!!.transformer.factory()!!.nodeFactory.newExportDeclaration(null, false, this!!.transformer.factory()!!.nodeFactory.newNamedExports(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newExportSpecifier(false, null, node!!.name().clone(this!!.transformer.factory()))))), null, null))
     }
     return statements
@@ -259,20 +259,20 @@ fun ESModuleTransformer?.appendExportsOfImportEqualsDeclaration(statements_0: Go
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.visitExportAssignment d9923c74
 fun ESModuleTransformer?.visitExportAssignment(node: ExportAssignment?): Node? {
     if (!node!!.isExportEquals) {
-        return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.nodeDefault.asNode())
+        return this!!.transformer.visitor().visitEachChild(node!!.statementBase.nodeBase.asNode())
     }
     if (this!!.compilerOptions.getEmitModuleKind().value != 200) {
         return null
     }
     val statement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(this!!.transformer.factory().newAssignmentExpression(this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(this!!.transformer.factory()!!.nodeFactory.newIdentifier("module"), null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("exports"), NodeFlags(0u)), this!!.transformer.visitor().visitNode(node!!.expression)))
-    this!!.transformer.emitContext().setOriginal(statement, node!!.statementBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(statement, node!!.statementBase.nodeBase.asNode())
     return statement
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.visitExportDeclaration c5d3593a
 fun ESModuleTransformer?.visitExportDeclaration(node: ExportDeclaration?): Node? {
     if (node!!.moduleSpecifier == null) {
-        return node!!.statementBase.nodeBase.nodeDefault.asNode()
+        return node!!.statementBase.nodeBase.asNode()
     }
     val updatedModuleSpecifier: Node? = rewriteModuleSpecifier(this!!.transformer.emitContext(), node!!.moduleSpecifier, this!!.compilerOptions)
     if (this!!.compilerOptions!!.module.value > 5 || node!!.exportClause == null || !com.xemantic.typescript.tsgo.ast.isNamespaceExport(node!!.exportClause)) {
@@ -283,29 +283,29 @@ fun ESModuleTransformer?.visitExportDeclaration(node: ExportDeclaration?): Node?
     val importDecl: Node? = this!!.transformer.factory()!!.nodeFactory.newImportDeclaration(null, this!!.transformer.factory()!!.nodeFactory.newImportClause(Kind(0), null, this!!.transformer.factory()!!.nodeFactory.newNamespaceImport(synthName)), updatedModuleSpecifier, this!!.transformer.visitor().visitNode(node!!.attributes))
     this!!.transformer.emitContext().setOriginal(importDecl, node!!.exportClause)
     var exportDecl: Node? = null
-    if (com.xemantic.typescript.tsgo.ast.isExportNamespaceAsDefaultDeclaration(node!!.statementBase.nodeBase.nodeDefault.asNode())) {
+    if (com.xemantic.typescript.tsgo.ast.isExportNamespaceAsDefaultDeclaration(node!!.statementBase.nodeBase.asNode())) {
         exportDecl = this!!.transformer.factory()!!.nodeFactory.newExportAssignment(null, false, null, synthName)
     } else {
         exportDecl = this!!.transformer.factory()!!.nodeFactory.newExportDeclaration(null, false, this!!.transformer.factory()!!.nodeFactory.newNamedExports(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newExportSpecifier(false, synthName, oldIdentifier)))), null, null)
     }
-    this!!.transformer.emitContext().setOriginal(exportDecl, node!!.statementBase.nodeBase.nodeDefault.asNode())
+    this!!.transformer.emitContext().setOriginal(exportDecl, node!!.statementBase.nodeBase.asNode())
     return com.xemantic.typescript.tsgo.transformers.singleOrMany(GoSlice.of(GoElem.ref<Node?>(), importDecl, exportDecl), this!!.transformer.factory())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.visitCallExpression 2f959a05
 fun ESModuleTransformer?.visitCallExpression(node: CallExpression?): Node? {
     if (this!!.compilerOptions!!.rewriteRelativeImportExtensions.isTrue()) {
-        if (com.xemantic.typescript.tsgo.ast.isImportCall(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()) && node!!.arguments!!.nodes.len > 0 || com.xemantic.typescript.tsgo.ast.isInJSFile(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode()) && com.xemantic.typescript.tsgo.ast.isRequireCall(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode(), false)) {
+        if (com.xemantic.typescript.tsgo.ast.isImportCall(node!!.leftHandSideExpressionBase.asNode()) && node!!.arguments!!.nodes.len > 0 || com.xemantic.typescript.tsgo.ast.isInJSFile(node!!.leftHandSideExpressionBase.asNode()) && com.xemantic.typescript.tsgo.ast.isRequireCall(node!!.leftHandSideExpressionBase.asNode(), false)) {
             return this.visitImportOrRequireCall(node)
         }
     }
-    return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+    return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.visitImportOrRequireCall 8d4e91ba
 fun ESModuleTransformer?.visitImportOrRequireCall(node: CallExpression?): Node? {
     if (node!!.arguments!!.nodes.len == 0) {
-        return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())
+        return this!!.transformer.visitor().visitEachChild(node!!.leftHandSideExpressionBase.asNode())
     }
     val expression: Node? = this!!.transformer.visitor().visitNode(node!!.expression)
     var argument: Node? = null
@@ -320,7 +320,7 @@ fun ESModuleTransformer?.visitImportOrRequireCall(node: CallExpression?): Node? 
     arguments = arguments.appendSlice(rest)
     val argumentList: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(arguments)
     argumentList!!.loc = node!!.arguments!!.loc.goCopy()
-    return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, expression, node!!.questionDotToken, null, argumentList, node!!.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.node.flags)
+    return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(node, expression, node!!.questionDotToken, null, argumentList, node!!.leftHandSideExpressionBase.node.flags)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.ESModuleTransformer.createRequireCall dca62341

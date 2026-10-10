@@ -93,7 +93,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.nullishCoalescingTran
             return this!!.transformer.factory()!!.nodeFactory.newConditionalExpression(createNotNullCondition(this!!.transformer.emitContext(), left, right, false), this!!.transformer.factory()!!.nodeFactory.newToken(Kind(57)), right, this!!.transformer.factory()!!.nodeFactory.newToken(Kind(58)), this!!.transformer.visitor().visitNode(node!!.right))
         }
         else -> {
-            return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.nodeBase.nodeDefault.asNode())
+            return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.asNode())
         }
     }
     goUnreachable()

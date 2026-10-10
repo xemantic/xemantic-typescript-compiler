@@ -1047,7 +1047,7 @@ fun Checker?.checkWithStatement(node: Node?) {
     if (!this.hasParseDiagnostics(sourceFile)) {
         val start: Int = com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile!!.text(), node!!.pos())
         val end: Int = node.statement()!!.pos()
-        this.grammarErrorAtPos(sourceFile!!.nodeBase.nodeDefault.asNode(), start, end - start, com.xemantic.typescript.tsgo.diagnostics.the_with_statement_is_not_supported_All_symbols_in_a_with_block_will_have_type_any, GoElem.ref<Any?>().nilSlice)
+        this.grammarErrorAtPos(sourceFile!!.nodeBase.asNode(), start, end - start, com.xemantic.typescript.tsgo.diagnostics.the_with_statement_is_not_supported_All_symbols_in_a_with_block_will_have_type_any, GoElem.ref<Any?>().nilSlice)
     }
 }
 

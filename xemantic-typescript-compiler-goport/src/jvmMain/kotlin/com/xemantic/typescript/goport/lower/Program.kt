@@ -1074,6 +1074,87 @@ class Program(
         }
     }
 
+    // ---- transparent wrappers (docs/goport-lowering.md § 3, "Transparent wrappers") ----
+
+    /**
+     * Struct types that are only a wrapper of another struct ([computeTransparentWrappers]), wrapper key → wrapped key:
+     * `type ExpressionBase struct { NodeBase }`. Go embeds by value, so an `ast.Identifier` is ONE allocation; the port
+     * made every level its own object (Identifier → PrimaryExpressionBase → … → NodeBase → NodeDefault: seven objects and
+     * seven pointer hops before a node's own data). A wrapper with no field and no method of its own and the same method
+     * set as what it wraps is, to every Go operation the run performs on it, the wrapped struct; it is lowered as a
+     * `typealias` of the struct at the end of its chain, and a selection through it is no step at all. Refused: a generic,
+     * reflected or map-key wrapper, and any chain whose wrapper OR wrapped type is the target of a type assertion or a
+     * type-switch case (an alias would make `x.(*NodeDefault)` succeed on what Go holds as a `*NodeBase`).
+     */
+    val transparentWrappers = HashMap<String, String>()
+
+    /** Why a single-embedded-field struct was not made transparent (for the report). */
+    val transparentRefusals = HashMap<String, String>()
+
+    /** The struct at the end of [key]'s wrapper chain ([key] itself when it is no wrapper). */
+    fun wrapperTarget(key: String): String {
+        var k = key
+        var guard = 0
+        while (true) {
+            k = transparentWrappers[k] ?: return k
+            if (++guard > 64) error("goport: wrapper cycle at $key")
+        }
+    }
+
+    fun computeTransparentWrappers() {
+        transparentWrappers.clear()
+        transparentRefusals.clear()
+        val cand = HashMap<String, String>()
+        val mset = HashMap<String, Set<String>>()
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (i in 0 until tt.size) {
+                val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                if (n.origin != null || n.pkg != p.path) continue
+                val st = tt.under(n.id) as? com.xemantic.typescript.goport.types.StructType ?: continue
+                mset[n.key] = (tt.msetPtr(n).map { it.name } + tt.msetT(n).map { it.name }).toSet()
+                if (st.fields.size != 1 || !st.fields[0].embedded) continue
+                val inner = tt.unalias(st.fields[0].t) as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                if (inner.origin != null || inner.tparams.isNotEmpty() || tt.under(inner.id) !is com.xemantic.typescript.goport.types.StructType) continue
+                val own = (tt.msetPtr(n) + tt.msetT(n)).any { it.fn.startsWith(n.key + ".") }
+                when {
+                    n.tparams.isNotEmpty() -> transparentRefusals[n.key] = "generic"
+                    own -> transparentRefusals[n.key] = "declares methods"
+                    n.key in reflectStructs || inner.key in reflectStructs -> transparentRefusals[n.key] = "reflected"
+                    n.key in structKeys -> transparentRefusals[n.key] = "a map key by value"
+                    n.key !in structTypes -> transparentRefusals[n.key] = "not a struct declared in the run"
+                    else -> cand[n.key] = inner.key
+                }
+            }
+        }
+        for ((w, e) in cand.toMap()) if (mset[w] != mset[e]) { cand.remove(w); transparentRefusals[w] = "method set differs from the wrapped struct's" }
+        // Types a type assertion or a type switch names: no wrapper chain may touch one.
+        val asserted = HashSet<String>()
+        for (p in packages) {
+            val tt = TypeTable(p)
+            fun note(t: Int?) {
+                var ty = t?.let { tt.unalias(it) } ?: return
+                if (ty is com.xemantic.typescript.goport.types.PointerType) ty = tt.unalias(ty.elem)
+                (ty as? com.xemantic.typescript.goport.types.NamedType)?.let { asserted += it.key }
+            }
+            for (f in p.files) walk(f) { n ->
+                when (n.str("k")) {
+                    "TypeAssertExpr" -> note(n.obj("type")?.int("t") ?: n.int("t"))
+                    "TypeCaseClause" -> n.list("types").forEach { note(it.int("t")) }
+                }
+                true
+            }
+        }
+        for (w in cand.keys.toList()) {
+            var k: String? = w
+            val chain = ArrayList<String>()
+            while (k != null) { chain += k; k = cand[k] }
+            val hit = chain.firstOrNull { it in asserted }
+            if (hit != null) { cand.remove(w); transparentRefusals[w] = "chain type $hit is type-asserted" }
+        }
+        transparentWrappers += cand
+    }
+
     // ---- abstract-class interfaces (docs/goport-lowering.md § 3, "Abstract-class interfaces") ----
 
     /**

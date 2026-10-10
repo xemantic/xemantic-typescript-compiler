@@ -771,7 +771,7 @@ fun Tracker?.getInsertNodeAfterOptions(sourceFile: SourceFile?, node: Node?): No
             options = NodeOptions(suffix = newLineChar)
         }
     }
-    if (node!!.end() == sourceFile!!.nodeBase.nodeDefault.node.end() && com.xemantic.typescript.tsgo.ast.isStatement(node)) {
+    if (node!!.end() == sourceFile!!.nodeBase.node.end() && com.xemantic.typescript.tsgo.ast.isStatement(node)) {
         options.prefix = this!!.newLine + options.prefix
     }
     return options

@@ -146,7 +146,7 @@ fun formatNodeLines(ctx: Context?, sourceFile: SourceFile?, node: Node?, request
 
 // go: github.com/microsoft/typescript-go/internal/format.FormatDocument 1fece072
 fun formatDocument(ctx: Context?, sourceFile: SourceFile?): GoSlice<TextChange> {
-    return formatSpan(ctx, com.xemantic.typescript.tsgo.core.newTextRange(0, sourceFile!!.nodeBase.nodeDefault.node.end()), sourceFile, FormatRequestKindFormatDocument)
+    return formatSpan(ctx, com.xemantic.typescript.tsgo.core.newTextRange(0, sourceFile!!.nodeBase.node.end()), sourceFile, FormatRequestKindFormatDocument)
 }
 
 // go: github.com/microsoft/typescript-go/internal/format.FormatSelection 85ff2725

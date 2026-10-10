@@ -77,17 +77,17 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.useStrictTransformer?
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.useStrictTransformer.visitSourceFile 87818e69
 fun com.xemantic.typescript.tsgo.transformers.estransforms.useStrictTransformer?.visitSourceFile(node: SourceFile?): Node? {
     if (node!!.scriptKind.value == 6) {
-        return node!!.nodeBase.nodeDefault.asNode()
+        return node!!.nodeBase.asNode()
     }
     val isExternalModule: Boolean = com.xemantic.typescript.tsgo.ast.isExternalModule(node)
     val moduleKind: ModuleKind = this!!.compilerOptions.getEmitModuleKind()
     val format: ModuleKind = this!!.getEmitModuleFormatOfFile!!(node)
     if (isExternalModule && moduleKind.value >= 5 && (moduleKind.value == 200 || format.value >= 5)) {
-        return node!!.nodeBase.nodeDefault.asNode()
+        return node!!.nodeBase.asNode()
     }
     val statements: GoSlice<Node?> = this!!.transformer.factory().ensureUseStrict(node!!.statements!!.nodes)
     val statementList: NodeList? = this!!.transformer.factory()!!.nodeFactory.newNodeList(statements)
     statementList!!.loc = node!!.statements!!.loc.goCopy()
-    return this!!.transformer.factory()!!.nodeFactory.updateSourceFile(node, statementList, node!!.endOfFileToken).asSourceFile()!!.nodeBase.nodeDefault.asNode()
+    return this!!.transformer.factory()!!.nodeFactory.updateSourceFile(node, statementList, node!!.endOfFileToken).asSourceFile()!!.nodeBase.asNode()
 }
 

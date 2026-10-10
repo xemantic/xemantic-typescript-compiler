@@ -1,3 +1,12 @@
+**(TSGO.6-h) DONE — an IO dispatcher beside the compute one: REFUSED, measured (2026-10-10):** owner question. The
+port's goroutines are platform threads gated by `GoProcs` run tokens; host file calls kept the token. Releasing it around
+every host call (`TSGO_IO_DISPATCH=release`) or running the call on a dedicated IO pool (`pool`) — experiment commit
+`1820a9de1` — made date-fns warm (`osfs`, every rebuild re-reads) **470 → 756 / 1,122 ms** (4/4 lost, two reversed
+batches) and cold 4.60 → 4.93 / 4.96 s; compiler noise. A cached syscall is kernel CPU work, so there is no idle core to
+give away; the token churn re-queued every call and made tsgo's loaders read `package.json` 174x per rebuild instead
+of 8. Kept: the `syscall()` funnel + `TSGO_IO_STATS` (docs/goport-perf.md § 9). Diag/Emit 13,127, CLI 105, LS, API
+594,007 equal; `-tsgo` 125 / 0.
+
 **(TSGO.6-g) DONE — JDK 27 measured; window fields + immutable `FlowType`; an AOT launcher for the port (2026-10-09):**
 JDK 27's default GC is still G1; compact object headers (now default) cut allocation 7-9%; warm −3..−6%, cold no win,
 ZGC 11-15% slower — not made the default (docs/goport-perf.md § 8.1). Porter rules: `Parser.sourceText`/`Scanner.text`

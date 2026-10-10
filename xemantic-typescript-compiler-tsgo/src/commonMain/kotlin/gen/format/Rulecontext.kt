@@ -587,7 +587,7 @@ fun isSemicolonDeletionContext(context: FormattingContext?): Boolean {
     if (com.xemantic.typescript.tsgo.ast.isTrivia(nextTokenKind)) {
         var nextRealToken: Node? = null
         if (context!!.nextTokenParent === context!!.currentTokenParent) {
-            nextRealToken = com.xemantic.typescript.tsgo.astnav.findNextToken(context!!.nextTokenParent, context!!.sourceFile!!.nodeBase.nodeDefault.asNode(), context!!.sourceFile)
+            nextRealToken = com.xemantic.typescript.tsgo.astnav.findNextToken(context!!.nextTokenParent, context!!.sourceFile!!.nodeBase.asNode(), context!!.sourceFile)
         } else {
             nextRealToken = com.xemantic.typescript.tsgo.ls.lsutil.getFirstToken(context!!.nextTokenParent, context!!.sourceFile)
         }

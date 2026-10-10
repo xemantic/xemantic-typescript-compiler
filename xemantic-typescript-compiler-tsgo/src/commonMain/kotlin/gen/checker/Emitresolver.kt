@@ -259,11 +259,11 @@ class EmitResolver(
             this.checkerMu!!.lock()
             val dr1 = this.checkerMu!!
             df0.defer { dr1.unlock() }
-            if (this.declarationFileLinks.get(file!!.nodeBase.nodeDefault.asNode())!!.aliasesMarked) {
+            if (this.declarationFileLinks.get(file!!.nodeBase.asNode())!!.aliasesMarked) {
                 return
             }
-            this.declarationFileLinks.get(file!!.nodeBase.nodeDefault.asNode())!!.aliasesMarked = true
-            file!!.nodeBase.nodeDefault.asNode().forEachChild(this.aliasMarkingVisitor)
+            this.declarationFileLinks.get(file!!.nodeBase.asNode())!!.aliasesMarked = true
+            file!!.nodeBase.asNode().forEachChild(this.aliasMarkingVisitor)
         }
     }
 
@@ -309,14 +309,14 @@ class EmitResolver(
     // go: github.com/microsoft/typescript-go/internal/checker.EmitResolver.IsImportRequiredByAugmentation 3c54020c
     override fun isImportRequiredByAugmentation(decl: ImportDeclaration?): Boolean {
         return withDefers({ false }) { df0 ->
-            if (!com.xemantic.typescript.tsgo.ast.isParseTreeNode(decl!!.statementBase.nodeBase.nodeDefault.asNode())) {
+            if (!com.xemantic.typescript.tsgo.ast.isParseTreeNode(decl!!.statementBase.nodeBase.asNode())) {
                 return false
             }
-            val file: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(decl!!.statementBase.nodeBase.nodeDefault.asNode())
+            val file: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(decl!!.statementBase.nodeBase.asNode())
             if (file!!.declarationBase.symbol == null) {
                 return false
             }
-            val importTarget: SourceFile? = this.getExternalModuleFileFromDeclaration(decl!!.statementBase.nodeBase.nodeDefault.asNode())
+            val importTarget: SourceFile? = this.getExternalModuleFileFromDeclaration(decl!!.statementBase.nodeBase.asNode())
             if (importTarget == null) {
                 return false
             }
@@ -510,7 +510,7 @@ class EmitResolver(
     // go: github.com/microsoft/typescript-go/internal/checker.EmitResolver.MarkLinkedReferencesRecursively a2ffcdf4
     override fun markLinkedReferencesRecursively(file: SourceFile?) {
         withDefers({ Unit }) { df0 ->
-            if (!com.xemantic.typescript.tsgo.ast.isParseTreeNode(file!!.nodeBase.nodeDefault.asNode())) {
+            if (!com.xemantic.typescript.tsgo.ast.isParseTreeNode(file!!.nodeBase.asNode())) {
                 return
             }
             this.checkerMu!!.lock()
@@ -632,7 +632,7 @@ class EmitResolver(
     // go: github.com/microsoft/typescript-go/internal/checker.EmitResolver.GetElementAccessExpressionName 8875c5b6
     override fun getElementAccessExpressionName(expression: ElementAccessExpression?): String {
         return withDefers({ "" }) { df0 ->
-            if (!com.xemantic.typescript.tsgo.ast.isParseTreeNode(expression!!.memberExpressionBase.leftHandSideExpressionBase.updateExpressionBase.unaryExpressionBase.expressionBase.nodeBase.nodeDefault.asNode())) {
+            if (!com.xemantic.typescript.tsgo.ast.isParseTreeNode(expression!!.memberExpressionBase.asNode())) {
                 return ""
             }
             this.checkerMu!!.lock()
@@ -1409,7 +1409,7 @@ fun EmitResolver?.isAliasResolvedToValue(symbol: Symbol?, excludeTypeOnlyValues:
     if (symbol!!.valueDeclaration != null) {
         val container: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(symbol!!.valueDeclaration)
         if (container != null) {
-            val fileSymbol: Symbol? = c.getSymbolOfDeclaration(container!!.nodeBase.nodeDefault.asNode())
+            val fileSymbol: Symbol? = c.getSymbolOfDeclaration(container!!.nodeBase.asNode())
             c.resolveExternalModuleSymbolImpl(fileSymbol, false)
         }
     }
