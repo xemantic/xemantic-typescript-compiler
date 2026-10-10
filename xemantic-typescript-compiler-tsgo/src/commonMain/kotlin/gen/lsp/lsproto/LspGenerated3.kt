@@ -5568,7 +5568,9 @@ class IntegerOrString(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.IntegerOrString.UnmarshalJSONFrom e435b58e
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(IntegerOrString())
+        val lp0 = this
+        lp0.integer = null
+        lp0.string = null
         when (dec!!.peekKind().value) {
             48 -> {
                 this.integer = goNew(GoElem.INT)
@@ -5628,11 +5630,12 @@ class DocumentSelectorOrNull(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.DocumentSelectorOrNull.UnmarshalJSONFrom cd5ec1b6
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(DocumentSelectorOrNull())
+        val lp0 = this
+        lp0.documentSelector = null
         when (dec!!.peekKind().value) {
             110 -> {
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             91 -> {
@@ -5689,13 +5692,15 @@ class BooleanOrEmptyObject(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrEmptyObject.UnmarshalJSONFrom cf486177
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrEmptyObject())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.emptyObject = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
@@ -5754,13 +5759,15 @@ class BooleanOrSemanticTokensFullDelta(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrSemanticTokensFullDelta.UnmarshalJSONFrom 91dbd8f0
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrSemanticTokensFullDelta())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.semanticTokensFullDelta = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
@@ -5823,10 +5830,14 @@ class TextDocumentEditOrCreateFileOrRenameFileOrDeleteFile(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.TextDocumentEditOrCreateFileOrRenameFileOrDeleteFile.UnmarshalJSONFrom 5fbd5ee4
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(TextDocumentEditOrCreateFileOrRenameFileOrDeleteFile())
-        val t0 = dec!!.readValue()
-        val data: Value = t0.first
-        val err: GoError? = t0.second
+        val lp0 = this
+        lp0.textDocumentEdit = null
+        lp0.createFile = null
+        lp0.renameFile = null
+        lp0.deleteFile = null
+        val t1 = dec!!.readValue()
+        val data: Value = t1.first
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
@@ -5900,7 +5911,9 @@ class StringOrInlayHintLabelParts(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.StringOrInlayHintLabelParts.UnmarshalJSONFrom eaba15da
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(StringOrInlayHintLabelParts())
+        val lp0 = this
+        lp0.string = null
+        lp0.inlayHintLabelParts = null
         when (dec!!.peekKind().value) {
             34 -> {
                 this.string = goNew(GoElem.STRING)
@@ -5962,7 +5975,9 @@ class StringOrMarkupContent(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.StringOrMarkupContent.UnmarshalJSONFrom 6e11d849
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(StringOrMarkupContent())
+        val lp0 = this
+        lp0.string = null
+        lp0.markupContent = null
         when (dec!!.peekKind().value) {
             34 -> {
                 this.string = goNew(GoElem.STRING)
@@ -6035,10 +6050,12 @@ class WorkspaceFullDocumentDiagnosticReportOrUnchangedDocumentDiagnosticReport(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.WorkspaceFullDocumentDiagnosticReportOrUnchangedDocumentDiagnosticReport.UnmarshalJSONFrom c784c426
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(WorkspaceFullDocumentDiagnosticReportOrUnchangedDocumentDiagnosticReport())
-        val t0 = dec!!.readValue()
-        val data: Value = t0.first
-        val err: GoError? = t0.second
+        val lp0 = this
+        lp0.fullDocumentDiagnosticReport = null
+        lp0.unchangedDocumentDiagnosticReport = null
+        val t1 = dec!!.readValue()
+        val data: Value = t1.first
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
@@ -6100,7 +6117,9 @@ class StringOrStringValue(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.StringOrStringValue.UnmarshalJSONFrom c628e41c
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(StringOrStringValue())
+        val lp0 = this
+        lp0.string = null
+        lp0.stringValue = null
         when (dec!!.peekKind().value) {
             34 -> {
                 this.string = goNew(GoElem.STRING)
@@ -6160,11 +6179,12 @@ class IntegerOrNull(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.IntegerOrNull.UnmarshalJSONFrom 9b8dab9d
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(IntegerOrNull())
+        val lp0 = this
+        lp0.integer = null
         when (dec!!.peekKind().value) {
             110 -> {
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             48 -> {
@@ -6219,11 +6239,12 @@ class StringOrNull(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.StringOrNull.UnmarshalJSONFrom 3bea92ee
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(StringOrNull())
+        val lp0 = this
+        lp0.string = null
         when (dec!!.peekKind().value) {
             110 -> {
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             34 -> {
@@ -6278,11 +6299,12 @@ class DocumentUriOrNull(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.DocumentUriOrNull.UnmarshalJSONFrom fe89a655
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(DocumentUriOrNull())
+        val lp0 = this
+        lp0.documentUri = null
         when (dec!!.peekKind().value) {
             110 -> {
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             34 -> {
@@ -6337,11 +6359,12 @@ class InitializationOptionsOrNull(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.InitializationOptionsOrNull.UnmarshalJSONFrom 7919b6cc
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(InitializationOptionsOrNull())
+        val lp0 = this
+        lp0.initializationOptions = null
         when (dec!!.peekKind().value) {
             110 -> {
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
@@ -6396,11 +6419,12 @@ class WorkspaceFoldersOrNull(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.WorkspaceFoldersOrNull.UnmarshalJSONFrom 3faf4e1c
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(WorkspaceFoldersOrNull())
+        val lp0 = this
+        lp0.workspaceFolders = null
         when (dec!!.peekKind().value) {
             110 -> {
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             91 -> {
@@ -6457,7 +6481,9 @@ class StringOrStrings(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.StringOrStrings.UnmarshalJSONFrom fdeaca3f
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(StringOrStrings())
+        val lp0 = this
+        lp0.string = null
+        lp0.strings = null
         when (dec!!.peekKind().value) {
             34 -> {
                 this.string = goNew(GoElem.STRING)
@@ -6519,10 +6545,12 @@ class TextDocumentContentChangePartialOrWholeDocument(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.TextDocumentContentChangePartialOrWholeDocument.UnmarshalJSONFrom 563f7933
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(TextDocumentContentChangePartialOrWholeDocument())
-        val t0 = dec!!.readValue()
-        val data: Value = t0.first
-        val err: GoError? = t0.second
+        val lp0 = this
+        lp0.partial = null
+        lp0.wholeDocument = null
+        val t1 = dec!!.readValue()
+        val data: Value = t1.first
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
@@ -6584,10 +6612,12 @@ class TextEditOrInsertReplaceEdit(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.TextEditOrInsertReplaceEdit.UnmarshalJSONFrom d53fb8c5
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(TextEditOrInsertReplaceEdit())
-        val t0 = dec!!.readValue()
-        val data: Value = t0.first
-        val err: GoError? = t0.second
+        val lp0 = this
+        lp0.textEdit = null
+        lp0.insertReplaceEdit = null
+        val t1 = dec!!.readValue()
+        val data: Value = t1.first
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
@@ -6653,12 +6683,16 @@ class MarkupContentOrStringOrMarkedStringWithLanguageOrMarkedStrings(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.MarkupContentOrStringOrMarkedStringWithLanguageOrMarkedStrings.UnmarshalJSONFrom 81c8a2a6
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(MarkupContentOrStringOrMarkedStringWithLanguageOrMarkedStrings())
+        val lp0 = this
+        lp0.markupContent = null
+        lp0.string = null
+        lp0.markedStringWithLanguage = null
+        lp0.markedStrings = null
         when (dec!!.peekKind().value) {
             123 -> {
-                val t0 = dec!!.readValue()
-                val data: Value = t0.first
-                val err: GoError? = t0.second
+                val t1 = dec!!.readValue()
+                val data: Value = t1.first
+                val err: GoError? = t1.second
                 if (err != null) {
                     return err
                 }
@@ -6736,11 +6770,12 @@ class UintegerOrNull(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.UintegerOrNull.UnmarshalJSONFrom 365e55e5
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(UintegerOrNull())
+        val lp0 = this
+        lp0.uinteger = null
         when (dec!!.peekKind().value) {
             110 -> {
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             48 -> {
@@ -6797,10 +6832,12 @@ class LocationOrLocationUriOnly(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.LocationOrLocationUriOnly.UnmarshalJSONFrom 5ed0caca
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(LocationOrLocationUriOnly())
-        val t0 = dec!!.readValue()
-        val data: Value = t0.first
-        val err: GoError? = t0.second
+        val lp0 = this
+        lp0.location = null
+        lp0.locationUriOnly = null
+        val t1 = dec!!.readValue()
+        val data: Value = t1.first
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
@@ -6864,10 +6901,13 @@ class WorkDoneProgressBeginOrReportOrEnd(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.WorkDoneProgressBeginOrReportOrEnd.UnmarshalJSONFrom 6619e3f2
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(WorkDoneProgressBeginOrReportOrEnd())
-        val t0 = dec!!.readValue()
-        val data: Value = t0.first
-        val err: GoError? = t0.second
+        val lp0 = this
+        lp0.begin = null
+        lp0.report = null
+        lp0.end = null
+        val t1 = dec!!.readValue()
+        val data: Value = t1.first
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
@@ -6937,10 +6977,13 @@ class TextEditOrAnnotatedTextEditOrSnippetTextEdit(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.TextEditOrAnnotatedTextEditOrSnippetTextEdit.UnmarshalJSONFrom c94fced2
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(TextEditOrAnnotatedTextEditOrSnippetTextEdit())
-        val t0 = dec!!.readValue()
-        val data: Value = t0.first
-        val err: GoError? = t0.second
+        val lp0 = this
+        lp0.textEdit = null
+        lp0.annotatedTextEdit = null
+        lp0.snippetTextEdit = null
+        val t1 = dec!!.readValue()
+        val data: Value = t1.first
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
@@ -7008,10 +7051,12 @@ class FullDocumentDiagnosticReportOrUnchangedDocumentDiagnosticReport(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.FullDocumentDiagnosticReportOrUnchangedDocumentDiagnosticReport.UnmarshalJSONFrom afa46f6e
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(FullDocumentDiagnosticReportOrUnchangedDocumentDiagnosticReport())
-        val t0 = dec!!.readValue()
-        val data: Value = t0.first
-        val err: GoError? = t0.second
+        val lp0 = this
+        lp0.fullDocumentDiagnosticReport = null
+        lp0.unchangedDocumentDiagnosticReport = null
+        val t1 = dec!!.readValue()
+        val data: Value = t1.first
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
@@ -7073,7 +7118,9 @@ class TextDocumentSyncOptionsOrKind(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.TextDocumentSyncOptionsOrKind.UnmarshalJSONFrom 440e6529
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(TextDocumentSyncOptionsOrKind())
+        val lp0 = this
+        lp0.options = null
+        lp0.kind = null
         when (dec!!.peekKind().value) {
             123 -> {
                 this.options = TextDocumentSyncOptions()
@@ -7135,13 +7182,15 @@ class BooleanOrHoverOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrHoverOptions.UnmarshalJSONFrom f6492064
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrHoverOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.hoverOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
@@ -7202,19 +7251,22 @@ class BooleanOrDeclarationOptionsOrDeclarationRegistrationOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrDeclarationOptionsOrDeclarationRegistrationOptions.UnmarshalJSONFrom 83ec7223
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrDeclarationOptionsOrDeclarationRegistrationOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.declarationOptions = null
+        lp0.declarationRegistrationOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
-                val t1 = dec!!.readValue()
-                val data: Value = t1.first
-                val err_1: GoError? = t1.second
+                val t2 = dec!!.readValue()
+                val data: Value = t2.first
+                val err_1: GoError? = t2.second
                 if (err_1 != null) {
                     return err_1
                 }
@@ -7283,13 +7335,15 @@ class BooleanOrDefinitionOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrDefinitionOptions.UnmarshalJSONFrom ca73db32
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrDefinitionOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.definitionOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
@@ -7350,19 +7404,22 @@ class BooleanOrTypeDefinitionOptionsOrTypeDefinitionRegistrationOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrTypeDefinitionOptionsOrTypeDefinitionRegistrationOptions.UnmarshalJSONFrom a94b4034
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrTypeDefinitionOptionsOrTypeDefinitionRegistrationOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.typeDefinitionOptions = null
+        lp0.typeDefinitionRegistrationOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
-                val t1 = dec!!.readValue()
-                val data: Value = t1.first
-                val err_1: GoError? = t1.second
+                val t2 = dec!!.readValue()
+                val data: Value = t2.first
+                val err_1: GoError? = t2.second
                 if (err_1 != null) {
                     return err_1
                 }
@@ -7433,19 +7490,22 @@ class BooleanOrImplementationOptionsOrImplementationRegistrationOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrImplementationOptionsOrImplementationRegistrationOptions.UnmarshalJSONFrom e75ab9e3
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrImplementationOptionsOrImplementationRegistrationOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.implementationOptions = null
+        lp0.implementationRegistrationOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
-                val t1 = dec!!.readValue()
-                val data: Value = t1.first
-                val err_1: GoError? = t1.second
+                val t2 = dec!!.readValue()
+                val data: Value = t2.first
+                val err_1: GoError? = t2.second
                 if (err_1 != null) {
                     return err_1
                 }
@@ -7514,13 +7574,15 @@ class BooleanOrReferenceOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrReferenceOptions.UnmarshalJSONFrom f9493f1a
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrReferenceOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.referenceOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
@@ -7579,13 +7641,15 @@ class BooleanOrDocumentHighlightOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrDocumentHighlightOptions.UnmarshalJSONFrom 54965a7c
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrDocumentHighlightOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.documentHighlightOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
@@ -7644,13 +7708,15 @@ class BooleanOrDocumentSymbolOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrDocumentSymbolOptions.UnmarshalJSONFrom d92ca6f0
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrDocumentSymbolOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.documentSymbolOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {
@@ -7709,13 +7775,15 @@ class BooleanOrCodeActionOptions(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.BooleanOrCodeActionOptions.UnmarshalJSONFrom e14a4856
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(BooleanOrCodeActionOptions())
+        val lp0 = this
+        lp0.boolean = null
+        lp0.codeActionOptions = null
         val kind: Kind = dec!!.peekKind()
         when (kind.value) {
             116, 102 -> {
                 this.boolean = GoBox<Boolean>(kind.value == 116)
-                val t0 = dec!!.readToken()
-                val err: GoError? = t0.second
+                val t1 = dec!!.readToken()
+                val err: GoError? = t1.second
                 return err
             }
             123 -> {

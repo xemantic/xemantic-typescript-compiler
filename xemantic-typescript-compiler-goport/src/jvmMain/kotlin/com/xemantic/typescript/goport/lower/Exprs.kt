@@ -135,6 +135,24 @@ open class ExprLowering(val fn: FnCtx) {
         else -> false
     }
 
+    /**
+     * A slice expression that yields a header nothing else holds (or the shared nil slice, which no owned
+     * operation changes): `make`, a composite literal, a sub-slice, `nil` (docs/goport-lowering.md § 3,
+     * "Owned slice fields").
+     */
+    fun freshSliceHeader(n: Node): Boolean = when (n.k) {
+        "ParenExpr" -> freshSliceHeader(n.reqObj("x"))
+        "CompositeLit" -> true
+        "SliceExpr" -> n.str("sk") in setOf("slice", "array", "ptrarray")
+        "CallExpr" -> n.str("call") == "builtin" && n.str("builtin") == "make"
+        "Ident" -> n.str("m") == "nil"
+        else -> false
+    }
+
+    /** [code] (the lowered [value]) as a header an owned slice field may keep: copied unless fresh. */
+    fun ownedSliceValue(value: Node?, code: Ex): String =
+        if (value != null && freshSliceHeader(value)) code.code else "${code.at(PRIMARY)}.ownedCopy()"
+
     /** [e] as its UNDERLYING representation: a value class is unwrapped (`.value`). */
     fun raw(e: Node): Ex {
         val t = ty(e)
@@ -826,15 +844,21 @@ open class ExprLowering(val fn: FnCtx) {
                     }
                     return Ex.primary("${tm.kt(t)}(${args.joinToString(", ")})")
                 }
+                // Program.ownedSliceFields: an owned field keeps a header of its own.
+                val ownerKey = (types.unalias(t) as? NamedType)?.key
+                fun fieldValue(idx: Int, v: Node): String {
+                    val code = flow(v)
+                    return if (ownerKey != null && "$ownerKey.${u.fields[idx].name}" in prog.ownedSliceFields) ownedSliceValue(v, code) else code.code
+                }
                 val args = elts.map { el ->
                     if (el.k == "KeyValueExpr") {
                         val key = el.reqObj("key")
                         val fo = pc.obj(key.int("obj") ?: refuse("field-key-without-object"))
                         val idx = u.fields.indexOfFirst { it.name == fo.str("name") }
-                        "${fieldNameOf(t, idx)} = ${flow(el.reqObj("value")).code}"
+                        "${fieldNameOf(t, idx)} = ${fieldValue(idx, el.reqObj("value"))}"
                     } else {
                         val idx = el.int("fieldIndex") ?: refuse("positional-field-without-index")
-                        "${fieldNameOf(t, idx)} = ${flow(el).code}"
+                        "${fieldNameOf(t, idx)} = ${fieldValue(idx, el)}"
                     }
                 }
                 val dict = (types.unalias(t) as? NamedType)?.let { tm.dictArgs(it) } ?: emptyList()

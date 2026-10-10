@@ -25,6 +25,38 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-k) — SLICE HEADERS OWNED BY THEIR FIELD AND STRUCT LITERALS STORED IN PLACE (two porter rules + two shim rewrites): allocation −11% in every warm regime and the first allocation round whose WALL clears the spread — −4.6% single (4/4, ranges disjoint), −6.6% compiler parallel (4/4), −5.3% services (3/4); the cold JIT measured: C1-only is −33..−44% on ordinary projects and +100% on type-fest, so the AOT cache stays the launcher's lever (2026-10-10)
+
+- **Owner goal (2026-10-10)**: highest performance keeping every test, diverging from the mechanical lowering toward
+  idiomatic Kotlin where it pays. A fresh allocation profile put `GoSlice` headers at 24.7% of a warm check's allocation;
+  Go writes a header VALUE into a field, the port allocated a header object per append and per pop.
+- **Owned slice fields** (`Program.computeOwnedSliceFields`, `Stmts.ownedSliceStore`, runtime `GoSlice.*Owned`/`ownedCopy`;
+  docs/goport-lowering.md § 3). A `[]T` field whose every read is DIRECT (index, len/cap, sub-slice, a non-self append/
+  copy/clear operand, an assignment target) and which has a self-append/self-reslice keeps a header no one else holds,
+  so the self-op updates it in place; every other store, `goCopy`/`goSet` and composite-literal value stores a copy
+  (skipped for a fresh header). A direct use whose sibling operands contain a call refuses the field (Go copies the
+  header before evaluating them); so do `&x.f`, op-assignments and any value use. 24 fields, 42 sites
+  (`sharedFlows`, `antecedentTypes`, `typeResolutions`, `Relater.maybeKeys`, `typeStack`, …); the porter prints every
+  refusal with its first reason (`Relater.sourceStack`: passed to `isDeeplyNestedType`).
+- **Struct literals stored in place** (`Stmts.literalStoreInPlace`): `*p = T{…}` evaluates the values in order, then
+  assigns `*p`'s fields (unlisted ones zeroed, a same-field self-value skipped) — no temporary object, no second copy of
+  its struct fields; 125 sites, tsgo's pooled `Relater`/`FlowState`/`InferenceState` among them.
+- **Shims**: `slices.Insert` and `slices.Clone` on the backing array (one header, one array when growing).
+- Predicted −7..−9% allocation, wall inside the spread. Measured (`scripts/tsgo-ab-warm.sh`, new; ABBA + BAAB, A = HEAD
+  `98b01e628`): allocation 1,396 → 1,237 MB single, 1,582 → 1,410 compiler parallel, 2,178 → 1,932 services (4/4 each);
+  wall 3,912 → 3,730 ms single (4/4), 2,260 → 2,110 compiler parallel (4/4), 2,883 → 2,730 services (3/4); GC pause
+  −4..−9%. docs/goport-perf.md § 13.
+- **Measured and not done** (§ 13.3; no code): `-XX:TieredStopAtLevel=1` cold compiler 9.9 → 6.5 s, date-fns 4.5 → 2.5 s,
+  type-fest 24.7 → **48.8 s**; with the AOT cache both modes read 6.0 s on the trained project and C1-only still doubles
+  type-fest — the shipped cache is the robust lever, and no file count predicts run length. C2 promoted 10x later or
+  2 compiler threads are both worse than the default. `-XX:+UseParallelGC` warm single −8.4%, parallel noise, cold +6%:
+  a host choice for the daemon/LSP, not a launcher default. JDK 27 has no AOT method-code cache.
+- Gates (final tree): `-tsgo` 134/0 (+7 `OwnedSliceTest`), `-goport` 25/0 (+2 pins), `-lsp` 38/0; DiagParity 13,127 /
+  13,127 equal; Emit, CLI, LS, API parity green (each fails on any difference; at their documented heaps — Emit/LS/API
+  3g, CLI 4g: at Gradle's default heap or with an idle 5 GB Kotlin daemon resident they die OOM, which read first as a
+  regression); warning gate live (an injected `No cast needed.` probe caught, all four compile tasks executed, nothing
+  else); 0 methods over 8,000 bytecodes; `linuxX64Test` 77/0.
+
 ### Round (TSGO.6-j) — TWO PORTER RULES FROM § 11's ALLOCATION TABLE: `keyBuilder` LOCALS POOLED BY AN ESCAPE PROOF (allocation −7.9% single / −9.2% parallel / −7.9% services, GC pause −15% compiler parallel) AND `Checker.compareSymbols` AS A PRIMITIVE `fun interface` (allocation −3.0% single / −5.7% services, +0.7% date-fns from the consumer adapter); wall inside noise in every regime (2026-10-10)
 
 - **Lever A — pooled locals** (`Program.computePooledLocals`, `lower/PooledLocals.kt` `EscapeAnalysis`, `runtime.GoLocalPool`;
@@ -263,46 +295,6 @@ it is the live Phase 18 queue.
   in the replay; 28 s parallel vs tsgo 17 s / 6 GB).
 - Receipts: `-tsgo` suite 119 / 0 (117 + 2), JVM + `linuxX64` compiles warning-clean (`--rerun-tasks`).
 - **Next**: PGO for the image (-21% on `-core`'s), a bounded Kotlin/Native GC default, a native `-tsgo` CI job.
-
-### Round (TSGO.6) — THE PORT IS MULTIPLATFORM: `-tsgo` builds for Kotlin/Native `linuxX64` with the generated 28 MB unchanged, its commonTest suite runs natively 64/64, and a native executable checks tsc's own sources (123 files) with 65 / 65 rows byte-identical to the tsgo 7.0.2 binary, in 12.6 s parallel / 14.5 s single (6.5 s / 10.6 s with the GC's allocation stall off) against tsgo's 2.1 / 3.3 s (2026-10-08)
-
-**What landed**: `linuxX64` on `-tsgo` behind `-PenableNativeTargets=true` (as `-core`'s), three `nativeMain` actuals —
-`go/sync` park (per-thread `@ThreadLocal` token: `pthread_mutex` + `pthread_cond` + a permit flag, freed by a `Cleaner`, not at thread
-exit), `goSpawn` (a DETACHED pthread with Go's 1 GB goroutine stack, 256 MB fallback; one thread per goroutine, no idle pool yet;
-`onGoStack` rides on it unchanged), `go/os` over POSIX `stat`/`opendir`/`open`+`read` — and `NativeCheckMain` (the executable:
-`<abs tsconfig> [single|parallel] [iters]`, tsc's `--noEmit` diagnostics through tsgo's own `diagnosticwriter`, phase times and
-GC env knobs on stderr). **No porter or `gen/` change was needed**: the whole generated port (and every hand-written shim) compiled
-for Native on the first build that got past the actuals. **Fixes**: `math.Exp` is now Go's portable `exp`/`expmulti` (Kotlin's
-`exp` on Native is glibc's and `Pow(7, 1.5)` differed from Go in the last ulp — the ONE native test failure; the JVM passed it by
-luck; the only `gen/` caller is `jsnum`'s `**`), two commonTest names with a comma. The `regexp` shim's translated patterns all pass
-`RegexpOracleTest` on Native's engine (0 rewrites needed).
-**Native suite**: `linuxX64Test` 64 / 64 (FmtSortMath, Shim, GoRuntime, Unicode/Strings, Slices, Regexp, Strconv, Xxh3, Sync).
-**End to end** (release binary, 35 MB; compiler profile `build/bench/tsc-project-637d5746`, one process each, box load ~7 on 8
-cores, so ±10%): output is `diff`-identical to `tools/tsgo-7.0.2/lib/tsc --noEmit -p` bar tsgo's trailing `Found 65 errors` summary,
-in all 12 native runs (single, parallel, GC variants); a 3-line project with the default (DOM) lib also matches.
-
-| arm | wall | peak RSS |
-|---|---:|---:|
-| native, parallel (K/N default GC) | 12.6 / 13.5 s | 2.1 GB |
-| native, single | 14.5 / 16.0 / 16.8 s | 1.7 GB |
-| native, parallel, `TSGO_GC_PAUSE=0` | **6.5 / 6.6 s** | 3.9-4.0 GB |
-| native, single, `TSGO_GC_PAUSE=0` | 10.6 / 10.9 s | 2.2-2.4 GB |
-| JVM port cold one-shot ((TSGO.4-d) § 3.2, recorded) | 10.3 s | 2.0 GB |
-| JVM port warm parallel / single (recorded) | 2.7 / 3.9 s | 3.5 GB |
-| tsgo 7.0.2 parallel / `--singleThreaded` | 2.07 / 3.3-3.7 s | 0.38 / 0.34 GB |
-
-Native has no JIT, so iterations in one process do not speed up (12.2 / 11.3 / 11.8 s). **The GC finding**: `-Xruntime-logs=gc=info`
-(now `-PtsgoNativeGcLogs=true`) shows 17 epochs = ~8 s of a 16 s single check, each preceded by `Pausing the mutators until epoch N is
-done` — K/N's `GC.pauseOnTargetHeapOverflow` stalls every allocating thread whenever the target heap overflows; turning it off
-halves the wall at ~2x RSS. A larger initial `targetHeapBytes` alone does nothing (autotune). Not made the default: an unbounded heap
-on type-fest-sized input with zero swap is the CLAUDE.md hazard. No profiler exists on this box (`perf` absent, paranoid 4), so the
-remaining ~2-3x over the warm JVM is unattributed (no escape analysis, boxed generics per CLAUDE.md's KIR measurements are the
-standing suspects). **Build cost**: `compileKotlinLinuxX64` ~2 min; test link + run ~1.5 min; release link 7.5-14 min, min ~6.6 GB
-available during it (Gradle heap 4 g). **JVM gate** (oracle inputs symlinked from the main tree's `build/goport`, `tools/tsgo-7.0.2`
-symlinked; outputs in the worktree): Diag 13,127 / 13,127, Emit 13,127 / 13,127, Oracle bound 7,774 / 7,774, Ls 21,614 / 21,614,
-Api 594,007 / 594,007 (a first run read 150k differ because the worktree had no `tools/tsgo-7.0.2/lib` — the libs the oracle names);
-`-tsgo` 110, `-goport` 15, `-lsp` 38 tests green. Warning-clean on JVM AND Native (a `USELESS_CAST` probe read its `w:` in both compiles, then deleted); huge-method census on `-tsgo` 0 over the limit (largest 7,526). **Left for (TSGO.6)**: the GraalVM image of the (TSGO.5) CLI (needs the CLI), a
-native idle-thread pool, the GC default, attributing the native gap, and wiring a native arm into CI (`native.yml` builds `-core` only).
 
 ## QUEUE
 

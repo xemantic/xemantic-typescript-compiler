@@ -49,13 +49,13 @@ class SymbolTrackerImpl(
     @kotlin.jvm.JvmField var getIsolatedDeclarationError: ((Node?) -> Diagnostic?)? = null,
 ) : SymbolTracker {
 
-    fun goCopy(): SymbolTrackerImpl = SymbolTrackerImpl(resolver = resolver, state = state, host = host, fallbackStack = fallbackStack, watchedClassSymbol = watchedClassSymbol, classSymbolTracked = classSymbolTracked, getIsolatedDeclarationError = getIsolatedDeclarationError)
+    fun goCopy(): SymbolTrackerImpl = SymbolTrackerImpl(resolver = resolver, state = state, host = host, fallbackStack = fallbackStack.ownedCopy(), watchedClassSymbol = watchedClassSymbol, classSymbolTracked = classSymbolTracked, getIsolatedDeclarationError = getIsolatedDeclarationError)
 
     fun goSet(o: SymbolTrackerImpl) {
         resolver = o.resolver
         state = o.state
         host = o.host
-        fallbackStack = o.fallbackStack
+        fallbackStack = o.fallbackStack.ownedCopy()
         watchedClassSymbol = o.watchedClassSymbol
         classSymbolTracked = o.classSymbolTracked
         getIsolatedDeclarationError = o.getIsolatedDeclarationError
@@ -63,12 +63,12 @@ class SymbolTrackerImpl(
 
     // go: github.com/microsoft/typescript-go/internal/transformers/declarations.SymbolTrackerImpl.PopErrorFallbackNode 9ada5051
     override fun popErrorFallbackNode() {
-        this.fallbackStack = this.fallbackStack.slice(0, this.fallbackStack.len - 1)
+        this.fallbackStack = this.fallbackStack.sliceOwned(0, this.fallbackStack.len - 1)
     }
 
     // go: github.com/microsoft/typescript-go/internal/transformers/declarations.SymbolTrackerImpl.PushErrorFallbackNode 2730e56f
     override fun pushErrorFallbackNode(node: Node?) {
-        this.fallbackStack = this.fallbackStack.append1(node)
+        this.fallbackStack = this.fallbackStack.append1Owned(node)
     }
 
     // go: github.com/microsoft/typescript-go/internal/transformers/declarations.SymbolTrackerImpl.ReportCyclicStructureError d13aac56

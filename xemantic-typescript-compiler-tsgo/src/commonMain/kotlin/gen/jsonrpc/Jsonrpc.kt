@@ -111,11 +111,13 @@ class ID(
 
     // go: github.com/microsoft/typescript-go/internal/jsonrpc.ID.UnmarshalJSON 505df273
     override fun unmarshalJSON(data: GoSlice<Int>): GoError? {
-        this.goSet(ID())
+        val lp0 = this
+        lp0.str = ""
+        lp0.int = 0
         if (data.len > 0 && data[0] == 34) {
-            return com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o0 = this; GoFieldPtr(o0, 0, { o0.str }, { o0.str = it }) }, GoElem.ref<Options?>().nilSlice)
+            return com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o1 = this; GoFieldPtr(o1, 0, { o1.str }, { o1.str = it }) }, GoElem.ref<Options?>().nilSlice)
         }
-        return com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o1 = this; GoFieldPtr(o1, 1, { o1.int }, { o1.int = it }) }, GoElem.ref<Options?>().nilSlice)
+        return com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o2 = this; GoFieldPtr(o2, 1, { o2.int }, { o2.int = it }) }, GoElem.ref<Options?>().nilSlice)
     }
 
     companion object {

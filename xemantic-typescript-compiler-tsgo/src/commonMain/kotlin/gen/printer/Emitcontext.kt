@@ -144,13 +144,13 @@ class varScope(
     @kotlin.jvm.JvmField var initializationStatements: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
 ) {
 
-    fun goCopy(): varScope = varScope(variables = variables, functions = functions, flags = flags, initializationStatements = initializationStatements)
+    fun goCopy(): varScope = varScope(variables = variables, functions = functions, flags = flags, initializationStatements = initializationStatements.ownedCopy())
 
     fun goSet(o: varScope) {
         variables = o.variables
         functions = o.functions
         flags = o.flags
-        initializationStatements = o.initializationStatements
+        initializationStatements = o.initializationStatements.ownedCopy()
     }
 
     companion object {
@@ -176,7 +176,16 @@ fun getEmitContext(): Tuple2<EmitContext?, (() -> Unit)?> {
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.Reset 0bb55383
 fun EmitContext?.reset() {
-    this!!.goSet(EmitContext(factory = this!!.factory))
+    val lp0 = this!!
+    lp0.autoGenerate = GoMap.nil<Node?, AutoGenerateInfo?>(GoElem.ref<AutoGenerateInfo?>())
+    lp0.textSource = GoMap.nil<Node?, Node?>(GoElem.ref<Node?>())
+    lp0.original = GoMap.nil<Node?, Node?>(GoElem.ref<Node?>())
+    lp0.emitNodes = LinkStore<Node?, com.xemantic.typescript.tsgo.printer.emitNode>(goElem_K = GoElem.ref<Node?>(), goElem_V = com.xemantic.typescript.tsgo.printer.emitNode.ELEM)
+    lp0.assignedName = GoMap.nil<Node?, Node?>(GoElem.ref<Node?>())
+    lp0.classThis = GoMap.nil<Node?, Node?>(GoElem.ref<Node?>())
+    lp0.varScopeStack = Stack<com.xemantic.typescript.tsgo.printer.varScope?>(goElem_T = GoElem.ref<com.xemantic.typescript.tsgo.printer.varScope?>())
+    lp0.letScopeStack = Stack<com.xemantic.typescript.tsgo.printer.varScope?>(goElem_T = GoElem.ref<com.xemantic.typescript.tsgo.printer.varScope?>())
+    lp0.emitHelpers = OrderedSet<EmitHelper?>(goElem_T = GoElem.ref<EmitHelper?>())
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.onCreate 2e9d01c5
@@ -1022,7 +1031,7 @@ fun EmitContext?.addInitializationStatement(node: Node?) {
         goPanic("Tried to add an initialization statement without a surrounding variable scope")
     }
     this.addEmitFlags(node, EFCustomPrologue)
-    scope!!.initializationStatements = scope!!.initializationStatements.append1(node)
+    scope!!.initializationStatements = scope!!.initializationStatements.append1Owned(node)
 }
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitContext.VisitFunctionBody d3b415eb

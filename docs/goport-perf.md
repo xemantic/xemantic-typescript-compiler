@@ -843,3 +843,64 @@ function per call (and still box per comparison inside `SortFunc`, as before), w
 compiler parallel's smaller gain. Kept: the large projects gain 43-130 MB/rebuild, the small one loses 4 MB, every
 gate equal. The adapter is the next thing to remove (a comparator overload of the shim's `SortFunc` taking the
 interface would make both sites allocation-free).
+
+## 13. (TSGO.6-k) Slice headers owned by their field, struct literals stored in place — and the cold JIT measured (2026-10-10)
+
+### 13.1 Where the slice headers came from
+
+A fresh warm allocation profile (HEAD `98b01e628`, compiler single, 21,181 samples) put `GoSlice` headers at **24.7%** of
+allocation. By site: `append1` in `getTypeAtFlowNode` 8.9% of them (`c.sharedFlows = append(c.sharedFlows, …)`),
+`slice` in `putRelater` 7.4% (`*r = Relater{maybeKeys: r.maybeKeys[:0], …}`), `slices.Insert`'s `GoSlice.of` 4.9% + its
+sub-slices 1.6% (a shim composing four headers and a temporary), `filterType`/`mapTypeEx`'s local builders, and a tail of
+`c.X = c.X[:n]` stack pops (`popActiveMapper`, `getTypeAtFlowBranchLabel`, `getFlowTypeOfReferenceEx`). Go writes a
+24-byte header VALUE into the field; the port allocated a 32-byte header object per append and per pop.
+
+### 13.2 What landed
+
+| change | kind | what |
+|---|---|---|
+| `slices.Insert`, `slices.Clone` on the backing array | runtime shim | one header (plus one array when growing) instead of four headers, a temporary slice and a snapshot array |
+| owned slice fields (docs/goport-lowering.md § 3) | porter rule | 24 fields, 42 in-place sites: a self-append/self-reslice updates the field's own header in place |
+| struct literals stored in place | porter rule | `*p = T{…}` (125 sites; tsgo's pooled `Relater`/`FlowState`/`InferenceState`) assigns `*p`'s fields — no temporary object, no second copy of its struct fields, a self-field skipped |
+
+**Predicted before measuring**: the owned fields' sites are ~26% of headers and the pool stores ~2% of allocation
+(the temporary objects + `maybeKeysSet`'s copy): **−7..−9% allocation**, wall −1..−3% (inside the spread).
+
+**Measured** (`scripts/tsgo-ab-warm.sh`, each arm its own JVM, `A B B A` + `B A A B`, 6 + 10 rebuilds, Zulu 26,
+`-Xms2g -Xmx6g`; A = HEAD `98b01e628`, B = this change; every run one digest — compiler `78feefbb`/65, services
+`ccb3b4c2`/65; medians of process medians [range], B's paired wins):
+
+| regime | A | B | Δ | B wins |
+|---|---:|---:|---:|---:|
+| compiler single, ms | 3,912 [3,828-3,967] | 3,730 [3,647-3,768] | **−4.6%** | 4/4 |
+| compiler single, allocation MB/rebuild | 1,396 | 1,237 | **−11.4%** | 4/4 |
+| compiler parallel, ms | 2,260 [2,106-2,304] | 2,110 [2,049-2,193] | **−6.6%** | 4/4 |
+| compiler parallel, allocation (all threads) | 1,582 | 1,410 | **−10.8%** | 4/4 |
+| services parallel, ms | 2,883 [2,698-3,033] | 2,730 [2,631-2,837] | **−5.3%** | 3/4 |
+| services parallel, allocation (all threads) | 2,178 | 1,932 | **−11.3%** | 4/4 |
+| GC pause/rebuild, single / parallel / services, ms | 225 / 245 / 317 | 206 / 236 / 288 | −8% / −4% / −9% | 3/4, 3/4, 4/4 |
+
+The first allocation lever in this arc whose WALL effect clears the process spread in every warm regime: the single
+arm's ranges do not overlap. Allocation beat the prediction (−11% against −7..−9%): the in-place pool stores also
+dropped the `maybeKeysSet` copy and the temporaries' own nested zero values.
+
+### 13.3 Measured and NOT done: the cold JIT ramp (no code change)
+
+Cold one-shot `tsc --noEmit -p` (Zulu 26, the frozen HEAD classes, arms alternated, every output byte-identical):
+
+| | default tiering | `-XX:TieredStopAtLevel=1` (C1 only) | AOT cache | AOT cache + C1 only |
+|---|---:|---:|---:|---:|
+| compiler (cache trained here), ms | 9,900 | 6,480 | **5,990** | 5,990 |
+| services, ms | 11,940 | 8,030 | | |
+| date-fns core (held out), ms | 4,470 | 2,530 | 3,500 | **1,890** |
+| type-fest (held out; a long type-level run), ms | 24,670 | **48,760** | 23,980 | 48,070 |
+
+- **C1-only is −33..−44% cold on every ordinary project and +100% on type-fest**: non-profiled C1 code is reached at
+  once, where tiered compilation keeps code in slow PROFILED C1 for most of a 10 s run — but C2's code is ~2x faster on
+  a long computation. Neither middle setting helps: C2 promoted 10x later (`Tier4*Threshold` x10) reads 11.1-12.6 s on
+  compiler (worse — the methods stay longer in profiled code) and `-XX:CICompilerCount=2` 13.2-13.5 s.
+- **The AOT cache the launcher already ships (§ 8.5) is the robust choice**: equal to C1-only on the trained project,
+  never worse anywhere. A per-project switch would have to predict run length, which no file count does (type-fest
+  has 440 roots). JDK 27 has no AOT method-code cache (`AOTCodeCaching` is unrecognized; only stub/adapter caching).
+- **`-XX:+UseParallelGC`**: warm single −8.4% (2/2), warm parallel −1.0% (noise), cold +6% — the host's (daemon, LSP)
+  choice for a single-threaded warm regime, not a launcher default.

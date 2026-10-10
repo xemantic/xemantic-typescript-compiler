@@ -390,6 +390,34 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   a return, a composite literal, a variadic slot, any other assigned value) refuses the field. Pins: `LoweringRulesTest`
   (the generated field, interface, producer, call and adapter; the use classifier's allowed and refused shapes).
 
+- **Owned slice fields** ((TSGO.6-k), `Program.computeOwnedSliceFields`/`ownedSelfOp`/`sameSelection`, `Stmts.ownedSliceStore`,
+  `Exprs.composite`/`ownedSliceValue`, `Decls.copyField`; runtime `GoSlice.append1Owned`/`appendOwned`/`appendSliceOwned`/
+  `sliceOwned`/`slice3Owned`/`ownedCopy`). An unnamed `[]T` field of a plain named struct (not generic, not reflected) is
+  OWNED — no variable, field or argument other than the field ever holds the header object stored in it — when the whole
+  run proves every occurrence is a DIRECT use: `x.f[i]`, `len`/`cap`, a sub-slice `x.f[lo:hi]` (a new header), the operand
+  of a non-self `append`/`copy`/`clear`, or an assignment target; and at least one assignment is a self-op on the same
+  side-effect-free selection, `x.f = append(x.f, …)` or `x.f = x.f[lo:hi(:max)]`. Those update the field's own header IN
+  PLACE (within capacity; a nil or full header grows into a new one, which is then the field's own). Every other store
+  keeps the invariant by storing a header of its own (`ownedCopy()`, skipped for `make`, a composite literal, a
+  sub-slice or `nil`), as do a struct's `goCopy`/`goSet` and a composite literal's field value. An in-place op never
+  replaces the backing array, so `&x.f[i]` and every header copied out earlier keep Go's meaning. Go evaluates `x.f` — a
+  header COPY — before the operands that follow it, so a direct use whose sibling operands (appended values, index,
+  bounds, an assigned element's right side) contain a call refuses the field (`callFree`); so do `&x.f`, an
+  op-assignment, and any value use (`range`, a call argument, a return, a comparison): a value use would need a copy
+  per read, moving the allocation rather than removing it. First run: 24 fields, 42 in-place sites (Checker.sharedFlows,
+  antecedentTypes, typeResolutions, Relater.maybeKeys, NodeBuilderContext.typeStack, …); the refusals and their first
+  reason are printed by the porter (docs/goport-perf.md § 13). Pins: `LoweringRulesTest` (the sites, a refused field,
+  the census of in-place calls), `OwnedSliceTest` (in place vs a copy taken earlier, nil and full headers, element
+  pointers across a reslice, panic messages equal to the plain slice expression's).
+- **Struct literals stored in place** ((TSGO.6-k), `Stmts.literalStoreInPlace`). `*p = T{f: v, …}` with `T` a plain named
+  struct (not generic or immutable, no window or primitive-func field) evaluates the field values in the literal's order
+  into temporaries (Go evaluates the whole right side before storing, and a value may read `*p`), then assigns every
+  field of `*p` — an unlisted one its zero value, as the temporary's constructor default was — instead of building a
+  temporary `T` and copying it with `goSet` (an object per store plus a second copy of each struct-valued field). A
+  value that is the same field of the same pointer (`maybeKeysSet: r.maybeKeysSet`) stores the field into itself and is
+  skipped. This is how tsgo recycles its pooled `Relater`/`FlowState`/`InferenceState` objects (125 sites). Pin:
+  `LoweringRulesTest` (`putRelater` builds no temporary).
+
 (TSGO.2) harness rules:
 
 - **A `switch` whose tag is an array or a comparable struct compares by VALUE**: the tag is bound

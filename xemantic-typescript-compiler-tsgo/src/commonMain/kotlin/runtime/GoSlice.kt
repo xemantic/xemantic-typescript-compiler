@@ -47,14 +47,29 @@ package com.xemantic.typescript.tsgo.runtime
  */
 class GoSlice<T> internal constructor(
     @PublishedApi internal val array: Array<Any?>,
-    @PublishedApi internal val offset: Int,
-    /** `len(s)`. */
-    val len: Int,
-    /** `cap(s)`. */
-    val cap: Int,
+    offset: Int,
+    len: Int,
+    cap: Int,
     /** The element kind (zero value and value copy). */
     val elem: GoElem<T>,
 ) {
+
+    /*
+     * The header's window. Mutable only through the `*Owned` operations below, which the porter emits for an
+     * OWNED slice field (docs/goport-lowering.md § 3, "Owned slice fields") — a header no other variable holds,
+     * so updating it in place is Go's `x.f = append(x.f, v)` writing a new header VALUE into the field. Every
+     * other header is never changed after construction. The backing [array] never changes.
+     */
+    @PublishedApi internal var offset: Int = offset
+        private set
+
+    /** `len(s)`. */
+    var len: Int = len
+        private set
+
+    /** `cap(s)`. */
+    var cap: Int = cap
+        private set
 
     /**
      * `s == nil`: the nil slice is the one backed by [GoElem.NIL_ARRAY]. Derived, not a field: without the
@@ -174,6 +189,86 @@ class GoSlice<T> internal constructor(
         return GoSlice(newArray, 0, newLen, newCap, elem)
     }
 
+    // ---- owned headers (NOT Go API; docs/goport-lowering.md § 3, "Owned slice fields") ----
+    //
+    // `x.f = x.f.append1Owned(v)` for an owned field: the same values as `append1`, but within capacity the
+    // header itself becomes the result (no allocation). A nil header (the shared per-kind nil slice) has
+    // capacity 0, so it is never changed: it grows into a new header like any full one.
+
+    /** `x.f = append(x.f, v)` on an owned field. */
+    fun append1Owned(v: T): GoSlice<T> {
+        val n = len
+        if (n < cap) {
+            array[offset + n] = v
+            len = n + 1
+            return this
+        }
+        return append1(v)
+    }
+
+    /** `x.f = append(x.f, elems...)` on an owned field. */
+    fun appendOwned(vararg elems: T): GoSlice<T> {
+        @Suppress("UNCHECKED_CAST")
+        val raw = elems as Array<Any?>
+        if (raw.isEmpty()) return this
+        val n = len
+        if (n + raw.size <= cap) {
+            raw.copyInto(array, offset + n, 0, raw.size)
+            len = n + raw.size
+            return this
+        }
+        return appendRaw(raw, 0, raw.size, copyValues = false)
+    }
+
+    /** `x.f = append(x.f, other...)` on an owned field: value copies of [other]'s elements, as [appendSlice]. */
+    fun appendSliceOwned(other: GoSlice<T>): GoSlice<T> {
+        val m = other.len
+        if (m == 0) return this
+        val n = len
+        if (n + m > cap) return appendSlice(other)
+        // `other` may alias this header's window (append(s, s...)): snapshot first, as appendSlice does.
+        val src = other.array.copyOfRange(other.offset, other.offset + m)
+        val copier = elem.copy
+        val base = offset + n
+        if (copier == null) {
+            src.copyInto(array, base, 0, m)
+        } else {
+            for (k in 0 until m) {
+                @Suppress("UNCHECKED_CAST")
+                val v = src[k] as T
+                array[base + k] = if (v == null) null else copier(v)
+            }
+        }
+        len = n + m
+        return this
+    }
+
+    /** `x.f = x.f[low:high]` on an owned field: the bounds checked as [slice] checks them. */
+    fun sliceOwned(low: Int = 0, high: Int = len): GoSlice<T> {
+        if (high < 0 || high > cap) goPanicSlice("[:$high] with capacity $cap")
+        if (low < 0 || low > high) goPanicSlice("[$low:$high]")
+        if (isNil) return this
+        offset += low
+        len = high - low
+        cap -= low
+        return this
+    }
+
+    /** `x.f = x.f[low:high:max]` on an owned field: the bounds checked as [slice3] checks them. */
+    fun slice3Owned(low: Int, high: Int, max: Int): GoSlice<T> {
+        if (max < 0 || max > cap) goPanicSlice("[::$max] with capacity $cap")
+        if (high < 0 || high > max) goPanicSlice("[:$high:$max]")
+        if (low < 0 || low > high) goPanicSlice("[$low:$high:]")
+        if (isNil) return this
+        offset += low
+        len = high - low
+        cap = max - low
+        return this
+    }
+
+    /** A header of its own for a value stored into, or copied out of, an owned field (Go's header value copy). */
+    fun ownedCopy(): GoSlice<T> = if (isNil) this else GoSlice(array, offset, len, cap, elem)
+
     /** `&s[i]`: a pointer to the element slot (equal to any other pointer to the same slot). */
     fun addr(i: Int): GoPtr<T> {
         if (i < 0 || i >= len) goPanicIndex(i, len)
@@ -264,6 +359,73 @@ internal fun goNextSliceCap(newLen: Int, oldCap: Int): Int {
     }
     if (newcap <= 0) return newLen
     return newcap
+}
+
+/**
+ * `slices.Clone(s)` of a non-nil [s]: `append([]E{}, s...)` — a fresh array of capacity `len(s)` (Go's growth
+ * from capacity 0 is exactly the new length) holding element value copies, in one array and one header.
+ */
+fun <T> goSliceClone(s: GoSlice<T>): GoSlice<T> {
+    val n = s.len
+    val copier = s.elem.copy
+    val b = if (copier == null) s.array.copyOfRange(s.offset, s.offset + n) else arrayOfNulls<Any?>(n).also { b ->
+        for (k in 0 until n) {
+            @Suppress("UNCHECKED_CAST")
+            val x = s.array[s.offset + k] as T
+            b[k] = if (x == null) null else copier(x)
+        }
+    }
+    return GoSlice(b, 0, n, n, s.elem)
+}
+
+/**
+ * `slices.Insert(s, i, v...)` on the backing array directly: ONE header (plus one array when it grows), where
+ * composing it from `append`/`copy` made four headers and a temporary slice of [v]. Same values as Go: the
+ * shifted tail and the inserted values are element value copies, and a grown array's capacity is `append`'s.
+ */
+fun <T> goSliceInsert(s: GoSlice<T>, i: Int, v: Array<out T>): GoSlice<T> {
+    val n = s.len
+    if (i < 0 || i > n) goPanicSlice("[$i:$n]")
+    val m = v.size
+    if (m == 0) return s
+    val copier = s.elem.copy
+    val newLen = n + m
+    if (newLen <= s.cap) {
+        val a = s.array
+        val o = s.offset
+        if (copier == null) {
+            a.copyInto(a, o + i + m, o + i, o + n)
+            for (k in 0 until m) a[o + i + k] = v[k]
+        } else {
+            // Downwards: every source slot is read before a later step overwrites it (memmove).
+            for (k in n - 1 downTo i) {
+                @Suppress("UNCHECKED_CAST")
+                val x = a[o + k] as T
+                a[o + k + m] = if (x == null) null else copier(x)
+            }
+            for (k in 0 until m) {
+                val x = v[k]
+                a[o + i + k] = if (x == null) null else copier(x)
+            }
+        }
+        return GoSlice(a, o, newLen, s.cap, s.elem)
+    }
+    val newCap = goNextSliceCap(newLen, s.cap)
+    val b = arrayOfNulls<Any?>(newCap)
+    val a = s.array
+    val o = s.offset
+    if (copier == null) {
+        a.copyInto(b, 0, o, o + i)
+        for (k in 0 until m) b[i + k] = v[k]
+        a.copyInto(b, i + m, o + i, o + n)
+    } else {
+        @Suppress("UNCHECKED_CAST")
+        fun cp(x: Any?): Any? = if (x == null) null else copier(x as T)
+        for (k in 0 until i) b[k] = cp(a[o + k])
+        for (k in 0 until m) b[i + k] = cp(v[k])
+        for (k in i until n) b[k + m] = cp(a[o + k])
+    }
+    return GoSlice(b, 0, newLen, newCap, s.elem)
 }
 
 /** `copy(dst, src)`: element value copies with memmove semantics; returns the count copied. */

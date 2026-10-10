@@ -192,10 +192,13 @@ fun JSONValue?.isFalsy(): Boolean {
 // go: github.com/microsoft/typescript-go/internal/packagejson.unmarshalJSONValue 1a0095c6
 fun <T> unmarshalJSONValue(goElem_T: GoElem<T>, v: JSONValue?, data: GoSlice<Int>): GoError? {
     if (goBytesToString(data) == "null") {
-        v!!.goSet(JSONValue(type = JSONValueTypeNull))
+        val lp0 = v!!
+        val lv1 = JSONValueTypeNull
+        lp0.type = lv1
+        lp0.value = null
     } else if (data[0] == 34) {
         v!!.type = JSONValueTypeString
-        return com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o0 = v!!; GoFieldPtr(o0, 1, { o0.value }, { o0.value = it }) }, GoElem.ref<Options?>().nilSlice)
+        return com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o2 = v!!; GoFieldPtr(o2, 1, { o2.value }, { o2.value = it }) }, GoElem.ref<Options?>().nilSlice)
     } else if (data[0] == 91) {
         val elements: GoBox<GoSlice<T>> = GoBox(goElem_T.nilSlice)
         val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, elements, GoElem.ref<Options?>().nilSlice)
@@ -220,7 +223,7 @@ fun <T> unmarshalJSONValue(goElem_T: GoElem<T>, v: JSONValue?, data: GoSlice<Int
         v!!.value = false
     } else {
         v!!.type = JSONValueTypeNumber
-        return com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o1 = v!!; GoFieldPtr(o1, 1, { o1.value }, { o1.value = it }) }, GoElem.ref<Options?>().nilSlice)
+        return com.xemantic.typescript.tsgo.json.unmarshal(data, run { val o3 = v!!; GoFieldPtr(o3, 1, { o3.value }, { o3.value = it }) }, GoElem.ref<Options?>().nilSlice)
     }
     return null
 }

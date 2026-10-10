@@ -52,10 +52,10 @@ class NodeBuilder(
     @kotlin.jvm.JvmField var verbosity: VerbosityContext? = null,
 ) {
 
-    fun goCopy(): NodeBuilder = NodeBuilder(ctxStack = ctxStack, host = host, impl = impl, verbosity = verbosity)
+    fun goCopy(): NodeBuilder = NodeBuilder(ctxStack = ctxStack.ownedCopy(), host = host, impl = impl, verbosity = verbosity)
 
     fun goSet(o: NodeBuilder) {
-        ctxStack = o.ctxStack
+        ctxStack = o.ctxStack.ownedCopy()
         host = o.host
         impl = o.impl
         verbosity = o.verbosity
@@ -112,7 +112,7 @@ fun NodeBuilder?.enterContext(enclosingDeclaration: Node?, flags: Flags, interna
         verbosityLevel = this!!.verbosity!!.level
         maxTruncationLength = this!!.verbosity!!.maxTruncationLength
     }
-    this!!.ctxStack = this!!.ctxStack.append1(this!!.impl!!.ctx)
+    this!!.ctxStack = this!!.ctxStack.append1Owned(this!!.impl!!.ctx)
     this!!.impl!!.ctx = NodeBuilderContext(host = this!!.host, tracker = tracker, flags = flags, internalFlags = internalFlags, maxExpansionDepth = verbosityLevel, maxTruncationLength = maxTruncationLength, enclosingDeclaration = enclosingDeclaration, enclosingFile = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(enclosingDeclaration), inferTypeParameters = GoSlice.make(GoElem.ref<Type?>(), 0), symbolDepth = GoMap.make<CompositeSymbolIdentity, Int>(GoElem.INT), trackedSymbols = GoSlice.make(GoElem.ref<TrackedSymbolArgs?>(), 0), reverseMappedStack = GoSlice.make(GoElem.ref<Symbol?>(), 0), enclosingSymbolTypes = GoMap.make<SymbolId, Type?>(GoElem.ref<Type?>()), remappedSymbolReferences = GoMap.make<SymbolId, Symbol?>(GoElem.ref<Symbol?>()))
     tracker = newSymbolTrackerImpl(this!!.impl!!.ctx, tracker)
     this!!.impl!!.ctx!!.tracker = tracker
@@ -137,7 +137,7 @@ fun NodeBuilder?.popContext() {
         this!!.impl!!.ctx = null
     } else {
         this!!.impl!!.ctx = this!!.ctxStack[stackSize - 1]
-        this!!.ctxStack = this!!.ctxStack.slice(0, stackSize - 1)
+        this!!.ctxStack = this!!.ctxStack.sliceOwned(0, stackSize - 1)
     }
 }
 
@@ -223,10 +223,10 @@ fun NodeBuilder?.signatureToSignatureDeclaration(signature: Signature?, kind: Ki
 fun NodeBuilder?.expandSymbolForHover(symbol: Symbol?, meaning: SymbolFlags): GoSlice<Node?> {
     this.enterContext(null, Flags(70239232u), InternalFlags(0), null)
     val declaredType: Type? = this!!.impl!!.ch.getDeclaredTypeOfSymbolImpl(symbol)
-    this!!.impl!!.ctx!!.typeStack = this!!.impl!!.ctx!!.typeStack.append1(declaredType)
-    this!!.impl!!.ctx!!.typeStack = this!!.impl!!.ctx!!.typeStack.append1(null)
+    this!!.impl!!.ctx!!.typeStack = this!!.impl!!.ctx!!.typeStack.append1Owned(declaredType)
+    this!!.impl!!.ctx!!.typeStack = this!!.impl!!.ctx!!.typeStack.append1Owned(null)
     val nodes: GoSlice<Node?> = this!!.impl.expandSymbolForHover(symbol)
-    this!!.impl!!.ctx!!.typeStack = this!!.impl!!.ctx!!.typeStack.slice(0, this!!.impl!!.ctx!!.typeStack.len - 2)
+    this!!.impl!!.ctx!!.typeStack = this!!.impl!!.ctx!!.typeStack.sliceOwned(0, this!!.impl!!.ctx!!.typeStack.len - 2)
     this.propagateVerbosityOut()
     var result: GoSlice<Node?> = GoSlice.make(GoElem.ref<Node?>(), 0, nodes.len)
     val s0 = nodes

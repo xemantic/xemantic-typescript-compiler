@@ -338,7 +338,7 @@ class classInfo(
     @kotlin.jvm.JvmField var pendingInstanceInitializers: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
 ) {
 
-    fun goCopy(): classInfo = classInfo(`class` = `class`, classDecoratorsName = classDecoratorsName, classDescriptorName = classDescriptorName, classExtraInitializersName = classExtraInitializersName, classThis = classThis, classSuper = classSuper, metadataReference = metadataReference, memberInfos = memberInfos.goCopy(), instanceMethodExtraInitializersName = instanceMethodExtraInitializersName, staticMethodExtraInitializersName = staticMethodExtraInitializersName, staticNonFieldDecorationStatements = staticNonFieldDecorationStatements, nonStaticNonFieldDecorationStatements = nonStaticNonFieldDecorationStatements, staticFieldDecorationStatements = staticFieldDecorationStatements, nonStaticFieldDecorationStatements = nonStaticFieldDecorationStatements, hasStaticInitializers = hasStaticInitializers, hasNonAmbientInstanceFields = hasNonAmbientInstanceFields, hasStaticPrivateClassElements = hasStaticPrivateClassElements, pendingStaticInitializers = pendingStaticInitializers, pendingInstanceInitializers = pendingInstanceInitializers)
+    fun goCopy(): classInfo = classInfo(`class` = `class`, classDecoratorsName = classDecoratorsName, classDescriptorName = classDescriptorName, classExtraInitializersName = classExtraInitializersName, classThis = classThis, classSuper = classSuper, metadataReference = metadataReference, memberInfos = memberInfos.goCopy(), instanceMethodExtraInitializersName = instanceMethodExtraInitializersName, staticMethodExtraInitializersName = staticMethodExtraInitializersName, staticNonFieldDecorationStatements = staticNonFieldDecorationStatements.ownedCopy(), nonStaticNonFieldDecorationStatements = nonStaticNonFieldDecorationStatements.ownedCopy(), staticFieldDecorationStatements = staticFieldDecorationStatements.ownedCopy(), nonStaticFieldDecorationStatements = nonStaticFieldDecorationStatements.ownedCopy(), hasStaticInitializers = hasStaticInitializers, hasNonAmbientInstanceFields = hasNonAmbientInstanceFields, hasStaticPrivateClassElements = hasStaticPrivateClassElements, pendingStaticInitializers = pendingStaticInitializers, pendingInstanceInitializers = pendingInstanceInitializers)
 
     fun goSet(o: classInfo) {
         `class` = o.`class`
@@ -351,10 +351,10 @@ class classInfo(
         memberInfos = o.memberInfos.goCopy()
         instanceMethodExtraInitializersName = o.instanceMethodExtraInitializersName
         staticMethodExtraInitializersName = o.staticMethodExtraInitializersName
-        staticNonFieldDecorationStatements = o.staticNonFieldDecorationStatements
-        nonStaticNonFieldDecorationStatements = o.nonStaticNonFieldDecorationStatements
-        staticFieldDecorationStatements = o.staticFieldDecorationStatements
-        nonStaticFieldDecorationStatements = o.nonStaticFieldDecorationStatements
+        staticNonFieldDecorationStatements = o.staticNonFieldDecorationStatements.ownedCopy()
+        nonStaticNonFieldDecorationStatements = o.nonStaticNonFieldDecorationStatements.ownedCopy()
+        staticFieldDecorationStatements = o.staticFieldDecorationStatements.ownedCopy()
+        nonStaticFieldDecorationStatements = o.nonStaticFieldDecorationStatements.ownedCopy()
         hasStaticInitializers = o.hasStaticInitializers
         hasNonAmbientInstanceFields = o.hasNonAmbientInstanceFields
         hasStaticPrivateClassElements = o.hasStaticPrivateClassElements
@@ -1487,15 +1487,15 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransforme
 fun com.xemantic.typescript.tsgo.transformers.estransforms.esDecoratorTransformer?.appendDecorationStatement(ci: com.xemantic.typescript.tsgo.transformers.estransforms.classInfo?, member: Node?, stmt: Node?) {
     if (com.xemantic.typescript.tsgo.ast.isMethodOrAccessor(member) || com.xemantic.typescript.tsgo.ast.isAutoAccessorPropertyDeclaration(member)) {
         if (com.xemantic.typescript.tsgo.ast.isStatic(member)) {
-            ci!!.staticNonFieldDecorationStatements = ci!!.staticNonFieldDecorationStatements.append1(stmt)
+            ci!!.staticNonFieldDecorationStatements = ci!!.staticNonFieldDecorationStatements.append1Owned(stmt)
         } else {
-            ci!!.nonStaticNonFieldDecorationStatements = ci!!.nonStaticNonFieldDecorationStatements.append1(stmt)
+            ci!!.nonStaticNonFieldDecorationStatements = ci!!.nonStaticNonFieldDecorationStatements.append1Owned(stmt)
         }
     } else if (com.xemantic.typescript.tsgo.ast.isPropertyDeclaration(member) && !com.xemantic.typescript.tsgo.ast.isAutoAccessorPropertyDeclaration(member)) {
         if (com.xemantic.typescript.tsgo.ast.isStatic(member)) {
-            ci!!.staticFieldDecorationStatements = ci!!.staticFieldDecorationStatements.append1(stmt)
+            ci!!.staticFieldDecorationStatements = ci!!.staticFieldDecorationStatements.append1Owned(stmt)
         } else {
-            ci!!.nonStaticFieldDecorationStatements = ci!!.nonStaticFieldDecorationStatements.append1(stmt)
+            ci!!.nonStaticFieldDecorationStatements = ci!!.nonStaticFieldDecorationStatements.append1Owned(stmt)
         }
     } else {
         com.xemantic.typescript.tsgo.debug.fail("Unexpected class element kind.")

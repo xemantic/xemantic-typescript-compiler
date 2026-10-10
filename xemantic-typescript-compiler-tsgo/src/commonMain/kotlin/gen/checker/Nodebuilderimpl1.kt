@@ -352,7 +352,7 @@ class NodeBuilderContext(
     @kotlin.jvm.JvmField var typeParameterSymbolList: CopyOnWriteSet<SymbolId> = CopyOnWriteSet<SymbolId>(goElem_K = SymbolId.ELEM),
 ) {
 
-    fun goCopy(): NodeBuilderContext = NodeBuilderContext(host = host, tracker = tracker, approximateLength = approximateLength, maxTruncationLength = maxTruncationLength, encounteredError = encounteredError, truncating = truncating, reportedDiagnostic = reportedDiagnostic, flags = flags, internalFlags = internalFlags, depth = depth, maxExpansionDepth = maxExpansionDepth, typeStack = typeStack, canIncreaseExpansionDepth = canIncreaseExpansionDepth, expansionTruncated = expansionTruncated, enclosingDeclaration = enclosingDeclaration, enclosingFile = enclosingFile, inferTypeParameters = inferTypeParameters, visitedTypes = visitedTypes.goCopy(), symbolDepth = symbolDepth, trackedSymbols = trackedSymbols, mapper = mapper, reverseMappedStack = reverseMappedStack, enclosingSymbolTypes = enclosingSymbolTypes, suppressReportInferenceFallback = suppressReportInferenceFallback, remappedSymbolReferences = remappedSymbolReferences, typeParameterNames = typeParameterNames.goCopy(), typeParameterNamesByText = typeParameterNamesByText.goCopy(), typeParameterNamesByTextNextNameCount = typeParameterNamesByTextNextNameCount.goCopy(), typeParameterSymbolList = typeParameterSymbolList.goCopy())
+    fun goCopy(): NodeBuilderContext = NodeBuilderContext(host = host, tracker = tracker, approximateLength = approximateLength, maxTruncationLength = maxTruncationLength, encounteredError = encounteredError, truncating = truncating, reportedDiagnostic = reportedDiagnostic, flags = flags, internalFlags = internalFlags, depth = depth, maxExpansionDepth = maxExpansionDepth, typeStack = typeStack.ownedCopy(), canIncreaseExpansionDepth = canIncreaseExpansionDepth, expansionTruncated = expansionTruncated, enclosingDeclaration = enclosingDeclaration, enclosingFile = enclosingFile, inferTypeParameters = inferTypeParameters, visitedTypes = visitedTypes.goCopy(), symbolDepth = symbolDepth, trackedSymbols = trackedSymbols, mapper = mapper, reverseMappedStack = reverseMappedStack, enclosingSymbolTypes = enclosingSymbolTypes, suppressReportInferenceFallback = suppressReportInferenceFallback, remappedSymbolReferences = remappedSymbolReferences, typeParameterNames = typeParameterNames.goCopy(), typeParameterNamesByText = typeParameterNamesByText.goCopy(), typeParameterNamesByTextNextNameCount = typeParameterNamesByTextNextNameCount.goCopy(), typeParameterSymbolList = typeParameterSymbolList.goCopy())
 
     fun goSet(o: NodeBuilderContext) {
         host = o.host
@@ -366,7 +366,7 @@ class NodeBuilderContext(
         internalFlags = o.internalFlags
         depth = o.depth
         maxExpansionDepth = o.maxExpansionDepth
-        typeStack = o.typeStack
+        typeStack = o.typeStack.ownedCopy()
         canIncreaseExpansionDepth = o.canIncreaseExpansionDepth
         expansionTruncated = o.expansionTruncated
         enclosingDeclaration = o.enclosingDeclaration
@@ -535,14 +535,14 @@ fun NodeBuilderImpl?.checkTypeExpandability(t: Type?) {
     if (this!!.ctx!!.maxExpansionDepth < 0 || t == null || this!!.ctx!!.canIncreaseExpansionDepth) {
         return
     }
-    this!!.ctx!!.typeStack = this!!.ctx!!.typeStack.append1(t)
+    this!!.ctx!!.typeStack = this!!.ctx!!.typeStack.append1Owned(t)
     if (t!!.alias != null) {
         this.shouldExpandType(t, true)
     }
     if (!this!!.ctx!!.canIncreaseExpansionDepth) {
         this.shouldExpandType(t, false)
     }
-    this!!.ctx!!.typeStack = this!!.ctx!!.typeStack.slice(0, this!!.ctx!!.typeStack.len - 1)
+    this!!.ctx!!.typeStack = this!!.ctx!!.typeStack.sliceOwned(0, this!!.ctx!!.typeStack.len - 1)
     if (this!!.ctx!!.canIncreaseExpansionDepth) {
         return
     }

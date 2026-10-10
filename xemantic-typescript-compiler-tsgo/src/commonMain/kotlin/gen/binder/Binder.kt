@@ -348,7 +348,36 @@ fun getBinder(): Binder? {
 
 // go: github.com/microsoft/typescript-go/internal/binder.putBinder d1f49b52
 fun putBinder(b: Binder?) {
-    b!!.goSet(Binder(bindFunc = b!!.bindFunc))
+    val lp0 = b!!
+    lp0.file = null
+    lp0.unreachableFlow = null
+    lp0.container = null
+    lp0.thisContainer = null
+    lp0.blockScopeContainer = null
+    lp0.lastContainer = null
+    lp0.currentFlow = null
+    lp0.currentBreakTarget = null
+    lp0.currentContinueTarget = null
+    lp0.currentReturnTarget = null
+    lp0.currentTrueTarget = null
+    lp0.currentFalseTarget = null
+    lp0.currentExceptionTarget = null
+    lp0.preSwitchCaseFlow = null
+    lp0.activeLabelList = null
+    lp0.emitFlags = NodeFlags(0u)
+    lp0.seenThisKeyword = false
+    lp0.hasExplicitReturn = false
+    lp0.hasFlowEffects = false
+    lp0.inAssignmentPattern = false
+    lp0.seenParseError = false
+    lp0.symbolCount = 0
+    lp0.classifiableNames = com.xemantic.typescript.tsgo.collections.Set<String>(goElem_T = GoElem.STRING)
+    lp0.notConstEnumOnlyModules = com.xemantic.typescript.tsgo.collections.Set<Symbol?>(goElem_T = GoElem.ref<Symbol?>())
+    lp0.symbolArena = Arena<Symbol>(goElem_T = Symbol.ELEM)
+    lp0.flowNodeArena = Arena<FlowNode>(goElem_T = FlowNode.ELEM)
+    lp0.flowListArena = Arena<FlowList>(goElem_T = FlowList.ELEM)
+    lp0.singleDeclarationsArena = Arena<Node?>(goElem_T = GoElem.ref<Node?>())
+    lp0.expandoAssignments = ExpandoAssignmentInfo.ELEM.nilSlice
     binderPool.put(b)
 }
 
@@ -1025,7 +1054,7 @@ fun Binder?.bindModuleDeclaration(node: Node?) {
                 if (!pattern.isValid()) {
                     this.errorOnFirstToken(name, com.xemantic.typescript.tsgo.diagnostics.pattern_0_can_have_at_most_one_Asterisk_character, GoSlice.of(GoElem.ref<Any?>(), name.text()))
                 } else if (pattern.starIndex >= 0) {
-                    this!!.file!!.patternAmbientModules = this!!.file!!.patternAmbientModules.append1(PatternAmbientModule(pattern = pattern.goCopy(), symbol = symbol))
+                    this!!.file!!.patternAmbientModules = this!!.file!!.patternAmbientModules.append1Owned(PatternAmbientModule(pattern = pattern.goCopy(), symbol = symbol))
                 }
             }
         }

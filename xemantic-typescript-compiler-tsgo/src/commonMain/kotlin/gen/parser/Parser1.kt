@@ -493,7 +493,7 @@ class Parser(
     @kotlin.jvm.JvmField var reparsedClones: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
 ) {
 
-    fun goCopy(): Parser = Parser(scanner = scanner, factory = factory.goCopy(), opts = opts.goCopy(), sourceText = sourceText, sourceText_o = sourceText_o, sourceText_n = sourceText_n, scriptKind = scriptKind, languageVariant = languageVariant, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, token = token, sourceFlags = sourceFlags, contextFlags = contextFlags, parsingContexts = parsingContexts, statementHasAwaitIdentifier = statementHasAwaitIdentifier, hasDeprecatedTag = hasDeprecatedTag, hasParseError = hasParseError, identifiers = identifiers, identifierCount = identifierCount, notParenthesizedArrow = notParenthesizedArrow.goCopy(), nodeSliceArena = nodeSliceArena.goCopy(), stringSliceArena = stringSliceArena.goCopy(), jsdocInfos = jsdocInfos, possibleAwaitSpans = possibleAwaitSpans, jsdocCommentsSpace = jsdocCommentsSpace, jsdocCommentRangesSpace = jsdocCommentRangesSpace, jsdocTagCommentsSpace = jsdocTagCommentsSpace, jsdocTagCommentsPartsSpace = jsdocTagCommentsPartsSpace, reparseList = reparseList, commonJSModuleIndicator = commonJSModuleIndicator, currentParent = currentParent, setParentFromContext = setParentFromContext, reparsedClones = reparsedClones)
+    fun goCopy(): Parser = Parser(scanner = scanner, factory = factory.goCopy(), opts = opts.goCopy(), sourceText = sourceText, sourceText_o = sourceText_o, sourceText_n = sourceText_n, scriptKind = scriptKind, languageVariant = languageVariant, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, token = token, sourceFlags = sourceFlags, contextFlags = contextFlags, parsingContexts = parsingContexts, statementHasAwaitIdentifier = statementHasAwaitIdentifier, hasDeprecatedTag = hasDeprecatedTag, hasParseError = hasParseError, identifiers = identifiers, identifierCount = identifierCount, notParenthesizedArrow = notParenthesizedArrow.goCopy(), nodeSliceArena = nodeSliceArena.goCopy(), stringSliceArena = stringSliceArena.goCopy(), jsdocInfos = jsdocInfos, possibleAwaitSpans = possibleAwaitSpans.ownedCopy(), jsdocCommentsSpace = jsdocCommentsSpace, jsdocCommentRangesSpace = jsdocCommentRangesSpace, jsdocTagCommentsSpace = jsdocTagCommentsSpace, jsdocTagCommentsPartsSpace = jsdocTagCommentsPartsSpace, reparseList = reparseList, commonJSModuleIndicator = commonJSModuleIndicator, currentParent = currentParent, setParentFromContext = setParentFromContext, reparsedClones = reparsedClones)
 
     fun goSet(o: Parser) {
         scanner = o.scanner
@@ -520,7 +520,7 @@ class Parser(
         nodeSliceArena = o.nodeSliceArena.goCopy()
         stringSliceArena = o.stringSliceArena.goCopy()
         jsdocInfos = o.jsdocInfos
-        possibleAwaitSpans = o.possibleAwaitSpans
+        possibleAwaitSpans = o.possibleAwaitSpans.ownedCopy()
         jsdocCommentsSpace = o.jsdocCommentsSpace
         jsdocCommentRangesSpace = o.jsdocCommentRangesSpace
         jsdocTagCommentsSpace = o.jsdocTagCommentsSpace
@@ -1003,7 +1003,7 @@ fun Parser?.parseToplevelStatement(i_0: Int): Node? {
     i += this!!.reparseList.len
     if (this!!.statementHasAwaitIdentifier && statement!!.flags.value and 8192u == 0u) {
         if (this!!.possibleAwaitSpans.len == 0 || this!!.possibleAwaitSpans[this!!.possibleAwaitSpans.len - 1] != i) {
-            this!!.possibleAwaitSpans = this!!.possibleAwaitSpans.append(i, i + 1)
+            this!!.possibleAwaitSpans = this!!.possibleAwaitSpans.appendOwned(i, i + 1)
         } else {
             this!!.possibleAwaitSpans[this!!.possibleAwaitSpans.len - 1] = i + 1
         }

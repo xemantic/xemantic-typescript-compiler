@@ -663,7 +663,7 @@ class PackageEmitter(
             if (big) {
                 w.block("fun goCopy(): $self") {
                     w.line("val goOut = $name(${dict.joinToString(", ") { "goElem_$it = goElem_$it" }})")
-                    st.fields.indices.forEach { w.line("goOut.${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm)}") }
+                    st.fields.indices.forEach { w.line("goOut.${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm, "$qname.${st.fields[it].name}" in prog.ownedSliceFields)}") }
                     w.line("return goOut")
                 }
             } else {
@@ -672,7 +672,7 @@ class PackageEmitter(
                     w.line("fun goCopy(): $self = this")
                 } else {
                 val copyArgs = dict.map { "goElem_$it = goElem_$it" } + st.fields.indices.flatMap {
-                    listOf("${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm)}") +
+                    listOf("${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm, "$qname.${st.fields[it].name}" in prog.ownedSliceFields)}") +
                         (if (it in windowIdx) listOf("${fieldNames[it]}_o = ${fieldNames[it]}_o", "${fieldNames[it]}_n = ${fieldNames[it]}_n") else emptyList())
                 }
                 w.line("fun goCopy(): $self = $name(${copyArgs.joinToString(", ")})")
@@ -681,7 +681,7 @@ class PackageEmitter(
             w.line()
             w.block("fun goSet(o: $self)") {
                 st.fields.forEachIndexed { i, f ->
-                    w.line("${fieldNames[i]} = ${copyField("o." + fieldNames[i], f.t, tm)}")
+                    w.line("${fieldNames[i]} = ${copyField("o." + fieldNames[i], f.t, tm, "$qname.${f.name}" in prog.ownedSliceFields)}")
                     if (i in windowIdx) {
                         w.line("${fieldNames[i]}_o = o.${fieldNames[i]}_o")
                         w.line("${fieldNames[i]}_n = o.${fieldNames[i]}_n")
@@ -811,7 +811,8 @@ class PackageEmitter(
         return "@get:kotlin.jvm.JvmName(\"goGet_$n\") " + if (mutable) "@set:kotlin.jvm.JvmName(\"goSet_$n\") " else ""
     }
 
-    private fun copyField(code: String, t: Int, tm: TypeMapper): String = when {
+    private fun copyField(code: String, t: Int, tm: TypeMapper, owned: Boolean = false): String = when {
+        owned -> "$code.ownedCopy()" // Program.ownedSliceFields: a struct copy gets a header of its own
         tm.isStructValue(t) && !tm.isEmptyStruct(t) && tm.hasGoCopy(t) -> "$code.goCopy()"
         types.under(t) is ArrayType -> "$code.goCopy()"
         else -> code

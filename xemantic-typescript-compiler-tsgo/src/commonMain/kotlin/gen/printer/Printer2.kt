@@ -2362,7 +2362,17 @@ fun Printer?.emitCommentsBeforeNode(node: Node?): com.xemantic.typescript.tsgo.p
         this!!.commentsDisabled = true
     }
     val c: com.xemantic.typescript.tsgo.printer.commentState? = this!!.commentStateArena.new()
-    c!!.goSet(com.xemantic.typescript.tsgo.printer.commentState(emitFlags = emitFlags, commentRange = commentRange.goCopy(), containerPos = containerPos, containerEnd = containerEnd, declarationListContainerEnd = declarationListContainerEnd))
+    val lp0 = c!!
+    val lv1 = emitFlags
+    val lv2 = commentRange.goCopy()
+    val lv3 = containerPos
+    val lv4 = containerEnd
+    val lv5 = declarationListContainerEnd
+    lp0.emitFlags = lv1
+    lp0.commentRange = lv2
+    lp0.containerPos = lv3
+    lp0.containerEnd = lv4
+    lp0.declarationListContainerEnd = lv5
     return c
 }
 
@@ -2913,7 +2923,13 @@ fun Printer?.emitSourceMapsBeforeNode(node: Node?): com.xemantic.typescript.tsgo
         this!!.sourceMapsDisabled = true
     }
     val state: com.xemantic.typescript.tsgo.printer.sourceMapState? = this!!.sourceMapStateArena.new()
-    state!!.goSet(com.xemantic.typescript.tsgo.printer.sourceMapState(emitFlags = emitFlags, sourceMapRange = loc.goCopy(), hasTokenSourceMapRange = false))
+    val lp0 = state!!
+    val lv1 = emitFlags
+    val lv2 = loc.goCopy()
+    val lv3 = false
+    lp0.emitFlags = lv1
+    lp0.sourceMapRange = lv2
+    lp0.hasTokenSourceMapRange = lv3
     return state
 }
 
@@ -2952,7 +2968,13 @@ fun Printer?.emitSourceMapsBeforeToken(token: Kind, pos_0: Int, contextNode: Nod
         this.emitSourcePos(this!!.sourceMapSource, pos)
     }
     val state: com.xemantic.typescript.tsgo.printer.sourceMapState? = this!!.sourceMapStateArena.new()
-    state!!.goSet(com.xemantic.typescript.tsgo.printer.sourceMapState(emitFlags = emitFlags, sourceMapRange = loc.goCopy(), hasTokenSourceMapRange = hasLoc))
+    val lp2 = state!!
+    val lv3 = emitFlags
+    val lv4 = loc.goCopy()
+    val lv5 = hasLoc
+    lp2.emitFlags = lv3
+    lp2.sourceMapRange = lv4
+    lp2.hasTokenSourceMapRange = lv5
     return state
 }
 

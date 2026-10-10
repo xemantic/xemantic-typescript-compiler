@@ -123,13 +123,26 @@ class BuildInfoRoot(
                 if (err_2 != null) {
                     return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid BuildInfoRoot: %s", data)
                 }
-                this.goSet(BuildInfoRoot(nonIncremental = name.value))
+                val lp0 = this
+                val lv1 = name.value
+                lp0.start = BuildInfoFileId(0)
+                lp0.end = BuildInfoFileId(0)
+                lp0.nonIncremental = lv1
                 return null
             }
-            this.goSet(BuildInfoRoot(start = BuildInfoFileId(start_1.value)))
+            val lp2 = this
+            val lv3 = BuildInfoFileId(start_1.value)
+            lp2.start = lv3
+            lp2.end = BuildInfoFileId(0)
+            lp2.nonIncremental = ""
             return null
         }
-        this.goSet(BuildInfoRoot(start = BuildInfoFileId(startAndEnd.value!![0]), end = BuildInfoFileId(startAndEnd.value!![1])))
+        val lp4 = this
+        val lv5 = BuildInfoFileId(startAndEnd.value!![0])
+        val lv6 = BuildInfoFileId(startAndEnd.value!![1])
+        lp4.start = lv5
+        lp4.end = lv6
+        lp4.nonIncremental = ""
         return null
     }
 
@@ -273,13 +286,25 @@ class BuildInfoFileInfo(
                 if (err_2 != null) {
                     return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid BuildInfoFileInfo: %s", data)
                 }
-                this.goSet(BuildInfoFileInfo(fileInfo = fileInfo_1))
+                val lp0 = this
+                val lv1 = fileInfo_1
+                lp0.signature = ""
+                lp0.noSignature = null
+                lp0.fileInfo = lv1
                 return null
             }
-            this.goSet(BuildInfoFileInfo(noSignature = noSignature_1))
+            val lp2 = this
+            val lv3 = noSignature_1
+            lp2.signature = ""
+            lp2.noSignature = lv3
+            lp2.fileInfo = null
             return null
         }
-        this.goSet(BuildInfoFileInfo(signature = vSignature.value))
+        val lp4 = this
+        val lv5 = vSignature.value
+        lp4.signature = lv5
+        lp4.noSignature = null
+        lp4.fileInfo = null
         return null
     }
 
@@ -348,7 +373,11 @@ class BuildInfoReferenceMapEntry(
         if (err != null) {
             return err
         }
-        this.goSet(BuildInfoReferenceMapEntry(fileId = BuildInfoFileId(v.value!![0]), fileIdListId = BuildInfoFileIdListId(v.value!![1])))
+        val lp0 = this
+        val lv1 = BuildInfoFileId(v.value!![0])
+        val lv2 = BuildInfoFileIdListId(v.value!![1])
+        lp0.fileId = lv1
+        lp0.fileIdListId = lv2
         return null
     }
 
@@ -526,7 +555,11 @@ class BuildInfoDiagnosticsOfFile(
         if (err_2 != null) {
             return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid diagnostics in BuildInfoDiagnosticsOfFile: %w", err_2)
         }
-        this.goSet(BuildInfoDiagnosticsOfFile(fileId = fileId_1.value, diagnostics = diagnostics_1.value))
+        val lp0 = this
+        val lv1 = fileId_1.value
+        val lv2 = diagnostics_1.value
+        lp0.fileId = lv1
+        lp0.diagnostics = lv2
         return null
     }
 
@@ -570,10 +603,16 @@ class BuildInfoSemanticDiagnostic(
             if (err_1 != null) {
                 return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid BuildInfoSemanticDiagnostic: %s", data)
             }
-            this.goSet(BuildInfoSemanticDiagnostic(diagnostics = diagnostics_1))
+            val lp0 = this
+            val lv1 = diagnostics_1
+            lp0.fileId = BuildInfoFileId(0)
+            lp0.diagnostics = lv1
             return null
         }
-        this.goSet(BuildInfoSemanticDiagnostic(fileId = fileId_1.value))
+        val lp2 = this
+        val lv3 = fileId_1.value
+        lp2.fileId = lv3
+        lp2.diagnostics = null
         return null
     }
 
@@ -624,11 +663,19 @@ class BuildInfoFilePendingEmit(
             }
             when (intTuple.value.len) {
                 1 -> {
-                    this.goSet(BuildInfoFilePendingEmit(fileId = BuildInfoFileId(intTuple.value[0]), emitKind = FileEmitKindDts))
+                    val lp0 = this
+                    val lv1 = BuildInfoFileId(intTuple.value[0])
+                    val lv2 = FileEmitKindDts
+                    lp0.fileId = lv1
+                    lp0.emitKind = lv2
                     return null
                 }
                 2 -> {
-                    this.goSet(BuildInfoFilePendingEmit(fileId = BuildInfoFileId(intTuple.value[0]), emitKind = FileEmitKind(intTuple.value[1].toUInt())))
+                    val lp3 = this
+                    val lv4 = BuildInfoFileId(intTuple.value[0])
+                    val lv5 = FileEmitKind(intTuple.value[1].toUInt())
+                    lp3.fileId = lv4
+                    lp3.emitKind = lv5
                     return null
                 }
                 else -> {
@@ -636,7 +683,10 @@ class BuildInfoFilePendingEmit(
                 }
             }
         }
-        this.goSet(BuildInfoFilePendingEmit(fileId = fileId_1.value))
+        val lp6 = this
+        val lv7 = fileId_1.value
+        lp6.fileId = lv7
+        lp6.emitKind = FileEmitKind(0u)
         return null
     }
 
@@ -747,10 +797,23 @@ class BuildInfoEmitSignature(
             } else {
                 signature_1 = signatureV
             }
-            this.goSet(BuildInfoEmitSignature(fileId = fileId_2, signature = signature_1, differsOnlyInDtsMap = differsOnlyInDtsMap_1, differsInOptions = differsInOptions_1))
+            val lp8 = this
+            val lv9 = fileId_2
+            val lv10 = signature_1
+            val lv11 = differsOnlyInDtsMap_1
+            val lv12 = differsInOptions_1
+            lp8.fileId = lv9
+            lp8.signature = lv10
+            lp8.differsOnlyInDtsMap = lv11
+            lp8.differsInOptions = lv12
             return null
         }
-        this.goSet(BuildInfoEmitSignature(fileId = fileId_1.value))
+        val lp13 = this
+        val lv14 = fileId_1.value
+        lp13.fileId = lv14
+        lp13.signature = ""
+        lp13.differsOnlyInDtsMap = false
+        lp13.differsInOptions = false
         return null
     }
 
@@ -811,7 +874,11 @@ class BuildInfoResolvedRoot(
         if (err != null) {
             return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid BuildInfoResolvedRoot: %s", data)
         }
-        this.goSet(BuildInfoResolvedRoot(resolved = BuildInfoFileId(resolvedAndRoot.value[0]), root = BuildInfoFileId(resolvedAndRoot.value[1])))
+        val lp0 = this
+        val lv1 = BuildInfoFileId(resolvedAndRoot.value[0])
+        val lv2 = BuildInfoFileId(resolvedAndRoot.value[1])
+        lp0.resolved = lv1
+        lp0.root = lv2
         return null
     }
 

@@ -92,12 +92,12 @@ class singleThreadedWorkGroup(
     @kotlin.jvm.JvmField var fns: GoSlice<(() -> Unit)?> = GoElem.ref<(() -> Unit)?>().nilSlice,
 ) : WorkGroup {
 
-    fun goCopy(): singleThreadedWorkGroup = singleThreadedWorkGroup(done = done.goCopy(), fnsMu = fnsMu.goCopy(), fns = fns)
+    fun goCopy(): singleThreadedWorkGroup = singleThreadedWorkGroup(done = done.goCopy(), fnsMu = fnsMu.goCopy(), fns = fns.ownedCopy())
 
     fun goSet(o: singleThreadedWorkGroup) {
         done = o.done.goCopy()
         fnsMu = o.fnsMu.goCopy()
-        fns = o.fns
+        fns = o.fns.ownedCopy()
     }
 
     // go: github.com/microsoft/typescript-go/internal/core.singleThreadedWorkGroup.Queue 84fe17b2
@@ -109,7 +109,7 @@ class singleThreadedWorkGroup(
             this.fnsMu.lock()
             val dr1 = this.fnsMu
             df0.defer { dr1.unlock() }
-            this.fns = this.fns.append1(fn)
+            this.fns = this.fns.append1Owned(fn)
         }
     }
 
@@ -146,7 +146,7 @@ fun com.xemantic.typescript.tsgo.core.singleThreadedWorkGroup?.pop(): (() -> Uni
         val end: Int = this!!.fns.len - 1
         val fn: (() -> Unit)? = this!!.fns[end]
         this!!.fns[end] = null
-        this!!.fns = this!!.fns.slice(0, end)
+        this!!.fns = this!!.fns.sliceOwned(0, end)
         return fn
     }
 }

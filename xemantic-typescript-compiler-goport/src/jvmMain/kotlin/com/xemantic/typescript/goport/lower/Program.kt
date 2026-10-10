@@ -908,6 +908,162 @@ class Program(
         }
     }
 
+    // ---- owned slice fields (docs/goport-lowering.md § 3, "Owned slice fields") ----
+
+    /**
+     * Slice struct fields whose header object is OWNED by the field ([computeOwnedSliceFields]), by key: no other
+     * variable, field or argument ever holds the header object stored in one, so `x.f = append(x.f, v)` and
+     * `x.f = x.f[lo:hi]` may update that header IN PLACE (`append1Owned`, `sliceOwned`, …) instead of allocating
+     * a new one per call — Go's own `append` writes a 24-byte header value into the field and allocates nothing.
+     *
+     * The invariant holds because every READ of the field is a DIRECT use that never lets the header object escape
+     * (`x.f[i]`, `len`/`cap`, `x.f[lo:hi]` — a new header —, the operand of a non-self `append`, `copy`, `clear`),
+     * and every STORE of anything but a fresh header (`make`, a composite literal, a sub-slice, `nil`) stores a
+     * copy ([CallLowering]'s `ownedCopy()`), as do a struct's `goCopy`/`goSet` and a composite literal's field.
+     * Since an in-place operation never replaces the backing ARRAY (growing does, and returns a new header), an
+     * element pointer `&x.f[i]` and every earlier copy keep Go's meaning. Go evaluates `x.f` (copying the header)
+     * before the operands after it, so a direct use whose sibling operands contain a call — which might change
+     * `x.f` in place before the header is used — refuses the field. Value reads (`range`, a call argument, a
+     * comparison) also refuse it for now: each would need a copy, i.e. move the allocation rather than remove it.
+     */
+    val ownedSliceFields = HashSet<String>()
+
+    /** Why a slice field with in-place candidates was refused, by key (the report). */
+    val ownedSliceRefusals = HashMap<String, String>()
+
+    /** The owned slice field a `SelectorExpr` selects in [p], or null. */
+    fun ownedSliceFieldKey(p: IrPackage, sel: Node): String? {
+        if (sel.str("k") != "SelectorExpr" || sel.str("selk") != "field") return null
+        val key = sel.obj("sel")?.int("obj")?.let { p.obj(it) }?.takeIf { it.str("k") == "field" }?.str("key") ?: return null
+        return key.takeIf { it in ownedSliceFields }
+    }
+
+    /** Whether [a] and [b] denote the same location through side-effect-free selections (`c.f`, `(*p).g.f`, …). */
+    fun sameSelection(a: Node, b: Node): Boolean {
+        val ka = a.str("k"); val kb = b.str("k")
+        if (ka == "ParenExpr") return sameSelection(a.obj("x")!!, b)
+        if (kb == "ParenExpr") return sameSelection(a, b.obj("x")!!)
+        if (ka != kb) return false
+        return when (ka) {
+            "Ident" -> a.int("obj") != null && a.int("obj") == b.int("obj")
+            "SelectorExpr" -> a.str("selk") == "field" && b.str("selk") == "field" &&
+                a.obj("sel")?.int("obj") == b.obj("sel")?.int("obj") && a.ints("path") == b.ints("path") &&
+                sameSelection(a.obj("x")!!, b.obj("x")!!)
+            "StarExpr" -> sameSelection(a.obj("x")!!, b.obj("x")!!)
+            else -> false
+        }
+    }
+
+    /**
+     * `x.f = append(x.f, …)` / `x.f = x.f[lo:hi(:max)]` on the same selection, as `"append"` or `"slice"`, or null.
+     * The operands after `x.f` must be call-free (see [ownedSliceFields]).
+     */
+    fun ownedSelfOp(l: Node, r0: Node): String? {
+        val r = if (r0.str("k") == "ParenExpr") r0.obj("x")!! else r0
+        return when {
+            r.str("k") == "CallExpr" && r.str("builtin") == "append" && r.list("args").isNotEmpty() &&
+                sameSelection(r.list("args")[0], l) && r.list("args").drop(1).all { callFree(it) } -> "append"
+            r.str("k") == "SliceExpr" && r.str("sk") == "slice" && sameSelection(r.obj("x")!!, l) &&
+                listOfNotNull(r.obj("low"), r.obj("high"), r.obj("max")).all { callFree(it) } -> "slice"
+            else -> null
+        }
+    }
+
+    /** No call that could run arbitrary code: only `len`/`cap`/`min`/`max` and conversions; no function literal. */
+    fun callFree(n: Any?): Boolean {
+        var ok = true
+        walk(n) { x ->
+            when (x.str("k")) {
+                "CallExpr" -> if (x.str("call") != "conv" && !(x.str("call") == "builtin" && x.str("builtin") in setOf("len", "cap", "min", "max"))) ok = false
+                "FuncLit" -> ok = false
+            }
+            ok
+        }
+        return ok
+    }
+
+    fun computeOwnedSliceFields() {
+        ownedSliceFields.clear()
+        ownedSliceRefusals.clear()
+        val selfOps = HashMap<String, Int>()
+        val refused = HashMap<String, String>()
+        val sliceFieldCache = HashMap<Pair<String, Int>, String?>()
+        for (p in packages) {
+            val tt = TypeTable(p)
+            /** The key of the slice field [sel] selects, when the field is an unnamed `[]T` of a plain, non-generic, unreflected struct. */
+            fun sliceField(sel: Node): String? {
+                if (sel.str("k") != "SelectorExpr" || sel.str("selk") != "field") return null
+                val id = sel.obj("sel")?.int("obj") ?: return null
+                return sliceFieldCache.getOrPut(p.path to id) {
+                    val o = p.obj(id)
+                    val key = o.str("key")
+                    if (o.str("k") != "field" || key == null) null
+                    else if (tt.unalias(o.int("t") ?: return@getOrPut null) !is com.xemantic.typescript.goport.types.SliceType) null
+                    else {
+                        val ownerKey = key.substringBeforeLast('.')
+                        val owner = p.types.firstOrNull { it.str("k") == "named" && it.str("key") == ownerKey }?.int("id")
+                            ?.let { tt.unalias(it) as? com.xemantic.typescript.goport.types.NamedType }
+                        when {
+                            owner == null -> { refused[key] = "owner type not found"; key }
+                            owner.tparams.isNotEmpty() -> { refused[key] = "generic owner"; key }
+                            owner.key in reflectStructs -> { refused[key] = "reflected owner"; key }
+                            ownerKey !in structTypes -> { refused[key] = "owner not a struct declared in the run"; key }
+                            else -> key
+                        }
+                    }
+                }
+            }
+            fun refuse(key: String, why: String) { refused.putIfAbsent(key, why) }
+            /** Visits every node with its parent and the key it hangs under. */
+            fun visit(n: Any?, parent: Node?, pkey: String?) {
+                when (n) {
+                    is kotlinx.serialization.json.JsonObject -> {
+                        val key = sliceField(n)
+                        if (key != null) {
+                            val pk = parent?.str("k")
+                            val direct = when {
+                                pk == "IndexExpr" && pkey == "x" -> callFree(parent.obj("index"))
+                                pk == "CallExpr" && parent.str("builtin") in setOf("len", "cap") -> true
+                                pk == "SliceExpr" && pkey == "x" && parent.str("sk") == "slice" ->
+                                    listOfNotNull(parent.obj("low"), parent.obj("high"), parent.obj("max")).all { callFree(it) }
+                                pk == "CallExpr" && parent.str("builtin") in setOf("append", "copy", "clear") && pkey == "args" ->
+                                    parent.list("args").all { a -> a === n || callFree(a) }
+                                pk == "AssignStmt" && pkey == "lhs" -> true
+                                else -> false
+                            }
+                            if (!direct) refuse(key, "a value use (${pk ?: "?"}.${pkey ?: "?"} at ${n.str("at") ?: p.path})")
+                        }
+                        if (n.str("k") == "UnaryExpr" && n.str("op") == "&") n.obj("x")?.let { x ->
+                            // `&x.f`: a pointer to the field's storage.
+                            sliceField(x)?.let { refuse(it, "&x.f (${p.path})") }
+                        }
+                        if (n.str("k") == "IndexExpr") {
+                            // `x.f[i] = g()`: Go checks `i` against the header read BEFORE `g()` runs.
+                            if (parent?.str("k") == "AssignStmt" && pkey == "lhs") n.obj("x")?.let { x ->
+                                sliceField(x)?.let { k -> if (!parent.list("rhs").all { callFree(it) }) refuse(k, "x.f[i] = <call> (${p.path})") }
+                            }
+                        }
+                        if (n.str("k") == "AssignStmt" && n.str("tok") == "=" && n.list("lhs").size == 1 && n.list("rhs").size == 1) {
+                            val l = n.list("lhs")[0]
+                            sliceField(l)?.let { k -> if (ownedSelfOp(l, n.list("rhs")[0]) != null) selfOps.merge(k, 1, Int::plus) }
+                        }
+                        if (n.str("k") == "AssignStmt" && n.str("tok") != "=" && n.str("tok") != ":=") {
+                            n.list("lhs").forEach { l -> sliceField(l)?.let { refuse(it, "op-assignment") } }
+                        }
+                        for ((k, v) in n) visit(v, n, k)
+                    }
+                    is List<*> -> for (v in n) visit(v, parent, pkey)
+                    else -> {}
+                }
+            }
+            for (f in p.files) visit(f.list("decls"), null, null)
+        }
+        for ((k, n) in selfOps) {
+            val why = refused[k]
+            if (why == null) ownedSliceFields += k else ownedSliceRefusals[k] = "$why ($n in-place candidates)"
+        }
+    }
+
     // ---- abstract-class interfaces (docs/goport-lowering.md § 3, "Abstract-class interfaces") ----
 
     /**

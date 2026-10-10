@@ -1,3 +1,43 @@
+### Round (TSGO.6) — THE PORT IS MULTIPLATFORM: `-tsgo` builds for Kotlin/Native `linuxX64` with the generated 28 MB unchanged, its commonTest suite runs natively 64/64, and a native executable checks tsc's own sources (123 files) with 65 / 65 rows byte-identical to the tsgo 7.0.2 binary, in 12.6 s parallel / 14.5 s single (6.5 s / 10.6 s with the GC's allocation stall off) against tsgo's 2.1 / 3.3 s (2026-10-08)
+
+**What landed**: `linuxX64` on `-tsgo` behind `-PenableNativeTargets=true` (as `-core`'s), three `nativeMain` actuals —
+`go/sync` park (per-thread `@ThreadLocal` token: `pthread_mutex` + `pthread_cond` + a permit flag, freed by a `Cleaner`, not at thread
+exit), `goSpawn` (a DETACHED pthread with Go's 1 GB goroutine stack, 256 MB fallback; one thread per goroutine, no idle pool yet;
+`onGoStack` rides on it unchanged), `go/os` over POSIX `stat`/`opendir`/`open`+`read` — and `NativeCheckMain` (the executable:
+`<abs tsconfig> [single|parallel] [iters]`, tsc's `--noEmit` diagnostics through tsgo's own `diagnosticwriter`, phase times and
+GC env knobs on stderr). **No porter or `gen/` change was needed**: the whole generated port (and every hand-written shim) compiled
+for Native on the first build that got past the actuals. **Fixes**: `math.Exp` is now Go's portable `exp`/`expmulti` (Kotlin's
+`exp` on Native is glibc's and `Pow(7, 1.5)` differed from Go in the last ulp — the ONE native test failure; the JVM passed it by
+luck; the only `gen/` caller is `jsnum`'s `**`), two commonTest names with a comma. The `regexp` shim's translated patterns all pass
+`RegexpOracleTest` on Native's engine (0 rewrites needed).
+**Native suite**: `linuxX64Test` 64 / 64 (FmtSortMath, Shim, GoRuntime, Unicode/Strings, Slices, Regexp, Strconv, Xxh3, Sync).
+**End to end** (release binary, 35 MB; compiler profile `build/bench/tsc-project-637d5746`, one process each, box load ~7 on 8
+cores, so ±10%): output is `diff`-identical to `tools/tsgo-7.0.2/lib/tsc --noEmit -p` bar tsgo's trailing `Found 65 errors` summary,
+in all 12 native runs (single, parallel, GC variants); a 3-line project with the default (DOM) lib also matches.
+
+| arm | wall | peak RSS |
+|---|---:|---:|
+| native, parallel (K/N default GC) | 12.6 / 13.5 s | 2.1 GB |
+| native, single | 14.5 / 16.0 / 16.8 s | 1.7 GB |
+| native, parallel, `TSGO_GC_PAUSE=0` | **6.5 / 6.6 s** | 3.9-4.0 GB |
+| native, single, `TSGO_GC_PAUSE=0` | 10.6 / 10.9 s | 2.2-2.4 GB |
+| JVM port cold one-shot ((TSGO.4-d) § 3.2, recorded) | 10.3 s | 2.0 GB |
+| JVM port warm parallel / single (recorded) | 2.7 / 3.9 s | 3.5 GB |
+| tsgo 7.0.2 parallel / `--singleThreaded` | 2.07 / 3.3-3.7 s | 0.38 / 0.34 GB |
+
+Native has no JIT, so iterations in one process do not speed up (12.2 / 11.3 / 11.8 s). **The GC finding**: `-Xruntime-logs=gc=info`
+(now `-PtsgoNativeGcLogs=true`) shows 17 epochs = ~8 s of a 16 s single check, each preceded by `Pausing the mutators until epoch N is
+done` — K/N's `GC.pauseOnTargetHeapOverflow` stalls every allocating thread whenever the target heap overflows; turning it off
+halves the wall at ~2x RSS. A larger initial `targetHeapBytes` alone does nothing (autotune). Not made the default: an unbounded heap
+on type-fest-sized input with zero swap is the CLAUDE.md hazard. No profiler exists on this box (`perf` absent, paranoid 4), so the
+remaining ~2-3x over the warm JVM is unattributed (no escape analysis, boxed generics per CLAUDE.md's KIR measurements are the
+standing suspects). **Build cost**: `compileKotlinLinuxX64` ~2 min; test link + run ~1.5 min; release link 7.5-14 min, min ~6.6 GB
+available during it (Gradle heap 4 g). **JVM gate** (oracle inputs symlinked from the main tree's `build/goport`, `tools/tsgo-7.0.2`
+symlinked; outputs in the worktree): Diag 13,127 / 13,127, Emit 13,127 / 13,127, Oracle bound 7,774 / 7,774, Ls 21,614 / 21,614,
+Api 594,007 / 594,007 (a first run read 150k differ because the worktree had no `tools/tsgo-7.0.2/lib` — the libs the oracle names);
+`-tsgo` 110, `-goport` 15, `-lsp` 38 tests green. Warning-clean on JVM AND Native (a `USELESS_CAST` probe read its `w:` in both compiles, then deleted); huge-method census on `-tsgo` 0 over the limit (largest 7,526). **Left for (TSGO.6)**: the GraalVM image of the (TSGO.5) CLI (needs the CLI), a
+native idle-thread pool, the GC default, attributing the native gap, and wiring a native arm into CI (`native.yml` builds `-core` only).
+
 ### Round (TSGO.5) — A tsgo CLI ON THE PORT: `internal/execute` + `internal/execute/tsc` + `vfs/osvfs` ported mechanically; `com.xemantic.typescript.tsgo.cli.TsgoMainKt` is `tsc` 7.0.2 on the JVM; 105 / 105 command-line cases print, exit and emit byte-identical to the tsgo binary (the 8 tsc profiles both arms, the census libraries, cronstrue, marked, 20 type-oracle projects, 37 flag/config shapes), type-fest skipped below an 8 GB heap; `--build`/`--watch` not ported (2026-10-08)
 
 **What is ported** (`docs/goport-cli.md`). The extractor's closure gains `execute/tsc` and `vfs/osvfs` (whole) and

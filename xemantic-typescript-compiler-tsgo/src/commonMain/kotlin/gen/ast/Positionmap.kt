@@ -31,11 +31,11 @@ class PositionMap(
     @kotlin.jvm.JvmField var entries: GoSlice<com.xemantic.typescript.tsgo.ast.positionMapEntry> = com.xemantic.typescript.tsgo.ast.positionMapEntry.ELEM.nilSlice,
 ) {
 
-    fun goCopy(): PositionMap = PositionMap(asciiOnly = asciiOnly, entries = entries)
+    fun goCopy(): PositionMap = PositionMap(asciiOnly = asciiOnly, entries = entries.ownedCopy())
 
     fun goSet(o: PositionMap) {
         asciiOnly = o.asciiOnly
-        entries = o.entries
+        entries = o.entries.ownedCopy()
     }
 
     companion object {
@@ -84,7 +84,7 @@ fun computePositionMap(text: String): PositionMap? {
             utf16Size = 2
         }
         delta += (size - utf16Size)
-        pm!!.entries = pm!!.entries.append1(com.xemantic.typescript.tsgo.ast.positionMapEntry(utf8Pos = i + size, delta = delta))
+        pm!!.entries = pm!!.entries.append1Owned(com.xemantic.typescript.tsgo.ast.positionMapEntry(utf8Pos = i + size, delta = delta))
         i += size
     }
     pm!!.asciiOnly = pm!!.entries.len == 0

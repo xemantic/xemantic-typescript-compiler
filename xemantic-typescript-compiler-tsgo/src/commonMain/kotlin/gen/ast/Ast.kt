@@ -24,6 +24,7 @@
 package com.xemantic.typescript.tsgo.ast
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.core.Arena
 import com.xemantic.typescript.tsgo.go.sync.atomic.Bool
 import com.xemantic.typescript.tsgo.diagnosticwriter.FileLike
 import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
@@ -2789,7 +2790,7 @@ class SourceFile(
     @kotlin.jvm.JvmField var positionMap: PositionMap? = null,
 ) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData(), FileLike, Script, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
 
-    fun goCopy(): SourceFile = SourceFile(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), fileName = fileName, parseOptions = parseOptions.goCopy(), text = text, statements = statements, endOfFileToken = endOfFileToken, dataMu = dataMu.goCopy(), data = data, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, languageVariant = languageVariant, scriptKind = scriptKind, isDeclarationFile = isDeclarationFile, containsNonASCII = containsNonASCII, usesUriStyleNodeCoreModules = usesUriStyleNodeCoreModules, identifiers = identifiers, identifierCount = identifierCount, imports = imports, moduleAugmentations = moduleAugmentations, ambientModuleNames = ambientModuleNames, commentDirectives = commentDirectives, jsdocCache = jsdocCache, jsdocMu = jsdocMu.goCopy(), hasLazyJSDoc = hasLazyJSDoc, reparsedClones = reparsedClones, pragmas = pragmas, referencedFiles = referencedFiles, typeReferenceDirectives = typeReferenceDirectives, libReferenceDirectives = libReferenceDirectives, checkJsDirective = checkJsDirective, nodeCount = nodeCount, textCount = textCount, commonJSModuleIndicator = commonJSModuleIndicator, externalModuleIndicator = externalModuleIndicator, isBound = isBound.goCopy(), bindOnce = bindOnce.goCopy(), bindDiagnostics = bindDiagnostics, bindSuggestionDiagnostics = bindSuggestionDiagnostics, endFlowNode = endFlowNode, symbolCount = symbolCount, classifiableNames = classifiableNames.goCopy(), patternAmbientModules = patternAmbientModules, globalExports = globalExports, ecmaLineMapMu = ecmaLineMapMu.goCopy(), ecmaLineMap = ecmaLineMap, hash = hash, tokenCacheMu = tokenCacheMu.goCopy(), tokenCache = tokenCache, tokenFactory = tokenFactory, declarationMapMu = declarationMapMu.goCopy(), declarationMap = declarationMap, nameTableOnce = nameTableOnce.goCopy(), nameTable = nameTable, positionMapOnce = positionMapOnce.goCopy(), positionMap = positionMap)
+    fun goCopy(): SourceFile = SourceFile(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), fileName = fileName, parseOptions = parseOptions.goCopy(), text = text, statements = statements, endOfFileToken = endOfFileToken, dataMu = dataMu.goCopy(), data = data, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, languageVariant = languageVariant, scriptKind = scriptKind, isDeclarationFile = isDeclarationFile, containsNonASCII = containsNonASCII, usesUriStyleNodeCoreModules = usesUriStyleNodeCoreModules, identifiers = identifiers, identifierCount = identifierCount, imports = imports, moduleAugmentations = moduleAugmentations, ambientModuleNames = ambientModuleNames, commentDirectives = commentDirectives, jsdocCache = jsdocCache, jsdocMu = jsdocMu.goCopy(), hasLazyJSDoc = hasLazyJSDoc, reparsedClones = reparsedClones, pragmas = pragmas, referencedFiles = referencedFiles, typeReferenceDirectives = typeReferenceDirectives, libReferenceDirectives = libReferenceDirectives, checkJsDirective = checkJsDirective, nodeCount = nodeCount, textCount = textCount, commonJSModuleIndicator = commonJSModuleIndicator, externalModuleIndicator = externalModuleIndicator, isBound = isBound.goCopy(), bindOnce = bindOnce.goCopy(), bindDiagnostics = bindDiagnostics, bindSuggestionDiagnostics = bindSuggestionDiagnostics, endFlowNode = endFlowNode, symbolCount = symbolCount, classifiableNames = classifiableNames.goCopy(), patternAmbientModules = patternAmbientModules.ownedCopy(), globalExports = globalExports, ecmaLineMapMu = ecmaLineMapMu.goCopy(), ecmaLineMap = ecmaLineMap, hash = hash, tokenCacheMu = tokenCacheMu.goCopy(), tokenCache = tokenCache, tokenFactory = tokenFactory, declarationMapMu = declarationMapMu.goCopy(), declarationMap = declarationMap, nameTableOnce = nameTableOnce.goCopy(), nameTable = nameTable, positionMapOnce = positionMapOnce.goCopy(), positionMap = positionMap)
 
     fun goSet(o: SourceFile) {
         nodeBase = o.nodeBase.goCopy()
@@ -2837,7 +2838,7 @@ class SourceFile(
         endFlowNode = o.endFlowNode
         symbolCount = o.symbolCount
         classifiableNames = o.classifiableNames.goCopy()
-        patternAmbientModules = o.patternAmbientModules
+        patternAmbientModules = o.patternAmbientModules.ownedCopy()
         globalExports = o.globalExports
         ecmaLineMapMu = o.ecmaLineMapMu.goCopy()
         ecmaLineMap = o.ecmaLineMap
@@ -3586,7 +3587,55 @@ fun visitEachChild_JSDocParameterOrPropertyTag(node: JSDocParameterOrPropertyTag
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.ReleaseArenas 73d7d30b
 fun NodeFactory?.releaseArenas() {
-    this!!.goSet(NodeFactory(hooks = this!!.hooks.goCopy(), textCount = this!!.textCount, nodeCount = this!!.nodeCount))
+    val lp0 = this!!
+    lp0.arrayTypeNodeArena = Arena<ArrayTypeNode>(goElem_T = ArrayTypeNode.ELEM)
+    lp0.binaryExpressionArena = Arena<BinaryExpression>(goElem_T = BinaryExpression.ELEM)
+    lp0.blockArena = Arena<Block>(goElem_T = Block.ELEM)
+    lp0.callExpressionArena = Arena<CallExpression>(goElem_T = CallExpression.ELEM)
+    lp0.conditionalExpressionArena = Arena<ConditionalExpression>(goElem_T = ConditionalExpression.ELEM)
+    lp0.constructSignatureDeclarationArena = Arena<ConstructSignatureDeclaration>(goElem_T = ConstructSignatureDeclaration.ELEM)
+    lp0.elementAccessExpressionArena = Arena<ElementAccessExpression>(goElem_T = ElementAccessExpression.ELEM)
+    lp0.expressionStatementArena = Arena<ExpressionStatement>(goElem_T = ExpressionStatement.ELEM)
+    lp0.expressionWithTypeArgumentsArena = Arena<ExpressionWithTypeArguments>(goElem_T = ExpressionWithTypeArguments.ELEM)
+    lp0.functionDeclarationArena = Arena<FunctionDeclaration>(goElem_T = FunctionDeclaration.ELEM)
+    lp0.functionTypeNodeArena = Arena<FunctionTypeNode>(goElem_T = FunctionTypeNode.ELEM)
+    lp0.heritageClauseArena = Arena<HeritageClause>(goElem_T = HeritageClause.ELEM)
+    lp0.identifierArena = Arena<Identifier>(goElem_T = Identifier.ELEM)
+    lp0.ifStatementArena = Arena<IfStatement>(goElem_T = IfStatement.ELEM)
+    lp0.importSpecifierArena = Arena<ImportSpecifier>(goElem_T = ImportSpecifier.ELEM)
+    lp0.indexedAccessTypeNodeArena = Arena<IndexedAccessTypeNode>(goElem_T = IndexedAccessTypeNode.ELEM)
+    lp0.interfaceDeclarationArena = Arena<InterfaceDeclaration>(goElem_T = InterfaceDeclaration.ELEM)
+    lp0.intersectionTypeNodeArena = Arena<IntersectionTypeNode>(goElem_T = IntersectionTypeNode.ELEM)
+    lp0.jsdocArena = Arena<JSDoc>(goElem_T = JSDoc.ELEM)
+    lp0.jsdocDeprecatedTagArena = Arena<JSDocDeprecatedTag>(goElem_T = JSDocDeprecatedTag.ELEM)
+    lp0.jsdocTextArena = Arena<JSDocText>(goElem_T = JSDocText.ELEM)
+    lp0.jsdocUnknownTagArena = Arena<JSDocUnknownTag>(goElem_T = JSDocUnknownTag.ELEM)
+    lp0.keywordExpressionArena = Arena<KeywordExpression>(goElem_T = KeywordExpression.ELEM)
+    lp0.keywordTypeNodeArena = Arena<KeywordTypeNode>(goElem_T = KeywordTypeNode.ELEM)
+    lp0.literalTypeNodeArena = Arena<LiteralTypeNode>(goElem_T = LiteralTypeNode.ELEM)
+    lp0.methodSignatureDeclarationArena = Arena<MethodSignatureDeclaration>(goElem_T = MethodSignatureDeclaration.ELEM)
+    lp0.modifierListArena = Arena<ModifierList>(goElem_T = ModifierList.ELEM)
+    lp0.nodeListArena = Arena<NodeList>(goElem_T = NodeList.ELEM)
+    lp0.numericLiteralArena = Arena<NumericLiteral>(goElem_T = NumericLiteral.ELEM)
+    lp0.parameterDeclarationArena = Arena<ParameterDeclaration>(goElem_T = ParameterDeclaration.ELEM)
+    lp0.parenthesizedExpressionArena = Arena<ParenthesizedExpression>(goElem_T = ParenthesizedExpression.ELEM)
+    lp0.parenthesizedTypeNodeArena = Arena<ParenthesizedTypeNode>(goElem_T = ParenthesizedTypeNode.ELEM)
+    lp0.prefixUnaryExpressionArena = Arena<PrefixUnaryExpression>(goElem_T = PrefixUnaryExpression.ELEM)
+    lp0.propertyAccessExpressionArena = Arena<PropertyAccessExpression>(goElem_T = PropertyAccessExpression.ELEM)
+    lp0.propertyAssignmentArena = Arena<PropertyAssignment>(goElem_T = PropertyAssignment.ELEM)
+    lp0.propertySignatureDeclarationArena = Arena<PropertySignatureDeclaration>(goElem_T = PropertySignatureDeclaration.ELEM)
+    lp0.returnStatementArena = Arena<ReturnStatement>(goElem_T = ReturnStatement.ELEM)
+    lp0.stringLiteralArena = Arena<StringLiteral>(goElem_T = StringLiteral.ELEM)
+    lp0.tokenArena = Arena<Token>(goElem_T = Token.ELEM)
+    lp0.typeAliasDeclarationArena = Arena<TypeAliasDeclaration>(goElem_T = TypeAliasDeclaration.ELEM)
+    lp0.typeLiteralNodeArena = Arena<TypeLiteralNode>(goElem_T = TypeLiteralNode.ELEM)
+    lp0.typeOperatorNodeArena = Arena<TypeOperatorNode>(goElem_T = TypeOperatorNode.ELEM)
+    lp0.typeParameterDeclarationArena = Arena<TypeParameterDeclaration>(goElem_T = TypeParameterDeclaration.ELEM)
+    lp0.typeReferenceNodeArena = Arena<TypeReferenceNode>(goElem_T = TypeReferenceNode.ELEM)
+    lp0.unionTypeNodeArena = Arena<UnionTypeNode>(goElem_T = UnionTypeNode.ELEM)
+    lp0.variableDeclarationArena = Arena<VariableDeclaration>(goElem_T = VariableDeclaration.ELEM)
+    lp0.variableDeclarationListArena = Arena<VariableDeclarationList>(goElem_T = VariableDeclarationList.ELEM)
+    lp0.variableStatementArena = Arena<VariableStatement>(goElem_T = VariableStatement.ELEM)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.parseJSDocForNode 1418d486

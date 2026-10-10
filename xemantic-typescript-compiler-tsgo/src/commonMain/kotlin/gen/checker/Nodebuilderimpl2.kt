@@ -188,9 +188,9 @@ fun NodeBuilderImpl?.typeToTypeNode(t_0: Type?): Node? {
     var t: Type? = t_0
     return withDefers({ null }) { df1 ->
         if (this!!.ctx!!.maxExpansionDepth >= 0 && t != null) {
-            this!!.ctx!!.typeStack = this!!.ctx!!.typeStack.append1(t)
+            this!!.ctx!!.typeStack = this!!.ctx!!.typeStack.append1Owned(t)
             df1.defer(fun() {
-                this!!.ctx!!.typeStack = this!!.ctx!!.typeStack.slice(0, this!!.ctx!!.typeStack.len - 1)
+                this!!.ctx!!.typeStack = this!!.ctx!!.typeStack.sliceOwned(0, this!!.ctx!!.typeStack.len - 1)
             })
         }
         val inTypeAlias: Flags = Flags(this!!.ctx!!.flags.value and 8388608u)

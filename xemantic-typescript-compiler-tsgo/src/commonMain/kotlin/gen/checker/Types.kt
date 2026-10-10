@@ -2186,13 +2186,13 @@ class StructuredType(
     @kotlin.jvm.JvmField var objectTypeWithoutAbstractConstructSignatures: Type? = null,
 ) : TypeData() {
 
-    fun goCopy(): StructuredType = StructuredType(constrainedType = constrainedType.goCopy(), members = members, properties = properties, signatures = signatures, callSignatureCount = callSignatureCount, indexInfos = indexInfos, objectTypeWithoutAbstractConstructSignatures = objectTypeWithoutAbstractConstructSignatures)
+    fun goCopy(): StructuredType = StructuredType(constrainedType = constrainedType.goCopy(), members = members, properties = properties, signatures = signatures.ownedCopy(), callSignatureCount = callSignatureCount, indexInfos = indexInfos, objectTypeWithoutAbstractConstructSignatures = objectTypeWithoutAbstractConstructSignatures)
 
     fun goSet(o: StructuredType) {
         constrainedType = o.constrainedType.goCopy()
         members = o.members
         properties = o.properties
-        signatures = o.signatures
+        signatures = o.signatures.ownedCopy()
         callSignatureCount = o.callSignatureCount
         indexInfos = o.indexInfos
         objectTypeWithoutAbstractConstructSignatures = o.objectTypeWithoutAbstractConstructSignatures

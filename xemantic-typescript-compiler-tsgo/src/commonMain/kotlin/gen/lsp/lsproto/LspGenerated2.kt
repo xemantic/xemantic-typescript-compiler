@@ -1321,30 +1321,32 @@ class Registration(
 
     // go: github.com/microsoft/typescript-go/internal/lsp/lsproto.Registration.UnmarshalJSONFrom f95f3c26
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        this.goSet(Registration())
+        val lp0 = this
+        lp0.id = ""
+        lp0.registerOptions = null
         var missing: ULong = 3uL
         val k: Kind = dec!!.peekKind()
         if (k.value != 123) {
             return errNotObject(k)
         }
-        val t0 = dec!!.readToken()
-        val err: GoError? = t0.second
+        val t1 = dec!!.readToken()
+        val err: GoError? = t1.second
         if (err != null) {
             return err
         }
         val method: GoBox<String> = GoBox("")
         var rawRegisterOptions: Value = GoElem.BYTE.nilSlice
         l0@ while (dec!!.peekKind().value != 125) {
-            val t1 = dec!!.readValue()
-            val name: Value = t1.first
-            val err_1: GoError? = t1.second
+            val t2 = dec!!.readValue()
+            val name: Value = t2.first
+            val err_1: GoError? = t2.second
             if (err_1 != null) {
                 return err_1
             }
             when (goBytesToString(name)) {
                 "\"id\"" -> {
                     missing = missing and 1uL.inv()
-                    val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, run { val o2 = this; GoFieldPtr(o2, 0, { o2.id }, { o2.id = it }) }, GoElem.ref<Options?>().nilSlice)
+                    val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, run { val o3 = this; GoFieldPtr(o3, 0, { o3.id }, { o3.id = it }) }, GoElem.ref<Options?>().nilSlice)
                     if (err_2 != null) {
                         return err_2
                     }
@@ -1357,9 +1359,9 @@ class Registration(
                     }
                 }
                 "\"registerOptions\"" -> {
-                    val t3 = dec!!.readValue()
-                    val v: Value = t3.first
-                    val err_4: GoError? = t3.second
+                    val t4 = dec!!.readValue()
+                    val v: Value = t4.first
+                    val err_4: GoError? = t4.second
                     if (err_4 != null) {
                         return err_4
                     }
@@ -1373,8 +1375,8 @@ class Registration(
                 }
             }
         }
-        val t4 = dec!!.readToken()
-        val err_6: GoError? = t4.second
+        val t5 = dec!!.readToken()
+        val err_6: GoError? = t5.second
         if (err_6 != null) {
             return err_6
         }

@@ -31,6 +31,7 @@ import com.xemantic.typescript.goport.emit.Ex.Companion.PRIMARY
 import com.xemantic.typescript.goport.ir.Node
 import com.xemantic.typescript.goport.ir.bool
 import com.xemantic.typescript.goport.ir.int
+import com.xemantic.typescript.goport.ir.ints
 import com.xemantic.typescript.goport.ir.k
 import com.xemantic.typescript.goport.ir.list
 import com.xemantic.typescript.goport.ir.nullableList
@@ -41,6 +42,7 @@ import com.xemantic.typescript.goport.ir.t
 import com.xemantic.typescript.goport.lower.TypeMapper.Rep
 import com.xemantic.typescript.goport.types.ArrayType
 import com.xemantic.typescript.goport.types.MapType
+import com.xemantic.typescript.goport.types.NamedType
 import com.xemantic.typescript.goport.types.PointerType
 import com.xemantic.typescript.goport.types.SignatureType
 import com.xemantic.typescript.goport.types.StructType
@@ -326,6 +328,8 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         ) return declareView(lhs[0].int("obj")!!, rhs[0]) { w.line(it) }
         if (!define && lhs.size == 1 && rhs.size == 1 && isWindowField(lhs[0])) return windowStore(lhs[0], rhs[0])
         if (!define && lhs.size == 1 && rhs.size == 1) prog.primFuncFieldKey(pc.pkg, lhs[0])?.let { return single(lhs[0], primFuncProducer(it, rhs[0]), false) }
+        if (!define && lhs.size == 1 && rhs.size == 1 && prog.ownedSliceFieldKey(pc.pkg, lhs[0]) != null) return ownedSliceStore(lhs[0], rhs[0])
+        if (!define && lhs.size == 1 && rhs.size == 1 && literalStoreInPlace(lhs[0], rhs[0])) return
         if (lhs.size == rhs.size) {
             if (lhs.size == 1) return single(lhs[0], flow(rhs[0]), define)
             // Parallel assignment: every right side is evaluated before any store.
@@ -339,6 +343,85 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         }
         val r = rhs.single()
         multi(lhs, r, define)
+    }
+
+    /**
+     * `*p = T{f: v, …}`: Go writes the literal into `*p`; the generic lowering built a temporary `T` and copied
+     * it field by field (`p.goSet(T(…))`) — an object per store, and a second copy of every struct-valued field.
+     * Here the values are evaluated first, in the literal's order (Go evaluates the whole right side before the
+     * store, and a value may read `*p`), then stored; an unlisted field gets its zero value, as the temporary's
+     * constructor default did. Only a plain named struct (not generic, immutable, or carrying a window or
+     * primitive-func field), and nothing else changes: the field values are the composite literal's own.
+     */
+    private fun literalStoreInPlace(l0: Node, r0: Node): Boolean {
+        val l = if (l0.k == "ParenExpr") l0.reqObj("x") else l0
+        val r = if (r0.k == "ParenExpr") r0.reqObj("x") else r0
+        if (l.k != "StarExpr" || r.k != "CompositeLit") return false
+        val p = l.reqObj("x")
+        val pt = types.under(ty(p)) as? PointerType ?: return false
+        val named = types.unalias(pt.elem) as? NamedType ?: return false
+        if (named.tparams.isNotEmpty() || named.origin != null) return false
+        if ((types.unalias(ty(r)) as? NamedType)?.key != named.key) return false
+        val st = types.under(pt.elem) as? StructType ?: return false
+        if (st.fields.isEmpty() || tm.isValueClass(pt.elem) || named.key in prog.immutableStructs) return false
+        if (st.fields.any { "${named.key}.${it.name}".let { k -> k in prog.windowFields || k in prog.primFuncFields } }) return false
+        val target = fn.fresh("lp")
+        w.line("val $target = ${nn(lower(p)).code}")
+        val values = HashMap<Int, String>()
+        val kept = HashSet<Int>()
+        for (el in r.list("elts")) {
+            val (idx, v) = if (el.k == "KeyValueExpr") {
+                val key = el.reqObj("key")
+                val fo = pc.obj(key.int("obj") ?: refuse("field-key-without-object"))
+                st.fields.indexOfFirst { it.name == fo.str("name") } to el.reqObj("value")
+            } else (el.int("fieldIndex") ?: refuse("positional-field-without-index")) to el
+            // `f: p.f` (the same field of the same pointer) stores the field into itself: nothing to do.
+            val vx = if (v.k == "ParenExpr") v.reqObj("x") else v
+            if (vx.k == "SelectorExpr" && vx.str("selk") == "field" && vx.ints("path") == listOf(idx) && prog.sameSelection(vx.reqObj("x"), p)) {
+                kept += idx
+                continue
+            }
+            val code = flow(v)
+            val stored = if ("${named.key}.${st.fields[idx].name}" in prog.ownedSliceFields) ownedSliceValue(v, code) else code.code
+            val t = fn.fresh("lv")
+            w.line("val $t = $stored")
+            values[idx] = t
+        }
+        st.fields.forEachIndexed { i, f -> if (i !in kept) w.line("$target.${fieldNameOf(pt.elem, i)} = ${values[i] ?: tm.zero(f.t)}") }
+        return true
+    }
+
+    /**
+     * `x.f = r` into an owned slice field ([Program.ownedSliceFields]): `append(x.f, …)` and `x.f[lo:hi]` of the
+     * same selection update the field's own header in place; any other value is stored as a header of its own.
+     */
+    private fun ownedSliceStore(l: Node, r0: Node) {
+        val r = if (r0.k == "ParenExpr") r0.reqObj("x") else r0
+        val target = lower(l)
+        when (prog.ownedSelfOp(l, r)) {
+            "append" -> {
+                val args = r.list("args")
+                val call = when {
+                    args.size == 1 -> return
+                    r.bool("spread") -> {
+                        val src = args[1]
+                        if (types.isString(ty(src))) return w.line("${target.code} = goAppendString(${target.code}, ${raw(src).code})")
+                        "appendSliceOwned(${raw(src).code})"
+                    }
+                    args.size == 2 -> "append1Owned(${flow(args[1]).code})"
+                    else -> "appendOwned(${args.drop(1).joinToString(", ") { flow(it).code }})"
+                }
+                w.line("${target.code} = ${target.at(Ex.PRIMARY)}.$call")
+            }
+            "slice" -> {
+                val lo = r.obj("low")?.let { intIndex(it).code }
+                val hi = r.obj("high")?.let { intIndex(it).code }
+                val call = if (r.bool("slice3")) "slice3Owned(${lo ?: "0"}, $hi, ${intIndex(r.reqObj("max")).code})"
+                else "sliceOwned(${listOfNotNull(lo ?: if (hi != null) "0" else null, hi).joinToString(", ")})"
+                w.line("${target.code} = ${target.at(Ex.PRIMARY)}.$call")
+            }
+            else -> w.line("${target.code} = ${ownedSliceValue(r, flow(r))}")
+        }
     }
 
     private fun isWindowField(l: Node): Boolean =
@@ -489,6 +572,9 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                 w.line("$ot.$name = $t")
                 w.line("$ot.${name}_o = 0")
                 w.line("$ot.${name}_n = $t.length")
+            } else if (prog.ownedSliceFieldKey(pc.pkg, l) != null) {
+                // An owned slice field (a parallel or tuple assignment): a header of its own.
+                w.line("${lower(l).code} = ${value.at(Ex.PRIMARY)}.ownedCopy()")
             } else w.line("${lower(l).code} = ${value.code}")
             "StarExpr" -> {
                 val p = l.reqObj("x")

@@ -412,7 +412,7 @@ class DeclarationTransformer(
     @kotlin.jvm.JvmField var inClassExpressionDeclaration: Boolean = false,
 ) {
 
-    fun goCopy(): DeclarationTransformer = DeclarationTransformer(transformer = transformer.goCopy(), host = host, compilerOptions = compilerOptions, tracker = tracker, state = state, resolver = resolver, declarationFilePath = declarationFilePath, declarationMapPath = declarationMapPath, needsDeclare = needsDeclare, needsScopeFixMarker = needsScopeFixMarker, resultHasScopeMarker = resultHasScopeMarker, enclosingDeclaration = enclosingDeclaration, resultHasExternalModuleIndicator = resultHasExternalModuleIndicator, suppressNewDiagnosticContexts = suppressNewDiagnosticContexts, witnessedCjsExports = witnessedCjsExports.goCopy(), lateStatementReplacementMap = lateStatementReplacementMap, expandoHosts = expandoHosts, expandoMembers = expandoMembers, seenProperties = seenProperties.goCopy(), thisPropertyAssignmentsCollected = thisPropertyAssignmentsCollected, rawReferencedFiles = rawReferencedFiles, rawTypeReferenceDirectives = rawTypeReferenceDirectives, rawLibReferenceDirectives = rawLibReferenceDirectives, bindingNameVisitor = bindingNameVisitor, expressionVisitor = expressionVisitor, cjsExportAssignmentVisitor = cjsExportAssignmentVisitor, exportStrippingVisitor = exportStrippingVisitor, thisPropertyVisitor = thisPropertyVisitor, cjsExportAssignment = cjsExportAssignment, cjsExportMembers = cjsExportMembers, cjsExportAssignmentName = cjsExportAssignmentName, declareStrippingVisitor = declareStrippingVisitor, inClassExpressionDeclaration = inClassExpressionDeclaration)
+    fun goCopy(): DeclarationTransformer = DeclarationTransformer(transformer = transformer.goCopy(), host = host, compilerOptions = compilerOptions, tracker = tracker, state = state, resolver = resolver, declarationFilePath = declarationFilePath, declarationMapPath = declarationMapPath, needsDeclare = needsDeclare, needsScopeFixMarker = needsScopeFixMarker, resultHasScopeMarker = resultHasScopeMarker, enclosingDeclaration = enclosingDeclaration, resultHasExternalModuleIndicator = resultHasExternalModuleIndicator, suppressNewDiagnosticContexts = suppressNewDiagnosticContexts, witnessedCjsExports = witnessedCjsExports.goCopy(), lateStatementReplacementMap = lateStatementReplacementMap, expandoHosts = expandoHosts, expandoMembers = expandoMembers, seenProperties = seenProperties.goCopy(), thisPropertyAssignmentsCollected = thisPropertyAssignmentsCollected, rawReferencedFiles = rawReferencedFiles, rawTypeReferenceDirectives = rawTypeReferenceDirectives, rawLibReferenceDirectives = rawLibReferenceDirectives, bindingNameVisitor = bindingNameVisitor, expressionVisitor = expressionVisitor, cjsExportAssignmentVisitor = cjsExportAssignmentVisitor, exportStrippingVisitor = exportStrippingVisitor, thisPropertyVisitor = thisPropertyVisitor, cjsExportAssignment = cjsExportAssignment, cjsExportMembers = cjsExportMembers.ownedCopy(), cjsExportAssignmentName = cjsExportAssignmentName, declareStrippingVisitor = declareStrippingVisitor, inClassExpressionDeclaration = inClassExpressionDeclaration)
 
     fun goSet(o: DeclarationTransformer) {
         transformer = o.transformer.goCopy()
@@ -444,7 +444,7 @@ class DeclarationTransformer(
         exportStrippingVisitor = o.exportStrippingVisitor
         thisPropertyVisitor = o.thisPropertyVisitor
         cjsExportAssignment = o.cjsExportAssignment
-        cjsExportMembers = o.cjsExportMembers
+        cjsExportMembers = o.cjsExportMembers.ownedCopy()
         cjsExportAssignmentName = o.cjsExportAssignmentName
         declareStrippingVisitor = o.declareStrippingVisitor
         inClassExpressionDeclaration = o.inClassExpressionDeclaration
@@ -2595,7 +2595,7 @@ fun DeclarationTransformer?.visitNestedExpression(expression: Node?): Node? {
                     if (this!!.state!!.currentSourceFile!!.commonJSModuleIndicator != null) {
                         val result: Node? = this.transformCommonJSExport(expression, this.getNameExpressionPreferringIdentifier(com.xemantic.typescript.tsgo.ast.getElementOrPropertyAccessName(expression.asBinaryExpression()!!.left)))
                         if (result != null) {
-                            this!!.cjsExportMembers = this!!.cjsExportMembers.append1(result)
+                            this!!.cjsExportMembers = this!!.cjsExportMembers.append1Owned(result)
                         }
                     }
                 }
@@ -2603,7 +2603,7 @@ fun DeclarationTransformer?.visitNestedExpression(expression: Node?): Node? {
                     if (this!!.state!!.currentSourceFile!!.commonJSModuleIndicator != null) {
                         val result_1: Node? = this.transformCommonJSExport(expression, this.getNameExpressionPreferringIdentifier(expression.arguments()[1]))
                         if (result_1 != null) {
-                            this!!.cjsExportMembers = this!!.cjsExportMembers.append1(result_1)
+                            this!!.cjsExportMembers = this!!.cjsExportMembers.append1Owned(result_1)
                         }
                     }
                 }

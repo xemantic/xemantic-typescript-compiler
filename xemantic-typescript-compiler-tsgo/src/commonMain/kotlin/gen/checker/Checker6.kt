@@ -3064,7 +3064,7 @@ fun Checker?.pushTypeResolution(target: TypeSystemEntity, propertyName: TypeSyst
         }
         return false
     }
-    this!!.typeResolutions = this!!.typeResolutions.append1(TypeResolution(target = target, propertyName = propertyName, result = true))
+    this!!.typeResolutions = this!!.typeResolutions.append1Owned(TypeResolution(target = target, propertyName = propertyName, result = true))
     return true
 }
 
@@ -3073,7 +3073,7 @@ fun Checker?.popTypeResolution(): Boolean {
     val lastIndex: Int = this!!.typeResolutions.len - 1
     val result: Boolean = this!!.typeResolutions[lastIndex].result
     this!!.typeResolutions[lastIndex] = TypeResolution()
-    this!!.typeResolutions = this!!.typeResolutions.slice(0, lastIndex)
+    this!!.typeResolutions = this!!.typeResolutions.sliceOwned(0, lastIndex)
     return result
 }
 

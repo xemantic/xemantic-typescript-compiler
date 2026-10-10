@@ -2861,7 +2861,7 @@ class Relater(
     @kotlin.jvm.JvmField var next: Relater? = null,
 ) {
 
-    fun goCopy(): Relater = Relater(c = c, relation = relation, errorNode = errorNode, errorChain = errorChain, relatedInfo = relatedInfo, maybeKeys = maybeKeys, maybeKeysSet = maybeKeysSet.goCopy(), sourceStack = sourceStack, targetStack = targetStack, maybeCount = maybeCount, sourceDepth = sourceDepth, targetDepth = targetDepth, expandingFlags = expandingFlags, overflow = overflow, relationCount = relationCount, next = next)
+    fun goCopy(): Relater = Relater(c = c, relation = relation, errorNode = errorNode, errorChain = errorChain, relatedInfo = relatedInfo, maybeKeys = maybeKeys.ownedCopy(), maybeKeysSet = maybeKeysSet.goCopy(), sourceStack = sourceStack, targetStack = targetStack, maybeCount = maybeCount, sourceDepth = sourceDepth, targetDepth = targetDepth, expandingFlags = expandingFlags, overflow = overflow, relationCount = relationCount, next = next)
 
     fun goSet(o: Relater) {
         c = o.c
@@ -2869,7 +2869,7 @@ class Relater(
         errorNode = o.errorNode
         errorChain = o.errorChain
         relatedInfo = o.relatedInfo
-        maybeKeys = o.maybeKeys
+        maybeKeys = o.maybeKeys.ownedCopy()
         maybeKeysSet = o.maybeKeysSet.goCopy()
         sourceStack = o.sourceStack
         targetStack = o.targetStack
@@ -2900,7 +2900,27 @@ fun Checker?.getRelater(): Relater? {
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.putRelater 23aa489c
 fun Checker?.putRelater(r: Relater?) {
     r!!.maybeKeysSet.clear()
-    r!!.goSet(Relater(c = this, maybeKeys = r!!.maybeKeys.slice(0, 0), maybeKeysSet = r!!.maybeKeysSet.goCopy(), sourceStack = r!!.sourceStack.slice(0, 0), targetStack = r!!.targetStack.slice(0, 0), next = this!!.freeRelater))
+    val lp0 = r!!
+    val lv1 = this
+    val lv2 = r!!.maybeKeys.slice(0, 0)
+    val lv3 = r!!.sourceStack.slice(0, 0)
+    val lv4 = r!!.targetStack.slice(0, 0)
+    val lv5 = this!!.freeRelater
+    lp0.c = lv1
+    lp0.relation = null
+    lp0.errorNode = null
+    lp0.errorChain = null
+    lp0.relatedInfo = GoElem.ref<Diagnostic?>().nilSlice
+    lp0.maybeKeys = lv2
+    lp0.sourceStack = lv3
+    lp0.targetStack = lv4
+    lp0.maybeCount = 0
+    lp0.sourceDepth = 0
+    lp0.targetDepth = 0
+    lp0.expandingFlags = ExpandingFlags(0)
+    lp0.overflow = false
+    lp0.relationCount = 0
+    lp0.next = lv5
     this!!.freeRelater = r
 }
 
@@ -3393,7 +3413,7 @@ fun Relater?.recursiveTypeRelatedTo(source: Type?, target: Type?, reportErrors: 
             return TernaryFalse
         }
         val maybeStart: Int = this!!.maybeKeys.len
-        this!!.maybeKeys = this!!.maybeKeys.append1(id)
+        this!!.maybeKeys = this!!.maybeKeys.append1Owned(id)
         this!!.maybeKeysSet.add(id)
         val saveExpandingFlags: ExpandingFlags = this!!.expandingFlags
         if (recursionFlags.value and 1u != 0u) {
@@ -3462,7 +3482,7 @@ fun Relater?.resetMaybeStack(maybeStart: Int, propagatingVarianceFlags: Relation
         }
         i++
     }
-    this!!.maybeKeys = this!!.maybeKeys.slice(0, maybeStart)
+    this!!.maybeKeys = this!!.maybeKeys.sliceOwned(0, maybeStart)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.Relater.getErrorState cf9df65f

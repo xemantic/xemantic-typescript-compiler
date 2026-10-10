@@ -2630,7 +2630,7 @@ class CallState(
     @kotlin.jvm.JvmField var candidateForTypeArgumentError: Signature? = null,
 ) {
 
-    fun goCopy(): CallState = CallState(node = node, typeArguments = typeArguments, args = args, candidates = candidates, argCheckMode = argCheckMode, isSingleNonGenericCandidate = isSingleNonGenericCandidate, signatureHelpTrailingComma = signatureHelpTrailingComma, candidatesForArgumentError = candidatesForArgumentError, candidateForArgumentArityError = candidateForArgumentArityError, candidateForTypeArgumentError = candidateForTypeArgumentError)
+    fun goCopy(): CallState = CallState(node = node, typeArguments = typeArguments, args = args, candidates = candidates, argCheckMode = argCheckMode, isSingleNonGenericCandidate = isSingleNonGenericCandidate, signatureHelpTrailingComma = signatureHelpTrailingComma, candidatesForArgumentError = candidatesForArgumentError.ownedCopy(), candidateForArgumentArityError = candidateForArgumentArityError, candidateForTypeArgumentError = candidateForTypeArgumentError)
 
     fun goSet(o: CallState) {
         node = o.node
@@ -2640,7 +2640,7 @@ class CallState(
         argCheckMode = o.argCheckMode
         isSingleNonGenericCandidate = o.isSingleNonGenericCandidate
         signatureHelpTrailingComma = o.signatureHelpTrailingComma
-        candidatesForArgumentError = o.candidatesForArgumentError
+        candidatesForArgumentError = o.candidatesForArgumentError.ownedCopy()
         candidateForArgumentArityError = o.candidateForArgumentArityError
         candidateForTypeArgumentError = o.candidateForTypeArgumentError
     }
@@ -2822,7 +2822,7 @@ fun Checker?.chooseOverload(s: CallState?, relation: Relation?): Signature? {
             checkCandidate = candidate_1
         }
         if (!this.isSignatureApplicable(s!!.node, s!!.args, checkCandidate, relation, s!!.argCheckMode, false, null)) {
-            s!!.candidatesForArgumentError = s!!.candidatesForArgumentError.append1(checkCandidate)
+            s!!.candidatesForArgumentError = s!!.candidatesForArgumentError.append1Owned(checkCandidate)
             continue@l0
         }
         if (s!!.argCheckMode.value != 0u) {
@@ -2836,7 +2836,7 @@ fun Checker?.chooseOverload(s: CallState?, relation: Relation?): Signature? {
                 }
             }
             if (!this.isSignatureApplicable(s!!.node, s!!.args, checkCandidate, relation, s!!.argCheckMode, false, null)) {
-                s!!.candidatesForArgumentError = s!!.candidatesForArgumentError.append1(checkCandidate)
+                s!!.candidatesForArgumentError = s!!.candidatesForArgumentError.append1Owned(checkCandidate)
                 continue@l0
             }
         }

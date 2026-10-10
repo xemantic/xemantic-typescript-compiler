@@ -184,7 +184,18 @@ fun Checker?.getFlowState(): FlowState? {
 
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.putFlowState 6ac2b9e1
 fun Checker?.putFlowState(f: FlowState?) {
-    f!!.goSet(FlowState(reduceLabels = f!!.reduceLabels.slice(0, 0), next = this!!.freeFlowState))
+    val lp0 = f!!
+    val lv1 = f!!.reduceLabels.slice(0, 0)
+    val lv2 = this!!.freeFlowState
+    lp0.reference = null
+    lp0.declaredType = null
+    lp0.initialType = null
+    lp0.flowContainer = null
+    lp0.refKey = CacheHashKey()
+    lp0.depth = 0
+    lp0.sharedFlowStart = 0
+    lp0.reduceLabels = lv1
+    lp0.next = lv2
     this!!.freeFlowState = f
 }
 
@@ -222,7 +233,7 @@ fun Checker?.getFlowTypeOfReferenceEx(reference: Node?, declaredType: Type?, ini
     f!!.sharedFlowStart = this!!.sharedFlows.len
     this!!.flowInvocationCount = this!!.flowInvocationCount + 1
     val evolvedType: Type? = this.getTypeAtFlowNode(f, flowNode).t
-    this!!.sharedFlows = this!!.sharedFlows.slice(0, f!!.sharedFlowStart)
+    this!!.sharedFlows = this!!.sharedFlows.sliceOwned(0, f!!.sharedFlowStart)
     this.putFlowState(f)
     var resultType: Type? = null
     if (evolvedType!!.objectFlags.value and 256u != 0u && this.isEvolvingArrayOperationTarget(reference)) {
@@ -325,7 +336,7 @@ fun Checker?.getTypeAtFlowNode(f: FlowState?, flow_0: FlowNode?): FlowType {
             }
         }
         if (sharedFlow != null) {
-            this!!.sharedFlows = this!!.sharedFlows.append1(SharedFlow(flow = sharedFlow, flowType = t.goCopy()))
+            this!!.sharedFlows = this!!.sharedFlows.append1Owned(SharedFlow(flow = sharedFlow, flowType = t.goCopy()))
         }
         f!!.depth = f!!.depth - 1
         return t.goCopy()
@@ -1410,11 +1421,11 @@ fun Checker?.getTypeAtFlowBranchLabel(f: FlowState?, flow: FlowNode?, antecedent
         }
         val flowType: FlowType = this.getTypeAtFlowNode(f, antecedent)
         if (flowType.t === f!!.declaredType && f!!.declaredType === f!!.initialType) {
-            this!!.antecedentTypes = this!!.antecedentTypes.slice(0, antecedentStart)
+            this!!.antecedentTypes = this!!.antecedentTypes.sliceOwned(0, antecedentStart)
             return FlowType(t = flowType.t)
         }
         if (!com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.antecedentTypes.slice(antecedentStart), flowType.t)) {
-            this!!.antecedentTypes = this!!.antecedentTypes.append1(flowType.t)
+            this!!.antecedentTypes = this!!.antecedentTypes.append1Owned(flowType.t)
         }
         if (!this.isTypeSubsetOf(flowType.t, f!!.initialType)) {
             subtypeReduction = true
@@ -1427,10 +1438,10 @@ fun Checker?.getTypeAtFlowBranchLabel(f: FlowState?, flow: FlowNode?, antecedent
         val flowType_1: FlowType = this.getTypeAtFlowNode(f, bypassFlow)
         if (flowType_1.t!!.flags.value and 262144u == 0u && !com.xemantic.typescript.tsgo.go.slices.contains<Type?>(this!!.antecedentTypes.slice(antecedentStart), flowType_1.t) && !this.isExhaustiveSwitchStatement(bypassFlow!!.node.asFlowSwitchClauseData()!!.switchStatement)) {
             if (flowType_1.t === f!!.declaredType && f!!.declaredType === f!!.initialType) {
-                this!!.antecedentTypes = this!!.antecedentTypes.slice(0, antecedentStart)
+                this!!.antecedentTypes = this!!.antecedentTypes.sliceOwned(0, antecedentStart)
                 return FlowType(t = flowType_1.t)
             }
-            this!!.antecedentTypes = this!!.antecedentTypes.append1(flowType_1.t)
+            this!!.antecedentTypes = this!!.antecedentTypes.append1Owned(flowType_1.t)
             if (!this.isTypeSubsetOf(flowType_1.t, f!!.initialType)) {
                 subtypeReduction = true
             }
@@ -1440,7 +1451,7 @@ fun Checker?.getTypeAtFlowBranchLabel(f: FlowState?, flow: FlowNode?, antecedent
         }
     }
     val result: FlowType = this.newFlowType(this.getUnionOrEvolvingArrayType(f, this!!.antecedentTypes.slice(antecedentStart), com.xemantic.typescript.tsgo.core.ifElse<UnionReduction>(UnionReduction.ELEM, subtypeReduction, UnionReductionSubtype, UnionReductionLiteral)), seenIncomplete)
-    this!!.antecedentTypes = this!!.antecedentTypes.slice(0, antecedentStart)
+    this!!.antecedentTypes = this!!.antecedentTypes.sliceOwned(0, antecedentStart)
     return result
 }
 

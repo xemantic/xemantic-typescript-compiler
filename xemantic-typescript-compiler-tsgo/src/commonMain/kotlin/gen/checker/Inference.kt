@@ -115,7 +115,24 @@ fun Checker?.getInferenceState(): InferenceState? {
 // go: github.com/microsoft/typescript-go/internal/checker.Checker.putInferenceState dbfe53e1
 fun Checker?.putInferenceState(n: InferenceState?) {
     n!!.visited.clear()
-    n!!.goSet(InferenceState(inferences = n!!.inferences.slice(0, 0), visited = n!!.visited, sourceStack = n!!.sourceStack.slice(0, 0), targetStack = n!!.targetStack.slice(0, 0), next = this!!.freeinferenceState))
+    val lp0 = n!!
+    val lv1 = n!!.inferences.slice(0, 0)
+    val lv2 = n!!.sourceStack.slice(0, 0)
+    val lv3 = n!!.targetStack.slice(0, 0)
+    val lv4 = this!!.freeinferenceState
+    lp0.inferences = lv1
+    lp0.originalSource = null
+    lp0.originalTarget = null
+    lp0.priority = InferencePriority(0)
+    lp0.inferencePriority = InferencePriority(0)
+    lp0.contravariant = false
+    lp0.bivariant = false
+    lp0.expandingFlags = ExpandingFlags(0)
+    lp0.propagationType = null
+    lp0.sourceStack = lv2
+    lp0.targetStack = lv3
+    lp0.next = lv4
+    lp0.depth = 0
     this!!.freeinferenceState = n
 }
 

@@ -66,7 +66,7 @@ class astDecoder(
     @kotlin.jvm.JvmField var nodeLists: GoSlice<NodeList?> = GoElem.ref<NodeList?>().nilSlice,
 ) {
 
-    fun goCopy(): astDecoder = astDecoder(raw = raw, strTable = strTable, strData = strData, extData = extData, nodeOff = nodeOff, nodeCount = nodeCount, factory = factory, childBuf = childBuf, allStringData = allStringData, nodeArena = nodeArena, nodes = nodes, nodeLists = nodeLists)
+    fun goCopy(): astDecoder = astDecoder(raw = raw, strTable = strTable, strData = strData, extData = extData, nodeOff = nodeOff, nodeCount = nodeCount, factory = factory, childBuf = childBuf, allStringData = allStringData, nodeArena = nodeArena.ownedCopy(), nodes = nodes, nodeLists = nodeLists)
 
     fun goSet(o: astDecoder) {
         raw = o.raw
@@ -78,7 +78,7 @@ class astDecoder(
         factory = o.factory
         childBuf = o.childBuf
         allStringData = o.allStringData
-        nodeArena = o.nodeArena
+        nodeArena = o.nodeArena.ownedCopy()
         nodes = o.nodes
         nodeLists = o.nodeLists
     }
@@ -142,7 +142,7 @@ fun newASTDecoder(data: GoSlice<Int>): Tuple2<com.xemantic.typescript.tsgo.api.e
 // go: github.com/microsoft/typescript-go/internal/api/encoder.astDecoder.allocNodeSlice 79339d0b
 fun com.xemantic.typescript.tsgo.api.encoder.astDecoder?.allocNodeSlice(capacity: Int): GoSlice<Node?> {
     val start: Int = this!!.nodeArena.len
-    this!!.nodeArena = this!!.nodeArena.slice(0, start + capacity)
+    this!!.nodeArena = this!!.nodeArena.sliceOwned(0, start + capacity)
     return this!!.nodeArena.slice3(start, start, start + capacity)
 }
 

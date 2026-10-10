@@ -1578,7 +1578,7 @@ fun Checker?.resolveAnonymousTypeMembers(t: Type?) {
     }
     d!!.structuredType.indexInfos = indexInfos_2
     if (symbol!!.flags.value and 8208u != 0u) {
-        d!!.structuredType.signatures = this.getSignaturesOfSymbol(symbol)
+        d!!.structuredType.signatures = this.getSignaturesOfSymbol(symbol).ownedCopy()
         d!!.structuredType.callSignatureCount = d!!.structuredType.signatures.len
     }
     if (symbol!!.flags.value and 32u != 0u) {
@@ -1587,7 +1587,7 @@ fun Checker?.resolveAnonymousTypeMembers(t: Type?) {
         if (constructSignatures_2.len == 0) {
             constructSignatures_2 = this.getDefaultConstructSignatures(classType_1)
         }
-        d!!.structuredType.signatures = d!!.structuredType.signatures.appendSlice(constructSignatures_2)
+        d!!.structuredType.signatures = d!!.structuredType.signatures.appendSliceOwned(constructSignatures_2)
     }
 }
 

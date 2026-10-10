@@ -1,3 +1,14 @@
+**(TSGO.6-f) DONE — the JVM port profiled, six allocation levers in the runtime shims (2026-10-09):** async-profiler
+(`scripts/tsgo-jvm-profile.sh`, `scripts/tsgo_ap_stacks.py`, docs/goport-perf.md § 7). COLD (10.4 s) is the JIT ramp:
+50% of all CPU in compiler threads, a third of the check interpreted, 0 methods over 8,000 bytecodes; the JDK AOT cache
+takes it to **6.3-6.7 s** (needs a JAR launcher, not shipped). WARM is flat checker code, identity-keyed `GoMap` probes
+(~8%, `LinkStore`), itable dispatch (4.3%) and G1 (31% of process CPU). Landed: inline `slices.BinarySearchFunc`, shared
+nil maps, immutable `xxh3.Uint128`, one-object `atomic.Uint64` on the JVM, 32-byte `GoSlice` headers, lazy defer lists:
+compiler warm allocation **2,693 → 2,352 MB/rebuild (−12.6%)**, GC pauses −11..−17%, wall −1.6% single / −2..−7%
+parallel (services −4.8%, 4/4). Diag/Emit 13,127, CLI 105, LS 21,614, API 594,007 equal; `-tsgo` 123 / 0, native
+68 / 0, image replay 106 / 106. Next: a byte-string window for the JSDoc prefix copy (~19% of allocation), a JAR
+launcher with an AOT cache.
+
 **(TSGO.6-e) DONE — Go's Ps: a run limit on goroutines (2026-10-09):** `GoProcs` (`go/sync/Procs.kt`) lets at most
 `TSGO_GOMAXPROCS` (default the processor count) goroutines RUN at once; a goroutine gives its token back around every
 park (`Mutex`/`RWMutex`/`WaitGroup`/`Once`/semaphore waits, `onGoStack`) and takes one again on waking, FIFO; a goroutine

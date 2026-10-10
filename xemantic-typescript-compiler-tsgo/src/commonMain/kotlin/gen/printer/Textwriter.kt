@@ -60,7 +60,15 @@ class textWriter(
 
     // go: github.com/microsoft/typescript-go/internal/printer.textWriter.Clear e3f5a2d5
     override fun clear() {
-        this.goSet(com.xemantic.typescript.tsgo.printer.textWriter(newLine = this.newLine, indentSize = this.indentSize, lineStart = true))
+        val lp0 = this
+        val lv1 = true
+        lp0.builder = Builder()
+        lp0.lastWritten = ""
+        lp0.indent = 0
+        lp0.lineStart = lv1
+        lp0.lineCount = 0
+        lp0.linePos = 0
+        lp0.hasTrailingCommentState = false
     }
 
     // go: github.com/microsoft/typescript-go/internal/printer.textWriter.Grow 5c7736b5

@@ -191,7 +191,7 @@ class sourceMapSpanWriter(
     @kotlin.jvm.JvmField var sourceMapDecoder: com.xemantic.typescript.tsgo.testutil.harnessutil.sourceMapDecoder? = null,
 ) {
 
-    fun goCopy(): sourceMapSpanWriter = sourceMapSpanWriter(sourceMapRecorder = sourceMapRecorder, sourceMapSources = sourceMapSources, sourceMapNames = sourceMapNames, jsFile = jsFile, jsLineMap = jsLineMap, tsCode = tsCode, tsLineMap = tsLineMap, spansOnSingleLine = spansOnSingleLine, prevWrittenSourcePos = prevWrittenSourcePos, nextJsLineToWrite = nextJsLineToWrite, spanMarkerContinues = spanMarkerContinues, sourceMapDecoder = sourceMapDecoder)
+    fun goCopy(): sourceMapSpanWriter = sourceMapSpanWriter(sourceMapRecorder = sourceMapRecorder, sourceMapSources = sourceMapSources, sourceMapNames = sourceMapNames, jsFile = jsFile, jsLineMap = jsLineMap, tsCode = tsCode, tsLineMap = tsLineMap, spansOnSingleLine = spansOnSingleLine.ownedCopy(), prevWrittenSourcePos = prevWrittenSourcePos, nextJsLineToWrite = nextJsLineToWrite, spanMarkerContinues = spanMarkerContinues, sourceMapDecoder = sourceMapDecoder)
 
     fun goSet(o: sourceMapSpanWriter) {
         sourceMapRecorder = o.sourceMapRecorder
@@ -201,7 +201,7 @@ class sourceMapSpanWriter(
         jsLineMap = o.jsLineMap
         tsCode = o.tsCode
         tsLineMap = o.tsLineMap
-        spansOnSingleLine = o.spansOnSingleLine
+        spansOnSingleLine = o.spansOnSingleLine.ownedCopy()
         prevWrittenSourcePos = o.prevWrittenSourcePos
         nextJsLineToWrite = o.nextJsLineToWrite
         spanMarkerContinues = o.spanMarkerContinues
@@ -267,7 +267,7 @@ fun com.xemantic.typescript.tsgo.testutil.harnessutil.sourceMapSpanWriter?.recor
         this.writeRecordedSpans()
         this!!.spansOnSingleLine = com.xemantic.typescript.tsgo.testutil.harnessutil.sourceMapSpanWithDecodeErrors.ELEM.nilSlice
     }
-    this!!.spansOnSingleLine = this!!.spansOnSingleLine.append1(com.xemantic.typescript.tsgo.testutil.harnessutil.sourceMapSpanWithDecodeErrors(sourceMapSpan = sourceMapSpan, decodeErrors = decodeErrors))
+    this!!.spansOnSingleLine = this!!.spansOnSingleLine.append1Owned(com.xemantic.typescript.tsgo.testutil.harnessutil.sourceMapSpanWithDecodeErrors(sourceMapSpan = sourceMapSpan, decodeErrors = decodeErrors))
 }
 
 // go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.sourceMapSpanWriter.recordNewSourceFileSpan adf95f42
@@ -343,10 +343,10 @@ class recordedSpanWriter(
     @kotlin.jvm.JvmField var w: com.xemantic.typescript.tsgo.testutil.harnessutil.sourceMapSpanWriter? = null,
 ) {
 
-    fun goCopy(): recordedSpanWriter = recordedSpanWriter(markerIds = markerIds, prevEmittedCol = prevEmittedCol, w = w)
+    fun goCopy(): recordedSpanWriter = recordedSpanWriter(markerIds = markerIds.ownedCopy(), prevEmittedCol = prevEmittedCol, w = w)
 
     fun goSet(o: recordedSpanWriter) {
-        markerIds = o.markerIds
+        markerIds = o.markerIds.ownedCopy()
         prevEmittedCol = o.prevEmittedCol
         w = o.w
     }
@@ -400,7 +400,7 @@ fun com.xemantic.typescript.tsgo.testutil.harnessutil.recordedSpanWriter?.writeS
 // go: github.com/microsoft/typescript-go/internal/testutil/harnessutil.recordedSpanWriter.writeSourceMapMarkerEx 8d67586a
 fun com.xemantic.typescript.tsgo.testutil.harnessutil.recordedSpanWriter?.writeSourceMapMarkerEx(currentSpan: com.xemantic.typescript.tsgo.testutil.harnessutil.sourceMapSpanWithDecodeErrors?, index: Int, endColumn: Int, endContinues: Boolean) {
     val markerId: String = this.getMarkerId(index)
-    this!!.markerIds = this!!.markerIds.append1(markerId)
+    this!!.markerIds = this!!.markerIds.append1Owned(markerId)
     this.writeSourceMapIndent(this!!.prevEmittedCol, markerId)
     var i: Int = this!!.prevEmittedCol
     l0@ while (i < endColumn) {

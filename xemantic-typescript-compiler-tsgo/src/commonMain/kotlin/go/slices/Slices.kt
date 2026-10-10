@@ -37,6 +37,8 @@ import com.xemantic.typescript.tsgo.runtime.goClear
 import com.xemantic.typescript.tsgo.runtime.goCopy
 import com.xemantic.typescript.tsgo.runtime.goEq
 import com.xemantic.typescript.tsgo.runtime.goPanic
+import com.xemantic.typescript.tsgo.runtime.goSliceClone
+import com.xemantic.typescript.tsgo.runtime.goSliceInsert
 
 // Go's `slices` package over GoSlice, with Go's aliasing (in-place edits share the backing
 // array) and Go's nil/non-nil results.
@@ -44,7 +46,7 @@ import com.xemantic.typescript.tsgo.runtime.goPanic
 /** `slices.Clone(s)`: nil stays nil, otherwise a fresh array of value copies. */
 fun <T> clone(s: GoSlice<T>): GoSlice<T> {
     if (s.isNil) return s
-    return GoSlice.make(s.elem, 0, 0).appendSlice(s)
+    return goSliceClone(s)
 }
 
 /** `slices.Clip(s)`. */
@@ -155,24 +157,7 @@ fun <T> deleteFunc(s: GoSlice<T>, del: (T) -> Boolean): GoSlice<T> {
 }
 
 /** `slices.Insert(s, i, v...)`. */
-fun <T> insert(s: GoSlice<T>, i: Int, vararg v: T): GoSlice<T> {
-    s.slice(i) // bounds check
-    val m = v.size
-    if (m == 0) return s
-    val n = s.len
-    val vs = GoSlice.of(s.elem, *v)
-    if (i == n) return s.appendSlice(vs)
-    if (n + m > s.cap) {
-        val s2 = s.slice(0, i).appendSlice(GoSlice.make(s.elem, n + m - i))
-        goCopy(s2.slice(i), vs)
-        goCopy(s2.slice(i + m), s.slice(i))
-        return s2
-    }
-    val t = s.slice(0, n + m)
-    goCopy(t.slice(i + m), s.slice(i, n))
-    goCopy(t.slice(i), vs)
-    return t
-}
+fun <T> insert(s: GoSlice<T>, i: Int, vararg v: T): GoSlice<T> = goSliceInsert(s, i, v)
 
 /** `slices.Replace(s, i, j, v...)`: `s[i:j]` replaced by [v]; a shrunk tail is zeroed in place. */
 fun <T> replace(s: GoSlice<T>, i: Int, j: Int, vararg v: T): GoSlice<T> {

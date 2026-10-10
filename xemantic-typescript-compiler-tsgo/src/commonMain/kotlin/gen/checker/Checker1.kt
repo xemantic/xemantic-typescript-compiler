@@ -2355,7 +2355,7 @@ class Checker(
         goOut.zeroType = zeroType
         goOut.zeroBigIntType = zeroBigIntType
         goOut.typeofType = typeofType
-        goOut.typeResolutions = typeResolutions
+        goOut.typeResolutions = typeResolutions.ownedCopy()
         goOut.resolutionStart = resolutionStart
         goOut.inVarianceComputation = inVarianceComputation
         goOut.apparentArgumentCount = apparentArgumentCount
@@ -2367,8 +2367,8 @@ class Checker(
         goOut.freeFlowState = freeFlowState
         goOut.flowLoopCache = flowLoopCache
         goOut.flowLoopStack = flowLoopStack
-        goOut.sharedFlows = sharedFlows
-        goOut.antecedentTypes = antecedentTypes
+        goOut.sharedFlows = sharedFlows.ownedCopy()
+        goOut.antecedentTypes = antecedentTypes.ownedCopy()
         goOut.flowAnalysisDisabled = flowAnalysisDisabled
         goOut.flowInvocationCount = flowInvocationCount
         goOut.flowTypeCache = flowTypeCache
@@ -2677,7 +2677,7 @@ class Checker(
         zeroType = o.zeroType
         zeroBigIntType = o.zeroBigIntType
         typeofType = o.typeofType
-        typeResolutions = o.typeResolutions
+        typeResolutions = o.typeResolutions.ownedCopy()
         resolutionStart = o.resolutionStart
         inVarianceComputation = o.inVarianceComputation
         apparentArgumentCount = o.apparentArgumentCount
@@ -2689,8 +2689,8 @@ class Checker(
         freeFlowState = o.freeFlowState
         flowLoopCache = o.flowLoopCache
         flowLoopStack = o.flowLoopStack
-        sharedFlows = o.sharedFlows
-        antecedentTypes = o.antecedentTypes
+        sharedFlows = o.sharedFlows.ownedCopy()
+        antecedentTypes = o.antecedentTypes.ownedCopy()
         flowAnalysisDisabled = o.flowAnalysisDisabled
         flowInvocationCount = o.flowInvocationCount
         flowTypeCache = o.flowTypeCache

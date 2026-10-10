@@ -44,6 +44,9 @@ import kotlin.test.Test
  * Pins for lowering rules whose failure is SILENT (a wrong value that still compiles). The
  * end-to-end gate is `-tsgo`'s OracleParityTest (encoded-AST byte equality against tsgo).
  */
+/** The owned-slice operations in gen/ (docs/goport-lowering.md § 3, "Owned slice fields"); re-count when the IR changes. */
+private const val OWNED_SLICE_OPS = 42
+
 class LoweringRulesTest {
 
     private fun c(kind: String, v: String) = JsonObject(mapOf("kind" to JsonPrimitive(kind), "v" to JsonPrimitive(v)))
@@ -312,6 +315,39 @@ class LoweringRulesTest {
             Regex("""\bnodeData[,{ ]|\bTypeData[,{ ]""").findAll(f.readText().lines().filter { it.startsWith(") : ") }.joinToString("\n")).count()
         }
         assert(bare == 0)
+    }
+
+    @Test
+    fun `an owned slice field appends and reslices its own header in place - Checker sharedFlows and Relater maybeKeys`() {
+        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        assert(genFunction("checker/Flow.kt", "$checker.Checker.getTypeAtFlowNode").contains("this!!.sharedFlows = this!!.sharedFlows.append1Owned(SharedFlow("))
+        assert(genFunction("checker/Flow.kt", "$checker.Checker.getFlowTypeOfReferenceEx").contains("this!!.sharedFlows = this!!.sharedFlows.sliceOwned(0, f!!.sharedFlowStart)"))
+        val rel = File(gen, "checker/Relater1.kt").readText()
+        // A struct copy gives the copy a header of its own; a field that is not owned shares it as before.
+        assert(rel.contains("maybeKeys = maybeKeys.ownedCopy(), maybeKeysSet = maybeKeysSet.goCopy(), sourceStack = sourceStack, "))
+        assert(rel.contains("        maybeKeys = o.maybeKeys.ownedCopy()\n"))
+        // Relater.sourceStack is read as a value (isDeeplyNestedType's argument): refused, so plain append.
+        assert(rel.contains("this!!.sourceStack = this!!.sourceStack.append1(source)"))
+        assert(!rel.contains("sourceStack.append1Owned("))
+        // No owned operation on any field outside the owned set (the census must not grow silently).
+        val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.map { it.readText() }.toList()
+        val ops = all.sumOf { Regex("""\.(append1Owned|appendOwned|appendSliceOwned|sliceOwned|slice3Owned)\(""").findAll(it).count() }
+        assert(ops == OWNED_SLICE_OPS)
+    }
+
+    @Test
+    fun `a struct literal stored through a pointer is written in place - putRelater builds no temporary Relater`() {
+        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val put = genFunction("checker/Relater1.kt", "$checker.Checker.putRelater")
+        assert(!put.contains("goSet("))
+        assert(!put.contains("= Relater(") && !put.contains("goSet(Relater("))
+        // `maybeKeysSet: r.maybeKeysSet` stores the field into itself: no copy, no store.
+        assert(!put.contains("maybeKeysSet.goCopy()"))
+        assert(put.contains("    val lv2 = r!!.maybeKeys.slice(0, 0)\n"))
+        assert(put.contains("    lp0.maybeKeys = lv2\n"))
+        // An unlisted field is zeroed, as the temporary's constructor default was.
+        assert(put.contains("    lp0.relation = null\n"))
+        assert(put.contains("    lp0.overflow = false\n"))
     }
 
     @Test

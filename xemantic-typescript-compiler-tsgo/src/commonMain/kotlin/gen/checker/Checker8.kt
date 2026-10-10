@@ -2941,14 +2941,14 @@ fun Checker?.setStructuredTypeMembers(t: Type?, members: SymbolTable, callSignat
     data!!.properties = this.getNamedMembers(members, t!!.symbol)
     if (callSignatures.len != 0) {
         if (constructSignatures.len != 0) {
-            data!!.signatures = com.xemantic.typescript.tsgo.core.concatenate<Signature?>(GoElem.ref<Signature?>(), callSignatures, constructSignatures)
+            data!!.signatures = com.xemantic.typescript.tsgo.core.concatenate<Signature?>(GoElem.ref<Signature?>(), callSignatures, constructSignatures).ownedCopy()
         } else {
-            data!!.signatures = com.xemantic.typescript.tsgo.go.slices.clip<Signature?>(callSignatures)
+            data!!.signatures = com.xemantic.typescript.tsgo.go.slices.clip<Signature?>(callSignatures).ownedCopy()
         }
         data!!.callSignatureCount = callSignatures.len
     } else {
         if (constructSignatures.len != 0) {
-            data!!.signatures = com.xemantic.typescript.tsgo.go.slices.clip<Signature?>(constructSignatures)
+            data!!.signatures = com.xemantic.typescript.tsgo.go.slices.clip<Signature?>(constructSignatures).ownedCopy()
         } else {
             data!!.signatures = GoElem.ref<Signature?>().nilSlice
         }

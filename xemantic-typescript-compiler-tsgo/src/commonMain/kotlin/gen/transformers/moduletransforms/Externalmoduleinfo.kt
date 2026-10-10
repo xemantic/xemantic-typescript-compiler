@@ -98,13 +98,13 @@ class externalModuleInfo(
     @kotlin.jvm.JvmField var hasExportStarsToExportValues: Boolean = false,
 ) {
 
-    fun goCopy(): externalModuleInfo = externalModuleInfo(externalImports = externalImports, exportSpecifiers = exportSpecifiers.goCopy(), exportedBindings = exportedBindings.goCopy(), exportedNames = exportedNames, exportedFunctions = exportedFunctions.goCopy(), exportEquals = exportEquals, hasExportStarsToExportValues = hasExportStarsToExportValues)
+    fun goCopy(): externalModuleInfo = externalModuleInfo(externalImports = externalImports.ownedCopy(), exportSpecifiers = exportSpecifiers.goCopy(), exportedBindings = exportedBindings.goCopy(), exportedNames = exportedNames.ownedCopy(), exportedFunctions = exportedFunctions.goCopy(), exportEquals = exportEquals, hasExportStarsToExportValues = hasExportStarsToExportValues)
 
     fun goSet(o: externalModuleInfo) {
-        externalImports = o.externalImports
+        externalImports = o.externalImports.ownedCopy()
         exportSpecifiers = o.exportSpecifiers.goCopy()
         exportedBindings = o.exportedBindings.goCopy()
-        exportedNames = o.exportedNames
+        exportedNames = o.exportedNames.ownedCopy()
         exportedFunctions = o.exportedFunctions.goCopy()
         exportEquals = o.exportEquals
         hasExportStarsToExportValues = o.hasExportStarsToExportValues
@@ -273,12 +273,12 @@ fun com.xemantic.typescript.tsgo.transformers.moduletransforms.externalModuleInf
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.externalModuleInfoCollector.addExternalImport c16a4c04
 fun com.xemantic.typescript.tsgo.transformers.moduletransforms.externalModuleInfoCollector?.addExternalImport(node: Node?) {
-    this!!.output!!.externalImports = this!!.output!!.externalImports.append1(node)
+    this!!.output!!.externalImports = this!!.output!!.externalImports.append1Owned(node)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.externalModuleInfoCollector.addExportedName ad9ddfd6
 fun com.xemantic.typescript.tsgo.transformers.moduletransforms.externalModuleInfoCollector?.addExportedName(name: Node?) {
-    this!!.output!!.exportedNames = this!!.output!!.exportedNames.append1(name)
+    this!!.output!!.exportedNames = this!!.output!!.exportedNames.append1Owned(name)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.externalModuleInfoCollector.addExportedNamesForExportDeclaration 9effe62d
