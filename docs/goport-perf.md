@@ -936,3 +936,10 @@ tsgo's `Node.id` would change when ids are assigned. A DENSE INDEX owned by the 
 
 Twice the prediction, and the memory went DOWN: the maps' half-empty tables and rehash copies cost more than the
 tables' partly empty leaves. Every run one digest (compiler `78feefbb`/65, services `ccb3b4c2`/65).
+
+**Follow-up — the index block in the goroutine's own thread object.** A warm parse profile charged `goNextLinkIndex`
+7.4% of the parse (its `ThreadLocal.get` per created node). A goroutine runs on the runtime's `GoroutineThread`, which
+now carries the block in two fields (`Thread.currentThread()` is an intrinsic); other threads keep the `ThreadLocal`.
+Warm parallel JVM: −0.3% (noise, 2/4). The GraalVM image — where the checker's goroutines create nodes and symbols
+all through the check — tsc's compiler profile **2.585 → 2.387 s (−7.7%, 4/4 rotated pairs)**, parse time unchanged
+(0.30 s; tsgo 0.12 s), output identical.

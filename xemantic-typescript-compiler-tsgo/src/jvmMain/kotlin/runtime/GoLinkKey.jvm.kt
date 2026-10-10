@@ -25,9 +25,22 @@
 
 package com.xemantic.typescript.tsgo.runtime
 
+import com.xemantic.typescript.tsgo.go.sync.GoroutineThread
+
+/** The block of a thread that is not a goroutine's (a host thread, a test's), probed only there. */
 private val linkIndexBlocks: ThreadLocal<IntArray> = ThreadLocal.withInitial { IntArray(2) }
 
 internal actual fun goNextLinkIndex(): Int {
+    val t = Thread.currentThread()
+    if (t is GoroutineThread) {
+        if (t.linkNext == t.linkEnd) {
+            val start = goLinkIndexBlock()
+            if (start < 0) return -1
+            t.linkNext = start
+            t.linkEnd = start + LINK_INDEX_BLOCK
+        }
+        return t.linkNext++
+    }
     val b = linkIndexBlocks.get()
     if (b[0] == b[1]) {
         val start = goLinkIndexBlock()

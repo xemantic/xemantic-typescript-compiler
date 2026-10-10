@@ -54,10 +54,19 @@ private val goroutines: java.util.concurrent.ExecutorService by lazy {
     }
 }
 
-/** A goroutine's thread; [holdsProc] is whether it currently holds a [GoProcs] run token. */
-private class GoroutineThread(r: Runnable, name: String) : Thread(null, r, name, 1L shl 30) {
+/**
+ * A goroutine's thread; [holdsProc] is whether it currently holds a [GoProcs] run token, [linkNext]/[linkEnd] its
+ * block of `runtime.GoLinkKey` indices (a field read, where a `ThreadLocal` probe per created node was 7% of a parse).
+ */
+internal class GoroutineThread(r: Runnable, name: String) : Thread(null, r, name, 1L shl 30) {
     @JvmField
     var holdsProc = false
+
+    @JvmField
+    var linkNext = 0
+
+    @JvmField
+    var linkEnd = 0
 }
 
 internal actual fun goProcHeld(): Boolean = (Thread.currentThread() as? GoroutineThread)?.holdsProc ?: false
