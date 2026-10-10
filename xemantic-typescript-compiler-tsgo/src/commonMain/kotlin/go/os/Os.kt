@@ -57,14 +57,14 @@ private class DirFS(private val dir: String) :
     override fun open(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.go.io.fs.File?, com.xemantic.typescript.tsgo.runtime.GoError?> {
         val (full, err) = join("open", name)
         if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, err)
-        val isDir = platformIsDir(host(full!!)) ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("open", name))
-        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostFile(this, name, full, isDir), null)
+        val isDir = syscall(GoSyscall.OP_STAT) { platformIsDir(host(full!!)) } ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("open", name))
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostFile(this, name, full!!, isDir), null)
     }
 
     override fun readFile(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.runtime.GoSlice<Int>, com.xemantic.typescript.tsgo.runtime.GoError?> {
         val (full, err) = join("open", name)
         if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE.nilSlice, err)
-        val bytes = platformReadFile(host(full!!))
+        val bytes = syscall(GoSyscall.OP_READ) { platformReadFile(host(full!!)) }?.also { GoSyscall.recordBytes(it.size) }
             ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE.nilSlice, notExist("open", name))
         val out = com.xemantic.typescript.tsgo.runtime.GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE, bytes.size)
         for (i in bytes.indices) out[i] = bytes[i].toInt() and 0xFF
@@ -75,7 +75,7 @@ private class DirFS(private val dir: String) :
         val (full, err) = join("readdir", name)
         val elem = com.xemantic.typescript.tsgo.runtime.GoElem.ref<com.xemantic.typescript.tsgo.go.io.fs.DirEntry?>()
         if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(elem.nilSlice, err)
-        val entries = platformListDir(host(full!!)) ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(elem.nilSlice, notExist("open", name))
+        val entries = syscall(GoSyscall.OP_LIST) { platformListDir(host(full!!)) } ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(elem.nilSlice, notExist("open", name))
         // Go's os.DirFS: entry names as bytes, sorted by name, a symbolic link typed ModeSymlink (lstat).
         val named = entries.map { com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(it.first) to it.second }
         val sorted = named.sortedWith { a, b -> com.xemantic.typescript.tsgo.go.strings.compare(a.first, b.first) }
@@ -83,7 +83,7 @@ private class DirFS(private val dir: String) :
         for ((i, e) in sorted.withIndex()) {
             val kind = e.second
             out[i] = com.xemantic.typescript.tsgo.go.io.fs.fileInfoToDirEntry(
-                HostInfo(e.first, kind == 'd', if (kind == 'f') platformSize(host("$full/${e.first}")) else 0L, kind),
+                HostInfo(e.first, kind == 'd', if (kind == 'f') syscall(GoSyscall.OP_STAT) { platformSize(host("$full/${e.first}")) } else 0L, kind),
             )
         }
         return com.xemantic.typescript.tsgo.runtime.Tuple2(out, null)
@@ -92,8 +92,8 @@ private class DirFS(private val dir: String) :
     override fun stat(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.go.io.fs.FileInfo?, com.xemantic.typescript.tsgo.runtime.GoError?> {
         val (full, err) = join("stat", name)
         if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, err)
-        val isDir = platformIsDir(host(full!!)) ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("stat", name))
-        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, platformSize(host(full))), null)
+        val isDir = syscall(GoSyscall.OP_STAT) { platformIsDir(host(full!!)) } ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("stat", name))
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, syscall(GoSyscall.OP_STAT) { platformSize(host(full!!)) }), null)
     }
 
     /** An opened host file: Stat and (for a directory) ReadDir; Read serves the whole content. */
@@ -171,18 +171,18 @@ const val O_APPEND: Int = 0x400
 class File internal constructor(private val name: String, private val handle: Any) {
     fun writeString(s: String): com.xemantic.typescript.tsgo.runtime.Tuple2<Int, com.xemantic.typescript.tsgo.runtime.GoError?> {
         val bytes = ByteArray(s.length) { s[it].code.toByte() }
-        val err = platformWrite(handle, bytes)
+        val err = syscall(GoSyscall.OP_WRITE) { platformWrite(handle, bytes) }
         return if (err == null) com.xemantic.typescript.tsgo.runtime.Tuple2(s.length, null)
         else com.xemantic.typescript.tsgo.runtime.Tuple2(0, pathError("write", name, err))
     }
 
-    fun close(): com.xemantic.typescript.tsgo.runtime.GoError? = platformClose(handle)?.let { pathError("close", name, it) }
+    fun close(): com.xemantic.typescript.tsgo.runtime.GoError? = syscall(GoSyscall.OP_WRITE) { platformClose(handle) }?.let { pathError("close", name, it) }
 }
 
 /** `os.OpenFile(name, flag, perm)`: write-only opens (O_CREATE, O_TRUNC, O_APPEND); the permission bits are the host's default. */
 @Suppress("UNUSED_PARAMETER")
 fun openFile(name: String, flag: Int, perm: com.xemantic.typescript.tsgo.go.io.fs.FileMode): com.xemantic.typescript.tsgo.runtime.Tuple2<File?, com.xemantic.typescript.tsgo.runtime.GoError?> {
-    val (handle, err) = platformOpenWrite(host(name), create = flag and O_CREATE != 0, append = flag and O_APPEND != 0, truncate = flag and O_TRUNC != 0)
+    val (handle, err) = syscall(GoSyscall.OP_WRITE) { platformOpenWrite(host(name), create = flag and O_CREATE != 0, append = flag and O_APPEND != 0, truncate = flag and O_TRUNC != 0) }
     if (handle == null) {
         val e = if (err == "not exist") com.xemantic.typescript.tsgo.go.io.fs.PathError("open", name, com.xemantic.typescript.tsgo.go.io.fs.errNotExist)
         else pathError("open", name, err ?: "open failed")
@@ -194,16 +194,16 @@ fun openFile(name: String, flag: Int, perm: com.xemantic.typescript.tsgo.go.io.f
 /** `os.MkdirAll(path, perm)`. */
 @Suppress("UNUSED_PARAMETER")
 fun mkdirAll(path: String, perm: com.xemantic.typescript.tsgo.go.io.fs.FileMode): com.xemantic.typescript.tsgo.runtime.GoError? =
-    platformMkdirAll(host(path))?.let { pathError("mkdir", path, it) }
+    syscall(GoSyscall.OP_WRITE) { platformMkdirAll(host(path)) }?.let { pathError("mkdir", path, it) }
 
 /** `os.RemoveAll(path)`: nil when [path] does not exist. */
 fun removeAll(path: String): com.xemantic.typescript.tsgo.runtime.GoError? =
-    platformRemoveAll(host(path))?.let { pathError("unlinkat", path, it) }
+    syscall(GoSyscall.OP_WRITE) { platformRemoveAll(host(path)) }?.let { pathError("unlinkat", path, it) }
 
 /** `os.Chtimes(name, atime, mtime)`: the modification time (the access time is left to the host). */
 @Suppress("UNUSED_PARAMETER")
 fun chtimes(name: String, atime: com.xemantic.typescript.tsgo.go.time.Time, mtime: com.xemantic.typescript.tsgo.go.time.Time): com.xemantic.typescript.tsgo.runtime.GoError? =
-    platformSetModTime(host(name), mtime.unixMilli())?.let { pathError("chtimes", name, it) }
+    syscall(GoSyscall.OP_WRITE) { platformSetModTime(host(name), mtime.unixMilli()) }?.let { pathError("chtimes", name, it) }
 
 /** `os.Executable()`: the running program's path (the JVM's `java`, or the native image). */
 fun executable(): com.xemantic.typescript.tsgo.runtime.Tuple2<String, com.xemantic.typescript.tsgo.runtime.GoError?> {
@@ -213,9 +213,9 @@ fun executable(): com.xemantic.typescript.tsgo.runtime.Tuple2<String, com.xemant
 
 /** `os.Stat(name)` (following symbolic links). */
 fun stat(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.go.io.fs.FileInfo?, com.xemantic.typescript.tsgo.runtime.GoError?> {
-    val isDir = platformIsDir(host(name))
+    val isDir = syscall(GoSyscall.OP_STAT) { platformIsDir(host(name)) }
         ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, com.xemantic.typescript.tsgo.go.io.fs.PathError("stat", name, com.xemantic.typescript.tsgo.go.io.fs.errNotExist))
-    return com.xemantic.typescript.tsgo.runtime.Tuple2(StatInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, platformSize(host(name)), platformModTime(host(name))), null)
+    return com.xemantic.typescript.tsgo.runtime.Tuple2(syscall(GoSyscall.OP_STAT) { StatInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, platformSize(host(name)), platformModTime(host(name))) }, null)
 }
 
 /** `os.IsNotExist(err)`. */

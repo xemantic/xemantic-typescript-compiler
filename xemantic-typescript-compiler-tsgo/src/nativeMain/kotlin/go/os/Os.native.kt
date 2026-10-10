@@ -198,3 +198,7 @@ internal actual fun platformUserCacheDir(): String? =
         ?: getenv("HOME")?.toKString()?.takeIf { it.isNotEmpty() }?.let { "$it/.cache" }
 
 internal actual fun platformTempDir(): String = getenv("TMPDIR")?.toKString()?.takeIf { it.isNotEmpty() } ?: "/tmp"
+
+internal actual fun <R> ioHandoff(block: () -> R): R = block()
+
+internal actual fun platformGetenv(name: String): String? = getenv(name)?.toKString()

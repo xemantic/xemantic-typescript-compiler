@@ -69,10 +69,12 @@ fun main(args: Array<String>) {
     val iters = args.getOrNull(2)?.toInt() ?: 8
     val libCache = args.getOrNull(3) == "libcache"
     val parallel = args.getOrNull(4) == "parallel"
+    // "osfs": tsgo's own vfs/osvfs (every rebuild reads every file again, through the shim's syscall funnel)
+    val osfs = args.getOrNull(5) == "osfs"
     var failure: Throwable? = null
     val th = Thread(null, {
         try {
-            CheckBench(File(config).absoluteFile.normalize(), warmup, iters, libCache, parallel).run()
+            CheckBench(File(config).absoluteFile.normalize(), warmup, iters, libCache, parallel, osfs).run()
         } catch (t: Throwable) {
             failure = t
         }
@@ -140,14 +142,14 @@ class LibCachingHost(private val inner: CompilerHost) : CompilerHost by inner {
     }
 }
 
-private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean, val parallel: Boolean) {
+private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean, val parallel: Boolean, val osfs: Boolean) {
 
     fun run() {
         TsgoPort.init()
-        val disk = DiskFS()
+        val disk: FS = if (osfs) com.xemantic.typescript.tsgo.vfs.osvfs.fs()!! else DiskFS()
         val cwd = GoString.fromUtf16(config.parentFile.path)
         val configName = GoString.fromUtf16(config.path)
-        println("project=$config warmup=$warmup iters=$iters libcache=$libCache parallel=$parallel java=${System.getProperty("java.version")}")
+        println("project=$config warmup=$warmup iters=$iters libcache=$libCache parallel=$parallel osfs=$osfs java=${System.getProperty("java.version")}")
         val totals = ArrayList<Double>()
         val cpus = ArrayList<Double>()
         val gcs = ArrayList<Double>()
@@ -217,5 +219,9 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             "RESULT median_ms=%.1f min_ms=%.1f max_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f talloc_mb=%.0f checksum=$checksum"
                 .format(median(totals), totals.min(), totals.max(), median(cpus), median(gcs), median(allocs), median(tallocs)),
         )
+        if (com.xemantic.typescript.tsgo.go.os.GoSyscall.statsOn) {
+            println(com.xemantic.typescript.tsgo.go.os.GoSyscall.stats())
+            println("${com.xemantic.typescript.tsgo.go.sync.GoProcs.stats()} threadsStarted=${threads.totalStartedThreadCount} peakThreads=${threads.peakThreadCount}")
+        }
     }
 }

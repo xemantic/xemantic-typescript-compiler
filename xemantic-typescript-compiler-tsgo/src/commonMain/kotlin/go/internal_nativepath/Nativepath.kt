@@ -36,13 +36,13 @@ import com.xemantic.typescript.tsgo.runtime.Tuple2
 
 /** `nativepath.Realpath(path)`: the canonical absolute path with every symbolic link resolved; an error when [path] does not exist. */
 fun realpath(path: String): Tuple2<String, GoError?> {
-    val resolved = platformRealpath(GoString.toUtf16(path))
+    val resolved = com.xemantic.typescript.tsgo.go.os.syscall(com.xemantic.typescript.tsgo.go.os.GoSyscall.OP_REALPATH) { platformRealpath(GoString.toUtf16(path)) }
         ?: return Tuple2("", com.xemantic.typescript.tsgo.go.io.fs.PathError("open", path, com.xemantic.typescript.tsgo.go.io.fs.errNotExist))
     return Tuple2(GoString.fromUtf16(resolved), null)
 }
 
 /** `nativepath.IsSymlinkOrReparsePoint(path)` (non-Windows: lstat reports a symbolic link). */
-fun isSymlinkOrReparsePoint(path: String): Boolean = platformIsSymlink(GoString.toUtf16(path))
+fun isSymlinkOrReparsePoint(path: String): Boolean = com.xemantic.typescript.tsgo.go.os.syscall(com.xemantic.typescript.tsgo.go.os.GoSyscall.OP_STAT) { platformIsSymlink(GoString.toUtf16(path)) }
 
 internal expect fun platformRealpath(path: String): String?
 

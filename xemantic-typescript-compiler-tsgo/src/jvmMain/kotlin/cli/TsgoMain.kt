@@ -61,5 +61,6 @@ fun main(args: Array<String>) {
         environment = { System.getenv(it) },
     )
     stdout.flush()
+    if (com.xemantic.typescript.tsgo.go.os.GoSyscall.statsOn) System.err.println(com.xemantic.typescript.tsgo.go.os.GoSyscall.stats())
     exitProcess(status)
 }

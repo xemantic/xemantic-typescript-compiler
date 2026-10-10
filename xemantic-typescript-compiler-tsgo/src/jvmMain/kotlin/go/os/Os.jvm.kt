@@ -94,3 +94,19 @@ internal actual fun platformUserCacheDir(): String? =
     System.getenv("XDG_CACHE_HOME")?.takeIf { it.isNotEmpty() } ?: System.getenv("HOME")?.takeIf { it.isNotEmpty() }?.let { "$it/.cache" }
 
 internal actual fun platformTempDir(): String = System.getenv("TMPDIR")?.takeIf { it.isNotEmpty() } ?: "/tmp"
+
+private val ioPool: java.util.concurrent.ExecutorService by lazy {
+    val n = java.util.concurrent.atomic.AtomicInteger()
+    java.util.concurrent.ThreadPoolExecutor(
+        0, Int.MAX_VALUE, 30L, java.util.concurrent.TimeUnit.SECONDS, java.util.concurrent.SynchronousQueue(),
+    ) { r -> Thread(r, "tsgo-io-${n.incrementAndGet()}").also { it.isDaemon = true } }
+}
+
+internal actual fun <R> ioHandoff(block: () -> R): R =
+    try {
+        java.util.concurrent.CompletableFuture.supplyAsync({ block() }, ioPool).get()
+    } catch (e: java.util.concurrent.ExecutionException) {
+        throw e.cause ?: e
+    }
+
+internal actual fun platformGetenv(name: String): String? = System.getenv(name)
