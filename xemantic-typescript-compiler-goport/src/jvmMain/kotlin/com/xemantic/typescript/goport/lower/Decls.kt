@@ -629,7 +629,11 @@ class PackageEmitter(
         val reflect = qname in prog.reflectStructs && named.tparams.isEmpty()
         val jsonIface = "com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct"
         val json = reflect && prog.shims.hasTop("com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json", "GoJsonStruct")
-        val supers = supers0 + (if (reflect) listOf("GoReflectStruct") else emptyList()) + (if (json) listOf(jsonIface) else emptyList())
+        // LINK_KEY_TYPES: the runtime's GoLinkKey base class gives the object a dense link-store index.
+        val linkKey = qname in LINK_KEY_TYPES && named.tparams.isEmpty()
+        if (linkKey && supers0.any { it.endsWith("()") }) error("goport: link key $qname already has a superclass: $supers0")
+        val supers = (if (linkKey) listOf("GoLinkKey()") else emptyList()) + supers0 +
+            (if (reflect) listOf("GoReflectStruct") else emptyList()) + (if (json) listOf(jsonIface) else emptyList())
         val w = CodeWriter()
         w.line(traceLine(qname, s.str("hash")))
         // A struct with more fields than a JVM constructor takes arguments (255 slots: `checker.Checker`)

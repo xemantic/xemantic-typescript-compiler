@@ -25,6 +25,23 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-l) — THE CHECKER'S LINK STORE FILED BY A DENSE PORT-INTERNAL INDEX (§ 8.3's refusal revisited): wall −9.2% single (4/4) / −6.5% compiler parallel (3/4) / −13.4% services (4/4), allocation −3%, peak heap −6% (2026-10-10)
+
+- `GoMap.find` was 15.6% of the warm thread after (TSGO.6-k), 54% of it `LinkStore.Get`. § 8.3 refused per-object
+  SLOTS (retention past the checker, sharing between checkers, tsgo's lazily assigned ids); a dense index owned by the
+  port avoids all three: `ast.Node`/`ast.Symbol` extend `runtime.GoLinkKey` (porter rule `LINK_KEY_TYPES`; index from
+  per-thread blocks of 1,024, so a file's nodes are contiguous), and the `core.LinkStore` override (4 hash-pinned
+  files) files an indexed key in a per-store three-level `GoLinkTable`, any other key in the map. The win is LOCALITY.
+- Predicted −3..−5% single; measured −9.2% / −6.5% / −13.4% (`scripts/tsgo-ab-warm.sh`, ABBA + BAAB, both arms
+  `-Xmx4g`, A = `a604fe166`), allocation −2.8..−3.4%, peak after-GC heap on services 2,020-2,091 → 1,878-1,983 MB.
+  docs/goport-perf.md § 14.
+- The first A/B attempt was stopped by the host for low memory: idle Kotlin (4.1 GB) and Gradle daemons from the
+  build sat beside the benchmark's 6 GB heap. Every gate script now stops the daemons when it finishes.
+- Gates: `-tsgo` 136/0 (+2 `GoLinkTableTest`), `-goport` 25/0 (+1 pin), `-lsp` 38/0; DiagParity 13,127 equal;
+  Emit/CLI/LS/API parity green; warning gate live (probe caught); 0 methods over 8,000 bytecodes; `linuxX64Test` 79/0
+  (the first native run failed to COMPILE on a `,` in two new backtick names — CLAUDE.md's native trap; a stale
+  results dir read 77/0 until the log was checked).
+
 ### Round (TSGO.6-k) — SLICE HEADERS OWNED BY THEIR FIELD AND STRUCT LITERALS STORED IN PLACE (two porter rules + two shim rewrites): allocation −11% in every warm regime and the first allocation round whose WALL clears the spread — −4.6% single (4/4, ranges disjoint), −6.6% compiler parallel (4/4), −5.3% services (3/4); the cold JIT measured: C1-only is −33..−44% on ordinary projects and +100% on type-fest, so the AOT cache stays the launcher's lever (2026-10-10)
 
 - **Owner goal (2026-10-10)**: highest performance keeping every test, diverging from the mechanical lowering toward
@@ -51,7 +68,7 @@ it is the live Phase 18 queue.
   type-fest — the shipped cache is the robust lever, and no file count predicts run length. C2 promoted 10x later or
   2 compiler threads are both worse than the default. `-XX:+UseParallelGC` warm single −8.4%, parallel noise, cold +6%:
   a host choice for the daemon/LSP, not a launcher default. JDK 27 has no AOT method-code cache.
-- Gates (final tree): `-tsgo` 134/0 (+7 `OwnedSliceTest`), `-goport` 25/0 (+2 pins), `-lsp` 38/0; DiagParity 13,127 /
+- Gates (final tree): `-tsgo` 134/0 (+7 `OwnedSliceTest`), `-goport` 24/0 (+2 pins), `-lsp` 38/0; DiagParity 13,127 /
   13,127 equal; Emit, CLI, LS, API parity green (each fails on any difference; at their documented heaps — Emit/LS/API
   3g, CLI 4g: at Gradle's default heap or with an idle 5 GB Kotlin daemon resident they die OOM, which read first as a
   regression); warning gate live (an injected `No cast needed.` probe caught, all four compile tasks executed, nothing
@@ -271,30 +288,6 @@ it is the live Phase 18 queue.
   the measured `pmcs` arm.
 - **Next**: a native `-tsgo` CI job; a native goroutine thread pool; attributing the remaining native gap (no
   profiler on the box).
-
-### Round (TSGO.6-b) — THE GraalVM IMAGE OF THE PORTED CLI: `:xemantic-typescript-compiler-tsgo:nativeImage` builds `xtsc-tsgo` (~57 MB, ~2 min, no reflection metadata) and it answers all 106 recorded command-line cases byte-identically to the tsgo 7.0.2 binary, type-fest included; G1 makes it 2.9 s on tsc's compiler profile against tsgo's 1.76 s (2026-10-09)
-
-- **Toolchain**: Oracle GraalVM 25.0.4 downloaded into the gitignored `tools/graalvm-25` (no GraalVM was on the box).
-  The task is -cli's `nativeImage` with the port's entry (`TsgoMainKt`); a relative `-PgraalvmHome` resolves against
-  the root project.
-- **Gate**: `scripts/tsgo-cli-native-replay.py` replays the recording through the image with the recorder's own
-  `run_case`: **106 / 106 equal** (stdout, exit, written files) — serial-GC image and G1 image alike. Positive
-  control: `--bin /bin/true` reads every case DIFFER.
-- **The GC is the whole performance story** (`--noEmit`, compiler profile, 3 runs each, alone on the box): serial
-  8.45-8.89 s / 0.81 GB — `-XX:+PrintGC` shows 19 pauses summing ~6.4 s, the stop-the-world collector freezing every
-  goroutine; `-Xmn`/`-Xms` sizing bottoms out at 6.87 s. `--gc=G1` 2.84-2.93 s / 1.7 GB (2.61 s with `-Xmn1g`), tsgo
-  1.65-1.87 s / 0.39 GB, the JVM port cold 10.6-10.9 s / 2.5 GB.
-- **A hang, found and fixed**: G1's default heap limit is 25% of RAM (`-R:MaxRAMPercentage=25`; serial's
-  `MaximumHeapSizePercent` is 80), and type-fest needs ~9.7 GB. At the default the image ran ~10 min, then sat at 0% CPU
-  forever: `OutOfMemoryError thrown from the UncaughtExceptionHandler in thread "goroutine-122"` — the error recurred
-  inside WaitGroup's/onGoStack's own handler, the pool thread died and the waiter was never unparked. `goSpawn`
-  (JVM and native actuals) now treats a throwable escaping a goroutine as Go treats an unrecovered panic: stderr
-  `fatal error: goroutine: …`, exit status 2 (`halt`/`_exit`). Pin `GoroutineFatalTest` (a child JVM; the old code
-  sleeps past the 60 s deadline) + a negative control (WaitGroup still hands a caught throwable to `wait`). The task
-  now defaults to `--gc=G1 -R:MaxRAMPercentage=80`; type-fest then passes at the default (40 s `--singleThreaded`
-  in the replay; 28 s parallel vs tsgo 17 s / 6 GB).
-- Receipts: `-tsgo` suite 119 / 0 (117 + 2), JVM + `linuxX64` compiles warning-clean (`--rerun-tasks`).
-- **Next**: PGO for the image (-21% on `-core`'s), a bounded Kotlin/Native GC default, a native `-tsgo` CI job.
 
 ## QUEUE
 

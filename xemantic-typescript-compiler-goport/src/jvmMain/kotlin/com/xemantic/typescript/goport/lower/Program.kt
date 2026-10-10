@@ -63,6 +63,16 @@ val IMMUTABLE_STRUCT_CANDIDATES = setOf(
 )
 
 /**
+ * Struct types whose objects get a dense port-internal index (`runtime.GoLinkKey`, docs/goport-lowering.md § 3,
+ * "Link keys"): the keys of tsgo's checker link stores, which the `core.LinkStore` override files by that index
+ * instead of hashing the pointer (docs/goport-perf.md § 14).
+ */
+val LINK_KEY_TYPES = setOf(
+    "github.com/microsoft/typescript-go/internal/ast.Node",
+    "github.com/microsoft/typescript-go/internal/ast.Symbol",
+)
+
+/**
  * Interfaces that may be lowered as ABSTRACT CLASSES ([Program.abstractIfaces], docs/goport-perf.md § 10-11):
  * `ast.nodeData` (every AST node's payload) and `checker.TypeData` (every type's) are called megamorphically
  * on every node/type access, and HotSpot dispatches an interface call through an itable stub (a scan of the

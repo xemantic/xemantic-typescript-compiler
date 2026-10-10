@@ -271,7 +271,7 @@ class Node(
     @kotlin.jvm.JvmField var id: Uint64 = Uint64(),
     @kotlin.jvm.JvmField var parent: Node? = null,
     @kotlin.jvm.JvmField var data: com.xemantic.typescript.tsgo.ast.nodeData? = null,
-) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
+) : GoLinkKey(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc.goCopy(), id = id.goCopy(), parent = parent, data = data)
 

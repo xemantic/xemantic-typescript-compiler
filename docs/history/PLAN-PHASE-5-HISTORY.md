@@ -1,3 +1,27 @@
+### Round (TSGO.6-b) — THE GraalVM IMAGE OF THE PORTED CLI: `:xemantic-typescript-compiler-tsgo:nativeImage` builds `xtsc-tsgo` (~57 MB, ~2 min, no reflection metadata) and it answers all 106 recorded command-line cases byte-identically to the tsgo 7.0.2 binary, type-fest included; G1 makes it 2.9 s on tsc's compiler profile against tsgo's 1.76 s (2026-10-09)
+
+- **Toolchain**: Oracle GraalVM 25.0.4 downloaded into the gitignored `tools/graalvm-25` (no GraalVM was on the box).
+  The task is -cli's `nativeImage` with the port's entry (`TsgoMainKt`); a relative `-PgraalvmHome` resolves against
+  the root project.
+- **Gate**: `scripts/tsgo-cli-native-replay.py` replays the recording through the image with the recorder's own
+  `run_case`: **106 / 106 equal** (stdout, exit, written files) — serial-GC image and G1 image alike. Positive
+  control: `--bin /bin/true` reads every case DIFFER.
+- **The GC is the whole performance story** (`--noEmit`, compiler profile, 3 runs each, alone on the box): serial
+  8.45-8.89 s / 0.81 GB — `-XX:+PrintGC` shows 19 pauses summing ~6.4 s, the stop-the-world collector freezing every
+  goroutine; `-Xmn`/`-Xms` sizing bottoms out at 6.87 s. `--gc=G1` 2.84-2.93 s / 1.7 GB (2.61 s with `-Xmn1g`), tsgo
+  1.65-1.87 s / 0.39 GB, the JVM port cold 10.6-10.9 s / 2.5 GB.
+- **A hang, found and fixed**: G1's default heap limit is 25% of RAM (`-R:MaxRAMPercentage=25`; serial's
+  `MaximumHeapSizePercent` is 80), and type-fest needs ~9.7 GB. At the default the image ran ~10 min, then sat at 0% CPU
+  forever: `OutOfMemoryError thrown from the UncaughtExceptionHandler in thread "goroutine-122"` — the error recurred
+  inside WaitGroup's/onGoStack's own handler, the pool thread died and the waiter was never unparked. `goSpawn`
+  (JVM and native actuals) now treats a throwable escaping a goroutine as Go treats an unrecovered panic: stderr
+  `fatal error: goroutine: …`, exit status 2 (`halt`/`_exit`). Pin `GoroutineFatalTest` (a child JVM; the old code
+  sleeps past the 60 s deadline) + a negative control (WaitGroup still hands a caught throwable to `wait`). The task
+  now defaults to `--gc=G1 -R:MaxRAMPercentage=80`; type-fest then passes at the default (40 s `--singleThreaded`
+  in the replay; 28 s parallel vs tsgo 17 s / 6 GB).
+- Receipts: `-tsgo` suite 119 / 0 (117 + 2), JVM + `linuxX64` compiles warning-clean (`--rerun-tasks`).
+- **Next**: PGO for the image (-21% on `-core`'s), a bounded Kotlin/Native GC default, a native `-tsgo` CI job.
+
 ### Round (TSGO.6) — THE PORT IS MULTIPLATFORM: `-tsgo` builds for Kotlin/Native `linuxX64` with the generated 28 MB unchanged, its commonTest suite runs natively 64/64, and a native executable checks tsc's own sources (123 files) with 65 / 65 rows byte-identical to the tsgo 7.0.2 binary, in 12.6 s parallel / 14.5 s single (6.5 s / 10.6 s with the GC's allocation stall off) against tsgo's 2.1 / 3.3 s (2026-10-08)
 
 **What landed**: `linuxX64` on `-tsgo` behind `-PenableNativeTargets=true` (as `-core`'s), three `nativeMain` actuals —

@@ -351,6 +351,18 @@ class LoweringRulesTest {
     }
 
     @Test
+    fun `Node and Symbol are link keys and the link store files them densely`() {
+        assert(File(gen, "ast/Ast.kt").readText().contains(") : GoLinkKey(), com.xemantic.typescript.tsgo.printer.triviaPositionKey"))
+        assert(File(gen, "ast/Symbol.kt").readText().contains(") : GoLinkKey() {"))
+        val ls = File(gen, "core/Linkstore.kt").readText()
+        assert(ls.contains("@kotlin.jvm.JvmField var dense: GoLinkTable = GoLinkTable(),"))
+        assert(ls.contains("val i = (key as? GoLinkKey)?.goLinkIndex ?: -1"))
+        // No other generated class extends GoLinkKey.
+        val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { Regex("""\bGoLinkKey\(\)""").findAll(it.readText()).count() }
+        assert(all == 2)
+    }
+
+    @Test
     fun `every keyBuilder local is pooled - acquired from the thread's stack and released in a finally`() {
         val checker = "github.com/microsoft/typescript-go/internal/checker"
         val c6 = File(gen, "checker/Checker6.kt").readText()

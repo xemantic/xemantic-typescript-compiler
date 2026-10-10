@@ -418,6 +418,13 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   skipped. This is how tsgo recycles its pooled `Relater`/`FlowState`/`InferenceState` objects (125 sites). Pin:
   `LoweringRulesTest` (`putRelater` builds no temporary).
 
+- **Link keys** ((TSGO.6-l), `LINK_KEY_TYPES`, `Decls.structClass`; runtime `GoLinkKey`/`GoLinkTable`; override
+  `core.LinkStore` + `Get`/`Has`/`TryGet`). `ast.Node` and `ast.Symbol` extend `runtime.GoLinkKey()`, which numbers
+  each object at construction (`goLinkIndex`, per-thread blocks of 1,024; -1 once 2^31 − 4 M are spent); a link-key
+  type that already has a superclass refuses the run. The `core.LinkStore` override files an indexed key in a
+  per-store `GoLinkTable` and any other key in the map, so a store keeps its Go semantics (values from the arena, `Has`
+  is presence) and its lifetime (one checker). Pins: `LoweringRulesTest` (the supertypes), `GoLinkTableTest`.
+
 (TSGO.2) harness rules:
 
 - **A `switch` whose tag is an array or a comparable struct compares by VALUE**: the tag is bound

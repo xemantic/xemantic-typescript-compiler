@@ -38,7 +38,7 @@ class Symbol(
     @kotlin.jvm.JvmField var id: Uint64 = Uint64(),
     @kotlin.jvm.JvmField var parent: Symbol? = null,
     @kotlin.jvm.JvmField var exportSymbol: Symbol? = null,
-) {
+) : GoLinkKey() {
 
     fun goCopy(): Symbol = Symbol(flags = flags, checkFlags = checkFlags, name = name, declarations = declarations, valueDeclaration = valueDeclaration, members = members, exports = exports, id = id.goCopy(), parent = parent, exportSymbol = exportSymbol)
 

@@ -1,3 +1,13 @@
+**(TSGO.6-g) DONE — JDK 27 measured; window fields + immutable `FlowType`; an AOT launcher for the port (2026-10-09):**
+JDK 27's default GC is still G1; compact object headers (now default) cut allocation 7-9%; warm −3..−6%, cold no win,
+ZGC 11-15% slower — not made the default (docs/goport-perf.md § 8.1). Porter rules: `Parser.sourceText`/`Scanner.text`
+as WINDOW FIELDS (no per-JSDoc copy of the file prefix) and `checker.FlowType` as an IMMUTABLE STRUCT: warm allocation
+**2,305 → 1,560 MB/rebuild (−32%)**, wall −1.9% compiler, **−5.5% services**. `LinkStore` slots refused (lifetime,
+concurrency), itable dispatch sized (≤ 2%). `scripts/xtsc-tsgo` + `xtsc-tsgo-aot`: guarded AOT cache, cold
+**9.8 → 6.4 s** compiler, 11.6 → 7.6 s services, 4.6 → 3.7 s date-fns. Diag/Emit 13,127, API 594,007 equal; `-tsgo`
+125 / 0, native 68 / 0, image replay 106 / 106. Next: per-node object count (4-7 objects per AST node), abstract-class
+`nodeData`.
+
 **(TSGO.6-f) DONE — the JVM port profiled, six allocation levers in the runtime shims (2026-10-09):** async-profiler
 (`scripts/tsgo-jvm-profile.sh`, `scripts/tsgo_ap_stacks.py`, docs/goport-perf.md § 7). COLD (10.4 s) is the JIT ramp:
 50% of all CPU in compiler threads, a third of the check interpreted, 0 methods over 8,000 bytecodes; the JDK AOT cache

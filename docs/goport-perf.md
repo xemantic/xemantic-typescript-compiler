@@ -904,3 +904,35 @@ Cold one-shot `tsc --noEmit -p` (Zulu 26, the frozen HEAD classes, arms alternat
   has 440 roots). JDK 27 has no AOT method-code cache (`AOTCodeCaching` is unrecognized; only stub/adapter caching).
 - **`-XX:+UseParallelGC`**: warm single −8.4% (2/2), warm parallel −1.0% (noise), cold +6% — the host's (daemon, LSP)
   choice for a single-threaded warm regime, not a launcher default.
+
+## 14. (TSGO.6-l) The link store filed by a dense index — § 8.3's refusal revisited (2026-10-10)
+
+The profile after § 13 (warm compiler single, bench thread): `GoMap.find` **15.6%** of the thread, **54%** of it under
+`core.LinkStore.Get` (~8.4% of the thread). § 8.3 refused per-object link SLOTS on three grounds — a slot on a node
+outlives its checker (lib nodes are shared across programs), four checkers write the same nodes, and dense arrays by
+tsgo's `Node.id` would change when ids are assigned. A DENSE INDEX owned by the port avoids all three:
+
+- `ast.Node` and `ast.Symbol` extend `runtime.GoLinkKey` (a porter rule, `LINK_KEY_TYPES`), whose `goLinkIndex` is
+  numbered at construction from per-thread blocks of 1,024 — a file's nodes, built by one goroutine, get consecutive
+  indices. It is not tsgo's lazily assigned id, and nothing observable reads it.
+- The `core.LinkStore` override files a key with an index in a `GoLinkTable` (three levels: 64 K indices per directory
+  entry, 64 per leaf, each allocated on first write) owned by the STORE, i.e. by one checker, as the map was: no
+  retention past the checker, no sharing between checkers. Every other key (`*ast.SourceFile` stores, a spent index
+  past 2^31 − 4 M) keeps the map.
+- What it buys is LOCALITY: the map put each link at a random slot after reading the key's header for an identity
+  hash; the table puts a file's links next to each other, in the order the checker walks them.
+
+**Predicted**: about half of the ~8.4% → −3..−5% single; memory unknown (a sparse store's leaves are mostly empty).
+
+**Measured** (`scripts/tsgo-ab-warm.sh`, ABBA + BAAB, both arms `-Xms1g -Xmx4g`; A = § 13's tree `a604fe166`):
+
+| regime | A | B | Δ | B wins |
+|---|---:|---:|---:|---:|
+| compiler single, ms | 3,731 [3,624-3,852] | 3,386 [3,289-3,578] | **−9.2%** | 4/4 |
+| compiler parallel, ms | 2,170 [2,154-2,206] | 2,030 [1,925-2,365] | **−6.5%** | 3/4 |
+| services parallel, ms | 2,987 [2,680-3,054] | 2,588 [2,522-2,732] | **−13.4%** | 4/4 |
+| allocation/rebuild, single / parallel / services, MB | 1,240 / 1,405 / 1,934 | 1,198 / 1,358 / 1,880 | −3.3% / −3.4% / −2.8% | 4/4 each |
+| peak heap after GC, services parallel (2 runs), MB | 2,091, 2,020 | 1,983, 1,878 | **−6%** | |
+
+Twice the prediction, and the memory went DOWN: the maps' half-empty tables and rehash copies cost more than the
+tables' partly empty leaves. Every run one digest (compiler `78feefbb`/65, services `ccb3b4c2`/65).

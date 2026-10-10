@@ -26,21 +26,30 @@ package com.xemantic.typescript.tsgo.core
 import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/typescript-go/internal/core.LinkStore f19b4f42
+// OVERRIDE (performance, docs/goport-perf.md § 14): Go's `map[K]*V` keyed by a pointer is one cheap hash of the
+// address; the port's map reads the key's header for an identity hash and probes a random slot, and ~half of a
+// warm check's map time was these link reads (~8% of the thread). A key with a dense index (runtime.GoLinkKey:
+// `*ast.Node`, `*ast.Symbol` — the porter's LINK_KEY_TYPES) is filed in [dense] by that index instead, so the
+// links of a file's nodes sit together; any other key (`*ast.SourceFile` stores, a spent index) keeps [entries].
+// [dense] is created with the store and shared by a copy, as [entries] is once it exists: a store is a checker
+// field and is never copied while live. The values are the arena's, as in Go; nothing else reads either table.
 class LinkStore<K, V>(
     @kotlin.jvm.JvmField val goElem_K: GoElem<K>,
     @kotlin.jvm.JvmField val goElem_V: GoElem<V>,
     @kotlin.jvm.JvmField var entries: GoMap<K, V?> = GoMap.nil<K, V?>(GoElem.ref<V?>()),
     @kotlin.jvm.JvmField var arena: Arena<V> = Arena<V>(goElem_T = goElem_V),
+    @kotlin.jvm.JvmField var dense: GoLinkTable = GoLinkTable(),
 ) {
 
-    fun goCopy(): LinkStore<K, V> = LinkStore(goElem_K = goElem_K, goElem_V = goElem_V, entries = entries, arena = arena.goCopy())
+    fun goCopy(): LinkStore<K, V> = LinkStore(goElem_K = goElem_K, goElem_V = goElem_V, entries = entries, arena = arena.goCopy(), dense = dense)
 
     fun goSet(o: LinkStore<K, V>) {
         entries = o.entries
         arena = o.arena.goCopy()
+        dense = o.dense
     }
 
-    fun goEquals(o: LinkStore<K, V>): Boolean = entries == o.entries && arena.goEquals(o.arena)
+    fun goEquals(o: LinkStore<K, V>): Boolean = entries == o.entries && arena.goEquals(o.arena) && dense === o.dense
 
     fun goHash(): Int = 31 * entries.hashCode() + 31 * arena.goHash()
 
@@ -50,28 +59,47 @@ class LinkStore<K, V>(
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.LinkStore.Get cd5a7b8c
+// OVERRIDE (performance, docs/goport-perf.md § 14): see core.LinkStore — an indexed key reads `dense`.
+@Suppress("UNCHECKED_CAST")
 fun <K, V> LinkStore<K, V>?.get(key: K): V? {
-    var value_1: V? = this!!.entries[key]
+    val s = this!!
+    val i = (key as? GoLinkKey)?.goLinkIndex ?: -1
+    if (i >= 0) {
+        val d = s.dense
+        val v = d[i]
+        if (v != null) return v as V
+        val created = s.arena.new()
+        d[i] = created
+        return created
+    }
+    var value_1: V? = s.entries[key]
     if (value_1 != null) {
         return value_1
     }
-    if (this!!.entries.isNil) {
-        this!!.entries = GoMap.make<K, V?>(GoElem.ref<V?>())
+    if (s.entries.isNil) {
+        s.entries = GoMap.make<K, V?>(GoElem.ref<V?>())
     }
-    value_1 = this!!.arena.new()
-    this!!.entries[key] = value_1
+    value_1 = s.arena.new()
+    s.entries[key] = value_1
     return value_1
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.LinkStore.Has 7d2e7898
+// OVERRIDE (performance, docs/goport-perf.md § 14): see core.LinkStore — an indexed key reads `dense`.
 fun <K, V> LinkStore<K, V>?.has(key: K): Boolean {
-    val t0 = this!!.entries.probe(key)
-    val ok: Boolean = t0 !== GoMapAbsent
-    return ok
+    val s = this!!
+    val i = (key as? GoLinkKey)?.goLinkIndex ?: -1
+    if (i >= 0) return s.dense[i] != null
+    return s.entries.probe(key) !== GoMapAbsent
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.LinkStore.TryGet a5de5e26
+// OVERRIDE (performance, docs/goport-perf.md § 14): see core.LinkStore — an indexed key reads `dense`.
+@Suppress("UNCHECKED_CAST")
 fun <K, V> LinkStore<K, V>?.tryGet(key: K): V? {
-    return this!!.entries[key]
+    val s = this!!
+    val i = (key as? GoLinkKey)?.goLinkIndex ?: -1
+    if (i >= 0) return s.dense[i] as V?
+    return s.entries[key]
 }
 
