@@ -25,6 +25,34 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-j) — TWO PORTER RULES FROM § 11's ALLOCATION TABLE: `keyBuilder` LOCALS POOLED BY AN ESCAPE PROOF (allocation −7.9% single / −9.2% parallel / −7.9% services, GC pause −15% compiler parallel) AND `Checker.compareSymbols` AS A PRIMITIVE `fun interface` (allocation −3.0% single / −5.7% services, +0.7% date-fns from the consumer adapter); wall inside noise in every regime (2026-10-10)
+
+- **Lever A — pooled locals** (`Program.computePooledLocals`, `lower/PooledLocals.kt` `EscapeAnalysis`, `runtime.GoLocalPool`;
+  docs/goport-lowering.md § 3, docs/goport-perf.md § 12.1). An escape proof over the Go IR — every use a call of a method
+  with a proved non-retaining receiver, `b.h` feeding a non-retaining shim method, `&b`/`&b.h` straight into a non-retaining
+  parameter, a capture only by a closure that is only called; no `go`/`defer`; a greatest fixpoint over pointer parameters —
+  lowers `var b keyBuilder` to a per-thread LIFO pool (`acquire` + `try`/`finally release`, `goReset()` keeping the Hasher's
+  buffer). 13 / 13 locals, 14 non-retaining parameters, 0 refused; pins: the 13 sites, a synthetic IR with three refused
+  locals (`&b` into a retaining parameter, a `go`, an escaping closure), `GoLocalPoolTest` (nesting, reset; JVM + native).
+  Predicted −7..−8% allocation, wall in noise. A/B (ABBA + BAAB + a third rotated batch, md5 `ca5f97c6` → `a47db82b`):
+  allocation 1,563 → 1,439 MB single (6/6), 1,729 → 1,570 parallel, 2,410 → 2,219 services; GC 237 → 202 ms compiler
+  parallel; wall single +1.7% (2/6), parallel −3.0% (4/4), services −2.9% (3/4), cold mixed; the pool itself 0.33% of the
+  thread (profiled). Commit `167e891c2`.
+- **Lever B — primitive func fields** (`Program.computePrimFuncFields`/`primFuncUseAllowed`; § 12.2). A func-typed field with
+  one primitive result is a generated `fun interface <Owner>_<field>_Fn` when every read is a call, a nil comparison or an
+  argument (adapted back) and every write a method value / literal / nil (SAM-converted at the assignment →
+  `LambdaMetafactory` over `(Symbol, Symbol)I`). Candidate `Checker.compareSymbols`; pins: generated shapes + the use
+  classifier's refused shapes. Predicted −2..−2.5% allocation. Measured (ABBA + BAAB, `a47db82b` → `0f4825e5`):
+  1,437 → 1,394 MB single (4/4), services 2,258 → 2,128 (4/4), compiler parallel −0.7%, date-fns **+0.7%** (0/4: the
+  adapter allocated per `sortSymbols`/`getSpellingSuggestion` call); wall −0.3% / +0.9% / −2.0% / +3.5%, cold mixed —
+  noise. Kept. Next: a comparator overload of the `SortFunc` shim taking the interface removes the adapter.
+  Commit `e955ead0d`.
+- Gates (each lever's tree): `-tsgo` 127/0, `-goport` 20/0 then 22/0, `-lsp` 38/0; DiagParity 13,127 equal; Emit 13,127;
+  CLI 105 equal (type-fest skipped below 8 GB); LS 21,614; API 594,007; warning-clean with an injected probe (`w:` read,
+  then deleted); huge_methods 0 of 69,646 / 69,649; native `compileKotlinLinuxX64` + `linuxX64Test` 70/0.
+- Trap found: Gradle's `--rerun` is a TASK option — `./gradlew a b --rerun` reruns only `b`, so the first warning-gate run
+  read the goport compile UP-TO-DATE (CLAUDE.md).
+
 ### Round (TSGO.6-i) — A FRESH WARM PROFILE AFTER THE WINDOW-FIELD ROUND, AND LEVER 4: `ast.nodeData` / `checker.TypeData` LOWERED AS ABSTRACT CLASSES BY A PORTER RULE — itable+vtable stubs 4.69% → 3.26% of the thread as predicted, wall inside noise, allocation/GC unchanged; no > 3% runtime-shim allocation lever left (2026-10-10)
 
 - **Profile** (docs/goport-perf.md § 10; compiler single CPU + allocation, services parallel CPU, HEAD `bac36aaad`):
@@ -275,60 +303,6 @@ symlinked; outputs in the worktree): Diag 13,127 / 13,127, Emit 13,127 / 13,127,
 Api 594,007 / 594,007 (a first run read 150k differ because the worktree had no `tools/tsgo-7.0.2/lib` — the libs the oracle names);
 `-tsgo` 110, `-goport` 15, `-lsp` 38 tests green. Warning-clean on JVM AND Native (a `USELESS_CAST` probe read its `w:` in both compiles, then deleted); huge-method census on `-tsgo` 0 over the limit (largest 7,526). **Left for (TSGO.6)**: the GraalVM image of the (TSGO.5) CLI (needs the CLI), a
 native idle-thread pool, the GC default, attributing the native gap, and wiring a native arm into CI (`native.yml` builds `-core` only).
-
-### Round (TSGO.5) — A tsgo CLI ON THE PORT: `internal/execute` + `internal/execute/tsc` + `vfs/osvfs` ported mechanically; `com.xemantic.typescript.tsgo.cli.TsgoMainKt` is `tsc` 7.0.2 on the JVM; 105 / 105 command-line cases print, exit and emit byte-identical to the tsgo binary (the 8 tsc profiles both arms, the census libraries, cronstrue, marked, 20 type-oracle projects, 37 flag/config shapes), type-fest skipped below an 8 GB heap; `--build`/`--watch` not ported (2026-10-08)
-
-**What is ported** (`docs/goport-cli.md`). The extractor's closure gains `execute/tsc` and `vfs/osvfs` (whole) and
-`execute` as a partial package rooted at a new overlay, `goport-extract/overlay/execute/xtsc_cli.go`: `xtscSystem`
-(cmd/tsgo/sys.go's `osSys` with its process ends injected) and `XtscCommandLine` (runMain's compiler branch →
-`execute.CommandLine`). Partial stubs: `tscBuildCompilation` (`--build`) and `createWatcher` + every `Watcher`
-method (`--watch`); `TsgoCli.run` (commonMain facade) answers a stub with a one-line error and exit 5. The
-shipped entry is `TsgoMain.kt` (jvmMain): `java -cp <tsgo jar + stdlib> com.xemantic.typescript.tsgo.cli.TsgoMainKt
-<tsc args>`; `XTSC_TSGO_LIB_DIR` reads a lib directory as the npm binary does (bundled libs otherwise).
-
-**Port defects found by the gate and fixed, each general**: (1) a method of a named MAP type named like a
-`GoMap` member was SHADOWED — `CommandLineOptionNameMap.Get` resolved to `GoMap.get` and lost its lower-case
-fallback (`--showConfig` printed `"compilerOptions": {}`, `--incremental` wrote a `.tsbuildinfo` without
-`"options"`); the porter now refuses such a method as a NAME COLLISION and `renames.txt` names it `getOption`.
-Finding it needed the shim scanner fixed: a column-0 `) {` (a multi-line primary constructor) ended the class, so
-`GoMap`/`GoSlice` had NO indexed members — with them indexed, `vfstest` copies `fstest.MapFile` values as Go does.
-(2) `json` into `map[Key]string`: a GoMap does not carry its key type, so `--locale de` printed English —
-`diagnostics.loadLocaleData` override (decode `map[string]string`, re-key). (3) `compress/gzip` was a stub (the
-locale bundles are gzipped): a real reader over `java.util.zip`. Porter rule: NAMED results with `defer` lower like
-unnamed ones when no deferred call and no func literal mentions a result (`osvfs.osFS.ReadFile`; it also lowered
-the two refused `ls` call-hierarchy functions). Overrides `core.LimitedSemaphore`/`NewLimitedSemaphore`
-(`chan struct{}` as a semaphore → `go.sync.CountingSemaphore`). Shims: `os` file writing/stat/`Executable`/cache
-dirs, `filepath.Abs`, `runtime.MemStats`/`GC`, `pprof.BeginProfiling` (no profile: stated divergence), stand-ins
-`nativepath` (realpath, lstat), `watchmanager.WatchManager`, `fswatch.EventKind`; `os.DirFS` converts byte-string
-names to host paths and reports a symbolic link as `ModeSymlink` (Go's lstat ReadDir).
-
-**The gate.** `scripts/tsgo-cli-oracle.py` runs the SHIPPED binary per case (fresh process, piped stdout, fixed
-env; an emit case in a scratch COPY, node_modules linked) → `build/goport/cli-oracle` (106 cases; REFUSES fewer
-than 8 tsc profiles; fails when the binary is killed). `CliParityTest` (`TSGO_CLI=1`, 4 GB heap) runs each through
-`TsgoCli.run` in process and compares stdout BYTES, exit status and the created/changed file set + sha256.
-**Receipts**: CliParityTest **105 equal / 0 differ / 1 skipped** (`lib-typefest-noemit`: tsgo holds ~3.5 GB live
-there, `--extendedDiagnostics` 10.6 M symbols / 5.1 M types; the port needs ~8 GB — run with TSGO_TEST_HEAP=8g on a
-box that has it; the shipped binary itself was OOM-killed on this box until `--singleThreaded`), 130 s; positive
-control `TSGO_CLI_INJECT=profile-project-noemit` red (1 differ). Profiles: all 8 × noEmit (65/126 rows) and emit
-(78-312 files) byte-identical incl. their tsconfig's `"pretty": true` (colours, code frames, summary). TsgoCliTest
-6/0 (incl. the real `main` in a child JVM). Kept green on the final gen (oracle inputs SYMLINKED from the main tree's build/goport — the API/LS oracles are the tsgo binary's, the diag/emit ones `oracle-go`'s, which this round's overlay does not touch): DiagParityTest 13,127 / 13,127, EmitParityTest 13,127 / 13,127, OracleParityTest bound 7,774 / 7,774, ApiParityTest 594,007 / 594,007, LsParityTest 21,614 / 21,614; `-tsgo` 117 tests / 0 failed, `-goport` 15 / 0 (two census bands widened for the new code: the inline-function band 20..60 → 20..64 at 61 with `tsc.WriteConfigFile`, and a CLI string-slice census ≤ 1 split out of the harness one), `-lsp` 38 / 0. `huge_methods.py --fail-over 0` = 0 (4,850 classes). Warning-clean (positive control `1 as Int` read its `w:`, deleted).
-
-**Kotlin/Native**: (TSGO.6)'s `linuxX64` target landed on main during this round; every new platform shim got a POSIX
-`actual` (open/write/mkdir/unlink/utime, lstat kinds, realpath, zlib inflate for gzip) in a follow-up commit —
-`compileKotlinLinuxX64` green, the CLI not yet RUN natively.
-
-**Incident (fixed, data restored)**: the first CliParityTest deleted its previous work copies with Kotlin's
-`File.deleteRecursively()`, which FOLLOWS a directory symlink — it emptied the original `node_modules` of the 8
-tsc profiles (`build/bench/tsc-*`) and of the census libraries mitt and ky. Restored: mitt/ky from
-`build/scratch-p18265-census/_deps/<lib>/node_modules` (their install source; tsgo's rows re-recorded identical to
-the pre-incident recording), the profiles' `node_modules/@types/` recreated EMPTY (what every sibling profile copy
-holds; the profiles set `"types": []`, and all 8 profiles' tsgo rows are unchanged). The test now deletes with a
-non-following walk; CLAUDE.md carries the trap.
-
-**Remains** (sub-steps of (TSGO.5)): `--build` (`internal/execute/build`: goroutines + channels; port with a
-`go`/`chan` lowering or an orchestrator override), `--watch` (`watchmanager` + `fswatch`: OS notifications — a JVM
-`WatchService` backend), `--pprofDir`; `--diagnostics`' "Memory allocs" (0 on the JVM). Gate extensions: an
-8 GB arm for type-fest; `--diagnostics` rows modulo values.
 
 ## QUEUE
 

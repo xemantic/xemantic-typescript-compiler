@@ -1,3 +1,12 @@
+**(TSGO.6-e) DONE — Go's Ps: a run limit on goroutines (2026-10-09):** `GoProcs` (`go/sync/Procs.kt`) lets at most
+`TSGO_GOMAXPROCS` (default the processor count) goroutines RUN at once; a goroutine gives its token back around every
+park (`Mutex`/`RWMutex`/`WaitGroup`/`Once`/semaphore waits, `onGoStack`) and takes one again on waking, FIFO; a goroutine
+started while all tokens are held is queued as a closure with NO thread. date-fns (1,445 files) Kotlin/Native check
+**3.60 → 2.02 s, 2.10 → 1.34 GB** (parse 1.8-3.5 → 0.8-0.9 s), JVM 5.14 → 4.75 s; tsc's compiler/services profiles
+unchanged (GC-bound). Output byte-identical to tsgo in all 54 A/B runs; Diag/Emit 13,127, CLI 105 + native 106, LS
+21,614 equal; `-tsgo` 123 / 0, native 68 / 0. Next: a native `-tsgo` CI job; the native gap is the K/N GC.
+
+
 **(TSGO.6-d) DONE — Kotlin/Native goroutine pool + the first native CPU profile (2026-10-09):** `goSpawn` on
 Kotlin/Native is now the JVM's unbounded cached pool on pthreads (idle 1 GB-stack workers reused for 30 s, a new one only
 when none is idle): ~700 goroutines run on ~150 pthreads on the compiler profile, wall/RSS unchanged within noise (7.84 s
