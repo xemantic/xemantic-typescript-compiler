@@ -513,6 +513,7 @@ class PackageEmitter(
         val name = prog.typeName(named.key, named.name)
         val mset = (types.msetT(named)).associateBy { prog.methodName(it.fn, it.name) }
         val (supers, overrideNames) = supertypes(named, tm, mset.keys)
+        requireNoSuperclass(named.key, supers)
         val w = CodeWriter()
         w.line("// goport: interface box of $name (docs/goport-lowering.md § 3)")
         w.line("class ${name}_Box(@kotlin.jvm.JvmField val value: ${tm.kt(named.id)})${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
@@ -533,6 +534,14 @@ class PackageEmitter(
     private fun tparamNames(named: NamedType): Map<Int, String> =
         named.tparams.associateWith { Naming.escape((types.unalias(it) as TypeParamType).name) }
 
+    /** `()` after a supertype that is an abstract-class interface (Program.abstractIfaces): a superclass constructor call. */
+    private fun superCall(key: String): String = if (key in prog.abstractIfaces) "()" else ""
+
+    /** Refuses the run if a non-struct emitter would extend an abstract-class interface (the proof excludes it). */
+    private fun requireNoSuperclass(owner: String, supers: List<String>) {
+        if (supers.any { it.endsWith("()") }) error("goport: $owner cannot extend an abstract-class interface: $supers")
+    }
+
     /** Supertypes from the IR's `implements` list (structural satisfaction made nominal). */
     private fun supertypes(named: NamedType, tm: TypeMapper, methods: Set<String>): Pair<List<String>, Set<String>> {
         val out = LinkedHashSet<String>()
@@ -544,7 +553,7 @@ class PackageEmitter(
                     prog.methodName(nm.substringBeforeLast('.', "") + ".T." + nm.substringAfterLast('.'), nm.substringAfterLast('.'))
                 }
                 if (!mnames.all { m -> m in methods }) continue
-                out += tm.fc.typeRef(Naming.kotlinPackage(b.pkg), prog.typeName(b.key, b.name))
+                out += tm.fc.typeRef(Naming.kotlinPackage(b.pkg), prog.typeName(b.key, b.name)) + superCall(b.key)
                 overrideNames += mnames
             }
             // The IR's GENERIC interfaces over the type's own parameters ((TSGO.4-a): `*dirty.Box[T]`
@@ -570,7 +579,7 @@ class PackageEmitter(
                         // An INSTANTIATED generic interface (`dirty.Cloneable[*directory]`, `dirty.Value[T]` over the
                         // type's own parameter, (TSGO.4-a)) with its type arguments; an uninstantiated one never.
                         if (it.targs.isEmpty() && it.tparams.isNotEmpty()) continue
-                        tm.namedRef(it) + (if (it.targs.isNotEmpty()) tm.typeArgs(it) else "") to (types.under(ifId) as InterfaceType)
+                        tm.namedRef(it) + (if (it.targs.isNotEmpty()) tm.typeArgs(it) else "") + superCall(it.key) to (types.under(ifId) as InterfaceType)
                     }
                     it is InterfaceType -> tm.synthIface(it) to it
                     else -> continue
@@ -860,13 +869,15 @@ class PackageEmitter(
         val allSupers = supers + structural.map { b -> fc.typeRef(Naming.kotlinPackage(b.pkg), prog.typeName(b.key, b.name)) }.filter { it !in supers }
         val w = CodeWriter()
         w.line(traceLine(qname, s.str("hash")))
-        w.line("interface $name${tm.typeParamDecl(named.tparams)}${if (allSupers.isEmpty()) "" else " : " + allSupers.joinToString(", ")} {")
+        // Program.abstractIfaces: an abstract class (vtable dispatch); every implementer is a struct class.
+        val abstract = named.key in prog.abstractIfaces
+        w.line("${if (abstract) "abstract class" else "interface"} $name${tm.typeParamDecl(named.tparams)}${if (allSupers.isEmpty()) "" else " : " + allSupers.joinToString(", ")} {")
         w.indent {
             for (m in it.methods) {
                 val sig = types.unalias(m.sig) as SignatureType
                 val ps = sig.params.mapIndexed { i, p -> "p$i: ${tm.kt(p.t)}" }
                 val ident = prog.methodIdentity(types, pc.pkg.path, m.name, m.sig)
-                val ov = if (ident in inherited) "override " else ""
+                val ov = (if (abstract) "abstract " else "") + (if (ident in inherited) "override " else "")
                 w.line("${ov}fun ${prog.methodName("$qname.${m.name}", m.name)}(${ps.joinToString(", ")})${tm.returns(sig.results.map { r -> r.t })}")
             }
         }
@@ -885,6 +896,7 @@ class PackageEmitter(
         val declared = pc.methodsOf(qname).filter { it.str("qname") !in prog.extensionMethods }
         val mset = methodSetNames(named)
         val (supers0, overrideNames) = supertypes(named, tm, mset.keys)
+        requireNoSuperclass(named.key, supers0)
         val ordered = (types.under(u) as? BasicType)?.let { b -> tm.rep(b) != TypeMapper.Rep.BOOL } ?: false
         // reflect.Value.Int() & co. read a boxed value class through GoBasicValue (runtime GoReflect.kt).
         val basicRaw = (types.under(u) as? BasicType)?.let { b -> tm.rep(b) != TypeMapper.Rep.UNSAFE } ?: false
@@ -940,6 +952,7 @@ class PackageEmitter(
             val mnames = iface.allMethods.ifEmpty { iface.methods }.map { m -> prog.methodName(m.fn ?: "", m.name) }
             // Only interfaces met entirely by the pointer methods (value methods would need the value too).
             if (!mnames.all { m -> m in ptrNames }) continue
+            if (it.key in prog.abstractIfaces) error("goport: ${named.key}_Ptr cannot extend the abstract-class interface ${it.key}")
             supers += try { tm.namedRef(it) } catch (_: Refusal) { continue }
             overrides += mnames
         }

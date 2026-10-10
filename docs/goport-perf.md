@@ -542,7 +542,7 @@ The cost is real (~6% of a warm thread is one identity-hash probe per link read,
 are cheaper because its map hashes the pointer without a header read), but no design keeps both soundness and
 bounded retention. Not built.
 
-### 8.4 Lever 4: megamorphic interface dispatch — sized, not built
+### 8.4 Lever 4: megamorphic interface dispatch — sized, not built (built in § 11)
 
 Warm CPU profile after § 8.2 (single-threaded, 36,359 bench-thread samples): itable stubs **4.38%** of the thread,
 callers: `ast.locals()` → `localsContainerData()` 22%, `asStructuredType` (from `resolveStructuredTypeMembers`)
@@ -691,3 +691,56 @@ scripts/tsgo_ap_stacks.py <collapsed> --thread check-bench --mechanisms --owners
 scripts/tsgo_ap_stacks.py <collapsed> --thread check-bench --callers 'itable stub'
 scripts/tsgo_ap_stacks.py <alloc collapsed> --classes; … --allocated-by 'byte[]'
 ```
+
+## 11. (TSGO.6-i) Lever 4: `nodeData` and `TypeData` as abstract classes (landed) — and the allocation levers left
+
+**The change** is a porter rule (docs/goport-lowering.md § 3, "Abstract-class interfaces"; `Program.computeAbstractIfaces`):
+an interface in `ABSTRACT_IFACE_CANDIDATES` becomes an `abstract class` when the whole run proves every implementer is a
+struct class, none implements two of them, and no interface extends one. Both candidates pass (213 AST data classes,
+24 checker type classes, regenerated: 6 files, every implementer `: nodeData()` / `: TypeData()`, forwarding overrides
+unchanged). Calls such as `ast.locals()` → `data.localsContainerData()` are now `invokevirtual`.
+
+**Predicted before measuring**: itable stubs are 4.1% of the thread and ~75% of them are these two (≈ 3.0%); a
+megamorphic vtable stub costs roughly a third to a half of an itable scan, so ≈ −1.5..−2% of the thread's samples, wall
+−1..−2% (inside the ±3-5% process spread), allocation and GC unchanged (no object changes shape).
+
+**Mechanism, measured** (warm compiler single, bench thread, same harness as § 10, arm B 37,560 samples):
+
+| | before | after |
+|---|---:|---:|
+| itable stubs | 4.09% | **0.92%** (left: `GoElem.zeroValue` from `Arena.new` 23% of it, Kotlin `Function1` in `filterType`/`instantiateType` ~20%, `forEachChild` visitors) |
+| vtable stubs | 0.60% | 2.34% (the same callers: `localsContainerData` 17%, `asStructuredType` 15%, `modifiers` 10%, `declarationData` 8%, `flowNodeData` 10% of it) |
+| both | 4.69% | **3.26% (−1.43 points)** |
+
+A/B (each arm its own JVM, batch 1 `A B B A`, batch 2 `B A A B`, warm = 6 + 10 rebuilds, Zulu 26; class md5 of the sorted
+`main` class files A `e97aa44e` (= `bac36aaad`), B `ca5f97c6`; every warm run one digest, every cold run byte-identical
+to tsgo 7.0.2; medians of process medians [range], B's paired wins of 4; cold pooled with a third rotated batch, 8
+processes per arm for compiler/services):
+
+| regime | A (interfaces) | B (abstract classes) | Δ |
+|---|---:|---:|---:|
+| compiler single, ms | 3,460 [3,454-3,545] | 3,465 [3,384-3,554] | +0.2% (2/4) |
+| compiler parallel, ms | 1,955 [1,889-1,983] | 1,918 [1,876-1,989] | −1.9% (2/4) |
+| services parallel, ms | 2,527 [2,450-2,563] | 2,506 [2,410-2,530] | −0.8% (4/4) |
+| date-fns parallel, ms | 464 [446-503] | 448 [445-465] | −3.5% (4/4) |
+| compiler cold, ms (8 + 8) | 9,884 [9,516-10,676] | 9,901 [9,182-10,222] | +0.2% |
+| services cold, ms (8 + 8) | 11,795 [10,855-12,704] | 11,843 [11,018-12,400] | +0.4% |
+| date-fns cold, ms | 4,648 [4,084-4,870] | 4,671 [4,101-4,842] | +0.5% |
+| allocation/rebuild, MB (single / parallel / services) | 1,559 / 1,762 / 2,414 | 1,566 / 1,758 / 2,458 | noise (no shape changed) |
+| GC pause/rebuild, ms (single / parallel / services) | 224 / 222 / 304 | 196 / 214 / 312 | noise |
+
+**Reading.** The dispatch moved exactly as predicted (−1.4 points of the thread in stubs); the wall did not resolve it —
+every warm delta is inside the ±3-5% process spread (single +0.2%, parallel −0.8..−3.5%), and cold is noise both ways
+(the first cold batch read compiler +2.6%, the rotated replication −7.8%; pooled +0.2%). Kept: it is free (no shape,
+allocation or answer changes, every gate equal) and removes the largest stub class from every later profile.
+
+**Step C — allocation and GC.** Lever 4 moves neither (above). The levers the § 10 allocation profile leaves, sized
+against 1,559 MB/rebuild (compiler single), none a small runtime-shim change with a clear > 3% win, so none built:
+
+| lever | share | what it takes |
+|---|---:|---|
+| `GoSlice` headers | 21.9% | a representation change (Go slices are 24-byte VALUES; here every `append`/`s[a:b]` is a header object stored in a field), not a rule |
+| relation-key hashing (`xxh3.Hasher` buffer 5.1% + `Hasher` 2.3% + `Uint128` from `hashBytes128` 1.8% + `keyBuilder` 0.8%) | ~10% | Go keeps the key builder on the stack. A shim cannot reuse a buffer per thread: a `Hasher` may be written again after `Sum128`, so a lent buffer would have to be copied back out whenever another hasher borrows it. A porter rule that proves the `b := keyBuilder{}` locals never escape (then one builder per checker, `Reset()` per key) is the sound shape: ~8% of allocation |
+| `TextRange` | 5.3% | three per node, two of them overwritten at once; needs `TextRange` immutable, which § 7.4 found refused (pointer type arguments, `goSet` locals in `ls`) — ~3.5% if the proof can be widened |
+| `compareSymbols` boxing (`Integer`) | 3.0% | a func-typed FIELD `func(*Symbol, *Symbol) int` is a `Function2`, so every call boxes its `Int`; a porter rule lowering a func-typed field/parameter with basic results to a primitive `fun interface` removes it (and part of the lambda's 2.7% of CPU) |
+| `atomic.Uint64` | 2.0% | one object per Node and Symbol; embedding it as a `@Volatile long` + field updater in the owner class is a porter rule |

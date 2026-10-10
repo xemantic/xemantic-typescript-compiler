@@ -1934,20 +1934,20 @@ fun Type?.isTupleType(): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypeData 0ec55060
-interface TypeData {
-    fun asConstrainedType(): ConstrainedType?
-    fun asInterfaceType(): InterfaceType?
-    fun asObjectType(): ObjectType?
-    fun asStructuredType(): StructuredType?
-    fun asType(): Type?
-    fun asTypeReference(): TypeReference?
-    fun asUnionOrIntersectionType(): UnionOrIntersectionType?
+abstract class TypeData {
+    abstract fun asConstrainedType(): ConstrainedType?
+    abstract fun asInterfaceType(): InterfaceType?
+    abstract fun asObjectType(): ObjectType?
+    abstract fun asStructuredType(): StructuredType?
+    abstract fun asType(): Type?
+    abstract fun asTypeReference(): TypeReference?
+    abstract fun asUnionOrIntersectionType(): UnionOrIntersectionType?
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.TypeBase be9e9622
 class TypeBase(
     @kotlin.jvm.JvmField var type: Type = Type(),
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): TypeBase = TypeBase(type = type.goCopy())
 
@@ -2003,7 +2003,7 @@ class TypeBase(
 class IntrinsicType(
     @kotlin.jvm.JvmField var typeBase: TypeBase = TypeBase(),
     @kotlin.jvm.JvmField var intrinsicName: String = "",
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): IntrinsicType = IntrinsicType(typeBase = typeBase.goCopy(), intrinsicName = intrinsicName)
 
@@ -2046,7 +2046,7 @@ class LiteralType(
     @kotlin.jvm.JvmField var value: Any? = null,
     @kotlin.jvm.JvmField var freshType: Type? = null,
     @kotlin.jvm.JvmField var regularType: Type? = null,
-) : Stringer, TypeData, com.xemantic.typescript.tsgo.glob.element {
+) : Stringer, TypeData(), com.xemantic.typescript.tsgo.glob.element {
 
     fun goCopy(): LiteralType = LiteralType(typeBase = typeBase.goCopy(), value = value, freshType = freshType, regularType = regularType)
 
@@ -2104,7 +2104,7 @@ fun LiteralType?.regularType(): Type? {
 class UniqueESSymbolType(
     @kotlin.jvm.JvmField var typeBase: TypeBase = TypeBase(),
     @kotlin.jvm.JvmField var name: String = "",
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): UniqueESSymbolType = UniqueESSymbolType(typeBase = typeBase.goCopy(), name = name)
 
@@ -2140,7 +2140,7 @@ class UniqueESSymbolType(
 class ConstrainedType(
     @kotlin.jvm.JvmField var typeBase: TypeBase = TypeBase(),
     @kotlin.jvm.JvmField var resolvedBaseConstraint: Type? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): ConstrainedType = ConstrainedType(typeBase = typeBase.goCopy(), resolvedBaseConstraint = resolvedBaseConstraint)
 
@@ -2184,7 +2184,7 @@ class StructuredType(
     @kotlin.jvm.JvmField var callSignatureCount: Int = 0,
     @kotlin.jvm.JvmField var indexInfos: GoSlice<IndexInfo?> = GoElem.ref<IndexInfo?>().nilSlice,
     @kotlin.jvm.JvmField var objectTypeWithoutAbstractConstructSignatures: Type? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): StructuredType = StructuredType(constrainedType = constrainedType.goCopy(), members = members, properties = properties, signatures = signatures, callSignatureCount = callSignatureCount, indexInfos = indexInfos, objectTypeWithoutAbstractConstructSignatures = objectTypeWithoutAbstractConstructSignatures)
 
@@ -2241,7 +2241,7 @@ class ObjectType(
     @kotlin.jvm.JvmField var target: Type? = null,
     @kotlin.jvm.JvmField var mapper: TypeMapper? = null,
     @kotlin.jvm.JvmField var instantiations: GoMap<CacheHashKey, Type?> = GoMap.nil<CacheHashKey, Type?>(GoElem.ref<Type?>()),
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): ObjectType = ObjectType(structuredType = structuredType.goCopy(), target = target, mapper = mapper, instantiations = instantiations)
 
@@ -2279,7 +2279,7 @@ class TypeReference(
     @kotlin.jvm.JvmField var objectType: ObjectType = ObjectType(),
     @kotlin.jvm.JvmField var node: Node? = null,
     @kotlin.jvm.JvmField var resolvedTypeArguments: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): TypeReference = TypeReference(objectType = objectType.goCopy(), node = node, resolvedTypeArguments = resolvedTypeArguments)
 
@@ -2325,7 +2325,7 @@ class InterfaceType(
     @kotlin.jvm.JvmField var declaredCallSignatures: GoSlice<Signature?> = GoElem.ref<Signature?>().nilSlice,
     @kotlin.jvm.JvmField var declaredConstructSignatures: GoSlice<Signature?> = GoElem.ref<Signature?>().nilSlice,
     @kotlin.jvm.JvmField var declaredIndexInfos: GoSlice<IndexInfo?> = GoElem.ref<IndexInfo?>().nilSlice,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): InterfaceType = InterfaceType(typeReference = typeReference.goCopy(), allTypeParameters = allTypeParameters, outerTypeParameterCount = outerTypeParameterCount, thisType = thisType, baseTypesResolved = baseTypesResolved, declaredMembersResolved = declaredMembersResolved, resolvedBaseConstructorType = resolvedBaseConstructorType, resolvedBaseTypes = resolvedBaseTypes, declaredMembers = declaredMembers, declaredCallSignatures = declaredCallSignatures, declaredConstructSignatures = declaredConstructSignatures, declaredIndexInfos = declaredIndexInfos)
 
@@ -2476,7 +2476,7 @@ class TupleType(
     @kotlin.jvm.JvmField var fixedLength: Int = 0,
     @get:kotlin.jvm.JvmName("goGet_combinedFlags") @set:kotlin.jvm.JvmName("goSet_combinedFlags") var combinedFlags: ElementFlags = ElementFlags(0u),
     @kotlin.jvm.JvmField var readonly: Boolean = false,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): TupleType = TupleType(interfaceType = interfaceType.goCopy(), elementInfos = elementInfos, minLength = minLength, fixedLength = fixedLength, combinedFlags = combinedFlags, readonly = readonly)
 
@@ -2539,7 +2539,7 @@ fun TupleType?.elementInfos(): GoSlice<TupleElementInfo> {
 class InstantiationExpressionType(
     @kotlin.jvm.JvmField var objectType: ObjectType = ObjectType(),
     @kotlin.jvm.JvmField var node: Node? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): InstantiationExpressionType = InstantiationExpressionType(objectType = objectType.goCopy(), node = node)
 
@@ -2578,7 +2578,7 @@ class MappedType(
     @kotlin.jvm.JvmField var modifiersType: Type? = null,
     @kotlin.jvm.JvmField var resolvedApparentType: Type? = null,
     @kotlin.jvm.JvmField var containsError: Boolean = false,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): MappedType = MappedType(objectType = objectType.goCopy(), declaration = declaration, typeParameter = typeParameter, constraintType = constraintType, nameType = nameType, templateType = templateType, modifiersType = modifiersType, resolvedApparentType = resolvedApparentType, containsError = containsError)
 
@@ -2619,7 +2619,7 @@ class ReverseMappedType(
     @kotlin.jvm.JvmField var source: Type? = null,
     @kotlin.jvm.JvmField var mappedType: Type? = null,
     @kotlin.jvm.JvmField var constraintType: Type? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): ReverseMappedType = ReverseMappedType(objectType = objectType.goCopy(), source = source, mappedType = mappedType, constraintType = constraintType)
 
@@ -2654,7 +2654,7 @@ class EvolvingArrayType(
     @kotlin.jvm.JvmField var objectType: ObjectType = ObjectType(),
     @kotlin.jvm.JvmField var elementType: Type? = null,
     @kotlin.jvm.JvmField var finalArrayType: Type? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): EvolvingArrayType = EvolvingArrayType(objectType = objectType.goCopy(), elementType = elementType, finalArrayType = finalArrayType)
 
@@ -2690,7 +2690,7 @@ class UnionOrIntersectionType(
     @kotlin.jvm.JvmField var propertyCache: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()),
     @kotlin.jvm.JvmField var propertyCacheWithoutFunctionPropertyAugment: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()),
     @kotlin.jvm.JvmField var resolvedProperties: GoSlice<Symbol?> = GoElem.ref<Symbol?>().nilSlice,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): UnionOrIntersectionType = UnionOrIntersectionType(structuredType = structuredType.goCopy(), types = types, propertyCache = propertyCache, propertyCacheWithoutFunctionPropertyAugment = propertyCacheWithoutFunctionPropertyAugment, resolvedProperties = resolvedProperties)
 
@@ -2737,7 +2737,7 @@ class UnionType(
     @kotlin.jvm.JvmField var origin: Type? = null,
     @kotlin.jvm.JvmField var keyPropertyName: String = "",
     @kotlin.jvm.JvmField var constituentMap: GoMap<Type?, Type?> = GoMap.nil<Type?, Type?>(GoElem.ref<Type?>()),
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): UnionType = UnionType(unionOrIntersectionType = unionOrIntersectionType.goCopy(), resolvedReducedType = resolvedReducedType, regularType = regularType, origin = origin, keyPropertyName = keyPropertyName, constituentMap = constituentMap)
 
@@ -2774,7 +2774,7 @@ class IntersectionType(
     @kotlin.jvm.JvmField var unionOrIntersectionType: UnionOrIntersectionType = UnionOrIntersectionType(),
     @kotlin.jvm.JvmField var resolvedApparentType: Type? = null,
     @kotlin.jvm.JvmField var uniqueLiteralFilledInstantiation: Type? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): IntersectionType = IntersectionType(unionOrIntersectionType = unionOrIntersectionType.goCopy(), resolvedApparentType = resolvedApparentType, uniqueLiteralFilledInstantiation = uniqueLiteralFilledInstantiation)
 
@@ -2811,7 +2811,7 @@ class TypeParameter(
     @kotlin.jvm.JvmField var mapper: TypeMapper? = null,
     @kotlin.jvm.JvmField var isThisType: Boolean = false,
     @kotlin.jvm.JvmField var resolvedDefaultType: Type? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): TypeParameter = TypeParameter(constrainedType = constrainedType.goCopy(), constraint = constraint, target = target, mapper = mapper, isThisType = isThisType, resolvedDefaultType = resolvedDefaultType)
 
@@ -2884,7 +2884,7 @@ class IndexType(
     @kotlin.jvm.JvmField var constrainedType: ConstrainedType = ConstrainedType(),
     @kotlin.jvm.JvmField var target: Type? = null,
     @get:kotlin.jvm.JvmName("goGet_indexFlags") @set:kotlin.jvm.JvmName("goSet_indexFlags") var indexFlags: IndexFlags = IndexFlags(0u),
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): IndexType = IndexType(constrainedType = constrainedType.goCopy(), target = target, indexFlags = indexFlags)
 
@@ -2928,7 +2928,7 @@ class IndexedAccessType(
     @kotlin.jvm.JvmField var objectType: Type? = null,
     @kotlin.jvm.JvmField var indexType: Type? = null,
     @get:kotlin.jvm.JvmName("goGet_accessFlags") @set:kotlin.jvm.JvmName("goSet_accessFlags") var accessFlags: AccessFlags = AccessFlags(0u),
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): IndexedAccessType = IndexedAccessType(constrainedType = constrainedType.goCopy(), objectType = objectType, indexType = indexType, accessFlags = accessFlags)
 
@@ -2977,7 +2977,7 @@ class TemplateLiteralType(
     @kotlin.jvm.JvmField var constrainedType: ConstrainedType = ConstrainedType(),
     @kotlin.jvm.JvmField var texts: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var types: GoSlice<Type?> = GoElem.ref<Type?>().nilSlice,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): TemplateLiteralType = TemplateLiteralType(constrainedType = constrainedType.goCopy(), texts = texts, types = types)
 
@@ -3020,7 +3020,7 @@ fun TemplateLiteralType?.types(): GoSlice<Type?> {
 class StringMappingType(
     @kotlin.jvm.JvmField var constrainedType: ConstrainedType = ConstrainedType(),
     @kotlin.jvm.JvmField var target: Type? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): StringMappingType = StringMappingType(constrainedType = constrainedType.goCopy(), target = target)
 
@@ -3062,7 +3062,7 @@ class SubstitutionType(
     @kotlin.jvm.JvmField var constrainedType: ConstrainedType = ConstrainedType(),
     @kotlin.jvm.JvmField var baseType: Type? = null,
     @kotlin.jvm.JvmField var constraint: Type? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): SubstitutionType = SubstitutionType(constrainedType = constrainedType.goCopy(), baseType = baseType, constraint = constraint)
 
@@ -3148,7 +3148,7 @@ class ConditionalType(
     @kotlin.jvm.JvmField var resolvedConstraintOfDistributive: Type? = null,
     @kotlin.jvm.JvmField var mapper: TypeMapper? = null,
     @kotlin.jvm.JvmField var combinedMapper: TypeMapper? = null,
-) : TypeData {
+) : TypeData() {
 
     fun goCopy(): ConditionalType = ConditionalType(constrainedType = constrainedType.goCopy(), root = root, checkType = checkType, extendsType = extendsType, resolvedTrueType = resolvedTrueType, resolvedFalseType = resolvedFalseType, resolvedInferredTrueType = resolvedInferredTrueType, resolvedDefaultConstraint = resolvedDefaultConstraint, resolvedConstraintOfDistributive = resolvedConstraintOfDistributive, mapper = mapper, combinedMapper = combinedMapper)
 

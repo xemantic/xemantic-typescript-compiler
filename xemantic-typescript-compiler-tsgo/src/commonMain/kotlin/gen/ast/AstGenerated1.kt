@@ -155,7 +155,7 @@ class NodeFactory(
 class StatementBase(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var flowNodeBase: FlowNodeBase = FlowNodeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): StatementBase = StatementBase(nodeBase = nodeBase.goCopy(), flowNodeBase = flowNodeBase.goCopy())
 
@@ -223,7 +223,7 @@ class StatementBase(
 class IterationStatementBase(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var statement: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): IterationStatementBase = IterationStatementBase(statementBase = statementBase.goCopy(), statement = statement)
 
@@ -290,7 +290,7 @@ class IterationStatementBase(
 // go: github.com/microsoft/typescript-go/internal/ast.ExpressionBase 84981a31
 class ExpressionBase(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ExpressionBase = ExpressionBase(nodeBase = nodeBase.goCopy())
 
@@ -356,7 +356,7 @@ class ExpressionBase(
 // go: github.com/microsoft/typescript-go/internal/ast.UnaryExpressionBase dba8e5c3
 class UnaryExpressionBase(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): UnaryExpressionBase = UnaryExpressionBase(expressionBase = expressionBase.goCopy())
 
@@ -422,7 +422,7 @@ class UnaryExpressionBase(
 // go: github.com/microsoft/typescript-go/internal/ast.UpdateExpressionBase 789f91d6
 class UpdateExpressionBase(
     @kotlin.jvm.JvmField var unaryExpressionBase: UnaryExpressionBase = UnaryExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): UpdateExpressionBase = UpdateExpressionBase(unaryExpressionBase = unaryExpressionBase.goCopy())
 
@@ -488,7 +488,7 @@ class UpdateExpressionBase(
 // go: github.com/microsoft/typescript-go/internal/ast.LeftHandSideExpressionBase badd9fe3
 class LeftHandSideExpressionBase(
     @kotlin.jvm.JvmField var updateExpressionBase: UpdateExpressionBase = UpdateExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): LeftHandSideExpressionBase = LeftHandSideExpressionBase(updateExpressionBase = updateExpressionBase.goCopy())
 
@@ -554,7 +554,7 @@ class LeftHandSideExpressionBase(
 // go: github.com/microsoft/typescript-go/internal/ast.MemberExpressionBase 32b055d5
 class MemberExpressionBase(
     @kotlin.jvm.JvmField var leftHandSideExpressionBase: LeftHandSideExpressionBase = LeftHandSideExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): MemberExpressionBase = MemberExpressionBase(leftHandSideExpressionBase = leftHandSideExpressionBase.goCopy())
 
@@ -620,7 +620,7 @@ class MemberExpressionBase(
 // go: github.com/microsoft/typescript-go/internal/ast.PrimaryExpressionBase a19acdad
 class PrimaryExpressionBase(
     @kotlin.jvm.JvmField var memberExpressionBase: MemberExpressionBase = MemberExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PrimaryExpressionBase = PrimaryExpressionBase(memberExpressionBase = memberExpressionBase.goCopy())
 
@@ -687,7 +687,7 @@ class PrimaryExpressionBase(
 class TypeNodeBase(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var typeSyntaxBase: TypeSyntaxBase = TypeSyntaxBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypeNodeBase = TypeNodeBase(nodeBase = nodeBase.goCopy(), typeSyntaxBase = typeSyntaxBase)
 
@@ -755,7 +755,7 @@ class TypeNodeBase(
 class NodeWithTypeArgumentsBase(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var typeArguments: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NodeWithTypeArgumentsBase = NodeWithTypeArgumentsBase(typeNodeBase = typeNodeBase.goCopy(), typeArguments = typeArguments)
 
@@ -822,7 +822,7 @@ class NodeWithTypeArgumentsBase(
 // go: github.com/microsoft/typescript-go/internal/ast.JSDocTypeBase b2a64fee
 class JSDocTypeBase(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocTypeBase = JSDocTypeBase(typeNodeBase = typeNodeBase.goCopy())
 
@@ -1147,7 +1147,7 @@ class LiteralLikeNodeBase(
 class LiteralExpressionBase(
     @kotlin.jvm.JvmField var literalLikeNodeBase: LiteralLikeNodeBase = LiteralLikeNodeBase(),
     @kotlin.jvm.JvmField var primaryExpressionBase: PrimaryExpressionBase = PrimaryExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): LiteralExpressionBase = LiteralExpressionBase(literalLikeNodeBase = literalLikeNodeBase.goCopy(), primaryExpressionBase = primaryExpressionBase.goCopy())
 
@@ -1325,7 +1325,7 @@ class AccessorDeclarationBase(
     @kotlin.jvm.JvmField var objectLiteralElementBase: ObjectLiteralElementBase = ObjectLiteralElementBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): AccessorDeclarationBase = AccessorDeclarationBase(namedMemberBase = namedMemberBase.goCopy(), functionLikeWithBodyBase = functionLikeWithBodyBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), typeElementBase = typeElementBase, classElementBase = classElementBase, objectLiteralElementBase = objectLiteralElementBase, compositeBase = compositeBase.goCopy(), nodeBase = nodeBase.goCopy())
 
@@ -1407,7 +1407,7 @@ class FunctionOrConstructorTypeNodeBase(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var modifiersBase: ModifiersBase = ModifiersBase(),
     @kotlin.jvm.JvmField var functionLikeBase: FunctionLikeBase = FunctionLikeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): FunctionOrConstructorTypeNodeBase = FunctionOrConstructorTypeNodeBase(typeNodeBase = typeNodeBase.goCopy(), modifiersBase = modifiersBase.goCopy(), functionLikeBase = functionLikeBase.goCopy())
 
@@ -1475,7 +1475,7 @@ class FunctionOrConstructorTypeNodeBase(
 class UnionOrIntersectionTypeNodeBase(
     @kotlin.jvm.JvmField var typeNodeBase: TypeNodeBase = TypeNodeBase(),
     @kotlin.jvm.JvmField var types: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): UnionOrIntersectionTypeNodeBase = UnionOrIntersectionTypeNodeBase(typeNodeBase = typeNodeBase.goCopy(), types = types)
 
@@ -1544,7 +1544,7 @@ class JSDocTagBase(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var tagName: Node? = null,
     @kotlin.jvm.JvmField var comment: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocTagBase = JSDocTagBase(nodeBase = nodeBase.goCopy(), tagName = tagName, comment = comment)
 
@@ -1613,7 +1613,7 @@ class JSDocTagBase(
 class JSDocCommentBase(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var text: GoSlice<String> = GoElem.STRING.nilSlice,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): JSDocCommentBase = JSDocCommentBase(nodeBase = nodeBase.goCopy(), text = text)
 
@@ -1676,7 +1676,7 @@ class JSDocCommentBase(
 // go: github.com/microsoft/typescript-go/internal/ast.Token ee43a87b
 class Token(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): Token = Token(nodeBase = nodeBase.goCopy())
 
@@ -1798,7 +1798,7 @@ class Identifier(
     @kotlin.jvm.JvmField var primaryExpressionBase: PrimaryExpressionBase = PrimaryExpressionBase(),
     @kotlin.jvm.JvmField var flowNodeBase: FlowNodeBase = FlowNodeBase(),
     @kotlin.jvm.JvmField var text: String = "",
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): Identifier = Identifier(primaryExpressionBase = primaryExpressionBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), text = text)
 
@@ -1886,7 +1886,7 @@ fun isIdentifier(node: Node?): Boolean {
 class PrivateIdentifier(
     @kotlin.jvm.JvmField var primaryExpressionBase: PrimaryExpressionBase = PrimaryExpressionBase(),
     @kotlin.jvm.JvmField var text: String = "",
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PrivateIdentifier = PrivateIdentifier(primaryExpressionBase = primaryExpressionBase.goCopy(), text = text)
 
@@ -1976,7 +1976,7 @@ class QualifiedName(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var left: Node? = null,
     @kotlin.jvm.JvmField var right: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): QualifiedName = QualifiedName(nodeBase = nodeBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), compositeBase = compositeBase.goCopy(), left = left, right = right)
 
@@ -2081,7 +2081,7 @@ class ComputedPropertyName(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ComputedPropertyName = ComputedPropertyName(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression)
 
@@ -2183,7 +2183,7 @@ class Decorator(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): Decorator = Decorator(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression)
 
@@ -2283,7 +2283,7 @@ fun isDecorator(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.EmptyStatement 57580ff0
 class EmptyStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): EmptyStatement = EmptyStatement(statementBase = statementBase.goCopy())
 
@@ -2367,7 +2367,7 @@ class IfStatement(
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var thenStatement: Node? = null,
     @kotlin.jvm.JvmField var elseStatement: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): IfStatement = IfStatement(statementBase = statementBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, thenStatement = thenStatement, elseStatement = elseStatement)
 
@@ -2473,7 +2473,7 @@ class DoStatement(
     @kotlin.jvm.JvmField var iterationStatementBase: IterationStatementBase = IterationStatementBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): DoStatement = DoStatement(iterationStatementBase = iterationStatementBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression)
 
@@ -2576,7 +2576,7 @@ class WhileStatement(
     @kotlin.jvm.JvmField var iterationStatementBase: IterationStatementBase = IterationStatementBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): WhileStatement = WhileStatement(iterationStatementBase = iterationStatementBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression)
 
@@ -2682,7 +2682,7 @@ class ForStatement(
     @kotlin.jvm.JvmField var initializer: Node? = null,
     @kotlin.jvm.JvmField var condition: Node? = null,
     @kotlin.jvm.JvmField var incrementor: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ForStatement = ForStatement(iterationStatementBase = iterationStatementBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), initializer = initializer, condition = condition, incrementor = incrementor)
 
@@ -2790,7 +2790,7 @@ class ForInOrOfStatement(
     @kotlin.jvm.JvmField var initializer: Node? = null,
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var statement: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ForInOrOfStatement = ForInOrOfStatement(statementBase = statementBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), awaitModifier = awaitModifier, initializer = initializer, expression = expression, statement = statement)
 
@@ -2899,7 +2899,7 @@ fun isForOfStatement(node: Node?): Boolean {
 class BreakStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var label: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): BreakStatement = BreakStatement(statementBase = statementBase.goCopy(), label = label)
 
@@ -2996,7 +2996,7 @@ fun isBreakStatement(node: Node?): Boolean {
 class ContinueStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var label: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ContinueStatement = ContinueStatement(statementBase = statementBase.goCopy(), label = label)
 
@@ -3094,7 +3094,7 @@ class ReturnStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ReturnStatement = ReturnStatement(statementBase = statementBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression)
 
@@ -3197,7 +3197,7 @@ class WithStatement(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var statement: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): WithStatement = WithStatement(statementBase = statementBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, statement = statement)
 
@@ -3302,7 +3302,7 @@ class SwitchStatement(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var caseBlock: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SwitchStatement = SwitchStatement(statementBase = statementBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, caseBlock = caseBlock)
 
@@ -3407,7 +3407,7 @@ class CaseBlock(
     @kotlin.jvm.JvmField var localsContainerBase: LocalsContainerBase = LocalsContainerBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var clauses: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): CaseBlock = CaseBlock(nodeBase = nodeBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), clauses = clauses)
 
@@ -3508,7 +3508,7 @@ class CaseOrDefaultClause(
     @kotlin.jvm.JvmField var expression: Node? = null,
     @kotlin.jvm.JvmField var statements: NodeList? = null,
     @kotlin.jvm.JvmField var fallthroughFlowNode: FlowNode? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): CaseOrDefaultClause = CaseOrDefaultClause(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression, statements = statements, fallthroughFlowNode = fallthroughFlowNode)
 
@@ -3618,7 +3618,7 @@ class ThrowStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ThrowStatement = ThrowStatement(statementBase = statementBase.goCopy(), compositeBase = compositeBase.goCopy(), expression = expression)
 
@@ -3722,7 +3722,7 @@ class TryStatement(
     @kotlin.jvm.JvmField var tryBlock: Node? = null,
     @kotlin.jvm.JvmField var catchClause: Node? = null,
     @kotlin.jvm.JvmField var finallyBlock: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TryStatement = TryStatement(statementBase = statementBase.goCopy(), compositeBase = compositeBase.goCopy(), tryBlock = tryBlock, catchClause = catchClause, finallyBlock = finallyBlock)
 
@@ -3830,7 +3830,7 @@ class CatchClause(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var variableDeclaration: Node? = null,
     @kotlin.jvm.JvmField var block: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): CatchClause = CatchClause(nodeBase = nodeBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), variableDeclaration = variableDeclaration, block = block)
 
@@ -3936,7 +3936,7 @@ fun isCatchClause(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.DebuggerStatement 4cfd3c27
 class DebuggerStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): DebuggerStatement = DebuggerStatement(statementBase = statementBase.goCopy())
 
@@ -4018,7 +4018,7 @@ class LabeledStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var label: Node? = null,
     @kotlin.jvm.JvmField var statement: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): LabeledStatement = LabeledStatement(statementBase = statementBase.goCopy(), label = label, statement = statement)
 
@@ -4120,7 +4120,7 @@ fun isLabeledStatement(node: Node?): Boolean {
 class ExpressionStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ExpressionStatement = ExpressionStatement(statementBase = statementBase.goCopy(), expression = expression)
 
@@ -4223,7 +4223,7 @@ class Block(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var statements: NodeList? = null,
     @kotlin.jvm.JvmField var multiLine: Boolean = false,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): Block = Block(statementBase = statementBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), statements = statements, multiLine = multiLine)
 
@@ -4325,7 +4325,7 @@ class VariableStatement(
     @kotlin.jvm.JvmField var modifiersBase: ModifiersBase = ModifiersBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var declarationList: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): VariableStatement = VariableStatement(statementBase = statementBase.goCopy(), modifiersBase = modifiersBase.goCopy(), compositeBase = compositeBase.goCopy(), declarationList = declarationList)
 
@@ -4439,7 +4439,7 @@ class VariableDeclaration(
     @kotlin.jvm.JvmField var exclamationToken: Node? = null,
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var initializer: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): VariableDeclaration = VariableDeclaration(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), exportableBase = exportableBase.goCopy(), compositeBase = compositeBase.goCopy(), name = name, exclamationToken = exclamationToken, type = type, initializer = initializer)
 
@@ -4552,7 +4552,7 @@ class VariableDeclarationList(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var declarations: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): VariableDeclarationList = VariableDeclarationList(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), declarations = declarations)
 
@@ -4659,7 +4659,7 @@ class BindingPattern(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var elements: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): BindingPattern = BindingPattern(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), elements = elements)
 
@@ -4786,7 +4786,7 @@ class ParameterDeclaration(
     @kotlin.jvm.JvmField var questionToken: Node? = null,
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var initializer: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ParameterDeclaration = ParameterDeclaration(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), modifiersBase = modifiersBase.goCopy(), compositeBase = compositeBase.goCopy(), dotDotDotToken = dotDotDotToken, name = name, questionToken = questionToken, type = type, initializer = initializer)
 
@@ -4916,7 +4916,7 @@ class BindingElement(
     @kotlin.jvm.JvmField var propertyName: Node? = null,
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var initializer: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): BindingElement = BindingElement(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), exportableBase = exportableBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), compositeBase = compositeBase.goCopy(), dotDotDotToken = dotDotDotToken, propertyName = propertyName, name = name, initializer = initializer)
 
@@ -5030,7 +5030,7 @@ class MissingDeclaration(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var modifiersBase: ModifiersBase = ModifiersBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): MissingDeclaration = MissingDeclaration(statementBase = statementBase.goCopy(), declarationBase = declarationBase.goCopy(), modifiersBase = modifiersBase.goCopy())
 
@@ -5134,7 +5134,7 @@ class FunctionDeclaration(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var returnFlowNode: FlowNode? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): FunctionDeclaration = FunctionDeclaration(declarationBase = declarationBase.goCopy(), statementBase = statementBase.goCopy(), exportableBase = exportableBase.goCopy(), modifiersBase = modifiersBase.goCopy(), functionLikeWithBodyBase = functionLikeWithBodyBase.goCopy(), compositeBase = compositeBase.goCopy(), name = name, returnFlowNode = returnFlowNode)
 
@@ -5257,7 +5257,7 @@ class ClassDeclaration(
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var classLikeBase: ClassLikeBase = ClassLikeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ClassDeclaration = ClassDeclaration(declarationBase = declarationBase.goCopy(), statementBase = statementBase.goCopy(), classLikeBase = classLikeBase.goCopy())
 
@@ -5361,7 +5361,7 @@ fun isClassDeclaration(node: Node?): Boolean {
 class ClassExpression(
     @kotlin.jvm.JvmField var primaryExpressionBase: PrimaryExpressionBase = PrimaryExpressionBase(),
     @kotlin.jvm.JvmField var classLikeBase: ClassLikeBase = ClassLikeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ClassExpression = ClassExpression(primaryExpressionBase = primaryExpressionBase.goCopy(), classLikeBase = classLikeBase.goCopy())
 
@@ -5466,7 +5466,7 @@ class HeritageClause(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @get:kotlin.jvm.JvmName("goGet_token") @set:kotlin.jvm.JvmName("goSet_token") var token: Kind = Kind(0),
     @kotlin.jvm.JvmField var types: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): HeritageClause = HeritageClause(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), token = token, types = types)
 
@@ -5587,7 +5587,7 @@ class InterfaceDeclaration(
     @kotlin.jvm.JvmField var typeParameters: NodeList? = null,
     @kotlin.jvm.JvmField var heritageClauses: NodeList? = null,
     @kotlin.jvm.JvmField var members: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): InterfaceDeclaration = InterfaceDeclaration(declarationBase = declarationBase.goCopy(), statementBase = statementBase.goCopy(), exportableBase = exportableBase.goCopy(), modifiersBase = modifiersBase.goCopy(), typeSyntaxBase = typeSyntaxBase, name = name, typeParameters = typeParameters, heritageClauses = heritageClauses, members = members)
 
@@ -5705,7 +5705,7 @@ class TypeAliasDeclaration(
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var typeParameters: NodeList? = null,
     @kotlin.jvm.JvmField var type: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): TypeAliasDeclaration = TypeAliasDeclaration(declarationBase = declarationBase.goCopy(), statementBase = statementBase.goCopy(), exportableBase = exportableBase.goCopy(), modifiersBase = modifiersBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), typeSyntaxBase = typeSyntaxBase, name = name, typeParameters = typeParameters, type = type)
 
@@ -5849,7 +5849,7 @@ class EnumMember(
     @kotlin.jvm.JvmField var namedMemberBase: NamedMemberBase = NamedMemberBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var initializer: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): EnumMember = EnumMember(nodeBase = nodeBase.goCopy(), namedMemberBase = namedMemberBase.goCopy(), compositeBase = compositeBase.goCopy(), initializer = initializer)
 
@@ -5960,7 +5960,7 @@ class EnumDeclaration(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var members: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): EnumDeclaration = EnumDeclaration(declarationBase = declarationBase.goCopy(), statementBase = statementBase.goCopy(), exportableBase = exportableBase.goCopy(), modifiersBase = modifiersBase.goCopy(), compositeBase = compositeBase.goCopy(), name = name, members = members)
 
@@ -6076,7 +6076,7 @@ class ModuleBlock(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var statements: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ModuleBlock = ModuleBlock(statementBase = statementBase.goCopy(), compositeBase = compositeBase.goCopy(), statements = statements)
 
@@ -6176,7 +6176,7 @@ fun isModuleBlock(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.NotEmittedStatement e6c61298
 class NotEmittedStatement(
     @kotlin.jvm.JvmField var statementBase: StatementBase = StatementBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NotEmittedStatement = NotEmittedStatement(statementBase = statementBase.goCopy())
 
@@ -6257,7 +6257,7 @@ fun isNotEmittedStatement(node: Node?): Boolean {
 class NotEmittedTypeElement(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var typeElementBase: TypeElementBase = TypeElementBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NotEmittedTypeElement = NotEmittedTypeElement(nodeBase = nodeBase.goCopy(), typeElementBase = typeElementBase)
 
@@ -6344,7 +6344,7 @@ class ImportDeclaration(
     @kotlin.jvm.JvmField var importClause: Node? = null,
     @kotlin.jvm.JvmField var moduleSpecifier: Node? = null,
     @kotlin.jvm.JvmField var attributes: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ImportDeclaration = ImportDeclaration(statementBase = statementBase.goCopy(), modifiersBase = modifiersBase.goCopy(), compositeBase = compositeBase.goCopy(), declarationBase = declarationBase.goCopy(), importClause = importClause, moduleSpecifier = moduleSpecifier, attributes = attributes)
 
@@ -6488,7 +6488,7 @@ fun isJSImportDeclaration(node: Node?): Boolean {
 class ExternalModuleReference(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ExternalModuleReference = ExternalModuleReference(nodeBase = nodeBase.goCopy(), expression = expression)
 
@@ -6590,7 +6590,7 @@ class NamespaceImport(
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var exportableBase: ExportableBase = ExportableBase(),
     @kotlin.jvm.JvmField var name: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NamespaceImport = NamespaceImport(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), exportableBase = exportableBase.goCopy(), name = name)
 
@@ -6696,7 +6696,7 @@ class NamedImports(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var elements: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NamedImports = NamedImports(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), elements = elements)
 
@@ -6802,7 +6802,7 @@ class ExportAssignment(
     @kotlin.jvm.JvmField var isExportEquals: Boolean = false,
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ExportAssignment = ExportAssignment(declarationBase = declarationBase.goCopy(), statementBase = statementBase.goCopy(), modifiersBase = modifiersBase.goCopy(), compositeBase = compositeBase.goCopy(), isExportEquals = isExportEquals, type = type, expression = expression)
 
@@ -6913,7 +6913,7 @@ class NamespaceExportDeclaration(
     @kotlin.jvm.JvmField var modifiersBase: ModifiersBase = ModifiersBase(),
     @kotlin.jvm.JvmField var typeSyntaxBase: TypeSyntaxBase = TypeSyntaxBase(),
     @kotlin.jvm.JvmField var name: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NamespaceExportDeclaration = NamespaceExportDeclaration(declarationBase = declarationBase.goCopy(), statementBase = statementBase.goCopy(), modifiersBase = modifiersBase.goCopy(), typeSyntaxBase = typeSyntaxBase, name = name)
 
@@ -7018,7 +7018,7 @@ class NamespaceExport(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var name: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NamespaceExport = NamespaceExport(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), name = name)
 
@@ -7123,7 +7123,7 @@ class NamedExports(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var elements: NodeList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NamedExports = NamedExports(nodeBase = nodeBase.goCopy(), compositeBase = compositeBase.goCopy(), elements = elements)
 
@@ -7229,7 +7229,7 @@ class ExportSpecifier(
     @kotlin.jvm.JvmField var isTypeOnly: Boolean = false,
     @kotlin.jvm.JvmField var propertyName: Node? = null,
     @kotlin.jvm.JvmField var name: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ExportSpecifier = ExportSpecifier(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), exportableBase = exportableBase.goCopy(), compositeBase = compositeBase.goCopy(), isTypeOnly = isTypeOnly, propertyName = propertyName, name = name)
 
@@ -7347,7 +7347,7 @@ class CallSignatureDeclaration(
     @kotlin.jvm.JvmField var functionLikeBase: FunctionLikeBase = FunctionLikeBase(),
     @kotlin.jvm.JvmField var typeElementBase: TypeElementBase = TypeElementBase(),
     @kotlin.jvm.JvmField var typeSyntaxBase: TypeSyntaxBase = TypeSyntaxBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): CallSignatureDeclaration = CallSignatureDeclaration(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), functionLikeBase = functionLikeBase.goCopy(), typeElementBase = typeElementBase, typeSyntaxBase = typeSyntaxBase)
 
@@ -7448,7 +7448,7 @@ class ConstructSignatureDeclaration(
     @kotlin.jvm.JvmField var functionLikeBase: FunctionLikeBase = FunctionLikeBase(),
     @kotlin.jvm.JvmField var typeElementBase: TypeElementBase = TypeElementBase(),
     @kotlin.jvm.JvmField var typeSyntaxBase: TypeSyntaxBase = TypeSyntaxBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ConstructSignatureDeclaration = ConstructSignatureDeclaration(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), functionLikeBase = functionLikeBase.goCopy(), typeElementBase = typeElementBase, typeSyntaxBase = typeSyntaxBase)
 
@@ -7551,7 +7551,7 @@ class ConstructorDeclaration(
     @kotlin.jvm.JvmField var classElementBase: ClassElementBase = ClassElementBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var returnFlowNode: FlowNode? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ConstructorDeclaration = ConstructorDeclaration(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), modifiersBase = modifiersBase.goCopy(), functionLikeWithBodyBase = functionLikeWithBodyBase.goCopy(), classElementBase = classElementBase, compositeBase = compositeBase.goCopy(), returnFlowNode = returnFlowNode)
 
@@ -7664,7 +7664,7 @@ fun isConstructorDeclaration(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.GetAccessorDeclaration 35778c6e
 class GetAccessorDeclaration(
     @kotlin.jvm.JvmField var accessorDeclarationBase: AccessorDeclarationBase = AccessorDeclarationBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): GetAccessorDeclaration = GetAccessorDeclaration(accessorDeclarationBase = accessorDeclarationBase.goCopy())
 
@@ -7764,7 +7764,7 @@ fun isGetAccessorDeclaration(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.SetAccessorDeclaration df48294c
 class SetAccessorDeclaration(
     @kotlin.jvm.JvmField var accessorDeclarationBase: AccessorDeclarationBase = AccessorDeclarationBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SetAccessorDeclaration = SetAccessorDeclaration(accessorDeclarationBase = accessorDeclarationBase.goCopy())
 
@@ -7870,7 +7870,7 @@ class IndexSignatureDeclaration(
     @kotlin.jvm.JvmField var typeElementBase: TypeElementBase = TypeElementBase(),
     @kotlin.jvm.JvmField var classElementBase: ClassElementBase = ClassElementBase(),
     @kotlin.jvm.JvmField var typeSyntaxBase: TypeSyntaxBase = TypeSyntaxBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): IndexSignatureDeclaration = IndexSignatureDeclaration(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), modifiersBase = modifiersBase.goCopy(), functionLikeBase = functionLikeBase.goCopy(), typeElementBase = typeElementBase, classElementBase = classElementBase, typeSyntaxBase = typeSyntaxBase)
 
@@ -7973,7 +7973,7 @@ class MethodSignatureDeclaration(
     @kotlin.jvm.JvmField var functionLikeBase: FunctionLikeBase = FunctionLikeBase(),
     @kotlin.jvm.JvmField var typeElementBase: TypeElementBase = TypeElementBase(),
     @kotlin.jvm.JvmField var typeSyntaxBase: TypeSyntaxBase = TypeSyntaxBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): MethodSignatureDeclaration = MethodSignatureDeclaration(nodeBase = nodeBase.goCopy(), namedMemberBase = namedMemberBase.goCopy(), functionLikeBase = functionLikeBase.goCopy(), typeElementBase = typeElementBase, typeSyntaxBase = typeSyntaxBase)
 
@@ -8082,7 +8082,7 @@ class MethodDeclaration(
     @kotlin.jvm.JvmField var classElementBase: ClassElementBase = ClassElementBase(),
     @kotlin.jvm.JvmField var objectLiteralElementBase: ObjectLiteralElementBase = ObjectLiteralElementBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): MethodDeclaration = MethodDeclaration(nodeBase = nodeBase.goCopy(), namedMemberBase = namedMemberBase.goCopy(), functionLikeWithBodyBase = functionLikeWithBodyBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), classElementBase = classElementBase, objectLiteralElementBase = objectLiteralElementBase, compositeBase = compositeBase.goCopy())
 
@@ -8208,7 +8208,7 @@ class PropertySignatureDeclaration(
     @kotlin.jvm.JvmField var typeSyntaxBase: TypeSyntaxBase = TypeSyntaxBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var initializer: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PropertySignatureDeclaration = PropertySignatureDeclaration(nodeBase = nodeBase.goCopy(), namedMemberBase = namedMemberBase.goCopy(), typeElementBase = typeElementBase, typeSyntaxBase = typeSyntaxBase, type = type, initializer = initializer)
 
@@ -8320,7 +8320,7 @@ class PropertyDeclaration(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var initializer: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PropertyDeclaration = PropertyDeclaration(nodeBase = nodeBase.goCopy(), namedMemberBase = namedMemberBase.goCopy(), classElementBase = classElementBase, compositeBase = compositeBase.goCopy(), type = type, initializer = initializer)
 
@@ -8435,7 +8435,7 @@ class SemicolonClassElement(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var classElementBase: ClassElementBase = ClassElementBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SemicolonClassElement = SemicolonClassElement(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), classElementBase = classElementBase)
 
@@ -8524,7 +8524,7 @@ class ClassStaticBlockDeclaration(
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var body: Node? = null,
     @kotlin.jvm.JvmField var returnFlowNode: FlowNode? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ClassStaticBlockDeclaration = ClassStaticBlockDeclaration(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), modifiersBase = modifiersBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), classElementBase = classElementBase, compositeBase = compositeBase.goCopy(), body = body, returnFlowNode = returnFlowNode)
 
@@ -8626,7 +8626,7 @@ fun isClassStaticBlockDeclaration(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.OmittedExpression f2201b2d
 class OmittedExpression(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): OmittedExpression = OmittedExpression(expressionBase = expressionBase.goCopy())
 
@@ -8707,7 +8707,7 @@ fun isOmittedExpression(node: Node?): Boolean {
 class KeywordExpression(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
     @kotlin.jvm.JvmField var flowNodeBase: FlowNodeBase = FlowNodeBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): KeywordExpression = KeywordExpression(expressionBase = expressionBase.goCopy(), flowNodeBase = flowNodeBase.goCopy())
 
@@ -8804,7 +8804,7 @@ fun isKeywordExpression(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.StringLiteral cfb5ffe3
 class StringLiteral(
     @kotlin.jvm.JvmField var literalExpressionBase: LiteralExpressionBase = LiteralExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): StringLiteral = StringLiteral(literalExpressionBase = literalExpressionBase.goCopy())
 
@@ -8887,7 +8887,7 @@ fun isStringLiteral(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.NumericLiteral 9fba8755
 class NumericLiteral(
     @kotlin.jvm.JvmField var literalExpressionBase: LiteralExpressionBase = LiteralExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NumericLiteral = NumericLiteral(literalExpressionBase = literalExpressionBase.goCopy())
 
@@ -8970,7 +8970,7 @@ fun isNumericLiteral(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.BigIntLiteral bda560bf
 class BigIntLiteral(
     @kotlin.jvm.JvmField var literalExpressionBase: LiteralExpressionBase = LiteralExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): BigIntLiteral = BigIntLiteral(literalExpressionBase = literalExpressionBase.goCopy())
 
@@ -9056,7 +9056,7 @@ fun isBigIntLiteral(node: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/ast.RegularExpressionLiteral 2697c0f5
 class RegularExpressionLiteral(
     @kotlin.jvm.JvmField var literalExpressionBase: LiteralExpressionBase = LiteralExpressionBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): RegularExpressionLiteral = RegularExpressionLiteral(literalExpressionBase = literalExpressionBase.goCopy())
 
@@ -9141,7 +9141,7 @@ class NoSubstitutionTemplateLiteral(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
     @kotlin.jvm.JvmField var templateLiteralLikeNodeBase: TemplateLiteralLikeNodeBase = TemplateLiteralLikeNodeBase(),
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NoSubstitutionTemplateLiteral = NoSubstitutionTemplateLiteral(expressionBase = expressionBase.goCopy(), templateLiteralLikeNodeBase = templateLiteralLikeNodeBase.goCopy(), declarationBase = declarationBase.goCopy())
 
@@ -9239,7 +9239,7 @@ class BinaryExpression(
     @kotlin.jvm.JvmField var type: Node? = null,
     @kotlin.jvm.JvmField var operatorToken: Node? = null,
     @kotlin.jvm.JvmField var right: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): BinaryExpression = BinaryExpression(expressionBase = expressionBase.goCopy(), declarationBase = declarationBase.goCopy(), modifiersBase = modifiersBase.goCopy(), compositeBase = compositeBase.goCopy(), left = left, type = type, operatorToken = operatorToken, right = right)
 
@@ -9359,7 +9359,7 @@ class PrefixUnaryExpression(
     @kotlin.jvm.JvmField var updateExpressionBase: UpdateExpressionBase = UpdateExpressionBase(),
     @get:kotlin.jvm.JvmName("goGet_operator") @set:kotlin.jvm.JvmName("goSet_operator") var operator: Kind = Kind(0),
     @kotlin.jvm.JvmField var operand: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PrefixUnaryExpression = PrefixUnaryExpression(updateExpressionBase = updateExpressionBase.goCopy(), operator = operator, operand = operand)
 
@@ -9462,7 +9462,7 @@ class PostfixUnaryExpression(
     @kotlin.jvm.JvmField var updateExpressionBase: UpdateExpressionBase = UpdateExpressionBase(),
     @kotlin.jvm.JvmField var operand: Node? = null,
     @get:kotlin.jvm.JvmName("goGet_operator") @set:kotlin.jvm.JvmName("goSet_operator") var operator: Kind = Kind(0),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): PostfixUnaryExpression = PostfixUnaryExpression(updateExpressionBase = updateExpressionBase.goCopy(), operand = operand, operator = operator)
 
@@ -9565,7 +9565,7 @@ class YieldExpression(
     @kotlin.jvm.JvmField var expressionBase: ExpressionBase = ExpressionBase(),
     @kotlin.jvm.JvmField var asteriskToken: Node? = null,
     @kotlin.jvm.JvmField var expression: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): YieldExpression = YieldExpression(expressionBase = expressionBase.goCopy(), asteriskToken = asteriskToken, expression = expression)
 
@@ -9672,7 +9672,7 @@ class ArrowFunction(
     @kotlin.jvm.JvmField var flowNodeBase: FlowNodeBase = FlowNodeBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
     @kotlin.jvm.JvmField var equalsGreaterThanToken: Node? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): ArrowFunction = ArrowFunction(expressionBase = expressionBase.goCopy(), declarationBase = declarationBase.goCopy(), modifiersBase = modifiersBase.goCopy(), functionLikeWithBodyBase = functionLikeWithBodyBase.goCopy(), flowNodeBase = flowNodeBase.goCopy(), compositeBase = compositeBase.goCopy(), equalsGreaterThanToken = equalsGreaterThanToken)
 

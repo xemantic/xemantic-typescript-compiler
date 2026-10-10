@@ -1741,33 +1741,33 @@ fun Node?.asFlowReduceLabelData(): FlowReduceLabelData? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.nodeData 90438737
-interface nodeData {
-    fun asNode(): Node?
-    fun bodyData(): BodyBase?
-    fun classLikeData(): ClassLikeBase?
-    fun clone(p0: NodeFactoryCoercible?): Node?
-    fun declarationData(): DeclarationBase?
-    fun exportableData(): ExportableBase?
-    fun flowNodeData(): FlowNodeBase?
-    fun forEachChild(p0: Visitor): Boolean
-    fun functionLikeData(): FunctionLikeBase?
-    fun literalLikeData(): LiteralLikeNodeBase?
-    fun localsContainerData(): LocalsContainerBase?
-    fun modifiers(): ModifierList?
-    fun name(): Node?
-    fun subtreeFacts(): SubtreeFacts
-    fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase?
-    fun visitEachChild(p0: NodeVisitor?): Node?
-    fun computeSubtreeFacts(): SubtreeFacts
-    fun propagateSubtreeFacts(): SubtreeFacts
-    fun setModifiers(p0: ModifierList?)
-    fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts
+abstract class nodeData {
+    abstract fun asNode(): Node?
+    abstract fun bodyData(): BodyBase?
+    abstract fun classLikeData(): ClassLikeBase?
+    abstract fun clone(p0: NodeFactoryCoercible?): Node?
+    abstract fun declarationData(): DeclarationBase?
+    abstract fun exportableData(): ExportableBase?
+    abstract fun flowNodeData(): FlowNodeBase?
+    abstract fun forEachChild(p0: Visitor): Boolean
+    abstract fun functionLikeData(): FunctionLikeBase?
+    abstract fun literalLikeData(): LiteralLikeNodeBase?
+    abstract fun localsContainerData(): LocalsContainerBase?
+    abstract fun modifiers(): ModifierList?
+    abstract fun name(): Node?
+    abstract fun subtreeFacts(): SubtreeFacts
+    abstract fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase?
+    abstract fun visitEachChild(p0: NodeVisitor?): Node?
+    abstract fun computeSubtreeFacts(): SubtreeFacts
+    abstract fun propagateSubtreeFacts(): SubtreeFacts
+    abstract fun setModifiers(p0: ModifierList?)
+    abstract fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault f6cfb78c
 class NodeDefault(
     @kotlin.jvm.JvmField var node: Node = Node(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NodeDefault = NodeDefault(node = node.goCopy())
 
@@ -1892,7 +1892,7 @@ class NodeDefault(
 // go: github.com/microsoft/typescript-go/internal/ast.NodeBase 5f5f4a35
 class NodeBase(
     @kotlin.jvm.JvmField var nodeDefault: NodeDefault = NodeDefault(),
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): NodeBase = NodeBase(nodeDefault = nodeDefault.goCopy())
 
@@ -2787,7 +2787,7 @@ class SourceFile(
     @kotlin.jvm.JvmField var nameTable: GoMap<String, Int> = GoMap.nil<String, Int>(GoElem.INT),
     @kotlin.jvm.JvmField var positionMapOnce: Once = Once(),
     @kotlin.jvm.JvmField var positionMap: PositionMap? = null,
-) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData, FileLike, Script, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData(), FileLike, Script, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): SourceFile = SourceFile(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), fileName = fileName, parseOptions = parseOptions.goCopy(), text = text, statements = statements, endOfFileToken = endOfFileToken, dataMu = dataMu.goCopy(), data = data, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, languageVariant = languageVariant, scriptKind = scriptKind, isDeclarationFile = isDeclarationFile, containsNonASCII = containsNonASCII, usesUriStyleNodeCoreModules = usesUriStyleNodeCoreModules, identifiers = identifiers, identifierCount = identifierCount, imports = imports, moduleAugmentations = moduleAugmentations, ambientModuleNames = ambientModuleNames, commentDirectives = commentDirectives, jsdocCache = jsdocCache, jsdocMu = jsdocMu.goCopy(), hasLazyJSDoc = hasLazyJSDoc, reparsedClones = reparsedClones, pragmas = pragmas, referencedFiles = referencedFiles, typeReferenceDirectives = typeReferenceDirectives, libReferenceDirectives = libReferenceDirectives, checkJsDirective = checkJsDirective, nodeCount = nodeCount, textCount = textCount, commonJSModuleIndicator = commonJSModuleIndicator, externalModuleIndicator = externalModuleIndicator, isBound = isBound.goCopy(), bindOnce = bindOnce.goCopy(), bindDiagnostics = bindDiagnostics, bindSuggestionDiagnostics = bindSuggestionDiagnostics, endFlowNode = endFlowNode, symbolCount = symbolCount, classifiableNames = classifiableNames.goCopy(), patternAmbientModules = patternAmbientModules, globalExports = globalExports, ecmaLineMapMu = ecmaLineMapMu.goCopy(), ecmaLineMap = ecmaLineMap, hash = hash, tokenCacheMu = tokenCacheMu.goCopy(), tokenCache = tokenCache, tokenFactory = tokenFactory, declarationMapMu = declarationMapMu.goCopy(), declarationMap = declarationMap, nameTableOnce = nameTableOnce.goCopy(), nameTable = nameTable, positionMapOnce = positionMapOnce.goCopy(), positionMap = positionMap)
 

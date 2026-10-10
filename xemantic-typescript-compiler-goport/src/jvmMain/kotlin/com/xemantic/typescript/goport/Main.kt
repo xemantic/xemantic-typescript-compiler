@@ -174,6 +174,8 @@ fun main(argv: Array<String>) {
     prog.computeWindowFields()
     prog.computeImmutableStructs()
     for ((k, why) in prog.immutableRefusals) println("goport: immutable struct refused: $k — $why")
+    prog.computeAbstractIfaces()
+    for ((k, why) in prog.abstractIfaceRefusals) println("goport: abstract-class interface refused: $k — $why")
     prog.computeWindowFuncs(overrides.keys)
     val pinned = RenameTable.load(args.refuse).let { t -> t.entries() }
     val report = Report()

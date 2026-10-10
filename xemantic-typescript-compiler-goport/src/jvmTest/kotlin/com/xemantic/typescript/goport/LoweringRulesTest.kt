@@ -292,4 +292,20 @@ class LoweringRulesTest {
         assert(node.contains("t = this.getTypeAtFlowAssignment(f, flow)"))
         assert(!node.contains("t.goSet("))
     }
+
+    @Test
+    fun `nodeData and TypeData are abstract classes and every implementer calls their constructor`() {
+        val ast = File(gen, "ast/Ast.kt").readText()
+        assert(ast.contains("abstract class nodeData {"))
+        assert(ast.contains("    abstract fun localsContainerData(): LocalsContainerBase?"))
+        assert(!ast.contains("interface nodeData"))
+        val types = File(gen, "checker/Types.kt").readText()
+        assert(types.contains("abstract class TypeData {"))
+        assert(types.contains(") : TypeData() {"))
+        // Every implementer's supertype list names them with a constructor call (`nodeData()`), never bare.
+        val bare = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f ->
+            Regex("""\bnodeData[,{ ]|\bTypeData[,{ ]""").findAll(f.readText().lines().filter { it.startsWith(") : ") }.joinToString("\n")).count()
+        }
+        assert(bare == 0)
+    }
 }

@@ -62,6 +62,17 @@ val IMMUTABLE_STRUCT_CANDIDATES = setOf(
     "github.com/microsoft/typescript-go/internal/checker.FlowType",
 )
 
+/**
+ * Interfaces that may be lowered as ABSTRACT CLASSES ([Program.abstractIfaces], docs/goport-perf.md § 10-11):
+ * `ast.nodeData` (every AST node's payload) and `checker.TypeData` (every type's) are called megamorphically
+ * on every node/type access, and HotSpot dispatches an interface call through an itable stub (a scan of the
+ * receiver class's itable) where a class call is one vtable load.
+ */
+val ABSTRACT_IFACE_CANDIDATES = setOf(
+    "github.com/microsoft/typescript-go/internal/ast.nodeData",
+    "github.com/microsoft/typescript-go/internal/checker.TypeData",
+)
+
 val OBJECT_MEMBERS = setOf("toString", "hashCode", "equals", "getClass", "wait", "notify", "notifyAll", "finalize", "clone")
 
 /**
@@ -102,6 +113,9 @@ class Program(
 
     /** Go method names of every interface a named type's `implements` lists (a superset of the overrides). */
     val ifaceMethodNames = HashMap<String, MutableSet<String>>()
+
+    /** (Declared before the init loop that fills it.) Named types whose IR `implements` lists a named interface: interface key → (implementer key, is a struct). */
+    val ifaceImplementers = HashMap<String, MutableList<Pair<String, Boolean>>>()
 
     /** Named STRUCT types declared in the run (not aliases): keys. */
     val structTypes = HashSet<String>()
@@ -480,6 +494,9 @@ class Program(
                 for (im in n.node.list("implements")) {
                     val iface = tt.under(im.int("iface")!!) as? com.xemantic.typescript.goport.types.InterfaceType ?: continue
                     ifaceMethodNames.getOrPut(n.key) { HashSet() } += iface.allMethods.ifEmpty { iface.methods }.map { it.name }
+                    (tt.unalias(im.int("iface")!!) as? com.xemantic.typescript.goport.types.NamedType)?.let { ik ->
+                        ifaceImplementers.getOrPut(ik.key) { ArrayList() } += n.key to (u is com.xemantic.typescript.goport.types.StructType)
+                    }
                 }
             }
         }
@@ -873,6 +890,47 @@ class Program(
             }
             true
         }
+    }
+
+    // ---- abstract-class interfaces (docs/goport-lowering.md § 3, "Abstract-class interfaces") ----
+
+    /**
+     * Interfaces lowered as abstract classes ([computeAbstractIfaces]), by key. Legal only when every
+     * implementer is a struct class (Kotlin: one superclass, never a value class, box or typealias), no
+     * implementer extends two of them, and no other interface extends one (an interface cannot extend a class).
+     */
+    val abstractIfaces = HashSet<String>()
+
+    /** Why each [ABSTRACT_IFACE_CANDIDATES] entry was refused (for the report and the pins). */
+    val abstractIfaceRefusals = HashMap<String, String>()
+
+    fun computeAbstractIfaces() {
+        abstractIfaces.clear()
+        abstractIfaceRefusals.clear()
+        val cand = ABSTRACT_IFACE_CANDIDATES.filter { it in namedIfaceByKey }.toMutableSet()
+        for (k in ABSTRACT_IFACE_CANDIDATES - cand) abstractIfaceRefusals[k] = "not a non-generic method-set interface declared in the run"
+        fun refuse(k: String, why: String) { if (cand.remove(k)) abstractIfaceRefusals[k] = why }
+        for (b in namedIfaces) for (k in cand.toList()) {
+            if (b.key == k) continue
+            if (embedsTransitively(b, k)) refuse(k, "interface ${b.key} embeds it")
+            else if (structuralIfaceSupers(b.key).any { it.key == k }) refuse(k, "interface ${b.key} extends it structurally")
+        }
+        for ((k, list) in genericImplements.entries.flatMap { (t, bs) -> bs.map { b -> b.key to t } }.groupBy({ it.first }, { it.second })) {
+            if (k in cand) for (t in list) if (t !in structTypes) refuse(k, "generic implementer $t is not a struct")
+        }
+        val seen = HashMap<String, String>()
+        for (k in cand.toList()) {
+            for ((t, isStruct) in ifaceImplementers[k] ?: emptyList()) {
+                if (!isStruct || t in boxedNamed) { refuse(k, "implementer $t is not a struct class"); continue }
+                val other = seen.put(t, k)
+                if (other != null && other != k) { refuse(k, "$t also implements $other"); refuse(other, "$t also implements $k") }
+            }
+        }
+        for ((t, bs) in genericImplements) for (b in bs) if (b.key in cand) {
+            val other = seen.put(t, b.key)
+            if (other != null && other != b.key) { refuse(b.key, "$t also implements $other"); refuse(other, "$t also implements ${b.key}") }
+        }
+        abstractIfaces += cand
     }
 
     // ---- immutable structs (docs/goport-lowering.md § 3, "Immutable structs") ----

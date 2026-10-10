@@ -347,6 +347,15 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   a field, deref, or call another pure method (fixpoint). Such a local is then a plain rebindable reference
   (`var t = …; t = f()`), not an address-stable object assigned by `goSet`. Refusals are printed by the porter.
   Pin: `LoweringRulesTest`.
+- **Abstract-class interfaces** ((TSGO.6-i), `Program.computeAbstractIfaces`, `Decls.ifaceDecl`/`superCall`). An
+  interface in `ABSTRACT_IFACE_CANDIDATES` (`ast.nodeData`, `checker.TypeData`) is lowered as an `abstract class`
+  (`abstract fun` members) when the whole run proves it legal: every named type whose IR `implements` lists it is a
+  STRUCT class (never a value class, a `<Name>_Box`, a `<V>_Ptr` or a typealias — Kotlin gives a class one superclass
+  and a value class none), no type implements two of them, and no other interface embeds it or extends it
+  structurally (an interface cannot extend a class). Implementers then name it with a constructor call
+  (`: nodeData()`); promoted-method forwarding overrides are unchanged. The JVM dispatches a call on it through a
+  vtable instead of an itable scan (docs/goport-perf.md § 11). Refusals are printed by the porter; the non-struct
+  emitters refuse the run if one would extend such a class. Pin: `LoweringRulesTest`.
 
 (TSGO.2) harness rules:
 

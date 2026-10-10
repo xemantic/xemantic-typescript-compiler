@@ -141,7 +141,7 @@ class FlowSwitchClauseData(
     @kotlin.jvm.JvmField var switchStatement: Node? = null,
     @kotlin.jvm.JvmField var clauseStart: Int = 0,
     @kotlin.jvm.JvmField var clauseEnd: Int = 0,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): FlowSwitchClauseData = FlowSwitchClauseData(nodeBase = nodeBase.goCopy(), switchStatement = switchStatement, clauseStart = clauseStart, clauseEnd = clauseEnd)
 
@@ -226,7 +226,7 @@ class FlowReduceLabelData(
     @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var target: FlowNode? = null,
     @kotlin.jvm.JvmField var antecedents: FlowList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
     fun goCopy(): FlowReduceLabelData = FlowReduceLabelData(nodeBase = nodeBase.goCopy(), target = target, antecedents = antecedents)
 
