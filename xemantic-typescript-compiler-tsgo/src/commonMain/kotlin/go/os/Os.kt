@@ -42,7 +42,7 @@ fun dirFS(dir: String): com.xemantic.typescript.tsgo.go.io.fs.FS? = DirFS(dir)
 private class DirFS(private val dir: String) :
     com.xemantic.typescript.tsgo.go.io.fs.ReadFileFS,
     com.xemantic.typescript.tsgo.go.io.fs.ReadDirFS,
-    com.xemantic.typescript.tsgo.go.io.fs.StatFS {
+    com.xemantic.typescript.tsgo.go.io.fs.StatFS, StringFileFS {
 
     private fun join(op: String, name: String): Pair<String?, com.xemantic.typescript.tsgo.runtime.GoError?> {
         if (!com.xemantic.typescript.tsgo.go.io.fs.validPath(name)) {
@@ -59,6 +59,14 @@ private class DirFS(private val dir: String) :
         if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, err)
         val isDir = syscall(GoSyscall.OP_STAT) { platformIsDir(host(full!!)) } ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("open", name))
         return com.xemantic.typescript.tsgo.runtime.Tuple2(HostFile(this, name, full!!, isDir), null)
+    }
+
+    override fun readFileString(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<String, com.xemantic.typescript.tsgo.runtime.GoError?> {
+        val (full, err) = join("open", name)
+        if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2("", err)
+        val bytes = syscall(GoSyscall.OP_READ) { platformReadFile(host(full!!)) }?.also { GoSyscall.recordBytes(it.size) }
+            ?: return com.xemantic.typescript.tsgo.runtime.Tuple2("", notExist("open", name))
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(goLatin1String(bytes), null)
     }
 
     override fun readFile(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.runtime.GoSlice<Int>, com.xemantic.typescript.tsgo.runtime.GoError?> {
@@ -143,6 +151,18 @@ private class DirFS(private val dir: String) :
         override fun sys(): Any? = null
     }
 }
+
+/**
+ * NOT Go API — `string(b)` of `fs.ReadFile(fsys, name)` in one step, for a file system that can read a file straight
+ * into a byte string (the host [DirFS]). `vfs/internal.Common.ReadFile` (an override, docs/goport-perf.md § 17) uses it
+ * where the generated code built a `[]byte` slice element by element and then a string from it again.
+ */
+interface StringFileFS {
+    fun readFileString(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<String, com.xemantic.typescript.tsgo.runtime.GoError?>
+}
+
+/** A byte string (one `Char` per byte, docs/goport-design.md § 3) of [bytes]. */
+internal expect fun goLatin1String(bytes: ByteArray): String
 
 /** Whether [path] is a directory; null when it does not exist. */
 internal expect fun platformIsDir(path: String): Boolean?

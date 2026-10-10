@@ -985,3 +985,16 @@ osfs`, the real file system every rebuild): `platformListDir` **39%** of the pha
 
 Measured, GraalVM default image, date-fns core, 5 rotated runs per arm: **Config time 107 → 77 ms (−28%)**, output
 identical (CLI parity green over every recorded project's file set, Diag 13,127 equal).
+
+## 17. (TSGO.6-m) Reading a source file into a string in one step (2026-10-10)
+
+A JFR profile of the GraalVM image (built with `--enable-monitoring=jfr`; `perf` needs root after a reboot here) put
+~20% of the image's PARSE phase in reading files: `goBytesToString`, `DirFS.readFile`, `containsNonASCII`. Go's
+`string(b)` of `os.ReadFile`'s bytes is one copy; the port read the host's `ByteArray`, filled a `[]byte` `GoSlice`
+element by element (boxed `Int`s), then built a string from it element by element again. `go.os.StringFileFS`
+(NOT Go API) reads a host file straight into a byte string (`String(bytes, ISO_8859_1)` on the JVM, an intrinsic copy;
+a `CharArray` natively), and a hash-pinned override of `vfs/internal.Common.ReadFile` asks for it when the file system
+is the host's; every other FS keeps Go's path, and `decodeBytes` (the BOM handling) is Go's.
+
+GraalVM default image, 4 rotated runs per arm, output identical: Parse time **316 → 286 ms** (compiler profile),
+**232 → 195 ms** (date-fns core); Total 2.47 → 2.38 s and 0.59 → 0.56 s.

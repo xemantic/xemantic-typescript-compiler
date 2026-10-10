@@ -200,3 +200,9 @@ internal actual fun platformUserCacheDir(): String? =
 internal actual fun platformTempDir(): String = getenv("TMPDIR")?.toKString()?.takeIf { it.isNotEmpty() } ?: "/tmp"
 
 internal actual fun platformGetenv(name: String): String? = getenv(name)?.toKString()
+
+internal actual fun goLatin1String(bytes: ByteArray): String {
+    val chars = CharArray(bytes.size)
+    for (i in bytes.indices) chars[i] = (bytes[i].toInt() and 0xFF).toChar()
+    return chars.concatToString()
+}

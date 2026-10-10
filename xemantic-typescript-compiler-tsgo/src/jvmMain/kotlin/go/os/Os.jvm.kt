@@ -111,3 +111,6 @@ internal actual fun platformUserCacheDir(): String? =
 internal actual fun platformTempDir(): String = System.getenv("TMPDIR")?.takeIf { it.isNotEmpty() } ?: "/tmp"
 
 internal actual fun platformGetenv(name: String): String? = System.getenv(name)
+
+/** ISO-8859-1 maps every byte to the `Char` of the same code: a JDK intrinsic copy into a compact string. */
+internal actual fun goLatin1String(bytes: ByteArray): String = String(bytes, Charsets.ISO_8859_1)
