@@ -35,8 +35,8 @@ import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
  * A declaration file's parse depends only on its name, its path and its text: its `ExternalModuleIndicatorOptions`
  * are always empty (`ast.GetExternalModuleIndicatorOptions`). So the trees of the bundled libs are the same in every
  * program, and tsgo's own language server and test harness reuse them across programs. The GraalVM image is built with
- * `-Dxtsc.tsgo.libSnapshot=true` and this object initialized at BUILD time, which parses every bundled lib into the
- * image heap; a run then starts with them parsed. `compilerHost.GetSourceFile` (an override) asks [lookup] after
+ * `-Dxtsc.tsgo.libSnapshot=true` and this object initialized at BUILD time, which parses AND binds every bundled lib
+ * into the image heap; a run then starts with them parsed and bound. `compilerHost.GetSourceFile` (an override) asks [lookup] after
  * reading a file's text, and a tree is answered only for the SAME parse options and the SAME text — anything else
  * (another lib directory, a case-insensitive file system's path, a JVM run with the property unset) parses as before.
  */
@@ -65,6 +65,9 @@ object TsgoLibSnapshot {
                 externalModuleIndicatorOptions = ExternalModuleIndicatorOptions(),
             )
             val file = com.xemantic.typescript.tsgo.parser.parseSourceFile(opts.goCopy(), read.first, com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(fileName)) ?: continue
+            // Bound ahead too: binding reads nothing but the file (`binder.BindSourceFile`), tsgo shares a bound file
+            // between programs and between its concurrent checkers, and a run's `BindSourceFile` finds it bound.
+            com.xemantic.typescript.tsgo.binder.bindSourceFile(file)
             out[fileName] = Entry(opts, file)
         }
         return out

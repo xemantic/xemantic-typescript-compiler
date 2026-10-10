@@ -1152,3 +1152,17 @@ the start and the path checks are spread over all workers; neither sits on the p
 **The PGO image after §§ 22-23** (embedded libs, 4 rotated runs per arm, every output identical to tsgo 7.0.2's):
 tsc's compiler profile **1,693 / 1,701 ms**, services **2,297 / 2,302**, hono 686 / 676, immer 567 / 522, ky 127 / 122,
 mitt **68 / 81**, date-fns 416 / 328 (1.27x; it was 448). `TSGO_IO_STATS=1` works from the image again.
+
+## 25. (TSGO.6-o) The bundled libs bound at image build time too (2026-10-10)
+
+Binding reads nothing but the file (`binder.BindSourceFile(file)` takes no options), and tsgo shares a bound file
+between programs and between its concurrent checkers — binder output is never written by a checker. So
+`TsgoLibSnapshot` now binds each lib after parsing it, inside the image builder; a run's `BindSourceFile` finds it
+bound (`BindOnce` is done). The binder's only id use (`GetSymbolId`, for `#private` names) never meets a lib
+declaration, and the dense link indices continue from the build's counter (`linkIndexCounter` is in the image heap),
+so no index collides. Image (no PGO, embedded libs, 4 rotated runs per arm, outputs identical): **mitt 105 → 56 ms,
+ky 158 → 115, immer 770 → 644, hono 865 → 805**, date-fns 528 → 513, tsc's compiler profile inside the noise. The CLI
+replay with the embedded libs is byte-identical to the unbound snapshot's; the standard replay is 106 / 106 against tsgo.
+
+Startup is the next constant: `--version` takes ~20 ms against tsgo's 5, and ~12 of it is the snapshot's image heap
+(RSS 22 → 61 MB at startup — the heap is read whole before `main`).
