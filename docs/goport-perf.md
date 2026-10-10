@@ -1148,3 +1148,7 @@ path of up to 8 characters on `a . /`) — and an image with them measured **no 
 other five projects inside the noise, outputs identical). The package.json parse runs once per worker in parallel at
 the start and the path checks are spread over all workers; neither sits on the path the wall waits for. Reverted.
 `core.Arena.new`'s `GoElem.zeroValue` row is the node constructors themselves (the lambda is the allocation site).
+
+**The PGO image after §§ 22-23** (embedded libs, 4 rotated runs per arm, every output identical to tsgo 7.0.2's):
+tsc's compiler profile **1,693 / 1,701 ms**, services **2,297 / 2,302**, hono 686 / 676, immer 567 / 522, ky 127 / 122,
+mitt **68 / 81**, date-fns 416 / 328 (1.27x; it was 448). `TSGO_IO_STATS=1` works from the image again.
