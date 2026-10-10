@@ -25,9 +25,14 @@ for p in "${PROJECTS[@]}"; do [[ -f $p/tsconfig.json ]] || { echo "REFUSED: no t
 N=$R/xemantic-typescript-compiler-tsgo/build/native
 WORK=$(mktemp -d); trap 'rm -r -- "$WORK"' EXIT
 
+# The bundled lib.*.d.ts parsed at IMAGE BUILD TIME into the image heap (com.xemantic.typescript.tsgo.TsgoLibSnapshot,
+# docs/goport-perf.md § 21): the port is initialized at build time, except GoProcs, which reads the CPU count and
+# TSGO_GOMAXPROCS. A run then finds the libs parsed (same options and text, else it parses as before).
+SNAPSHOT="-Dxtsc.tsgo.libSnapshot=true --initialize-at-build-time=com.xemantic.typescript.tsgo,kotlin --initialize-at-run-time=com.xemantic.typescript.tsgo.go.sync.GoProcs"
+
 cd "$R"
 ./gradlew -q :xemantic-typescript-compiler-tsgo:nativeImage -PgraalvmHome="$GRAAL" \
-  -PnativeImageArgs=--pgo-instrument -PnativeImageOutput=xtsc-tsgo-instrumented
+  "-PnativeImageArgs=--pgo-instrument $SNAPSHOT" -PnativeImageOutput=xtsc-tsgo-instrumented
 
 export XTSC_TSGO_LIB_DIR=${XTSC_TSGO_LIB_DIR:-$R/tools/tsgo-7.0.2/lib}
 profiles=(); i=0
@@ -44,5 +49,5 @@ done
 for f in "${profiles[@]}"; do [[ -s $f ]] || { echo "REFUSED: training wrote no profile $f" >&2; exit 1; }; done
 pgo=$(IFS=,; echo "${profiles[*]}")
 ./gradlew -q :xemantic-typescript-compiler-tsgo:nativeImage -PgraalvmHome="$GRAAL" \
-  "-PnativeImageArgs=--pgo=$pgo -O3" -PnativeImageOutput=xtsc-tsgo-pgo
+  "-PnativeImageArgs=--pgo=$pgo -O3 $SNAPSHOT" -PnativeImageOutput=xtsc-tsgo-pgo
 echo "PGO image: $N/xtsc-tsgo-pgo (trained on ${#PROJECTS[@]} project(s))"

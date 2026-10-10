@@ -1,3 +1,12 @@
+**(TSGO.6-i) DONE — a fresh warm profile; `nodeData`/`TypeData` as abstract classes (2026-10-10):** the profile after
+the window-field round (docs/goport-perf.md § 10): `GoMap` 15% of the thread (half of it the refused `LinkStore` probe),
+itable stubs 4.1%, `compareSymbols` boxing 3% of allocation, the `xxh3` key hasher 74% of `byte[]`, GC ~35% of process
+CPU. Lever 4 is a porter rule (`Program.computeAbstractIfaces`): `ast.nodeData` and `checker.TypeData` become abstract
+classes after a whole-run legality proof — itable+vtable stubs **4.69% → 3.26%** of the bench thread as predicted, wall
+inside noise (+0.2% single, −0.8..−3.5% parallel, cold ±0.5%), allocation/GC unchanged (§ 11). No > 3% runtime-shim
+allocation lever left; sized: key-builder reuse ~8%, `TextRange` ~3.5%, `compareSymbols` boxing 3%, `atomic.Uint64` 2%.
+Diag/Emit 13,127, CLI 105, LS 21,614, API 594,007 equal; `-tsgo` 125 / 0, native 68 / 0.
+
 **(TSGO.6-h) DONE — an IO dispatcher beside the compute one: REFUSED, measured (2026-10-10):** owner question. The
 port's goroutines are platform threads gated by `GoProcs` run tokens; host file calls kept the token. Releasing it around
 every host call (`TSGO_IO_DISPATCH=release`) or running the call on a dedicated IO pool (`pool`) — experiment commit

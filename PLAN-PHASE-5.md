@@ -25,6 +25,22 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-m..o) — CONFIG WALK, ONE-STEP FILE READS, TRANSPARENT WRAPPERS, AND THE BUNDLED LIBS PARSED AT IMAGE BUILD TIME: the PGO image is at or past tsgo 7.0.2 on tsc's compiler (1,722 / 1,728 ms) and services (2,305 / 2,335) profiles and on immer, ky and mitt; date-fns is the one left (483 / 359) (2026-10-10)
+
+- (6-m) config-phase directory walk: one `lstat` per entry, a lazy size, `vfsmatch` path parts searched in place
+  (image Config time on date-fns 107 → 77 ms); source files read into a byte string in one step (`StringFileFS` + a
+  `Common.ReadFile` override; image parse −9..−16%). docs/goport-perf.md §§ 16-17.
+- (6-n) transparent wrappers: 9 `*Base` structs with no field or method of their own lowered as `typealias`es of what
+  they wrap — an `ast.Identifier` 13 objects → 6; warm −5.8% single / −2.6% parallel / −5.2% services (§ 19). Flat
+  struct stores in place (`x.f.goSet(v)`) built and REFUSED: −4% allocation, wall +2..+4% (with owned slice locals,
+  the second allocation-only lever with no wall gain; what pays is fewer objects ON THE ACCESS PATH).
+- (6-o) `TsgoLibSnapshot`: the bundled libs parsed inside the GraalVM builder into the image heap, answered by a
+  `compilerHost.GetSourceFile` override for the same options and text only (§ 21). A broader PGO training set was
+  measured and is mixed (§ 20).
+- Gates (each change): `-tsgo` 136/0, `-goport` 26/0, `-lsp` 38/0, Diag 13,127 equal, Emit/CLI/LS/API parity green,
+  CLI native replay 106/106 (with and without the snapshot), warning gate live, 0 methods over 8,000 bytecodes,
+  `linuxX64Test` 79/0.
+
 ### Round (TSGO.6-l) — THE CHECKER'S LINK STORE FILED BY A DENSE PORT-INTERNAL INDEX (§ 8.3's refusal revisited): wall −9.2% single (4/4) / −6.5% compiler parallel (3/4) / −13.4% services (4/4), allocation −3%, peak heap −6% (2026-10-10)
 
 - `GoMap.find` was 15.6% of the warm thread after (TSGO.6-k), 54% of it `LinkStore.Get`. § 8.3 refused per-object
@@ -271,28 +287,6 @@ it is the live Phase 18 queue.
   (7.8 s vs 1.7 s) is the K/N heap and the generated code's allocation rate.
 - Gates: `linuxX64Test` 64 / 0, `-tsgo` `jvmTest` 119 / 0, warning-clean (only the 5 host notices). gperftools was tried
   first (no root) and dropped once `perf` was available.
-
-### Round (TSGO.6-c) — EVERY AOT LEVER MEASURED: Oracle GraalVM's PGO + `-O3` makes the image 15-23% faster (compiler profile 2.95 → 2.47 s, held-out services 4.00 → 3.08 s; tsgo 1.73 / 2.36 s), `-O3` alone 5-11%, `-march=native` nothing; Kotlin/Native now links `gc=pmcs`, 33-35% faster AND ~20% smaller than Kotlin's default `cms` (2026-10-09)
-
-- **GraalVM** (5 images, ~2.5 min each; rotated medians of 3 over 4 workloads, every arm byte-identical to tsgo incl.
-  the 78 emitted files): default G1 / `-O3` / `-O3 -march=native` / PGO + `-O3` / PGO + `-O3 -march=native` read
-  compiler check 2.95 / 2.80 / 2.82 / 2.47 / 2.44 s, check+emit 4.54 / 4.34 / 4.41 / 3.90 / 3.68 s, services
-  (held out) 4.00 / 3.56 / 3.64 / 3.08 / 3.23 s, date-fns (held out) 0.66 / 0.65 / 0.63 / 0.59 / 0.58 s. Training:
-  the compiler profile check + emit and zod (three `.iprof`, 13-16 MB each). `-march=native` is noise on Zen 2 (the
-  default is `x86-64-v3`, no AVX-512). G1 young-gen sizing on top of PGO: under ~5%, mixed — not baked in.
-  `scripts/tsgo-native-image-pgo.sh` reproduces it from scratch (2.37-2.55 s) and the PGO image passes the
-  106-case replay (162 s for all of them vs 189 s without PGO). Profiles are NOT committed (40 MB, binary-specific).
-- **Kotlin/Native** (release links ~8 min each, alone): `NativeCheckMain` reads every runtime GC knob;
-  `-PtsgoNativeBinaryOptions` relinks with others. **Three of six links were byte-identical to the default**
-  (`gc=cms` IS the 2.4 default; `gcMutatorsCooperate=true`, `auxGCThreads=4` no-ops) — caught by `md5sum` before
-  any timing; `gc=pmcs` differs (the positive control). Compiler / services, parallel, 2 rounds, outputs = tsgo:
-  `cms` 11.6 s / 2.1 GB, 15.5 / 2.9; **`pmcs` 7.8 / 1.7, 10.1 / 2.3**; `cms` + utilisation 0.3 + trigger 0.5 (stall
-  on) 6.2 / 3.5, 8.9 / 5.3; `cms` stall off 5.8 / 4.1, 8.1 / 6.0 (and `TSGO_GC_MAX_MB=3072` does not bound it). The
-  knobs make `pmcs` worse (0.4 / 0.5: 14.7 s). **The build now links `gc=pmcs`** — faster, smaller, and still
-  bounded — for every `-tsgo` native binary; native suite 64 / 64 on it, and the default link is byte-identical to
-  the measured `pmcs` arm.
-- **Next**: a native `-tsgo` CI job; a native goroutine thread pool; attributing the remaining native gap (no
-  profiler on the box).
 
 ## QUEUE
 

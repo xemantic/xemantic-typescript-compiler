@@ -1,3 +1,25 @@
+### Round (TSGO.6-c) — EVERY AOT LEVER MEASURED: Oracle GraalVM's PGO + `-O3` makes the image 15-23% faster (compiler profile 2.95 → 2.47 s, held-out services 4.00 → 3.08 s; tsgo 1.73 / 2.36 s), `-O3` alone 5-11%, `-march=native` nothing; Kotlin/Native now links `gc=pmcs`, 33-35% faster AND ~20% smaller than Kotlin's default `cms` (2026-10-09)
+
+- **GraalVM** (5 images, ~2.5 min each; rotated medians of 3 over 4 workloads, every arm byte-identical to tsgo incl.
+  the 78 emitted files): default G1 / `-O3` / `-O3 -march=native` / PGO + `-O3` / PGO + `-O3 -march=native` read
+  compiler check 2.95 / 2.80 / 2.82 / 2.47 / 2.44 s, check+emit 4.54 / 4.34 / 4.41 / 3.90 / 3.68 s, services
+  (held out) 4.00 / 3.56 / 3.64 / 3.08 / 3.23 s, date-fns (held out) 0.66 / 0.65 / 0.63 / 0.59 / 0.58 s. Training:
+  the compiler profile check + emit and zod (three `.iprof`, 13-16 MB each). `-march=native` is noise on Zen 2 (the
+  default is `x86-64-v3`, no AVX-512). G1 young-gen sizing on top of PGO: under ~5%, mixed — not baked in.
+  `scripts/tsgo-native-image-pgo.sh` reproduces it from scratch (2.37-2.55 s) and the PGO image passes the
+  106-case replay (162 s for all of them vs 189 s without PGO). Profiles are NOT committed (40 MB, binary-specific).
+- **Kotlin/Native** (release links ~8 min each, alone): `NativeCheckMain` reads every runtime GC knob;
+  `-PtsgoNativeBinaryOptions` relinks with others. **Three of six links were byte-identical to the default**
+  (`gc=cms` IS the 2.4 default; `gcMutatorsCooperate=true`, `auxGCThreads=4` no-ops) — caught by `md5sum` before
+  any timing; `gc=pmcs` differs (the positive control). Compiler / services, parallel, 2 rounds, outputs = tsgo:
+  `cms` 11.6 s / 2.1 GB, 15.5 / 2.9; **`pmcs` 7.8 / 1.7, 10.1 / 2.3**; `cms` + utilisation 0.3 + trigger 0.5 (stall
+  on) 6.2 / 3.5, 8.9 / 5.3; `cms` stall off 5.8 / 4.1, 8.1 / 6.0 (and `TSGO_GC_MAX_MB=3072` does not bound it). The
+  knobs make `pmcs` worse (0.4 / 0.5: 14.7 s). **The build now links `gc=pmcs`** — faster, smaller, and still
+  bounded — for every `-tsgo` native binary; native suite 64 / 64 on it, and the default link is byte-identical to
+  the measured `pmcs` arm.
+- **Next**: a native `-tsgo` CI job; a native goroutine thread pool; attributing the remaining native gap (no
+  profiler on the box).
+
 ### Round (TSGO.6-b) — THE GraalVM IMAGE OF THE PORTED CLI: `:xemantic-typescript-compiler-tsgo:nativeImage` builds `xtsc-tsgo` (~57 MB, ~2 min, no reflection metadata) and it answers all 106 recorded command-line cases byte-identically to the tsgo 7.0.2 binary, type-fest included; G1 makes it 2.9 s on tsc's compiler profile against tsgo's 1.76 s (2026-10-09)
 
 - **Toolchain**: Oracle GraalVM 25.0.4 downloaded into the gitignored `tools/graalvm-25` (no GraalVM was on the box).

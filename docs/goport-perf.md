@@ -1070,3 +1070,35 @@ per arm, every output byte-identical:
   image heap would remove most of it — but it needs build-time initialization of much of the port, whose process-global
   state (the run-token count read from the CPU count, the link-index counter, the goroutine pool) must not be baked in.
   A project of its own, not attempted here.
+
+## 21. (TSGO.6-o) The bundled libs parsed at image build time — the PGO image at or past tsgo on 5 of 6 projects (2026-10-10)
+
+§ 20 left the small projects' gap in parsing the bundled `lib.*.d.ts` files (mitt: parse 65 ms vs tsgo's 37 ms, 91 of
+its 94 files libs). A declaration file's parse depends only on its name, path and text — its
+`ExternalModuleIndicatorOptions` are always empty — so the lib trees are the same in every program (tsgo's language
+server and test harness reuse them). `com.xemantic.typescript.tsgo.TsgoLibSnapshot` (hand-written, common) parses every
+bundled lib when its object is initialized, but only when the system property `xtsc.tsgo.libSnapshot=true` is set —
+inside the GraalVM builder, with the port initialized at BUILD time (`--initialize-at-build-time=
+com.xemantic.typescript.tsgo,kotlin`, except `GoProcs`, which reads the CPU count and `TSGO_GOMAXPROCS`). The trees land
+in the image heap. A hash-pinned override of `compiler.compilerHost.GetSourceFile` asks `lookup(opts, text)` after
+reading a file: a tree is answered only for the SAME parse options and the SAME text, so another lib directory
+(`XTSC_TSGO_LIB_DIR`), a case-insensitive file system's path or a JVM run (the property unset) parse as before.
+`scripts/tsgo-native-image-pgo.sh` builds it; the plain Gradle `nativeImage` task is unchanged (a build-configuration
+default — owner decision). The image grows 56 → 94 MB.
+
+Correctness: the CLI replay with the embedded libs (`XTSC_TSGO_LIB_DIR` unset) gives byte-identical output for all 106
+recorded cases with and without the snapshot; the standard replay (the variable set) is 106 / 106 equal to tsgo.
+
+Measured (PGO images from the same tree, embedded libs, one rotated batch, 3 runs per arm; every output identical to
+tsgo 7.0.2's):
+
+| project | PGO | **PGO + lib snapshot** | tsgo 7.0.2 | snapshot / tsgo |
+|---|---:|---:|---:|---:|
+| tsc's compiler profile | 1,851 ms | **1,722 ms** | 1,728 ms | **1.00** |
+| tsc's services profile | 2,439 ms | **2,305 ms** | 2,335 ms | **0.99** |
+| immer | 644 ms | **544 ms** | 549 ms | **0.99** |
+| ky | 162 ms | **123 ms** | 125 ms | **0.98** |
+| mitt | 111 ms | **70 ms** | 92 ms | **0.76** |
+| date-fns core | 495 ms | 483 ms | 359 ms | 1.35 |
+
+date-fns is the one left: 1,445 files of its own, so its parse and config phases are what tsgo does faster (§ 16-17).
