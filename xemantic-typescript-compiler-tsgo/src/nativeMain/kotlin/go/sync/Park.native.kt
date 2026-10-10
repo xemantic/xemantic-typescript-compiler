@@ -278,3 +278,8 @@ internal actual fun startGoroutineThread(body: () -> Unit) {
     nativeHeap.free(worker.cond)
     error("startGoroutineThread: pthread_create failed")
 }
+
+@OptIn(ExperimentalForeignApi::class)
+internal actual fun goYield() {
+    platform.posix.sched_yield()
+}

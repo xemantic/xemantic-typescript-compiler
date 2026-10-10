@@ -1102,3 +1102,16 @@ tsgo 7.0.2's):
 | date-fns core | 495 ms | 483 ms | 359 ms | 1.35 |
 
 date-fns is the one left: 1,445 files of its own, so its parse and config phases are what tsgo does faster (§ 16-17).
+
+## 22. (TSGO.6-o) Bounded spinning in the runtime's two spin guards (2026-10-10)
+
+A JFR profile of the image on date-fns (1,440 samples over 10 runs) put **83 leaf samples (~6% of all) in
+`go.sync.spinWait`**, under `GoProcs.release`: `GoProcs.guarded` (the run-token queue's guard) and `WaitQueue.guarded`
+spun on a CAS with an exponential back-off that never yielded. A many-file program hands tokens back and forth once per
+file (one goroutine each), and with more runnable threads than cores a waiter can burn its time slice while the
+holder is descheduled. Both guards now spin for 6 rounds (2 + 4 + … + 64 volatile reads) and then `goYield()`
+(`Thread.yield` / `sched_yield`); the critical sections are a few `ArrayDeque` operations, so the spin still wins the
+uncontended case. `GoProcsTest`'s deadlock pins (JVM and native) are unchanged and green.
+
+GraalVM image with the lib snapshot (no PGO), 4 rotated runs per arm, outputs identical: date-fns core **612 → 551 ms
+(−10%)**, hono 865 → 829 ms (−4%), ky 140 → 135 ms, tsc's compiler profile 2,228 → 2,193 ms.

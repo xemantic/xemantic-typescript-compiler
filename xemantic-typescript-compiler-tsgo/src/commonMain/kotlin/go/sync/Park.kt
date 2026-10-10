@@ -76,7 +76,8 @@ internal class WaitQueue {
 
     private inline fun <R> guarded(block: () -> R): R {
         var round = 0
-        while (!guard.compareAndSet(0, 1)) spinWait(round++, guard)
+        // Spin briefly, then yield: the holder may be descheduled (GoProcs.guarded, docs/goport-perf.md § 22).
+        while (!guard.compareAndSet(0, 1)) if (round < 6) spinWait(round++, guard) else goYield()
         try {
             return block()
         } finally {

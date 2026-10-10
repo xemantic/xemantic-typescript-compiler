@@ -87,6 +87,9 @@ internal object GoProcs {
     private val free = AtomicInt(limit)
 
     private val guard = AtomicInt(0)
+
+    /** Exponential spin rounds before [guarded] yields the thread instead (2 + 4 + … + 64 volatile reads). */
+    private const val GUARD_SPIN_ROUNDS = 6
     private val queue = ArrayDeque<Entry>()
 
     // statistics (TSGO_GOROUTINE_STATS)
@@ -97,7 +100,12 @@ internal object GoProcs {
 
     private inline fun <R> guarded(block: () -> R): R {
         var round = 0
-        while (!guard.compareAndSet(0, 1)) spinWait(round++, guard)
+        while (!guard.compareAndSet(0, 1)) {
+            // Spin briefly, then give the core away: the guard's holder may be descheduled (more runnable threads
+            // than cores — the goroutine threads, the GC's), and an unbounded spin burned ~6% of a many-file check's
+            // samples in the GraalVM image (docs/goport-perf.md § 22).
+            if (round < GUARD_SPIN_ROUNDS) spinWait(round++, guard) else goYield()
+        }
         try {
             return block()
         } finally {

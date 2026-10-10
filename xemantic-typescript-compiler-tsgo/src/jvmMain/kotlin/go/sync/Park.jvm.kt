@@ -98,3 +98,5 @@ internal actual fun startGoroutineThread(body: () -> Unit) {
         }
     }
 }
+
+internal actual fun goYield() = Thread.yield()

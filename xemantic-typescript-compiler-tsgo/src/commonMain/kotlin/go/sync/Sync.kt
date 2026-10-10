@@ -53,6 +53,9 @@ internal fun spinWait(round: Int, probe: AtomicInt) {
     }
 }
 
+/** Gives up the rest of this thread's time slice (`Thread.yield` / `sched_yield`). */
+internal expect fun goYield()
+
 /** `sync.Locker`. */
 interface Locker {
     fun lock()
