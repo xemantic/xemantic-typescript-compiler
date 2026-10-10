@@ -1166,3 +1166,9 @@ replay with the embedded libs is byte-identical to the unbound snapshot's; the s
 
 Startup is the next constant: `--version` takes ~20 ms against tsgo's 5, and ~12 of it is the snapshot's image heap
 (RSS 22 → 61 MB at startup — the heap is read whole before `main`).
+
+**The PGO image with the bound-lib snapshot** (4 rotated runs per arm, outputs identical to tsgo's; standard CLI replay
+106 / 106): tsc's compiler profile 1,784 / 1,724 ms (1.04), services **2,217 / 2,312 (0.96)**, hono 700 / 714 (0.98),
+immer 542 / 548 (0.99), ky **92 / 120 (0.76)**, mitt **48 / 86 (0.55)**, date-fns 422 / 340 (1.24). Measured and refused
+in the same round: leaving `lib.webworker.d.ts` out of the snapshot (-10 MB of binary) moved start-up by ~1 ms, inside
+the noise — the start-up read of the image heap does not scale with it the way the per-MB estimate assumed.
