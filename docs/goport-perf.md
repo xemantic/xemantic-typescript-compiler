@@ -1037,3 +1037,11 @@ Measured (`scripts/tsgo-ab-warm.sh`, ABBA + BAAB, `-Xmx4g` both arms; every run 
 What remains per node is NodeDefault + Node + TextRange + atomic id (+ FlowNodeBase and the node's own data struct): a
 second rule of the same kind — embedding the Node itself, i.e. making the data struct and its Node one object — would
 need Kotlin inheritance for the first embedded field and is the next representation step.
+
+**Measured and refused — flat struct stores in place.** `x.f = <fresh value>` into a struct field whose struct has only
+basic fields, lowered as `x.f.goSet(v)` (Go's copy into the field's storage; 44 sites, `TextRange` in `newNode` and the
+parser's `finishNode` among them) so the JIT could drop the temporary: allocation **−3.7..−4.3%** (4/4 everywhere), all
+parity gates green, but wall **+2.0% single (1/4), +3.8% compiler parallel (1/4), −0.9% services** — the second
+allocation-only lever this arc (with § 15's owned locals) whose removed objects were cheap young TLAB allocations.
+Reverted. What has paid is fewer OBJECTS ON THE ACCESS PATH (§ 14's dense table, § 19's wrapper chain), not fewer
+short-lived temporaries.
