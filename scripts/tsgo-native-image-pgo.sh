@@ -26,9 +26,10 @@ N=$R/xemantic-typescript-compiler-tsgo/build/native
 WORK=$(mktemp -d); trap 'rm -r -- "$WORK"' EXIT
 
 # The bundled lib.*.d.ts parsed at IMAGE BUILD TIME into the image heap (com.xemantic.typescript.tsgo.TsgoLibSnapshot,
-# docs/goport-perf.md § 21): the port is initialized at build time, except GoProcs, which reads the CPU count and
-# TSGO_GOMAXPROCS. A run then finds the libs parsed (same options and text, else it parses as before).
-SNAPSHOT="-Dxtsc.tsgo.libSnapshot=true --initialize-at-build-time=com.xemantic.typescript.tsgo,kotlin --initialize-at-run-time=com.xemantic.typescript.tsgo.go.sync.GoProcs"
+# docs/goport-perf.md § 21): the port is initialized at build time, except what reads the running process — GoProcs
+# (the CPU count, TSGO_GOMAXPROCS), GoSyscall (TSGO_IO_STATS), go.time's monotonic origin and
+# osvfs (the file system's case sensitivity, probed through the executable's path). A run then finds the libs parsed (same options and text, else it parses as before).
+SNAPSHOT="-Dxtsc.tsgo.libSnapshot=true --initialize-at-build-time=com.xemantic.typescript.tsgo,kotlin --initialize-at-run-time=com.xemantic.typescript.tsgo.go.sync.GoProcs,com.xemantic.typescript.tsgo.go.os.GoSyscall,com.xemantic.typescript.tsgo.go.time.TimeKt,com.xemantic.typescript.tsgo.vfs.osvfs.OsKt"
 
 cd "$R"
 ./gradlew -q :xemantic-typescript-compiler-tsgo:nativeImage -PgraalvmHome="$GRAAL" \

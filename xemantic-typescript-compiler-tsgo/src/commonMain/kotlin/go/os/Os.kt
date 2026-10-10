@@ -100,9 +100,10 @@ private class DirFS(private val dir: String) :
     override fun stat(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.go.io.fs.FileInfo?, com.xemantic.typescript.tsgo.runtime.GoError?> {
         val (full, err) = join("stat", name)
         if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, err)
-        val isDir = syscall(GoSyscall.OP_STAT) { platformIsDir(host(full!!)) } ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("stat", name))
-        val size = syscall(GoSyscall.OP_STAT) { platformSize(host(full!!)) }
-        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, { size }), null)
+        // One stat for the kind and the size together (it was three: exists, isDirectory, length).
+        val sized = syscall(GoSyscall.OP_STAT) { platformStatSize(host(full!!)) } ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("stat", name))
+        val isDir = sized < 0
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, { if (isDir) 0L else sized }), null)
     }
 
     /** An opened host file: Stat and (for a directory) ReadDir; Read serves the whole content. */
@@ -175,6 +176,9 @@ internal expect fun platformListDir(path: String): List<Pair<String, Char>>?
 
 /** The bytes of file [path]; null when it cannot be read. */
 internal expect fun platformReadFile(path: String): ByteArray?
+
+/** One `stat` (following links): null if [path] does not exist, -1 for a directory, else the size in bytes. */
+internal expect fun platformStatSize(path: String): Long?
 
 /** The size of [path] in bytes (0 when unknown). */
 internal expect fun platformSize(path: String): Long

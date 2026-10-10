@@ -27,7 +27,19 @@ package com.xemantic.typescript.tsgo.go.os
 
 import java.io.File
 
-internal actual fun platformIsDir(path: String): Boolean? = File(path).let { if (it.exists()) it.isDirectory else null }
+/** One `stat` (`File.exists` + `isDirectory` was two). */
+internal actual fun platformIsDir(path: String): Boolean? = platformStatSize(path)?.let { it < 0 }
+
+internal actual fun platformStatSize(path: String): Long? {
+    val a = try {
+        java.nio.file.Files.readAttributes(java.nio.file.Path.of(path), java.nio.file.attribute.BasicFileAttributes::class.java)
+    } catch (_: java.io.IOException) {
+        return null
+    } catch (_: java.nio.file.InvalidPathException) {
+        return null
+    }
+    return if (a.isDirectory) -1L else a.size()
+}
 
 /**
  * `os.ReadDir`'s names and entry kinds. ONE `lstat` per entry (`readAttributes` NOFOLLOW): the three predicate
@@ -56,7 +68,15 @@ internal actual fun platformListDir(path: String): List<Pair<String, Char>>? {
     return out
 }
 
-internal actual fun platformReadFile(path: String): ByteArray? = File(path).takeIf { it.isFile }?.readBytes()
+/**
+ * open + fstat + read; a missing file or a directory fails the open. `File.isFile` in front of it, and `readBytes`'s
+ * own `length()`, were a path `stat` each per read.
+ */
+internal actual fun platformReadFile(path: String): ByteArray? = try {
+    java.io.FileInputStream(path).use { it.readAllBytes() }
+} catch (_: java.io.IOException) {
+    null
+}
 
 internal actual fun platformSize(path: String): Long = File(path).length()
 

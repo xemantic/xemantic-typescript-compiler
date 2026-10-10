@@ -132,6 +132,8 @@ internal actual fun platformReadFile(path: String): ByteArray? {
 
 internal actual fun platformSize(path: String): Long = statOf(path)?.second ?: 0L
 
+internal actual fun platformStatSize(path: String): Long? = statOf(path)?.let { if (hasType(it.first, S_IFDIR)) -1L else it.second }
+
 // ---- (TSGO.5) writing, for the command line (vfs/osvfs): POSIX open/write/close, mkdir, unlink/rmdir, utime.
 
 internal actual fun platformOpenWrite(path: String, create: Boolean, append: Boolean, truncate: Boolean): Pair<Any?, String?> {

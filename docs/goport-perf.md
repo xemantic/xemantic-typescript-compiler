@@ -1115,3 +1115,24 @@ uncontended case. `GoProcsTest`'s deadlock pins (JVM and native) are unchanged a
 
 GraalVM image with the lib snapshot (no PGO), 4 rotated runs per arm, outputs identical: date-fns core **612 → 551 ms
 (−10%)**, hono 865 → 829 ms (−4%), ky 140 → 135 ms, tsc's compiler profile 2,228 → 2,193 ms.
+
+## 23. (TSGO.6-o) Host syscalls, in-place glob matching, and what the build-time initialization must not freeze (2026-10-10)
+
+**Syscalls.** strace on date-fns read **16.7k `stat`-family syscalls against tsgo's 5.2k**. The JVM host layer paid two
+or three per question: `platformIsDir` was `File.exists` + `isDirectory`, `DirFS.stat` added a third for the size, and
+`platformReadFile` did `isFile` and then `readBytes`, which asks `length()` again. Now one `readAttributes` answers kind
+and size together (`platformStatSize`), and a read is `FileInputStream.readAllBytes` (open + fstat + read): **~9.1k**.
+
+**Glob matching.** A JFR profile of the image put half the config phase in `vfsmatch.matchPathParts`, still copying
+every path component (`nextPathPartParts`' `substring`) and the pattern's component struct (`goCopy`). An override
+locates components in place, compares a literal region to region and builds a substring only for a wildcard, a
+case-insensitive compare or the hidden/package-folder test. Config time on date-fns **73-86 → 49-63 ms**; image
+medians date-fns 551 → 540, hono 859 → 825, tsc's compiler profile 2,282 → 2,200 ms, every output unchanged.
+
+**Measured and refused:** prefetching directory listings on goroutines (a listing starts its subdirectories'). Once its
+state was process-wide (osvfs makes a new `DirFS` per call — the first cut's per-instance map was never hit and doubled
+the listings) the walk took every prefetched listing and config time did not move: listing was not the cost.
+
+**Build-time initialization (§ 21) froze two things it must not:** `GoSyscall.statsOn` (so `TSGO_IO_STATS` printed
+nothing from the image) and osvfs's `isFileSystemCaseSensitive` (probed through the executable's path — the BUILD
+machine's). Both, and go.time's monotonic origin, are now `--initialize-at-run-time` in the PGO script.
