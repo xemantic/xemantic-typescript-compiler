@@ -1183,3 +1183,11 @@ immer and mitt flat. First-touching the fresh young pages costs what the evacuat
 node's own, and `NodeFactory.newNode`'s per-node `hooks` copy). Young pauses on date-fns shrank a little (26.5 / 21.9 →
 19.2 / 17.1 ms for the last two) and the wall did not move: date-fns 512 / 513.5 ms, compiler profile 2,168 / 2,169,
 the others inside the noise — the standing lesson that an allocation-only change does not move the wall.
+
+**Priced and not started: flattening an AST node into one object** (data struct, its embedded `NodeDefault` and the
+`Node` merged by inheritance). Go's embedding is safe to turn into inheritance here (`NodeDefault`'s methods pass
+`self` explicitly where dispatch matters), but the redesign touches every node type, `Node` value copies and § 11's
+vtable layout — and its CPU prize is small: the hops it removes (`asNode` and its kin) are **4 of 2,918** leaf samples
+of the date-fns image profile, and its allocation half is what the two refusals above measured as not moving the wall.
+What still separates date-fns from tsgo: start-up ~20 vs ~5 ms (the image heap read before `main`), config ~40 vs ~23,
+parse ~125 vs ~90, and ~60 ms of G1 young pauses Go's concurrent collector does not take.
