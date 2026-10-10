@@ -1,3 +1,25 @@
+### Round (TSGO.4-d) — THE `-core` SUNSET REPORT: `docs/core-sunset.md`, measured; on 18 real projects the port reports 616 / 616 rows identical to tsgo 7.0.2 where `-core` has 153 false positives and 184 misses; warm on tsc's sources the port checks in 2.7 s vs 7.6 s and checks+emits in 4.0 s vs 8.9 s at ~1.6x the memory; the deletion is an OWNER decision (2026-10-08)
+
+**What it is**: a report, no `-core` change and no dependency change. **Census**: `-externals`, `-lsp`, `-api`, `-client`,
+`-goport` take nothing from `-core`; `-kir` (lowering over `-core`'s AST + value model), `-project` (published, IntelliJ
+plugin, the whole incremental language service), `-daemon` and `-cli` (both `runCli`; the GraalVM image is `-cli`'s) still do;
+371 of 483 scripts mention `-core`, the live ones are the launcher, the bench series, `cost_gate.py`, the grid and `native.yml`.
+**Parity (measured here, one run per arm)**: `SunsetProbeMain rows` (new, `-tsgo` jvmTest: tsc's `--noEmit` path —
+`GetDiagnosticsOfAnyProgram` + `SortAndDeduplicateDiagnostics`; without the CLI's short-circuit cronstrue read an extra TS2550 and
+marked/ky an emit-only TS5096/TS5011) vs the tsgo binary vs `-core`'s CLI over the 8 tsc profiles, the 8 (P18.265) census libraries,
+cronstrue and marked: port **616 / 616** incl. head message; `-core` 585 = 153 only + 184 missing — the library half reproduces
+the (P18.313) tally 152 exactly, and every tsc profile MISSES 19 rows (33 on harness: TS2591, TS18048, …), i.e. the v1 "zero false
+positives" exit never counted false negatives. **Cost** (one JVM per arm, ABBA, two processes per arm, `-Xmx3g` because two idle
+daemons held ~10 GB): check 2,659/2,686 vs 7,711/7,433 ms; check+emit 3,971/4,080 vs 8,671/9,095 ms; port single-threaded 3,940
+(one process); tsgo binary 1.79-1.82 s / 2.60-2.68 s; RSS 3.5 vs 1.8-2.2 GB, the port ~1 s/iteration in GC at that heap. Cold
+one-shot: compiler profile 10.3 vs 29.2 s, type-fest 35.1 vs 16.5 s (the port's worst case, heap-starved; tsgo 17.7 s). Build:
+`compileKotlinJvm --rerun` 100 s (-tsgo, 4,785 classes, 18.3 MB jar) vs 104 s (-core, 984 classes, 7.1 MB), full rebuilds, one draw.
+**The unmeasured blocker**: `-tsgo` declares `jvm()` only (two `expect`/`actual`s, `go/os` and `go/sync/Park`, have JVM actuals
+only) and no GraalVM image of the port has been built. **Recommendation**: retire `-core` in five stages (tsgo CLI → native →
+move consumers incl. KIR's lowering → `-project` → delete), deletion gated on the native stage; the owner decisions are listed in
+the report's § 7 and on the queue item. Probe gates: warning-clean (positive-control probe file read its `w:`, then deleted);
+`SunsetProbeMain` largest method 765 bytecodes.
+
 ### Round (TSGO.4-a) — THE LANGUAGE SERVICE: tsgo's `internal/ls` (+ `lsp/lsproto`, `ls/lsutil`, `ls/lsconv`, `ls/change`, `ls/autoimport`, `format`, ~62k Go lines) is ported mechanically and answers in process behind `TsgoLanguageService`; 21,614 / 21,614 LSP requests over tsc's 78 sources and 200 conformance projects equal the tsgo 7.0.2 language server's (`tsc --lsp`); `-lsp` re-based onto it (2026-10-08)
 
 **What is ported** (`docs/goport-ls.md`). The extractor's default closure gains `jsonrpc`, `lsp/lsproto`, `ls/lsutil`, `format`,

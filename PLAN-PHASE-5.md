@@ -25,6 +25,29 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-i) — A FRESH WARM PROFILE AFTER THE WINDOW-FIELD ROUND, AND LEVER 4: `ast.nodeData` / `checker.TypeData` LOWERED AS ABSTRACT CLASSES BY A PORTER RULE — itable+vtable stubs 4.69% → 3.26% of the thread as predicted, wall inside noise, allocation/GC unchanged; no > 3% runtime-shim allocation lever left (2026-10-10)
+
+- **Profile** (docs/goport-perf.md § 10; compiler single CPU + allocation, services parallel CPU, HEAD `bac36aaad`):
+  bench thread 57% of the process, G1 27% + 9%; on the thread checker code 38%, `GoMap` 15% (56% of `find` under
+  `LinkStore.Get`), ast 14%, `GoSlice` 5%, itable stubs 4.1% (`nodeData`/`TypeData` ~75%). Allocation 1,559 MB/rebuild:
+  `GoSlice` headers 22%, `Object[]` 9%, `byte[]` 7% (74% `xxh3.Hasher` buffers), `TextRange` 5%, boxed `Integer` 3%
+  (the `compareSymbols` func-typed field through `Function2`).
+- **Lever 4** (porter rule `Program.computeAbstractIfaces`, `ABSTRACT_IFACE_CANDIDATES`; docs/goport-lowering.md § 3):
+  an interface becomes an `abstract class` when every implementer is a struct class, none implements two, and no
+  interface embeds/extends it; gen/ by regeneration only (6 files, 213 + 24 implementers). Predicted −1.5..−2% of the
+  thread in stubs, wall in noise. Measured stubs −1.43 points (itable 4.09 → 0.92%, vtable 0.60 → 2.34%). A/B (each
+  arm its own JVM, ABBA + BAAB, 6 + 10, class md5 `e97aa44e` → `ca5f97c6`): compiler single 3,460 → 3,465 ms,
+  parallel 1,955 → 1,918, services 2,527 → 2,506 (4/4), date-fns 464 → 448 (4/4); cold pooled 8 + 8 compiler +0.2%,
+  services +0.4% (the first cold batch read +2.6%, its rotated replication −7.8%); allocation and GC pause unchanged.
+  Kept (free, every gate equal) — docs/goport-perf.md § 11.
+- **Step C**: lever 4 moves no allocation. Sized, not built (none a small shim change > 3%): relation-key hashing ~10%
+  (a porter rule proving `keyBuilder` locals non-escaping, ~8%), `TextRange` ~3.5% (needs the § 7.4 immutability proof
+  widened), `compareSymbols` boxing 3% (a primitive `fun interface` for func-typed fields with basic results),
+  `atomic.Uint64` 2% (embedded `@Volatile long`), `GoSlice` headers 22% (a representation change).
+- Gates (final tree): `-tsgo` 125/0, `-goport` 18/0 (new pin), `-lsp` 38/0; DiagParity 13,127 equal; Emit 13,127;
+  CLI 105 equal; LS 21,614; API 594,007; warning-clean with an injected probe (its `w:` read, then deleted);
+  huge_methods 0 of 69,630 over 8,000; native `compileKotlinLinuxX64` + `linuxX64Test` 68/0.
+
 ### Round (TSGO.6-h) — AN IO DISPATCHER BESIDE THE COMPUTE ONE: REFUSED, MEASURED (owner question); releasing the run token around host IO is +61% warm on date-fns, an IO thread pool +139%; a syscall funnel with `TSGO_IO_STATS` kept (2026-10-10)
 
 - **Design read first**: no coroutines in the port; goroutines are pooled platform threads gated by the `GoProcs`
@@ -306,28 +329,6 @@ non-following walk; CLAUDE.md carries the trap.
 `go`/`chan` lowering or an orchestrator override), `--watch` (`watchmanager` + `fswatch`: OS notifications — a JVM
 `WatchService` backend), `--pprofDir`; `--diagnostics`' "Memory allocs" (0 on the JVM). Gate extensions: an
 8 GB arm for type-fest; `--diagnostics` rows modulo values.
-
-### Round (TSGO.4-d) — THE `-core` SUNSET REPORT: `docs/core-sunset.md`, measured; on 18 real projects the port reports 616 / 616 rows identical to tsgo 7.0.2 where `-core` has 153 false positives and 184 misses; warm on tsc's sources the port checks in 2.7 s vs 7.6 s and checks+emits in 4.0 s vs 8.9 s at ~1.6x the memory; the deletion is an OWNER decision (2026-10-08)
-
-**What it is**: a report, no `-core` change and no dependency change. **Census**: `-externals`, `-lsp`, `-api`, `-client`,
-`-goport` take nothing from `-core`; `-kir` (lowering over `-core`'s AST + value model), `-project` (published, IntelliJ
-plugin, the whole incremental language service), `-daemon` and `-cli` (both `runCli`; the GraalVM image is `-cli`'s) still do;
-371 of 483 scripts mention `-core`, the live ones are the launcher, the bench series, `cost_gate.py`, the grid and `native.yml`.
-**Parity (measured here, one run per arm)**: `SunsetProbeMain rows` (new, `-tsgo` jvmTest: tsc's `--noEmit` path —
-`GetDiagnosticsOfAnyProgram` + `SortAndDeduplicateDiagnostics`; without the CLI's short-circuit cronstrue read an extra TS2550 and
-marked/ky an emit-only TS5096/TS5011) vs the tsgo binary vs `-core`'s CLI over the 8 tsc profiles, the 8 (P18.265) census libraries,
-cronstrue and marked: port **616 / 616** incl. head message; `-core` 585 = 153 only + 184 missing — the library half reproduces
-the (P18.313) tally 152 exactly, and every tsc profile MISSES 19 rows (33 on harness: TS2591, TS18048, …), i.e. the v1 "zero false
-positives" exit never counted false negatives. **Cost** (one JVM per arm, ABBA, two processes per arm, `-Xmx3g` because two idle
-daemons held ~10 GB): check 2,659/2,686 vs 7,711/7,433 ms; check+emit 3,971/4,080 vs 8,671/9,095 ms; port single-threaded 3,940
-(one process); tsgo binary 1.79-1.82 s / 2.60-2.68 s; RSS 3.5 vs 1.8-2.2 GB, the port ~1 s/iteration in GC at that heap. Cold
-one-shot: compiler profile 10.3 vs 29.2 s, type-fest 35.1 vs 16.5 s (the port's worst case, heap-starved; tsgo 17.7 s). Build:
-`compileKotlinJvm --rerun` 100 s (-tsgo, 4,785 classes, 18.3 MB jar) vs 104 s (-core, 984 classes, 7.1 MB), full rebuilds, one draw.
-**The unmeasured blocker**: `-tsgo` declares `jvm()` only (two `expect`/`actual`s, `go/os` and `go/sync/Park`, have JVM actuals
-only) and no GraalVM image of the port has been built. **Recommendation**: retire `-core` in five stages (tsgo CLI → native →
-move consumers incl. KIR's lowering → `-project` → delete), deletion gated on the native stage; the owner decisions are listed in
-the report's § 7 and on the queue item. Probe gates: warning-clean (positive-control probe file read its `w:`, then deleted);
-`SunsetProbeMain` largest method 765 bytecodes.
 
 ## QUEUE
 

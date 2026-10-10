@@ -1,3 +1,11 @@
+**(TSGO.6-d) DONE — Kotlin/Native goroutine pool + the first native CPU profile (2026-10-09):** `goSpawn` on
+Kotlin/Native is now the JVM's unbounded cached pool on pthreads (idle 1 GB-stack workers reused for 30 s, a new one only
+when none is idle): ~700 goroutines run on ~150 pthreads on the compiler profile, wall/RSS unchanged within noise (7.84 s
+both arms; output byte-identical to tsgo). `perf` (`scripts/tsgo-native-profile.sh`, DWARF call graphs) attributes **~60%
+of the native port's CPU to memory management** — GC mark 43%, sweep 4.4%, allocation 4.2%, page mapping ~7% — against
+23% ported code and ~11% Go map/slice runtime; no cheap runtime lever left (`disableMmap` measured, noise). Native suite
+64 / 64, `-tsgo` 119 / 0. Next: a native `-tsgo` CI job; the native gap is the K/N heap and allocation rate.
+
 
 **(TSGO.6-c) DONE — every native AOT lever measured (2026-10-09):** Oracle GraalVM PGO + `-O3`
 (`scripts/tsgo-native-image-pgo.sh`) makes the CLI image 15-23% faster — compiler profile 2.95 → **2.47 s**, held-out
