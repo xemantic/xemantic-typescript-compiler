@@ -4,7 +4,9 @@
 `runtime.GoLinkKey` (a sequential index from per-thread blocks, NOT tsgo's lazily assigned id) and the `core.LinkStore`
 override files them in a per-checker paged `GoLinkTable` instead of an identity-hashed map — a file's links sit
 together in the order the checker walks them. Warm wall **−9.2% single / −6.5% compiler parallel / −13.4% services**,
-allocation −3%, peak heap −6% (docs/goport-perf.md § 14). Diag 13,127 equal, Emit/CLI/LS/API parity green; `-tsgo`
+allocation −3%, peak heap −6% (docs/goport-perf.md § 14). With the index block in the goroutine's thread object, the shipped
+**PGO image reads 1.84 s / 2.46 s on compiler / services against tsgo's 1.73 / 2.35 s** (2.38 / 3.00 s on 2026-10-09;
+§ 15). Owned slice LOCALS were built and refused (−4% allocation, no wall gain). Diag 13,127 equal, Emit/CLI/LS/API parity green; `-tsgo`
 136 / 0, `-goport` 25 / 0, `-lsp` 38 / 0, native 79 / 0.
 
 **(TSGO.6-k) DONE — slice headers owned by their field, struct literals stored in place (2026-10-10):** owner goal:

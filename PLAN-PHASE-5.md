@@ -37,6 +37,11 @@ it is the live Phase 18 queue.
   docs/goport-perf.md § 14.
 - The first A/B attempt was stopped by the host for low memory: idle Kotlin (4.1 GB) and Gradle daemons from the
   build sat beside the benchmark's 6 GB heap. Every gate script now stops the daemons when it finishes.
+- **Follow-up**: the index block lives in `GoroutineThread` fields (a `ThreadLocal.get` per created node was 7.4% of a
+  parse): JVM warm noise, GraalVM image −7.7% (4/4). The PGO image is now **1.84 s / 2.46 s** on compiler / services
+  against tsgo's 1.73 / 2.35 s (was 2.38 / 3.00 s on 2026-10-09; docs/goport-perf.md § 15).
+- **Owned slice LOCALS built, gated and REFUSED** (§ 15): −4% allocation, wall +5.8% at a short warm-up (0/4), −0.4% at
+  a long one, the image unchanged — reverted, not committed.
 - Gates: `-tsgo` 136/0 (+2 `GoLinkTableTest`), `-goport` 25/0 (+1 pin), `-lsp` 38/0; DiagParity 13,127 equal;
   Emit/CLI/LS/API parity green; warning gate live (probe caught); 0 methods over 8,000 bytecodes; `linuxX64Test` 79/0
   (the first native run failed to COMPILE on a `,` in two new backtick names — CLAUDE.md's native trap; a stale

@@ -943,3 +943,28 @@ now carries the block in two fields (`Thread.currentThread()` is an intrinsic); 
 Warm parallel JVM: −0.3% (noise, 2/4). The GraalVM image — where the checker's goroutines create nodes and symbols
 all through the check — tsc's compiler profile **2.585 → 2.387 s (−7.7%, 4/4 rotated pairs)**, parse time unchanged
 (0.30 s; tsgo 0.12 s), output identical.
+
+## 15. Where the shipped image stands after §§ 13-14, and owned slice LOCALS refused (2026-10-10)
+
+**The GraalVM image** (Oracle GraalVM 25.0.4, G1; rotated, 3 runs per arm, every output byte-identical to tsgo
+7.0.2). The 2026-10-09 binaries were kept as the "before" arm:
+
+| project | default image 10-09 → today | PGO image (`scripts/tsgo-native-image-pgo.sh`) 10-09 → today | tsgo 7.0.2 |
+|---|---:|---:|---:|
+| tsc's compiler profile | 2.81 → 2.39 s | 2.38 → **1.84 s (−23%)** | 1.73 s |
+| tsc's services profile | 3.62 → 3.32 s | 3.00 → **2.46 s (−18%)** | 2.35 s |
+| date-fns core | 0.68 → 0.61 s | 0.60 → 0.53 s | 0.33 s |
+
+The PGO image is now within ~6% of tsgo on the two large projects. Phases of the default image against tsgo
+(`--extendedDiagnostics`, compiler profile): parse 0.34 / 0.12 s, bind 0.08 / 0.06 s, check 2.05 / 1.46 s; with
+`--singleThreaded` parse is 0.69 / 0.26 s — a per-thread code-quality gap in the AOT image (the warm JVM parses at
+tsgo's speed), which is what PGO closes. GC is not it: 16 G1 pauses sum to ~0.2 s of a 2.6 s run. `perf` cannot profile
+the image on this box after a reboot (`perf_event_paranoid` is 4 again and needs root; the image is stripped).
+
+**Owned slice locals — built, gated, REFUSED.** The local counterpart of § 13's owned fields (a `[]T` local appended
+in place; its value uses taken without a copy when no in-place op can run after them; 296 locals, 425 in-place sites
+with the fields). Every gate passed (Diag 13,127 equal, Emit/CLI/LS/API green, `-tsgo` 136/0). Measured against the
+§ 14 tree: allocation **−3.6..−4.7%** (4/4 everywhere) but wall **+5.8% single (0/4) / +6.5% parallel / −0.7%
+services** at 6 warm-up rebuilds, **−0.4% (2/4)** at 20 — a slower JIT warm-up and no steady-state gain — and the
+GraalVM image unchanged (compiler 2,455 → 2,461 ms, services 3,149 → 3,180 ms medians). A local builder's header
+lives in a register or a TLAB slot either way; the header objects it removed were never the cost. Reverted.
