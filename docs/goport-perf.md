@@ -643,3 +643,51 @@ call still running after ~20 µs — never an eager per-call hop.
 TSGO_IO_STATS=1 java -cp <cp> com.xemantic.typescript.tsgo.cli.TsgoMainKt --noEmit -p <project>
 TSGO_IO_STATS=1 java -cp <cp> com.xemantic.typescript.tsgo.CheckBenchMainKt <tsconfig.json> 6 10 nolib parallel osfs
 ```
+
+## 10. (TSGO.6-i) A fresh warm profile after § 8.2 (2026-10-10)
+
+Same instruments as § 7 (async-profiler 4.1, `scripts/tsgo-jvm-profile.sh` + `scripts/tsgo_ap_stacks.py`), HEAD
+`bac36aaad` (class md5 of the sorted `main` class files `e97aa44e`), Zulu 26, 8 cores, `-Xms2g -Xmx6g`, G1; every
+profiled rebuild printed the same diagnostics/digest (compiler 65 / `78feefbb`, services 65 / `ccb3b4c2`).
+
+**Process CPU, compiler single-threaded** (65,775 samples over 40 s): the bench thread **57.2%**, G1 workers **27.4%**
++ concurrent marking **9.2%**, C2 6.3% — the § 7.2 shape (57 / 31 + 6 / 6); GC is still a third of the process.
+**Services parallel** (132,463): goroutines 60.0%, G1 24.3% + 11.4%, C2 3.9%.
+
+**The thread, by leaf mechanism** (single = compiler, bench thread, 37,595 samples; parallel = services, goroutines, 79,493):
+
+| mechanism | single | parallel | § 7.2 (before § 8.2) | what |
+|---|---:|---:|---:|---|
+| generated checker code | 38.3% | 39.0% | 36.7% | flat; the largest owner `getResolvedSymbolImpl` 2.9% / 3.6% |
+| `runtime.GoMap` | **15.4%** | 12.6% | 14.3% | `find` 14.3% / 10.6% of the thread; **56% / 46% of it under `core.LinkStore.Get`** (§ 8.3, refused), then `Relater.get` 9%, `getMergedSymbol` 6%, `getPropertyOfTypeEx` 6%, `internIdentifier` 4% |
+| generated `ast` | 14.2% | 14.1% | 13.3% | `visitNodeList`, `asIdentifier`, `forEachChild`, `localsContainerData`: flat |
+| `runtime.GoSlice` | 5.1% | 5.5% | 4.9% | `load` 1.6%, `slice`, `append1`, `len` |
+| **itable stubs** | **4.1%** | **3.8%** | 4.3% | `nodeData` callers ~55% (`localsContainerData` 22%, `modifiers` 8%, `declarationData` 8%, `flowNodeData` 8%), `TypeData` ~21% (`asStructuredType` 16%, `asObjectType` 3%), `GoElem.zeroValue` (Arena) 6%, Kotlin `Function1` (`filterType`, `mapTypeEx`) 3% |
+| `xxh3` shim (`go-shim:github_com`) | 2.6% | 2.2% | — | relation/union cache keys |
+| binder / scanner / parser | 2.5 / 2.0 / 2.0% | 3.1 / 1.9 / 2.3% | 2.9 / 1.8 / 1.9% | |
+| `java.lang.String` | 2.1% | 1.8% | 1.2% | `equals` of name-keyed tables |
+| comparator lambda (`compareSymbols`) | 2.7% (owner) | 1.0% | — | `compareTypes` → `checker.compareSymbols!!(…)`: a func-typed FIELD called through `Function2.invoke`, whose `Int` result is boxed |
+| vtable stubs | 0.6% | < 0.6% | — | `Intrinsics.areEqual` from `isSimpleTypeRelatedTo` / `GoMap.find` |
+
+**Allocation, compiler single** (1,559 MB/rebuild, 23,167 samples): `GoSlice` headers **21.9%** (`append1` in
+`getTypeAtFlowNode` 9% of them, `putRelater`'s `slice` 7%, `filterType`/`mapTypeEx` 4.5% each), `Object[]` 9.2% (map
+`rehash` 27% of it, slice `grow` 24%), `byte[]` 6.9% (**74% the `xxh3.Hasher` key buffers**, 15% `scanIdentifier`'s
+`goViewSubstring`), `TextRange` 5.3% (three per node, § 7.2), `Integer` **3.0%** (85% the `compareSymbols` boxing above),
+`Tuple2` 2.9%, `Node` 2.8%, `xxh3.Uint128` 2.5%, `Type[]` 2.5%, `xxh3.Hasher` 2.3%, `atomic.Uint64` 2.0% (one per Node
+and Symbol), `int[]` 1.9%, `FlowType` 1.8%, `SharedFlow` 1.6%, `Relater` 1.4%, `keyBuilder` 0.8%.
+
+**What changed since § 8.2**: the JSDoc prefix copies are gone (`byte[]` 25% → 6.9%, its remainder now the relation-key
+hasher); `GoMap` is the largest mechanism at 15% of the thread and half of it is still the `LinkStore` probe § 8.3
+refused; the itable share is unchanged (4.1-4.4%) and its callers are the same — the lever § 8.4 sized; `Integer` boxing
+is back at 3% of allocation, not through `BinarySearchFunc`'s comparator (inline since § 7.3) but one call further in,
+through the `compareSymbols` func-typed field. GC is still ~35% of the process's CPU warm; nothing in the profile is a
+new single mechanism above ~3%.
+
+```bash
+scripts/tsgo-jvm-profile.sh warm build/bench/tsc-project-637d5746/tsconfig.json cpu single 45 40
+scripts/tsgo-jvm-profile.sh warm build/bench/tsc-project-637d5746/tsconfig.json alloc single 45 40
+scripts/tsgo-jvm-profile.sh warm build/bench/tsc-services-637d5746/tsconfig.json cpu parallel 45 40
+scripts/tsgo_ap_stacks.py <collapsed> --thread check-bench --mechanisms --owners          # --thread goroutine for parallel
+scripts/tsgo_ap_stacks.py <collapsed> --thread check-bench --callers 'itable stub'
+scripts/tsgo_ap_stacks.py <alloc collapsed> --classes; … --allocated-by 'byte[]'
+```
