@@ -259,7 +259,10 @@ statement; the one goroutine source is `WaitGroup.Go`). They are built on `kotli
     the queue guards' CAS spins, which no holder keeps across a park. A goroutine HOLDING a token therefore never
     waits indefinitely, so whatever it waits for can always get a token: no deadlock from the limit at any N >= 1.
     File reads keep the token (Go releases its P around a syscall; local reads here are short, and the osvfs
-    semaphore already bounds them).
+    semaphore already bounds them). MEASURED ((TSGO.6-h), docs/goport-perf.md § 9): releasing it around every host
+    call, or handing the call to an IO pool, is a regression (date-fns warm +61% / +139%) — a cached syscall is
+    kernel CPU work, so there is no idle core to give the token to; every host call passes the `syscall()` funnel
+    (`go/os/Syscall.kt`, `TSGO_IO_STATS=1`).
   - **Fairness**: one FIFO holds both kinds of waiter — a parked thread wanting a token back and a queued closure.
     A released token goes to its head (unparked, or started on a thread with the token transferred); the free count
     only grows when the queue is empty, so `free > 0` implies an empty queue and a fast-path taker can never jump a

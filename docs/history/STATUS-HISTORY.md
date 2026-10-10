@@ -1,4 +1,11 @@
 
+**(TSGO.6-c) DONE — every native AOT lever measured (2026-10-09):** Oracle GraalVM PGO + `-O3`
+(`scripts/tsgo-native-image-pgo.sh`) makes the CLI image 15-23% faster — compiler profile 2.95 → **2.47 s**, held-out
+services 4.00 → 3.08 s (tsgo 1.73 / 2.36 s); `-O3` alone 5-11%, `-march=native` nothing; the PGO image passes the
+106-case replay. Kotlin/Native now links `gc=pmcs`: **7.8 s / 1.7 GB** on the compiler profile against Kotlin's
+default `cms` at 11.6 s / 2.1 GB (services 10.1 s / 2.3 GB vs 15.5 s / 2.9 GB), heap bound kept; native suite 64 / 64.
+Next: a native `-tsgo` CI job, a native goroutine pool.
+
 **(TSGO.6-b) DONE — the GraalVM image of the ported tsgo CLI (2026-10-09):** `./gradlew
 :xemantic-typescript-compiler-tsgo:nativeImage -PgraalvmHome=tools/graalvm-25` (Oracle GraalVM 25.0.4, gitignored) builds
 `xtsc-tsgo`, ~57 MB, no reflection metadata. `scripts/tsgo-cli-native-replay.py` replays all **106 / 106** recorded CLI

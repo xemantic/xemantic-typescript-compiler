@@ -577,3 +577,69 @@ any rebuild of the jar changes its bytes (CLAUDE.md), so re-`stage` and re-`trai
 scripts/xtsc-tsgo-aot stage && scripts/xtsc-tsgo-aot train build/bench/tsc-project-637d5746
 XTSC_AOT_VERBOSE=1 scripts/xtsc-tsgo --noEmit -p <project>
 ```
+
+## 9. (TSGO.6-h) An IO dispatcher beside the compute one — REFUSED, measured (2026-10-10)
+
+**The question** (owner): would running file IO on an IO dispatcher and computation on the default (bounded) one help,
+as it did in an isolated test elsewhere?
+
+**The design it would change.** The port has no coroutines. A goroutine is a pooled daemon PLATFORM thread
+(`startGoroutineThread`: an unbounded cached `ThreadPoolExecutor`, 1 GB stacks) that runs only while holding one of
+N `GoProcs` run tokens (N = `TSGO_GOMAXPROCS`, default the core count) — that token pool IS the bounded compute
+dispatcher, and threads beyond N exist only for BLOCKED goroutines. Every indefinite block (`WaitQueue`, `onGoStack`)
+gives the token back through `blockingWait { }`. File IO did NOT: `vfs/osvfs` bounds its syscalls with three
+`LimitedSemaphore`s (128 / 128 / 32) and the call itself runs on the goroutine holding its token. The non-goroutine
+caller (the CLI/bench thread: config parse, include glob) holds no token. Since this round every host file-system
+call (`go/os`, `internal_nativepath`) goes through one funnel, `syscall()` (`go/os/Syscall.kt`); `TSGO_IO_STATS=1`
+prints `io: read=<calls>/<ms> stat=… list=… realpath=… write=… total=… bytes=…` (CLI stderr, `CheckBenchMain` stdout).
+
+**IO share** (JDK 26 Zulu, 8 cores, page cache warm; nanoseconds summed over ALL threads):
+
+| run | calls | IO time | of |
+|---|---:|---:|---|
+| compiler cold CLI | 572 (124 reads, 10.4 MB) | 177 ms | 10.0 s wall, 65 s CPU |
+| services cold CLI | 1,252 (298 reads, 13.4 MB) | 68 ms | 11.9 s wall |
+| date-fns cold CLI | 11,595 (1,456 reads, 8,844 stats, 1,292 lists) | 220 ms | 4.6 s wall |
+| date-fns warm, `osfs` (every rebuild re-reads through osvfs) | ~36,600 / rebuild (~34,000 stats) | ~244 ms / rebuild | ~470 ms wall |
+| any warm `CheckBenchMain` default (`DiskFS` caches content) | 0 through the shim | — | — |
+
+So only the warm `osfs` date-fns case has a real IO share; everywhere else the upper bound of any overlap gain is the
+IO time over N ≈ 10-25 ms, under the ±3-5% process spread.
+
+**What was tried** (experiment commit `db02d0b84`, `TSGO_IO_DISPATCH`, same binary for every arm): `release` gives the
+run token back around each host call (`blockingWait`: Go's P hand-off, made EAGER), `pool` additionally runs the call
+on a dedicated unbounded IO thread pool while the goroutine waits without a token (the literal "Dispatchers.IO" split).
+
+A/B, each arm its own JVM, batch 1 `inline release pool pool release inline`, batch 2 the reverse; warm = 6 + 10
+parallel rebuilds; every warm run one digest, every cold run byte-identical to tsgo 7.0.2. Medians of process
+medians [process medians]:
+
+| regime | inline (shipped) | release | pool |
+|---|---:|---:|---:|
+| date-fns warm `osfs`, ms | **470** [435, 493, 457, 483] | 756 [801, 736, 768, 744] (**+61%**, 4/4 lost) | 1,122 [1,183, 1,101, 1,127, 1,118] (**+139%**, 4/4 lost) |
+| date-fns warm, allocation all threads MB/rebuild | 752-756 | 1,725-1,763 (+130%) | 1,707-1,729 |
+| date-fns cold, ms | 4,601 [4,608, 4,211, 4,869, 4,594] | 4,931 [4,946, 4,915, 4,949, 4,437] (+7%, 3/4 lost) | 4,956 [4,864, 5,047, 5,168, 4,866] |
+| compiler cold, ms (batch 1) | 9,842 [9,775, 9,908] | 9,970 [10,308, 9,632] | 10,142 [9,992, 10,291] |
+| compiler warm `osfs`, ms (ABBA, 4 processes) | 1,861 [1,881, 1,842] | 1,900 [1,928, 1,872] (noise) | — |
+
+**Mechanism.** (1) A page-cached `stat`/`read` is KERNEL CPU work on the calling core (~4.6 µs per stat here), not a
+wait: there is no idle core for a released token to fill, so the split can only add cost. An IO dispatcher pays off
+when IO blocks on a device or the network — which is what an isolated test with real latency measures. (2) The token
+churn is not free: a released token goes to the queue head, so after EVERY call the IO goroutine re-queues FIFO
+(`queuedAcquires` 2,145 → 234,352 over 6 rebuilds, goroutine threads 842 → 1,431). Go avoids this because it hands its
+P off only for a syscall still running after ~20 µs (sysmon), and on return re-takes its old P if idle. (3) With more
+loader goroutines in flight at once, tsgo's unsynchronised check-then-read caches herd: the project's `package.json`
+was read **174 times per rebuild instead of 8** (`undici-types/package.json` 3 instead of 1) — +33 MB of reads and
++1 GB of allocation per rebuild. Go tolerates the race by design; widening the window is what makes it expensive.
+(4) The `pool` arm adds a thread hand-off per call on top (the (INC.64)/(INC.56) finding again: dispatcher hops for
+sub-10 µs work are pure overhead).
+
+**Kept**: the `syscall()` funnel and `TSGO_IO_STATS` (an instrument; off, it is one boolean read per host call) and
+`CheckBenchMain`'s `osfs` mode. **Removed**: the dispatch switch and the IO pool. If a host ever serves the port from
+a slow file system (network mount, cold disk), the lever to try is Go's LAZY hand-off — release the token only for a
+call still running after ~20 µs — never an eager per-call hop.
+
+```bash
+TSGO_IO_STATS=1 java -cp <cp> com.xemantic.typescript.tsgo.cli.TsgoMainKt --noEmit -p <project>
+TSGO_IO_STATS=1 java -cp <cp> com.xemantic.typescript.tsgo.CheckBenchMainKt <tsconfig.json> 6 10 nolib parallel osfs
+```

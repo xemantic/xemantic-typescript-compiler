@@ -1,3 +1,60 @@
+### Round (TSGO.4-a) — THE LANGUAGE SERVICE: tsgo's `internal/ls` (+ `lsp/lsproto`, `ls/lsutil`, `ls/lsconv`, `ls/change`, `ls/autoimport`, `format`, ~62k Go lines) is ported mechanically and answers in process behind `TsgoLanguageService`; 21,614 / 21,614 LSP requests over tsc's 78 sources and 200 conformance projects equal the tsgo 7.0.2 language server's (`tsc --lsp`); `-lsp` re-based onto it (2026-10-08)
+
+**What is ported** (`docs/goport-ls.md`). The extractor's default closure gains `jsonrpc`, `lsp/lsproto`, `ls/lsutil`, `format`,
+`ls/lsconv`, `ls/change`, `project/dirty`, `project/logging`, `vfs/wrapvfs`, `ls/autoimport`, `ls` — whole packages, 67 in all,
+99.5% lowered mechanically (`ls` 99.4%, `lsp/lsproto` 100%); the hand stand-ins `go/internal_ls`, `go/internal_lsconv`,
+`go/internal_lsproto` are deleted. The language SERVER and the project system stay unported: a new overlay
+`goport-extract/overlay/api/xtsc_ls.go` is the server's ends — `XtscResolveClientCapabilities` (handleInitialize),
+`XtscUserPreferences` (RequestConfiguration), `XtscLanguageService.XtscLSRequest` (server.go's handler table for hover, definition,
+typeDefinition, references, implementation, completion, signatureHelp, documentHighlight, diagnostic, bodies verbatim) and a
+one-project `crossProjectOrchestrator`. `XtscCheckerPool` gained the project pool's request affinity (find-all-references re-acquires
+its checker). The `project` shim's `Snapshot` is now the `ls.Host` and `Project` an `ls.Project`. The API session's six
+language-service handlers and `setupLanguageService` are no longer stubs (17 → 10 `partial-stub`s; smoke-pinned in TsgoProjectTest,
+not yet in the API recording). One override: `format.getAllRules` split for the JIT limit (generated body verbatim).
+
+**The Kotlin API**: `TsgoLanguageService.open(tsconfig, fs, libDirectory, initializeParams, configuration)`; `request(method, json)`
+(the raw LSP result) and typed `hover`/`definition`/`references`/`completions`/`diagnostics` at UTF-16 offsets. **`-lsp`** now depends
+on `-tsgo`, not `-project`: `XtscLanguageServer` keeps its JSON-RPC/stdio loop and routes every language-service method to
+`TsgoLanguageService.request`; buffers are an `OverlayFS` over the disk, a file's project is the nearest tsconfig.json, diagnostics are
+pushed for open documents and served on pull. Its old -project feature tests (rename, signature help label offsets, …) are replaced by
+`XtscLspServerTest` (expected texts read from `tsc --lsp`) and a stdio end-to-end smoke (`XtscLspStdioSmokeTest`, the shipped `main` in
+a child JVM).
+
+**The gate.** `scripts/tsgo-ls-oracle.py` drives the SHIPPED `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` over `build/goport/api-projects`
+(VS Code-like capabilities, auto-imports off, every file opened BOM-less as an editor does) and records per file a pull diagnostic, 60
+hover + definition, 6 references and 4 completion carets → `build/goport/ls-oracle` (21,614 requests). `LsParityTest` (`TSGO_LS=1`)
+replays them through the port (each file's project = its nearest tsconfig, as the server picks: tsc's sources carry a nested
+`src/compiler/tsconfig.json`) and compares JSON — a completion list's items as a MULTISET, because tsgo's own order is a Go map's
+(two recordings of the binary differ).
+
+**Receipts**: **LsParityTest 21,614 / 21,614 equal**, 0 differ, 0 crash, ~260 s (hover 9,496, definition 9,496, references 1,515,
+completion 829, diagnostic 278; tsc's 78 sources alone 9,898 / 9,898); positive control `TSGO_LS_INJECT=conf-0010:5` red (1 differ).
+DiagParityTest 13,127 / 13,127, EmitParityTest 13,127 / 13,127, OracleParityTest bound 7,774 / 7,774, ApiParityTest 594,007 / 594,007.
+`-tsgo` 110 tests / 0 failed, `-goport` 15 / 0, `-lsp` 38 / 0. `huge_methods.py --fail-over 0` = 0 (4,785 classes). Warning-clean
+(positive control `1 as Int` read its `w:`, deleted).
+
+**Port defects fixed** (first differential: 407 equal / 825 differ / 1,198 crash on 20 projects), each a rule or a shim:
+(1) **Go 1.26 `new(expr)` lowered as `new(T)`** — a silent ZERO (every LSP diagnostic `code` was 0, `source` ""); the extractor
+already said `m != "type"`. (2) **Struct context keys compared by identity** (`clientCapabilitiesKey{}`): no request saw the client's
+capabilities (plaintext hovers, no definition links); `structKeys` now includes `context.WithValue` / `ctx.Value` keys. (3) Structs
+reaching `reflect` through a parameter (`lsproto.marshalUnion(v any)`) were not `GoReflectStruct`s. (4) A generic shim's
+type-parameter argument got `!!` (`slices.Contains(syms, nilSym)` threw: every find-all-references on a shorthand property).
+(5) Instantiated generic interfaces were never implemented nominally (`Cloneable<directory?>`), nor a generic struct's interface over
+its own parameters (`Box<T> : Value<T>`) — extractor + porter. (6) A ported generic `*T` parameter instantiated with a non-struct T
+(`derefOr`). (7) `result.(json.Value)` type test on an erased typealias. (8) An imported value class's `_Ptr` box unqualified.
+(9) The json shim could not decode into a nil `*T` struct field nor an LSP named numeric (`CompletionItemKind`) — `PointeeCell` and an
+lsproto-scoped numeric decode (§ 10 #14 keeps the rest refused). Shims added: `bytes`, `url.PathEscape`/`Parse`,
+`unicode.IsUpper/IsLower/IsDigit/Mn` (dumped from Go 1.27.1), `runtime.GOMAXPROCS`, `debug.Stack` (the last recovered panic's stack —
+what made defect 4 findable), `slices.Replace`, `jsontext.Value.Kind`, reflect `Fields/Addr/Len/Index/Set*`, `MakeSlice/Append`.
+Recorder artifacts found and fixed on the way: a UTF-8 BOM sent in `didOpen` (an editor strips it; 20 conformance files), and the
+nested tsconfig.
+
+**Not ported / remaining** (TSGO.4-a's surface): auto-import completions and code actions (the project system's auto-import
+registry: `ErrNeedsAutoImports` is an error, so clients must set `suggest.autoImports: false`), inferred projects, rename (server.go's
+cross-project workspace edit), the project system's incremental program updates (`-lsp` rebuilds the program after any change),
+call hierarchy (`defer` with named results), organize-imports collation (`x/text/unicode/norm`). Not yet gated: typeDefinition,
+implementation, signatureHelp, documentHighlight (wired, in no recording), and the API's six language-service handlers.
+
 ### Round (TSGO.4-c) — KIR on the ported checker: the JVM backend's front end asks tsgo, not `-core`'s checker; kir 313/313, `kir-bench.sh`'s equivalence gate unchanged (mitt + toml, all 3 arms agree), 9 of 33 programs lower differently and every change is toward TYPED operations; the tsgo front end is faster than `-core`'s on this corpus (1,265 vs 1,973 ms) at the same peak heap (2026-10-08)
 
 **What moved.** `checkTypeScript` / `checkTypeScriptProject` (`-kir`'s only checker seam) now build a tsgo program and answer

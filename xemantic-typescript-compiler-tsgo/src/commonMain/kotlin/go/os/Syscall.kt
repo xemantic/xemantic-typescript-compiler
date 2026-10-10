@@ -27,7 +27,6 @@
 
 package com.xemantic.typescript.tsgo.go.os
 
-import com.xemantic.typescript.tsgo.go.sync.blockingWait
 import kotlin.concurrent.atomics.AtomicLong
 import kotlin.concurrent.atomics.AtomicLongArray
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -37,12 +36,12 @@ import kotlin.time.TimeSource
  * The one funnel every host file-system call of the port passes through (the `platform*` actuals of
  * `go/os` and `internal_nativepath`) — Go's `entersyscall`/`exitsyscall` boundary.
  *
- * `TSGO_IO_STATS=1` counts calls and nanoseconds per operation ([stats]). `TSGO_IO_DISPATCH` is an
- * EXPERIMENT switch ((TSGO.6-h), docs/goport-perf.md § 9) for the "IO on an IO dispatcher, compute on
- * the bounded one" split: `release` gives the goroutine's run token back around the call (Go releases
- * its P around a blocking syscall), `pool` additionally hands the call to a dedicated IO thread pool
- * (JVM; the Native actual runs it inline) while the goroutine waits without a token. Unset: the call
- * runs on the calling goroutine holding its token, which is the shipped behaviour.
+ * `TSGO_IO_STATS=1` counts calls, nanoseconds and bytes per operation ([stats]). The call runs on the
+ * calling goroutine, which KEEPS its run token: giving it back around the call (Go's eager P hand-off)
+ * or handing the call to a dedicated IO pool — the "IO dispatcher / compute dispatcher" split — was
+ * measured as a regression ((TSGO.6-h), docs/goport-perf.md § 9, experiment commit db02d0b84): a cached
+ * file-system call is kernel CPU work, not a wait, so there is no idle core to give away, and the
+ * token churn multiplied tsgo's unsynchronised package.json reads 20x.
  */
 internal object GoSyscall {
     const val OP_READ = 0
@@ -53,13 +52,6 @@ internal object GoSyscall {
     private val names = arrayOf("read", "stat", "list", "realpath", "write")
 
     val statsOn: Boolean = platformGetenv("TSGO_IO_STATS").let { it != null && it.isNotEmpty() && it != "0" }
-
-    /** 0 inline (default), 1 release the run token, 2 release and hand off to the IO pool. */
-    val dispatch: Int = when (platformGetenv("TSGO_IO_DISPATCH")) {
-        "release", "1" -> 1
-        "pool", "2" -> 2
-        else -> 0
-    }
 
     private val calls = AtomicLongArray(names.size)
     private val nanos = AtomicLongArray(names.size)
@@ -74,9 +66,9 @@ internal object GoSyscall {
         if (statsOn) bytes.fetchAndAdd(n.toLong())
     }
 
-    /** `io: dispatch=… read=<calls>/<ms> … total=<calls>/<ms> bytes=…` (nanoseconds summed over all threads). */
+    /** `io: read=<calls>/<ms> … total=<calls>/<ms> bytes=…` (nanoseconds summed over all threads). */
     fun stats(): String {
-        val sb = StringBuilder("io: dispatch=").append(arrayOf("inline", "release", "pool")[dispatch])
+        val sb = StringBuilder("io:")
         var c = 0L
         var n = 0L
         for (i in names.indices) {
@@ -93,21 +85,14 @@ internal object GoSyscall {
 }
 
 /** Runs the host call [block] at the syscall boundary (see [GoSyscall]). */
-internal inline fun <R> syscall(op: Int, crossinline block: () -> R): R {
+internal inline fun <R> syscall(op: Int, block: () -> R): R {
     val t0 = if (GoSyscall.statsOn) TimeSource.Monotonic.markNow() else null
     try {
-        return when (GoSyscall.dispatch) {
-            0 -> block()
-            1 -> blockingWait { block() }
-            else -> blockingWait { ioHandoff { block() } }
-        }
+        return block()
     } finally {
         if (t0 != null) GoSyscall.record(op, t0.elapsedNow().inWholeNanoseconds)
     }
 }
-
-/** Runs [block] on a dedicated IO thread and waits for it (JVM); inline on Native. */
-internal expect fun <R> ioHandoff(block: () -> R): R
 
 /** The host environment variable [name] (null when unset). */
 internal expect fun platformGetenv(name: String): String?
