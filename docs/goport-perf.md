@@ -968,3 +968,20 @@ with the fields). Every gate passed (Diag 13,127 equal, Emit/CLI/LS/API green, `
 services** at 6 warm-up rebuilds, **−0.4% (2/4)** at 20 — a slower JIT warm-up and no steady-state gain — and the
 GraalVM image unchanged (compiler 2,455 → 2,461 ms, services 3,149 → 3,180 ms medians). A local builder's header
 lives in a register or a TLAB slot either way; the header objects it removed were never the cost. Reverted.
+
+## 16. (TSGO.6-m) The config phase's directory walk: one `lstat` per entry, no eager size, no path copies (2026-10-10)
+
+On a small project the image spends a large share outside checking: date-fns core (1,445 files), `--extendedDiagnostics`
+**Config time 0.087 s against tsgo's 0.022 s** — the tsconfig include walk. A warm profile of it (`CheckBenchMain …
+osfs`, the real file system every rebuild): `platformListDir` **39%** of the phase, `nextPathPartParts` **23%**, the eager
+`platformSize` 6%. Three fixes, all inside Go's semantics:
+
+- `platformListDir` (JVM `actual`): ONE `Files.readAttributes(…, NOFOLLOW_LINKS)` per entry for the kind, where
+  `isSymbolicLink` + `isDirectory` + `isRegularFile` were up to three `lstat`s (Go reads `d_type` from `readdir`).
+- `DirFS.readDir`'s `HostInfo` takes its size on first `size()` — Go's `DirEntry.Info()` stats lazily too, and no
+  include walk asks.
+- `vfsmatch.nextPathPartSingle`/`nextPathPartParts` (hash-pinned overrides): Go's `rest := s[offset:]` is O(1), the
+  lowered `substring` copied the rest of the path once per component; the overrides search `s` from `offset`.
+
+Measured, GraalVM default image, date-fns core, 5 rotated runs per arm: **Config time 107 → 77 ms (−28%)**, output
+identical (CLI parity green over every recorded project's file set, Diag 13,127 equal).

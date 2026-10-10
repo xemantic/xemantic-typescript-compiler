@@ -29,17 +29,32 @@ import java.io.File
 
 internal actual fun platformIsDir(path: String): Boolean? = File(path).let { if (it.exists()) it.isDirectory else null }
 
-internal actual fun platformListDir(path: String): List<Pair<String, Char>>? =
-    File(path).listFiles()?.map {
-        val p = it.toPath()
+/**
+ * `os.ReadDir`'s names and entry kinds. ONE `lstat` per entry (`readAttributes` NOFOLLOW): the three predicate
+ * calls it replaces were up to three, and a 1,445-file project's config phase was ~40% listing (docs/goport-perf.md
+ * § 16). Go reads the kind from `readdir`'s `d_type` without any. An entry gone between the listing and its `lstat`
+ * is skipped, as Go's `ReadDir` drops one that vanished.
+ */
+internal actual fun platformListDir(path: String): List<Pair<String, Char>>? {
+    val names = File(path).list() ?: return null
+    val dir = java.nio.file.Path.of(path)
+    val out = ArrayList<Pair<String, Char>>(names.size)
+    for (name in names) {
+        val a = try {
+            java.nio.file.Files.readAttributes(dir.resolve(name), java.nio.file.attribute.BasicFileAttributes::class.java, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        } catch (_: java.io.IOException) {
+            continue
+        }
         val kind = when {
-            java.nio.file.Files.isSymbolicLink(p) -> 'l'
-            java.nio.file.Files.isDirectory(p, java.nio.file.LinkOption.NOFOLLOW_LINKS) -> 'd'
-            java.nio.file.Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS) -> 'f'
+            a.isSymbolicLink -> 'l'
+            a.isDirectory -> 'd'
+            a.isRegularFile -> 'f'
             else -> 'o'
         }
-        it.name to kind
+        out += name to kind
     }
+    return out
+}
 
 internal actual fun platformReadFile(path: String): ByteArray? = File(path).takeIf { it.isFile }?.readBytes()
 

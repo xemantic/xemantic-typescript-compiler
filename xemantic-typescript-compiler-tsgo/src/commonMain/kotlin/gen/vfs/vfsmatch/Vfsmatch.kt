@@ -380,37 +380,35 @@ fun com.xemantic.typescript.tsgo.vfs.vfsmatch.globPattern?.patternSatisfied(comp
 }
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.nextPathPartSingle e86f7965
+// OVERRIDE (performance, docs/goport-perf.md § 16): Go's `rest := s[offset:]` is an O(1) slice; lowered as `substring`
+// it COPIED the rest of the path once per component (quadratic in the path's length, ~a quarter of a 1,445-file
+// project's config phase with nextPathPartParts). The same search over `s` from `offset`, the same results.
 fun nextPathPartSingle(s: String, offset_0: Int): Tuple3<String, Int, Boolean> {
     var offset: Int = offset_0
-    var part: String = ""
-    var nextOffset: Int = 0
-    var ok: Boolean = false
     if (offset >= s.length) {
         return Tuple3<String, Int, Boolean>("", offset, false)
     }
     if (offset == 0 && s.length > 0 && s[0].code == 47) {
         return Tuple3<String, Int, Boolean>("", 1, true)
     }
-    l0@ while (offset < s.length && s[offset].code == 47) {
+    while (offset < s.length && s[offset].code == 47) {
         offset++
     }
     if (offset >= s.length) {
         return Tuple3<String, Int, Boolean>("", offset, false)
     }
-    val rest: String = s.substring(offset)
-    val idx: Int = com.xemantic.typescript.tsgo.go.strings.indexByte(rest, 47)
-    if (idx >= 0) {
-        return Tuple3<String, Int, Boolean>(rest.substring(0, idx), offset + idx, true)
+    val end: Int = s.indexOf('/', offset)
+    if (end >= 0) {
+        return Tuple3<String, Int, Boolean>(s.substring(offset, end), end, true)
     }
-    return Tuple3<String, Int, Boolean>(rest, s.length, true)
+    return Tuple3<String, Int, Boolean>(s.substring(offset), s.length, true)
 }
 
 // go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.nextPathPartParts 4159d623
+// OVERRIDE (performance, docs/goport-perf.md § 16): see nextPathPartSingle — `prefix[offset:]` searched in place
+// instead of copied; the same results.
 fun nextPathPartParts(prefix: String, suffix: String, offset_0: Int): Tuple3<String, Int, Boolean> {
     var offset: Int = offset_0
-    var part: String = ""
-    var nextOffset: Int = 0
-    var ok: Boolean = false
     if (suffix.length == 0) {
         return nextPathPartSingle(prefix, offset)
     }
@@ -425,13 +423,14 @@ fun nextPathPartParts(prefix: String, suffix: String, offset_0: Int): Tuple3<Str
         return Tuple3<String, Int, Boolean>("", 1, true)
     }
     if (offset < prefix.length) {
-        l0@ while (offset < prefix.length && prefix[offset].code == 47) {
+        while (offset < prefix.length && prefix[offset].code == 47) {
             offset++
         }
         if (offset < prefix.length) {
-            val rest: String = prefix.substring(offset)
-            val idx: Int = com.xemantic.typescript.tsgo.go.strings.indexByte(rest, 47)
-            return Tuple3<String, Int, Boolean>(rest.substring(0, idx), offset + idx, true)
+            // Go: idx is >= 0 here (prefix ends in '/'); a -1 would make Go's rest[:idx] panic, and substring throws.
+            val end: Int = prefix.indexOf('/', offset)
+            if (end < 0) goPanicSlice("[:-1]")
+            return Tuple3<String, Int, Boolean>(prefix.substring(offset, end), end, true)
         }
     }
     val sOff: Int = offset - prefix.length

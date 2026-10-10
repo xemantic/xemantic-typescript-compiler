@@ -83,7 +83,7 @@ private class DirFS(private val dir: String) :
         for ((i, e) in sorted.withIndex()) {
             val kind = e.second
             out[i] = com.xemantic.typescript.tsgo.go.io.fs.fileInfoToDirEntry(
-                HostInfo(e.first, kind == 'd', if (kind == 'f') syscall(GoSyscall.OP_STAT) { platformSize(host("$full/${e.first}")) } else 0L, kind),
+                HostInfo(e.first, kind == 'd', { if (kind == 'f') syscall(GoSyscall.OP_STAT) { platformSize(host("$full/${e.first}")) } else 0L }, kind),
             )
         }
         return com.xemantic.typescript.tsgo.runtime.Tuple2(out, null)
@@ -93,7 +93,8 @@ private class DirFS(private val dir: String) :
         val (full, err) = join("stat", name)
         if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, err)
         val isDir = syscall(GoSyscall.OP_STAT) { platformIsDir(host(full!!)) } ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("stat", name))
-        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, syscall(GoSyscall.OP_STAT) { platformSize(host(full!!)) }), null)
+        val size = syscall(GoSyscall.OP_STAT) { platformSize(host(full!!)) }
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, { size }), null)
     }
 
     /** An opened host file: Stat and (for a directory) ReadDir; Read serves the whole content. */
@@ -118,10 +119,19 @@ private class DirFS(private val dir: String) :
     }
 
     /** [kind]: 'd' directory, 'f' regular file, 'l' symbolic link (as lstat reports it), 'o' anything else. */
-    private class HostInfo(private val name: String, private val dir: Boolean, private val size: Long, private val kind: Char = if (dir) 'd' else 'f') :
+    /**
+     * A host file's info. Its size is asked for on first use: Go's `DirEntry.Info()` stats lazily too, and directory
+     * walks (the config phase's include matching) never read it — an eager `stat` per listed file was a second syscall
+     * per entry (docs/goport-perf.md § 16).
+     */
+    private class HostInfo(private val name: String, private val dir: Boolean, private val sizeOf: () -> Long, private val kind: Char = if (dir) 'd' else 'f') :
         com.xemantic.typescript.tsgo.go.io.fs.FileInfo {
+        private var size = -1L
         override fun name(): String = name
-        override fun size(): Long = size
+        override fun size(): Long {
+            if (size < 0) size = sizeOf()
+            return size
+        }
         override fun mode(): com.xemantic.typescript.tsgo.go.io.fs.FileMode = when (kind) {
             'd' -> com.xemantic.typescript.tsgo.go.io.fs.FileMode(com.xemantic.typescript.tsgo.go.io.fs.ModeDir.value or 493u)
             'l' -> com.xemantic.typescript.tsgo.go.io.fs.FileMode(com.xemantic.typescript.tsgo.go.io.fs.ModeSymlink.value or 511u)
