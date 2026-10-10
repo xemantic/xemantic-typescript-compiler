@@ -998,3 +998,20 @@ is the host's; every other FS keeps Go's path, and `decodeBytes` (the BOM handli
 
 GraalVM default image, 4 rotated runs per arm, output identical: Parse time **316 → 286 ms** (compiler profile),
 **232 → 195 ms** (date-fns core); Total 2.47 → 2.38 s and 0.59 → 0.56 s.
+
+## 18. The shipped image at the end of (TSGO.6-k..m) (2026-10-10)
+
+PGO images (`scripts/tsgo-native-image-pgo.sh`, Oracle GraalVM 25.0.4) of 2026-10-09 ("old"), after § 14 ("mid") and
+after § 17 ("final"), with tsgo 7.0.2, one rotated batch, 3 runs per arm, every output byte-identical:
+
+| project | old | mid | final | tsgo | final / tsgo |
+|---|---:|---:|---:|---:|---:|
+| tsc's compiler profile | 2,486 ms | 2,019 ms | **1,912 ms** | 1,828 ms | 1.05 |
+| tsc's services profile | 3,109 ms | 2,640 ms | 2,690 ms | 2,353 ms | 1.14 |
+| date-fns core | 581 ms | 542 ms | **516 ms** | 356 ms | 1.45 |
+
+(The box ran ~5% slower in this batch than in § 15's; compare within the row.) A JFR profile of the image's parse
+(214 samples over 6 runs) is now flat — the scanner ~30% inclusive, the rest the parser and node allocation (4-7
+objects per AST node against Go's one) — and the check phase matches tsgo's under PGO. What is left on small projects
+is per-file fixed cost: config (a Java listing needs an `lstat` per entry where Go reads `d_type`), parse code quality
+in the AOT image, and process start.

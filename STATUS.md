@@ -7,7 +7,8 @@ together in the order the checker walks them. Warm wall **−9.2% single / −6.
 allocation −3%, peak heap −6% (docs/goport-perf.md § 14). With the index block in the goroutine's thread object, the shipped
 **PGO image reads 1.84 s / 2.46 s on compiler / services against tsgo's 1.73 / 2.35 s** (2.38 / 3.00 s on 2026-10-09;
 § 15). Owned slice LOCALS were built and refused (−4% allocation, no wall gain). The config phase's directory walk (one `lstat` per entry, a lazy size, no path copies in `vfsmatch`)
-takes the image's Config time on date-fns 107 → 77 ms (§ 16). Source files are read into a string in one step (§ 17): parse −9% (compiler) / −16% (date-fns) in the image. Diag 13,127 equal, Emit/CLI/LS/API parity green; `-tsgo`
+takes the image's Config time on date-fns 107 → 77 ms (§ 16). Source files are read into a string in one step (§ 17): parse −9% (compiler) / −16% (date-fns) in the image. End of the arc (§ 18, one batch): PGO image 1.91 / 2.69 / 0.52 s on compiler / services / date-fns against
+tsgo's 1.83 / 2.35 / 0.36 s (2.49 / 3.11 / 0.58 s on 2026-10-09). Diag 13,127 equal, Emit/CLI/LS/API parity green; `-tsgo`
 136 / 0, `-goport` 25 / 0, `-lsp` 38 / 0, native 79 / 0.
 
 **(TSGO.6-k) DONE — slice headers owned by their field, struct literals stored in place (2026-10-10):** owner goal:
