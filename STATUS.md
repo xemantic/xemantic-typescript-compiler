@@ -4,7 +4,8 @@
 the port made each `*Base` wrapper level its own object. A porter rule lowers the 9 wrapper structs with no field or method
 of their own as `typealias`es of what they wrap (the expression chain onto `NodeDefault`), and a selection through one is
 no step. Warm wall **−5.8% single / −2.6% compiler parallel / −5.2% services**, allocation −5% (docs/goport-perf.md
-§ 19). Diag 13,127 equal, Emit/CLI/LS/API parity green; `-tsgo` 136 / 0, `-goport` 26 / 0, `-lsp` 38 / 0, native 79 / 0.
+§ 19). The shipped PGO image is now 1,755 / 2,352 ms on tsc's compiler / services profiles against tsgo's 1,737 /
+2,286 ms (§ 20). Diag 13,127 equal, Emit/CLI/LS/API parity green; `-tsgo` 136 / 0, `-goport` 26 / 0, `-lsp` 38 / 0, native 79 / 0.
 
 **(TSGO.6-l) DONE — the link store filed by a dense port-internal index (2026-10-10):** `ast.Node`/`ast.Symbol` extend
 `runtime.GoLinkKey` (a sequential index from per-thread blocks, NOT tsgo's lazily assigned id) and the `core.LinkStore`

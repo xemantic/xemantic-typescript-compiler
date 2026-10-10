@@ -1045,3 +1045,28 @@ parity gates green, but wall **+2.0% single (1/4), +3.8% compiler parallel (1/4)
 allocation-only lever this arc (with § 15's owned locals) whose removed objects were cheap young TLAB allocations.
 Reverted. What has paid is fewer OBJECTS ON THE ACCESS PATH (§ 14's dense table, § 19's wrapper chain), not fewer
 short-lived temporaries.
+
+## 20. The shipped image after § 19, and the PGO training set (2026-10-10)
+
+PGO images built from the same tree (HEAD `a7e8a93b3`, with § 19's transparent wrappers): the default training set
+(tsc's compiler profile + zod) against four projects (+ date-fns core + hono), with tsgo 7.0.2; one rotated batch, 4 runs
+per arm, every output byte-identical:
+
+| project | 2-project PGO | 4-project PGO | tsgo | 2-project / tsgo |
+|---|---:|---:|---:|---:|
+| tsc's compiler profile (trained) | 1,755 ms | 1,760 ms | 1,737 ms | **1.01** |
+| tsc's services profile (held out) | **2,352 ms** | 2,425 ms | 2,286 ms | **1.03** |
+| date-fns core | 488 ms | 461 ms | 370 ms | 1.32 |
+| immer (held out) | 640 ms | 621 ms | 536 ms | 1.19 |
+| ky (held out) | 163 ms | 153 ms | 120 ms | 1.35 |
+| mitt (held out) | 121 ms | 110 ms | 83 ms | 1.45 |
+
+- **The image is at tsgo's speed on the large projects** (+1% / +3%).
+- **The broader training set is mixed** (−3..−9% on the small held-out projects, +3% on the large one): the default stays.
+- **What is left is per-run fixed cost on small projects.** On mitt (3 roots, 91 files in the program — nearly all the
+  bundled `lib.*.d.ts`) parse is 65 ms against tsgo's 37 ms, i.e. the AOT image parses the libs ~1.7x slower even with
+  PGO. Lib ASTs are reusable across programs (the bench's `libcache` arm, keyed by parse options + text + script kind,
+  gives the identical digest, as tsgo's language server does), so parsing the bundled libs at IMAGE BUILD TIME into the
+  image heap would remove most of it — but it needs build-time initialization of much of the port, whose process-global
+  state (the run-token count read from the CPU count, the link-index counter, the goroutine pool) must not be baked in.
+  A project of its own, not attempted here.
