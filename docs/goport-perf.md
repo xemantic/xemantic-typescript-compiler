@@ -1206,3 +1206,7 @@ The same profile's other port-side rows, for whoever takes the next pass: `json.
 `package.json` 173 samples (§ 24: not on the wall), `tspath.hasRelativePathSegment` 97 (§ 24 likewise),
 `checker.sortSymbols` 134 (`getNamedMembers` sorting members by declaration position, `getSourceFileOfNode` per compare
 — tsgo's own algorithm).
+
+**Measured and refused: a same-parent shortcut in `checker.compareNodes`** (two nodes with one parent compared by
+position, skipping both `GetSourceFileOfNode` walks — aimed at § 26's `sortSymbols` row). Exact, and inside the noise:
+date-fns 530 / 518 ms, hono 826 / 818, compiler profile 2,185 / 2,170, services 2,914 / 2,934, immer and ky flat.
