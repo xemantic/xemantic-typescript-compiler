@@ -1191,3 +1191,18 @@ vtable layout — and its CPU prize is small: the hops it removes (`asNode` and 
 of the date-fns image profile, and its allocation half is what the two refusals above measured as not moving the wall.
 What still separates date-fns from tsgo: start-up ~20 vs ~5 ms (the image heap read before `main`), config ~40 vs ~23,
 parse ~125 vs ~90, and ~60 ms of G1 young pauses Go's concurrent collector does not take.
+
+## 26. (TSGO.6-o) A missing path answered without an exception (2026-10-11)
+
+A fresh JFR profile of the image on date-fns (3,401 samples) put 137 samples under `vfs.internal.stat`
+(`fileExists` / `directoryExists`), with native-image stack walking (`lookupCodeInfo`) among the leaves: § 23's
+one-call `readAttributes` reports a MISSING path by throwing `NoSuchFileException`, and module resolution probes
+~1,850 missing paths per run. `platformStatSize` asks `File.exists` first (one `stat`, a boolean) and reads attributes
+only for a path that exists. Image, 6 rotated runs per arm, outputs identical, on a noisy box: date-fns 516 → 500 ms,
+hono 800 → 782, immer 657 → 644, the rest inside the noise. Native CLI replay 106 / 106, Diag 13,127 equal, CLI parity
+green, `-tsgo` 136 / 0.
+
+The same profile's other port-side rows, for whoever takes the next pass: `json.unmarshal` of date-fns's 261 KB
+`package.json` 173 samples (§ 24: not on the wall), `tspath.hasRelativePathSegment` 97 (§ 24 likewise),
+`checker.sortSymbols` 134 (`getNamedMembers` sorting members by declaration position, `getSourceFileOfNode` per compare
+— tsgo's own algorithm).

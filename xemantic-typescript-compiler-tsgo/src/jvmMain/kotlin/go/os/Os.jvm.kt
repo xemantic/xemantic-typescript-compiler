@@ -31,6 +31,10 @@ import java.io.File
 internal actual fun platformIsDir(path: String): Boolean? = platformStatSize(path)?.let { it < 0 }
 
 internal actual fun platformStatSize(path: String): Long? {
+    // A missing path is answered without an exception: `readAttributes` reports one by THROWING, and in the native
+    // image an exception walks the stack (`lookupCodeInfo`) — module resolution probes ~1,850 missing paths on a
+    // 1,445-file project (docs/goport-perf.md § 26). `File.exists` is one `stat` that returns a boolean.
+    if (!File(path).exists()) return null
     val a = try {
         java.nio.file.Files.readAttributes(java.nio.file.Path.of(path), java.nio.file.attribute.BasicFileAttributes::class.java)
     } catch (_: java.io.IOException) {
