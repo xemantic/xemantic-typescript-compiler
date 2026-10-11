@@ -1210,3 +1210,10 @@ The same profile's other port-side rows, for whoever takes the next pass: `json.
 **Measured and refused: a same-parent shortcut in `checker.compareNodes`** (two nodes with one parent compared by
 position, skipping both `GetSourceFileOfNode` walks — aimed at § 26's `sortSymbols` row). Exact, and inside the noise:
 date-fns 530 / 518 ms, hono 826 / 818, compiler profile 2,185 / 2,170, services 2,914 / 2,934, immer and ky flat.
+
+**Measured: the young pauses are first evacuations, not survivor ping-pong.** `-XX:MaxTenuringThreshold=1` (promote
+after one survival) leaves date-fns at 5 pauses / 82 ms and the compiler profile at 10 / 188-192 ms, the same as the
+default 15; a threshold of 0 needs `AlwaysTenure`, which this G1 does not honour (the run refuses to start). What a pause
+copies is the newly-live part of the young generation — the trees and types a compile keeps — once. With § 25's young
+sizes (fewer pauses, first-touch cost instead) and serial GC (§ 9a: far slower on large projects), the G1 side is closed
+on GraalVM 25.0.4, which is the current Oracle release.
