@@ -1217,3 +1217,11 @@ default 15; a threshold of 0 needs `AlwaysTenure`, which this G1 does not honour
 copies is the newly-live part of the young generation — the trees and types a compile keeps — once. With § 25's young
 sizes (fewer pauses, first-touch cost instead) and serial GC (§ 9a: far slower on large projects), the G1 side is closed
 on GraalVM 25.0.4, which is the current Oracle release.
+
+**Measured: the live-object half of one-object AST nodes.** An `ast.Node` override with the id as a volatile `Long`
+in the node (assigned once under a lock by a `GetNodeId` override) instead of a per-node `atomic.Uint64` object — one
+LIVE object fewer per node, the kind of object a young pause copies. Pauses: date-fns 86 → 83 ms, compiler profile
+196 → 183 ms (4-7%); wall inside the noise and mixed in sign (date-fns 517 / 500, hono 804 / 783, ky 101 / 95,
+compiler profile 2,151 / 2,188, services 2,893 / 2,922). Reverted. Extrapolated, removing ALL of a node's extra objects
+(its `TextRange`, the embedded-base chain) buys ~15 ms of date-fns's pauses — a fifth of its gap to tsgo — which is the
+measured price of the porter-wide rewrite.
