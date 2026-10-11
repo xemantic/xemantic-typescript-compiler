@@ -1225,3 +1225,25 @@ LIVE object fewer per node, the kind of object a young pause copies. Pauses: dat
 compiler profile 2,151 / 2,188, services 2,893 / 2,922). Reverted. Extrapolated, removing ALL of a node's extra objects
 (its `TextRange`, the embedded-base chain) buys ~15 ms of date-fns's pauses — a fifth of its gap to tsgo — which is the
 measured price of the porter-wide rewrite.
+
+## 27. (TSGO.6-o) Warm in-process rebuilds against the native image (2026-10-11)
+
+`CheckBenchMain <tsconfig> 6 10 libcache parallel` — a whole-program rebuild per iteration in one warm JVM, file
+contents served from memory, the bundled libs cached across rebuilds (a daemon's best case without incremental reuse);
+each project in a fresh JVM, Temurin 26 and Oracle GraalVM 25's JIT, median / min of 10 measured rebuilds, diagnostics
+equal to tsgo's on every row:
+
+| project | warm Temurin | warm Graal JIT | native PGO image, cold | tsgo 7.0.2, cold |
+|---|---:|---:|---:|---:|
+| mitt | 168 / 118 ms | 138 / 96 | ~48 | 72-139 |
+| ky | 318 / 199 | 271 / 207 | ~92 | 114-127 |
+| immer | 719 / 495 | 799 / 536 | ~542 | 541-579 |
+| hono | 1,028 / 727 | 856 / 628 | ~700 | 689-756 |
+| date-fns | 1,034 / 584 | 1,040 / 566 | ~422 | 326-383 |
+| tsc's compiler profile | 1,773 / 1,589 | 2,008 / 1,670 | ~1,784 | 1,700-1,743 |
+| tsc's services profile | 2,420 / 2,285 | 2,241 / 2,065 | ~2,217 | 2,206-2,555 |
+
+A warm full rebuild is no faster than the native image's cold run, and slower on small projects: the image already
+starts with PGO-compiled code and the libs parsed and bound (§§ 21, 25), and each JVM rebuild allocates ~2.3 GB whose
+collection is most of the median-min spread. What a daemon could add is INCREMENTAL reuse (unchanged files' parse and
+bind kept between requests, as tsgo's language server does) — tsgo's `--watch`/`--build` are not ported yet.
