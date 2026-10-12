@@ -25,6 +25,17 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.6-p) — tsc-rs MEASURED (2.3-3.9x faster than tsgo, same work, a Rust data-model redesign) AND WHAT TRANSFERS: plain relation keys landed (`getRelationKey` 1.5% → 0.3% of the thread); its flow-walk skip, the small lookup levers and an Epsilon (no-GC) image priced and not built (docs/goport-perf.md § 28)
+
+- Owner ask 2026-10-12: measure tsc-rs (pingdotgg/ts-rust) on our projects and borrow what transfers. Measured on 10 projects;
+  single-threaded it does the same work (Types/Symbols/Instantiations within ~1% of tsgo) at 2.2-4x less CPU.
+- Landed: override `checker.getRelationKey` — a non-generic relation key is the 128-bit value itself (bijective mix of
+  the type ids + tagged intersection state), not its xxh3 hash. Pin in `CheckerSmokeTest` (failed against a symmetric key).
+- Priced, refused: its flow skip (`GOPORT_FLOWSKIP=0` vs `=1` on tsc-rs: inside the noise on hono, date-fns, zod, the
+  compiler profile); symbol-table / `getNamedMembers` / interning levers (≤ 2.6% of the thread each); `--gc=epsilon`
+  (CPU −20..−30%, wall better only on small projects, RSS +20..+50% — an opt-in image is a build change, owner's call).
+- Gates: Diag 13,127 equal, Emit 13,127 equal, CLI 105 equal; `-tsgo` 137 / 0, `-goport` 26 / 0; warning-clean.
+
 ### Round (TSGO.6-m..o) — CONFIG WALK, ONE-STEP FILE READS, TRANSPARENT WRAPPERS, AND THE BUNDLED LIBS PARSED AT IMAGE BUILD TIME: the PGO image is at or past tsgo 7.0.2 on tsc's compiler (1,722 / 1,728 ms) and services (2,305 / 2,335) profiles and on immer, ky and mitt; date-fns is the one left (483 / 359) (2026-10-10)
 
 - (6-m) config-phase directory walk: one `lstat` per entry, a lazy size, `vfsmatch` path parts searched in place

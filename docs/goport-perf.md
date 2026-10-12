@@ -1247,3 +1247,63 @@ A warm full rebuild is no faster than the native image's cold run, and slower on
 starts with PGO-compiled code and the libs parsed and bound (§§ 21, 25), and each JVM rebuild allocates ~2.3 GB whose
 collection is most of the median-min spread. What a daemon could add is INCREMENTAL reuse (unchanged files' parse and
 bind kept between requests, as tsgo's language server does) — tsgo's `--watch`/`--build` are not ported yet.
+
+## 28. (TSGO.6-p) tsc-rs measured, and what of it transfers (2026-10-12)
+
+[tsc-rs](https://github.com/pingdotgg/ts-rust) 0.5.0 (the prebuilt static linux-x64 release, checksum verified;
+pinned to TypeScript `7.1.0-dev` @ `673a5f17d713`) is an LLM-written hand port of tsgo to Rust (~605k lines). Same
+box, idle, `--noEmit -p`, medians of 3-5 rotated runs, our PGO image (`xtsc-tsgo-pgo`):
+
+| project | tsgo 7.0.2 | our PGO image | tsc-rs 0.5.0 |
+|---|---:|---:|---:|
+| mitt | 92 ms | 44 | 27 |
+| superstruct | 88 | 90 | 31 |
+| ky | 118 | 95 | 50 |
+| immer | 553 | 584 | 193 |
+| date-fns core | 361 | 427 | 171 |
+| hono | 761 | 714 | 196 |
+| zod | 1,184 | 1,096 | 328 |
+| tsc's compiler profile | 1,864 | 1,841 | 727 |
+| tsc's services profile | 2,337 | 2,352 | 815 |
+| type-fest (a non-PGO image of ours) | 17,253 | 21,486 | 3,809 |
+
+Output byte-identical to tsgo's on 8 of 10 (hono +2 TS7031, zod +2 TS5115 — its pin is 7.1-dev; its README says
+zod's TS5115 moves with the checker count). It does the SAME work: `--extendedDiagnostics` Types / Symbols /
+Instantiations agree with tsgo's within ~1%. Single-threaded it uses 2.2-4x less CPU (hono 404 vs 1,652 ms; compiler
+profile check 1.44 s vs tsgo 2.94 s, ours 2.76 s; parse ~2.4x faster), CPU/wall 1.0, the lowest peak RSS of the three
+(`GOPORT_LAUNCH=0`, which keeps its worker process from escaping `getrusage`, changes nothing here). Its speed is a
+data-model redesign tuned over hundreds of measured rounds (its first prototype was 2.6-3.4x SLOWER than Go): every
+pointer a 32-bit arena index, the AST a column store (~42 bytes of header per node), types as 64-byte-aligned records,
+paged dense side tables, interned `u32` names and linear small symbol tables, no GC (leaked bump arenas, `_exit`),
+jemalloc + huge pages, fat LTO + PGO, lib files pre-parsed AND pre-bound into the binary (our §§ 21, 25). None of the
+data model is a porter rule; what is separable was priced here.
+
+**Priced and not built — its flow-walk skip (`flow_skip.rs`, 2.4k lines: an Euler-tour index + union-find proving a
+walk can only return the declared type).** On tsc-rs itself, `GOPORT_FLOWSKIP=0` against `=1`, single-threaded check
+time, two runs each: hono 0.310 / 0.268 vs 0.292 / 0.284 s, date-fns 0.230 / 0.252 vs 0.232 / 0.280, zod 0.750 / 0.648
+vs 0.594 / 0.685, compiler profile 1.332 / 1.420 vs 1.354 / 1.361 — inside the run-to-run spread on all four. Not
+worth an algorithm tsgo does not have on these projects.
+
+**Priced, not built — the small levers.** A warm profile of the JVM port (compiler profile, single, 38,224 samples):
+symbol-table / property lookups (`getPropertyOfTypeEx`, `getSymbol`, `getMergedSymbolImpl` through `GoMap.find`)
+~2.6% of the thread, `getNamedMembers` 1.6% inclusive, identifier interning 0.8%. Flow analysis
+(`getFlowTypeOfReference`) is 24.3% inclusive — tsgo's own algorithm, the same walk tsc-rs makes.
+
+**Measured: no GC at all (GraalVM `--gc=epsilon`, a throwaway non-PGO image via `nativeImageArgs`).** Against the
+same-tree non-PGO G1 image, output identical on 7 projects: CPU −20..−30% everywhere (no GC threads), wall
+−25..−30% on small projects (mitt 53 → 39 ms, ky 122 → 86), flat or worse on large ones (compiler profile 2,622 both;
+immer 654 → 709 — first-touch page faults replace collection), peak RSS +20..+50% (compiler profile 929 → 1,379 MB).
+Not a default; an opt-in image for small projects would need `-PnativeImageGc=epsilon` (a build change, owner's call).
+
+**Landed — plain relation keys** (override `checker.getRelationKey`, ts-rust's `PlainRelationKey`). A relation key
+is only ever compared for equality (`Relation.results`, `maybeKeysSet`), so a non-generic pair's key is the 128-bit
+value itself — a splitmix64 bijection of the two type ids in `lo`, the intersection state under a non-zero tag in
+`hi` — instead of its xxh3 hash; generic-reference keys still hash. Profile: `getRelationKey` 1.5% → 0.3% of the
+thread, xxh3 2.7% → 2.1%. The warm A/B cannot see ~1% (compiler single, 4 processes per arm: 3,474 → 3,585 ms, B wins
+2/4; allocation flat — the `keyBuilder` pool (§ 12.1) had already taken the buffers, which is why § 10's ~10% is gone).
+Kept as exact work removed. Pin: `CheckerSmokeTest` "a cached relation in one direction does not answer the other"
+(fails with a symmetric key). Diag 13,127 / Emit 13,127 / CLI 105 equal; `-tsgo` 137 / 0, `-goport` 26 / 0.
+
+What transfers is therefore small: tsc-rs's lead over tsgo is the cost of Go's object graph itself (and of our
+port's, which mirrors it), not a missing cache. Matching it would mean leaving the mechanical port for the
+checker's core data model.

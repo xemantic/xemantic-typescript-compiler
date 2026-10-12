@@ -1,3 +1,13 @@
+**(TSGO.6-j) DONE — two porter rules from § 11's allocation table (2026-10-10):** (A) an ESCAPE PROOF over the Go IR
+(`Program.computePooledLocals`, `lower/PooledLocals.kt`) pools the checker's 13 `var b keyBuilder` locals in a per-thread
+LIFO stack (`runtime.GoLocalPool`, `acquire` + `try`/`finally release`, the Hasher's buffer kept): allocation
+**−7.9% single / −9.2% compiler parallel / −7.9% services**, GC pause −15% compiler parallel, wall inside noise (single
++1.7% at 2/6, parallel −3%), the pool itself 0.33% of the thread. (B) `Checker.compareSymbols` is a generated primitive
+`fun interface` (`Program.computePrimFuncFields`: reads only call / nil-compare / argument, writes only SAM-converted
+method values): **−3.0% single / −5.7% services**, +0.7% date-fns (a per-call adapter where the field is handed to
+`SortFunc`), wall noise. docs/goport-perf.md § 12. Diag/Emit 13,127, CLI 105, LS 21,614, API 594,007 equal; `-tsgo`
+127 / 0, `-goport` 22 / 0, native 70 / 0.
+
 **(TSGO.6-i) DONE — a fresh warm profile; `nodeData`/`TypeData` as abstract classes (2026-10-10):** the profile after
 the window-field round (docs/goport-perf.md § 10): `GoMap` 15% of the thread (half of it the refused `LinkStore` probe),
 itable stubs 4.1%, `compareSymbols` boxing 3% of allocation, the `xxh3` key hasher 74% of `byte[]`, GC ~35% of process
