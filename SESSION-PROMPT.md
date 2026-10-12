@@ -144,10 +144,10 @@ Your loop (per CLAUDE.md § Execution protocol):
    with analysis-only output while workable items remain.
 
 Specifics worth remembering:
-- CLAUDE.md was trimmed 425 KB -> 91 KB (round 716). Per-diagnostic and
-  per-walker knowledge lives in docs/history/CLAUDE-GOTCHAS-ARCHIVE.md — GREP IT
-  before touching a walker, a TS code, or a corpus regression. A missing entry
-  means "look in the archive", never "no such constraint exists".
+- CLAUDE.md holds only tsgo-era knowledge (2026-10-12). Everything from the
+  `-core` era lives in docs/history/CLAUDE-CORE-ERA.md and
+  docs/history/CLAUDE-GOTCHAS-ARCHIVE.md — GREP them (never read them whole)
+  before touching `-core`, a TS code, or a corpus regression.
 - Any crash/hang/OOM on any input is a P0: repro item at the top of the queue.
 - The tsc sources, real lib .d.ts, and the conformance corpus are all available
   OFFLINE in typescript-repo's object DB.
