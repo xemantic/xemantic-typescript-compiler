@@ -115,6 +115,14 @@ class CheckerSmokeTest {
         assert(diags == listOf("TS2322: Type 'string' is not assignable to type 'number'."))
     }
 
+    @Test
+    fun `a cached relation in one direction does not answer the other`() = onDeepStack {
+        // `a = b` caches B -> A as related; `b = a` asks A -> B under its own plain relation key
+        // (the `checker.getRelationKey` override, docs/goport-perf.md § 28). tsgo 7.0.2 prints exactly this.
+        val diags = check("interface A { a: string }\ninterface B { a: string; b: number }\ndeclare let a: A;\ndeclare let b: B;\na = b;\nb = a;\n")
+        assert(diags == listOf("TS2741: Property 'b' is missing in type 'A' but required in type 'B'."))
+    }
+
     /** [check] with message chains (SnippetMain). */
     fun checkForDebug(source: String): List<String> = check(source, chains = true)
 
