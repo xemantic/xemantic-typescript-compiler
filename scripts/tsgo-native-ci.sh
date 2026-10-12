@@ -8,7 +8,7 @@
 #   2. the 8 tsc profiles under build/bench (`bench-compile-tsc.sh --materialize-only`).
 #   3. the PGO image (`scripts/tsgo-native-image-pgo.sh`, Oracle GraalVM — trained on tsc's compiler profile).
 #   4. tsgo's own output recorded (`scripts/tsgo-cli-oracle.py`) for the cases a fresh checkout can reproduce —
-#      the 8 profiles (check-only and emit) and the command-line cases; the census libraries, cronstrue, marked
+#      the 8 profiles (check-only and emit), the command-line cases and the `-b` / `--incremental` fixtures; the census libraries, cronstrue, marked
 #      and the type-oracle projects are local data — then replayed through the image
 #      (`scripts/tsgo-cli-native-replay.py`), which FAILS on any difference in stdout, exit status or written files.
 #
@@ -47,7 +47,7 @@ fi
 
 scripts/tsgo-native-image-pgo.sh --graalvm "$GRAAL"
 
-CASES=$(python3 scripts/tsgo-cli-oracle.py --list | grep -E '^(profile|cli)-' | paste -sd, -)
+CASES=$(python3 scripts/tsgo-cli-oracle.py --list | grep -E '^(profile|cli|build|incremental)-' | paste -sd, -)
 [[ $(tr ',' '\n' <<<"$CASES" | grep -c '^profile-') -ge 16 ]] || { echo "REFUSED: fewer than 16 profile cases: $CASES" >&2; exit 1; }
 python3 scripts/tsgo-cli-oracle.py --only "$CASES" --workers "$WORKERS"
 python3 scripts/tsgo-cli-native-replay.py --bin xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo --only "$CASES"
