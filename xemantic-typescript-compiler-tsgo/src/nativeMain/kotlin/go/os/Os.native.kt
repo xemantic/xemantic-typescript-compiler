@@ -65,10 +65,8 @@ import platform.posix.readlink
 import platform.posix.rmdir
 import platform.posix.stat
 import platform.posix.unlink
-import platform.posix.AT_FDCWD
-import platform.posix.UTIME_OMIT
+import platform.posix.futimens
 import platform.posix.timespec
-import platform.posix.utimensat
 
 
 /** `st_mode` and `st_size` of [path] (following links); null when it cannot be stat'ed. */
@@ -138,7 +136,7 @@ internal actual fun platformSize(path: String): Long = statOf(path)?.second ?: 0
 
 internal actual fun platformStatSize(path: String): Long? = statOf(path)?.let { if (hasType(it.first, S_IFDIR)) -1L else it.second }
 
-// ---- (TSGO.5) writing, for the command line (vfs/osvfs): POSIX open/write/close, mkdir, unlink/rmdir, utimensat.
+// ---- (TSGO.5) writing, for the command line (vfs/osvfs): POSIX open/write/close, mkdir, unlink/rmdir, futimens.
 
 internal actual fun platformOpenWrite(path: String, create: Boolean, append: Boolean, truncate: Boolean): Pair<Any?, String?> {
     var flags = O_WRONLY
@@ -181,14 +179,23 @@ internal actual fun platformRemoveAll(path: String): String? {
     return if (unlink(path) == 0) null else "unlink failed (errno $errno)"
 }
 
+/** `UTIME_OMIT` (`(1l << 30) - 2l`, <sys/stat.h> on Linux): not bound by the posix klib. */
+private const val LINUX_UTIME_OMIT = (1L shl 30) - 2L
+
 internal actual fun platformSetModTime(path: String, epochNanos: Long): String? = memScoped {
-    // utimensat: nanoseconds, as Go's Chtimes; the access time is left alone (UTIME_OMIT)
+    // futimens: nanoseconds, as Go's Chtimes; the access time is left alone (UTIME_OMIT). The posix klib binds neither
+    // utimensat nor the UTIME_OMIT macro: Linux's value is spelled out.
+    val fd = open(path, O_RDONLY)
+    if (fd < 0) return@memScoped "open failed (errno $errno)"
     val times = allocArray<timespec>(2)
     times[0].tv_sec = 0
-    times[0].tv_nsec = UTIME_OMIT
+    times[0].tv_nsec = LINUX_UTIME_OMIT
     times[1].tv_sec = epochNanos.floorDiv(1_000_000_000L)
     times[1].tv_nsec = epochNanos.mod(1_000_000_000L)
-    if (utimensat(AT_FDCWD, path, times, 0) == 0) null else "utimensat failed (errno $errno)"
+    val rc = futimens(fd, times)
+    val err = errno
+    close(fd)
+    if (rc == 0) null else "futimens failed (errno $err)"
 }
 
 internal actual fun platformModTime(path: String): Long = memScoped {
