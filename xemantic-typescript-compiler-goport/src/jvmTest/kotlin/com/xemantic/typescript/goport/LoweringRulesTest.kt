@@ -45,7 +45,7 @@ import kotlin.test.Test
  * end-to-end gate is `-tsgo`'s OracleParityTest (encoded-AST byte equality against tsgo).
  */
 /** The owned-slice operations in gen/ (docs/goport-lowering.md § 3, "Owned slice fields"); re-count when the IR changes. */
-private const val OWNED_SLICE_OPS = 42
+private const val OWNED_SLICE_OPS = 43
 
 class LoweringRulesTest {
 

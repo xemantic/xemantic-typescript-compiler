@@ -33,6 +33,8 @@ package com.xemantic.typescript.tsgo.go.os
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.allocArray
+import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
@@ -63,8 +65,10 @@ import platform.posix.readlink
 import platform.posix.rmdir
 import platform.posix.stat
 import platform.posix.unlink
-import platform.posix.utimbuf
-import platform.posix.utime
+import platform.posix.AT_FDCWD
+import platform.posix.UTIME_OMIT
+import platform.posix.timespec
+import platform.posix.utimensat
 
 
 /** `st_mode` and `st_size` of [path] (following links); null when it cannot be stat'ed. */
@@ -134,7 +138,7 @@ internal actual fun platformSize(path: String): Long = statOf(path)?.second ?: 0
 
 internal actual fun platformStatSize(path: String): Long? = statOf(path)?.let { if (hasType(it.first, S_IFDIR)) -1L else it.second }
 
-// ---- (TSGO.5) writing, for the command line (vfs/osvfs): POSIX open/write/close, mkdir, unlink/rmdir, utime.
+// ---- (TSGO.5) writing, for the command line (vfs/osvfs): POSIX open/write/close, mkdir, unlink/rmdir, utimensat.
 
 internal actual fun platformOpenWrite(path: String, create: Boolean, append: Boolean, truncate: Boolean): Pair<Any?, String?> {
     var flags = O_WRONLY
@@ -177,16 +181,19 @@ internal actual fun platformRemoveAll(path: String): String? {
     return if (unlink(path) == 0) null else "unlink failed (errno $errno)"
 }
 
-internal actual fun platformSetModTime(path: String, epochMillis: Long): String? = memScoped {
-    val times = alloc<utimbuf>()
-    times.actime = epochMillis / 1000
-    times.modtime = epochMillis / 1000
-    if (utime(path, times.ptr) == 0) null else "utime failed (errno $errno)"
+internal actual fun platformSetModTime(path: String, epochNanos: Long): String? = memScoped {
+    // utimensat: nanoseconds, as Go's Chtimes; the access time is left alone (UTIME_OMIT)
+    val times = allocArray<timespec>(2)
+    times[0].tv_sec = 0
+    times[0].tv_nsec = UTIME_OMIT
+    times[1].tv_sec = epochNanos.floorDiv(1_000_000_000L)
+    times[1].tv_nsec = epochNanos.mod(1_000_000_000L)
+    if (utimensat(AT_FDCWD, path, times, 0) == 0) null else "utimensat failed (errno $errno)"
 }
 
 internal actual fun platformModTime(path: String): Long = memScoped {
     val st = alloc<stat>()
-    if (stat(path, st.ptr) != 0) 0L else st.st_mtim.tv_sec * 1000L + st.st_mtim.tv_nsec / 1_000_000L
+    if (stat(path, st.ptr) != 0) 0L else st.st_mtim.tv_sec * 1_000_000_000L + st.st_mtim.tv_nsec
 }
 
 internal actual fun platformExecutable(): String? {

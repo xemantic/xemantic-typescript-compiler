@@ -41,8 +41,14 @@ var partialClosure = map[string][]string{
 		// (TSGO.4-a) the language service behind the language server's handlers (docs/goport-ls.md)
 		"XtscResolveClientCapabilities", "XtscUserPreferences", "XtscLanguageService"},
 	// (TSGO.5) the command line (docs/goport-cli.md): the overlay's runMain keeps CommandLine and
-	// what it reaches; --build and --watch are stubs (partialStubs).
+	// what it reaches; --watch is a stub (partialStubs), --build is ported ((TSGO.5-b), below).
 	"execute": {"XtscCommandLine"},
+	// (TSGO.5-b) `tsc --build` (internal/execute/build, its task graph on `chan struct{}` done signals): the
+	// orchestrator always constructs a WatchManager, so the watch types are kept and their watching bodies
+	// are stubs (partialStubs) until `--watch` has an fswatch shim.
+	"execute/build":        {"NewOrchestrator"},
+	"execute/watchmanager": {"NewWatchManager"},
+	"fswatch":              {"EventKind"},
 }
 
 // partialStubs: methods ("Recv.Name") or functions of a partial package kept as a SIGNATURE ONLY — the
@@ -63,10 +69,24 @@ var partialStubs = map[string][]string{
 	// `tsc --watch` (internal/execute/watchmanager + internal/fswatch: OS file-system notifications) are not
 	// ported yet: their entry points and the Watcher's methods are signatures only.
 	"execute": {
-		"tscBuildCompilation", "createWatcher",
+		"createWatcher",
 		"Watcher.start", "Watcher.computeDesiredWatches", "Watcher.reconcileWatches", "Watcher.comparePathsOptions",
 		"Watcher.DoCycle", "Watcher.isRelevantChange", "Watcher.doBuild", "Watcher.evictChangedSourceFiles",
 		"Watcher.compileAndEmit", "Watcher.recheckTsConfig", "Watcher.parseConfigFile",
+	},
+	// (TSGO.5-b) the orchestrator's `-b --watch` half.
+	"execute/build": {
+		"Orchestrator.Watch", "Orchestrator.DoCycle", "Orchestrator.updateWatch", "Orchestrator.checkTasksForEventChanges",
+		"Orchestrator.computeDesiredWatches", "Orchestrator.packageJsonLookupChanged", "Orchestrator.addWatchDir",
+		"Orchestrator.addPackageJsonWatchDirs", "BuildTask.updateWatch",
+	},
+	"execute/watchmanager": {
+		"WatchManager.EnsureDefaultBackend", "WatchManager.DrainEvents", "WatchManager.ForceOverflow",
+		"WatchManager.signalDoCycle", "WatchManager.onWatchEvents", "WatchManager.handleWatchTerminated",
+		"WatchManager.CloseAllWatches", "WatchManager.createDirWatch", "WatchManager.createDirWatchRequest",
+		"WatchManager.ResolveDesiredDirs", "WatchManager.ReconcileWatches", "WatchManager.createDirWatches",
+		"WatchManager.IsPathUnderWatch", "WatchManager.RunLoop",
+		"FSWatchBackend.WatchDirectory", "FSWatchBackend.WatchDirectories",
 	},
 }
 

@@ -91,7 +91,12 @@ private class DirFS(private val dir: String) :
         for ((i, e) in sorted.withIndex()) {
             val kind = e.second
             out[i] = com.xemantic.typescript.tsgo.go.io.fs.fileInfoToDirEntry(
-                HostInfo(e.first, kind == 'd', { if (kind == 'f') syscall(GoSyscall.OP_STAT) { platformSize(host("$full/${e.first}")) } else 0L }, kind),
+                HostInfo(
+                    e.first, kind == 'd',
+                    { if (kind == 'f') syscall(GoSyscall.OP_STAT) { platformSize(host("$full/${e.first}")) } else 0L },
+                    { syscall(GoSyscall.OP_STAT) { platformModTime(host("$full/${e.first}")) } },
+                    kind,
+                ),
             )
         }
         return com.xemantic.typescript.tsgo.runtime.Tuple2(out, null)
@@ -103,7 +108,10 @@ private class DirFS(private val dir: String) :
         // One stat for the kind and the size together (it was three: exists, isDirectory, length).
         val sized = syscall(GoSyscall.OP_STAT) { platformStatSize(host(full!!)) } ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, notExist("stat", name))
         val isDir = sized < 0
-        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, { if (isDir) 0L else sized }), null)
+        return com.xemantic.typescript.tsgo.runtime.Tuple2(HostInfo(
+            com.xemantic.typescript.tsgo.go.path.base(name), isDir, { if (isDir) 0L else sized },
+            { syscall(GoSyscall.OP_STAT) { platformModTime(host(full!!)) } },
+        ), null)
     }
 
     /** An opened host file: Stat and (for a directory) ReadDir; Read serves the whole content. */
@@ -133,9 +141,15 @@ private class DirFS(private val dir: String) :
      * walks (the config phase's include matching) never read it — an eager `stat` per listed file was a second syscall
      * per entry (docs/goport-perf.md § 16).
      */
-    private class HostInfo(private val name: String, private val dir: Boolean, private val sizeOf: () -> Long, private val kind: Char = if (dir) 'd' else 'f') :
-        com.xemantic.typescript.tsgo.go.io.fs.FileInfo {
+    private class HostInfo(
+        private val name: String,
+        private val dir: Boolean,
+        private val sizeOf: () -> Long,
+        private val modOf: () -> Long,
+        private val kind: Char = if (dir) 'd' else 'f',
+    ) : com.xemantic.typescript.tsgo.go.io.fs.FileInfo {
         private var size = -1L
+        private var mod: com.xemantic.typescript.tsgo.go.time.Time? = null
         override fun name(): String = name
         override fun size(): Long {
             if (size < 0) size = sizeOf()
@@ -147,7 +161,9 @@ private class DirFS(private val dir: String) :
             'o' -> com.xemantic.typescript.tsgo.go.io.fs.FileMode(com.xemantic.typescript.tsgo.go.io.fs.ModeIrregular.value or 420u)
             else -> com.xemantic.typescript.tsgo.go.io.fs.FileMode(420u)
         }
-        override fun modTime(): com.xemantic.typescript.tsgo.go.time.Time = com.xemantic.typescript.tsgo.go.time.Time()
+        /** Asked for on first use, as the size is ((TSGO.5-b): `tsc -b`'s up-to-date check reads it). */
+        override fun modTime(): com.xemantic.typescript.tsgo.go.time.Time =
+            mod ?: com.xemantic.typescript.tsgo.go.time.Time(modOf()).also { mod = it }
         override fun isDir(): Boolean = dir
         override fun sys(): Any? = null
     }
@@ -237,7 +253,7 @@ fun removeAll(path: String): com.xemantic.typescript.tsgo.runtime.GoError? =
 /** `os.Chtimes(name, atime, mtime)`: the modification time (the access time is left to the host). */
 @Suppress("UNUSED_PARAMETER")
 fun chtimes(name: String, atime: com.xemantic.typescript.tsgo.go.time.Time, mtime: com.xemantic.typescript.tsgo.go.time.Time): com.xemantic.typescript.tsgo.runtime.GoError? =
-    syscall(GoSyscall.OP_WRITE) { platformSetModTime(host(name), mtime.unixMilli()) }?.let { pathError("chtimes", name, it) }
+    syscall(GoSyscall.OP_WRITE) { platformSetModTime(host(name), mtime.unixNano()) }?.let { pathError("chtimes", name, it) }
 
 /** `os.Executable()`: the running program's path (the JVM's `java`, or the native image). */
 fun executable(): com.xemantic.typescript.tsgo.runtime.Tuple2<String, com.xemantic.typescript.tsgo.runtime.GoError?> {
@@ -272,13 +288,13 @@ fun userCacheDir(): com.xemantic.typescript.tsgo.runtime.Tuple2<String, com.xema
 /** `os.TempDir()`. */
 fun tempDir(): String = com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(platformTempDir())
 
-private class StatInfo(private val name: String, private val dir: Boolean, private val size: Long, private val modMillis: Long) :
+private class StatInfo(private val name: String, private val dir: Boolean, private val size: Long, private val modNanos: Long) :
     com.xemantic.typescript.tsgo.go.io.fs.FileInfo {
     override fun name(): String = name
     override fun size(): Long = size
     override fun mode(): com.xemantic.typescript.tsgo.go.io.fs.FileMode =
         if (dir) com.xemantic.typescript.tsgo.go.io.fs.FileMode(com.xemantic.typescript.tsgo.go.io.fs.ModeDir.value or 493u) else com.xemantic.typescript.tsgo.go.io.fs.FileMode(420u)
-    override fun modTime(): com.xemantic.typescript.tsgo.go.time.Time = com.xemantic.typescript.tsgo.go.time.Time(modMillis * 1_000_000L)
+    override fun modTime(): com.xemantic.typescript.tsgo.go.time.Time = com.xemantic.typescript.tsgo.go.time.Time(modNanos)
     override fun isDir(): Boolean = dir
     override fun sys(): Any? = null
 }
@@ -298,10 +314,13 @@ internal expect fun platformMkdirAll(path: String): String?
 /** Removes [path] and everything below it; null (also when absent) or an error message. */
 internal expect fun platformRemoveAll(path: String): String?
 
-/** Sets the modification time of [path]; null or an error message. */
-internal expect fun platformSetModTime(path: String, epochMillis: Long): String?
+/** Sets the modification time of [path] (epoch NANOSECONDS, as Go's `Chtimes`); null or an error message. */
+internal expect fun platformSetModTime(path: String, epochNanos: Long): String?
 
-/** The modification time of [path] in epoch milliseconds (0 when unknown). */
+/**
+ * The modification time of [path] in epoch NANOSECONDS (0 when unknown): Go's precision — `tsc -b`'s up-to-date
+ * check compares an input's time with an output's, and a millisecond clock makes a fast build's two equal.
+ */
 internal expect fun platformModTime(path: String): Long
 
 /** The running executable's path; null when unknown. */

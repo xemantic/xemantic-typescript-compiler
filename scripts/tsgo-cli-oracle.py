@@ -33,6 +33,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -75,6 +76,29 @@ EMIT_LIBS = {"mitt", "superstruct", "ky", "zod"}
 ENV = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent-home", "LANG": "C.UTF-8", "GOMEMLIMIT": "2500MiB"}
 
 FIXTURE_FILES = {
+    # (TSGO.5-b) `tsc --build`: a composite library and an app referencing it, with and without an error, and a cycle
+    "build-ok/tsconfig.json": '{ "files": [], "references": [{ "path": "./lib" }, { "path": "./app" }] }\n',
+    "build-ok/lib/tsconfig.json": '{ "compilerOptions": { "composite": true, "outDir": "out", "rootDir": "src", "target": "es2022", "module": "nodenext" }, "include": ["src"] }\n',
+    "build-ok/lib/src/index.ts": "export function add(a: number, b: number): number { return a + b; }\nexport const name = 'lib';\n",
+    # incremental: a non-incremental project's "older than output X" names whichever output the file system's
+    # coarse clock stamped first — machine-dependent, for tsgo as for the port
+    "build-ok/app/tsconfig.json": '{ "compilerOptions": { "incremental": true, "outDir": "out", "rootDir": "src", "target": "es2022", "module": "nodenext" }, "references": [{ "path": "../lib" }], "include": ["src"] }\n',
+    "build-ok/app/src/main.ts": "import { add, name } from '../../lib/src/index.js';\nconst n: number = add(1, 2);\nconsole.log(name, n);\n",
+    "build-err/tsconfig.json": '{ "files": [], "references": [{ "path": "./lib" }, { "path": "./app" }] }\n',
+    "build-err/lib/tsconfig.json": '{ "compilerOptions": { "composite": true, "outDir": "out", "rootDir": "src", "target": "es2022", "module": "nodenext" }, "include": ["src"] }\n',
+    "build-err/lib/src/index.ts": "export function add(a: number, b: number): number { return a + b; }\nexport const name = 'lib';\n",
+    "build-err/app/tsconfig.json": '{ "compilerOptions": { "outDir": "out", "rootDir": "src", "target": "es2022", "module": "nodenext" }, "references": [{ "path": "../lib" }], "include": ["src"] }\n',
+    "build-err/app/src/main.ts": "import { add, name } from '../../lib/src/index.js';\nconst n: string = add(1, 2);\nconsole.log(name, n);\n",
+    "incr-ok/tsconfig.json": '{ "compilerOptions": { "incremental": true, "outDir": "out", "target": "es2022" } }\n',
+    "incr-ok/a.ts": "export const a: number = 1;\n",
+    "incr-ok/b.ts": "import { a } from './a';\nexport const b = a + 1;\n",
+    "incr-err/tsconfig.json": '{ "compilerOptions": { "incremental": true, "outDir": "out", "target": "es2022" } }\n',
+    "incr-err/a.ts": "export const a: number = 'one';\n",
+    "incr-err/b.ts": "import { a } from './a';\nexport const b: string = a;\n",
+    "build-cycle/a/tsconfig.json": '{ "compilerOptions": { "composite": true, "outDir": "out" }, "references": [{ "path": "../b" }], "files": ["a.ts"] }\n',
+    "build-cycle/a/a.ts": "export const a = 1;\n",
+    "build-cycle/b/tsconfig.json": '{ "compilerOptions": { "composite": true, "outDir": "out" }, "references": [{ "path": "../a" }], "files": ["b.ts"] }\n',
+    "build-cycle/b/b.ts": "export const b = 2;\n",
     "loose/a.ts": "export const x: number = 'not a number';\nexport function f(a: string) { return a.length; }\n",
     "loose/b.ts": "import { f } from './a';\nconst n: string = f('x');\n",
     "bad-json/tsconfig.json": '{\n  "compilerOptions": {\n    "strict": true,\n  ,\n}\n',
@@ -112,8 +136,10 @@ def profiles():
 def build_cases(api_sample):
     cases = []
 
-    def case(name, args, cwd=None, copy=None, env=None):
-        cases.append({"name": name, "args": args, "cwd": cwd or ".", "copy": copy, "env": env or {}})
+    def case(name, args, cwd=None, copy=None, env=None, pre=None):
+        # pre: argument lists run first, by the same binary, in the same work copy (e.g. a build an
+        # up-to-date check then sees); their output is not recorded.
+        cases.append({"name": name, "args": args, "cwd": cwd or ".", "copy": copy, "env": env or {}, "pre": pre or []})
 
     for d in profiles():
         short = os.path.basename(d).split("-")[1]
@@ -158,6 +184,23 @@ def build_cases(api_sample):
     case("cli-config-bad-option", ["-p", fx("bad-option"), "--noEmit"], cwd=fx("bad-option"))
     case("cli-config-file-path", ["-p", fx("clean/tsconfig.json"), "--noEmit"], cwd=fx("clean"))
     case("cli-find-config-upwards", [], cwd=fx("nested/sub/dir"))
+    # (TSGO.5-b) `tsc --build`
+    case("build-ok", ["-b"], copy=fx("build-ok"))
+    case("build-verbose-errors", ["-b", "--verbose"], copy=fx("build-err"))
+    case("build-pretty-errors", ["-b", "--verbose", "--pretty"], copy=fx("build-err"))
+    case("build-up-to-date", ["-b", "--verbose"], copy=fx("build-ok"), pre=[["-b"]])
+    case("build-errors-rebuilt", ["-b", "--verbose"], copy=fx("build-err"), pre=[["-b"]])
+    case("build-force", ["-b", "--force", "--verbose"], copy=fx("build-ok"), pre=[["-b"]])
+    case("build-dry", ["-b", "--dry", "--verbose"], copy=fx("build-ok"))
+    case("build-clean", ["-b", "--clean"], copy=fx("build-ok"), pre=[["-b"]])
+    case("build-one-project", ["-b", "lib", "--verbose"], copy=fx("build-ok"))
+    case("build-cycle", ["-b", "a"], copy=fx("build-cycle"))
+    case("build-help", ["-b", "--help"], cwd=fx("empty"))
+    # (TSGO.5-b) `--incremental` reads its .tsbuildinfo back on the second run
+    case("incremental-first", ["-p", "."], copy=fx("incr-ok"))
+    case("incremental-rerun", ["-p", "."], copy=fx("incr-ok"), pre=[["-p", "."]])
+    case("incremental-rerun-errors", ["-p", "."], copy=fx("incr-err"), pre=[["-p", "."]])
+    case("incremental-rerun-noemit", ["-p", ".", "--noEmit"], copy=fx("incr-err"), pre=[["-p", ".", "--noEmit"]])
     case("cli-nested-pretty-forced", ["--pretty", "true"], cwd=fx("nested"))
     case("cli-nested-no-color", ["--pretty", "true"], cwd=fx("nested"), env={"NO_COLOR": "1"})
     case("cli-show-config", ["--showConfig", "-p", fx("clean")], cwd=fx("clean"))
@@ -201,6 +244,14 @@ def prepare_copy(src, dst):
         os.symlink(os.path.join(src, "node_modules"), os.path.join(dst, "node_modules"))
 
 
+TIME_OF_DAY = re.compile(rb"(?<![0-9])\d\d:\d\d:\d\d [AP]M\b")
+
+
+def normalize_times(stdout):
+    """`tsc -b`'s status lines start with the wall-clock time (`03:04:05 PM`): masked, as CliParityTest masks it."""
+    return TIME_OF_DAY.sub(b"HH:MM:SS XM", stdout)
+
+
 def run_case(c):
     work = None
     if c["copy"]:
@@ -212,19 +263,25 @@ def run_case(c):
         cwd = c["cwd"]
     env = dict(ENV)
     env.update(c["env"])
+    for pre in c.get("pre", []):
+        subprocess.run([TSC] + pre, cwd=cwd, env=env, capture_output=True, timeout=1800)
+    if work:
+        before = snapshot(work)
     p = subprocess.run([TSC] + c["args"], cwd=cwd, env=env, capture_output=True, timeout=1800)
-    stdout = p.stdout
+    stdout = normalize_times(p.stdout)
     files = {}
+    deleted = []
     if work:
         stdout = stdout.replace(work.encode(), b"{WORK}")
         after = snapshot(work)
         files = {k: v for k, v in sorted(after.items()) if before.get(k) != v}
+        deleted = sorted(k for k in before if k not in after)
     d = os.path.join(OUT, c["name"])
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "stdout.txt"), "wb") as f:
         f.write(stdout)
     with open(os.path.join(d, "result.json"), "w") as f:
-        json.dump({"exit": p.returncode, "stderr": p.stderr.decode("utf-8", "replace"), "files": files}, f, indent=1, sort_keys=True)
+        json.dump({"exit": p.returncode, "stderr": p.stderr.decode("utf-8", "replace"), "files": files, "deleted": deleted}, f, indent=1, sort_keys=True)
     return c["name"], p.returncode, len(stdout), len(files)
 
 
@@ -253,7 +310,8 @@ def main():
         f.write(f"#libDir\t{os.path.dirname(TSC)}\n")
         for c in cases:
             f.write("\t".join([c["name"], c["cwd"], c["copy"] or "", "\x1f".join(c["args"]),
-                               "\x1f".join(f"{k}={v}" for k, v in sorted(c["env"].items()))]) + "\n")
+                               "\x1f".join(f"{k}={v}" for k, v in sorted(c["env"].items())),
+                               "\x1e".join("\x1f".join(a) for a in c["pre"])]) + "\n")
     only = set(filter(None, a.only.split(",")))
     todo = [c for c in cases if not only or c["name"] in only]
     killed = []

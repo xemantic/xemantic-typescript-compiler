@@ -28,6 +28,7 @@ import com.xemantic.typescript.tsgo.checker.Checker
 import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.vfs.Entries
 import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.go.sync.atomic.Int32
 import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.OuterExpressionKinds
 import com.xemantic.typescript.tsgo.packagejson.PackageJson
@@ -252,7 +253,7 @@ fun addProjectReferenceOutputMappings(program: Program?, result: GoMap<Path, Str
 
 // go: github.com/microsoft/typescript-go/internal/ls/autoimport.createCheckerPool cad07f9e
 fun createCheckerPool(program: com.xemantic.typescript.tsgo.checker.Program?): Tuple3<(() -> Tuple2<Checker?, (() -> Unit)?>)?, (() -> Unit)?, (() -> Int)?> {
-    TODO("goport: refused make: github.com/microsoft/typescript-go/internal/ls/autoimport.createCheckerPool")
+    TODO("goport: refused select: github.com/microsoft/typescript-go/internal/ls/autoimport.createCheckerPool")
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls/autoimport.addPackageJsonDependencies 25123b73

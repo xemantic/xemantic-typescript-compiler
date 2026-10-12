@@ -26,6 +26,7 @@ package com.xemantic.typescript.tsgo.core
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.sync.atomic.Bool
 import com.xemantic.typescript.tsgo.go.context.Context
+import com.xemantic.typescript.tsgo.go.golang_org.x.sync.errgroup.Group
 import com.xemantic.typescript.tsgo.go.sync.Mutex
 import com.xemantic.typescript.tsgo.go.sync.WaitGroup
 
@@ -152,22 +153,50 @@ fun com.xemantic.typescript.tsgo.core.singleThreadedWorkGroup?.pop(): (() -> Uni
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.ThrottleGroup cff6f2e0
-// goport: refused chan: github.com/microsoft/typescript-go/internal/core.ThrottleGroup (type)
-class ThrottleGroup {
-    fun goCopy(): ThrottleGroup = TODO("goport: refused chan: github.com/microsoft/typescript-go/internal/core.ThrottleGroup")
+class ThrottleGroup(
+    @kotlin.jvm.JvmField var semaphore: GoChan<Unit>? = null,
+    @kotlin.jvm.JvmField var group: Group? = null,
+) {
+
+    fun goCopy(): ThrottleGroup = ThrottleGroup(semaphore = semaphore, group = group)
+
+    fun goSet(o: ThrottleGroup) {
+        semaphore = o.semaphore
+        group = o.group
+    }
+
+    fun goEquals(o: ThrottleGroup): Boolean = semaphore == o.semaphore && group === o.group
+
+    fun goHash(): Int = 31 * semaphore.hashCode() + 31 * group.hashCode()
+
+    companion object {
+        val ELEM: GoElem<ThrottleGroup> = GoElem({ ThrottleGroup() }, { it.goCopy() })
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.NewThrottleGroup f5319946
-// goport: refused chan: github.com/microsoft/typescript-go/internal/core.NewThrottleGroup (no stub: signature)
+fun newThrottleGroup(ctx: Context?, semaphore: GoChan<Unit>?): ThrottleGroup? {
+    val t0 = com.xemantic.typescript.tsgo.go.golang_org.x.sync.errgroup.withContext(ctx)
+    val g: Group? = t0.first
+    return ThrottleGroup(semaphore = semaphore, group = g)
+}
 
 // go: github.com/microsoft/typescript-go/internal/core.ThrottleGroup.Go 9265697f
 fun ThrottleGroup?.go(fn: (() -> GoError?)?) {
-    TODO("goport: refused receiver-type-refused: github.com/microsoft/typescript-go/internal/core.ThrottleGroup.Go")
+    this!!.group!!.go(fun(): GoError? {
+        return withDefers({ null }) { df0 ->
+            goSend(this!!.semaphore, Unit)
+            df0.defer(fun() {
+                goRecv(this!!.semaphore)
+            })
+            return fn!!()
+        }
+    })
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.ThrottleGroup.Wait 59ecd14c
 fun ThrottleGroup?.wait(): GoError? {
-    TODO("goport: refused receiver-type-refused: github.com/microsoft/typescript-go/internal/core.ThrottleGroup.Wait")
+    return this!!.group!!.wait()
 }
 
 

@@ -48,6 +48,10 @@ class SourceFileParseOptions(
 
     fun goHash(): Int = 31 * fileName.hashCode() + 31 * path.hashCode() + 31 * externalModuleIndicatorOptions.goHash()
 
+    override fun equals(other: Any?): Boolean = other is SourceFileParseOptions && goEquals(other as SourceFileParseOptions)
+
+    override fun hashCode(): Int = goHash()
+
     companion object {
         val ELEM: GoElem<SourceFileParseOptions> = GoElem({ SourceFileParseOptions() }, { it.goCopy() })
     }

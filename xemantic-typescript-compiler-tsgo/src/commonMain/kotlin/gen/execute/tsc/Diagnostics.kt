@@ -175,11 +175,43 @@ fun createReportErrorSummary(sys: System?, locale: Locale, options: CompilerOpti
 
 // go: github.com/microsoft/typescript-go/internal/execute/tsc.CreateBuilderStatusReporter 55799e3f
 fun createBuilderStatusReporter(sys: System?, w: Writer?, locale: Locale, options: CompilerOptions?, testing: CommandLineTesting?): ((Diagnostic?) -> Unit)? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/execute/tsc.CreateBuilderStatusReporter")
+    if (options!!.quiet.isTrue()) {
+        return fun(p0: Diagnostic?) = quietDiagnosticReporter(p0)
+    }
+    val formatOpts: FormattingOptions? = getFormatOptsOfSys(sys, locale.goCopy())
+    val writeStatus: ((Writer?, String, com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, FormattingOptions?) -> Unit)? = com.xemantic.typescript.tsgo.core.ifElse<((Writer?, String, com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, FormattingOptions?) -> Unit)?>(GoElem.ref<((Writer?, String, com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, FormattingOptions?) -> Unit)?>(), shouldBePretty(sys, options), fun(p0: Writer?, p1: String, p2: com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, p3: FormattingOptions?) = com.xemantic.typescript.tsgo.diagnosticwriter.formatDiagnosticsStatusWithColorAndTime(p0, p1, p2, p3), fun(p0: Writer?, p1: String, p2: com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, p3: FormattingOptions?) = com.xemantic.typescript.tsgo.diagnosticwriter.formatDiagnosticsStatusAndTime(p0, p1, p2, p3))
+    return fun(diagnostic: Diagnostic?) {
+        withDefers({ Unit }) { df0 ->
+            val writerDiagnostic: ASTDiagnostic? = com.xemantic.typescript.tsgo.diagnosticwriter.wrapASTDiagnostic(diagnostic)
+            if (testing != null) {
+                testing!!.onBuildStatusReportStart(w)
+                val da1 = w
+                val dr2 = testing!!
+                df0.defer { dr2.onBuildStatusReportEnd(da1) }
+            }
+            writeStatus!!(w, sys!!.now().format("03:04:05 PM"), writerDiagnostic, formatOpts)
+            com.xemantic.typescript.tsgo.go.fmt.fprint(w, formatOpts!!.newLine, formatOpts!!.newLine)
+        }
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/tsc.CreateWatchStatusReporter 6de89652
 fun createWatchStatusReporter(sys: System?, locale: Locale, options: CompilerOptions?, testing: CommandLineTesting?): ((Diagnostic?) -> Unit)? {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/execute/tsc.CreateWatchStatusReporter")
+    val formatOpts: FormattingOptions? = getFormatOptsOfSys(sys, locale.goCopy())
+    val writeStatus: ((Writer?, String, com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, FormattingOptions?) -> Unit)? = com.xemantic.typescript.tsgo.core.ifElse<((Writer?, String, com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, FormattingOptions?) -> Unit)?>(GoElem.ref<((Writer?, String, com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, FormattingOptions?) -> Unit)?>(), shouldBePretty(sys, options), fun(p0: Writer?, p1: String, p2: com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, p3: FormattingOptions?) = com.xemantic.typescript.tsgo.diagnosticwriter.formatDiagnosticsStatusWithColorAndTime(p0, p1, p2, p3), fun(p0: Writer?, p1: String, p2: com.xemantic.typescript.tsgo.diagnosticwriter.Diagnostic?, p3: FormattingOptions?) = com.xemantic.typescript.tsgo.diagnosticwriter.formatDiagnosticsStatusAndTime(p0, p1, p2, p3))
+    return fun(diagnostic: Diagnostic?) {
+        withDefers({ Unit }) { df0 ->
+            val writerDiagnostic: ASTDiagnostic? = com.xemantic.typescript.tsgo.diagnosticwriter.wrapASTDiagnostic(diagnostic)
+            val writer: Writer? = sys!!.writer()
+            if (testing != null) {
+                testing!!.onWatchStatusReportStart()
+                val dr1 = testing!!
+                df0.defer { dr1.onWatchStatusReportEnd() }
+            }
+            com.xemantic.typescript.tsgo.diagnosticwriter.tryClearScreen(writer, writerDiagnostic, options)
+            writeStatus!!(writer, sys!!.now().format("03:04:05 PM"), writerDiagnostic, formatOpts)
+            com.xemantic.typescript.tsgo.go.fmt.fprint(writer, formatOpts!!.newLine, formatOpts!!.newLine)
+        }
+    }
 }
 

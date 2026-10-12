@@ -421,7 +421,11 @@ fun goJsonFieldsOf(s: GoReflectStruct): List<com.xemantic.typescript.tsgo.go.git
         val type = f.type
         out += com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField(
             name = opts[0].ifEmpty { f.name },
-            ptr = if (type.kind == GoTypeInfo.KIND_POINTER) JsonPointerField(s.goFieldPtr(i), type) else s.goFieldPtr(i),
+            ptr = when {
+                type.kind == GoTypeInfo.KIND_POINTER -> JsonPointerField(s.goFieldPtr(i), type)
+                type.kind == GoTypeInfo.KIND_SLICE && type.elem?.kind == GoTypeInfo.KIND_POINTER -> JsonPointerSliceField(s.goFieldPtr(i), type.elem)
+                else -> s.goFieldPtr(i)
+            },
             omitEmpty = "omitempty" in opts.drop(1),
             omitZero = "omitzero" in opts.drop(1),
             isZero = { v -> goIsZero(v, type) },
@@ -441,33 +445,187 @@ private class JsonPointerField(private val ptr: GoPtr<Any?>, private val type: G
     override var value: Any?
         get() = ptr.value
         set(v) {
-            ptr.value = convert(v)
+            ptr.value = convertPointee(v, type)
         }
-
-    private fun convert(v: Any?): Any? {
-        if (v == null) return null
-        val elem = type.elem ?: return v
-        if (elem.kind == GoTypeInfo.KIND_STRUCT) {
-            if (elem.cls != null && elem.cls.isInstance(v)) return v
-            val fresh = elem.zero() ?: return v
-            val json = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshal(v)
-            if (json.second != null) return v
-            val err = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshal(json.first, fresh)
-            return if (err == null) fresh else v
-        }
-        if (v is GoPtr<*>) return v
-        val raw = when (elem.kind) {
-            GoTypeInfo.KIND_INT, 3, 4, 5 -> (v as? Double)?.toInt() ?: v
-            GoTypeInfo.KIND_INT64 -> (v as? Double)?.toLong() ?: v
-            GoTypeInfo.KIND_UINT32 -> (v as? Double)?.toUInt() ?: v
-            GoTypeInfo.KIND_UINT64, 7 -> (v as? Double)?.toULong() ?: v
-            else -> v
-        }
-        // A named basic pointee (a value class) wraps the raw value.
-        val wrapped = (elem.zero() as? GoBasicValue)?.goWithRaw(raw) ?: raw
-        return com.xemantic.typescript.tsgo.runtime.GoBox(wrapped)
-    }
 
     override fun equals(other: Any?): Boolean = other is JsonPointerField && other.ptr == ptr
     override fun hashCode(): Int = ptr.hashCode()
+}
+
+/**
+ * A `[]*T` field as json sees it ((TSGO.5-b): `incremental.BuildInfo.FileInfos []*BuildInfoFileInfo`, whose
+ * elements decode themselves with `UnmarshalJSON`): the slice's element kind is a nil pointer, so the shim
+ * decodes each element as `any`; this adapter converts every element into the pointee [pointer] describes,
+ * as [JsonPointerField] does for one.
+ */
+private class JsonPointerSliceField(private val ptr: GoPtr<Any?>, private val pointer: GoTypeInfo) : GoPtr<Any?> {
+    override var value: Any?
+        get() = ptr.value
+        set(v) {
+            @Suppress("UNCHECKED_CAST")
+            val s = v as? com.xemantic.typescript.tsgo.runtime.GoSlice<Any?>
+            ptr.value = if (s == null || s.isNil) v else {
+                var out = s.elem.nilSlice
+                for (i in 0 until s.len) out = out.append1(convertPointee(s[i], pointer))
+                if (out.isNil) com.xemantic.typescript.tsgo.runtime.GoSlice.make(s.elem, 0) else out
+            }
+        }
+
+    override fun equals(other: Any?): Boolean = other is JsonPointerSliceField && other.ptr == ptr
+    override fun hashCode(): Int = ptr.hashCode()
+}
+
+/** [v] as decoded by the json shim, converted into the pointee of the POINTER type [type] (see [JsonPointerField]). */
+private fun convertPointee(v: Any?, type: GoTypeInfo): Any? {
+    if (v == null) return null
+    val elem = type.elem ?: return v
+    if (elem.kind == GoTypeInfo.KIND_STRUCT) {
+        if (elem.cls != null && elem.cls.isInstance(v)) return v
+        val fresh = elem.zero() ?: return v
+        val json = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshal(v)
+        if (json.second != null) return v
+        val err = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshal(json.first, fresh)
+        return if (err == null) fresh else v
+    }
+    if (v is GoPtr<*>) return v
+    val raw = when (elem.kind) {
+        GoTypeInfo.KIND_INT, 3, 4, 5 -> (v as? Double)?.toInt() ?: v
+        GoTypeInfo.KIND_INT64 -> (v as? Double)?.toLong() ?: v
+        GoTypeInfo.KIND_UINT32 -> (v as? Double)?.toUInt() ?: v
+        GoTypeInfo.KIND_UINT64, 7 -> (v as? Double)?.toULong() ?: v
+        else -> v
+    }
+    // A named basic pointee (a value class) wraps the raw value.
+    val wrapped = (elem.zero() as? GoBasicValue)?.goWithRaw(raw) ?: raw
+    return com.xemantic.typescript.tsgo.runtime.GoBox(wrapped)
+}
+
+/**
+ * NOT Go API — the target of `json.Unmarshal(in, &x)` with `&x`'s STATIC Go type [pointer] ((TSGO.5-b), a porter rule at
+ * every `Unmarshal*` call of tsgo's `internal/json` and of the json shim): Go's decoder reads the target's type by
+ * reflection; the shim reads it off the current value, which a nil `*[2]int`, a `[2]int`, a `[]*T` or a
+ * `[]jsontext.Value` does not tell (`incremental`'s buildinfo reader uses all four). For those the shim decodes the
+ * value untyped and this target converts it by the static type, failing as Go would on a shape that does not fit;
+ * any other target is passed through unchanged.
+ */
+fun goJsonTarget(target: Any?, pointer: GoTypeInfo): Any? {
+    val elem = pointer.elem ?: return target
+    @Suppress("UNCHECKED_CAST")
+    return if (pointer.kind == GoTypeInfo.KIND_POINTER && target is GoPtr<*> && needsStaticType(elem)) JsonTypedTarget(target as GoPtr<Any?>, elem) else target
+}
+
+private fun isJsonValue(t: GoTypeInfo): Boolean = t.name == "jsontext.Value"
+
+private fun needsStaticType(t: GoTypeInfo): Boolean = isJsonValue(t) || when (t.kind) {
+    GoTypeInfo.KIND_ARRAY, GoTypeInfo.KIND_POINTER -> true
+    GoTypeInfo.KIND_SLICE, GoTypeInfo.KIND_MAP -> t.elem?.let { needsStaticType(it) } == true
+    else -> false
+}
+
+private class JsonTypedTarget(private val ptr: GoPtr<Any?>, private val type: GoTypeInfo) :
+    GoPtr<Any?>, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonTyped {
+    override var value: Any?
+        get() = ptr.value
+        set(v) {
+            ptr.value = v
+        }
+
+    override fun convertDecoded(v: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, String?> = convertTyped(v, type)
+
+    override fun equals(other: Any?): Boolean = other is JsonTypedTarget && other.ptr == ptr
+    override fun hashCode(): Int = ptr.hashCode()
+}
+
+private fun jsonKindOf(v: Any?): String = when (v) {
+    null -> "null"
+    is Boolean -> "boolean"
+    is String -> "string"
+    is Number -> "number"
+    is com.xemantic.typescript.tsgo.runtime.GoSlice<*> -> "array"
+    is com.xemantic.typescript.tsgo.runtime.GoMap<*, *> -> "object"
+    else -> "value"
+}
+
+/** [v] — an untyped decode (`any`: Double, String, Boolean, `[]any`, `map[string]any`) — as a value of Go type [t]. */
+@Suppress("UNCHECKED_CAST")
+private fun convertTyped(v: Any?, t: GoTypeInfo): com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, String?> {
+    fun ok(x: Any?) = com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, String?>(x, null)
+    fun fail() = com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, String?>(null, "cannot unmarshal JSON ${jsonKindOf(v)} into Go $t")
+    if (isJsonValue(t)) {
+        val (raw, err) = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshal(v)
+        return if (err != null) com.xemantic.typescript.tsgo.runtime.Tuple2(null, err.error()) else ok(raw)
+    }
+    return when (t.kind) {
+        GoTypeInfo.KIND_INTERFACE -> ok(v)
+        GoTypeInfo.KIND_POINTER -> {
+            if (v == null) return ok(null)
+            val e = t.elem ?: return ok(v)
+            val (x, m) = convertTyped(v, e)
+            when {
+                m != null -> com.xemantic.typescript.tsgo.runtime.Tuple2(null, m)
+                // a pointer to a struct or an array IS the reference (docs/goport-design.md § 3)
+                e.kind == GoTypeInfo.KIND_STRUCT || e.kind == GoTypeInfo.KIND_ARRAY -> ok(x)
+                else -> ok(com.xemantic.typescript.tsgo.runtime.GoBox(x))
+            }
+        }
+        GoTypeInfo.KIND_ARRAY -> {
+            val arr = t.zero() as com.xemantic.typescript.tsgo.runtime.GoArray<Any?>
+            if (v == null) return ok(arr)
+            val s = v as? com.xemantic.typescript.tsgo.runtime.GoSlice<Any?> ?: return fail()
+            if (s.len != arr.size) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, "cannot unmarshal JSON array of ${s.len} elements into Go $t")
+            for (i in 0 until s.len) {
+                val (x, m) = convertTyped(s[i], t.elem!!)
+                if (m != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, m)
+                arr[i] = x
+            }
+            ok(arr)
+        }
+        GoTypeInfo.KIND_SLICE -> {
+            val nil = t.zero() as com.xemantic.typescript.tsgo.runtime.GoSlice<Any?>
+            if (v == null) return ok(nil)
+            val s = v as? com.xemantic.typescript.tsgo.runtime.GoSlice<Any?> ?: return fail()
+            var out = com.xemantic.typescript.tsgo.runtime.GoSlice.make(nil.elem, 0)
+            for (i in 0 until s.len) {
+                val (x, m) = convertTyped(s[i], t.elem!!)
+                if (m != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, m)
+                out = out.append1(x)
+            }
+            ok(out)
+        }
+        GoTypeInfo.KIND_MAP -> {
+            val nil = t.zero() as com.xemantic.typescript.tsgo.runtime.GoMap<Any?, Any?>
+            if (v == null) return ok(nil)
+            val src = v as? com.xemantic.typescript.tsgo.runtime.GoMap<Any?, Any?> ?: return fail()
+            val out = com.xemantic.typescript.tsgo.runtime.GoMap.make<Any?, Any?>(nil.elem)
+            var failure: String? = null
+            src.range { k, x ->
+                val (c, m) = convertTyped(x, t.elem!!)
+                if (m != null) failure = m else out[k] = c
+                m == null
+            }
+            if (failure != null) com.xemantic.typescript.tsgo.runtime.Tuple2(null, failure) else ok(out)
+        }
+        GoTypeInfo.KIND_STRUCT -> {
+            if (v == null) return ok(t.zero())
+            val fresh = t.zero() ?: return ok(v)
+            val (raw, err) = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshal(v)
+            if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(null, err.error())
+            val uerr = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshal(raw, fresh)
+            if (uerr != null) com.xemantic.typescript.tsgo.runtime.Tuple2(null, uerr.error()) else ok(fresh)
+        }
+        GoTypeInfo.KIND_STRING -> if (v is String) ok((t.zero() as? GoBasicValue)?.goWithRaw(v) ?: v) else fail()
+        GoTypeInfo.KIND_BOOL -> if (v is Boolean) ok((t.zero() as? GoBasicValue)?.goWithRaw(v) ?: v) else fail()
+        else -> {
+            val d = v as? Double ?: return fail()
+            val raw: Any = when (t.kind) {
+                GoTypeInfo.KIND_FLOAT64 -> d
+                13 -> d.toFloat()
+                GoTypeInfo.KIND_INT64 -> if (d == kotlin.math.floor(d)) d.toLong() else return fail()
+                GoTypeInfo.KIND_UINT32 -> if (d == kotlin.math.floor(d) && d >= 0) d.toLong().toUInt() else return fail()
+                GoTypeInfo.KIND_UINT64, 7 -> if (d == kotlin.math.floor(d) && d >= 0) d.toULong() else return fail()
+                else -> if (d == kotlin.math.floor(d)) d.toInt() else return fail()
+            }
+            ok((t.zero() as? GoBasicValue)?.goWithRaw(raw) ?: raw)
+        }
+    }
 }

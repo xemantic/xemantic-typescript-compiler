@@ -402,7 +402,7 @@ open class ExprLowering(val fn: FnCtx) {
     fun unary(e: Node): Ex = when (e.str("op")) {
         "!" -> Ex("!${lower(e.reqObj("x")).at(PREFIX)}", PREFIX)
         "&" -> addressOf(e.reqObj("x"))
-        "<-" -> refuse("chan")
+        "<-" -> Ex.primary("goRecv(${raw(e.reqObj("x")).code})")
         else -> wrap(unaryRaw(e), ty(e))
     }
 

@@ -57,9 +57,11 @@ class CliParityTest {
          * are larger than Go's.
          */
         val HEAVY = mapOf("lib-typefest-noemit" to 8L)
+        /** `tsc -b`'s status-line clock (`03:04:05 PM`), masked on both sides (scripts/tsgo-cli-oracle.py `normalize_times`). */
+        val TIME_OF_DAY = Regex("(?<![0-9])\\d\\d:\\d\\d:\\d\\d [AP]M\\b")
     }
 
-    private class Case(val name: String, val cwd: String, val copy: String?, val args: List<String>, val env: Map<String, String>)
+    private class Case(val name: String, val cwd: String, val copy: String?, val args: List<String>, val env: Map<String, String>, val pre: List<List<String>>)
 
     @Test
     fun `the ported command line prints, exits and emits as the tsgo binary`() {
@@ -78,6 +80,7 @@ class CliParityTest {
                 f[0], f[1], f[2].ifEmpty { null },
                 f[3].split('\u001f').filter { it.isNotEmpty() },
                 f[4].split('\u001f').filter { it.isNotEmpty() }.associate { it.substringBefore('=') to it.substringAfter('=') },
+                f.getOrElse(5) { "" }.split('\u001e').filter { it.isNotEmpty() }.map { r -> r.split('\u001f').filter { it.isNotEmpty() } },
             )
         }.filter { filter == null || filter in it.name }
         val work = File(root, "build/goport/cli-work/kotlin")
@@ -104,17 +107,23 @@ class CliParityTest {
             val wantExit = Regex("\"exit\": (-?\\d+)").find(result)!!.groupValues[1].toInt()
             val wantFiles = Regex("\"([^\"]+)\": \"([0-9a-f]{64})\"").findAll(result.substringAfter("\"files\"")).associate { it.groupValues[1] to it.groupValues[2] }
             val wantStderr = Regex("\"stderr\": \"((?:[^\"\\\\]|\\\\.)*)\"").find(result)!!.groupValues[1]
+            val wantDeleted = Regex("\"deleted\": \\[([^\\]]*)]").find(result)?.groupValues?.get(1)
+                ?.let { Regex("\"([^\"]+)\"").findAll(it).map { m -> m.groupValues[1] }.toList() } ?: emptyList()
 
             val caseWork = c.copy?.let { File(work, c.name).also { w -> prepareCopy(File(it), w) } }
             val cwd = if (caseWork != null) File(caseWork, c.cwd).canonicalFile else File(c.cwd)
+            for (pre in c.pre) TsgoCli.run(pre, cwd.path, { }, libDirectory = libDir, environment = { c.env[it] })
             val before = caseWork?.let { snapshot(it) } ?: emptyMap()
             val buf = ByteArrayOutputStream()
             val s0 = System.nanoTime()
             val exit = TsgoCli.run(c.args, cwd.path, { buf.write(it) }, libDirectory = libDir, environment = { c.env[it] })
             val ms = (System.nanoTime() - s0) / 1_000_000
-            var gotStdout = buf.toByteArray()
+            // `tsc -b`'s status lines start with the wall-clock time: masked, as the recorder masks it
+            var gotStdout = TIME_OF_DAY.replace(buf.toByteArray().toString(Charsets.ISO_8859_1), "HH:MM:SS XM").toByteArray(Charsets.ISO_8859_1)
             if (caseWork != null) gotStdout = replaceAll(gotStdout, caseWork.canonicalPath.toByteArray(), "{WORK}".toByteArray())
-            val gotFiles = caseWork?.let { w -> snapshot(w).filter { (k, v) -> before[k] != v } } ?: emptyMap()
+            val after = caseWork?.let { snapshot(it) } ?: emptyMap()
+            val gotFiles = after.filter { (k, v) -> before[k] != v }
+            val gotDeleted = before.keys.filter { it !in after }.sorted()
 
             val problems = ArrayList<String>()
             if (wantStderr.isNotEmpty()) problems += "tsgo wrote to stderr: ${wantStderr.take(200)}"
@@ -129,6 +138,7 @@ class CliParityTest {
                 val changed = wantFiles.keys.intersect(gotFiles.keys).filter { wantFiles[it] != gotFiles[it] }
                 problems += "files: ${wantFiles.size} vs ${gotFiles.size}; missing ${missing.take(5)}, extra ${extra.take(5)}, different ${changed.take(5)}"
             }
+            if (gotDeleted != wantDeleted) problems += "deleted $gotDeleted, tsgo $wantDeleted"
             val row = "%-40s %s exit=%d stdout=%dB files=%d %d ms".format(c.name, if (problems.isEmpty()) "equal " else "DIFFER", exit, gotStdout.size, gotFiles.size, ms)
             table.appendLine(row)
             val rt = Runtime.getRuntime()

@@ -305,7 +305,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             "DeferStmt" -> deferStmt(s)
             "GoStmt" -> refuse("go")
             "SelectStmt" -> refuse("select")
-            "SendStmt" -> refuse("chan")
+            "SendStmt" -> w.line("goSend(${raw(s.reqObj("chan")).code}, ${flow(s.reqObj("value")).code})")
             else -> refuse("stmt", s.k)
         }
     }
@@ -499,6 +499,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
                     w.line("val $t = if ($check) Tuple2($cast, true) else Tuple2(${tm.zero(target)}, false)")
                 }
                 "ParenExpr" -> return multi(lhs, r.reqObj("x"), define)
+                "UnaryExpr" -> if (r.str("op") == "<-") w.line("val $t = goRecv2(${raw(r.reqObj("x")).code})") else refuse("commaok", "UnaryExpr")
                 else -> refuse("commaok", r.k)
             }
         } else {

@@ -37,6 +37,8 @@ import com.xemantic.typescript.tsgo.execute.tsc.ExitStatus
 import com.xemantic.typescript.tsgo.execute.tsc.ExtendedConfigCache
 import com.xemantic.typescript.tsgo.locale.Locale
 import com.xemantic.typescript.tsgo.diagnostics.Message
+import com.xemantic.typescript.tsgo.execute.build.Options
+import com.xemantic.typescript.tsgo.execute.build.Orchestrator
 import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.tsoptions.ParsedBuildCommandLine
 import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
@@ -49,6 +51,7 @@ import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.tracing.Tracing
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.core.isIncremental
+import com.xemantic.typescript.tsgo.execute.build.start
 import com.xemantic.typescript.tsgo.execute.incremental.getProgram
 import com.xemantic.typescript.tsgo.tracing.stopTracing
 import com.xemantic.typescript.tsgo.tsoptions.compilerOptions
@@ -99,7 +102,31 @@ fun commandLine(ctx: Context?, sys: System?, commandLineArgs: GoSlice<String>, t
 
 // go: github.com/microsoft/typescript-go/internal/execute.tscBuildCompilation 0004830f
 fun tscBuildCompilation(ctx: Context?, sys: System?, buildCommand: ParsedBuildCommandLine?, testing: CommandLineTesting?): CommandLineResult {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.tscBuildCompilation")
+    return withDefers({ CommandLineResult() }) { df0 ->
+        val locale: Locale = buildCommand.locale()
+        val reportDiagnostic: ((Diagnostic?) -> Unit)? = com.xemantic.typescript.tsgo.execute.tsc.createDiagnosticReporter(sys, sys!!.writer(), locale.goCopy(), buildCommand!!.compilerOptions)
+        if (buildCommand!!.errors.len > 0) {
+            val s1 = buildCommand!!.errors
+            l0@ for (i2 in 0 until s1.len) {
+                val err: Diagnostic? = s1[i2]
+                reportDiagnostic!!(err)
+            }
+            return CommandLineResult(status = ExitStatus(1))
+        }
+        val pprofDir: String = buildCommand!!.compilerOptions!!.pprofDir
+        if (pprofDir != "") {
+            val profileSession: ProfileSession? = com.xemantic.typescript.tsgo.pprof.beginProfiling(pprofDir, sys!!.writer())
+            val dr3 = profileSession!!
+            df0.defer { dr3.stop() }
+        }
+        if (buildCommand!!.compilerOptions!!.help.isTrue()) {
+            com.xemantic.typescript.tsgo.execute.tsc.printVersion(sys, locale.goCopy())
+            com.xemantic.typescript.tsgo.execute.tsc.printBuildHelp(sys, locale.goCopy(), com.xemantic.typescript.tsgo.tsoptions.buildOpts)
+            return CommandLineResult(status = ExitStatus(0))
+        }
+        val orchestrator: Orchestrator? = com.xemantic.typescript.tsgo.execute.build.newOrchestrator(Options(sys = sys, command = buildCommand, testing = testing))
+        return orchestrator.start(ctx)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.tscCompilation 33aadad9

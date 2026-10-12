@@ -113,7 +113,7 @@ class BuildInfoRoot(
     // go: github.com/microsoft/typescript-go/internal/execute/incremental.BuildInfoRoot.UnmarshalJSON 3ef10d45
     override fun unmarshalJSON(data: GoSlice<Int>): GoError? {
         val startAndEnd: GoBox<GoArray<Int>?> = GoBox(null)
-        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, startAndEnd, GoElem.ref<Options?>().nilSlice)
+        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(startAndEnd, GoTypeInfo(22, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(17, "", elem = GoTypeInfo(2, "int", zero = { 0 }), zero = { GoArray(2, GoElem.INT) }), zero = { null }), zero = { null })), GoElem.ref<Options?>().nilSlice)
         if (err != null) {
             val start_1: GoBox<Int> = GoBox(0)
             val err_1: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, start_1, GoElem.ref<Options?>().nilSlice)
@@ -369,7 +369,7 @@ class BuildInfoReferenceMapEntry(
     // go: github.com/microsoft/typescript-go/internal/execute/incremental.BuildInfoReferenceMapEntry.UnmarshalJSON 72ff882e
     override fun unmarshalJSON(data: GoSlice<Int>): GoError? {
         val v: GoBox<GoArray<Int>?> = GoBox(null)
-        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, v, GoElem.ref<Options?>().nilSlice)
+        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(v, GoTypeInfo(22, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(17, "", elem = GoTypeInfo(2, "int", zero = { 0 }), zero = { GoArray(2, GoElem.INT) }), zero = { null }), zero = { null })), GoElem.ref<Options?>().nilSlice)
         if (err != null) {
             return err
         }
@@ -538,7 +538,7 @@ class BuildInfoDiagnosticsOfFile(
     // go: github.com/microsoft/typescript-go/internal/execute/incremental.BuildInfoDiagnosticsOfFile.UnmarshalJSON fa5e6873
     override fun unmarshalJSON(data: GoSlice<Int>): GoError? {
         val fileIdAndDiagnostics: GoBox<GoSlice<Value>> = GoBox(GoElem.slice(GoElem.BYTE).nilSlice)
-        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, fileIdAndDiagnostics, GoElem.ref<Options?>().nilSlice)
+        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(fileIdAndDiagnostics, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.slice(GoElem.BYTE).nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
         if (err != null) {
             return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid BuildInfoDiagnosticsOfFile: %s", data)
         }
@@ -551,7 +551,7 @@ class BuildInfoDiagnosticsOfFile(
             return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid fileId in BuildInfoDiagnosticsOfFile: %w", err_1)
         }
         val diagnostics_1: GoBox<GoSlice<BuildInfoDiagnostic?>> = GoBox(GoElem.ref<BuildInfoDiagnostic?>().nilSlice)
-        val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(fileIdAndDiagnostics.value[1], diagnostics_1, GoElem.ref<Options?>().nilSlice)
+        val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(fileIdAndDiagnostics.value[1], com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(diagnostics_1, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "incremental.BuildInfoDiagnostic", cls = BuildInfoDiagnostic::class, structInfo = { BuildInfoDiagnostic.GO_STRUCT }, zero = { BuildInfoDiagnostic() }), zero = { null }), zero = { GoElem.ref<BuildInfoDiagnostic?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
         if (err_2 != null) {
             return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid diagnostics in BuildInfoDiagnosticsOfFile: %w", err_2)
         }
@@ -870,7 +870,7 @@ class BuildInfoResolvedRoot(
     // go: github.com/microsoft/typescript-go/internal/execute/incremental.BuildInfoResolvedRoot.UnmarshalJSON b07b0f62
     override fun unmarshalJSON(data: GoSlice<Int>): GoError? {
         val resolvedAndRoot: GoBox<GoArray<Int>> = GoBox(GoArray(2, GoElem.INT))
-        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, resolvedAndRoot.value, GoElem.ref<Options?>().nilSlice)
+        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(resolvedAndRoot.value, GoTypeInfo(22, "", elem = GoTypeInfo(17, "", elem = GoTypeInfo(2, "int", zero = { 0 }), zero = { GoArray(2, GoElem.INT) }), zero = { null })), GoElem.ref<Options?>().nilSlice)
         if (err != null) {
             return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid BuildInfoResolvedRoot: %s", data)
         }

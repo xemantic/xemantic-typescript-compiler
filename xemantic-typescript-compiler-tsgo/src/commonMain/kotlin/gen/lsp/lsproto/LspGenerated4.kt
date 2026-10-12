@@ -1577,7 +1577,7 @@ class StringOrTuple(
             }
             91 -> {
                 this.tuple = GoArray(2, GoElem.UINT)
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.tuple, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.tuple, GoTypeInfo(22, "", elem = GoTypeInfo(17, "", elem = GoTypeInfo(10, "uint32", zero = { 0u }), zero = { GoArray(2, GoElem.UINT) }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("StringOrTuple", dec!!.peekKind())
@@ -1859,7 +1859,7 @@ class LocationOrLocationsOrDefinitionLinksOrNull(
                     return null
                 }
                 val vDefinitionLinks: GoBox<GoSlice<LocationLink?>> = GoBox(GoElem.ref<LocationLink?>().nilSlice)
-                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, vDefinitionLinks, GoElem.ref<Options?>().nilSlice)
+                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(vDefinitionLinks, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.LocationLink", cls = LocationLink::class, structInfo = { LocationLink.GO_STRUCT }, zero = { LocationLink() }), zero = { null }), zero = { GoElem.ref<LocationLink?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
                 if (err_3 == null) {
                     this.definitionLinks = vDefinitionLinks
                     return null
@@ -1933,7 +1933,7 @@ class FoldingRangesOrNull(
             }
             91 -> {
                 this.foldingRanges = goNew(GoElem.slice(GoElem.ref<FoldingRange?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.foldingRanges, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.foldingRanges, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.FoldingRange", cls = FoldingRange::class, structInfo = { FoldingRange.GO_STRUCT }, zero = { FoldingRange() }), zero = { null }), zero = { GoElem.ref<FoldingRange?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("FoldingRangesOrNull", dec!!.peekKind())
@@ -2015,7 +2015,7 @@ class LocationOrLocationsOrDeclarationLinksOrNull(
                     return null
                 }
                 val vDeclarationLinks: GoBox<GoSlice<LocationLink?>> = GoBox(GoElem.ref<LocationLink?>().nilSlice)
-                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, vDeclarationLinks, GoElem.ref<Options?>().nilSlice)
+                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(vDeclarationLinks, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.LocationLink", cls = LocationLink::class, structInfo = { LocationLink.GO_STRUCT }, zero = { LocationLink() }), zero = { null }), zero = { GoElem.ref<LocationLink?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
                 if (err_3 == null) {
                     this.declarationLinks = vDeclarationLinks
                     return null
@@ -2089,7 +2089,7 @@ class SelectionRangesOrNull(
             }
             91 -> {
                 this.selectionRanges = goNew(GoElem.slice(GoElem.ref<SelectionRange?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.selectionRanges, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.selectionRanges, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.SelectionRange", cls = SelectionRange::class, structInfo = { SelectionRange.GO_STRUCT }, zero = { SelectionRange() }), zero = { null }), zero = { GoElem.ref<SelectionRange?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("SelectionRangesOrNull", dec!!.peekKind())
@@ -2149,7 +2149,7 @@ class CallHierarchyItemsOrNull(
             }
             91 -> {
                 this.callHierarchyItems = goNew(GoElem.slice(GoElem.ref<CallHierarchyItem?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.callHierarchyItems, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.callHierarchyItems, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.CallHierarchyItem", cls = CallHierarchyItem::class, structInfo = { CallHierarchyItem.GO_STRUCT }, zero = { CallHierarchyItem() }), zero = { null }), zero = { GoElem.ref<CallHierarchyItem?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("CallHierarchyItemsOrNull", dec!!.peekKind())
@@ -2209,7 +2209,7 @@ class CallHierarchyIncomingCallsOrNull(
             }
             91 -> {
                 this.callHierarchyIncomingCalls = goNew(GoElem.slice(GoElem.ref<CallHierarchyIncomingCall?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.callHierarchyIncomingCalls, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.callHierarchyIncomingCalls, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.CallHierarchyIncomingCall", cls = CallHierarchyIncomingCall::class, structInfo = { CallHierarchyIncomingCall.GO_STRUCT }, zero = { CallHierarchyIncomingCall() }), zero = { null }), zero = { GoElem.ref<CallHierarchyIncomingCall?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("CallHierarchyIncomingCallsOrNull", dec!!.peekKind())
@@ -2269,7 +2269,7 @@ class CallHierarchyOutgoingCallsOrNull(
             }
             91 -> {
                 this.callHierarchyOutgoingCalls = goNew(GoElem.slice(GoElem.ref<CallHierarchyOutgoingCall?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.callHierarchyOutgoingCalls, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.callHierarchyOutgoingCalls, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.CallHierarchyOutgoingCall", cls = CallHierarchyOutgoingCall::class, structInfo = { CallHierarchyOutgoingCall.GO_STRUCT }, zero = { CallHierarchyOutgoingCall() }), zero = { null }), zero = { GoElem.ref<CallHierarchyOutgoingCall?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("CallHierarchyOutgoingCallsOrNull", dec!!.peekKind())
@@ -2589,7 +2589,7 @@ class MonikersOrNull(
             }
             91 -> {
                 this.monikers = goNew(GoElem.slice(GoElem.ref<Moniker?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.monikers, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.monikers, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.Moniker", cls = Moniker::class, structInfo = { Moniker.GO_STRUCT }, zero = { Moniker() }), zero = { null }), zero = { GoElem.ref<Moniker?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("MonikersOrNull", dec!!.peekKind())
@@ -2649,7 +2649,7 @@ class TypeHierarchyItemsOrNull(
             }
             91 -> {
                 this.typeHierarchyItems = goNew(GoElem.slice(GoElem.ref<TypeHierarchyItem?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.typeHierarchyItems, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.typeHierarchyItems, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.TypeHierarchyItem", cls = TypeHierarchyItem::class, structInfo = { TypeHierarchyItem.GO_STRUCT }, zero = { TypeHierarchyItem() }), zero = { null }), zero = { GoElem.ref<TypeHierarchyItem?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("TypeHierarchyItemsOrNull", dec!!.peekKind())
@@ -2769,7 +2769,7 @@ class InlayHintsOrNull(
             }
             91 -> {
                 this.inlayHints = goNew(GoElem.slice(GoElem.ref<InlayHint?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.inlayHints, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.inlayHints, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.InlayHint", cls = InlayHint::class, structInfo = { InlayHint.GO_STRUCT }, zero = { InlayHint() }), zero = { null }), zero = { GoElem.ref<InlayHint?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("InlayHintsOrNull", dec!!.peekKind())
@@ -2903,7 +2903,7 @@ class InlineCompletionListOrItemsOrNull(
             }
             91 -> {
                 this.items = goNew(GoElem.slice(GoElem.ref<InlineCompletionItem?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.items, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.items, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.InlineCompletionItem", cls = InlineCompletionItem::class, structInfo = { InlineCompletionItem.GO_STRUCT }, zero = { InlineCompletionItem() }), zero = { null }), zero = { GoElem.ref<InlineCompletionItem?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("InlineCompletionListOrItemsOrNull", dec!!.peekKind())
@@ -3025,7 +3025,7 @@ class TextEditsOrNull(
             }
             91 -> {
                 this.textEdits = goNew(GoElem.slice(GoElem.ref<TextEdit?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.textEdits, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.textEdits, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.TextEdit", cls = TextEdit::class, structInfo = { TextEdit.GO_STRUCT }, zero = { TextEdit() }), zero = { null }), zero = { GoElem.ref<TextEdit?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("TextEditsOrNull", dec!!.peekKind())
@@ -3088,7 +3088,7 @@ class CompletionItemsOrListOrNull(
             }
             91 -> {
                 this.items = goNew(GoElem.slice(GoElem.ref<CompletionItem?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.items, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.items, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.CompletionItem", cls = CompletionItem::class, structInfo = { CompletionItem.GO_STRUCT }, zero = { CompletionItem() }), zero = { null }), zero = { GoElem.ref<CompletionItem?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             123 -> {
                 this.list = CompletionList()
@@ -3339,7 +3339,7 @@ class DocumentHighlightsOrNull(
             }
             91 -> {
                 this.documentHighlights = goNew(GoElem.slice(GoElem.ref<DocumentHighlight?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.documentHighlights, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.documentHighlights, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.DocumentHighlight", cls = DocumentHighlight::class, structInfo = { DocumentHighlight.GO_STRUCT }, zero = { DocumentHighlight() }), zero = { null }), zero = { GoElem.ref<DocumentHighlight?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("DocumentHighlightsOrNull", dec!!.peekKind())
@@ -3408,13 +3408,13 @@ class SymbolInformationsOrDocumentSymbolsOrNull(
                     return err_1
                 }
                 val vSymbolInformations: GoBox<GoSlice<SymbolInformation?>> = GoBox(GoElem.ref<SymbolInformation?>().nilSlice)
-                val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, vSymbolInformations, GoElem.ref<Options?>().nilSlice)
+                val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(vSymbolInformations, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.SymbolInformation", cls = SymbolInformation::class, structInfo = { SymbolInformation.GO_STRUCT }, zero = { SymbolInformation() }), zero = { null }), zero = { GoElem.ref<SymbolInformation?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
                 if (err_2 == null) {
                     this.symbolInformations = vSymbolInformations
                     return null
                 }
                 val vDocumentSymbols: GoBox<GoSlice<DocumentSymbol?>> = GoBox(GoElem.ref<DocumentSymbol?>().nilSlice)
-                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, vDocumentSymbols, GoElem.ref<Options?>().nilSlice)
+                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(vDocumentSymbols, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.DocumentSymbol", cls = DocumentSymbol::class, structInfo = { DocumentSymbol.GO_STRUCT }, zero = { DocumentSymbol() }), zero = { null }), zero = { GoElem.ref<DocumentSymbol?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
                 if (err_3 == null) {
                     this.documentSymbols = vDocumentSymbols
                     return null
@@ -3619,13 +3619,13 @@ class SymbolInformationsOrWorkspaceSymbolsOrNull(
                     return err_1
                 }
                 val vSymbolInformations: GoBox<GoSlice<SymbolInformation?>> = GoBox(GoElem.ref<SymbolInformation?>().nilSlice)
-                val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, vSymbolInformations, GoElem.ref<Options?>().nilSlice)
+                val err_2: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(vSymbolInformations, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.SymbolInformation", cls = SymbolInformation::class, structInfo = { SymbolInformation.GO_STRUCT }, zero = { SymbolInformation() }), zero = { null }), zero = { GoElem.ref<SymbolInformation?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
                 if (err_2 == null) {
                     this.symbolInformations = vSymbolInformations
                     return null
                 }
                 val vWorkspaceSymbols: GoBox<GoSlice<WorkspaceSymbol?>> = GoBox(GoElem.ref<WorkspaceSymbol?>().nilSlice)
-                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, vWorkspaceSymbols, GoElem.ref<Options?>().nilSlice)
+                val err_3: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(vWorkspaceSymbols, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.WorkspaceSymbol", cls = WorkspaceSymbol::class, structInfo = { WorkspaceSymbol.GO_STRUCT }, zero = { WorkspaceSymbol() }), zero = { null }), zero = { GoElem.ref<WorkspaceSymbol?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
                 if (err_3 == null) {
                     this.workspaceSymbols = vWorkspaceSymbols
                     return null
@@ -3692,7 +3692,7 @@ class CodeLensesOrNull(
             }
             91 -> {
                 this.codeLenses = goNew(GoElem.slice(GoElem.ref<CodeLens?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.codeLenses, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.codeLenses, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.CodeLens", cls = CodeLens::class, structInfo = { CodeLens.GO_STRUCT }, zero = { CodeLens() }), zero = { null }), zero = { GoElem.ref<CodeLens?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("CodeLensesOrNull", dec!!.peekKind())
@@ -3752,7 +3752,7 @@ class DocumentLinksOrNull(
             }
             91 -> {
                 this.documentLinks = goNew(GoElem.slice(GoElem.ref<DocumentLink?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.documentLinks, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.documentLinks, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.DocumentLink", cls = DocumentLink::class, structInfo = { DocumentLink.GO_STRUCT }, zero = { DocumentLink() }), zero = { null }), zero = { GoElem.ref<DocumentLink?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("DocumentLinksOrNull", dec!!.peekKind())
@@ -3962,7 +3962,7 @@ class MultiDocumentHighlightsOrNull(
             }
             91 -> {
                 this.multiDocumentHighlights = goNew(GoElem.slice(GoElem.ref<MultiDocumentHighlight?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.multiDocumentHighlights, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.multiDocumentHighlights, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.MultiDocumentHighlight", cls = MultiDocumentHighlight::class, structInfo = { MultiDocumentHighlight.GO_STRUCT }, zero = { MultiDocumentHighlight() }), zero = { null }), zero = { GoElem.ref<MultiDocumentHighlight?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("MultiDocumentHighlightsOrNull", dec!!.peekKind())
@@ -4082,7 +4082,7 @@ class VSReferenceItemsOrNull(
             }
             91 -> {
                 this.vsReferenceItems = goNew(GoElem.slice(GoElem.ref<VSReferenceItem?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.vsReferenceItems, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.vsReferenceItems, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.VSReferenceItem", cls = VSReferenceItem::class, structInfo = { VSReferenceItem.GO_STRUCT }, zero = { VSReferenceItem() }), zero = { null }), zero = { GoElem.ref<VSReferenceItem?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("VSReferenceItemsOrNull", dec!!.peekKind())

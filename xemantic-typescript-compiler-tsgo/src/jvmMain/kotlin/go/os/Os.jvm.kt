@@ -122,10 +122,18 @@ internal actual fun platformRemoveAll(path: String): String? {
     return if (f.deleteRecursively()) null else "remove failed"
 }
 
-internal actual fun platformSetModTime(path: String, epochMillis: Long): String? =
-    if (File(path).setLastModified(epochMillis)) null else "setting the modification time failed"
+internal actual fun platformSetModTime(path: String, epochNanos: Long): String? = try {
+    java.nio.file.Files.setLastModifiedTime(java.nio.file.Paths.get(path), java.nio.file.attribute.FileTime.from(epochNanos, java.util.concurrent.TimeUnit.NANOSECONDS))
+    null
+} catch (e: java.io.IOException) {
+    "setting the modification time failed: ${e.message}"
+}
 
-internal actual fun platformModTime(path: String): Long = File(path).lastModified()
+internal actual fun platformModTime(path: String): Long = try {
+    java.nio.file.Files.getLastModifiedTime(java.nio.file.Paths.get(path)).to(java.util.concurrent.TimeUnit.NANOSECONDS)
+} catch (_: java.io.IOException) {
+    0L
+}
 
 internal actual fun platformExecutable(): String? = ProcessHandle.current().info().command().orElse(null)
 

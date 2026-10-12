@@ -63,4 +63,4 @@ class Group {
 }
 
 /** `errgroup.WithContext(ctx)`: the derived context is [ctx] itself (no cancellation). */
-fun withContext(ctx: Context): Tuple2<Group?, Context> = Tuple2(Group(), ctx)
+fun withContext(ctx: Context?): Tuple2<Group?, Context?> = Tuple2(Group(), ctx)

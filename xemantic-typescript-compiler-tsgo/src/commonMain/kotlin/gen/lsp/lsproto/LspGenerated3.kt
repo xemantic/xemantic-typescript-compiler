@@ -5921,7 +5921,7 @@ class StringOrInlayHintLabelParts(
             }
             91 -> {
                 this.inlayHintLabelParts = goNew(GoElem.slice(GoElem.ref<InlayHintLabelPart?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.inlayHintLabelParts, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.inlayHintLabelParts, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.InlayHintLabelPart", cls = InlayHintLabelPart::class, structInfo = { InlayHintLabelPart.GO_STRUCT }, zero = { InlayHintLabelPart() }), zero = { null }), zero = { GoElem.ref<InlayHintLabelPart?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("StringOrInlayHintLabelParts", dec!!.peekKind())
@@ -6429,7 +6429,7 @@ class WorkspaceFoldersOrNull(
             }
             91 -> {
                 this.workspaceFolders = goNew(GoElem.slice(GoElem.ref<WorkspaceFolder?>()))
-                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, this.workspaceFolders, GoElem.ref<Options?>().nilSlice)
+                return com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(this.workspaceFolders, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "lsproto.WorkspaceFolder", cls = WorkspaceFolder::class, structInfo = { WorkspaceFolder.GO_STRUCT }, zero = { WorkspaceFolder() }), zero = { null }), zero = { GoElem.ref<WorkspaceFolder?>().nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             }
             else -> {
                 return errInvalidKind("WorkspaceFoldersOrNull", dec!!.peekKind())

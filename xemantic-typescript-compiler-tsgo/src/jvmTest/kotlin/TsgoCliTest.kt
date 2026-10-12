@@ -83,10 +83,22 @@ class TsgoCliTest {
     }
 
     @Test
-    fun `--build is not ported yet and says so with the not-implemented status`() {
-        val (exit, out) = tsc(project(), "--build")
+    fun `--build builds the project, reports its error and writes its buildinfo`() {
+        // (TSGO.5-b) tsgo 7.0.2 prints exactly this, exits 2 and writes these two files for the same project
+        val dir = project("tsconfig.json" to """{ "compilerOptions": { "strict": true, "outDir": "out" } }""", "a.ts" to "const n: number = 'x';\n")
+        val (exit, out) = tsc(dir, "--build")
+        assert(exit == 2)
+        assert(out == "a.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n")
+        val written = File(dir, "out").list()!!.sorted()
+        assert(written == listOf("a.js", "tsconfig.tsbuildinfo"))
+    }
+
+    @Test
+    fun `--watch is not ported yet and says so with the not-implemented status`() {
+        val dir = project("tsconfig.json" to """{ "compilerOptions": { "noEmit": true } }""", "a.ts" to "export const a = 1;\n")
+        val (exit, out) = tsc(dir, "--watch")
         assert(exit == TsgoCli.EXIT_NOT_IMPLEMENTED)
-        assert(out.startsWith("error: this tsc mode is not available in the port yet (execute.tscBuildCompilation)"))
+        assert(out.startsWith("error: this tsc mode is not available in the port yet (execute.createWatcher)"))
     }
 
     @Test

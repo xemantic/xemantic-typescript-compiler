@@ -258,6 +258,8 @@ class WaitGroup {
                 f()
             } catch (t: Throwable) {
                 failure.compareAndSet(null, t)
+                // the goroutines blocked on a channel this one would have closed must not wait forever
+                com.xemantic.typescript.tsgo.runtime.GoChan.goroutineFailed(t)
             } finally {
                 done()
             }
@@ -268,7 +270,10 @@ class WaitGroup {
     @kotlin.jvm.JvmName("goWait")
     fun wait() {
         if (count.load() != 0) waiters.await(count) { count.load() == 0 }
-        failure.load()?.let { throw it }
+        failure.load()?.let {
+            com.xemantic.typescript.tsgo.runtime.GoChan.goroutineFailureReported(it)
+            throw it
+        }
     }
 
     fun goCopy(): WaitGroup = WaitGroup().also { it.count.store(count.load()) }

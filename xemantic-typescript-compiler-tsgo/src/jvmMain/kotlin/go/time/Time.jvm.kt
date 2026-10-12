@@ -23,10 +23,7 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-package com.xemantic.typescript.tsgo.execute.watchmanager
+package com.xemantic.typescript.tsgo.go.time
 
-// tsgo's `internal/execute/watchmanager` is not ported: `tsc --watch` is a stub ((TSGO.5), docs/goport-cli.md).
-// The ported `execute.Watcher` holds one in a field.
-
-/** `*watchmanager.WatchManager`: the type `execute.Watcher` names; never constructed (createWatcher is a stub). */
-class WatchManager
+internal actual fun localZoneOffsetSeconds(unixSeconds: Long): Int =
+    java.util.TimeZone.getDefault().getOffset(unixSeconds * 1000L) / 1000

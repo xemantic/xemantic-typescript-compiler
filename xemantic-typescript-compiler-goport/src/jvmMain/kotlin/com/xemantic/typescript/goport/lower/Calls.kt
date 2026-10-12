@@ -42,6 +42,7 @@ import com.xemantic.typescript.goport.lower.TypeMapper.Rep
 import com.xemantic.typescript.goport.naming.Naming
 import com.xemantic.typescript.goport.types.ArrayType
 import com.xemantic.typescript.goport.types.BasicType
+import com.xemantic.typescript.goport.types.ChanType
 import com.xemantic.typescript.goport.types.InterfaceType
 import com.xemantic.typescript.goport.types.MapType
 import com.xemantic.typescript.goport.types.PointerType
@@ -224,8 +225,36 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             return Ex.primary("$wref(${codes.joinToString(", ")})")
         }
         val generic = if (shim) o.int("t")?.let { types.unalias(it) as? SignatureType }?.takeIf { it.tparams.isNotEmpty() } else null
-        val codes = opaquePointerArgs(o, e, args(e, sig, shim && sig.variadic, shim, generic))
+        val codes = jsonTypedTarget(o, e, opaquePointerArgs(o, e, args(e, sig, shim && sig.variadic, shim, generic)))
         return withTuplePrelude(Ex.primary("$ref${typeArgs(fnExpr)}(${(dictArgs(fnExpr) + inlineArgs(e, o.str("key"), codes)).joinToString(", ")})"))
+    }
+
+    /**
+     * `json.Unmarshal(in, &x)` (and `UnmarshalRead`/`UnmarshalDecode`, of tsgo's `internal/json` or the json library):
+     * when `&x`'s STATIC type is one the json shim cannot read off x's current value — a pointer or an array, or a
+     * slice/map of them, or `jsontext.Value` — the target is passed as `goJsonTarget(&x, <its GoTypeInfo>)` so the
+     * shim decodes by the Go type, as Go's reflection does ((TSGO.5-b), docs/goport-runtime.md § 10 #14).
+     */
+    private fun jsonTypedTarget(o: Node, e: Node, codes: List<String>): List<String> {
+        if (o.str("pkg") !in JSON_PACKAGES || o.str("name") !in JSON_UNMARSHALS || codes.size < 2) return codes
+        val a = e.list("args").getOrNull(1) ?: return codes
+        val pt = types.unalias(ty(a)) as? PointerType ?: return codes
+        if (!needsStaticJsonType(pt.elem, HashSet())) return codes
+        return codes.toMutableList().also {
+            it[1] = "com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(${codes[1]}, ${tm.reflectTypeInfo(ty(a))})"
+        }
+    }
+
+    private fun needsStaticJsonType(id: Int, seen: MutableSet<Int>): Boolean {
+        if (!seen.add(id)) return false
+        val t = types.unalias(id)
+        if (t is com.xemantic.typescript.goport.types.NamedType && t.name == "Value" && t.pkg?.endsWith("jsontext") == true) return true
+        return when (val u = types.under(id)) {
+            is ArrayType, is PointerType -> true
+            is SliceType -> needsStaticJsonType(u.elem, seen)
+            is MapType -> needsStaticJsonType(u.elem, seen)
+            else -> false
+        }
     }
 
     /**
@@ -481,6 +510,9 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             return bad
         }
 
+        val JSON_PACKAGES = setOf("github.com/microsoft/typescript-go/internal/json", "github.com/go-json-experiment/json")
+        val JSON_UNMARSHALS = setOf("Unmarshal", "UnmarshalRead", "UnmarshalDecode")
+
         /** The fusable shim calls by callee key (rune-decoding ones have no bounded form). */
         val FUSIONS: Map<String, Fusion> = mapOf(
             "strings.HasPrefix" to Fusion(STRINGS, "hasPrefix", true),
@@ -632,10 +664,13 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
                     is SliceType, is MapType -> "${r.at(PRIMARY)}.len"
                     is ArrayType -> "${r.at(PRIMARY)}.size"
                     is PointerType -> "${nn(r).code}.size"
+                    is ChanType -> "${r.at(PRIMARY)}.goLen"
                     else -> refuse("len-of", types[ty(a)].key)
                 })
             }
-            "cap" -> Ex.primary("${raw(args[0]).at(PRIMARY)}.cap")
+            "cap" -> if (types.under(types.core(ty(args[0]))) is ChanType) Ex.primary("${raw(args[0]).at(PRIMARY)}.goCap")
+                else Ex.primary("${raw(args[0]).at(PRIMARY)}.cap")
+            "close" -> Ex.primary("goClose(${raw(args[0]).code})")
             "append" -> {
                 val s = args[0]
                 val base = raw(s)
@@ -673,6 +708,10 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
                     is MapType -> {
                         val hint = args.getOrNull(1)?.let { ", " + intIndex(it).code } ?: ""
                         "GoMap.make<${tm.kt(u.keyType)}, ${tm.kt(u.elem)}>(${tm.elem(u.elem)}$hint)"
+                    }
+                    is ChanType -> {
+                        val c = args.getOrNull(1)?.let { ", " + intIndex(it).code } ?: ""
+                        "GoChan.make(${tm.elem(u.elem)}$c)"
                     }
                     else -> refuse("make", types[t].key)
                 }

@@ -23,11 +23,23 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-package com.xemantic.typescript.tsgo.fswatch
+@file:OptIn(ExperimentalForeignApi::class)
 
-// tsgo's `internal/fswatch` (OS file-system notifications) is not ported: `tsc --watch` is a stub
-// ((TSGO.5), docs/goport-cli.md). The stubbed `execute.Watcher` methods name its event kind.
+package com.xemantic.typescript.tsgo.go.time
 
-/** `fswatch.EventKind`. */
-@kotlin.jvm.JvmInline
-value class EventKind(val value: Int)
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
+import kotlinx.cinterop.value
+import platform.posix.localtime_r
+import platform.posix.time_tVar
+import platform.posix.tm
+
+internal actual fun localZoneOffsetSeconds(unixSeconds: Long): Int = memScoped {
+    val t = alloc<time_tVar>()
+    t.value = unixSeconds
+    val out = alloc<tm>()
+    localtime_r(t.ptr, out.ptr)
+    out.tm_gmtoff.toInt()
+}

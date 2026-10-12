@@ -66,7 +66,7 @@ def main():
         got = open(os.path.join(o.OUT, n, "stdout.txt"), "rb").read()
         rw = json.load(open(os.path.join(recorded, n, "result.json")))
         rg = json.load(open(os.path.join(o.OUT, n, "result.json")))
-        what = [k for k, x, y in (("stdout", want, got), ("exit", rw["exit"], rg["exit"]), ("files", rw["files"], rg["files"])) if x != y]
+        what = [k for k, x, y in (("stdout", want, got), ("exit", rw["exit"], rg["exit"]), ("files", rw["files"], rg["files"]), ("deleted", rw.get("deleted", []), rg.get("deleted", []))) if x != y]
         if what:
             differ.append(f"{n}: {', '.join(what)} (exit {rg['exit']}, stderr {rg['stderr'][:200]!r})")
     print(f"native replay: {len(cases)} cases: equal {len(cases) - len(differ)}, differ {len(differ)}; {sum(times.values()):.0f} s")

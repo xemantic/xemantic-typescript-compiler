@@ -187,7 +187,7 @@ fun newNopLogger(): Logger? {
 
 // go: github.com/microsoft/typescript-go/internal/project/logging.formatTime eb00baff
 fun formatTime(t: Time): String {
-    TODO("goport: refused shim-missing: github.com/microsoft/typescript-go/internal/project/logging.formatTime")
+    return com.xemantic.typescript.tsgo.go.fmt.sprintf("[%s]", t.format("15:04:05.000"))
 }
 
 

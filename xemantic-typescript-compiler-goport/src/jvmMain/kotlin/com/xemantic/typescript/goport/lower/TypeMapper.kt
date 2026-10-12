@@ -195,7 +195,8 @@ class TypeMapper(
             is SliceType -> "GoSlice<${kt(t.elem)}>"
             is ArrayType -> "GoArray<${kt(t.elem)}>"
             is MapType -> "GoMap<${kt(t.keyType)}, ${kt(t.elem)}>"
-            is ChanType -> refuse("chan")
+            // a Go channel (runtime GoChan, docs/goport-runtime.md § 10); a nil channel is null
+            is ChanType -> "GoChan<${kt(t.elem)}>?"
             is SignatureType -> "(${funType(t)})?"
             is StructType -> if (t.fields.isEmpty()) "Unit" else anonStruct(t)
             is InterfaceType -> ifaceKt(t) ?: "Any?"
@@ -247,6 +248,8 @@ class TypeMapper(
                     is StructType -> info(25, qn, namedRef(t) + "::class",
                         struct = if (isPortedNamed(t) && origin.key in pc.prog.reflectStructs && namedKind(t) == NamedKind.STRUCT) namedRef(t) + ".GO_STRUCT" else null)
                     is InterfaceType -> info(20, qn)
+                    // `jsontext.Value` (a shim's alias of `[]byte`): json decodes it as the RAW value, so its name is kept
+                    is SliceType -> if (qn == "jsontext.Value") info(23, qn, elem = reflectTypeInfo(u.elem)) else reflectTypeInfo(t.underlying)
                     else -> reflectTypeInfo(t.underlying)
                 }
             }

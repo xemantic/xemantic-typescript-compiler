@@ -324,8 +324,8 @@ class Message(
                 GoFieldInfo("JSONRPC", "json:\"jsonrpc\"", true, false, GoTypeInfo(25, "jsonrpc.JSONRPCVersion", cls = JSONRPCVersion::class, structInfo = { JSONRPCVersion.GO_STRUCT }, zero = { JSONRPCVersion() })),
                 GoFieldInfo("ID", "json:\"id,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "jsonrpc.ID", cls = ID::class, zero = { ID() }), zero = { null })),
                 GoFieldInfo("Method", "json:\"method,omitzero\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
-                GoFieldInfo("Params", "json:\"params,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice })),
-                GoFieldInfo("Result", "json:\"result,omitzero\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice })),
+                GoFieldInfo("Params", "json:\"params,omitzero\"", true, false, GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice })),
+                GoFieldInfo("Result", "json:\"result,omitzero\"", true, false, GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice })),
                 GoFieldInfo("Error", "json:\"error,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "jsonrpc.ResponseError", cls = ResponseError::class, structInfo = { ResponseError.GO_STRUCT }, zero = { ResponseError() }), zero = { null })),
             ))
         }
