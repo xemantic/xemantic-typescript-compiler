@@ -25,6 +25,23 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.5-b) — `tsc --build` ON THE PORT: Go channels lowered, the buildinfo reader decoding by static type, CLI parity 120 / 121 with 15 new build/incremental cases
+
+- Porter: `chan T` → `runtime.GoChan<T>?` with `make`/`close`/`len`/`cap`/receive/comma-ok receive/send (`select` still
+  refused); `core.ThrottleGroup` now ports too. `execute/build` (rooted at `NewOrchestrator`), `execute/watchmanager` and
+  `fswatch` extracted as partial packages, the watch half stubbed; `.gitignore` un-ignores `src/commonMain/**/build/`.
+- Runtime: `GoChan` (one process-wide `WaitQueue`; `GoChanTest` 6 incl. `TSGO_GOMAXPROCS=1`); a throwing `WaitGroup`
+  goroutine POISONS channel waits until its `Wait` rethrows — found as a real one-off hang of `-b` (a task that threw
+  never closed its done channel); the pin hangs without the fix. `time.Time.Format` (local zone via a platform offset),
+  nanosecond file mtimes both ways, `HostInfo.modTime` (it was always zero: every input looked missing).
+- json: `reflect.goJsonTarget` — the porter passes the static type at `Unmarshal*` calls whose target the shim cannot
+  type (`*[2]int`, `[2]int`, `[]*T`, `[]jsontext.Value`); `[]*T` struct fields; `incremental` named numbers.
+- Gate: `pre` runs, deleted files and a masked clock in the CLI recorder/test/replay. Diag 13,127, Emit 13,127, LS
+  21,614, API 594,007, CLI 120 equal; `-tsgo` 144 / 0, `-goport` 26 / 0, `-lsp` 38 / 0; warning-clean.
+- Measured and left: a non-incremental project's "older than output X" depends on the file system's coarse clock (tsgo
+  varies too) — the up-to-date fixture is incremental. `GoProcsTest`'s concurrency-peak assertion failed once while three
+  module suites ran at once, then passed 3 / 3 alone.
+
 ### Round (TSGO.6-p, CI) — THE NATIVE `-tsgo` CI JOBS: the PGO image replayed against tsgo 7.0.2 from a fresh checkout, and the port's suite on Kotlin/Native
 
 - `.github/workflows/native.yml` (manual, input `tsgo`): `tsgo-native-image` runs the new `scripts/tsgo-native-ci.sh` —
@@ -424,7 +441,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
     library probes, wall/heap per engine) and a recommendation; deleting `-core` is not done autonomously.
     REPORT DONE 2026-10-08: `docs/core-sunset.md` (session note (TSGO.4-d)).
 
-- [ ] **(TSGO.5) a tsgo CLI on the port (`docs/core-sunset.md` § 6 stage 1).** **IN PROGRESS — (5-a) the `tsc` command line DONE 2026-10-08 (`TsgoMainKt`, CliParityTest 105/105 equal, type-fest skipped below an 8 GB heap; re-verified on main by the orchestrator). Remains: `--build`, `--watch`, `--pprofDir`, `--diagnostics` memory figures, a native CLI run.** Port `internal/execute` (+ the `tsc`
+- [ ] **(TSGO.5) a tsgo CLI on the port (`docs/core-sunset.md` § 6 stage 1).** **IN PROGRESS — (5-a) the `tsc` command line DONE 2026-10-08 (`TsgoMainKt`, CliParityTest 105/105 equal, type-fest skipped below an 8 GB heap; re-verified on main by the orchestrator). (5-b) `tsc --build` DONE 2026-10-12 (`internal/execute/build` ported on Go channels lowered onto `runtime.GoChan`; the buildinfo reader decodes by static type, so `--incremental` re-runs reuse it too; CliParityTest 120 / 121 equal incl. 11 `build-*` and 4 `incremental-*` cases; docs/goport-cli.md § 2b). The native CLI run is (TSGO.6)'s CI replay. `--pprofDir` and the `--diagnostics` memory figures are Go-runtime artefacts, kept as documented divergences (docs/goport-cli.md § 2). Remains: `--watch` (an `fswatch` shim: JVM `WatchService`, Kotlin/Native inotify).** Port `internal/execute` (+ the `tsc`
   command line; `--build`/incremental may follow as a sub-step) through the porter and expose a `-cli`-shaped entry on
   `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
   `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.

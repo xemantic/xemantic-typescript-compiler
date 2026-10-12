@@ -1,3 +1,14 @@
+**(TSGO.6-k) DONE — slice headers owned by their field, struct literals stored in place (2026-10-10):** owner goal:
+highest performance, idiomatic Kotlin where it pays. Two porter rules (docs/goport-lowering.md § 3): an OWNED slice
+field (24 fields, 42 sites — every read direct, every other store a copy) appends and reslices its own header in place,
+as Go writes a header value; `*p = T{…}` assigns `*p`'s fields instead of building and `goSet`-copying a temporary (125
+sites, tsgo's pooled `Relater`/`FlowState`/`InferenceState`); plus `slices.Insert`/`Clone` on the array. Allocation
+**−11%** in every warm regime and wall **−4.6% single (4/4, disjoint ranges) / −6.6% compiler parallel / −5.3%
+services** — the first allocation round to clear the spread (docs/goport-perf.md § 13). Measured, not done: C1-only
+tiering is −33..−44% cold on ordinary projects but **+100% on type-fest**; the AOT cache matches it where trained and
+never loses, so it stays the launcher's lever. Diag 13,127 equal, Emit/CLI/LS/API parity green; `-tsgo` 134 / 0,
+`-goport` 24 / 0, `-lsp` 38 / 0, native 77 / 0.
+
 **(TSGO.6-j) DONE — two porter rules from § 11's allocation table (2026-10-10):** (A) an ESCAPE PROOF over the Go IR
 (`Program.computePooledLocals`, `lower/PooledLocals.kt`) pools the checker's 13 `var b keyBuilder` locals in a per-thread
 LIFO stack (`runtime.GoLocalPool`, `acquire` + `try`/`finally release`, the Hasher's buffer kept): allocation

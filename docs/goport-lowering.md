@@ -269,6 +269,14 @@ underlying interface of `comparable` has key `interface{comparable}` (it collide
 
 Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a hand edit of `gen/`):
 
+- **Channels** ((TSGO.5-b), `TypeMapper.kt` `ChanType`, `Calls.builtin`, `Exprs.unary`, `Stmts` `SendStmt` /
+  comma-ok `UnaryExpr`): `chan T` → `GoChan<T>?` (nil channel = null), `make(chan T, n)` → `GoChan.make(elem, n)`,
+  `close`/`len`/`cap` → `goClose`/`.goLen`/`.goCap`, `<-ch` → `goRecv(ch)`, `v, ok := <-ch` → `goRecv2(ch)`,
+  `ch <- v` → `goSend(ch, v)`. `select` and `go` statements are still refused. Runtime: docs/goport-runtime.md § 10 #19.
+- **json targets by static type** ((TSGO.5-b), `Calls.jsonTypedTarget`, runtime `reflect.goJsonTarget`): the second
+  argument of `Unmarshal`/`UnmarshalRead`/`UnmarshalDecode` (tsgo's `internal/json` or the library) whose pointee is
+  a pointer, an array, `jsontext.Value` (`TypeMapper.reflectTypeInfo` keeps that name), or a slice/map of them is
+  wrapped with its `GoTypeInfo`; the shim decodes it untyped and converts by the Go type (§ 10 #14 of the runtime doc).
 - **Substring elimination** (`Exprs.windowOf`, `Calls.viewCandidates`/`declareView`/`FUSIONS`).
   Go's `s[a:b]` is an O(1) view; Kotlin's `substring` copies, and a suffix of the source text per
   token made the scanner quadratic (134x). A string slice is lowered as a WINDOW `(base, from, to)`

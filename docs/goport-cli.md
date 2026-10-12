@@ -82,12 +82,32 @@ Every new platform shim has a Kotlin/Native `actual` too ((TSGO.6)'s `linuxX64`,
 
 ## 2. Not ported / divergences
 
-- `--build` (project references, `internal/execute/build`) and `--watch` — partial stubs, exit status 5.
+- `--watch` (and `-b --watch`) — partial stubs, exit status 5: `internal/fswatch` (OS file-system notifications:
+  inotify/fanotify/kqueue/FSEvents) has no shim yet; `execute/watchmanager` and `fswatch` are extracted for their
+  TYPES only (the orchestrator constructs a `WatchManager`), their watching bodies are stubs.
 - `--pprofDir` — no Go profile is written and its two "profile:" lines are not printed.
 - `--diagnostics` / `--extendedDiagnostics` — times and memory are the JVM's (the rows are the same; the values
   are not comparable), "Memory allocs" is 0.
 - `--lsp` / `--api` are tsgo's other two modes; the port serves them through `-lsp` (`TsgoLanguageService`) and
   `TsgoProject`, not through this entry.
+
+## 2b. `tsc --build` ((TSGO.5-b))
+
+`internal/execute/build` is ported (partial package rooted at `NewOrchestrator`; the `-b --watch` half stubbed). Its
+task graph runs on Go channels — `chan struct{}` done signals a task closes and its downstream tasks receive — lowered
+onto `runtime.GoChan` (docs/goport-runtime.md § 10 #19). Up-to-date checks read each project's `.tsbuildinfo` back,
+which needed the json shim to decode by STATIC type where the current value carries none (`*[2]int`, `[2]int`,
+`[]*T`, `[]jsontext.Value`: § 10 #14) — the same reader makes `--incremental`'s second run reuse its buildinfo instead
+of rebuilding — and file modification times at Go's nanosecond precision. Status lines carry the wall-clock time
+(`time.Time.Format`, local zone).
+
+The gate's cases ((TSGO.5-b) in `scripts/tsgo-cli-oracle.py`): `build-*` (a clean and an erroring two-project build,
+`--verbose`, `--pretty`, up to date, errors rebuilt, `--force`, `--dry`, `--clean`, one project, a reference cycle,
+`-b --help`) and `incremental-*` (first run; re-run clean, with errors, `--noEmit`). A case may carry `pre` runs (the
+same binary, same work copy, output not recorded — the build an up-to-date check then sees); a run's DELETED files are
+recorded beside its written ones; `HH:MM:SS AM/PM` is masked in stdout on both sides. One fixture choice is
+deliberate: a NON-incremental project's "older than output X" names whichever output the file system's coarse clock
+stamped first, which differs between machines for tsgo itself, so the up-to-date fixture's app is incremental.
 
 ## 3. The gate
 
