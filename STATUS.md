@@ -9,7 +9,7 @@ hash (`getRelationKey` 1.5% → 0.3% of the thread; wall inside the A/B noise). 
 −20..−30%, wall better only on small projects, RSS +20..+50%; an opt-in image is a build change). docs/goport-perf.md
 § 28. Diag/Emit 13,127, CLI 105 equal; `-tsgo` 137 / 0, `-goport` 26 / 0. Then the native `-tsgo` CI jobs (`native.yml`
 `tsgo-native-image` = `scripts/tsgo-native-ci.sh`: the PGO image replayed against tsgo 7.0.2's own output, 50 / 50
-equal locally; `tsgo-kotlin-native` = `linuxX64Test`) — (TSGO.6) waits on one green GitHub run.
+equal locally; `tsgo-kotlin-native` = `linuxX64Test`) — green on GitHub (run 38298712635: replay 50 / 50, native 79 / 0): **(TSGO.6) DONE**.
 
 **(TSGO.6-o) DONE — the bundled libs parsed at image build time; the PGO image at or past tsgo on 5 of 6 projects
 (2026-10-10):** a lib `.d.ts` parse depends only on name, path and text, so `TsgoLibSnapshot` parses every bundled lib
