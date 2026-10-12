@@ -51,7 +51,7 @@ class GoChanTest {
     }
 
     @Test
-    fun `a buffered channel keeps order, reports len and cap, and drains after close`() {
+    fun `a buffered channel keeps order - reports len and cap - and drains after close`() {
         val ch = GoChan.make(GoElem.INT, 3)
         goSend(ch, 1)
         goSend(ch, 2)
