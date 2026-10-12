@@ -142,6 +142,14 @@ the image is ~57 MB. The gate replays the CLI recording through the image (the r
 `build/goport/cli-work/native`): **106 / 106 equal** in stdout, exit status and written files, type-fest included —
 the in-process `CliParityTest` skips it below an 8 GB heap.
 
+**In CI** (`.github/workflows/native.yml`, manual trigger, input `tsgo`): `tsgo-native-image` runs
+`scripts/tsgo-native-ci.sh` from a fresh checkout — tsgo 7.0.2 from the npm registry tarball (sha1 pinned; the tree is
+byte-identical to `tools/tsgo-7.0.2`), the 8 tsc profiles (`bench-compile-tsc.sh --materialize-only`), the PGO image,
+then tsgo's own output RECORDED on the runner and replayed through the image for the cases a fresh checkout can
+reproduce: the 8 profiles (check-only and emit, plus two `pretty` runs) and the command-line shapes. The census
+libraries, cronstrue, marked and the type-oracle projects are local data and stay a local gate. `tsgo-kotlin-native`
+runs `:xemantic-typescript-compiler-tsgo:linuxX64Test`.
+
 The task defaults to **G1 with `-R:MaxRAMPercentage=80`**, both measured (2026-10-09, `--noEmit` on tsc's compiler
 profile, 65 rows byte-identical in every arm, 8-core box):
 

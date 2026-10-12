@@ -1,7 +1,10 @@
-# The two NATIVE toolchains, both manual-trigger only:
+# The NATIVE toolchains, all manual-trigger only:
 #   * `native-image` — the GraalVM AOT executable (round 771).
 #   * `kotlin-native` — the Kotlin/Native linuxX64 target and the corpus suite
 #     run against it (round 775).
+#   * `tsgo-native-image` / `tsgo-kotlin-native` — the same two for the tsgo port
+#     (`-tsgo`, (TSGO.6)): its PGO image replayed against tsgo 7.0.2's own output,
+#     and its common suite on linuxX64.
 #
 # MANUAL TRIGGER ONLY, deliberately. Neither is a correctness gate for a normal
 # push — the JVM suite is — and both are slow. Attaching the AOT binary to
@@ -36,6 +39,10 @@ on:
         default: true
       kotlin_native:
         description: "Compile the Kotlin/Native linuxX64 target and run the corpus suite on it"
+        type: boolean
+        default: true
+      tsgo:
+        description: "The tsgo port: its PGO image against tsgo 7.0.2, and its suite on Kotlin/Native"
         type: boolean
         default: true
 
@@ -160,4 +167,80 @@ jobs:
           path: |
             xemantic-typescript-compiler-core/build/test-results/linuxX64Test
             build/reports/tests/linuxX64Test
+          if-no-files-found: warn
+
+  # The tsgo port's GraalVM image, gated against tsgo 7.0.2 itself (not against
+  # the JVM): scripts/tsgo-native-ci.sh fetches the official tsgo binary (sha1
+  # pinned), materializes the 8 tsc profiles, builds the PGO image (Oracle
+  # GraalVM — PGO is Oracle-only) and replays tsgo's recorded stdout, exit status
+  # and written files for the profiles (check-only and emit) and the command-line
+  # cases through it. Any difference fails. The census libraries and the
+  # type-oracle projects are local data and are not replayed here.
+  tsgo-native-image:
+    if: ${{ inputs.tsgo }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up GraalVM (Oracle, for PGO)
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: 'gradle'
+
+      - name: Build the PGO image and replay tsgo 7.0.2 through it
+        run: scripts/tsgo-native-ci.sh --graalvm "$GRAALVM_HOME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtsc-tsgo-linux-x64
+          path: xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo
+          if-no-files-found: error
+
+      - name: Upload the replay on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsgo-cli-native-replay
+          path: |
+            build/goport/cli-oracle
+            build/goport/cli-native
+          if-no-files-found: warn
+
+  # The tsgo port's common suite (runtime shims, Go oracle vectors, the port's
+  # concurrency model) compiled and run on Kotlin/Native linuxX64. The heap
+  # override is the kotlin-native job's, for the same reason.
+  tsgo-kotlin-native:
+    if: ${{ inputs.tsgo }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 26
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '26'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run the tsgo port's suite on Kotlin/Native (linuxX64)
+        run: |
+          ./gradlew -PenableNativeTargets=true \
+            -Dorg.gradle.jvmargs=-Xmx6g \
+            :xemantic-typescript-compiler-tsgo:linuxX64Test
+
+      - name: Upload native test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsgo-linuxX64-test-results
+          path: |
+            xemantic-typescript-compiler-tsgo/build/test-results/linuxX64Test
+            xemantic-typescript-compiler-tsgo/build/reports/tests/linuxX64Test
           if-no-files-found: warn

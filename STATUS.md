@@ -7,7 +7,9 @@ transferable cache. Landed: `checker.getRelationKey` override — a non-generic 
 hash (`getRelationKey` 1.5% → 0.3% of the thread; wall inside the A/B noise). Priced and refused: its flow-walk skip
 (no measurable effect on tsc-rs itself here), the small lookup levers (≤ 2.6% each), an Epsilon no-GC image (CPU
 −20..−30%, wall better only on small projects, RSS +20..+50%; an opt-in image is a build change). docs/goport-perf.md
-§ 28. Diag/Emit 13,127, CLI 105 equal; `-tsgo` 137 / 0, `-goport` 26 / 0.
+§ 28. Diag/Emit 13,127, CLI 105 equal; `-tsgo` 137 / 0, `-goport` 26 / 0. Then the native `-tsgo` CI jobs (`native.yml`
+`tsgo-native-image` = `scripts/tsgo-native-ci.sh`: the PGO image replayed against tsgo 7.0.2's own output, 50 / 50
+equal locally; `tsgo-kotlin-native` = `linuxX64Test`) — (TSGO.6) waits on one green GitHub run.
 
 **(TSGO.6-o) DONE — the bundled libs parsed at image build time; the PGO image at or past tsgo on 5 of 6 projects
 (2026-10-10):** a lib `.d.ts` parse depends only on name, path and text, so `TsgoLibSnapshot` parses every bundled lib

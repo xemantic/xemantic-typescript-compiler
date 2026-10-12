@@ -81,6 +81,9 @@
 #                    cached copy exists
 #   --label TEXT     free-text note stored in the results log
 #   --no-log         do not append to the bench/ results TSV
+#   --materialize-only  write the profiles' projects under build/bench and exit:
+#                    no compiler build, no run (the -tsgo native CI job checks
+#                    them with tsgo and the port's image, not with -core)
 #   --help           show this help
 #
 # Each benchmark project is materialized under build/bench/tsc-<name>-<commit8>/
@@ -121,6 +124,7 @@ NODE_STUB=0
 FRESH=0
 LABEL=""
 DO_LOG=1
+MATERIALIZE_ONLY=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -133,6 +137,7 @@ while [[ $# -gt 0 ]]; do
         --fresh)      FRESH=1; shift ;;
         --label)      LABEL="$2"; shift 2 ;;
         --no-log)     DO_LOG=0; shift ;;
+        --materialize-only) MATERIALIZE_ONLY=1; shift ;;
         --help|-h)    sed -n '/^# Performance benchmark/,/^set -euo/p' "$0" | sed '$d;s/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
@@ -408,6 +413,11 @@ DTSEOF
 }
 JSONEOF
 }
+
+if [[ $MATERIALIZE_ONLY -eq 1 ]]; then
+    for P in "${PROJECTS[@]}"; do materialize_project "$P"; echo "$PROJ_DIR"; done
+    exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Build the compiler and resolve its runtime classpath.
