@@ -37,7 +37,9 @@ it is the live Phase 18 queue.
 - json: `reflect.goJsonTarget` — the porter passes the static type at `Unmarshal*` calls whose target the shim cannot
   type (`*[2]int`, `[2]int`, `[]*T`, `[]jsontext.Value`); `[]*T` struct fields; `incremental` named numbers.
 - Gate: `pre` runs, deleted files and a masked clock in the CLI recorder/test/replay. Diag 13,127, Emit 13,127, LS
-  21,614, API 594,007, CLI 120 equal; `-tsgo` 144 / 0, `-goport` 26 / 0, `-lsp` 38 / 0; warning-clean.
+  21,614, API 594,007, CLI 120 equal; `-tsgo` 144 / 0, `-goport` 26 / 0, `-lsp` 38 / 0; warning-clean. Native CI run
+  38312208543 green: the PGO image replays 65 / 65 (the build/incremental cases included), `linuxX64Test` 85 / 0 (two
+  native-only fixes on the way: `futimens` — the posix klib binds no `utimensat` — and no commas in a test name).
 - Measured and left: a non-incremental project's "older than output X" depends on the file system's coarse clock (tsgo
   varies too) — the up-to-date fixture is incremental. `GoProcsTest`'s concurrency-peak assertion failed once while three
   module suites ran at once, then passed 3 / 3 alone.

@@ -5,7 +5,8 @@ channels, now lowered onto `runtime.GoChan` (a failing goroutine poisons channel
 buildinfo reader decodes by STATIC type where the json shim cannot see one (`reflect.goJsonTarget`), so `-b`'s up-to-date
 checks and `--incremental` re-runs read it as tsgo does; `time.Time.Format` and nanosecond mtimes. CLI parity 120 / 121
 equal incl. 11 `build-*` + 4 `incremental-*` cases (docs/goport-cli.md § 2b); Diag/Emit 13,127, LS 21,614, API 594,007
-equal; `-tsgo` 144 / 0, `-goport` 26 / 0, `-lsp` 38 / 0. Remains in (TSGO.5): `--watch` (an `fswatch` shim).
+equal; `-tsgo` 144 / 0, `-goport` 26 / 0, `-lsp` 38 / 0; native CI green (image replay 65 / 65, `linuxX64Test` 85 / 0). Remains
+in (TSGO.5): `--watch` (an `fswatch` shim).
 
 **(TSGO.6-p) DONE — tsc-rs measured; plain relation keys landed (2026-10-12):** tsc-rs 0.5.0 (an LLM hand port of
 tsgo to Rust) is 2.3-3.9x faster than tsgo 7.0.2 on our 10 projects (compiler profile 727 vs 1,864 ms; ours 1,841),
