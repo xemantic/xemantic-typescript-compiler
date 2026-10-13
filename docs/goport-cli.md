@@ -24,7 +24,7 @@ imported; the overlay is its two ends, verbatim in shape:
 | overlay | what it replaces |
 |---|---|
 | `xtscSystem` | `cmd/tsgo/sys.go`'s `osSys` (the `tsc.System`): writer, file system, default-library path, cwd, start time — the terminal test (`golang.org/x/term`) and `os.Getenv` are passed in |
-| `XtscCommandLine(args, fs, libPath, cwd, writer, isTTY, width, getenv)` | `cmd/tsgo/main.go`'s `runMain` for the compiler: `execute.CommandLine(ctx, sys, args, nil)` → the exit status |
+| `XtscCommandLine(ctx, args, fs, libPath, cwd, writer, isTTY, width, getenv)` | `cmd/tsgo/main.go`'s `runMain` for the compiler: `execute.CommandLine(ctx, sys, args, nil)` → the exit status; `ctx` is its signal context |
 
 `TsgoCli.run` builds what `newSystem` builds — `bundled.WrapFS(osvfs.FS())`, `bundled.LibPath()` (or a given
 lib directory) — and runs the command on a goroutine thread. `TsgoMain` is the process: arguments, stdout,
@@ -33,12 +33,9 @@ lib directory) — and runs the command on a goroutine thread. `TsgoMain` is the
 shipped npm binary does with the directory next to its executable (and what makes lib file names in its
 output — `--listFiles`, `--explainFiles` — agree byte for byte).
 
-Partial stubs (signatures only, `partial.go`): `tscBuildCompilation` (`--build`: `internal/execute/build`'s
-orchestrator is goroutines and channels) and `createWatcher` plus every `Watcher` method (`--watch`:
-`internal/execute/watchmanager` + `internal/fswatch`, OS file notifications). `TsgoCli.run` answers such a
-stub with `error: this tsc mode is not available in the port yet (…)` and exit status 5
-(`ExitStatusNotImplemented`) instead of a stack trace. Stand-ins for their types:
-`go/internal_watch/{WatchManager,Fswatch}.kt`.
+`--build` ((TSGO.5-b), § 2b) and `--watch` ((TSGO.5-c), § 2c) are ported; nothing of the command line is a
+partial stub any more. `TsgoCli.run` still answers a refused declaration with `error: this tsc mode is not
+available in the port yet (…)` and exit status 5 (`ExitStatusNotImplemented`) instead of a stack trace.
 
 Porter, override and shim changes (each general):
 
@@ -82,9 +79,10 @@ Every new platform shim has a Kotlin/Native `actual` too ((TSGO.6)'s `linuxX64`,
 
 ## 2. Not ported / divergences
 
-- `--watch` (and `-b --watch`) — partial stubs, exit status 5: `internal/fswatch` (OS file-system notifications:
-  inotify/fanotify/kqueue/FSEvents) has no shim yet; `execute/watchmanager` and `fswatch` are extracted for their
-  TYPES only (the orchestrator constructs a `WatchManager`), their watching bodies are stubs.
+- `--watch` notifications come from inotify (Kotlin/Native) or the JDK's `WatchService` (JVM; inotify underneath
+  on Linux, a polling one on macOS) where tsgo picks fanotify, inotify, FSEvents, kqueue or Windows' API; the
+  coalescing above them is tsgo's own (§ 2c). On the JVM, SIGINT/SIGTERM end the watch (exit 0) through
+  `sun.misc.Signal`.
 - `--pprofDir` — no Go profile is written and its two "profile:" lines are not printed.
 - `--diagnostics` / `--extendedDiagnostics` — times and memory are the JVM's (the rows are the same; the values
   are not comparable), "Memory allocs" is 0.
@@ -93,7 +91,7 @@ Every new platform shim has a Kotlin/Native `actual` too ((TSGO.6)'s `linuxX64`,
 
 ## 2b. `tsc --build` ((TSGO.5-b))
 
-`internal/execute/build` is ported (partial package rooted at `NewOrchestrator`; the `-b --watch` half stubbed). Its
+`internal/execute/build` is ported (partial package rooted at `NewOrchestrator`; `-b --watch` since (TSGO.5-c)). Its
 task graph runs on Go channels — `chan struct{}` done signals a task closes and its downstream tasks receive — lowered
 onto `runtime.GoChan` (docs/goport-runtime.md § 10 #19). Up-to-date checks read each project's `.tsbuildinfo` back,
 which needed the json shim to decode by STATIC type where the current value carries none (`*[2]int`, `[2]int`,
@@ -108,6 +106,30 @@ same binary, same work copy, output not recorded — the build an up-to-date che
 recorded beside its written ones; `HH:MM:SS AM/PM` is masked in stdout on both sides. One fixture choice is
 deliberate: a NON-incremental project's "older than output X" names whichever output the file system's coarse clock
 stamped first, which differs between machines for tsgo itself, so the up-to-date fixture's app is incremental.
+
+## 2c. `tsc --watch` ((TSGO.5-c))
+
+`execute`'s `Watcher`, `execute/watchmanager` and `vfs/trackingvfs` are ported whole, and so is `internal/fswatch`'s
+platform-independent core — `watcher`/`dirWatch` (subscriptions, the callbacks' ignore and recursive filtering),
+`eventList` (create/update/delete coalescing), `debounce` (50 ms min / 500 ms max), `walkDirGeneric`. Only the OS
+layer is replaced: the overlay `overlay/fswatch/xtsc_backend.go` is `inotify_linux.go`'s backend verbatim with its
+system calls behind an `XtscNotifier` interface (add/remove a watch, read events with a timeout), and
+`fswatch.XtscInstall(newNotifier)` makes it what `fswatch.Default()` returns. `runtime/FsNotify` implements the
+notifier: inotify(7) through cinterop on Kotlin/Native, `java.nio.file.WatchService` on the JVM (a watch descriptor
+per `WatchKey`; an invalidated key reads as `IN_DELETE_SELF`; a deleted entry is a directory when it is itself
+watched). `TsgoCli.run` installs it before running the command.
+
+`--watch` runs until `TsgoCli.run`'s `context` is done — runMain's signal context; `go.context.withCancel` (the shim
+now has cancellation and a real `Done` channel). `TsgoMain` cancels it on SIGINT/SIGTERM and flushes stdout after
+every write in watch mode (Go's stdout is unbuffered: each status line shows at once). The porter gained `select`
+and `go` statements for it (docs/goport-lowering.md, Channels), `time.After`, `os.ReadDir`/`Lstat`/`IsPathSeparator`
+and `syscall.ENOTDIR`.
+
+A trap for anyone testing it: tsgo watches no directory within two components of the root (`/tmp/x` reads like
+`/home/user`, `watchmanager.CanWatchDirectory`), so a project directly under `/tmp` never sees a change — put it
+two levels down. With an `outDir` inside a recursively watched directory the emitted files are themselves events,
+so how many cycles one edit triggers depends on timing, for tsgo as for the port; `TsgoCliTest`'s pins use
+`include: ["src"]` and `noEmit` / an `outDir` outside it.
 
 ## 3. The gate
 

@@ -51,14 +51,25 @@ fun main(args: Array<String>) {
     val isTerminal = System.console()?.let { c ->
         runCatching { c.javaClass.getMethod("isTerminal").invoke(c) as Boolean }.getOrDefault(true)
     } ?: false
+    // `--watch` (`-w`): Go's stdout is unbuffered, so every status line shows as it is printed; SIGINT/SIGTERM cancel
+    // runMain's signal context (signal.NotifyContext there), which ends the watch loop and exits 0 as tsgo does.
+    val watching = args.any { it.trimStart('-').lowercase() in setOf("w", "watch") }
+    val (context, cancel) = com.xemantic.typescript.tsgo.go.context.withCancel(com.xemantic.typescript.tsgo.go.context.background())
+    if (watching) for (signal in listOf("INT", "TERM")) {
+        runCatching { sun.misc.Signal.handle(sun.misc.Signal(signal)) { cancel() } }
+    }
     val status = TsgoCli.run(
         args = args.toList(),
         currentDirectory = java.io.File(System.getProperty("user.dir")).absolutePath,
-        out = { stdout.write(it) },
+        out = {
+            stdout.write(it)
+            if (watching) stdout.flush()
+        },
         libDirectory = System.getenv("XTSC_TSGO_LIB_DIR")?.takeIf { it.isNotEmpty() },
         isTerminal = isTerminal,
         terminalWidth = if (isTerminal) (System.getenv("COLUMNS")?.toIntOrNull() ?: 80) else 0,
         environment = { System.getenv(it) },
+        context = context!!,
     )
     stdout.flush()
     if (com.xemantic.typescript.tsgo.go.os.GoSyscall.statsOn) System.err.println(com.xemantic.typescript.tsgo.go.os.GoSyscall.stats())

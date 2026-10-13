@@ -231,6 +231,9 @@ class Pool(var new: (() -> Any?)? = null) {
     fun goCopy(): Pool = Pool(new)
 }
 
+/** The [WaitGroup] whose `Go` started the current goroutine (one cell per thread), or null. */
+internal val currentWaitGroup = com.xemantic.typescript.tsgo.runtime.GoThreadLocal { arrayOfNulls<WaitGroup>(1) }
+
 /**
  * `sync.WaitGroup`: `Go` runs the function in a new goroutine ([goSpawn]); [wait] blocks until the
  * counter is zero. A panic in a goroutine crashes a Go program; here the first one is kept and
@@ -254,26 +257,30 @@ class WaitGroup {
     fun go(f: () -> Unit) {
         add(1)
         goSpawn {
+            val group = currentWaitGroup.get()
+            val outer = group[0]
+            group[0] = this
             try {
                 f()
             } catch (t: Throwable) {
-                failure.compareAndSet(null, t)
-                // the goroutines blocked on a channel this one would have closed must not wait forever
-                com.xemantic.typescript.tsgo.runtime.GoChan.goroutineFailed(t)
+                // the goroutines of this group blocked on a channel this one would have closed must not wait
+                // forever: they rethrow it (GoChan.await) — goroutines of other groups are not concerned
+                if (failure.compareAndSet(null, t)) com.xemantic.typescript.tsgo.runtime.GoChan.changed()
             } finally {
+                group[0] = outer
                 done()
             }
         }
     }
 
+    /** The first failure of a goroutine of this group, if any. */
+    internal fun failed(): Throwable? = failure.load()
+
     // `wait()V` would clash with java.lang.Object.wait on the JVM.
     @kotlin.jvm.JvmName("goWait")
     fun wait() {
         if (count.load() != 0) waiters.await(count) { count.load() == 0 }
-        failure.load()?.let {
-            com.xemantic.typescript.tsgo.runtime.GoChan.goroutineFailureReported(it)
-            throw it
-        }
+        failure.load()?.let { throw it }
     }
 
     fun goCopy(): WaitGroup = WaitGroup().also { it.count.store(count.load()) }

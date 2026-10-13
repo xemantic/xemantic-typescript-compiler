@@ -25,7 +25,10 @@ package com.xemantic.typescript.tsgo.execute.watchmanager
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.go.io.Closer
+import com.xemantic.typescript.tsgo.fswatch.Watch
 import com.xemantic.typescript.tsgo.fswatch.WatchCallback
+import com.xemantic.typescript.tsgo.fswatch.WatchOption
+import com.xemantic.typescript.tsgo.fswatch.Watcher
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchBackend 9862ebbe
 interface WatchBackend {
@@ -58,5 +61,112 @@ class WatchDirectoryRequest(
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.CommandLineTestingWithWatchBackend a035029b
 interface CommandLineTestingWithWatchBackend {
     fun watchBackend(): WatchBackend?
+}
+
+// go: github.com/microsoft/typescript-go/internal/execute/watchmanager.FSWatchBackend 72719268
+class FSWatchBackend(
+    @kotlin.jvm.JvmField var inner: Watcher? = null,
+) : WatchBackend {
+
+    fun goCopy(): FSWatchBackend = FSWatchBackend(inner = inner)
+
+    fun goSet(o: FSWatchBackend) {
+        inner = o.inner
+    }
+
+    fun goEquals(o: FSWatchBackend): Boolean = inner == o.inner
+
+    fun goHash(): Int = 31 * inner.hashCode()
+
+    // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.FSWatchBackend.WatchDirectory cb7f1120
+    override fun watchDirectory(dir: String, fn: WatchCallback, recursive: Boolean, ignore: ((String) -> Boolean)?): Tuple2<Closer?, GoError?> {
+        val t0 = this.watchDirectories(GoSlice.of(WatchDirectoryRequest.ELEM, WatchDirectoryRequest(dir = dir, callback = fn, recursive = recursive, ignore = ignore)))
+        val closers: GoSlice<Closer?> = t0.first
+        val err: GoError? = t0.second
+        if (err != null) {
+            return Tuple2<Closer?, GoError?>(null, err)
+        }
+        return Tuple2<Closer?, GoError?>(closers[0], null)
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.FSWatchBackend.WatchDirectories 106f27e2
+    override fun watchDirectories(requests: GoSlice<WatchDirectoryRequest>): Tuple2<GoSlice<Closer?>, GoError?> {
+        val fswatchRequests: GoSlice<com.xemantic.typescript.tsgo.fswatch.WatchDirectoryRequest> = GoSlice.make(com.xemantic.typescript.tsgo.fswatch.WatchDirectoryRequest.ELEM, requests.len)
+        val s0 = requests
+        l0@ for (i1 in 0 until s0.len) {
+            val i: Int = i1
+            val request: WatchDirectoryRequest = s0[i1].goCopy()
+            var opts: GoSlice<WatchOption?> = GoElem.ref<WatchOption?>().nilSlice
+            if (request.recursive) {
+                opts = opts.append1(com.xemantic.typescript.tsgo.fswatch.withRecursive())
+            }
+            if (request.ignore != null) {
+                opts = opts.append1(com.xemantic.typescript.tsgo.fswatch.withIgnore(request.ignore))
+            }
+            fswatchRequests[i] = com.xemantic.typescript.tsgo.fswatch.WatchDirectoryRequest(dir = request.dir, callback = request.callback, options = opts)
+        }
+        val t2 = this.inner!!.watchDirectories(fswatchRequests)
+        val watches: GoSlice<Watch?> = t2.first
+        val err: GoError? = t2.second
+        if (err != null) {
+            return Tuple2<GoSlice<Closer?>, GoError?>(GoElem.ref<Closer?>().nilSlice, err)
+        }
+        val closers: GoSlice<Closer?> = GoSlice.make(GoElem.ref<Closer?>(), watches.len)
+        val s3 = watches
+        l1@ for (i4 in 0 until s3.len) {
+            val i_1: Int = i4
+            val watch: Watch? = s3[i4]
+            closers[i_1] = watch
+        }
+        return Tuple2<GoSlice<Closer?>, GoError?>(closers, null)
+    }
+
+    companion object {
+        val ELEM: GoElem<FSWatchBackend> = GoElem({ FSWatchBackend() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/execute/watchmanager.ShouldIgnoreWatchPath c41b9dbf
+fun shouldIgnoreWatchPath(path: String): Boolean {
+    val p: String = com.xemantic.typescript.tsgo.tspath.normalizeSlashes(path)
+    return com.xemantic.typescript.tsgo.go.strings.hasSuffix(p, "/.git") || com.xemantic.typescript.tsgo.go.strings.contains(p, "/.git/") || com.xemantic.typescript.tsgo.go.strings.contains(p, "/node_modules/.") || com.xemantic.typescript.tsgo.go.strings.contains(p, "/.#")
+}
+
+// go: github.com/microsoft/typescript-go/internal/execute/watchmanager.CanWatchDirectory 2c2abd99
+fun canWatchDirectory(dir: String): Boolean {
+    val components: GoSlice<String> = com.xemantic.typescript.tsgo.tspath.getPathComponents(dir, "")
+    val length: Int = components.len
+    if (length <= 2) {
+        return false
+    }
+    val rootLength: Int = perceivedOsRootLengthForWatching(components)
+    return length > rootLength + 1
+}
+
+// go: github.com/microsoft/typescript-go/internal/execute/watchmanager.PerceivedOsRootLengthForWatching 8c9969a3
+fun perceivedOsRootLengthForWatching(components: GoSlice<String>): Int {
+    val length: Int = components.len
+    if (length <= 1) {
+        return 1
+    }
+    val root: String = components[0]
+    var indexAfterOsRoot: Int = 1
+    var isDosStyle: Boolean = root.length >= 2 && com.xemantic.typescript.tsgo.tspath.isVolumeCharacter(root[0].code) && root[1].code == 58
+    if (root != "/" && !isDosStyle && components.len > 1) {
+        if (components[1].length >= 2 && com.xemantic.typescript.tsgo.tspath.isVolumeCharacter(components[1][0].code) && com.xemantic.typescript.tsgo.go.strings.hasSuffix(components[1], "\$")) {
+            if (length == 2) {
+                return 2
+            }
+            indexAfterOsRoot = 2
+            isDosStyle = true
+        }
+    }
+    if (isDosStyle && (indexAfterOsRoot >= length || !com.xemantic.typescript.tsgo.go.strings.equalFold(components[indexAfterOsRoot], "users"))) {
+        return indexAfterOsRoot
+    }
+    if (indexAfterOsRoot < length && com.xemantic.typescript.tsgo.go.strings.equalFold(components[indexAfterOsRoot], "workspaces")) {
+        return indexAfterOsRoot + 1
+    }
+    return indexAfterOsRoot + 2
 }
 

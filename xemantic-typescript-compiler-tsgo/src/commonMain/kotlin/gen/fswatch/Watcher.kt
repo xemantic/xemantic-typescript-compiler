@@ -24,7 +24,1292 @@
 package com.xemantic.typescript.tsgo.fswatch
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.io.Closer
+import com.xemantic.typescript.tsgo.go.syscall.Errno
+import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
+import com.xemantic.typescript.tsgo.synth.Iface_subscribeMany_8000e99b
+import com.xemantic.typescript.tsgo.go.sync.Mutex
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.Watcher 5d9d8b90
+interface Watcher : Named {
+    fun available(): Boolean
+    fun hasFastRecursiveBackend(): Boolean
+    override fun name(): String
+    fun watchDirectories(p0: GoSlice<WatchDirectoryRequest>): Tuple2<GoSlice<Watch?>, GoError?>
+    fun watchDirectory(p0: String, p1: WatchCallback, p2: GoSlice<WatchOption?>): Tuple2<Watch?, GoError?>
+    fun watchFile(p0: String, p1: WatchCallback): Tuple2<Watch?, GoError?>
+    fun unexported()
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.WatchOption 20d8b0b2
+interface WatchOption {
+    fun applyWatchOption(p0: com.xemantic.typescript.tsgo.fswatch.watchOptions?)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.WatchDirectoryRequest 885dd540
+class WatchDirectoryRequest(
+    @kotlin.jvm.JvmField var dir: String = "",
+    @kotlin.jvm.JvmField var callback: WatchCallback = null,
+    @kotlin.jvm.JvmField var options: GoSlice<WatchOption?> = GoElem.ref<WatchOption?>().nilSlice,
+) {
+
+    fun goCopy(): WatchDirectoryRequest = WatchDirectoryRequest(dir = dir, callback = callback, options = options)
+
+    fun goSet(o: WatchDirectoryRequest) {
+        dir = o.dir
+        callback = o.callback
+        options = o.options
+    }
+
+    companion object {
+        val ELEM: GoElem<WatchDirectoryRequest> = GoElem({ WatchDirectoryRequest() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watchOptions afb4e4d9
+class watchOptions(
+    @kotlin.jvm.JvmField var ignore: ((String) -> Boolean)? = null,
+    @kotlin.jvm.JvmField var recursive: Boolean = false,
+) {
+
+    fun goCopy(): watchOptions = watchOptions(ignore = ignore, recursive = recursive)
+
+    fun goSet(o: watchOptions) {
+        ignore = o.ignore
+        recursive = o.recursive
+    }
+
+    companion object {
+        val ELEM: GoElem<watchOptions> = GoElem({ watchOptions() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.ignoreOption eeb1d67c
+class ignoreOption(
+    @kotlin.jvm.JvmField var fn: ((String) -> Boolean)? = null,
+) : WatchOption {
+
+    fun goCopy(): ignoreOption = ignoreOption(fn = fn)
+
+    fun goSet(o: ignoreOption) {
+        fn = o.fn
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.ignoreOption.applyWatchOption 324b5a35
+    override fun applyWatchOption(opts: com.xemantic.typescript.tsgo.fswatch.watchOptions?) {
+        opts!!.ignore = this.fn
+    }
+
+    companion object {
+        val ELEM: GoElem<ignoreOption> = GoElem({ ignoreOption() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.WithIgnore 551facf7
+fun withIgnore(fn: ((String) -> Boolean)?): WatchOption? {
+    return com.xemantic.typescript.tsgo.fswatch.ignoreOption(fn = fn)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.recursiveOption 46be9c78
+class recursiveOption(
+) : WatchOption {
+
+    fun goCopy(): recursiveOption = recursiveOption()
+
+    fun goSet(o: recursiveOption) {
+    }
+
+    fun goEquals(o: recursiveOption): Boolean = true
+
+    fun goHash(): Int = 0
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.recursiveOption.applyWatchOption 0f1209c4
+    override fun applyWatchOption(opts: com.xemantic.typescript.tsgo.fswatch.watchOptions?) {
+        opts!!.recursive = true
+    }
+
+    companion object {
+        val ELEM: GoElem<recursiveOption> = GoElem({ recursiveOption() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.WithRecursive 774bd5e5
+fun withRecursive(): WatchOption? {
+    return com.xemantic.typescript.tsgo.fswatch.recursiveOption()
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.Watch 3122cbd3
+interface Watch : Closer {
+    override fun close(): GoError?
+    fun unexported()
+}
 
 // go: github.com/microsoft/typescript-go/internal/fswatch.WatchCallback ad41e847
 typealias WatchCallback = ((GoSlice<Event>, GoError?) -> Unit)?
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.Inotify 6bcfc881
+fun inotify(): Watcher? {
+    return inotifyWatcher
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.FSEvents d5903b4f
+fun fsEvents(): Watcher? {
+    return fseventsWatcher
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.Kqueue 6a9ce0f6
+fun kqueue(): Watcher? {
+    return kqueueWatcher
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.Windows 6d3ea1ac
+fun windows(): Watcher? {
+    return windowsWatcher
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.Fanotify 7af55a67
+fun fanotify(): Watcher? {
+    return fanotifyWatcher
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.Default ee7b7483
+fun default(): Watcher? {
+    when ("linux") {
+        "linux" -> {
+            if (fanotify()!!.available()) {
+                return fanotify()
+            }
+            return inotify()
+        }
+        "darwin" -> {
+            if (fsEvents()!!.available()) {
+                return fsEvents()
+            }
+            return kqueue()
+        }
+        "windows" -> {
+            return windows()
+        }
+        "freebsd", "openbsd", "netbsd", "dragonfly" -> {
+            return kqueue()
+        }
+        else -> {
+            return com.xemantic.typescript.tsgo.fswatch.watcher(name = "unsupported")
+        }
+    }
+    goUnreachable()
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcher e8bde756
+class watcher(
+    @kotlin.jvm.JvmField var name: String = "",
+    @kotlin.jvm.JvmField var mu: Mutex = Mutex(),
+    @kotlin.jvm.JvmField var impl: com.xemantic.typescript.tsgo.fswatch.watcherImpl? = null,
+    @kotlin.jvm.JvmField var factory: (() -> com.xemantic.typescript.tsgo.fswatch.watcherImpl?)? = null,
+    @kotlin.jvm.JvmField var dirWatches: GoMap<String, com.xemantic.typescript.tsgo.fswatch.dirWatch?> = GoMap.nil<String, com.xemantic.typescript.tsgo.fswatch.dirWatch?>(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.dirWatch?>()),
+    @kotlin.jvm.JvmField var debounce: com.xemantic.typescript.tsgo.fswatch.debounce? = null,
+    @kotlin.jvm.JvmField var sequence: (() -> ULong)? = null,
+) : Stringer, Watcher, com.xemantic.typescript.tsgo.glob.element, Named {
+
+    fun goCopy(): watcher = watcher(name = name, mu = mu.goCopy(), impl = impl, factory = factory, dirWatches = dirWatches, debounce = debounce, sequence = sequence)
+
+    fun goSet(o: watcher) {
+        name = o.name
+        mu = o.mu.goCopy()
+        impl = o.impl
+        factory = o.factory
+        dirWatches = o.dirWatches
+        debounce = o.debounce
+        sequence = o.sequence
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watcher.Name fe1474d8
+    override fun name(): String {
+        return this.name
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watcher.String 7ba316fa
+    override fun string(): String {
+        return this.name
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watcher.Available e9a30e6b
+    override fun available(): Boolean {
+        return this.factory != null
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watcher.unexported 0b441985
+    override fun unexported() {
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watcher.HasFastRecursiveBackend 48283579
+    override fun hasFastRecursiveBackend(): Boolean {
+        when (this.name) {
+            "windows", "fsevents" -> {
+                return true
+            }
+            else -> {
+                return false
+            }
+        }
+        goUnreachable()
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watcher.WatchDirectory 7e399ca0
+    override fun watchDirectory(dir: String, fn: WatchCallback, opts: GoSlice<WatchOption?>): Tuple2<Watch?, GoError?> {
+        val t0 = this.watchDirectories(GoSlice.of(WatchDirectoryRequest.ELEM, WatchDirectoryRequest(dir = dir, callback = fn, options = opts)))
+        val watches: GoSlice<Watch?> = t0.first
+        val err: GoError? = t0.second
+        if (err != null) {
+            return Tuple2<Watch?, GoError?>(null, err)
+        }
+        return Tuple2<Watch?, GoError?>(watches[0], null)
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watcher.WatchDirectories d8a2592f
+    override fun watchDirectories(requests: GoSlice<WatchDirectoryRequest>): Tuple2<GoSlice<Watch?>, GoError?> {
+        if (!this.available()) {
+            return Tuple2<GoSlice<Watch?>, GoError?>(GoElem.ref<Watch?>().nilSlice, errUnavailable)
+        }
+        if (requests.len == 0) {
+            return Tuple2<GoSlice<Watch?>, GoError?>(GoElem.ref<Watch?>().nilSlice, null)
+        }
+        var prepared: GoSlice<com.xemantic.typescript.tsgo.fswatch.preparedWatch_watcher_WatchDirectories> = GoSlice.make(com.xemantic.typescript.tsgo.fswatch.preparedWatch_watcher_WatchDirectories.ELEM, 0, requests.len)
+        var uniqueDirWatches: GoSlice<com.xemantic.typescript.tsgo.fswatch.dirWatch?> = GoSlice.make(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.dirWatch?>(), 0, requests.len)
+        val seenDirWatches: GoMap<com.xemantic.typescript.tsgo.fswatch.dirWatch?, Unit> = GoMap.make<com.xemantic.typescript.tsgo.fswatch.dirWatch?, Unit>(goUnitElem, requests.len)
+        val rollback: (() -> Unit)? = fun() {
+            var i: Int = prepared.len - 1
+            l0@ while (i >= 0) {
+                val p: com.xemantic.typescript.tsgo.fswatch.preparedWatch_watcher_WatchDirectories = prepared[i].goCopy()
+                p.dw.unwatch(p.id)
+                p.dw.unref(this)
+                i--
+            }
+        }
+        val s0 = requests
+        l1@ for (i1 in 0 until s0.len) {
+            val request: WatchDirectoryRequest = s0[i1].goCopy()
+            var dir: String = request.dir
+            val fn: WatchCallback = request.callback
+            if (fn == null) {
+                rollback!!()
+                return Tuple2<GoSlice<Watch?>, GoError?>(GoElem.ref<Watch?>().nilSlice, errNilCallback)
+            }
+            dir = com.xemantic.typescript.tsgo.go.path.filepath.clean(dir)
+            if (!com.xemantic.typescript.tsgo.go.path.filepath.isAbs(dir)) {
+                rollback!!()
+                return Tuple2<GoSlice<Watch?>, GoError?>(GoElem.ref<Watch?>().nilSlice, errNotAbsolute)
+            }
+            dir = canonicalizePath(dir)
+            if (this.canShareRecursiveDirWatches()) {
+                val err: GoError? = validateWatchDirectory(dir)
+                if (err != null) {
+                    rollback!!()
+                    return Tuple2<GoSlice<Watch?>, GoError?>(GoElem.ref<Watch?>().nilSlice, err)
+                }
+            }
+            val physicalDir: String = physicalDirFor(dir)
+            val sopts: com.xemantic.typescript.tsgo.fswatch.watchOptions = com.xemantic.typescript.tsgo.fswatch.watchOptions()
+            val s2 = request.options
+            l2@ for (i3 in 0 until s2.len) {
+                val o: WatchOption? = s2[i3]
+                o!!.applyWatchOption(sopts)
+            }
+            val dw: com.xemantic.typescript.tsgo.fswatch.dirWatch? = this.getOrCreateDirWatch(dir, physicalDir, sopts.recursive)
+            val t4 = dw.watch(dir, physicalDir, sopts.recursive, fn, sopts.ignore)
+            val id: ULong = t4.first
+            prepared = prepared.append1(com.xemantic.typescript.tsgo.fswatch.preparedWatch_watcher_WatchDirectories(dw = dw, id = id, recursive = sopts.recursive, dir = dir))
+            val t5 = seenDirWatches.probe(dw)
+            val ok: Boolean = t5 !== GoMapAbsent
+            if (!ok) {
+                seenDirWatches[dw] = Unit
+                uniqueDirWatches = uniqueDirWatches.append1(dw)
+            }
+        }
+        val t6 = this.getImpl()
+        val impl_1: com.xemantic.typescript.tsgo.fswatch.watcherImpl? = t6.first
+        val err_1: GoError? = t6.second
+        if (err_1 != null) {
+            rollback!!()
+            return Tuple2<GoSlice<Watch?>, GoError?>(GoElem.ref<Watch?>().nilSlice, err_1)
+        }
+        val err_2: GoError? = impl_1!!.watchAddMany(uniqueDirWatches)
+        if (err_2 != null) {
+            rollback!!()
+            return Tuple2<GoSlice<Watch?>, GoError?>(GoElem.ref<Watch?>().nilSlice, err_2)
+        }
+        val watches: GoSlice<Watch?> = GoSlice.make(GoElem.ref<Watch?>(), prepared.len)
+        val s7 = prepared
+        l3@ for (i8 in 0 until s7.len) {
+            val i_1: Int = i8
+            val p_1: com.xemantic.typescript.tsgo.fswatch.preparedWatch_watcher_WatchDirectories = s7[i8].goCopy()
+            watches[i_1] = com.xemantic.typescript.tsgo.fswatch.watch(w = this, dw = p_1.dw, impl = impl_1, id = p_1.id)
+        }
+        return Tuple2<GoSlice<Watch?>, GoError?>(watches, null)
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watcher.WatchFile e97585ec
+    override fun watchFile(path_0: String, fn: WatchCallback): Tuple2<Watch?, GoError?> {
+        var path: String = path_0
+        if (fn == null) {
+            return Tuple2<Watch?, GoError?>(null, errNilCallback)
+        }
+        if (!this.available()) {
+            return Tuple2<Watch?, GoError?>(null, errUnavailable)
+        }
+        path = com.xemantic.typescript.tsgo.go.path.filepath.clean(path)
+        if (!com.xemantic.typescript.tsgo.go.path.filepath.isAbs(path)) {
+            return Tuple2<Watch?, GoError?>(null, errNotAbsolute)
+        }
+        path = canonicalizePath(path)
+        val dir: String = com.xemantic.typescript.tsgo.go.path.filepath.dir(path)
+        if (dir == path) {
+            return Tuple2<Watch?, GoError?>(null, errRootPath)
+        }
+        return this.watchDirectory(dir, fileCallback(path, fn), GoElem.ref<WatchOption?>().nilSlice)
+    }
+
+    companion object {
+        val ELEM: GoElem<watcher> = GoElem({ watcher() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.recursiveConsolidateThreshold c468981e
+const val recursiveConsolidateThreshold: Int = 10
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcher.canShareRecursiveDirWatches 2912fe85
+fun com.xemantic.typescript.tsgo.fswatch.watcher?.canShareRecursiveDirWatches(): Boolean {
+    return this!!.name == "fsevents"
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcher.getImpl e45b6fa5
+fun com.xemantic.typescript.tsgo.fswatch.watcher?.getImpl(): Tuple2<com.xemantic.typescript.tsgo.fswatch.watcherImpl?, GoError?> {
+    this!!.mu.lock()
+    if (this!!.impl != null) {
+        val impl: com.xemantic.typescript.tsgo.fswatch.watcherImpl? = this!!.impl
+        this!!.mu.unlock()
+        return Tuple2<com.xemantic.typescript.tsgo.fswatch.watcherImpl?, GoError?>(impl, null)
+    }
+    val factory: (() -> com.xemantic.typescript.tsgo.fswatch.watcherImpl?)? = this!!.factory
+    this!!.mu.unlock()
+    if (factory == null) {
+        return Tuple2<com.xemantic.typescript.tsgo.fswatch.watcherImpl?, GoError?>(null, errUnavailable)
+    }
+    val impl_1: com.xemantic.typescript.tsgo.fswatch.watcherImpl? = factory!!()
+    val err: GoError? = impl_1!!.run()
+    if (err != null) {
+        return Tuple2<com.xemantic.typescript.tsgo.fswatch.watcherImpl?, GoError?>(null, err)
+    }
+    this!!.mu.lock()
+    if (this!!.impl != null) {
+        this!!.mu.unlock()
+        impl_1!!.shutdown()
+        return Tuple2<com.xemantic.typescript.tsgo.fswatch.watcherImpl?, GoError?>(this!!.impl, null)
+    }
+    this!!.impl = impl_1
+    this!!.mu.unlock()
+    return Tuple2<com.xemantic.typescript.tsgo.fswatch.watcherImpl?, GoError?>(impl_1, null)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcher.keyForDirWatch d69006c0
+fun com.xemantic.typescript.tsgo.fswatch.watcher?.keyForDirWatch(dir: String, recursive: Boolean): String {
+    if (recursive) {
+        return dir + "\u0000recursive"
+    }
+    return dir
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcher.findCoveringRecursiveWatchLocked f5ab549b
+fun com.xemantic.typescript.tsgo.fswatch.watcher?.findCoveringRecursiveWatchLocked(dir: String, physicalDir: String): com.xemantic.typescript.tsgo.fswatch.dirWatch? {
+    var best: com.xemantic.typescript.tsgo.fswatch.dirWatch? = null
+    val mi0 = this!!.dirWatches.iter()
+    l0@ while (mi0.next()) {
+        val dw: com.xemantic.typescript.tsgo.fswatch.dirWatch? = mi0.value
+        if (!dw!!.recursive || !isInDirectoryOrSelf(dw!!.dir, dir) || !isInDirectoryOrSelf(dw!!.physicalDir, physicalDir)) {
+            continue@l0
+        }
+        if (best == null || dw!!.dir.length > best!!.dir.length) {
+            best = dw
+        }
+    }
+    return best
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcher.findConsolidationDirLocked 4b2f1a3e
+fun com.xemantic.typescript.tsgo.fswatch.watcher?.findConsolidationDirLocked(dir_0: String, physicalDir: String): String {
+    var dir: String = dir_0
+    if (!this.canShareRecursiveDirWatches()) {
+        return ""
+    }
+    var parent: String = com.xemantic.typescript.tsgo.go.path.filepath.dir(dir)
+    l0@ while (parent != dir && parent != ".") {
+        if (com.xemantic.typescript.tsgo.go.path.filepath.dir(parent) == parent) {
+            break@l0
+        }
+        val physicalParent: String = physicalDirFor(parent)
+        if (!isInDirectoryOrSelf(physicalParent, physicalDir)) {
+            return ""
+        }
+        var count: Int = 1
+        val mi1 = this!!.dirWatches.iter()
+        l1@ while (mi1.next()) {
+            val dw: com.xemantic.typescript.tsgo.fswatch.dirWatch? = mi1.value
+            if (isInDirectoryOrSelf(parent, dw!!.dir) && isInDirectoryOrSelf(physicalParent, dw!!.physicalDir)) {
+                count++
+                if (count >= 10) {
+                    return parent
+                }
+            }
+        }
+        val next: String = com.xemantic.typescript.tsgo.go.path.filepath.dir(parent)
+        if (next == parent) {
+            break@l0
+        }
+        dir = parent
+        parent = next
+    }
+    return ""
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcher.getOrCreateDirWatch e4543922
+fun com.xemantic.typescript.tsgo.fswatch.watcher?.getOrCreateDirWatch(dir_0: String, physicalDir_1: String, recursive_2: Boolean): com.xemantic.typescript.tsgo.fswatch.dirWatch? {
+    var dir: String = dir_0
+    var physicalDir: String = physicalDir_1
+    var recursive: Boolean = recursive_2
+    return withDefers({ null }) { df3 ->
+        this!!.mu.lock()
+        val dr4 = this!!.mu
+        df3.defer { dr4.unlock() }
+        if (this!!.dirWatches.isNil) {
+            this!!.dirWatches = GoMap.make<String, com.xemantic.typescript.tsgo.fswatch.dirWatch?>(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.dirWatch?>())
+        }
+        if (this!!.debounce == null) {
+            this!!.debounce = newDebounce()
+        }
+        if (this.canShareRecursiveDirWatches()) {
+            val dw: com.xemantic.typescript.tsgo.fswatch.dirWatch? = this.findCoveringRecursiveWatchLocked(dir, physicalDir)
+            if (dw != null) {
+                return dw
+            }
+            val consolidationDir: String = this.findConsolidationDirLocked(dir, physicalDir)
+            if (consolidationDir != "") {
+                dir = consolidationDir
+                physicalDir = physicalDirFor(dir)
+                recursive = true
+                val dw_1: com.xemantic.typescript.tsgo.fswatch.dirWatch? = this.findCoveringRecursiveWatchLocked(dir, physicalDir)
+                if (dw_1 != null) {
+                    return dw_1
+                }
+            }
+        }
+        val key: String = this.keyForDirWatch(dir, recursive)
+        val t5 = this!!.dirWatches.probe(key)
+        val dw_2: com.xemantic.typescript.tsgo.fswatch.dirWatch? = goProbeValue<com.xemantic.typescript.tsgo.fswatch.dirWatch?>(t5) { null }
+        val ok: Boolean = t5 !== GoMapAbsent
+        if (ok) {
+            return dw_2
+        }
+        val dw_3: com.xemantic.typescript.tsgo.fswatch.dirWatch? = newDirWatch(dir, physicalDir, this!!.debounce)
+        dw_3!!.sequence = this!!.sequence
+        dw_3!!.recursive = recursive
+        this!!.dirWatches[key] = dw_3
+        return dw_3
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcher.removeDirWatch 8d99ed4e
+fun com.xemantic.typescript.tsgo.fswatch.watcher?.removeDirWatch(dw: com.xemantic.typescript.tsgo.fswatch.dirWatch?) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        val key: String = this.keyForDirWatch(dw!!.dir, dw!!.recursive)
+        val t2 = this!!.dirWatches.probe(key)
+        val existing: com.xemantic.typescript.tsgo.fswatch.dirWatch? = goProbeValue<com.xemantic.typescript.tsgo.fswatch.dirWatch?>(t2) { null }
+        val ok: Boolean = t2 !== GoMapAbsent
+        if (ok && existing === dw) {
+            this!!.dirWatches.delete(key)
+            dw.destroyDebounce()
+        }
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.preparedWatch_watcher_WatchDirectories 
+class preparedWatch_watcher_WatchDirectories(
+    @kotlin.jvm.JvmField var dw: com.xemantic.typescript.tsgo.fswatch.dirWatch? = null,
+    @get:kotlin.jvm.JvmName("goGet_id") @set:kotlin.jvm.JvmName("goSet_id") var id: ULong = 0uL,
+    @kotlin.jvm.JvmField var recursive: Boolean = false,
+    @kotlin.jvm.JvmField var dir: String = "",
+) {
+
+    fun goCopy(): preparedWatch_watcher_WatchDirectories = preparedWatch_watcher_WatchDirectories(dw = dw, id = id, recursive = recursive, dir = dir)
+
+    fun goSet(o: preparedWatch_watcher_WatchDirectories) {
+        dw = o.dw
+        id = o.id
+        recursive = o.recursive
+        dir = o.dir
+    }
+
+    fun goEquals(o: preparedWatch_watcher_WatchDirectories): Boolean = dw === o.dw && id == o.id && recursive == o.recursive && dir == o.dir
+
+    fun goHash(): Int = 31 * dw.hashCode() + 31 * id.hashCode() + 31 * recursive.hashCode() + 31 * dir.hashCode()
+
+    companion object {
+        val ELEM: GoElem<preparedWatch_watcher_WatchDirectories> = GoElem({ preparedWatch_watcher_WatchDirectories() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.validateWatchDirectory d27fb548
+fun validateWatchDirectory(dir: String): GoError? {
+    val t0 = com.xemantic.typescript.tsgo.go.os.stat(dir)
+    val info: FileInfo? = t0.first
+    val err: GoError? = t0.second
+    if (err != null) {
+        return err
+    }
+    if (!info!!.isDir()) {
+        return Errno(20uL)
+    }
+    return null
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.fileCallback 90fff946
+fun fileCallback(target: String, fn: WatchCallback): WatchCallback {
+    return fun(events: GoSlice<Event>, err: GoError?) {
+        var filtered: GoSlice<Event> = Event.ELEM.nilSlice
+        val s0 = events
+        l0@ for (i1 in 0 until s0.len) {
+            val e: Event = s0[i1].goCopy()
+            if (e.path == target) {
+                filtered = filtered.append1(e.goCopy())
+            }
+        }
+        if (filtered.len > 0 || err != null) {
+            fn!!(filtered, err)
+        }
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watch 53b3695d
+class watch(
+    @kotlin.jvm.JvmField var mu: Mutex = Mutex(),
+    @kotlin.jvm.JvmField var w: com.xemantic.typescript.tsgo.fswatch.watcher? = null,
+    @kotlin.jvm.JvmField var dw: com.xemantic.typescript.tsgo.fswatch.dirWatch? = null,
+    @kotlin.jvm.JvmField var impl: com.xemantic.typescript.tsgo.fswatch.watcherImpl? = null,
+    @get:kotlin.jvm.JvmName("goGet_id") @set:kotlin.jvm.JvmName("goSet_id") var id: ULong = 0uL,
+    @kotlin.jvm.JvmField var cancelled: Boolean = false,
+) : Watch, Closer {
+
+    fun goCopy(): watch = watch(mu = mu.goCopy(), w = w, dw = dw, impl = impl, id = id, cancelled = cancelled)
+
+    fun goSet(o: watch) {
+        mu = o.mu.goCopy()
+        w = o.w
+        dw = o.dw
+        impl = o.impl
+        id = o.id
+        cancelled = o.cancelled
+    }
+
+    fun goEquals(o: watch): Boolean = mu == o.mu && w === o.w && dw === o.dw && impl == o.impl && id == o.id && cancelled == o.cancelled
+
+    fun goHash(): Int = 31 * mu.hashCode() + 31 * w.hashCode() + 31 * dw.hashCode() + 31 * impl.hashCode() + 31 * id.hashCode() + 31 * cancelled.hashCode()
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watch.Close 48711ff0
+    override fun close(): GoError? {
+        return withDefers({ null }) { df0 ->
+            this.mu.lock()
+            val dr1 = this.mu
+            df0.defer { dr1.unlock() }
+            if (this.cancelled) {
+                return null
+            }
+            this.cancelled = true
+            val last: Boolean = this.dw.unwatch(this.id)
+            if (last) {
+                this.impl!!.watchRemove(this.dw)
+                this.dw.unref(this.w)
+            }
+            return null
+        }
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.watch.unexported 25de8350
+    override fun unexported() {
+    }
+
+    companion object {
+        val ELEM: GoElem<watch> = GoElem({ watch() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherImpl f56a29f0
+interface watcherImpl {
+    fun closeWatch(p0: com.xemantic.typescript.tsgo.fswatch.dirWatch?): GoError?
+    fun handleWatcherError(p0: com.xemantic.typescript.tsgo.fswatch.dirWatchError?)
+    fun run(): GoError?
+    fun shutdown()
+    fun start(): GoError?
+    fun subscribe(p0: com.xemantic.typescript.tsgo.fswatch.dirWatch?): GoError?
+    fun watchAdd(p0: com.xemantic.typescript.tsgo.fswatch.dirWatch?): GoError?
+    fun watchAddMany(p0: GoSlice<com.xemantic.typescript.tsgo.fswatch.dirWatch?>): GoError?
+    fun watchRemove(p0: com.xemantic.typescript.tsgo.fswatch.dirWatch?)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase 1a81d4fa
+class watcherBase(
+    @kotlin.jvm.JvmField var mu: Mutex = Mutex(),
+    @kotlin.jvm.JvmField var subscriptions: GoMap<com.xemantic.typescript.tsgo.fswatch.dirWatch?, Unit> = GoMap.nil<com.xemantic.typescript.tsgo.fswatch.dirWatch?, Unit>(goUnitElem),
+    @kotlin.jvm.JvmField var started: GoChan<Unit>? = null,
+    @kotlin.jvm.JvmField var startErr: GoError? = null,
+    @kotlin.jvm.JvmField var self: com.xemantic.typescript.tsgo.fswatch.watcherImpl? = null,
+) {
+
+    fun goCopy(): watcherBase = watcherBase(mu = mu.goCopy(), subscriptions = subscriptions, started = started, startErr = startErr, self = self)
+
+    fun goSet(o: watcherBase) {
+        mu = o.mu.goCopy()
+        subscriptions = o.subscriptions
+        started = o.started
+        startErr = o.startErr
+        self = o.self
+    }
+
+    companion object {
+        val ELEM: GoElem<watcherBase> = GoElem({ watcherBase() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.init e32dc35e
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.init(self: com.xemantic.typescript.tsgo.fswatch.watcherImpl?) {
+    this!!.self = self
+    this!!.subscriptions = GoMap.make<com.xemantic.typescript.tsgo.fswatch.dirWatch?, Unit>(goUnitElem)
+    this!!.started = GoChan.make(goUnitElem)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.notifyStarted 476c9a39
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.notifyStarted() {
+    val sc0 = this!!.started
+    val sel1 = goSelect(true, goSelectRecv(sc0))
+    when (sel1.index) {
+        0 -> {
+        }
+        else -> {
+            goClose(this!!.started)
+        }
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.shutdown e63e94ec
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.shutdown() {
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.run 92bf941e
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.run(): GoError? {
+    return withDefers({ null }) { df0 ->
+        com.xemantic.typescript.tsgo.go.sync.goSpawn(fun() {
+            withDefers({ Unit }) { df1 ->
+                df1.defer(fun() {
+                    val r: Any? = df1.recover()
+                    if (r != null) {
+                        val x3 = r
+                        val t2 = if (x3 is GoError) Tuple2(x3 as GoError?, true) else Tuple2(null, false)
+                        var err: GoError? = t2.first
+                        val ok: Boolean = t2.second
+                        if (!ok) {
+                            err = com.xemantic.typescript.tsgo.go.fmt.errorf("%v", r)
+                        }
+                        this.handleStartError(err)
+                    }
+                })
+                val err_1: GoError? = this!!.self!!.start()
+                if (err_1 != null) {
+                    this.handleStartError(err_1)
+                }
+            }
+        })
+        goRecv(this!!.started)
+        this!!.mu.lock()
+        val dr4 = this!!.mu
+        df0.defer { dr4.unlock() }
+        return this!!.startErr
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.handleStartError fdbeaef9
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.handleStartError(err: GoError?) {
+    this!!.mu.lock()
+    this!!.startErr = err
+    var subs: GoSlice<com.xemantic.typescript.tsgo.fswatch.dirWatch?> = GoSlice.make(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.dirWatch?>(), 0, this!!.subscriptions.len)
+    val mi0 = this!!.subscriptions.iter()
+    l0@ while (mi0.next()) {
+        val w: com.xemantic.typescript.tsgo.fswatch.dirWatch? = mi0.key
+        subs = subs.append1(w)
+    }
+    this!!.mu.unlock()
+    val s1 = subs
+    l1@ for (i2 in 0 until s1.len) {
+        val w_1: com.xemantic.typescript.tsgo.fswatch.dirWatch? = s1[i2]
+        w_1.notifyError(err)
+    }
+    this.notifyStarted()
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.watchAdd 53fb3d27
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.watchAdd(w: com.xemantic.typescript.tsgo.fswatch.dirWatch?): GoError? {
+    return this.watchAddMany(GoSlice.of(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.dirWatch?>(), w))
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.watchAddMany 96f8342b
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.watchAddMany(watches: GoSlice<com.xemantic.typescript.tsgo.fswatch.dirWatch?>): GoError? {
+    this!!.mu.lock()
+    var toAdd: GoSlice<com.xemantic.typescript.tsgo.fswatch.dirWatch?> = GoSlice.make(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.dirWatch?>(), 0, watches.len)
+    val s0 = watches
+    l0@ for (i1 in 0 until s0.len) {
+        val w: com.xemantic.typescript.tsgo.fswatch.dirWatch? = s0[i1]
+        val t2 = this!!.subscriptions.probe(w)
+        val ok: Boolean = t2 !== GoMapAbsent
+        if (ok) {
+            continue@l0
+        }
+        toAdd = toAdd.append1(w)
+    }
+    if (toAdd.len == 0) {
+        this!!.mu.unlock()
+        return null
+    }
+    val x4 = this!!.self
+    val t3 = if (x4 is Iface_subscribeMany_8000e99b) Tuple2(x4 as Iface_subscribeMany_8000e99b?, true) else Tuple2(null, false)
+    val subscriber: Iface_subscribeMany_8000e99b? = t3.first
+    val ok_1: Boolean = t3.second
+    if (ok_1) {
+        val err: GoError? = subscriber!!.subscribeMany(toAdd)
+        if (err != null) {
+            this!!.mu.unlock()
+            return err
+        }
+        val s5 = toAdd
+        l1@ for (i6 in 0 until s5.len) {
+            val w_1: com.xemantic.typescript.tsgo.fswatch.dirWatch? = s5[i6]
+            this!!.subscriptions[w_1] = Unit
+        }
+        this!!.mu.unlock()
+        return null
+    }
+    var added: GoSlice<com.xemantic.typescript.tsgo.fswatch.dirWatch?> = GoSlice.make(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.dirWatch?>(), 0, toAdd.len)
+    val s7 = toAdd
+    l2@ for (i8 in 0 until s7.len) {
+        val w_2: com.xemantic.typescript.tsgo.fswatch.dirWatch? = s7[i8]
+        val err_1: GoError? = this!!.self!!.subscribe(w_2)
+        if (err_1 != null) {
+            val s9 = added
+            l3@ for (i10 in 0 until s9.len) {
+                val addedWatch: com.xemantic.typescript.tsgo.fswatch.dirWatch? = s9[i10]
+                this!!.subscriptions.delete(addedWatch)
+                this!!.self!!.closeWatch(addedWatch)
+            }
+            this!!.mu.unlock()
+            return err_1
+        }
+        this!!.subscriptions[w_2] = Unit
+        added = added.append1(w_2)
+    }
+    this!!.mu.unlock()
+    return null
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.watchRemove 14e6d636
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.watchRemove(w: com.xemantic.typescript.tsgo.fswatch.dirWatch?) {
+    this!!.mu.lock()
+    val t0 = this!!.subscriptions.probe(w)
+    val ok: Boolean = t0 !== GoMapAbsent
+    if (!ok) {
+        this!!.mu.unlock()
+        return
+    }
+    this!!.subscriptions.delete(w)
+    this!!.self!!.closeWatch(w)
+    this!!.mu.unlock()
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.watcherBase.handleWatcherError 561795cc
+fun com.xemantic.typescript.tsgo.fswatch.watcherBase?.handleWatcherError(werr: com.xemantic.typescript.tsgo.fswatch.dirWatchError?) {
+    this.watchRemove(werr!!.dirWatch)
+    werr!!.dirWatch.notifyError(com.xemantic.typescript.tsgo.go.fmt.errorf("%w: %w", errWatchTerminated, werr))
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.callback 702ba0c9
+class callback(
+    @get:kotlin.jvm.JvmName("goGet_id") @set:kotlin.jvm.JvmName("goSet_id") var id: ULong = 0uL,
+    @kotlin.jvm.JvmField var dir: String = "",
+    @kotlin.jvm.JvmField var physicalDir: String = "",
+    @kotlin.jvm.JvmField var watchDir: String = "",
+    @kotlin.jvm.JvmField var watchPhysicalDir: String = "",
+    @kotlin.jvm.JvmField var recursive: Boolean = false,
+    @kotlin.jvm.JvmField var fn: WatchCallback = null,
+    @kotlin.jvm.JvmField var ignore: ((String) -> Boolean)? = null,
+    @get:kotlin.jvm.JvmName("goGet_sinceSeq") @set:kotlin.jvm.JvmName("goSet_sinceSeq") var sinceSeq: ULong = 0uL,
+    @kotlin.jvm.JvmField var terminal: GoError? = null,
+    @kotlin.jvm.JvmField var delivered: Boolean = false,
+) {
+
+    fun goCopy(): callback = callback(id = id, dir = dir, physicalDir = physicalDir, watchDir = watchDir, watchPhysicalDir = watchPhysicalDir, recursive = recursive, fn = fn, ignore = ignore, sinceSeq = sinceSeq, terminal = terminal, delivered = delivered)
+
+    fun goSet(o: callback) {
+        id = o.id
+        dir = o.dir
+        physicalDir = o.physicalDir
+        watchDir = o.watchDir
+        watchPhysicalDir = o.watchPhysicalDir
+        recursive = o.recursive
+        fn = o.fn
+        ignore = o.ignore
+        sinceSeq = o.sinceSeq
+        terminal = o.terminal
+        delivered = o.delivered
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.callback.mapEvent bec73f60
+    fun mapEvent(e: Event): Event {
+        if (this.physicalDir != "" && this.physicalDir != this.dir) {
+            val physicalPath: String = this.eventPhysicalPath(e.path)
+            if (isInDirectoryOrSelf(this.physicalDir, physicalPath)) {
+                e.path = rebasePath(physicalPath, this.physicalDir, this.dir)
+            }
+        }
+        return e.goCopy()
+    }
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.callback.eventPhysicalPath 17214796
+    fun eventPhysicalPath(path: String): String {
+        if (this.watchPhysicalDir != "" && this.watchDir != "" && this.watchPhysicalDir != this.watchDir && isInDirectoryOrSelf(this.watchDir, path)) {
+            return rebasePath(path, this.watchDir, this.watchPhysicalDir)
+        }
+        return path
+    }
+
+    companion object {
+        val ELEM: GoElem<callback> = GoElem({ callback() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatchError b64b40cb
+class dirWatchError(
+    @kotlin.jvm.JvmField var err: GoError? = null,
+    @kotlin.jvm.JvmField var dirWatch: com.xemantic.typescript.tsgo.fswatch.dirWatch? = null,
+) : GoError, GoUnwrapper {
+
+    fun goCopy(): dirWatchError = dirWatchError(err = err, dirWatch = dirWatch)
+
+    fun goSet(o: dirWatchError) {
+        err = o.err
+        dirWatch = o.dirWatch
+    }
+
+    fun goEquals(o: dirWatchError): Boolean = err == o.err && dirWatch === o.dirWatch
+
+    fun goHash(): Int = 31 * err.hashCode() + 31 * dirWatch.hashCode()
+
+    // go: github.com/microsoft/typescript-go/internal/fswatch.dirWatchError.Error f4109046
+    override fun error(): String {
+        return this.err!!.error()
+    }
+
+    override fun unwrap(): GoError? = com.xemantic.typescript.tsgo.synth.goNullable(this).unwrap()
+
+    companion object {
+        val ELEM: GoElem<dirWatchError> = GoElem({ dirWatchError() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatchError.Unwrap 0d72526d
+fun com.xemantic.typescript.tsgo.fswatch.dirWatchError?.unwrap(): GoError? {
+    return this!!.err
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch eef9a3df
+class dirWatch(
+    @kotlin.jvm.JvmField var dir: String = "",
+    @kotlin.jvm.JvmField var physicalDir: String = "",
+    @kotlin.jvm.JvmField var recursive: Boolean = false,
+    @kotlin.jvm.JvmField var events: com.xemantic.typescript.tsgo.fswatch.eventList = com.xemantic.typescript.tsgo.fswatch.eventList(),
+    @kotlin.jvm.JvmField var state: Any? = null,
+    @kotlin.jvm.JvmField var sequence: (() -> ULong)? = null,
+    @kotlin.jvm.JvmField var mu: Mutex = Mutex(),
+    @kotlin.jvm.JvmField var callbacks: GoSlice<com.xemantic.typescript.tsgo.fswatch.callback> = com.xemantic.typescript.tsgo.fswatch.callback.ELEM.nilSlice,
+    @kotlin.jvm.JvmField var debounce: com.xemantic.typescript.tsgo.fswatch.debounce? = null,
+    @get:kotlin.jvm.JvmName("goGet_nextCBID") @set:kotlin.jvm.JvmName("goSet_nextCBID") var nextCBID: ULong = 0uL,
+) {
+
+    fun goCopy(): dirWatch = dirWatch(dir = dir, physicalDir = physicalDir, recursive = recursive, events = events.goCopy(), state = state, sequence = sequence, mu = mu.goCopy(), callbacks = callbacks, debounce = debounce, nextCBID = nextCBID)
+
+    fun goSet(o: dirWatch) {
+        dir = o.dir
+        physicalDir = o.physicalDir
+        recursive = o.recursive
+        events = o.events.goCopy()
+        state = o.state
+        sequence = o.sequence
+        mu = o.mu.goCopy()
+        callbacks = o.callbacks
+        debounce = o.debounce
+        nextCBID = o.nextCBID
+    }
+
+    companion object {
+        val ELEM: GoElem<dirWatch> = GoElem({ dirWatch() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.newDirWatch 414a41a3
+fun newDirWatch(dir: String, physicalDir: String, db: com.xemantic.typescript.tsgo.fswatch.debounce?): com.xemantic.typescript.tsgo.fswatch.dirWatch? {
+    val dw: com.xemantic.typescript.tsgo.fswatch.dirWatch? = com.xemantic.typescript.tsgo.fswatch.dirWatch(dir = dir, physicalDir = physicalDir)
+    dw!!.debounce = db
+    dw!!.debounce.add(dw, fun() {
+        dw.triggerCallbacks()
+    })
+    return dw
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.physicalDirFor 95c6f76c
+fun physicalDirFor(dir: String): String {
+    val t0 = com.xemantic.typescript.tsgo.nativepath.realpath(dir)
+    val realpath: String = t0.first
+    val err: GoError? = t0.second
+    if (err != null) {
+        return dir
+    }
+    if (realpath == dir) {
+        return dir
+    }
+    return canonicalizePath(com.xemantic.typescript.tsgo.go.path.filepath.clean(realpath))
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.displayPath 386245f0
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.displayPath(watchPath: String): String {
+    return rebasePath(watchPath, this!!.physicalDir, this!!.dir)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.physicalPath a31a6e08
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.physicalPath(displayPath_1: String): String {
+    return rebasePath(displayPath_1, this!!.dir, this!!.physicalDir)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.rebasePath cfbb2a42
+fun rebasePath(path: String, from: String, to: String): String {
+    if (from == to) {
+        return path
+    }
+    if (path == from) {
+        return to
+    }
+    if (!com.xemantic.typescript.tsgo.go.strings.hasPrefix(path, from)) {
+        return path
+    }
+    val suffix: String = path.substring(from.length)
+    if (from.length > 0 && com.xemantic.typescript.tsgo.go.os.isPathSeparator(from[from.length - 1].code)) {
+        return joinPathSuffix(to, suffix)
+    }
+    if (suffix.length == 0 || !com.xemantic.typescript.tsgo.go.os.isPathSeparator(suffix[0].code)) {
+        return path
+    }
+    return joinPathSuffix(to, suffix)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.joinPathSuffix 1a0d674d
+fun joinPathSuffix(root: String, suffix: String): String {
+    if (suffix == "") {
+        return root
+    }
+    if (com.xemantic.typescript.tsgo.go.os.isPathSeparator(suffix[0].code)) {
+        if (root.length > 0 && com.xemantic.typescript.tsgo.go.os.isPathSeparator(root[root.length - 1].code)) {
+            return root + suffix.substring(1)
+        }
+        return root + suffix
+    }
+    if (root.length > 0 && com.xemantic.typescript.tsgo.go.os.isPathSeparator(root[root.length - 1].code)) {
+        return root + suffix
+    }
+    return root + "/" + suffix
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.destroyDebounce 00f28111
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.destroyDebounce() {
+    this!!.mu.lock()
+    val db: com.xemantic.typescript.tsgo.fswatch.debounce? = this!!.debounce
+    this!!.debounce = null
+    this!!.mu.unlock()
+    if (db != null) {
+        db.remove(this)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.notify 52ac1d50
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.notify() {
+    this!!.mu.lock()
+    val hasPendingCBs: Boolean = com.xemantic.typescript.tsgo.go.slices.containsFunc<com.xemantic.typescript.tsgo.fswatch.callback>(this!!.callbacks, fun(cb: com.xemantic.typescript.tsgo.fswatch.callback): Boolean {
+        return !cb.delivered
+    })
+    val hasTerminal: Boolean = com.xemantic.typescript.tsgo.go.slices.containsFunc<com.xemantic.typescript.tsgo.fswatch.callback>(this!!.callbacks, fun(cb_1: com.xemantic.typescript.tsgo.fswatch.callback): Boolean {
+        return cb_1.terminal != null && !cb_1.delivered
+    })
+    val hasEvents: Boolean = this!!.events.size() > 0
+    val hasError: Boolean = this!!.events.hasError()
+    val db: com.xemantic.typescript.tsgo.fswatch.debounce? = this!!.debounce
+    this!!.mu.unlock()
+    if (hasPendingCBs && (hasEvents || hasError || hasTerminal) && db != null) {
+        db.trigger()
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.notifyError aa5f2e73
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.notifyError(err: GoError?) {
+    this!!.mu.lock()
+    val cbs: GoSlice<com.xemantic.typescript.tsgo.fswatch.callback> = com.xemantic.typescript.tsgo.go.slices.clone<com.xemantic.typescript.tsgo.fswatch.callback>(this!!.callbacks)
+    this!!.callbacks = com.xemantic.typescript.tsgo.fswatch.callback.ELEM.nilSlice
+    this!!.mu.unlock()
+    val s0 = cbs
+    l0@ for (i1 in 0 until s0.len) {
+        val cb: com.xemantic.typescript.tsgo.fswatch.callback = s0[i1].goCopy()
+        cb.fn!!(Event.ELEM.nilSlice, err)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.triggerCallbacks d2f133b4
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.triggerCallbacks() {
+    this!!.mu.lock()
+    val hasError: Boolean = this!!.events.hasError()
+    val hasEvents: Boolean = this!!.events.size() > 0
+    var cbs: GoSlice<com.xemantic.typescript.tsgo.fswatch.callback> = GoSlice.make(com.xemantic.typescript.tsgo.fswatch.callback.ELEM, 0, this!!.callbacks.len)
+    var hasTerminal: Boolean = false
+    val s0 = this!!.callbacks
+    l0@ for (i1 in 0 until s0.len) {
+        val cb: com.xemantic.typescript.tsgo.fswatch.callback = s0[i1].goCopy()
+        if (cb.delivered) {
+            continue@l0
+        }
+        if (cb.terminal != null) {
+            hasTerminal = true
+        }
+        cbs = cbs.append1(cb.goCopy())
+    }
+    if (cbs.len == 0) {
+        if (hasEvents || hasError) {
+            val t2 = this!!.events.drain()
+        }
+        this!!.mu.unlock()
+        return
+    }
+    if (!hasEvents && !hasError && !hasTerminal) {
+        this!!.mu.unlock()
+        return
+    }
+    val startSeqs: GoSlice<ULong> = GoSlice.make(GoElem.ULONG, cbs.len)
+    val s3 = cbs
+    l1@ for (i4 in 0 until s3.len) {
+        val i: Int = i4
+        val cb_1: com.xemantic.typescript.tsgo.fswatch.callback = s3[i4].goCopy()
+        startSeqs[i] = cb_1.sinceSeq
+    }
+    val t5 = this!!.events.drainForSequences(startSeqs)
+    val eventsByCallback: GoSlice<GoSlice<Event>> = t5.first
+    val err: GoError? = t5.second
+    val s6 = cbs
+    l2@ for (i7 in 0 until s6.len) {
+        val cb_2: com.xemantic.typescript.tsgo.fswatch.callback = s6[i7].goCopy()
+        if (cb_2.terminal == null) {
+            continue@l2
+        }
+        val s8 = this!!.callbacks
+        l3@ for (i9 in 0 until s8.len) {
+            val i_1: Int = i9
+            if (this!!.callbacks[i_1].id == cb_2.id) {
+                this!!.callbacks[i_1].delivered = true
+                break@l3
+            }
+        }
+    }
+    this!!.mu.unlock()
+    val s10 = cbs
+    l4@ for (i11 in 0 until s10.len) {
+        val i_2: Int = i11
+        val cb_3: com.xemantic.typescript.tsgo.fswatch.callback = s10[i11].goCopy()
+        var cbEvents: GoSlice<Event> = eventsByCallback[i_2]
+        if (cb_3.ignore != null || !cb_3.recursive || cb_3.dir != this!!.dir) {
+            var filtered: GoSlice<Event> = GoSlice.make(Event.ELEM, 0, cbEvents.len)
+            val s12 = cbEvents
+            l5@ for (i13 in 0 until s12.len) {
+                var e: Event = s12[i13].goCopy()
+                e = cb_3.mapEvent(e.goCopy())
+                if (cb_3.ignore != null && cb_3.ignore!!(e.path)) {
+                    continue@l5
+                }
+                if (cb_3.dir != this!!.dir && !e.includedWatchRoot && e.path == cb_3.dir && e.kind.value == 1) {
+                    continue@l5
+                }
+                if (cb_3.recursive) {
+                    if (cb_3.dir != this!!.dir && !isInDirectoryOrSelf(cb_3.dir, e.path)) {
+                        continue@l5
+                    }
+                } else if (!isDirectChild(cb_3.dir, e.path) && !(cb_3.dir != this!!.dir && e.path == cb_3.dir)) {
+                    continue@l5
+                }
+                filtered = filtered.append1(e.goCopy())
+            }
+            cbEvents = filtered
+        }
+        var cbErr: GoError? = err
+        if (cb_3.terminal != null) {
+            cbErr = cb_3.terminal
+        }
+        if (cbEvents.len > 0 || cbErr != null) {
+            cb_3.fn!!(cbEvents, cbErr)
+        }
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.terminateCallbacksForDeletedRoot 6c1f0bf8
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.terminateCallbacksForDeletedRoot(path: String, seq: ULong, err: GoError?): Boolean {
+    return withDefers({ false }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        var changed: Boolean = false
+        val s2 = this!!.callbacks
+        l0@ for (i3 in 0 until s2.len) {
+            val i: Int = i3
+            val cb: com.xemantic.typescript.tsgo.fswatch.callback? = this!!.callbacks[i]
+            if (cb!!.delivered || cb!!.terminal != null || cb!!.sinceSeq >= seq) {
+                continue@l0
+            }
+            val physicalPath_1: String = cb!!.eventPhysicalPath(path)
+            if (isInDirectoryOrSelf(path, cb!!.dir) || (cb!!.physicalDir != cb!!.dir && isInDirectoryOrSelf(physicalPath_1, cb!!.physicalDir))) {
+                cb!!.terminal = err
+                changed = true
+            }
+        }
+        return changed
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.isInDirectoryOrSelf 94411620
+fun isInDirectoryOrSelf(dir: String, path: String): Boolean {
+    if (dir == "") {
+        return false
+    }
+    if (path == dir) {
+        return true
+    }
+    if (!com.xemantic.typescript.tsgo.go.strings.hasPrefix(path, dir)) {
+        return false
+    }
+    val rest_b0: String = path
+    val rest_o1: Int = dir.length
+    val rest_n2: Int = goStrView(rest_b0, rest_o1, rest_b0.length)
+    if (rest_n2 == 0) {
+        return false
+    }
+    if (com.xemantic.typescript.tsgo.go.os.isPathSeparator(dir[dir.length - 1].code)) {
+        return true
+    }
+    return com.xemantic.typescript.tsgo.go.os.isPathSeparator(goViewByte(rest_b0, rest_o1, rest_n2, 0))
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.isDirectChild a266390f
+fun isDirectChild(dir: String, path: String): Boolean {
+    if (!com.xemantic.typescript.tsgo.go.strings.hasPrefix(path, dir)) {
+        return false
+    }
+    var rest: String = path.substring(dir.length)
+    if (rest.length == 0) {
+        return false
+    }
+    if (rest[0].code != 47 && rest[0].code != 47) {
+        return false
+    }
+    rest = rest.substring(1)
+    return rest.length > 0 && !com.xemantic.typescript.tsgo.go.strings.containsRune(rest, 47) && !com.xemantic.typescript.tsgo.go.strings.containsRune(rest, 47)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.watch 9b481a3c
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.watch(dir: String, physicalDir: String, recursive: Boolean, fn: WatchCallback, ignore: ((String) -> Boolean)?): Tuple2<ULong, Boolean> {
+    return withDefers({ Tuple2<ULong, Boolean>(0uL, false) }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        this!!.nextCBID = this!!.nextCBID + 1uL
+        val id: ULong = this!!.nextCBID
+        var sinceSeq: ULong = this!!.events.sequence()
+        if (this!!.sequence != null) {
+            sinceSeq = this!!.sequence!!()
+        }
+        this!!.callbacks = this!!.callbacks.append1(com.xemantic.typescript.tsgo.fswatch.callback(id = id, dir = dir, physicalDir = physicalDir, watchDir = this!!.dir, watchPhysicalDir = this!!.physicalDir, recursive = recursive, fn = fn, ignore = ignore, sinceSeq = sinceSeq))
+        return Tuple2<ULong, Boolean>(id, true)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.unwatch b34fc149
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.unwatch(id: ULong): Boolean {
+    return withDefers({ false }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        val s2 = this!!.callbacks
+        l0@ for (i3 in 0 until s2.len) {
+            val i: Int = i3
+            val cb: com.xemantic.typescript.tsgo.fswatch.callback = s2[i3].goCopy()
+            if (cb.id == id) {
+                this!!.callbacks = this!!.callbacks.slice(0, i).appendSlice(this!!.callbacks.slice(i + 1))
+                return this!!.callbacks.len == 0
+            }
+        }
+        return false
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.dirWatch.unref 122256bc
+fun com.xemantic.typescript.tsgo.fswatch.dirWatch?.unref(w: com.xemantic.typescript.tsgo.fswatch.watcher?) {
+    this!!.mu.lock()
+    val empty: Boolean = this!!.callbacks.len == 0
+    this!!.mu.unlock()
+    if (empty) {
+        w.removeDirWatch(this)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.errNilCallback 8b9f0677
+@kotlin.jvm.JvmField val errNilCallback: GoError? = com.xemantic.typescript.tsgo.go.errors.new("fswatch: callback must not be nil")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.errRootPath 5c094d4c
+@kotlin.jvm.JvmField val errRootPath: GoError? = com.xemantic.typescript.tsgo.go.errors.new("fswatch: cannot watch a root path")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.errNotAbsolute be768e95
+@kotlin.jvm.JvmField val errNotAbsolute: GoError? = com.xemantic.typescript.tsgo.go.errors.new("fswatch: path must be absolute")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.ErrOverflow da537c81
+@kotlin.jvm.JvmField val errOverflow: GoError? = com.xemantic.typescript.tsgo.go.errors.new("fswatch: event overflow; some changes were missed")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.ErrWatchTerminated fb946c95
+@kotlin.jvm.JvmField val errWatchTerminated: GoError? = com.xemantic.typescript.tsgo.go.errors.new("fswatch: watch terminated")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.ErrUnavailable de726db5
+@kotlin.jvm.JvmField val errUnavailable: GoError? = com.xemantic.typescript.tsgo.go.errors.new("fswatch: watcher not available on this platform")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.inotifyWatcher a2708c07
+@kotlin.jvm.JvmField val inotifyWatcher: com.xemantic.typescript.tsgo.fswatch.watcher? = com.xemantic.typescript.tsgo.fswatch.watcher(name = "inotify")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.fseventsWatcher fd474310
+@kotlin.jvm.JvmField val fseventsWatcher: com.xemantic.typescript.tsgo.fswatch.watcher? = com.xemantic.typescript.tsgo.fswatch.watcher(name = "fsevents")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.kqueueWatcher 9702b0fd
+@kotlin.jvm.JvmField val kqueueWatcher: com.xemantic.typescript.tsgo.fswatch.watcher? = com.xemantic.typescript.tsgo.fswatch.watcher(name = "kqueue")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.windowsWatcher 4ff43fee
+@kotlin.jvm.JvmField val windowsWatcher: com.xemantic.typescript.tsgo.fswatch.watcher? = com.xemantic.typescript.tsgo.fswatch.watcher(name = "windows")
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.fanotifyWatcher a2b3ecb0
+@kotlin.jvm.JvmField val fanotifyWatcher: com.xemantic.typescript.tsgo.fswatch.watcher? = com.xemantic.typescript.tsgo.fswatch.watcher(name = "fanotify")
 

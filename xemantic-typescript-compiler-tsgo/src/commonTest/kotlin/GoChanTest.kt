@@ -33,6 +33,9 @@ import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoPanic
 import com.xemantic.typescript.tsgo.runtime.GoError
 import com.xemantic.typescript.tsgo.runtime.goClose
+import com.xemantic.typescript.tsgo.runtime.goSelect
+import com.xemantic.typescript.tsgo.runtime.goSelectRecv
+import com.xemantic.typescript.tsgo.runtime.goSelectSend
 import com.xemantic.typescript.tsgo.runtime.goRecv
 import com.xemantic.typescript.tsgo.runtime.goRecv2
 import com.xemantic.typescript.tsgo.runtime.goSend
@@ -151,5 +154,85 @@ class GoChanTest {
         val ch = GoChan.make(GoElem.INT, 1)
         goSend(ch, 7)
         assert(goRecv(ch) == 7)
+    }
+
+    @Test
+    fun `select takes a ready case - or default when none is ready`() {
+        val a = GoChan.make(GoElem.INT, 1)
+        val full = GoChan.make(goUnitElem, 1)
+        goSend(full, Unit)
+        val none = goSelect(true, goSelectRecv(a), goSelectSend(full, Unit))
+        goSend(a, 5)
+        val got = goSelect(true, goSelectRecv(a), goSelectSend(full, Unit))
+        assert(none.index == -1)
+        assert(got.index == 0 && got.value == 5 && got.ok)
+        goClose(a)
+        val closed = goSelect(false, goSelectRecv(a))
+        assert(closed.index == 0 && closed.value == 0 && !closed.ok)
+    }
+
+    @Test
+    fun `a blocking select wakes for whichever channel a goroutine readies`() {
+        // watchmanager.RunLoop: `select { case <-ctx.Done(): … case <-wm.doCycleCh: … }`
+        val (ctx, cancel) = com.xemantic.typescript.tsgo.go.context.withCancel(com.xemantic.typescript.tsgo.go.context.background())
+        val work = GoChan.make(goUnitElem, 1)
+        val seen = ArrayList<Int>()
+        val wg = WaitGroup()
+        wg.go {
+            while (true) {
+                val s = goSelect(false, goSelectRecv(ctx!!.done()), goSelectRecv(work))
+                seen += s.index
+                if (s.index == 0) break
+            }
+        }
+        work.trySend(Unit)
+        while (work.len != 0) com.xemantic.typescript.tsgo.go.sync.goYield()
+        cancel()
+        wg.wait()
+        val err = ctx!!.err()
+        assert(seen.last() == 0 && seen.dropLast(1).all { it == 1 })
+        assert(err === com.xemantic.typescript.tsgo.go.context.canceled)
+    }
+
+    @Test
+    fun `time After fires once its duration has passed`() {
+        val start = com.xemantic.typescript.tsgo.go.time.now()
+        val ch = com.xemantic.typescript.tsgo.go.time.after(com.xemantic.typescript.tsgo.go.time.Duration(30_000_000))
+        val idle = goSelect(true, goSelectRecv(ch))
+        goRecv(ch)
+        val waited = com.xemantic.typescript.tsgo.go.time.since(start).milliseconds()
+        assert(idle.index == -1 && waited >= 30)
+    }
+
+    @Test
+    fun `cancelling a parent cancels the context derived from it through a value`() {
+        val (parent, cancel) = com.xemantic.typescript.tsgo.go.context.withCancel(com.xemantic.typescript.tsgo.go.context.background())
+        val child = com.xemantic.typescript.tsgo.go.context.withCancel(com.xemantic.typescript.tsgo.go.context.withValue(parent, "k", 1)).first!!
+        val before = child.err()
+        cancel()
+        goRecv(child.done())
+        val after = child.err()
+        assert(before == null && after === com.xemantic.typescript.tsgo.go.context.canceled && child.value("k") == 1)
+    }
+
+    @Test
+    fun `a failing goroutine does not disturb the goroutines of other groups`() {
+        // `--watch`: fswatch's debounce loop waits on its channels for the life of the process while a build's
+        // WaitGroup may fail; that failure is the build's, rethrown by its Wait, not the loop's.
+        val ch = GoChan.make(GoElem.INT)
+        val got = GoChan.make(GoElem.INT, 1)
+        val other = WaitGroup()
+        other.go { goSend(got, goRecv(ch)) }
+        val failing = WaitGroup()
+        failing.go { error("boom") }
+        val thrown = try {
+            failing.wait()
+            null
+        } catch (e: IllegalStateException) {
+            e.message
+        }
+        goSend(ch, 7)
+        other.wait()
+        assert(thrown == "boom" && goRecv(got) == 7)
     }
 }

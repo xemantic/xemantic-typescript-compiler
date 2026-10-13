@@ -27,3 +27,7 @@ package com.xemantic.typescript.tsgo.go.time
 
 internal actual fun localZoneOffsetSeconds(unixSeconds: Long): Int =
     java.util.TimeZone.getDefault().getOffset(unixSeconds * 1000L) / 1000
+
+internal actual fun platformSleep(nanos: Long) {
+    Thread.sleep(nanos / 1_000_000, (nanos % 1_000_000).toInt())
+}

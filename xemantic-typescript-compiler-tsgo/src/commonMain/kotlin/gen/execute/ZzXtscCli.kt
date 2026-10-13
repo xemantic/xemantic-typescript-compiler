@@ -26,6 +26,7 @@ package com.xemantic.typescript.tsgo.execute
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.vfs.vfstest.Clock
 import com.xemantic.typescript.tsgo.execute.tsc.CommandLineResult
+import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.go.time.Duration
 import com.xemantic.typescript.tsgo.vfs.FS
 import com.xemantic.typescript.tsgo.tsoptions.ParseConfigHost
@@ -109,10 +110,10 @@ class xtscSystem(
     }
 }
 
-// go: github.com/microsoft/typescript-go/internal/execute.XtscCommandLine 2ef0eae4
-fun xtscCommandLine(args: GoSlice<String>, fs: FS?, defaultLibraryPath: String, cwd: String, writer: Writer?, isTTY: Boolean, width: Int, getenv: ((String) -> String)?): Int {
+// go: github.com/microsoft/typescript-go/internal/execute.XtscCommandLine f2cd14f5
+fun xtscCommandLine(ctx: Context?, args: GoSlice<String>, fs: FS?, defaultLibraryPath: String, cwd: String, writer: Writer?, isTTY: Boolean, width: Int, getenv: ((String) -> String)?): Int {
     val sys: com.xemantic.typescript.tsgo.execute.xtscSystem? = com.xemantic.typescript.tsgo.execute.xtscSystem(cwd = com.xemantic.typescript.tsgo.tspath.normalizePath(cwd), fs = fs, defaultLibraryPath = defaultLibraryPath, writer = writer, start = com.xemantic.typescript.tsgo.go.time.now(), isTTY = isTTY, width = width, getenv = getenv)
-    val result: CommandLineResult = commandLine(com.xemantic.typescript.tsgo.go.context.background(), sys, args, null)
+    val result: CommandLineResult = commandLine(ctx, sys, args, null)
     return result.status.value
 }
 

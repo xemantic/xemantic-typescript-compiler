@@ -215,7 +215,7 @@ class Program(
         return namedIfaces.filter { b ->
             b.key != a.key && a.methods.containsAll(b.methods) && !embedsTransitively(b, a.key) &&
                 (b.methods.size < a.methods.size || b.key < a.key || embedsTransitively(a, b.key))
-        }
+        } + externalIfaces.values.filter { b -> a.methods.containsAll(b.methods) && b.key !in a.embeds }
     }
 
     /** Generic origin types: method identity → Go method name, from the pointer method set (see [genericImplements]). */

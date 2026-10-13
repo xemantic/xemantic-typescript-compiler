@@ -31,6 +31,7 @@ import com.xemantic.typescript.tsgo.fswatch.Event
 import com.xemantic.typescript.tsgo.fswatch.EventKind
 import com.xemantic.typescript.tsgo.go.sync.Locker
 import com.xemantic.typescript.tsgo.go.sync.Mutex
+import com.xemantic.typescript.tsgo.fswatch.Watcher
 import com.xemantic.typescript.tsgo.go.io.Writer
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.watchedDir 4d7b05ae
@@ -138,7 +139,13 @@ fun WatchManager?.backend(): WatchBackend? {
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.EnsureDefaultBackend 5163fe80
 fun WatchManager?.ensureDefaultBackend() {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.EnsureDefaultBackend")
+    if (this!!.backend == null) {
+        val fsw: Watcher? = com.xemantic.typescript.tsgo.fswatch.default()
+        this!!.backend = FSWatchBackend(inner = fsw)
+        if (this!!.debugLog != null) {
+            com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] using %s backend\n", fsw!!.name())
+        }
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.DoCycleCh 3675e84d
@@ -148,66 +155,315 @@ fun WatchManager?.doCycleCh(): GoChan<Unit>? {
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.DrainEvents 887a002d
 fun WatchManager?.drainEvents(): Tuple2<GoMap<String, EventKind>, Boolean> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.DrainEvents")
+    var changed: GoMap<String, EventKind> = GoMap.nil<String, EventKind>(EventKind.ELEM)
+    var overflow: Boolean = false
+    this!!.changedMu.lock()
+    changed = this!!.changedPaths
+    overflow = this!!.changedOverflow
+    this!!.changedPaths = GoMap.nil<String, EventKind>(EventKind.ELEM)
+    this!!.changedOverflow = false
+    this!!.changedMu.unlock()
+    return Tuple2<GoMap<String, EventKind>, Boolean>(changed, overflow)
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.ForceOverflow ffca1185
 fun WatchManager?.forceOverflow() {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.ForceOverflow")
+    this!!.changedMu.lock()
+    this!!.changedOverflow = true
+    this!!.changedMu.unlock()
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.signalDoCycle 75a12941
 fun WatchManager?.signalDoCycle() {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.signalDoCycle")
+    val sc0 = this!!.doCycleCh
+    val sv1 = Unit
+    val sel2 = goSelect(true, goSelectSend(sc0, sv1))
+    when (sel2.index) {
+        0 -> {
+        }
+        else -> {
+        }
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.onWatchEvents d75d4a10
 fun WatchManager?.onWatchEvents(events: GoSlice<Event>, err: GoError?) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.onWatchEvents")
+    if (err != null) {
+        if (com.xemantic.typescript.tsgo.go.errors.`is`(err, com.xemantic.typescript.tsgo.fswatch.errOverflow)) {
+            if (this!!.debugLog != null) {
+                com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] event overflow, triggering rebuild\n")
+            }
+            this!!.changedMu.lock()
+            this!!.changedOverflow = true
+            this!!.changedMu.unlock()
+            this.signalDoCycle()
+            return
+        }
+        com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.warnWriter, "Warning: File watch error: %v\n", err)
+        return
+    }
+    if (events.len > 0) {
+        if (this!!.debugLog != null) {
+            com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] %d event(s): ", events.len)
+            val s0 = events
+            l0@ for (i1 in 0 until s0.len) {
+                val i: Int = i1
+                val e: Event = s0[i1].goCopy()
+                if (i > 0) {
+                    com.xemantic.typescript.tsgo.go.fmt.fprint(this!!.debugLog, ", ")
+                }
+                if (i >= 5) {
+                    com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "... and %d more", events.len - i)
+                    break@l0
+                }
+                com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "%s %s", e.kind, e.path)
+            }
+            com.xemantic.typescript.tsgo.go.fmt.fprintln(this!!.debugLog)
+        }
+        this!!.changedMu.lock()
+        if (this!!.changedPaths.isNil) {
+            this!!.changedPaths = GoMap.make<String, EventKind>(EventKind.ELEM, events.len)
+        }
+        val s2 = events
+        l1@ for (i3 in 0 until s2.len) {
+            val e_1: Event = s2[i3].goCopy()
+            this!!.changedPaths[e_1.path] = e_1.kind
+        }
+        this!!.changedMu.unlock()
+        this.signalDoCycle()
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.handleWatchTerminated ad288e7a
 fun WatchManager?.handleWatchTerminated(dir: String, identity: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.handleWatchTerminated")
+    if (this!!.debugLog != null) {
+        com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] watch terminated: %s\n", dir)
+    }
+    var staleCloser: Closer? = null
+    this!!.mu.lock()
+    val t0 = this!!.watchedDirs.probe(dir)
+    val wd: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir? = goProbeValue<com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?>(t0) { null }
+    val ok: Boolean = t0 !== GoMapAbsent
+    if (ok && wd === identity) {
+        staleCloser = wd!!.closer
+        this!!.watchedDirs.delete(dir)
+    }
+    this!!.mu.unlock()
+    if (staleCloser != null) {
+        staleCloser!!.close()
+    }
+    this!!.changedMu.lock()
+    this!!.changedOverflow = true
+    this!!.changedMu.unlock()
+    this.signalDoCycle()
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.CloseAllWatches 522cdb67
 fun WatchManager?.closeAllWatches() {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.CloseAllWatches")
+    this!!.mu.lock()
+    var closers: GoSlice<Closer?> = GoSlice.make(GoElem.ref<Closer?>(), 0, this!!.watchedDirs.len)
+    val mi0 = this!!.watchedDirs.iter()
+    l0@ while (mi0.next()) {
+        val dir: String = mi0.key
+        val wd: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir? = mi0.value
+        closers = closers.append1(wd!!.closer)
+        this!!.watchedDirs.delete(dir)
+    }
+    this!!.mu.unlock()
+    val s1 = closers
+    l1@ for (i2 in 0 until s1.len) {
+        val c: Closer? = s1[i2]
+        c!!.close()
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.createDirWatch aa95b64f
 fun WatchManager?.createDirWatch(dir: String, recursive: Boolean): GoError? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.createDirWatch")
+    val entry: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir? = com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir(recursive = recursive)
+    val request: WatchDirectoryRequest = this.createDirWatchRequest(dir, entry)
+    val t0 = this!!.backend!!.watchDirectory(request.dir, request.callback, request.recursive, request.ignore)
+    val watch: Closer? = t0.first
+    val err: GoError? = t0.second
+    if (err != null) {
+        if (this!!.debugLog != null) {
+            com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] failed to watch directory %s: %v\n", dir, err)
+        }
+        return com.xemantic.typescript.tsgo.go.fmt.errorf("failed to watch directory %s: %w", dir, err)
+    }
+    entry!!.closer = watch
+    this!!.watchedDirs[dir] = entry
+    return null
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.createDirWatchRequest 1414137c
 fun WatchManager?.createDirWatchRequest(dir: String, entry: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?): WatchDirectoryRequest {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.createDirWatchRequest")
+    return WatchDirectoryRequest(dir = dir, recursive = entry!!.recursive, ignore = fun(p0: String): Boolean = shouldIgnoreWatchPath(p0), callback = fun(events: GoSlice<Event>, err: GoError?) {
+        if (err != null && com.xemantic.typescript.tsgo.go.errors.`is`(err, com.xemantic.typescript.tsgo.fswatch.errWatchTerminated)) {
+            this.handleWatchTerminated(dir, entry)
+            return
+        }
+        this.onWatchEvents(events, err)
+    })
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.ResolveDesiredDirs 9843ab45
 fun WatchManager?.resolveDesiredDirs(desiredDirs: GoMap<String, Boolean>): GoMap<String, Boolean> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.ResolveDesiredDirs")
+    val resolved: GoMap<String, Boolean> = GoMap.make<String, Boolean>(GoElem.BOOL, desiredDirs.len)
+    val mi0 = desiredDirs.iter()
+    l0@ while (mi0.next()) {
+        val dir: String = mi0.key
+        val recursive: Boolean = mi0.value
+        var watchDir: String = dir
+        var watchRecursive: Boolean = recursive
+        l1@ while (!this!!.dirExists!!(watchDir)) {
+            val parent: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(watchDir)
+            if (parent == watchDir) {
+                break@l1
+            }
+            watchDir = parent
+            watchRecursive = false
+        }
+        if (!this!!.dirExists!!(watchDir) || !canWatchDirectory(watchDir)) {
+            if (this!!.debugLog != null) {
+                com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] no watchable ancestor for %s\n", dir)
+            }
+            continue@l0
+        }
+        if (watchDir != dir && this!!.debugLog != null) {
+            com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] resolved %s to ancestor %s\n", dir, watchDir)
+        }
+        val t1 = resolved.probe(watchDir)
+        val existing: Boolean = goProbeValue<Boolean>(t1) { false }
+        val has: Boolean = t1 !== GoMapAbsent
+        if (has) {
+            resolved[watchDir] = existing || watchRecursive
+        } else {
+            resolved[watchDir] = watchRecursive
+        }
+    }
+    return resolved
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.ReconcileWatches fa7ba0a2
 fun WatchManager?.reconcileWatches(desiredDirs: GoMap<String, Boolean>): GoError? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.ReconcileWatches")
+    if (this!!.backend == null) {
+        return null
+    }
+    var additions: GoSlice<com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate> = com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate.ELEM.nilSlice
+    var changes: GoSlice<com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate> = com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate.ELEM.nilSlice
+    com.xemantic.typescript.tsgo.core.diffMapsFunc<String, com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?, Boolean>(GoElem.STRING, GoElem.ref<com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?>(), GoElem.BOOL, this!!.watchedDirs, desiredDirs, fun(wd: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?, recursive: Boolean): Boolean {
+        return wd!!.recursive == recursive
+    }, fun(dir: String, recursive_1: Boolean) {
+        if (this!!.debugLog != null) {
+            com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] watching directory %s (recursive=%v)\n", dir, recursive_1)
+        }
+        additions = additions.append1(com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate(dir = dir, recursive = recursive_1))
+    }, fun(dir_1: String, wd_1: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?) {
+        if (this!!.debugLog != null) {
+            com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] closing stale dir watch: %s\n", dir_1)
+        }
+        wd_1!!.closer!!.close()
+        this!!.watchedDirs.delete(dir_1)
+    }, fun(dir_2: String, wd_2: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?, recursive_2: Boolean) {
+        if (this!!.debugLog != null) {
+            com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] recreating dir watch %s (recursive %v\u00E2\u0086\u0092%v)\n", dir_2, wd_2!!.recursive, recursive_2)
+        }
+        wd_2!!.closer!!.close()
+        this!!.watchedDirs.delete(dir_2)
+        changes = changes.append1(com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate(dir = dir_2, recursive = recursive_2))
+    })
+    additions = additions.appendSlice(changes)
+    return this.createDirWatches(additions)
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.createDirWatches c25f2ffa
 fun WatchManager?.createDirWatches(updates: GoSlice<com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate>): GoError? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.createDirWatches")
+    if (updates.len == 0) {
+        return null
+    }
+    val requests: GoSlice<WatchDirectoryRequest> = GoSlice.make(WatchDirectoryRequest.ELEM, updates.len)
+    val entries: GoSlice<com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?> = GoSlice.make(GoElem.ref<com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir?>(), updates.len)
+    val s0 = updates
+    l0@ for (i1 in 0 until s0.len) {
+        val i: Int = i1
+        val update: com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate = s0[i1].goCopy()
+        val entry: com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir? = com.xemantic.typescript.tsgo.execute.watchmanager.watchedDir(recursive = update.recursive)
+        entries[i] = entry
+        requests[i] = this.createDirWatchRequest(update.dir, entry)
+    }
+    val t2 = this!!.backend!!.watchDirectories(requests)
+    val closers: GoSlice<Closer?> = t2.first
+    val err: GoError? = t2.second
+    if (err != null) {
+        val s3 = updates
+        l1@ for (i4 in 0 until s3.len) {
+            val i_1: Int = i4
+            val update_1: com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate = s3[i4].goCopy()
+            if (this!!.debugLog != null) {
+                com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.debugLog, "[watch] failed to watch directory %s: %v\n", update_1.dir, err)
+            }
+            if (i_1 < closers.len && closers[i_1] != null) {
+                closers[i_1]!!.close()
+            }
+        }
+        return err
+    }
+    val s5 = updates
+    l2@ for (i6 in 0 until s5.len) {
+        val i_2: Int = i6
+        val update_2: com.xemantic.typescript.tsgo.execute.watchmanager.dirWatchUpdate = s5[i6].goCopy()
+        entries[i_2]!!.closer = closers[i_2]
+        this!!.watchedDirs[update_2.dir] = entries[i_2]
+    }
+    return null
+}
+
+// go: github.com/microsoft/typescript-go/internal/execute/watchmanager.IsDirCoveredByWatch 5460eb22
+fun isDirCoveredByWatch(dirs: GoMap<String, Boolean>, dir: String, opts: ComparePathsOptions): Boolean {
+    val mi0 = dirs.iter()
+    l0@ while (mi0.next()) {
+        val wdir: String = mi0.key
+        val recursive: Boolean = mi0.value
+        if (recursive) {
+            if (com.xemantic.typescript.tsgo.tspath.containsPath(wdir, dir, opts.goCopy())) {
+                return true
+            }
+        } else if (com.xemantic.typescript.tsgo.tspath.comparePaths(dir, wdir, opts.goCopy()) == 0) {
+            return true
+        }
+    }
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.IsPathUnderWatch 56c7231e
 fun WatchManager?.isPathUnderWatch(path: String, opts: ComparePathsOptions): Boolean {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.IsPathUnderWatch")
+    val mi0 = this!!.watchedDirs.iter()
+    l0@ while (mi0.next()) {
+        val dir: String = mi0.key
+        if (com.xemantic.typescript.tsgo.tspath.containsPath(dir, path, opts.goCopy())) {
+            return true
+        }
+    }
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.RunLoop 54f7a1bf
-fun WatchManager?.runLoop(ctx: Context?, doCycle: (() -> Unit)) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/watchmanager.WatchManager.RunLoop")
+inline fun WatchManager?.runLoop(ctx: Context?, doCycle: (() -> Unit)) {
+    l0@ while (true) {
+        val sc0 = ctx!!.done()
+        val sc1 = this!!.doCycleCh
+        val sel2 = goSelect(false, goSelectRecv(sc0), goSelectRecv(sc1))
+        when (sel2.index) {
+            0 -> {
+                this.closeAllWatches()
+                return
+            }
+            1 -> {
+                doCycle()
+            }
+            else -> {
+            }
+        }
+    }
 }
 

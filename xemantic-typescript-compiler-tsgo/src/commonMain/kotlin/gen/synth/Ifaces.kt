@@ -33,6 +33,10 @@ interface Iface_KindString_f376415e {
     fun kindString(): String
 }
 
+interface Iface_subscribeMany_8000e99b {
+    fun subscribeMany(p0: GoSlice<com.xemantic.typescript.tsgo.fswatch.dirWatch?>): GoError?
+}
+
 interface Iface_Grow_81b904b4 {
     fun grow(p0: Int)
 }

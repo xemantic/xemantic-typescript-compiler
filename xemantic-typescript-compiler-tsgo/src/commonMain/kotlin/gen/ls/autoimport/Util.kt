@@ -253,7 +253,49 @@ fun addProjectReferenceOutputMappings(program: Program?, result: GoMap<Path, Str
 
 // go: github.com/microsoft/typescript-go/internal/ls/autoimport.createCheckerPool cad07f9e
 fun createCheckerPool(program: com.xemantic.typescript.tsgo.checker.Program?): Tuple3<(() -> Tuple2<Checker?, (() -> Unit)?>)?, (() -> Unit)?, (() -> Int)?> {
-    TODO("goport: refused select: github.com/microsoft/typescript-go/internal/ls/autoimport.createCheckerPool")
+    var getChecker: (() -> Tuple2<Checker?, (() -> Unit)?>)? = null
+    var closePool: (() -> Unit)? = null
+    var getCreatedCount: (() -> Int)? = null
+    val maxSize: Int = com.xemantic.typescript.tsgo.go.runtime.gomaxprocs(0)
+    val pool: GoChan<Checker?>? = GoChan.make(GoElem.ref<Checker?>(), maxSize)
+    val created: Int32 = Int32()
+    return Tuple3<(() -> Tuple2<Checker?, (() -> Unit)?>)?, (() -> Unit)?, (() -> Int)?>(fun(): Tuple2<Checker?, (() -> Unit)?> {
+        run sel0@{
+            val sc0 = pool
+            val sel1 = goSelect(true, goSelectRecv(sc0))
+            when (sel1.index) {
+                0 -> {
+                    val ch: Checker? = (sel1.value as Checker?)
+                    return Tuple2<Checker?, (() -> Unit)?>(ch, fun() {
+                        goSend(pool, ch)
+                    })
+                }
+                else -> {
+                    return@sel0
+                }
+            }
+        }
+        l1@ while (true) {
+            val current: Int = created.load()
+            if (current >= maxSize) {
+                val ch_1: Checker? = goRecv(pool)
+                return Tuple2<Checker?, (() -> Unit)?>(ch_1, fun() {
+                    goSend(pool, ch_1)
+                })
+            }
+            if (created.compareAndSwap(current, current + 1)) {
+                val ch_2: Checker? = run { val ta2 = com.xemantic.typescript.tsgo.checker.newChecker(program, null); com.xemantic.typescript.tsgo.core.firstResult<Checker?>(GoElem.ref<Checker?>(), ta2.first, GoSlice.of(GoElem.ref<Any?>(), ta2.second)) }
+                return Tuple2<Checker?, (() -> Unit)?>(ch_2, fun() {
+                    goSend(pool, ch_2)
+                })
+            }
+        }
+        goUnreachable()
+    }, fun() {
+        goClose(pool)
+    }, fun(): Int {
+        return created.load()
+    })
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls/autoimport.addPackageJsonDependencies 25123b73

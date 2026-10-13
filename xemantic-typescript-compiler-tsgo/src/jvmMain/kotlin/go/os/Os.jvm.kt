@@ -72,6 +72,20 @@ internal actual fun platformListDir(path: String): List<Pair<String, Char>>? {
     return out
 }
 
+internal actual fun platformLstatKind(path: String): Char? {
+    val a = try {
+        java.nio.file.Files.readAttributes(java.nio.file.Path.of(path), java.nio.file.attribute.BasicFileAttributes::class.java, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+    } catch (_: java.io.IOException) {
+        return null
+    }
+    return when {
+        a.isSymbolicLink -> 'l'
+        a.isDirectory -> 'd'
+        a.isRegularFile -> 'f'
+        else -> 'o'
+    }
+}
+
 /**
  * open + fstat + read; a missing file or a directory fails the open. `File.isFile` in front of it, and `readBytes`'s
  * own `length()`, were a path `stat` each per read.

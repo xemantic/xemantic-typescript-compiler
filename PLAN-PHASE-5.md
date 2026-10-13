@@ -25,6 +25,28 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.5-c) — `tsc --watch` AND `-b --watch` ON THE PORT: fswatch's core ported, only the OS layer replaced (inotify / WatchService); `select` and `go` lowered; (TSGO.5) DONE
+
+- Extraction: `execute`'s `Watcher`, `execute/watchmanager` whole; `vfs/trackingvfs`; `fswatch` partial, rooted at the
+  overlay's `XtscInstall` (`overlay/fswatch/xtsc_backend.go` = `inotify_linux.go`'s backend over an `XtscNotifier`
+  interface); every watch stub in `partial.go` removed. `XtscCommandLine` takes runMain's signal context.
+- Porter: `select` (`goSelect`, random among ready cases, `break` leaves it), `go` (arguments evaluated at the
+  statement, `goSpawn`), interfaces extend SHIMMED external interfaces structurally (`fswatch.Watch : io.Closer`), a
+  method named `init` is no package init. `ls/autoimport.createCheckerPool` (a `select`) ports now — LS gate equal.
+- Runtime: `context.WithCancel` (real `Done`), `time.After`, `os.ReadDir`/`Lstat`/`IsPathSeparator`, `syscall.ENOTDIR`,
+  `runtime/FsNotify` (native inotify via cinterop, JVM `WatchService`). The (TSGO.5-b) channel poison was process-wide:
+  the native suite showed a long-lived goroutine of another test (fswatch's debounce loop) rethrowing an unrelated group's
+  failure, fatally — now scoped to the failing goroutine's own `WaitGroup` (thread-local group; pin
+  `GoChanTest` "does not disturb the goroutines of other groups").
+- `TsgoMain`: stdout flushed per write and SIGINT/SIGTERM → cancel → exit 0 in watch mode (pinned in a subprocess).
+- A testing trap: tsgo watches nothing within two path components of the root (`/tmp/x` reads like `/home/user`), so a
+  temp project must sit two levels down; an `outDir` inside a watched directory makes cycle counts timing-dependent.
+- Gate: `TsgoCliTest` 9 (`--watch`, `-b --watch` in process vs tsgo's own text; the shipped main under SIGTERM; 3 runs
+  stable), `FsWatchTest` (JVM and native), `GoChanTest` 11; Diag/Emit 13,127, LS 21,614, API 594,007, CLI 120 / 121
+  equal; `-tsgo` 152 / 0, `-goport` 26 / 0 (CLI census 1 → 5: fswatch path tails), `-lsp` 38 / 0, `linuxX64Test`
+  91 / 0; warning-clean. `scripts/tsgo-watch-smoke.py` (tsgo vs a binary, same edits, SIGTERM): the JVM main equal on
+  both scenarios; added to `scripts/tsgo-native-ci.sh` for the PGO image.
+
 ### Round (TSGO.5-b) — `tsc --build` ON THE PORT: Go channels lowered, the buildinfo reader decoding by static type, CLI parity 120 / 121 with 15 new build/incremental cases
 
 - Porter: `chan T` → `runtime.GoChan<T>?` with `make`/`close`/`len`/`cap`/receive/comma-ok receive/send (`select` still
@@ -443,7 +465,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
     library probes, wall/heap per engine) and a recommendation; deleting `-core` is not done autonomously.
     REPORT DONE 2026-10-08: `docs/core-sunset.md` (session note (TSGO.4-d)).
 
-- [ ] **(TSGO.5) a tsgo CLI on the port (`docs/core-sunset.md` § 6 stage 1).** **IN PROGRESS — (5-a) the `tsc` command line DONE 2026-10-08 (`TsgoMainKt`, CliParityTest 105/105 equal, type-fest skipped below an 8 GB heap; re-verified on main by the orchestrator). (5-b) `tsc --build` DONE 2026-10-12 (`internal/execute/build` ported on Go channels lowered onto `runtime.GoChan`; the buildinfo reader decodes by static type, so `--incremental` re-runs reuse it too; CliParityTest 120 / 121 equal incl. 11 `build-*` and 4 `incremental-*` cases; docs/goport-cli.md § 2b). The native CLI run is (TSGO.6)'s CI replay. `--pprofDir` and the `--diagnostics` memory figures are Go-runtime artefacts, kept as documented divergences (docs/goport-cli.md § 2). Remains: `--watch` (an `fswatch` shim: JVM `WatchService`, Kotlin/Native inotify).** Port `internal/execute` (+ the `tsc`
+- [x] **(TSGO.5) a tsgo CLI on the port (`docs/core-sunset.md` § 6 stage 1).** **DONE 2026-10-13 — (5-a) the `tsc` command line DONE 2026-10-08 (`TsgoMainKt`, CliParityTest 105/105 equal, type-fest skipped below an 8 GB heap; re-verified on main by the orchestrator). (5-b) `tsc --build` DONE 2026-10-12 (`internal/execute/build` ported on Go channels lowered onto `runtime.GoChan`; the buildinfo reader decodes by static type, so `--incremental` re-runs reuse it too; CliParityTest 120 / 121 equal incl. 11 `build-*` and 4 `incremental-*` cases; docs/goport-cli.md § 2b). The native CLI run is (TSGO.6)'s CI replay. `--pprofDir` and the `--diagnostics` memory figures are Go-runtime artefacts, kept as documented divergences (docs/goport-cli.md § 2). (5-c) `--watch` and `-b --watch` DONE 2026-10-13 (fswatch's core ported, the OS layer an overlay backend over inotify / `WatchService`; docs/goport-cli.md § 2c).** Port `internal/execute` (+ the `tsc`
   command line; `--build`/incremental may follow as a sub-step) through the porter and expose a `-cli`-shaped entry on
   `-tsgo`. Gate: a CLI-output differential (rows + exit code; emitted files for an emit arm) against
   `tools/tsgo-7.0.2/lib/tsc` over the 8 tsc profiles + the census libraries, with a positive control. Does not touch `-core`.

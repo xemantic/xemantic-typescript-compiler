@@ -196,8 +196,8 @@ fun Glob?.parseLiteral(pattern: String, nested: Boolean): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/glob.element 3fd63e89
-interface element {
-    fun string(): String
+interface element : Stringer {
+    override fun string(): String
 }
 
 // go: github.com/microsoft/typescript-go/internal/glob.slash 4becd5a2

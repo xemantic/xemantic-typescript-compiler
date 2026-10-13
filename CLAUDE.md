@@ -177,5 +177,7 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
   as `assert(xs.isEmpty())`.
 - Never put an AST node/SourceFile inside a power-assert expression (the failure diagram renders
   whole subtrees → SOE/OOM); compute primitives into locals first.
+- A `--watch` test project must sit two path levels below a temp dir: tsgo watches nothing within two components of
+  the root (`/tmp/x` reads like `/home/user`, `watchmanager.CanWatchDirectory`) — the change never arrives.
 - Assert the full expected output, not a substring. A pin is only a pin once it has failed
   against the mistake it names.

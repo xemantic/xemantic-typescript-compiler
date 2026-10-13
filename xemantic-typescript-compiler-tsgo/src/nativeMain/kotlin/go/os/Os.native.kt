@@ -106,6 +106,16 @@ internal actual fun platformListDir(path: String): List<Pair<String, Char>>? {
 }
 
 /** `st_mode` of [path] NOT following a final symbolic link; null when it cannot be lstat'ed. */
+internal actual fun platformLstatKind(path: String): Char? {
+    val mode = lstatMode(path) ?: return null
+    return when {
+        hasType(mode, S_IFLNK) -> 'l'
+        hasType(mode, S_IFDIR) -> 'd'
+        hasType(mode, S_IFREG) -> 'f'
+        else -> 'o'
+    }
+}
+
 private fun lstatMode(path: String): UInt? = memScoped {
     val st = alloc<stat>()
     if (lstat(path, st.ptr) != 0) null else st.st_mode

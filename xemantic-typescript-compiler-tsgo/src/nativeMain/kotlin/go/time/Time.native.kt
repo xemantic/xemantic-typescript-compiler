@@ -33,6 +33,8 @@ import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
 import platform.posix.localtime_r
+import platform.posix.nanosleep
+import platform.posix.timespec
 import platform.posix.time_tVar
 import platform.posix.tm
 
@@ -42,4 +44,13 @@ internal actual fun localZoneOffsetSeconds(unixSeconds: Long): Int = memScoped {
     val out = alloc<tm>()
     localtime_r(t.ptr, out.ptr)
     out.tm_gmtoff.toInt()
+}
+
+internal actual fun platformSleep(nanos: Long) {
+    memScoped {
+        val ts = alloc<timespec>()
+        ts.tv_sec = nanos / 1_000_000_000
+        ts.tv_nsec = nanos % 1_000_000_000
+        nanosleep(ts.ptr, null)
+    }
 }

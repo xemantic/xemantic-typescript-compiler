@@ -39,6 +39,7 @@ import com.xemantic.typescript.tsgo.vfs.cachedvfs.FS
 import com.xemantic.typescript.tsgo.go.sync.atomic.Int64
 import com.xemantic.typescript.tsgo.diagnostics.Message
 import com.xemantic.typescript.tsgo.tsoptions.ParsedBuildCommandLine
+import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
 import com.xemantic.typescript.tsgo.tspath.Path
 import com.xemantic.typescript.tsgo.execute.tsc.Statistics
 import com.xemantic.typescript.tsgo.collections.SyncMap
@@ -52,13 +53,26 @@ import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.load
 import com.xemantic.typescript.tsgo.collections.loadOrStore
+import com.xemantic.typescript.tsgo.execute.incremental.getMissingPackageJsons
+import com.xemantic.typescript.tsgo.execute.incremental.getPackageJsons
 import com.xemantic.typescript.tsgo.execute.tsc.report
 import com.xemantic.typescript.tsgo.execute.tsc.setTotalTime
+import com.xemantic.typescript.tsgo.execute.watchmanager.drainEvents
+import com.xemantic.typescript.tsgo.execute.watchmanager.ensureDefaultBackend
+import com.xemantic.typescript.tsgo.execute.watchmanager.forceOverflow
+import com.xemantic.typescript.tsgo.execute.watchmanager.isPathUnderWatch
+import com.xemantic.typescript.tsgo.execute.watchmanager.reconcileWatches
+import com.xemantic.typescript.tsgo.execute.watchmanager.resolveDesiredDirs
+import com.xemantic.typescript.tsgo.execute.watchmanager.runLoop
 import com.xemantic.typescript.tsgo.execute.watchmanager.setBackend
+import com.xemantic.typescript.tsgo.tsoptions.extendedSourceFiles
+import com.xemantic.typescript.tsgo.tsoptions.fileNames
 import com.xemantic.typescript.tsgo.tsoptions.locale
 import com.xemantic.typescript.tsgo.tsoptions.projectReferences
+import com.xemantic.typescript.tsgo.tsoptions.reloadFileNamesOfParsedCommandLine
 import com.xemantic.typescript.tsgo.tsoptions.resolvedProjectPaths
 import com.xemantic.typescript.tsgo.tsoptions.resolvedProjectReferencePaths
+import com.xemantic.typescript.tsgo.tsoptions.wildcardDirectories
 import com.xemantic.typescript.tsgo.vfs.cachedvfs.clearCache
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Options 5cfa62c1
@@ -155,7 +169,51 @@ class Orchestrator(
 
     // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.DoCycle 435e08a4
     override fun doCycle() {
-        TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.DoCycle")
+        withDefers({ Unit }) { df0 ->
+            this.wm!!.lock()
+            val dr1 = this.wm!!
+            df0.defer { dr1.unlock() }
+            val t2 = this.wm.drainEvents()
+            val changedPaths: GoMap<String, EventKind> = t2.first
+            val overflow: Boolean = t2.second
+            val hasEvents: Boolean = changedPaths.len > 0 || overflow
+            if (!hasEvents) {
+                if (this.wm!!.debugLog != null) {
+                    com.xemantic.typescript.tsgo.go.fmt.fprintf(this.wm!!.debugLog, "[watch] DoCycle: no events, skipping\n")
+                }
+                return
+            }
+            val needsConfigUpdate: Bool = Bool()
+            val needsUpdate: Bool = Bool()
+            if (overflow) {
+                this.rangeTask(fun(path: Path, task: BuildTask?) {
+                    task.resetConfig(this, path)
+                    task!!.reportDone = GoChan.make(goUnitElem)
+                    task!!.done = GoChan.make(goUnitElem)
+                })
+                needsConfigUpdate.store(true)
+                needsUpdate.store(true)
+            } else {
+                this.checkTasksForEventChanges(changedPaths, needsConfigUpdate, needsUpdate)
+            }
+            if (!needsUpdate.load()) {
+                this.resetCaches()
+                return
+            }
+            this.watchStatusReporter!!(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.file_change_detected_Starting_incremental_compilation, GoElem.ref<Any?>().nilSlice))
+            if (needsConfigUpdate.load()) {
+                this.generateGraphReusingOldTasks()
+            }
+            this.buildOrClean()
+            this.updateWatch()
+            val desiredDirs: GoMap<String, Boolean> = this.computeDesiredWatches()
+            val err: GoError? = this.wm.reconcileWatches(desiredDirs)
+            if (err != null) {
+                com.xemantic.typescript.tsgo.go.fmt.fprintf(this.opts.sys!!.writer(), "%v\n", err)
+                this.wm.forceOverflow()
+            }
+            this.resetCaches()
+        }
     }
 
     companion object {
@@ -337,12 +395,34 @@ fun Orchestrator?.start(ctx: Context?): CommandLineResult {
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.Watch b0b9634b
 fun Orchestrator?.watch(ctx: Context?) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.Watch")
+    this!!.wm!!.lock()
+    if (this!!.opts.testing == null) {
+        if (this!!.opts.sys!!.getEnvironmentVariable("TS_WATCH_DEBUG") != "") {
+            this!!.wm!!.debugLog = this!!.opts.sys!!.writer()
+        }
+        this!!.wm.ensureDefaultBackend()
+    }
+    this.updateWatch()
+    val desiredDirs: GoMap<String, Boolean> = this.computeDesiredWatches()
+    val err: GoError? = this!!.wm.reconcileWatches(desiredDirs)
+    if (err != null) {
+        com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.opts.sys!!.writer(), "%v\n", err)
+        this!!.wm.forceOverflow()
+    }
+    this.resetCaches()
+    this!!.wm!!.unlock()
+    if (this!!.opts.testing == null) {
+        this!!.wm.runLoop(ctx, (run { val r0 = this!!; fun() = r0.doCycle() })!!)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.updateWatch e12c9ed6
 fun Orchestrator?.updateWatch() {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.updateWatch")
+    val oldCache: SyncMap<Path, Time>? = this!!.host!!.mTimes
+    this!!.host!!.mTimes = SyncMap<Path, Time>(goElem_K = Path.ELEM, goElem_V = GoElem<Time>({ Time() }, { it.goCopy() }))
+    this.rangeTask(fun(path: Path, task: BuildTask?) {
+        task.updateWatch(this, oldCache)
+    })
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.resetCaches ed30551c
@@ -356,27 +436,300 @@ fun Orchestrator?.resetCaches() {
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.checkTasksForEventChanges 1b82eae4
 fun Orchestrator?.checkTasksForEventChanges(changedPaths: GoMap<String, EventKind>, needsConfigUpdate: Bool?, needsUpdate: Bool?) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.checkTasksForEventChanges")
+    val normalizedPaths: GoMap<Path, EventKind> = GoMap.make<Path, EventKind>(EventKind.ELEM, changedPaths.len)
+    val mi0 = changedPaths.iter()
+    l0@ while (mi0.next()) {
+        val eventPath: String = mi0.key
+        val kind: EventKind = mi0.value
+        normalizedPaths[this.toPath(eventPath)] = kind
+    }
+    val s1 = this!!.order
+    l1@ for (i2 in 0 until s1.len) {
+        val i: Int = i2
+        val config: String = this!!.order[i]
+        val path: Path = this.toPath(config)
+        val task: BuildTask? = this.getTask(path)
+        val configPath: Path = this.toPath(task!!.config)
+        val t3 = normalizedPaths.probe(configPath)
+        val changed: Boolean = t3 !== GoMapAbsent
+        if (changed) {
+            task.resetConfig(this, path)
+            needsConfigUpdate!!.store(true)
+            needsUpdate!!.store(true)
+            continue@l1
+        }
+        if (task!!.resolved == null) {
+            continue@l1
+        }
+        var configChanged: Boolean = false
+        val s4 = task!!.resolved.extendedSourceFiles()
+        l2@ for (i5 in 0 until s4.len) {
+            val file: String = s4[i5]
+            val fp: Path = this.toPath(file)
+            val t6 = normalizedPaths.probe(fp)
+            val changed_1: Boolean = t6 !== GoMapAbsent
+            if (changed_1) {
+                task.resetConfig(this, path)
+                needsConfigUpdate!!.store(true)
+                needsUpdate!!.store(true)
+                configChanged = true
+                break@l2
+            }
+        }
+        if (configChanged) {
+            continue@l1
+        }
+        var rootChanged: Boolean = false
+        val fileNames: GoSlice<String> = task!!.resolved.fileNames()
+        val roots: com.xemantic.typescript.tsgo.collections.Set<Path>? = com.xemantic.typescript.tsgo.collections.newSetWithSizeHint<Path>(Path.ELEM, fileNames.len)
+        val s7 = fileNames
+        l3@ for (i8 in 0 until s7.len) {
+            val file_1: String = s7[i8]
+            val fp_1: Path = this.toPath(file_1)
+            roots.add(fp_1)
+            if (!rootChanged) {
+                val t9 = normalizedPaths.probe(fp_1)
+                val changed_2: Boolean = t9 !== GoMapAbsent
+                if (changed_2) {
+                    task.resetStatus()
+                    needsUpdate!!.store(true)
+                    rootChanged = true
+                }
+            }
+        }
+        if (!rootChanged) {
+            task!!.buildInfoEntryMu.lock()
+            val bi: com.xemantic.typescript.tsgo.execute.build.buildInfoEntry? = task!!.buildInfoEntry
+            task!!.buildInfoEntryMu.unlock()
+            if (bi != null && bi!!.buildInfo != null) {
+                val buildInfoDir: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(bi!!.path.value)
+                val s10 = bi!!.buildInfo!!.fileNames
+                l4@ for (i11 in 0 until s10.len) {
+                    val fileName: String = s10[i11]
+                    val fp_2: Path = this.toPath(this.resolveBuildInfoFileName(fileName, buildInfoDir))
+                    if (roots.has(fp_2)) {
+                        continue@l4
+                    }
+                    val t12 = normalizedPaths.probe(fp_2)
+                    val changed_3: Boolean = t12 !== GoMapAbsent
+                    if (changed_3) {
+                        task.resetStatus()
+                        needsUpdate!!.store(true)
+                        break@l4
+                    }
+                }
+                bi!!.buildInfo.getPackageJsons(buildInfoDir)!!(fun(y13: String): Boolean {
+                                    val packageJson: String = y13
+                                    if (this.packageJsonLookupChanged(packageJson, normalizedPaths)) {
+                                        task.resetStatus()
+                                        needsUpdate!!.store(true)
+                                        return false
+                                    }
+                                    return true
+                })
+                bi!!.buildInfo.getMissingPackageJsons(buildInfoDir)!!(fun(y14: String): Boolean {
+                                    val packageJson_1: String = y14
+                                    if (this.packageJsonLookupChanged(packageJson_1, normalizedPaths)) {
+                                        task.resetStatus()
+                                        needsUpdate!!.store(true)
+                                        return false
+                                    }
+                                    return true
+                })
+            }
+            val s15 = task!!.packageJsons
+            l7@ for (i16 in 0 until s15.len) {
+                val packageJson_2: String = s15[i16]
+                if (this.packageJsonLookupChanged(packageJson_2, normalizedPaths)) {
+                    task.resetStatus()
+                    needsUpdate!!.store(true)
+                    break@l7
+                }
+            }
+        }
+        task!!.reportDone = GoChan.make(goUnitElem)
+        task!!.done = GoChan.make(goUnitElem)
+        val newConfig: ParsedCommandLine? = task!!.resolved.reloadFileNamesOfParsedCommandLine(this!!.host!!.fs())
+        if (!com.xemantic.typescript.tsgo.go.slices.equal<String>(task!!.resolved.fileNames(), newConfig.fileNames())) {
+            this!!.host!!.resolvedReferences.store(path, newConfig)
+            task!!.resolved = newConfig
+            task.resetStatus()
+            needsUpdate!!.store(true)
+        }
+    }
+    if (!needsUpdate!!.load()) {
+        val opts: ComparePathsOptions = this!!.comparePathsOptions.goCopy()
+        val mi17 = changedPaths.iter()
+        l8@ while (mi17.next()) {
+            val eventPath_1: String = mi17.key
+            if (this!!.host!!.fs()!!.directoryExists(eventPath_1)) {
+                if (this!!.wm.isPathUnderWatch(eventPath_1, opts.goCopy())) {
+                    this.rangeTask(fun(path_1: Path, task_1: BuildTask?) {
+                        task_1.resetStatus()
+                        task_1!!.reportDone = GoChan.make(goUnitElem)
+                        task_1!!.done = GoChan.make(goUnitElem)
+                    })
+                    needsUpdate!!.store(true)
+                    break@l8
+                }
+            }
+        }
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.packageJsonLookupChanged b1a4472d
 fun Orchestrator?.packageJsonLookupChanged(packageJson: String, changedPaths: GoMap<Path, EventKind>): Boolean {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.packageJsonLookupChanged")
+    val packageJsonPath: Path = this.toPath(packageJson)
+    val t0 = changedPaths.probe(packageJsonPath)
+    val changed: Boolean = t0 !== GoMapAbsent
+    if (changed) {
+        return true
+    }
+    val mi1 = changedPaths.iter()
+    l0@ while (mi1.next()) {
+        val changedPath: Path = mi1.key
+        val kind: EventKind = mi1.value
+        if (kind.value == 2 && com.xemantic.typescript.tsgo.tspath.containsPath(changedPath.value, packageJsonPath.value, this!!.comparePathsOptions.goCopy())) {
+            return true
+        }
+    }
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.computeDesiredWatches 77aff228
 fun Orchestrator?.computeDesiredWatches(): GoMap<String, Boolean> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.computeDesiredWatches")
+    val desiredDirs: GoMap<String, Boolean> = GoMap.make<String, Boolean>(GoElem.BOOL)
+    val s0 = this!!.order
+    l0@ for (i1 in 0 until s0.len) {
+        val i: Int = i1
+        val config: String = this!!.order[i]
+        val path: Path = this.toPath(config)
+        val task: BuildTask? = this.getTask(path)
+        val configDir: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(task!!.config)
+        val realConfigDir: String = this!!.host!!.fs()!!.realpath(configDir)
+        val t2 = desiredDirs.probe(realConfigDir)
+        val has: Boolean = t2 !== GoMapAbsent
+        if (!has) {
+            desiredDirs[realConfigDir] = false
+        }
+        if (task!!.resolved == null) {
+            continue@l0
+        }
+        val s3 = task!!.resolved.extendedSourceFiles()
+        l1@ for (i4 in 0 until s3.len) {
+            val cfgPath: String = s3[i4]
+            val realPath: String = this!!.host!!.fs()!!.realpath(cfgPath)
+            val dir: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(realPath)
+            val t5 = desiredDirs.probe(dir)
+            val has_1: Boolean = t5 !== GoMapAbsent
+            if (!has_1) {
+                desiredDirs[dir] = false
+            }
+        }
+        val mi6 = task!!.resolved.wildcardDirectories().iter()
+        l2@ while (mi6.next()) {
+            val dir_1: String = mi6.key
+            val recursive: Boolean = mi6.value
+            val realDir: String = this!!.host!!.fs()!!.realpath(dir_1)
+            val t7 = desiredDirs.probe(realDir)
+            val existing: Boolean = goProbeValue<Boolean>(t7) { false }
+            val has_2: Boolean = t7 !== GoMapAbsent
+            if (has_2) {
+                desiredDirs[realDir] = existing || recursive
+            } else {
+                desiredDirs[realDir] = recursive
+            }
+        }
+        val s8 = task!!.resolved.fileNames()
+        l3@ for (i9 in 0 until s8.len) {
+            val fileName: String = s8[i9]
+            val absPath: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(fileName, this!!.opts.sys!!.getCurrentDirectory())
+            val dir_2: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(absPath)
+            if (!com.xemantic.typescript.tsgo.execute.watchmanager.isDirCoveredByWatch(desiredDirs, dir_2, this!!.comparePathsOptions.goCopy())) {
+                if (com.xemantic.typescript.tsgo.execute.watchmanager.canWatchDirectory(dir_2)) {
+                    desiredDirs[dir_2] = false
+                }
+            }
+        }
+        task!!.buildInfoEntryMu.lock()
+        val bi: com.xemantic.typescript.tsgo.execute.build.buildInfoEntry? = task!!.buildInfoEntry
+        task!!.buildInfoEntryMu.unlock()
+        if (bi != null && bi!!.buildInfo != null) {
+            val buildInfoDir: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(bi!!.path.value)
+            val roots: com.xemantic.typescript.tsgo.collections.Set<Path>? = com.xemantic.typescript.tsgo.collections.newSetFromItems<Path>(Path.ELEM, com.xemantic.typescript.tsgo.core.map<String, Path>(GoElem.STRING, Path.ELEM, task!!.resolved.fileNames(), (run { val r10 = this; fun(p0: String): Path = r10.toPath(p0) })!!))
+            val s11 = bi!!.buildInfo!!.fileNames
+            l4@ for (i12 in 0 until s11.len) {
+                val fileName_1: String = s11[i12]
+                val absPath_1: String = this!!.host!!.fs()!!.realpath(this.resolveBuildInfoFileName(fileName_1, buildInfoDir))
+                val fp: Path = this.toPath(absPath_1)
+                if (roots.has(fp)) {
+                    continue@l4
+                }
+                val dir_3: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(absPath_1)
+                if (!com.xemantic.typescript.tsgo.execute.watchmanager.isDirCoveredByWatch(desiredDirs, dir_3, this!!.comparePathsOptions.goCopy())) {
+                    if (com.xemantic.typescript.tsgo.execute.watchmanager.canWatchDirectory(dir_3)) {
+                        desiredDirs[dir_3] = false
+                    }
+                }
+            }
+            bi!!.buildInfo.getPackageJsons(buildInfoDir)!!(fun(y13: String): Boolean {
+                            val packageJson: String = y13
+                            this.addPackageJsonWatchDirs(desiredDirs, packageJson)
+                            return true
+            })
+            bi!!.buildInfo.getMissingPackageJsons(buildInfoDir)!!(fun(y14: String): Boolean {
+                            val packageJson_1: String = y14
+                            this.addPackageJsonWatchDirs(desiredDirs, packageJson_1)
+                            return true
+            })
+        }
+        val s15 = task!!.packageJsons
+        l7@ for (i16 in 0 until s15.len) {
+            val packageJson_2: String = s15[i16]
+            this.addPackageJsonWatchDirs(desiredDirs, packageJson_2)
+        }
+    }
+    return this!!.wm.resolveDesiredDirs(desiredDirs)
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.addWatchDir 27d8a4a9
 fun Orchestrator?.addWatchDir(desiredDirs: GoMap<String, Boolean>, dir: String) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.addWatchDir")
+    if (!com.xemantic.typescript.tsgo.execute.watchmanager.isDirCoveredByWatch(desiredDirs, dir, this!!.comparePathsOptions.goCopy()) && com.xemantic.typescript.tsgo.execute.watchmanager.canWatchDirectory(dir)) {
+        desiredDirs[dir] = false
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.addPackageJsonWatchDirs 80e3cb4e
 fun Orchestrator?.addPackageJsonWatchDirs(desiredDirs: GoMap<String, Boolean>, packageJson: String) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.addPackageJsonWatchDirs")
+    val dir: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(packageJson)
+    var dirs: GoSlice<String> = GoSlice.of(GoElem.STRING, dir)
+    var foundNodeModules: Boolean = false
+    var current: String = dir
+    l0@ while (true) {
+        val parent: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(current)
+        if (parent == "" || parent == current) {
+            break@l0
+        }
+        dirs = dirs.append1(parent)
+        if (com.xemantic.typescript.tsgo.tspath.getBaseFileName(parent) == "node_modules") {
+            foundNodeModules = true
+            val grandparent: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(parent)
+            if (grandparent != "" && grandparent != parent) {
+                dirs = dirs.append1(grandparent)
+            }
+            break@l0
+        }
+        current = parent
+    }
+    if (!foundNodeModules) {
+        this.addWatchDir(desiredDirs, dir)
+        return
+    }
+    val s0 = dirs
+    l1@ for (i1 in 0 until s0.len) {
+        val dir_1: String = s0[i1]
+        this.addWatchDir(desiredDirs, dir_1)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.Orchestrator.buildOrClean c6464313

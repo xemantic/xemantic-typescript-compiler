@@ -41,6 +41,7 @@ import com.xemantic.typescript.goport.ir.str
 import com.xemantic.typescript.goport.ir.t
 import com.xemantic.typescript.goport.lower.TypeMapper.Rep
 import com.xemantic.typescript.goport.types.ArrayType
+import com.xemantic.typescript.goport.types.ChanType
 import com.xemantic.typescript.goport.types.MapType
 import com.xemantic.typescript.goport.types.NamedType
 import com.xemantic.typescript.goport.types.PointerType
@@ -303,8 +304,8 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             "BranchStmt" -> branch(s)
             "EmptyStmt" -> {}
             "DeferStmt" -> deferStmt(s)
-            "GoStmt" -> refuse("go")
-            "SelectStmt" -> refuse("select")
+            "GoStmt" -> goStmt(s)
+            "SelectStmt" -> selectStmt(s, goLabel)
             "SendStmt" -> w.line("goSend(${raw(s.reqObj("chan")).code}, ${flow(s.reqObj("value")).code})")
             else -> refuse("stmt", s.k)
         }
@@ -1246,6 +1247,134 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         val fv = fn.fresh("df")
         w.line("val $fv = ${raw(f).code}")
         w.line("$frame.defer { $fv!!(${temps.joinToString(", ")}) }")
+    }
+
+    /**
+     * `go f(args)`: the function value, receiver and arguments are evaluated here (Go), the call runs on a new
+     * goroutine (`goSpawn`: a goroutine thread holding a run token, docs/goport-runtime.md § 9a).
+     */
+    private fun goStmt(s: Node) {
+        val call = s.reqObj("call")
+        val f = call.reqObj("fun")
+        val spawn = "com.xemantic.typescript.tsgo.go.sync.goSpawn"
+        val args = call.list("args")
+        if (f.k == "FuncLit" && args.isEmpty()) {
+            w.line("$spawn(${funcLit(f).code})")
+            return
+        }
+        val temps = args.map { a ->
+            val n = fn.fresh("ga")
+            w.line("val $n = ${flow(a).code}")
+            n
+        }
+        when (call.str("call")) {
+            "method" -> {
+                val (recv, name, _) = methodTarget(f)
+                val rv = fn.fresh("gr")
+                w.line("val $rv = ${recv.code}")
+                w.line("$spawn { $rv.$name(${temps.joinToString(", ")}) }")
+            }
+            "func" -> {
+                val o = pc.obj((if (f.k == "SelectorExpr") f.reqObj("sel") else f).int("obj")!!)
+                w.line("$spawn { ${funcRef(o)}(${(dictArgs(f) + temps).joinToString(", ")}) }")
+            }
+            "builtin" -> refuse("go-builtin")
+            else -> {
+                val fv = fn.fresh("gf")
+                w.line("val $fv = ${raw(f).code}")
+                w.line("$spawn { $fv!!(${temps.joinToString(", ")}) }")
+            }
+        }
+    }
+
+    /**
+     * `select { … }` (docs/goport-lowering.md, Channels): the cases' channels and sent values are evaluated in
+     * source order (Go), `goSelect` performs one ready operation (or blocks until one is; `default` when none is
+     * ready) and the clause of its index runs. A receive clause's `v[, ok] :=` / `=` binds the received value.
+     * A `break` in a clause leaves the select (a `run` label, as a switch).
+     */
+    private fun selectStmt(s: Node, goLabel: String?) {
+        val clauses = s.list("clauses")
+        val t = Target(goLabel, Target.Kind.SWITCH, fn.freshLabel("sel"))
+        t.switchBroken = breaks(clauses, goLabel)
+        fn.frame.targets.addLast(t)
+        try {
+            if (t.switchBroken) {
+                w.line("run ${t.kLabel}@{")
+                w.push()
+            }
+            class Comm(val clause: Node, val recv: Node?, val lhs: List<Node>, val define: Boolean)
+            val comms = ArrayList<Comm>()
+            val caseCodes = ArrayList<String>()
+            var default: Node? = null
+            for (c in clauses) {
+                if (c.bool("default")) {
+                    default = c
+                    continue
+                }
+                val comm = c.reqObj("comm")
+                fun recvOf(x: Node): Node {
+                    var e = x
+                    while (e.k == "ParenExpr") e = e.reqObj("x")
+                    if (e.k != "UnaryExpr" || e.str("op") != "<-") refuse("select-comm", e.k)
+                    return e
+                }
+                when (comm.k) {
+                    "SendStmt" -> {
+                        val ch = fn.fresh("sc")
+                        val v = fn.fresh("sv")
+                        w.line("val $ch = ${raw(comm.reqObj("chan")).code}")
+                        w.line("val $v = ${flow(comm.reqObj("value")).code}")
+                        caseCodes += "goSelectSend($ch, $v)"
+                        comms += Comm(c, null, emptyList(), false)
+                    }
+                    "ExprStmt" -> {
+                        val r = recvOf(comm.reqObj("x"))
+                        val ch = fn.fresh("sc")
+                        w.line("val $ch = ${raw(r.reqObj("x")).code}")
+                        caseCodes += "goSelectRecv($ch)"
+                        comms += Comm(c, r, emptyList(), false)
+                    }
+                    "AssignStmt" -> {
+                        val rhs = comm.list("rhs")
+                        if (rhs.size != 1) refuse("select-comm", "AssignStmt")
+                        val r = recvOf(rhs[0])
+                        val ch = fn.fresh("sc")
+                        w.line("val $ch = ${raw(r.reqObj("x")).code}")
+                        caseCodes += "goSelectRecv($ch)"
+                        comms += Comm(c, r, comm.list("lhs"), comm.str("tok") == ":=")
+                    }
+                    else -> refuse("select-comm", comm.k)
+                }
+            }
+            val sel = fn.fresh("sel")
+            w.line("val $sel = goSelect(${default != null}${caseCodes.joinToString("") { ", $it" }})")
+            w.line("when (${sel}.index) {")
+            w.indent {
+                comms.forEachIndexed { i, cm ->
+                    w.line("$i -> {")
+                    w.indent {
+                        if (cm.recv != null && cm.lhs.isNotEmpty()) {
+                            val elem = (types.under(ty(cm.recv.reqObj("x"))) as? ChanType)?.elem ?: refuse("select-chan-type")
+                            single(cm.lhs[0], Ex.primary("(${sel}.value as ${tm.kt(elem)})"), cm.define)
+                            if (cm.lhs.size > 1) single(cm.lhs[1], Ex.primary("${sel}.ok"), cm.define)
+                        }
+                        body(cm.clause.list("body"))
+                    }
+                    w.line("}")
+                }
+                w.line("else -> {")
+                w.indent { default?.let { body(it.list("body")) } }
+                w.line("}")
+            }
+            w.line("}")
+            if (t.switchBroken) {
+                w.pop()
+                w.line("}")
+            }
+        } finally {
+            fn.frame.targets.removeLast()
+        }
     }
 
     companion object {

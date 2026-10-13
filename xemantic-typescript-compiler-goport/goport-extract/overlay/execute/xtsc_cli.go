@@ -67,9 +67,9 @@ func (s *xtscSystem) GetEnvironmentVariable(name string) string {
 
 // XtscCommandLine is cmd/tsgo/main.go's runMain for the compiler (the `--lsp` and `--api` branches
 // are the language server's and the API's, not the CLI's): newSystem's System over the given ends,
-// then execute.CommandLine, its exit status returned. The signal context (SIGINT/SIGTERM) is
-// context.Background: the port's goroutines are not cancelled by a signal, the process is.
-func XtscCommandLine(args []string, fs vfs.FS, defaultLibraryPath string, cwd string, writer io.Writer, isTTY bool, width int, getenv func(name string) string) int {
+// then execute.CommandLine, its exit status returned. ctx is runMain's signal context
+// (signal.NotifyContext on SIGINT/SIGTERM there): cancelling it ends `--watch` as a signal ends tsgo's.
+func XtscCommandLine(ctx context.Context, args []string, fs vfs.FS, defaultLibraryPath string, cwd string, writer io.Writer, isTTY bool, width int, getenv func(name string) string) int {
 	sys := &xtscSystem{
 		cwd:                tspath.NormalizePath(cwd),
 		fs:                 fs,
@@ -80,6 +80,6 @@ func XtscCommandLine(args []string, fs vfs.FS, defaultLibraryPath string, cwd st
 		width:              width,
 		getenv:             getenv,
 	}
-	result := CommandLine(context.Background(), sys, args, nil)
+	result := CommandLine(ctx, sys, args, nil)
 	return int(result.Status)
 }

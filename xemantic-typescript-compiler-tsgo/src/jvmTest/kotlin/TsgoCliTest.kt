@@ -44,8 +44,9 @@ class TsgoCliTest {
         return exit to buf.toString(Charsets.UTF_8)
     }
 
-    private fun project(vararg files: Pair<String, String>): File {
-        val dir = Files.createTempDirectory("tsgo-cli").toFile()
+    private fun project(vararg files: Pair<String, String>): File = projectIn(Files.createTempDirectory("tsgo-cli").toFile(), *files)
+
+    private fun projectIn(dir: File, vararg files: Pair<String, String>): File {
         for ((name, text) in files) File(dir, name).also { it.parentFile.mkdirs() }.writeText(text)
         return dir
     }
@@ -93,12 +94,96 @@ class TsgoCliTest {
         assert(written == listOf("a.js", "tsconfig.tsbuildinfo"))
     }
 
+    /**
+     * Runs `tsc [args]` in [dir] on a thread, lets [steps] change files (its argument waits until the n-th
+     * "Watching for file changes" and then for quiet), cancels the context and returns the output, times masked.
+     */
+    private fun watch(dir: File, args: List<String>, steps: ((Int) -> Unit) -> Unit): String {
+        val out = StringBuffer()
+        val (ctx, cancel) = com.xemantic.typescript.tsgo.go.context.withCancel(com.xemantic.typescript.tsgo.go.context.background())
+        var exit = -1
+        val run = Thread { exit = TsgoCli.run(args, dir.absolutePath, { out.append(it.toString(Charsets.UTF_8)) }, context = ctx!!) }
+        run.start()
+        fun cycles() = Regex("Watching for file changes").findAll(out).count()
+        steps { n ->
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
+            while (cycles() < n && System.nanoTime() < deadline) Thread.sleep(20)
+            // quiet for a while: no further cycle follows the change
+            Thread.sleep(700)
+        }
+        cancel()
+        run.join(TimeUnit.SECONDS.toMillis(30))
+        val alive = run.isAlive
+        assert(!alive && exit == 0)
+        return out.toString().replace(Regex("\\d\\d:\\d\\d:\\d\\d [AP]M"), "HH:MM:SS XM")
+    }
+
     @Test
-    fun `--watch is not ported yet and says so with the not-implemented status`() {
-        val dir = project("tsconfig.json" to """{ "compilerOptions": { "noEmit": true } }""", "a.ts" to "export const a = 1;\n")
-        val (exit, out) = tsc(dir, "--watch")
-        assert(exit == TsgoCli.EXIT_NOT_IMPLEMENTED)
-        assert(out.startsWith("error: this tsc mode is not available in the port yet (execute.createWatcher)"))
+    fun `--build --watch rebuilds the project on each change and keeps its outputs and buildinfo`() {
+        // (TSGO.5-c) tsgo 7.0.2 prints exactly this (times masked) for the same steps and leaves these files.
+        val dir = projectIn(
+            File(Files.createTempDirectory("tsgo-cli").toFile(), "work/app"),
+            "tsconfig.json" to """{ "compilerOptions": { "strict": true, "rootDir": "src", "outDir": "out" }, "include": ["src"] }""",
+            "src/a.ts" to "export const a: number = 1;\n",
+        )
+        val masked = watch(dir, listOf("-b", "-w")) { awaitCycles ->
+            awaitCycles(1)
+            File(dir, "src/a.ts").writeText("export const a: number = \"x\";\n")
+            awaitCycles(2)
+            File(dir, "src/b.ts").writeText("export const b: string = \"y\";\n")
+            awaitCycles(3)
+        }
+        val cls = "\u001b[2J\u001b[3J\u001b[H"
+        assert(
+            masked == "${cls}HH:MM:SS XM - Starting compilation in watch mode...\n\n" +
+                "HH:MM:SS XM - Found 0 errors. Watching for file changes.\n\n" +
+                "${cls}HH:MM:SS XM - File change detected. Starting incremental compilation...\n\n" +
+                "src/a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n" +
+                "HH:MM:SS XM - Found 1 error. Watching for file changes.\n\n" +
+                "${cls}HH:MM:SS XM - File change detected. Starting incremental compilation...\n\n" +
+                "src/a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n" +
+                "HH:MM:SS XM - Found 1 error. Watching for file changes.\n\n"
+        )
+        val files = dir.walk().filter { it.isFile }.map { it.relativeTo(dir).path }.sorted().toList()
+        assert(files == listOf("out/a.js", "out/b.js", "src/a.ts", "src/b.ts", "tsconfig.json", "tsconfig.tsbuildinfo"))
+    }
+
+    @Test
+    fun `--watch rebuilds on each relevant change and ends when its context is cancelled`() {
+        // (TSGO.5-c) tsgo 7.0.2 prints exactly this (times masked) for the same steps; `notes.txt` (outside the
+        // include) is an event the watcher finds irrelevant: no cycle. Two levels down: tsgo watches no directory
+        // within two components of the root (`/tmp/x` reads like `/home/user`, watchmanager.CanWatchDirectory).
+        val dir = projectIn(
+            File(Files.createTempDirectory("tsgo-cli").toFile(), "work/app"),
+            "tsconfig.json" to """{ "compilerOptions": { "strict": true, "noEmit": true }, "include": ["src"] }""",
+            "src/a.ts" to "export const a: number = 1;\n",
+        )
+        val masked = watch(dir, listOf("--watch")) { awaitCycles ->
+            awaitCycles(1)
+            File(dir, "src/a.ts").writeText("export const a: number = \"x\";\n")
+            awaitCycles(2)
+            File(dir, "notes.txt").writeText("note\n")
+            Thread.sleep(700)
+            File(dir, "src/b.ts").writeText("export const b: string = 1;\n")
+            awaitCycles(3)
+            File(dir, "src/b.ts").delete()
+            awaitCycles(4)
+        }
+        val cls = "\u001b[2J\u001b[3J\u001b[H"
+        assert(
+            masked == "${cls}HH:MM:SS XM - Starting compilation in watch mode...\n\n" +
+                "HH:MM:SS XM - Found 0 errors. Watching for file changes.\n\n" +
+                "${cls}HH:MM:SS XM - File change detected. Starting incremental compilation...\n\n" +
+                "src/a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n" +
+                "HH:MM:SS XM - Found 1 error. Watching for file changes.\n\n" +
+                "${cls}HH:MM:SS XM - File change detected. Starting incremental compilation...\n\n" +
+                "src/a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n" +
+                "src/b.ts(1,14): error TS2322: Type 'number' is not assignable to type 'string'.\n" +
+                "HH:MM:SS XM - Found 2 errors. Watching for file changes.\n\n" +
+                "${cls}HH:MM:SS XM - File change detected. Starting incremental compilation...\n\n" +
+                "src/a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n" +
+                "HH:MM:SS XM - Found 1 error. Watching for file changes.\n\n"
+        )
     }
 
     @Test
@@ -119,5 +204,39 @@ class TsgoCliTest {
         assert(exit == 1)
         assert(stdout == "a.ts(1,7): error TS2322: Type 'number' is not assignable to type 'boolean'.\n")
         assert(stderr == "")
+    }
+
+    @Test
+    fun `the shipped main in watch mode prints each cycle as it happens and exits 0 on SIGTERM`() {
+        // tsgo 7.0.2: its status lines reach a pipe at once (Go's stdout is unbuffered) and SIGTERM cancels the
+        // watch (signal.NotifyContext), exit status 0.
+        val dir = projectIn(
+            File(Files.createTempDirectory("tsgo-cli").toFile(), "work/app"),
+            "tsconfig.json" to """{ "compilerOptions": { "strict": true, "noEmit": true }, "include": ["src"] }""",
+            "src/a.ts" to "export const a: number = 1;\n",
+        )
+        val java = File(System.getProperty("java.home"), "bin/java").path
+        val outFile = File.createTempFile("tsgo-cli", ".out")
+        val p = ProcessBuilder(java, "-Xss64m", "-cp", System.getProperty("java.class.path"), "com.xemantic.typescript.tsgo.cli.TsgoMainKt", "-w")
+            .directory(dir).redirectOutput(outFile).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        fun awaitText(text: String): Boolean {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+            while (System.nanoTime() < deadline && p.isAlive) {
+                if (text in outFile.readText()) return true
+                Thread.sleep(50)
+            }
+            return false
+        }
+        val first = awaitText("Found 0 errors. Watching for file changes.")
+        File(dir, "src/a.ts").writeText("let s: string = 1;\n")
+        val second = awaitText("Found 1 error. Watching for file changes.")
+        p.destroy()
+        val finished = p.waitFor(30, TimeUnit.SECONDS)
+        if (!finished) p.destroyForcibly()
+        assert(first && second && finished)
+        val exit = p.exitValue()
+        assert(exit == 0)
+        val lines = outFile.readText().lines().filter { "error TS" in it }
+        assert(lines == listOf("src/a.ts(1,5): error TS2322: Type 'number' is not assignable to type 'string'."))
     }
 }

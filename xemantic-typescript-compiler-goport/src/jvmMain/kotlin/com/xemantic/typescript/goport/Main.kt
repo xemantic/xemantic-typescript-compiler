@@ -238,7 +238,8 @@ fun main(argv: Array<String>) {
             File(dir, "AnonStructs.kt").writeText(render(pc, FileCtx(pc), listOf(Item(0, body, false)), "anonymous struct types of ${p.sourceDir}"))
             written++
         }
-        val inits = p.files.flatMap { f -> f.list("decls").filter { it.str("k") == "FuncDecl" && it.str("name") == "init" } }
+        // package `func init()`s — not a method named init (fswatch's `watcherBase.init`)
+        val inits = p.files.flatMap { f -> f.list("decls").filter { it.str("k") == "FuncDecl" && it.str("name") == "init" && it["recv"] == null } }
         if (inits.isNotEmpty()) {
             val fc = FileCtx(pc)
             val body = buildString {

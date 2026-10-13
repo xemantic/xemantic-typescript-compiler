@@ -24,6 +24,7 @@
 package com.xemantic.typescript.tsgo.fswatch
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.sync.Mutex
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 
 // go: github.com/microsoft/typescript-go/internal/fswatch.EventKind dae34a90
@@ -85,5 +86,346 @@ class Event(
     companion object {
         val ELEM: GoElem<Event> = GoElem({ Event() }, { it.goCopy() })
     }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventEntry 865fc91c
+class eventEntry(
+    @get:kotlin.jvm.JvmName("goGet_createdSeq") @set:kotlin.jvm.JvmName("goSet_createdSeq") var createdSeq: ULong = 0uL,
+    @get:kotlin.jvm.JvmName("goGet_updatedSeq") @set:kotlin.jvm.JvmName("goSet_updatedSeq") var updatedSeq: ULong = 0uL,
+    @get:kotlin.jvm.JvmName("goGet_deletedSeq") @set:kotlin.jvm.JvmName("goSet_deletedSeq") var deletedSeq: ULong = 0uL,
+    @kotlin.jvm.JvmField var includedWatchRoot: Boolean = false,
+) {
+
+    fun goCopy(): eventEntry = eventEntry(createdSeq = createdSeq, updatedSeq = updatedSeq, deletedSeq = deletedSeq, includedWatchRoot = includedWatchRoot)
+
+    fun goSet(o: eventEntry) {
+        createdSeq = o.createdSeq
+        updatedSeq = o.updatedSeq
+        deletedSeq = o.deletedSeq
+        includedWatchRoot = o.includedWatchRoot
+    }
+
+    fun goEquals(o: eventEntry): Boolean = createdSeq == o.createdSeq && updatedSeq == o.updatedSeq && deletedSeq == o.deletedSeq && includedWatchRoot == o.includedWatchRoot
+
+    fun goHash(): Int = 31 * createdSeq.hashCode() + 31 * updatedSeq.hashCode() + 31 * deletedSeq.hashCode() + 31 * includedWatchRoot.hashCode()
+
+    companion object {
+        val ELEM: GoElem<eventEntry> = GoElem({ eventEntry() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList 5d76dfab
+class eventList(
+    @kotlin.jvm.JvmField var mu: Mutex = Mutex(),
+    @kotlin.jvm.JvmField var entries: GoMap<String, com.xemantic.typescript.tsgo.fswatch.eventEntry?> = GoMap.nil<String, com.xemantic.typescript.tsgo.fswatch.eventEntry?>(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.eventEntry?>()),
+    @kotlin.jvm.JvmField var err: GoError? = null,
+    @get:kotlin.jvm.JvmName("goGet_seq") @set:kotlin.jvm.JvmName("goSet_seq") var seq: ULong = 0uL,
+) {
+
+    fun goCopy(): eventList = eventList(mu = mu.goCopy(), entries = entries, err = err, seq = seq)
+
+    fun goSet(o: eventList) {
+        mu = o.mu.goCopy()
+        entries = o.entries
+        err = o.err
+        seq = o.seq
+    }
+
+    companion object {
+        val ELEM: GoElem<eventList> = GoElem({ eventList() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.create beaa9c4a
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.create(path: String) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        val seq: ULong = this.nextSeqLocked()
+        this.createLocked(path, seq)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.createAt 98323bdc
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.createAt(path: String, seq: ULong) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        this.advanceSeqLocked(seq)
+        this.createLocked(path, seq)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.createLocked 5303e19b
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.createLocked(path: String, seq: ULong) {
+    val entry: com.xemantic.typescript.tsgo.fswatch.eventEntry? = this.getOrCreate(path)
+    if (entry.isDeleted()) {
+        entry!!.deletedSeq = 0uL
+        entry!!.createdSeq = 0uL
+        entry!!.updatedSeq = seq
+    } else {
+        entry!!.createdSeq = seq
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.update 2ffdfdcb
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.update(path: String) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        val seq: ULong = this.nextSeqLocked()
+        this.updateLocked(path, seq)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.updateAt 3a547aee
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.updateAt(path: String, seq: ULong) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        this.advanceSeqLocked(seq)
+        this.updateLocked(path, seq)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.updateWatchRootAt 010a31e1
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.updateWatchRootAt(path: String, seq: ULong) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        this.advanceSeqLocked(seq)
+        this.updateLocked(path, seq)
+        this.getOrCreate(path)!!.includedWatchRoot = true
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.updateLocked 03631110
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.updateLocked(path: String, seq: ULong) {
+    this.getOrCreate(path)!!.updatedSeq = seq
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.remove cc5faec9
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.remove(path: String) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        val seq: ULong = this.nextSeqLocked()
+        this.removeLocked(path, seq)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.removeAndGetSequence 9298da5c
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.removeAndGetSequence(path: String): ULong {
+    return withDefers({ 0uL }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        val seq: ULong = this.nextSeqLocked()
+        this.removeLocked(path, seq)
+        return seq
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.removeAt e4e0cf93
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.removeAt(path: String, seq: ULong) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        this.advanceSeqLocked(seq)
+        this.removeLocked(path, seq)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.removeWatchRootAt d74ec022
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.removeWatchRootAt(path: String, seq: ULong) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        this.advanceSeqLocked(seq)
+        this.removeLocked(path, seq)
+        this.getOrCreate(path)!!.includedWatchRoot = true
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.removeLocked f6c8116c
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.removeLocked(path: String, seq: ULong) {
+    val entry: com.xemantic.typescript.tsgo.fswatch.eventEntry? = this.getOrCreate(path)
+    entry!!.deletedSeq = seq
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.size b75aefe8
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.size(): Int {
+    return withDefers({ 0 }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        return this!!.entries.len
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.snapshotLocked 0287f3e7
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.snapshotLocked(): GoSlice<Event> {
+    return this.snapshotSinceLocked(0uL)
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.snapshotSinceLocked dd3cfc03
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.snapshotSinceLocked(startSeq: ULong): GoSlice<Event> {
+    var out: GoSlice<Event> = GoSlice.make(Event.ELEM, 0, this!!.entries.len)
+    val mi0 = this!!.entries.iter()
+    l0@ while (mi0.next()) {
+        val path: String = mi0.key
+        val e: com.xemantic.typescript.tsgo.fswatch.eventEntry? = mi0.value
+        val t1 = e.kindSince(startSeq)
+        val kind: EventKind = t1.first
+        val ok: Boolean = t1.second
+        if (!ok) {
+            continue@l0
+        }
+        out = out.append1(Event(kind = kind, path = path, includedWatchRoot = e!!.includedWatchRoot))
+    }
+    return out
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.getEvents 7f066298
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.getEvents(): GoSlice<Event> {
+    return withDefers({ Event.ELEM.nilSlice }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        return this.snapshotLocked()
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.drain 05f14937
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.drain(): Tuple2<GoSlice<Event>, GoError?> {
+    return withDefers({ Tuple2<GoSlice<Event>, GoError?>(Event.ELEM.nilSlice, null) }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        val out: GoSlice<Event> = this.snapshotLocked()
+        val err: GoError? = this!!.err
+        this!!.entries = GoMap.nil<String, com.xemantic.typescript.tsgo.fswatch.eventEntry?>(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.eventEntry?>())
+        this!!.err = null
+        return Tuple2<GoSlice<Event>, GoError?>(out, err)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.drainForSequences 7d50fdc2
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.drainForSequences(startSeqs: GoSlice<ULong>): Tuple2<GoSlice<GoSlice<Event>>, GoError?> {
+    return withDefers({ Tuple2<GoSlice<GoSlice<Event>>, GoError?>(GoElem.slice(Event.ELEM).nilSlice, null) }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        val out: GoSlice<GoSlice<Event>> = GoSlice.make(GoElem.slice(Event.ELEM), startSeqs.len)
+        val s2 = startSeqs
+        l0@ for (i3 in 0 until s2.len) {
+            val i: Int = i3
+            val startSeq: ULong = s2[i3]
+            out[i] = this.snapshotSinceLocked(startSeq)
+        }
+        val err: GoError? = this!!.err
+        this!!.entries = GoMap.nil<String, com.xemantic.typescript.tsgo.fswatch.eventEntry?>(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.eventEntry?>())
+        this!!.err = null
+        return Tuple2<GoSlice<GoSlice<Event>>, GoError?>(out, err)
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.setError 5592ee95
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.setError(err: GoError?) {
+    withDefers({ Unit }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        if (this!!.err == null) {
+            this!!.err = err
+        }
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.hasError 0b1fc328
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.hasError(): Boolean {
+    return withDefers({ false }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        return this!!.err != null
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.getError 022cfe30
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.getError(): GoError? {
+    return withDefers({ null }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        return this!!.err
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.getOrCreate 0b572198
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.getOrCreate(path: String): com.xemantic.typescript.tsgo.fswatch.eventEntry? {
+    if (this!!.entries.isNil) {
+        this!!.entries = GoMap.make<String, com.xemantic.typescript.tsgo.fswatch.eventEntry?>(GoElem.ref<com.xemantic.typescript.tsgo.fswatch.eventEntry?>())
+    }
+    val t0 = this!!.entries.probe(path)
+    val e: com.xemantic.typescript.tsgo.fswatch.eventEntry? = goProbeValue<com.xemantic.typescript.tsgo.fswatch.eventEntry?>(t0) { null }
+    val ok: Boolean = t0 !== GoMapAbsent
+    if (ok) {
+        return e
+    }
+    val e_1: com.xemantic.typescript.tsgo.fswatch.eventEntry? = com.xemantic.typescript.tsgo.fswatch.eventEntry()
+    this!!.entries[path] = e_1
+    return e_1
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.sequence 5b903be0
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.sequence(): ULong {
+    return withDefers({ 0uL }) { df0 ->
+        this!!.mu.lock()
+        val dr1 = this!!.mu
+        df0.defer { dr1.unlock() }
+        return this!!.seq
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.nextSeqLocked ba7dc48d
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.nextSeqLocked(): ULong {
+    this!!.seq = this!!.seq + 1uL
+    return this!!.seq
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventList.advanceSeqLocked a5e41ccf
+fun com.xemantic.typescript.tsgo.fswatch.eventList?.advanceSeqLocked(seq: ULong) {
+    if (seq > this!!.seq) {
+        this!!.seq = seq
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventEntry.isDeleted 2e189ac5
+fun com.xemantic.typescript.tsgo.fswatch.eventEntry?.isDeleted(): Boolean {
+    return this!!.deletedSeq > this!!.createdSeq && this!!.deletedSeq > this!!.updatedSeq
+}
+
+// go: github.com/microsoft/typescript-go/internal/fswatch.eventEntry.kindSince 0539635f
+fun com.xemantic.typescript.tsgo.fswatch.eventEntry?.kindSince(startSeq: ULong): Tuple2<EventKind, Boolean> {
+    if (this!!.deletedSeq > startSeq) {
+        if (this!!.createdSeq > startSeq && this!!.createdSeq < this!!.deletedSeq && this!!.updatedSeq < this!!.deletedSeq) {
+            return Tuple2<EventKind, Boolean>(EventKind(0), false)
+        }
+        return Tuple2<EventKind, Boolean>(EventDelete, true)
+    }
+    val seq: ULong = maxOf(this!!.createdSeq, this!!.updatedSeq)
+    if (seq > startSeq) {
+        return Tuple2<EventKind, Boolean>(EventUpdate, true)
+    }
+    return Tuple2<EventKind, Boolean>(EventKind(0), false)
 }
 

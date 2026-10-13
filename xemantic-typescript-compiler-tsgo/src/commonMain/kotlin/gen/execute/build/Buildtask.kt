@@ -839,7 +839,15 @@ fun BuildTask?.cleanProjectOutput(orchestrator: Orchestrator?, outputFile: Strin
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.BuildTask.updateWatch 89d50a9a
 fun BuildTask?.updateWatch(orchestrator: Orchestrator?, oldCache: SyncMap<Path, Time>?) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute/build.BuildTask.updateWatch")
+    if (this!!.resolved != null) {
+        if (this.canUpdateJsDtsOutputTimestamps()) {
+            this!!.resolved.getOutputFileNames()!!(fun(y0: String): Boolean {
+                            val outputFile: String = y0
+                            orchestrator!!.host.storeMTimeFromOldCache(outputFile, oldCache)
+                            return true
+            })
+        }
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute/build.BuildTask.resetStatus 695d5cce

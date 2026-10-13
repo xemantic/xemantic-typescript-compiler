@@ -272,7 +272,16 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
 - **Channels** ((TSGO.5-b), `TypeMapper.kt` `ChanType`, `Calls.builtin`, `Exprs.unary`, `Stmts` `SendStmt` /
   comma-ok `UnaryExpr`): `chan T` → `GoChan<T>?` (nil channel = null), `make(chan T, n)` → `GoChan.make(elem, n)`,
   `close`/`len`/`cap` → `goClose`/`.goLen`/`.goCap`, `<-ch` → `goRecv(ch)`, `v, ok := <-ch` → `goRecv2(ch)`,
-  `ch <- v` → `goSend(ch, v)`. `select` and `go` statements are still refused. Runtime: docs/goport-runtime.md § 10 #19.
+  `ch <- v` → `goSend(ch, v)`. (TSGO.5-c) `select` (`Stmts.selectStmt`): the cases' channels and sent values are
+  bound in source order, `goSelect(hasDefault, goSelectRecv(ch), goSelectSend(ch, v), …)` performs one ready case
+  (random among several, as Go; -1 = `default`) and a `when` on its index runs the clause, binding `v[, ok] :=`/`=`
+  from `.value`/`.ok`; a `break` leaves the select (a `run` label, as a switch). `go f(args)` (`Stmts.goStmt`):
+  function value, receiver and arguments evaluated at the statement (as `defer`), the call on `goSpawn`.
+  Runtime: docs/goport-runtime.md § 10 #19.
+- **Interfaces extend shimmed external interfaces structurally** ((TSGO.5-c), `Program.structuralIfaceSupers`): as a
+  run interface already extends every run interface with a subset method set, it now also extends every SHIMMED
+  external one (`fswatch.Watch : io.Closer`, `glob.element : fmt.Stringer`) — Go assigns `Watch` to `io.Closer`
+  without a conversion the IR records.
 - **json targets by static type** ((TSGO.5-b), `Calls.jsonTypedTarget`, runtime `reflect.goJsonTarget`): the second
   argument of `Unmarshal`/`UnmarshalRead`/`UnmarshalDecode` (tsgo's `internal/json` or the library) whose pointee is
   a pointer, an array, `jsontext.Value` (`TypeMapper.reflectTypeInfo` keeps that name), or a slice/map of them is

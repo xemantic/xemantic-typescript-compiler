@@ -31,7 +31,6 @@ import com.xemantic.typescript.tsgo.go.sync.WaitQueue
 import com.xemantic.typescript.tsgo.go.sync.goYield
 import com.xemantic.typescript.tsgo.go.sync.spinWait
 import kotlin.concurrent.atomics.AtomicInt
-import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.incrementAndFetch
 
@@ -186,6 +185,9 @@ class GoChan<T> private constructor(private val elem: GoElem<T>, val cap: Int) {
         return r
     }
 
+    @Suppress("UNCHECKED_CAST")
+    internal fun trySendUnchecked(value: Any?): Boolean = trySend(value as T)
+
     /** `close(ch)`. */
     fun close() {
         guarded {
@@ -205,41 +207,32 @@ class GoChan<T> private constructor(private val elem: GoElem<T>, val cap: Int) {
         private val version = AtomicInt(0)
         private val waiters = WaitQueue()
 
-        /**
-         * A goroutine of a `WaitGroup` failed (a Go panic, which in Go ends the PROCESS). Its channel operations
-         * never happen — a `close(t.done)` the others wait for, say — so while this is set, every blocked or
-         * blocking channel operation rethrows it instead of waiting: the goroutines unwind, the `WaitGroup`'s
-         * count reaches zero, and its `Wait` rethrows the first failure to the caller (who reports it) instead
-         * of the process hanging. Process-wide, as the Go panic is; cleared by the `Wait` that rethrows it.
-         */
-        private val failure = AtomicReference<Throwable?>(null)
-
-        internal fun goroutineFailed(t: Throwable) {
-            if (failure.compareAndSet(null, t)) changed()
-        }
-
-        internal fun goroutineFailureReported(t: Throwable) {
-            failure.compareAndSet(t, null)
-        }
-
         /** Every state change of any channel: wakes every waiter to re-check. */
         internal fun changed() {
             version.incrementAndFetch()
             if (waiters.waiting.load() != 0) waiters.signalAll()
         }
 
-        /** Blocks until [ready] (which performs the operation when it can) answers true, or a goroutine failed. */
+        /**
+         * Blocks until [ready] (which performs the operation when it can) answers true — or, in a goroutine of a
+         * `WaitGroup`, until another goroutine of that group has failed (a Go panic, which ends a Go PROCESS): its
+         * channel operations never happen (a `close(t.done)` the others wait for, say), so the waiter rethrows the
+         * failure instead of waiting; the group's goroutines unwind and its `Wait` rethrows the first failure to
+         * the caller instead of the process hanging. Goroutines outside that group (a `--watch` debounce loop)
+         * keep waiting.
+         */
         internal fun await(ready: () -> Boolean) {
-            failure.load()?.let { throw it }
+            val group = com.xemantic.typescript.tsgo.go.sync.currentWaitGroup.get()[0]
+            group?.failed()?.let { throw it }
             var done = false
             waiters.await(version) {
-                if (failure.load() != null) true
+                if (group?.failed() != null) true
                 else {
                     done = ready()
                     done
                 }
             }
-            if (!done) throw failure.load()!!
+            if (!done) throw group!!.failed()!!
         }
     }
 }
@@ -266,6 +259,54 @@ fun <T> goRecv2(ch: GoChan<T>?): Tuple2<T, Boolean> {
 fun goClose(ch: GoChan<*>?) {
     if (ch == null) goPanic(GoPlainError("close of nil channel"))
     ch.close()
+}
+
+/** One case of a `select`: a receive from, or a send of [value] to, [ch] (a nil channel is never ready). */
+class GoSelectCase internal constructor(internal val ch: GoChan<*>?, internal val send: Boolean, internal val value: Any?)
+
+/** `case <-ch` / `case v, ok := <-ch`. */
+fun goSelectRecv(ch: GoChan<*>?): GoSelectCase = GoSelectCase(ch, false, null)
+
+/** `case ch <- v`. */
+fun <T> goSelectSend(ch: GoChan<T>?, value: T): GoSelectCase = GoSelectCase(ch, true, value)
+
+/** The case a `select` took: its [index] (-1: `default`), and for a receive the [value] and whether it was sent ([ok]). */
+class GoSelected(val index: Int, val value: Any?, val ok: Boolean)
+
+private val noneSelected = GoSelected(-1, null, false)
+
+/**
+ * `select`: performs one case that can proceed — when several can, one chosen at random, as Go does — and says which;
+ * with [hasDefault] it never blocks (-1 when none can), without it blocks until one can (forever when every channel
+ * is nil). A receive is ready when a value is buffered, a sender waits or the channel is closed; a send when the buffer
+ * has room or (unbuffered) a receiver waits in `recv`.
+ */
+fun goSelect(hasDefault: Boolean, vararg cases: GoSelectCase): GoSelected {
+    fun attempt(): GoSelected? {
+        if (cases.isEmpty()) return null
+        val start = kotlin.random.Random.nextInt(cases.size)
+        for (k in cases.indices) {
+            val i = (start + k) % cases.size
+            val c = cases[i]
+            val ch = c.ch ?: continue
+            if (c.send) {
+                if (ch.trySendUnchecked(c.value)) return GoSelected(i, null, false)
+            } else {
+                val r = ch.tryRecv2()
+                if (r != null) return GoSelected(i, r.first, r.second)
+            }
+        }
+        return null
+    }
+    attempt()?.let { return it }
+    if (hasDefault) return noneSelected
+    if (cases.all { it.ch == null }) goBlockForever()
+    var taken: GoSelected? = null
+    GoChan.await {
+        taken = attempt()
+        taken != null
+    }
+    return taken!!
 }
 
 /** `len(ch)` / `cap(ch)` of a possibly nil channel. */

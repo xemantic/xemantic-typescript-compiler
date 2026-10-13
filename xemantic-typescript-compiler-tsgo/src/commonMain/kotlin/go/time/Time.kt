@@ -185,6 +185,22 @@ class Time(internal val wallNanos: Long = Long.MIN_VALUE, internal val mono: Lon
 /** The local zone's offset from UTC, in seconds, at [unixSeconds] (daylight saving included). */
 internal expect fun localZoneOffsetSeconds(unixSeconds: Long): Int
 
+/** Blocks the calling thread for [nanos] nanoseconds. */
+internal expect fun platformSleep(nanos: Long)
+
+/**
+ * `time.After(d)`: a channel that receives the current time once [d] has passed — a goroutine that sleeps (its run
+ * token given back meanwhile, docs/goport-runtime.md § 9a) and then sends into a buffer of one, as Go's timer does.
+ */
+fun after(d: Duration): com.xemantic.typescript.tsgo.runtime.GoChan<Time>? {
+    val ch = com.xemantic.typescript.tsgo.runtime.GoChan.make(com.xemantic.typescript.tsgo.runtime.GoElem({ Time() }), 1)
+    com.xemantic.typescript.tsgo.go.sync.goSpawn {
+        if (d.value > 0) com.xemantic.typescript.tsgo.go.sync.blockingWait { platformSleep(d.value) }
+        ch.trySend(now())
+    }
+    return ch
+}
+
 /** Unix nanoseconds of Go's zero `Time` (0001-01-01 UTC) do not fit in an `int64`; clamp. */
 private const val ZERO_WALL: Long = Long.MIN_VALUE + 1
 

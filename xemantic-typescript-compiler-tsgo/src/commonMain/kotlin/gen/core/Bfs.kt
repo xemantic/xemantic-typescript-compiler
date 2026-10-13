@@ -28,7 +28,9 @@ import com.xemantic.typescript.tsgo.go.sync.atomic.Int64
 import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.collections.SyncSet
 import com.xemantic.typescript.tsgo.go.sync.WaitGroup
+import com.xemantic.typescript.tsgo.collections.addIfAbsent
 import com.xemantic.typescript.tsgo.collections.delete
+import com.xemantic.typescript.tsgo.collections.entryAt
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.size
 import com.xemantic.typescript.tsgo.collections.values
@@ -156,7 +158,7 @@ fun <N> breadthFirstSearchParallel(goElem_N: GoElem<N>, start: N, neighbors: ((N
 
 // go: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchParallelEx a0aa22b8
 fun <K, N> breadthFirstSearchParallelEx(goElem_K: GoElem<K>, goElem_N: GoElem<N>, start: N, neighbors: ((N) -> GoSlice<N>)?, visit: ((N) -> Tuple2<Boolean, Boolean>)?, options: BreadthFirstSearchOptions<K, N>, getKey: ((N) -> K)?): BreadthFirstSearchResult<N> {
-    TODO("goport: refused go: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchParallelEx")
+    TODO("goport: refused local-type: github.com/microsoft/typescript-go/internal/core.BreadthFirstSearchParallelEx")
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.updateMin 26dc71a9

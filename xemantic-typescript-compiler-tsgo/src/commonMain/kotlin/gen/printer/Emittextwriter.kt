@@ -24,12 +24,13 @@
 package com.xemantic.typescript.tsgo.printer
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.ast.Symbol
 import com.xemantic.typescript.tsgo.core.UTF16Offset
 import com.xemantic.typescript.tsgo.glob.element
 
 // go: github.com/microsoft/typescript-go/internal/printer.EmitTextWriter e5bb7b56
-interface EmitTextWriter : element {
+interface EmitTextWriter : element, Stringer {
     fun clear()
     fun decreaseIndent()
     fun getColumn(): UTF16Offset

@@ -11,6 +11,8 @@
 #      the 8 profiles (check-only and emit), the command-line cases and the `-b` / `--incremental` fixtures; the census libraries, cronstrue, marked
 #      and the type-oracle projects are local data — then replayed through the image
 #      (`scripts/tsgo-cli-native-replay.py`), which FAILS on any difference in stdout, exit status or written files.
+#   5. (TSGO.5-c) `--watch` and `-b --watch` under the same scripted edits as tsgo, ended by SIGTERM
+#      (`scripts/tsgo-watch-smoke.py`): stdout, exit status and the files left must agree.
 #
 # Usage: scripts/tsgo-native-ci.sh --graalvm <ORACLE_GRAALVM_HOME> [--workers N]
 set -euo pipefail
@@ -51,3 +53,4 @@ CASES=$(python3 scripts/tsgo-cli-oracle.py --list | grep -E '^(profile|cli|build
 [[ $(tr ',' '\n' <<<"$CASES" | grep -c '^profile-') -ge 16 ]] || { echo "REFUSED: fewer than 16 profile cases: $CASES" >&2; exit 1; }
 python3 scripts/tsgo-cli-oracle.py --only "$CASES" --workers "$WORKERS"
 python3 scripts/tsgo-cli-native-replay.py --bin xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo --only "$CASES"
+python3 scripts/tsgo-watch-smoke.py --bin xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo

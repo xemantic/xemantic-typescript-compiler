@@ -196,6 +196,9 @@ internal expect fun platformReadFile(path: String): ByteArray?
 /** One `stat` (following links): null if [path] does not exist, -1 for a directory, else the size in bytes. */
 internal expect fun platformStatSize(path: String): Long?
 
+/** The kind of [path] itself as `lstat` reports it ('d', 'f', 'l' or 'o', see [platformListDir]); null when it does not exist. */
+internal expect fun platformLstatKind(path: String): Char?
+
 /** The size of [path] in bytes (0 when unknown). */
 internal expect fun platformSize(path: String): Long
 
@@ -266,6 +269,38 @@ fun stat(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic
     val isDir = syscall(GoSyscall.OP_STAT) { platformIsDir(host(name)) }
         ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, com.xemantic.typescript.tsgo.go.io.fs.PathError("stat", name, com.xemantic.typescript.tsgo.go.io.fs.errNotExist))
     return com.xemantic.typescript.tsgo.runtime.Tuple2(syscall(GoSyscall.OP_STAT) { StatInfo(com.xemantic.typescript.tsgo.go.path.base(name), isDir, platformSize(host(name)), platformModTime(host(name))) }, null)
+}
+
+/** `os.Lstat(name)`: the file itself, a symbolic link not followed. */
+fun lstat(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.go.io.fs.FileInfo?, com.xemantic.typescript.tsgo.runtime.GoError?> {
+    val kind = syscall(GoSyscall.OP_STAT) { platformLstatKind(host(name)) }
+        ?: return com.xemantic.typescript.tsgo.runtime.Tuple2(null, com.xemantic.typescript.tsgo.go.io.fs.PathError("lstat", name, com.xemantic.typescript.tsgo.go.io.fs.errNotExist))
+    val base = com.xemantic.typescript.tsgo.go.path.base(name)
+    val info = if (kind == 'l') LinkInfo(base) else syscall(GoSyscall.OP_STAT) {
+        StatInfo(base, kind == 'd', if (kind == 'f') platformSize(host(name)) else 0L, platformModTime(host(name)))
+    }
+    return com.xemantic.typescript.tsgo.runtime.Tuple2(info, null)
+}
+
+/** `os.ReadDir(name)`: the entries of directory [name] sorted by name, each typed as `Lstat` types it. */
+fun readDir(name: String): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.runtime.GoSlice<com.xemantic.typescript.tsgo.go.io.fs.DirEntry?>, com.xemantic.typescript.tsgo.runtime.GoError?> {
+    val (entries, err) = DirFS(name).readDir(".")
+    if (err != null) return com.xemantic.typescript.tsgo.runtime.Tuple2(entries, com.xemantic.typescript.tsgo.go.io.fs.PathError("open", name, com.xemantic.typescript.tsgo.go.io.fs.errNotExist))
+    return com.xemantic.typescript.tsgo.runtime.Tuple2(entries, null)
+}
+
+/** `os.IsPathSeparator(c)`. */
+fun isPathSeparator(c: Int): Boolean = c == '/'.code
+
+/** The info `Lstat` gives a symbolic link. */
+private class LinkInfo(private val name: String) : com.xemantic.typescript.tsgo.go.io.fs.FileInfo {
+    override fun name(): String = name
+    override fun size(): Long = 0L
+    override fun mode(): com.xemantic.typescript.tsgo.go.io.fs.FileMode =
+        com.xemantic.typescript.tsgo.go.io.fs.FileMode(com.xemantic.typescript.tsgo.go.io.fs.ModeSymlink.value or 511u)
+    override fun modTime(): com.xemantic.typescript.tsgo.go.time.Time = com.xemantic.typescript.tsgo.go.time.Time(0L)
+    override fun isDir(): Boolean = false
+    override fun sys(): Any? = null
 }
 
 /** `os.IsNotExist(err)`. */

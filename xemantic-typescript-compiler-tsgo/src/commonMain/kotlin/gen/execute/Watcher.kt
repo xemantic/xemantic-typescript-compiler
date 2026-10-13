@@ -25,22 +25,59 @@ package com.xemantic.typescript.tsgo.execute
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.execute.tsc.CommandLineTesting
+import com.xemantic.typescript.tsgo.execute.watchmanager.CommandLineTestingWithWatchBackend
 import com.xemantic.typescript.tsgo.tspath.ComparePathsOptions
 import com.xemantic.typescript.tsgo.execute.tsc.CompileAndEmitResult
+import com.xemantic.typescript.tsgo.execute.tsc.CompileTimes
+import com.xemantic.typescript.tsgo.compiler.CompilerHost
 import com.xemantic.typescript.tsgo.core.CompilerOptions
 import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.execute.tsc.EmitInput
 import com.xemantic.typescript.tsgo.fswatch.EventKind
 import com.xemantic.typescript.tsgo.execute.tsc.ExtendedConfigCache
+import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
+import com.xemantic.typescript.tsgo.diagnostics.Message
 import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.tsoptions.ParseConfigHost
 import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
 import com.xemantic.typescript.tsgo.tspath.Path
 import com.xemantic.typescript.tsgo.execute.incremental.Program
+import com.xemantic.typescript.tsgo.compiler.ProgramOptions
+import com.xemantic.typescript.tsgo.module.ResolutionHost
 import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
 import com.xemantic.typescript.tsgo.collections.SyncMap
 import com.xemantic.typescript.tsgo.execute.tsc.System
 import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.execute.watchmanager.WatchManager
+import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.delete
+import com.xemantic.typescript.tsgo.collections.has
+import com.xemantic.typescript.tsgo.collections.load
+import com.xemantic.typescript.tsgo.collections.range
+import com.xemantic.typescript.tsgo.collections.store
+import com.xemantic.typescript.tsgo.collections.toSlice
+import com.xemantic.typescript.tsgo.compiler.filesByPath
+import com.xemantic.typescript.tsgo.execute.incremental.getProgram
+import com.xemantic.typescript.tsgo.execute.watchmanager.drainEvents
+import com.xemantic.typescript.tsgo.execute.watchmanager.ensureDefaultBackend
+import com.xemantic.typescript.tsgo.execute.watchmanager.forceOverflow
+import com.xemantic.typescript.tsgo.execute.watchmanager.isPathUnderWatch
+import com.xemantic.typescript.tsgo.execute.watchmanager.reconcileWatches
+import com.xemantic.typescript.tsgo.execute.watchmanager.resolveDesiredDirs
+import com.xemantic.typescript.tsgo.execute.watchmanager.runLoop
+import com.xemantic.typescript.tsgo.execute.watchmanager.setBackend
+import com.xemantic.typescript.tsgo.tsoptions.compilerOptions
+import com.xemantic.typescript.tsgo.tsoptions.extendedSourceFiles
+import com.xemantic.typescript.tsgo.tsoptions.fileNames
+import com.xemantic.typescript.tsgo.tsoptions.locale
+import com.xemantic.typescript.tsgo.tsoptions.possiblyMatchesDirectoryName
+import com.xemantic.typescript.tsgo.tsoptions.possiblyMatchesFileName
+import com.xemantic.typescript.tsgo.tsoptions.reloadFileNamesOfParsedCommandLine
+import com.xemantic.typescript.tsgo.tsoptions.wildcardDirectories
+import com.xemantic.typescript.tsgo.vfs.cachedvfs.disableAndClearCache
 
 // go: github.com/microsoft/typescript-go/internal/execute.cachedSourceFile e57defbb
 class cachedSourceFile(
@@ -61,6 +98,60 @@ class cachedSourceFile(
 
     companion object {
         val ELEM: GoElem<cachedSourceFile> = GoElem({ cachedSourceFile() }, { it.goCopy() })
+    }
+}
+
+// go: github.com/microsoft/typescript-go/internal/execute.watchCompilerHost 0ecb16fc
+class watchCompilerHost(
+    @kotlin.jvm.JvmField var compilerHost: CompilerHost? = null,
+    @kotlin.jvm.JvmField var cache: SyncMap<Path, com.xemantic.typescript.tsgo.execute.cachedSourceFile?>? = null,
+) : CompilerHost, ResolutionHost, ParseConfigHost {
+
+    fun goCopy(): watchCompilerHost = watchCompilerHost(compilerHost = compilerHost, cache = cache)
+
+    fun goSet(o: watchCompilerHost) {
+        compilerHost = o.compilerHost
+        cache = o.cache
+    }
+
+    fun goEquals(o: watchCompilerHost): Boolean = compilerHost == o.compilerHost && cache === o.cache
+
+    fun goHash(): Int = 31 * compilerHost.hashCode() + 31 * cache.hashCode()
+
+    // go: github.com/microsoft/typescript-go/internal/execute.watchCompilerHost.GetSourceFile 03a04456
+    override fun getSourceFile(opts: SourceFileParseOptions): SourceFile? {
+        val info: FileInfo? = this.compilerHost!!.fs()!!.stat(opts.fileName)
+        val t0 = this.cache.load(opts.path)
+        val cached: com.xemantic.typescript.tsgo.execute.cachedSourceFile? = t0.first
+        val ok: Boolean = t0.second
+        if (ok) {
+            if (info != null && info!!.modTime().equal(cached!!.modTime.goCopy())) {
+                return cached!!.file
+            }
+        }
+        val file: SourceFile? = this.compilerHost!!.getSourceFile(opts.goCopy())
+        if (file != null) {
+            if (info != null) {
+                this.cache.store(opts.path, com.xemantic.typescript.tsgo.execute.cachedSourceFile(file = file, modTime = info!!.modTime()))
+            }
+        } else {
+            this.cache.delete(opts.path)
+        }
+        return file
+    }
+
+    override fun defaultLibraryPath(): String = this.compilerHost!!.defaultLibraryPath()
+
+    override fun fs(): FS? = this.compilerHost!!.fs()
+
+    override fun getCurrentDirectory(): String = this.compilerHost!!.getCurrentDirectory()
+
+    override fun getResolvedProjectReference(p0: String, p1: Path): ParsedCommandLine? = this.compilerHost!!.getResolvedProjectReference(p0, p1)
+
+    override fun trace(p0: Message?, p1: GoSlice<Any?>) = this.compilerHost!!.trace(p0, p1)
+
+    companion object {
+        val ELEM: GoElem<watchCompilerHost> = GoElem({ watchCompilerHost() }, { it.goCopy() })
     }
 }
 
@@ -111,7 +202,46 @@ class Watcher(
 
     // go: github.com/microsoft/typescript-go/internal/execute.Watcher.DoCycle 7e0239a5
     override fun doCycle() {
-        TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.DoCycle")
+        withDefers({ Unit }) { df0 ->
+            this.wm!!.lock()
+            val dr1 = this.wm!!
+            df0.defer { dr1.unlock() }
+            val t2 = this.wm.drainEvents()
+            val changedPaths: GoMap<String, EventKind> = t2.first
+            val overflow: Boolean = t2.second
+            val hasEvents: Boolean = changedPaths.len > 0 || overflow
+            if (this.recheckTsConfig()) {
+                return
+            }
+            if (hasEvents && !overflow && !this.configModified) {
+                if (this.isRelevantChange(changedPaths)) {
+                    this.evictChangedSourceFiles(changedPaths)
+                } else {
+                    if (this.wm!!.debugLog != null) {
+                        com.xemantic.typescript.tsgo.go.fmt.fprintf(this.wm!!.debugLog, "[watch] DoCycle: %d event(s) not relevant to compilation, skipping rebuild\n", changedPaths.len)
+                    }
+                    if (this.testing != null) {
+                        this.testing!!.onProgram(this.program)
+                    }
+                    return
+                }
+            } else if (overflow) {
+                this.sourceFileCache = SyncMap<Path, com.xemantic.typescript.tsgo.execute.cachedSourceFile?>(goElem_K = Path.ELEM, goElem_V = GoElem.ref<com.xemantic.typescript.tsgo.execute.cachedSourceFile?>())
+            } else if (!hasEvents && !this.configModified) {
+                if (this.wm!!.debugLog != null) {
+                    com.xemantic.typescript.tsgo.go.fmt.fprintf(this.wm!!.debugLog, "[watch] DoCycle: no events, skipping\n")
+                }
+                if (this.testing != null) {
+                    this.testing!!.onProgram(this.program)
+                }
+                return
+            }
+            this.reportWatchStatus!!(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.file_change_detected_Starting_incremental_compilation, GoElem.ref<Any?>().nilSlice))
+            val err: GoError? = this.doBuild()
+            if (err != null) {
+                this.wm.forceOverflow()
+            }
+        }
     }
 
     companion object {
@@ -121,56 +251,306 @@ class Watcher(
 
 // go: github.com/microsoft/typescript-go/internal/execute.createWatcher 207c5ffb
 fun createWatcher(sys: System?, configParseResult: ParsedCommandLine?, compilerOptionsFromCommandLine: CompilerOptions?, commandLineRaw: OrderedMap<String, Any?>?, reportDiagnostic: ((Diagnostic?) -> Unit)?, reportErrorSummary: ((GoSlice<Diagnostic?>) -> Unit)?, testing: CommandLineTesting?): Watcher? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.createWatcher")
+    val wm: WatchManager? = com.xemantic.typescript.tsgo.execute.watchmanager.newWatchManager(sys!!.writer(), run { val r0 = sys!!.fs()!!; fun(p0: String): Boolean = r0.directoryExists(p0) })
+    val x2 = testing
+    val t1 = if (x2 is CommandLineTestingWithWatchBackend) Tuple2(x2 as CommandLineTestingWithWatchBackend?, true) else Tuple2(null, false)
+    val t: CommandLineTestingWithWatchBackend? = t1.first
+    val ok: Boolean = t1.second
+    if (ok) {
+        wm.setBackend(t!!.watchBackend())
+    }
+    val w: Watcher? = Watcher(sys = sys, config = configParseResult, compilerOptionsFromCommandLine = compilerOptionsFromCommandLine, commandLineRaw = commandLineRaw, reportDiagnostic = reportDiagnostic, reportErrorSummary = reportErrorSummary, reportWatchStatus = com.xemantic.typescript.tsgo.execute.tsc.createWatchStatusReporter(sys, configParseResult.locale(), configParseResult.compilerOptions(), testing), testing = testing, sourceFileCache = SyncMap<Path, com.xemantic.typescript.tsgo.execute.cachedSourceFile?>(goElem_K = Path.ELEM, goElem_V = GoElem.ref<com.xemantic.typescript.tsgo.execute.cachedSourceFile?>()), wm = wm)
+    if (configParseResult!!.configFile != null) {
+        w!!.configFileName = configParseResult!!.configFile!!.sourceFile!!.fileName()
+    }
+    return w
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.start 6dde9e4e
 fun Watcher?.start(ctx: Context?) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.start")
+    this!!.wm!!.lock()
+    this!!.extendedConfigCache = ExtendedConfigCache()
+    val host: CompilerHost? = com.xemantic.typescript.tsgo.compiler.newCompilerHost(this!!.sys!!.getCurrentDirectory(), this!!.sys!!.fs(), this!!.sys!!.defaultLibraryPath(), this!!.extendedConfigCache, getTraceFromSys(this!!.sys, this!!.config.locale(), this!!.testing))
+    this!!.program = com.xemantic.typescript.tsgo.execute.incremental.readBuildInfoProgram(this!!.config, com.xemantic.typescript.tsgo.execute.incremental.newBuildInfoReader(host), host)
+    if (this!!.configFileName != "") {
+        this!!.configFilePaths = GoSlice.of(GoElem.STRING, this!!.configFileName).appendSlice(this!!.config.extendedSourceFiles())
+    }
+    if (this!!.sys!!.getEnvironmentVariable("TS_WATCH_DEBUG") != "") {
+        this!!.wm!!.debugLog = this!!.sys!!.writer()
+    }
+    if (this!!.testing == null) {
+        this!!.wm.ensureDefaultBackend()
+    }
+    this!!.reportWatchStatus!!(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.starting_compilation_in_watch_mode, GoElem.ref<Any?>().nilSlice))
+    val err: GoError? = this.doBuild()
+    if (err != null) {
+        this!!.wm.forceOverflow()
+    }
+    this!!.wm!!.unlock()
+    if (this!!.testing == null) {
+        this!!.wm.runLoop(ctx, (run { val r0 = this!!; fun() = r0.doCycle() })!!)
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.computeDesiredWatches 8e41d16e
 fun Watcher?.computeDesiredWatches(seenFilePaths: GoSlice<String>): GoMap<String, Boolean> {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.computeDesiredWatches")
+    val cwd: String = this!!.sys!!.getCurrentDirectory()
+    val desiredDirs: GoMap<String, Boolean> = GoMap.make<String, Boolean>(GoElem.BOOL)
+    if (this!!.config!!.configFile != null) {
+        val mi0 = this!!.config.wildcardDirectories().iter()
+        l0@ while (mi0.next()) {
+            val dir: String = mi0.key
+            val recursive: Boolean = mi0.value
+            val realDir: String = this!!.sys!!.fs()!!.realpath(dir)
+            desiredDirs[realDir] = recursive
+        }
+    }
+    if (this!!.config!!.configFile == null && desiredDirs.len == 0) {
+        val dir_1: String = this!!.sys!!.fs()!!.realpath(cwd)
+        desiredDirs[dir_1] = false
+    }
+    val s1 = this!!.configFilePaths
+    l1@ for (i2 in 0 until s1.len) {
+        val cfgPath: String = s1[i2]
+        val realPath: String = this!!.sys!!.fs()!!.realpath(cfgPath)
+        val dir_2: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(realPath)
+        val t3 = desiredDirs.probe(dir_2)
+        val has: Boolean = t3 !== GoMapAbsent
+        if (!has) {
+            desiredDirs[dir_2] = false
+        }
+    }
+    if (this!!.config!!.configFile == null) {
+        val s4 = this!!.config.fileNames()
+        l2@ for (i5 in 0 until s4.len) {
+            val fileName: String = s4[i5]
+            val absPath: String = com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(fileName, cwd)
+            val realPath_1: String = this!!.sys!!.fs()!!.realpath(absPath)
+            val dir_3: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(realPath_1)
+            val t6 = desiredDirs.probe(dir_3)
+            val has_1: Boolean = t6 !== GoMapAbsent
+            if (!has_1) {
+                desiredDirs[dir_3] = false
+            }
+        }
+    }
+    val resolvedDirs: GoMap<String, Boolean> = this!!.wm.resolveDesiredDirs(desiredDirs)
+    val opts: ComparePathsOptions = this.comparePathsOptions()
+    val s7 = seenFilePaths
+    l3@ for (i8 in 0 until s7.len) {
+        val filePath: String = s7[i8]
+        val dir_4: String = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(filePath)
+        if (!com.xemantic.typescript.tsgo.execute.watchmanager.isDirCoveredByWatch(resolvedDirs, dir_4, opts.goCopy())) {
+            if (com.xemantic.typescript.tsgo.execute.watchmanager.canWatchDirectory(dir_4)) {
+                resolvedDirs[dir_4] = false
+            }
+        }
+    }
+    return this!!.wm.resolveDesiredDirs(resolvedDirs)
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.reconcileWatches 1cf9f0b4
 fun Watcher?.reconcileWatches(seenFilePaths: GoSlice<String>): GoError? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.reconcileWatches")
+    val desiredDirs: GoMap<String, Boolean> = this.computeDesiredWatches(seenFilePaths)
+    return this!!.wm.reconcileWatches(desiredDirs)
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.comparePathsOptions 2c558e81
 fun Watcher?.comparePathsOptions(): ComparePathsOptions {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.comparePathsOptions")
+    return ComparePathsOptions(useCaseSensitiveFileNames = this!!.sys!!.fs()!!.useCaseSensitiveFileNames(), currentDirectory = this!!.sys!!.getCurrentDirectory())
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.isRelevantChange bd9262e6
 fun Watcher?.isRelevantChange(changedPaths: GoMap<String, EventKind>): Boolean {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.isRelevantChange")
+    val caseSensitive: Boolean = this!!.sys!!.fs()!!.useCaseSensitiveFileNames()
+    val cwd: String = this!!.sys!!.getCurrentDirectory()
+    val opts: ComparePathsOptions = this.comparePathsOptions()
+    val mi0 = changedPaths.iter()
+    l0@ while (mi0.next()) {
+        val eventPath: String = mi0.key
+        val p: Path = com.xemantic.typescript.tsgo.tspath.toPath(eventPath, cwd, caseSensitive)
+        if (this!!.seenFiles.has(p)) {
+            return true
+        }
+        if (this!!.config!!.configFile != null && this!!.config.possiblyMatchesFileName(eventPath)) {
+            return true
+        }
+        if (this!!.config!!.configFile != null && this!!.config.possiblyMatchesDirectoryName(p)) {
+            return true
+        }
+        if (this!!.sys!!.fs()!!.directoryExists(eventPath)) {
+            if (this!!.wm.isPathUnderWatch(eventPath, opts.goCopy())) {
+                return true
+            }
+        }
+    }
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.doBuild 30be2db3
 fun Watcher?.doBuild(): GoError? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.doBuild")
+    if (this!!.configModified) {
+        this!!.sourceFileCache = SyncMap<Path, com.xemantic.typescript.tsgo.execute.cachedSourceFile?>(goElem_K = Path.ELEM, goElem_V = GoElem.ref<com.xemantic.typescript.tsgo.execute.cachedSourceFile?>())
+    }
+    val cached: com.xemantic.typescript.tsgo.vfs.cachedvfs.FS? = com.xemantic.typescript.tsgo.vfs.cachedvfs.from(this!!.sys!!.fs())
+    val tfs: com.xemantic.typescript.tsgo.vfs.trackingvfs.FS? = com.xemantic.typescript.tsgo.vfs.trackingvfs.FS(inner = cached)
+    val innerHost: CompilerHost? = com.xemantic.typescript.tsgo.compiler.newCompilerHost(this!!.sys!!.getCurrentDirectory(), tfs, this!!.sys!!.defaultLibraryPath(), this!!.extendedConfigCache, getTraceFromSys(this!!.sys, this!!.config.locale(), this!!.testing))
+    val host: com.xemantic.typescript.tsgo.execute.watchCompilerHost? = com.xemantic.typescript.tsgo.execute.watchCompilerHost(compilerHost = innerHost, cache = this!!.sourceFileCache)
+    var wildcardDirs: GoMap<String, Boolean> = GoMap.nil<String, Boolean>(GoElem.BOOL)
+    if (this!!.config!!.configFile != null) {
+        wildcardDirs = this!!.config.wildcardDirectories()
+        val mi0 = wildcardDirs.iter()
+        l0@ while (mi0.next()) {
+            val dir: String = mi0.key
+            tfs!!.seenFiles.add(dir)
+        }
+        if (wildcardDirs.len > 0) {
+            this!!.config = this!!.config.reloadFileNamesOfParsedCommandLine(this!!.sys!!.fs())
+        }
+    }
+    val s1 = this!!.configFilePaths
+    l1@ for (i2 in 0 until s1.len) {
+        val path: String = s1[i2]
+        tfs!!.seenFiles.add(path)
+    }
+    this!!.program = com.xemantic.typescript.tsgo.execute.incremental.newProgram(com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(config = this!!.config, host = host)), this!!.program, null, this!!.testing != null)
+    val result: CompileAndEmitResult = this.compileAndEmit()
+    cached.disableAndClearCache()
+    val caseSensitive: Boolean = this!!.sys!!.fs()!!.useCaseSensitiveFileNames()
+    val cwd: String = this!!.sys!!.getCurrentDirectory()
+    val seenSlice: GoSlice<String> = tfs!!.seenFiles.toSlice()
+    this!!.seenFiles = com.xemantic.typescript.tsgo.collections.newSetWithSizeHint<Path>(Path.ELEM, seenSlice.len)
+    val s3 = seenSlice
+    l2@ for (i4 in 0 until s3.len) {
+        val p: String = s3[i4]
+        this!!.seenFiles.add(com.xemantic.typescript.tsgo.tspath.toPath(p, cwd, caseSensitive))
+    }
+    this!!.configMtimes = GoMap.make<String, Time>(GoElem<Time>({ Time() }, { it.goCopy() }), this!!.configFilePaths.len)
+    val s5 = this!!.configFilePaths
+    l3@ for (i6 in 0 until s5.len) {
+        val cfgPath: String = s5[i6]
+        val s: FileInfo? = this!!.sys!!.fs()!!.stat(cfgPath)
+        if (s != null) {
+            this!!.configMtimes[cfgPath] = s!!.modTime()
+        }
+    }
+    val err: GoError? = this.reconcileWatches(seenSlice)
+    if (err != null) {
+        com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.sys!!.writer(), "%v\n", err)
+        return err
+    }
+    this!!.configModified = false
+    val programFiles: GoMap<Path, SourceFile?> = this!!.program.getProgram().filesByPath()
+    this!!.sourceFileCache.range(fun(path_1: Path, unused7: com.xemantic.typescript.tsgo.execute.cachedSourceFile?): Boolean {
+        val t8 = programFiles.probe(path_1)
+        val ok: Boolean = t8 !== GoMapAbsent
+        if (!ok) {
+            this!!.sourceFileCache.delete(path_1)
+        }
+        return true
+    })
+    val errorCount: Int = result.diagnostics.len
+    if (errorCount == 1) {
+        this!!.reportWatchStatus!!(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.found_1_error_Watching_for_file_changes, GoElem.ref<Any?>().nilSlice))
+    } else {
+        this!!.reportWatchStatus!!(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.found_0_errors_Watching_for_file_changes, GoSlice.of(GoElem.ref<Any?>(), errorCount)))
+    }
+    if (this!!.testing != null) {
+        this!!.testing!!.onProgram(this!!.program)
+    }
+    return null
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.evictChangedSourceFiles ed3676b2
 fun Watcher?.evictChangedSourceFiles(changedPaths: GoMap<String, EventKind>) {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.evictChangedSourceFiles")
+    val caseSensitive: Boolean = this!!.sys!!.fs()!!.useCaseSensitiveFileNames()
+    val cwd: String = this!!.sys!!.getCurrentDirectory()
+    val mi0 = changedPaths.iter()
+    l0@ while (mi0.next()) {
+        val eventPath: String = mi0.key
+        val p: Path = com.xemantic.typescript.tsgo.tspath.toPath(eventPath, cwd, caseSensitive)
+        val t1 = this!!.sourceFileCache.load(p)
+        val ok: Boolean = t1.second
+        if (ok) {
+            if (this!!.wm!!.debugLog != null) {
+                com.xemantic.typescript.tsgo.go.fmt.fprintf(this!!.wm!!.debugLog, "[watch] evicting cached source file: %s\n", p)
+            }
+            this!!.sourceFileCache.delete(p)
+        }
+    }
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.compileAndEmit 6e54ccdc
 fun Watcher?.compileAndEmit(): CompileAndEmitResult {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.compileAndEmit")
+    return com.xemantic.typescript.tsgo.execute.tsc.emitFilesAndReportErrors(EmitInput(sys = this!!.sys, programLike = this!!.program, program = this!!.program.getProgram(), config = this!!.config, reportDiagnostic = this!!.reportDiagnostic, reportErrorSummary = this!!.reportErrorSummary, writer = this!!.sys!!.writer(), compileTimes = CompileTimes(), testing = this!!.testing))
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.recheckTsConfig 35c03feb
 fun Watcher?.recheckTsConfig(): Boolean {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.recheckTsConfig")
+    if (this!!.configFileName == "") {
+        return false
+    }
+    if (!this!!.configHasErrors && this!!.configFilePaths.len > 0) {
+        var changed: Boolean = false
+        val s0 = this!!.configFilePaths
+        l0@ for (i1 in 0 until s0.len) {
+            val path: String = s0[i1]
+            val t2 = this!!.configMtimes.probe(path)
+            val oldMtime: Time = goProbeValue<Time>(t2) { Time() }.goCopy()
+            val ok: Boolean = t2 !== GoMapAbsent
+            val s: FileInfo? = this!!.sys!!.fs()!!.stat(path)
+            if (!ok) {
+                if (s != null) {
+                    changed = true
+                    break@l0
+                }
+            } else if (s == null || !s!!.modTime().equal(oldMtime.goCopy())) {
+                changed = true
+                break@l0
+            }
+        }
+        if (!changed) {
+            return false
+        }
+    }
+    val configParseResult: ParsedCommandLine? = this.parseConfigFile()
+    if (configParseResult == null) {
+        return true
+    }
+    if (this!!.configHasErrors) {
+        this!!.configModified = true
+    }
+    this!!.configHasErrors = false
+    this!!.configFilePaths = GoSlice.of(GoElem.STRING, this!!.configFileName).appendSlice(configParseResult.extendedSourceFiles())
+    if (!com.xemantic.typescript.tsgo.go.reflect.deepEqual(this!!.config!!.parsedConfig, configParseResult!!.parsedConfig)) {
+        this!!.configModified = true
+    }
+    this!!.config = configParseResult
+    return false
 }
 
 // go: github.com/microsoft/typescript-go/internal/execute.Watcher.parseConfigFile 0366d768
 fun Watcher?.parseConfigFile(): ParsedCommandLine? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/typescript-go/internal/execute.Watcher.parseConfigFile")
+    val extendedConfigCache: ExtendedConfigCache? = ExtendedConfigCache()
+    val t0 = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(this!!.configFileName, this!!.compilerOptionsFromCommandLine, this!!.commandLineRaw, this!!.sys, extendedConfigCache)
+    val configParseResult: ParsedCommandLine? = t0.first
+    val errors: GoSlice<Diagnostic?> = t0.second
+    if (errors.len > 0) {
+        val s1 = errors
+        l0@ for (i2 in 0 until s1.len) {
+            val e: Diagnostic? = s1[i2]
+            this!!.reportDiagnostic!!(e)
+        }
+        this!!.configHasErrors = true
+        val errorCount: Int = errors.len
+        if (errorCount == 1) {
+            this!!.reportWatchStatus!!(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.found_1_error_Watching_for_file_changes, GoElem.ref<Any?>().nilSlice))
+        } else {
+            this!!.reportWatchStatus!!(com.xemantic.typescript.tsgo.ast.newCompilerDiagnostic(com.xemantic.typescript.tsgo.diagnostics.found_0_errors_Watching_for_file_changes, GoSlice.of(GoElem.ref<Any?>(), errorCount)))
+        }
+        return null
+    }
+    this!!.extendedConfigCache = extendedConfigCache
+    return configParseResult
 }
 

@@ -39,8 +39,8 @@ import com.xemantic.typescript.tsgo.runtime.Tuple2
  * for the bundled libraries, exactly as `cmd/tsgo/sys.go`'s `newSystem`. Everything tsc prints goes to
  * [out] (tsgo writes it all to stdout), and the result is tsc's exit status.
  *
- * Not ported yet: `--build` (`internal/execute/build`) and `--watch` (`internal/execute/watchmanager`); they
- * answer [EXIT_NOT_IMPLEMENTED] with a one-line explanation.
+ * `--watch` runs until [context] is done (tsgo: until SIGINT/SIGTERM cancels `runMain`'s signal context), then
+ * returns its status (0); the file-system notifications are the platform's (`runtime/FsNotify`).
  */
 object TsgoCli {
 
@@ -52,7 +52,8 @@ object TsgoCli {
      * null serves the bundled lib files, as a tsgo build with embedded libs does (the shipped npm binary
      * reads the `lib.*.d.ts` next to its executable instead — pass that directory to reproduce it exactly).
      * [isTerminal] and [terminalWidth] describe stdout (tsc's `--pretty` default and help layout);
-     * [environment] answers `GetEnvironmentVariable`.
+     * [environment] answers `GetEnvironmentVariable`. [context] is `runMain`'s signal context: cancelling it
+     * ([com.xemantic.typescript.tsgo.go.context.withCancel]) ends `--watch`.
      */
     fun run(
         args: List<String>,
@@ -62,8 +63,10 @@ object TsgoCli {
         isTerminal: Boolean = false,
         terminalWidth: Int = 0,
         environment: (String) -> String? = { null },
+        context: com.xemantic.typescript.tsgo.go.context.Context = com.xemantic.typescript.tsgo.go.context.background(),
     ): Int = onGoStack {
         TsgoProject.init()
+        com.xemantic.typescript.tsgo.runtime.installFsNotify()
         val writer = object : com.xemantic.typescript.tsgo.go.io.Writer {
             override fun write(p: GoSlice<Int>): Tuple2<Int, GoError?> {
                 val bytes = ByteArray(p.len) { p[it].toByte() }
@@ -77,11 +80,11 @@ object TsgoCli {
             ?: com.xemantic.typescript.tsgo.bundled.libPath()
         try {
             com.xemantic.typescript.tsgo.execute.xtscCommandLine(
-                goArgs, fs, lib, GoString.fromUtf16(currentDirectory), writer, isTerminal, terminalWidth,
+                context, goArgs, fs, lib, GoString.fromUtf16(currentDirectory), writer, isTerminal, terminalWidth,
             ) { name -> GoString.fromUtf16(environment(GoString.toUtf16(name)) ?: "") }
         } catch (e: NotImplementedError) {
-            // A refused declaration of the port (`--build`, `--watch` are partial stubs): say so instead of a
-            // stack trace. Any other NotImplementedError is a defect and propagates.
+            // A refused declaration of the port (`-b --watch` is a partial stub): say so instead of a stack trace.
+            // Any other NotImplementedError is a defect and propagates.
             val message = e.message ?: ""
             if ("goport: refused" !in message) throw e
             val what = message.substringAfterLast("internal/").substringBefore(' ')

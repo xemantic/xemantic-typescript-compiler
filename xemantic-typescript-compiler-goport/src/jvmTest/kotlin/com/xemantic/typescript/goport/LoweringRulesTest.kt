@@ -161,8 +161,11 @@ class LoweringRulesTest {
         // The (TSGO.2) compiler test harness (docs/goport-lowering.md § 1c): not on the compiler's path, counted apart.
         val harness = listOf("testrunner/", "testutil/", "execute/incremental/", "tsoptions/tsoptionstest/", "vfs/vfstest/", "vfs/iovfs/", "vfs/internal/")
         fun isHarness(f: File) = harness.any { f.relativeTo(gen).path.startsWith(it) }
-        // (TSGO.5) the command line (execute, execute/tsc, vfs/osvfs): counted apart too.
-        fun isCli(f: File) = f.relativeTo(gen).path.let { (it.startsWith("execute/") && !it.startsWith("execute/incremental/")) || it.startsWith("vfs/osvfs/") }
+        // (TSGO.5) the command line (execute, execute/tsc, vfs/osvfs; (TSGO.5-c) --watch's fswatch, vfs/trackingvfs): counted apart too.
+        fun isCli(f: File) = f.relativeTo(gen).path.let {
+            (it.startsWith("execute/") && !it.startsWith("execute/incremental/")) || it.startsWith("vfs/osvfs/") ||
+                it.startsWith("fswatch/") || it.startsWith("vfs/trackingvfs/")
+        }
         // (TSGO.3-b) the API session (gen/api/*.kt, not api/encoder): counted apart too.
         fun isApiSession(f: File) = f.relativeTo(gen).path.let { it.startsWith("api/") && !it.startsWith("api/encoder/") }
         fun census(dirs: List<String>?, harnessOnly: Boolean = false, apiOnly: Boolean = false, lsOnly: Boolean = false, cliOnly: Boolean = false) = gen.walkTopDown()
@@ -180,8 +183,9 @@ class LoweringRulesTest {
         assert(census(null, apiOnly = true) <= 1)
         // (TSGO.4-a) the language service (ls, lsp, format, project/*, vfs/wrapvfs, jsonrpc): 54 at first generation (2026-10-08).
         assert(census(null, lsOnly = true) <= 54)
-        // (TSGO.5) the command line: 1 at first generation (2026-10-08, `--help`'s description wrapping).
-        assert(census(null, cliOnly = true) <= 1)
+        // (TSGO.5) the command line: 1 at first generation (2026-10-08, `--help`'s description wrapping); 5 with
+        // (TSGO.5-c)'s fswatch (2026-10-13, four path tails in `rebasePath` / `joinPathSuffix` / `isDirectChild`, per event).
+        assert(census(null, cliOnly = true) <= 5)
     }
 
     @Test
