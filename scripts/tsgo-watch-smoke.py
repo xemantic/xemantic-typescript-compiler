@@ -6,7 +6,10 @@ components of the root) and a list of steps. A step changes files and then waits
 expected number of "Watching for file changes." lines and stays quiet; at the end the process gets SIGTERM, which
 ends a watch with exit status 0 (tsgo: signal.NotifyContext). Compared: stdout (times masked), the exit status and
 the files left in the project. Only scenarios whose cycle count does not depend on timing are listed: no outputs
-inside a watched directory (each emitted file would itself be an event).
+inside a watched directory (each emitted file would itself be an event). A file is written atomically (a temporary
+beside the project, renamed in: one event), and a cycle block identical to the one before it is dropped on both
+sides — on a slow machine one change can still reach tsgo as two debounce batches, a second identical cycle (seen
+on a CI runner).
 
 Usage: scripts/tsgo-watch-smoke.py --bin <port executable> [--tsgo tools/tsgo-7.0.2/lib/tsc]
 """
@@ -21,6 +24,17 @@ import tempfile
 import time
 
 TIME = re.compile(rb"(?<![0-9])\d\d:\d\d:\d\d [AP]M\b")
+CLEAR = b"\x1b[2J\x1b[3J\x1b[H"
+
+
+def collapse(stdout):
+    """stdout with each cycle block (one per clear-screen) that repeats the block before it dropped."""
+    blocks = stdout.split(CLEAR)
+    out = [blocks[0]]
+    for b in blocks[1:]:
+        if len(out) < 2 or b != out[-1]:
+            out.append(b)
+    return CLEAR.join(out)
 
 SCENARIOS = [
     ("watch-noemit", ["--watch"],
@@ -60,8 +74,10 @@ def run(exe, args, files, steps, env):
                         os.remove(p)
                     else:
                         os.makedirs(os.path.dirname(p), exist_ok=True)
-                        with open(p, "w") as f:
+                        tmp = os.path.join(root, "pending")
+                        with open(tmp, "w") as f:
                             f.write(text)
+                        os.rename(tmp, p)
                 deadline = time.time() + 120
                 while time.time() < deadline and proc.poll() is None:
                     with open(out_path, "rb") as f:
@@ -78,7 +94,7 @@ def run(exe, args, files, steps, env):
                 proc.kill()
                 status = "hung"
         with open(out_path, "rb") as f:
-            stdout = TIME.sub(b"HH:MM:SS XM", f.read())
+            stdout = collapse(TIME.sub(b"HH:MM:SS XM", f.read()))
         left = sorted(os.path.relpath(os.path.join(d, n), work) for d, _, ns in os.walk(work) for n in ns)
         return ok, status, stdout, left
     finally:
