@@ -8,7 +8,8 @@ extending shimmed external ones structurally; `context.WithCancel`, `time.After`
 poisons only its own group's channel waits (a process-wide poison killed `--watch`'s debounce loop). `TsgoMain`: SIGINT/SIGTERM
 end a watch with exit 0, stdout flushed per write. `scripts/tsgo-watch-smoke.py` (tsgo vs the JVM main: both scenarios
 equal) joins the native CI script. Diag/Emit 13,127, LS 21,614, API 594,007, CLI 120 / 121 equal; `-tsgo` 152 / 0,
-`-goport` 26 / 0, `-lsp` 38 / 0, `linuxX64Test` 91 / 0; warning-clean (docs/goport-cli.md § 2c).
+`-goport` 26 / 0, `-lsp` 38 / 0, `linuxX64Test` 91 / 0; warning-clean (docs/goport-cli.md § 2c). Native CI run 38388249235
+green: image replay 65 / 65 and both watch scenarios equal to tsgo through the PGO image.
 
 **(TSGO.5-b) DONE — `tsc --build` on the port (2026-10-12):** `internal/execute/build` ported; its task graph runs on Go
 channels, now lowered onto `runtime.GoChan` (a failing goroutine poisons channel waits instead of hanging them). The

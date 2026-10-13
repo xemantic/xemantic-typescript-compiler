@@ -46,6 +46,11 @@ it is the live Phase 18 queue.
   equal; `-tsgo` 152 / 0, `-goport` 26 / 0 (CLI census 1 → 5: fswatch path tails), `-lsp` 38 / 0, `linuxX64Test`
   91 / 0; warning-clean. `scripts/tsgo-watch-smoke.py` (tsgo vs a binary, same edits, SIGTERM): the JVM main equal on
   both scenarios; added to `scripts/tsgo-native-ci.sh` for the PGO image.
+- Native CI run 38388249235 green: the PGO image replays 65 / 65 and is equal to tsgo on both watch scenarios
+  (`sun.misc.Signal` and `WatchService` work in the image); `tsgo-kotlin-native` green. On the first run tsgo ITSELF
+  ran one file creation as two identical cycles (two debounce batches on the slow runner): the smoke now writes files
+  atomically and collapses repeated cycle blocks on both sides. The `-core` `kotlin-native` job (on by default when
+  dispatched without inputs) fails on `@Volatile` in frozen `-core` sources, unchanged since 2026-08-31 — not this round's.
 
 ### Round (TSGO.5-b) — `tsc --build` ON THE PORT: Go channels lowered, the buildinfo reader decoding by static type, CLI parity 120 / 121 with 15 new build/incremental cases
 
