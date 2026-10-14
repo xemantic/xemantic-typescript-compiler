@@ -29,6 +29,7 @@ import com.xemantic.kotlin.test.assert
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 
@@ -95,6 +96,17 @@ class TsgoCliTest {
     }
 
     /**
+     * Writes [file] as ONE file-system event: the text is staged in a separate temp directory (same file system)
+     * and moved into place atomically. A plain `writeText` is a create and a modify; on a loaded machine the two can
+     * land further apart than the watcher's debounce and one edit becomes two rebuilds (seen on a CI runner).
+     */
+    private fun replace(file: File, text: String) {
+        val staged = File(Files.createTempDirectory("tsgo-cli-stage").toFile(), file.name).apply { writeText(text) }
+        Files.move(staged.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        staged.parentFile.delete()
+    }
+
+    /**
      * Runs `tsc [args]` in [dir] on a thread, lets [steps] change files (its argument waits until the n-th
      * "Watching for file changes" and then for quiet), cancels the context and returns the output, times masked.
      */
@@ -128,9 +140,9 @@ class TsgoCliTest {
         )
         val masked = watch(dir, listOf("-b", "-w")) { awaitCycles ->
             awaitCycles(1)
-            File(dir, "src/a.ts").writeText("export const a: number = \"x\";\n")
+            replace(File(dir, "src/a.ts"), "export const a: number = \"x\";\n")
             awaitCycles(2)
-            File(dir, "src/b.ts").writeText("export const b: string = \"y\";\n")
+            replace(File(dir, "src/b.ts"), "export const b: string = \"y\";\n")
             awaitCycles(3)
         }
         val cls = "\u001b[2J\u001b[3J\u001b[H"
@@ -160,11 +172,11 @@ class TsgoCliTest {
         )
         val masked = watch(dir, listOf("--watch")) { awaitCycles ->
             awaitCycles(1)
-            File(dir, "src/a.ts").writeText("export const a: number = \"x\";\n")
+            replace(File(dir, "src/a.ts"), "export const a: number = \"x\";\n")
             awaitCycles(2)
-            File(dir, "notes.txt").writeText("note\n")
+            replace(File(dir, "notes.txt"), "note\n")
             Thread.sleep(700)
-            File(dir, "src/b.ts").writeText("export const b: string = 1;\n")
+            replace(File(dir, "src/b.ts"), "export const b: string = 1;\n")
             awaitCycles(3)
             File(dir, "src/b.ts").delete()
             awaitCycles(4)
