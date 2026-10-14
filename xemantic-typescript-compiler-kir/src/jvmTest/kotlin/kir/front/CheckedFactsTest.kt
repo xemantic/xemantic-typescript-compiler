@@ -26,16 +26,16 @@
 package com.xemantic.typescript.compiler.kir.front
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.CallExpression
-import com.xemantic.typescript.compiler.ClassDeclaration
-import com.xemantic.typescript.compiler.Expression
-import com.xemantic.typescript.compiler.FunctionDeclaration
-import com.xemantic.typescript.compiler.Identifier
-import com.xemantic.typescript.compiler.MethodDeclaration
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.Parameter
-import com.xemantic.typescript.compiler.PropertyDeclaration
-import com.xemantic.typescript.compiler.forEachChild
+import com.xemantic.typescript.compiler.kir.ast.CallExpression
+import com.xemantic.typescript.compiler.kir.ast.ClassDeclaration
+import com.xemantic.typescript.compiler.kir.ast.Expression
+import com.xemantic.typescript.compiler.kir.ast.FunctionDeclaration
+import com.xemantic.typescript.compiler.kir.ast.Identifier
+import com.xemantic.typescript.compiler.kir.ast.MethodDeclaration
+import com.xemantic.typescript.compiler.kir.ast.Node
+import com.xemantic.typescript.compiler.kir.ast.Parameter
+import com.xemantic.typescript.compiler.kir.ast.PropertyDeclaration
+import com.xemantic.typescript.compiler.kir.ast.forEachChild
 import kotlin.test.Test
 
 /**

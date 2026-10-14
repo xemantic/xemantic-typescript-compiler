@@ -25,12 +25,12 @@
 
 package com.xemantic.typescript.compiler.kir
 
-import com.xemantic.typescript.compiler.CompilerOptions
-import com.xemantic.typescript.compiler.Diagnostic
+import com.xemantic.typescript.compiler.kir.front.CheckOptions
+import com.xemantic.typescript.compiler.kir.model.Diagnostic
 import com.xemantic.typescript.compiler.kir.emit.EmitResult
 import com.xemantic.typescript.compiler.kir.emit.GeneratedProgramClasspath
 import com.xemantic.typescript.compiler.kir.emit.KotlinIrEmitter
-import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
 import com.xemantic.typescript.compiler.kir.front.checkTypeScript
 import com.xemantic.typescript.compiler.kir.front.checkTypeScriptProject
@@ -85,7 +85,7 @@ public fun compileTypeScriptToJvm(
     source: String,
     outputDirectory: Path,
     packageName: String = "program",
-    options: CompilerOptions = CompilerOptions(useRealLibs = true),
+    options: CheckOptions = CheckOptions(),
     classpath: List<Path> = GeneratedProgramClasspath.minimal(),
 ): KirCompilation {
     val mainClass = "$packageName.MainKt"

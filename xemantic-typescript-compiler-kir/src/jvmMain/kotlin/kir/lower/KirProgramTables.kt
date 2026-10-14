@@ -25,14 +25,14 @@
 
 package com.xemantic.typescript.compiler.kir.lower
 
-import com.xemantic.typescript.compiler.ClassDeclaration
-import com.xemantic.typescript.compiler.EnumDeclaration
-import com.xemantic.typescript.compiler.FunctionDeclaration
-import com.xemantic.typescript.compiler.MethodDeclaration
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.PropertyDeclaration
-import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.VariableDeclaration
+import com.xemantic.typescript.compiler.kir.ast.ClassDeclaration
+import com.xemantic.typescript.compiler.kir.ast.EnumDeclaration
+import com.xemantic.typescript.compiler.kir.ast.FunctionDeclaration
+import com.xemantic.typescript.compiler.kir.ast.MethodDeclaration
+import com.xemantic.typescript.compiler.kir.ast.Node
+import com.xemantic.typescript.compiler.kir.ast.PropertyDeclaration
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
+import com.xemantic.typescript.compiler.kir.ast.VariableDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
@@ -200,7 +200,7 @@ internal class KirProgramTables(
         var current: Node? = node
         while (current != null) {
             if (current is SourceFile && files.any { it === current }) return true
-            current = (current as? com.xemantic.typescript.compiler.NodeBase)?.parent
+            current = (current as? com.xemantic.typescript.compiler.kir.ast.NodeBase)?.parent
         }
         return false
     }

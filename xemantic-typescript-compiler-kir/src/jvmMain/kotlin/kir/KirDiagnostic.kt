@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler.kir
 
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.ast.Node
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
 
 /**
  * Why the backend refused to lower something.

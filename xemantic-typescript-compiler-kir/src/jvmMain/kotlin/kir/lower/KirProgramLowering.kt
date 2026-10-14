@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler.kir.lower
 
-import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
 

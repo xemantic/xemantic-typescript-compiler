@@ -25,15 +25,15 @@
 
 package com.xemantic.typescript.compiler.kir.front
 
-import com.xemantic.typescript.compiler.CallExpression
-import com.xemantic.typescript.compiler.Expression
-import com.xemantic.typescript.compiler.Identifier
-import com.xemantic.typescript.compiler.NewExpression
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.Parameter
-import com.xemantic.typescript.compiler.PropertyAccessExpression
+import com.xemantic.typescript.compiler.kir.ast.CallExpression
+import com.xemantic.typescript.compiler.kir.ast.Expression
+import com.xemantic.typescript.compiler.kir.ast.Identifier
+import com.xemantic.typescript.compiler.kir.ast.NewExpression
+import com.xemantic.typescript.compiler.kir.ast.Node
+import com.xemantic.typescript.compiler.kir.ast.Parameter
+import com.xemantic.typescript.compiler.kir.ast.PropertyAccessExpression
 import com.xemantic.typescript.compiler.kir.model.Signature
-import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.compiler.kir.model.Symbol
 import com.xemantic.typescript.compiler.kir.model.Type
 import java.util.IdentityHashMap

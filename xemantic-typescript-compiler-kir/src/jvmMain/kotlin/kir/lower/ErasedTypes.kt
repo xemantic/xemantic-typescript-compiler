@@ -25,18 +25,18 @@
 
 package com.xemantic.typescript.compiler.kir.lower
 
-import com.xemantic.typescript.compiler.ArrowFunction
-import com.xemantic.typescript.compiler.Constructor
-import com.xemantic.typescript.compiler.ConstructorType
-import com.xemantic.typescript.compiler.FunctionDeclaration
-import com.xemantic.typescript.compiler.FunctionExpression
-import com.xemantic.typescript.compiler.FunctionType
-import com.xemantic.typescript.compiler.GetAccessor
-import com.xemantic.typescript.compiler.IndexSignature
-import com.xemantic.typescript.compiler.MethodDeclaration
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.Parameter
-import com.xemantic.typescript.compiler.SetAccessor
+import com.xemantic.typescript.compiler.kir.ast.ArrowFunction
+import com.xemantic.typescript.compiler.kir.ast.Constructor
+import com.xemantic.typescript.compiler.kir.ast.ConstructorType
+import com.xemantic.typescript.compiler.kir.ast.FunctionDeclaration
+import com.xemantic.typescript.compiler.kir.ast.FunctionExpression
+import com.xemantic.typescript.compiler.kir.ast.FunctionType
+import com.xemantic.typescript.compiler.kir.ast.GetAccessor
+import com.xemantic.typescript.compiler.kir.ast.IndexSignature
+import com.xemantic.typescript.compiler.kir.ast.MethodDeclaration
+import com.xemantic.typescript.compiler.kir.ast.Node
+import com.xemantic.typescript.compiler.kir.ast.Parameter
+import com.xemantic.typescript.compiler.kir.ast.SetAccessor
 import com.xemantic.typescript.compiler.kir.model.Type
 import com.xemantic.typescript.compiler.kir.model.TypeFlags
 import org.jetbrains.kotlin.ir.IrBuiltIns

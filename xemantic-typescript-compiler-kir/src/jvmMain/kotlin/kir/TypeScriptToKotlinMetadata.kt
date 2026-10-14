@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler.kir
 
-import com.xemantic.typescript.compiler.CompilerOptions
-import com.xemantic.typescript.compiler.Diagnostic
-import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.front.CheckOptions
+import com.xemantic.typescript.compiler.kir.model.Diagnostic
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.compiler.kir.api.KotlinApiModule
 import com.xemantic.typescript.compiler.kir.api.TypeScriptApiExtractor
 import com.xemantic.typescript.compiler.kir.api.compileMetadataKlib
@@ -97,7 +97,7 @@ public fun exportTypeScriptApi(
     outputKlib: Path,
     packageName: String = "ts",
     moduleName: String = defaultModuleName(outputKlib),
-    options: CompilerOptions = CompilerOptions(useRealLibs = true),
+    options: CheckOptions = CheckOptions(),
     runtimeKlib: Path? = null,
 ): KotlinMetadataExport {
     val checked = checkTypeScript(fileName, source, options)

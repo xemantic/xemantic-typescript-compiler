@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler.kir.model
 
-import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.kir.ast.Node
 import java.util.concurrent.atomic.AtomicInteger
 
 // (TSGO.7-d) KIR'S OWN VALUE MODEL — the types, symbols and signatures the lowering reads.

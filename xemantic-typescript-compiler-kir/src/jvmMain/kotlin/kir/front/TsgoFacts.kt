@@ -25,39 +25,39 @@
 
 package com.xemantic.typescript.compiler.kir.front
 
-import com.xemantic.typescript.compiler.BigIntLiteralNode
-import com.xemantic.typescript.compiler.CallExpression
-import com.xemantic.typescript.compiler.ClassDeclaration
-import com.xemantic.typescript.compiler.Constructor
-import com.xemantic.typescript.compiler.EmptyStatement
-import com.xemantic.typescript.compiler.Expression
-import com.xemantic.typescript.compiler.FunctionDeclaration
-import com.xemantic.typescript.compiler.GetAccessor
-import com.xemantic.typescript.compiler.Identifier
-import com.xemantic.typescript.compiler.MethodDeclaration
-import com.xemantic.typescript.compiler.NewExpression
-import com.xemantic.typescript.compiler.NoSubstitutionTemplateLiteralNode
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.NumericLiteralNode
-import com.xemantic.typescript.compiler.Parameter
-import com.xemantic.typescript.compiler.PropertyAccessExpression
-import com.xemantic.typescript.compiler.PropertyDeclaration
-import com.xemantic.typescript.compiler.RegularExpressionLiteralNode
-import com.xemantic.typescript.compiler.SetAccessor
+import com.xemantic.typescript.compiler.kir.ast.BigIntLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.CallExpression
+import com.xemantic.typescript.compiler.kir.ast.ClassDeclaration
+import com.xemantic.typescript.compiler.kir.ast.Constructor
+import com.xemantic.typescript.compiler.kir.ast.EmptyStatement
+import com.xemantic.typescript.compiler.kir.ast.Expression
+import com.xemantic.typescript.compiler.kir.ast.FunctionDeclaration
+import com.xemantic.typescript.compiler.kir.ast.GetAccessor
+import com.xemantic.typescript.compiler.kir.ast.Identifier
+import com.xemantic.typescript.compiler.kir.ast.MethodDeclaration
+import com.xemantic.typescript.compiler.kir.ast.NewExpression
+import com.xemantic.typescript.compiler.kir.ast.NoSubstitutionTemplateLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.Node
+import com.xemantic.typescript.compiler.kir.ast.NumericLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.Parameter
+import com.xemantic.typescript.compiler.kir.ast.PropertyAccessExpression
+import com.xemantic.typescript.compiler.kir.ast.PropertyDeclaration
+import com.xemantic.typescript.compiler.kir.ast.RegularExpressionLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.SetAccessor
 import com.xemantic.typescript.compiler.kir.model.Signature
-import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.StringLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
+import com.xemantic.typescript.compiler.kir.ast.StringLiteralNode
 import com.xemantic.typescript.compiler.kir.model.Symbol
 import com.xemantic.typescript.compiler.kir.model.SymbolFlags
 import com.xemantic.typescript.compiler.kir.model.Type
 import com.xemantic.typescript.compiler.kir.model.TypeFlags
-import com.xemantic.typescript.compiler.TypeNode
+import com.xemantic.typescript.compiler.kir.ast.TypeNode
 import com.xemantic.typescript.compiler.kir.model.anyType
 import com.xemantic.typescript.compiler.kir.model.bigintType
 import com.xemantic.typescript.compiler.kir.model.booleanType
 import com.xemantic.typescript.compiler.kir.model.esSymbolType
 import com.xemantic.typescript.compiler.kir.model.falseType
-import com.xemantic.typescript.compiler.forEachChild
+import com.xemantic.typescript.compiler.kir.ast.forEachChild
 import com.xemantic.typescript.compiler.kir.model.neverType
 import com.xemantic.typescript.compiler.kir.model.nonPrimitiveType
 import com.xemantic.typescript.compiler.kir.model.nullType
@@ -494,10 +494,10 @@ internal class TsgoFactsBuilder(
         for (map in maps) {
             for (statement in map.core.statements) {
                 val specifier = when (statement) {
-                    is com.xemantic.typescript.compiler.ImportDeclaration -> statement.moduleSpecifier
-                    is com.xemantic.typescript.compiler.ExportDeclaration -> statement.moduleSpecifier
-                    is com.xemantic.typescript.compiler.ImportEqualsDeclaration ->
-                        (statement.moduleReference as? com.xemantic.typescript.compiler.ExternalModuleReference)?.expression
+                    is com.xemantic.typescript.compiler.kir.ast.ImportDeclaration -> statement.moduleSpecifier
+                    is com.xemantic.typescript.compiler.kir.ast.ExportDeclaration -> statement.moduleSpecifier
+                    is com.xemantic.typescript.compiler.kir.ast.ImportEqualsDeclaration ->
+                        (statement.moduleReference as? com.xemantic.typescript.compiler.kir.ast.ExternalModuleReference)?.expression
                     else -> null
                 } ?: continue
                 val tsgo = map.tsgoOf(specifier) ?: continue
@@ -634,7 +634,7 @@ internal class TsgoFactsBuilder(
         val map = maps.firstOrNull { it.tsgo === file } ?: return emptyList()
         val names = mutableListOf<String>()
         for (statement in map.core.statements) {
-            val star = statement as? com.xemantic.typescript.compiler.ExportDeclaration ?: continue
+            val star = statement as? com.xemantic.typescript.compiler.kir.ast.ExportDeclaration ?: continue
             if (star.exportClause != null) continue
             val specifier = star.moduleSpecifier?.let { map.tsgoOf(it) } ?: continue
             val target = checker.getSymbolAtLocation(specifier) ?: continue

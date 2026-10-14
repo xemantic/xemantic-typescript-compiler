@@ -26,7 +26,7 @@
 package com.xemantic.typescript.compiler.kir
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.CompilerOptions
+import com.xemantic.typescript.compiler.kir.front.CheckOptions
 import com.xemantic.typescript.compiler.kir.emit.GeneratedProgramClasspath
 import com.xemantic.typescript.compiler.kir.emit.runGeneratedProgram
 import java.io.File
@@ -72,7 +72,7 @@ class KirReceiverShapeTest {
 
     private fun lower(
         source: String,
-        options: CompilerOptions = CompilerOptions(useRealLibs = true),
+        options: CheckOptions = CheckOptions(),
     ): Lowered {
         val output = Files.createTempDirectory("xtsc-kir-shape")
         try {
@@ -372,7 +372,7 @@ class KirReceiverShapeTest {
                 }
                 console.log(new C(5).a);
                 """,
-                CompilerOptions(useRealLibs = true, useDefineForClassFields = false),
+                CheckOptions(useDefineForClassFields = false),
             ).stdout == "6\n"
         )
     }

@@ -36,9 +36,8 @@ class KirBuildTest {
     }
 
     @Test
-    fun `should have the TypeScript compiler core on the classpath`() {
-        val parser = com.xemantic.typescript.compiler.Parser("const a = 1;", "t.ts")
-        val sourceFile = parser.parse()
+    fun `should have the ported tsgo front end on the classpath`() {
+        val sourceFile = com.xemantic.typescript.compiler.kir.front.checkTypeScript("t.ts", "const a = 1;").sourceFile
         assert(sourceFile.statements.size == 1)
     }
 

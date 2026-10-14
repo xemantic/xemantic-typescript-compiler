@@ -1,3 +1,21 @@
+**(TSGO.5-b) DONE — `tsc --build` on the port (2026-10-12):** `internal/execute/build` ported; its task graph runs on Go
+channels, now lowered onto `runtime.GoChan` (a failing goroutine poisons channel waits instead of hanging them). The
+buildinfo reader decodes by STATIC type where the json shim cannot see one (`reflect.goJsonTarget`), so `-b`'s up-to-date
+checks and `--incremental` re-runs read it as tsgo does; `time.Time.Format` and nanosecond mtimes. CLI parity 120 / 121
+equal incl. 11 `build-*` + 4 `incremental-*` cases (docs/goport-cli.md § 2b); Diag/Emit 13,127, LS 21,614, API 594,007
+equal; `-tsgo` 144 / 0, `-goport` 26 / 0, `-lsp` 38 / 0; native CI green (image replay 65 / 65, `linuxX64Test` 85 / 0).
+
+**(TSGO.6-p) DONE — tsc-rs measured; plain relation keys landed (2026-10-12):** tsc-rs 0.5.0 (an LLM hand port of
+tsgo to Rust) is 2.3-3.9x faster than tsgo 7.0.2 on our 10 projects (compiler profile 727 vs 1,864 ms; ours 1,841),
+doing the same work at 2.2-4x less CPU — a data-model redesign (arena indices, column-store AST, no GC), not a
+transferable cache. Landed: `checker.getRelationKey` override — a non-generic relation key is the value, not its xxh3
+hash (`getRelationKey` 1.5% → 0.3% of the thread; wall inside the A/B noise). Priced and refused: its flow-walk skip
+(no measurable effect on tsc-rs itself here), the small lookup levers (≤ 2.6% each), an Epsilon no-GC image (CPU
+−20..−30%, wall better only on small projects, RSS +20..+50%; an opt-in image is a build change). docs/goport-perf.md
+§ 28. Diag/Emit 13,127, CLI 105 equal; `-tsgo` 137 / 0, `-goport` 26 / 0. Then the native `-tsgo` CI jobs (`native.yml`
+`tsgo-native-image` = `scripts/tsgo-native-ci.sh`: the PGO image replayed against tsgo 7.0.2's own output, 50 / 50
+equal locally; `tsgo-kotlin-native` = `linuxX64Test`) — green on GitHub (run 38298712635: replay 50 / 50, native 79 / 0): **(TSGO.6) DONE**.
+
 **(TSGO.6-o) DONE — the bundled libs parsed at image build time; the PGO image at or past tsgo on 5 of 6 projects
 (2026-10-10):** a lib `.d.ts` parse depends only on name, path and text, so `TsgoLibSnapshot` parses every bundled lib
 inside the GraalVM builder (the port initialized at build time, `GoProcs` excepted) into the image heap, and the

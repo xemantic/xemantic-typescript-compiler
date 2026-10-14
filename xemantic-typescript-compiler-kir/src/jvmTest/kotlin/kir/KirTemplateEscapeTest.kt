@@ -35,7 +35,7 @@ import kotlin.test.Test
  * (TSGO.7-e) A template literal's escapes are COOKED, as JavaScript cooks them. The lowering reads a template's
  * text as the runtime string; `-core`'s parser handed a template's middle, tail and substitution-free text over
  * RAW (and a head in some forms), so `` `a\nb` `` compiled to a backslash and an `n`. The syntax is tsgo's tree
- * now, whose template text is the cooked string (`TsgoSyntaxParityTest` names the difference).
+ * now, whose template text is the cooked string.
  */
 class KirTemplateEscapeTest {
 

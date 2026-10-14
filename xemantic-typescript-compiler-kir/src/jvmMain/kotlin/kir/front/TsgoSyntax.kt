@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler.kir.front
 
-import com.xemantic.typescript.compiler.*
+import com.xemantic.typescript.compiler.kir.ast.*
 import com.xemantic.typescript.tsgo.ast.asInterfaceDeclaration
 import com.xemantic.typescript.tsgo.ast.asVariableStatement
 import com.xemantic.typescript.tsgo.ast.asVariableDeclarationList
@@ -126,13 +126,14 @@ import com.xemantic.typescript.tsgo.ast.SourceFile as TsgoSourceFile
 
 // (TSGO.7-e) THE SYNTAX THE LOWERING WALKS, BUILT FROM tsgo's TREE.
 //
-// The lowering walks `-core`'s AST classes. Until (TSGO.7-e) every program file was parsed a SECOND time by
-// `-core`'s parser for that, and the two trees were paired by (kind, position) (`FileNodeMap`). This builds the
-// same classes from the tree tsgo already parsed, node for node, recording the pairing as it goes: one parse,
-// and no pairing to miss. It reproduces the shapes `-core`'s parser gave the lowering — `this` / `super` /
-// `true` / `false` / `null` as identifiers, a declaration starting AFTER its modifiers, an interface's call
-// signature as a method named "" and its construct signature as a method named `new`, positions in UTF-16 —
-// and `TsgoSyntaxParityTest` holds it to `-core`'s parser on every KIR corpus program.
+// The lowering walks the syntax classes of `kir.ast` (`-core`'s AST, moved here in (TSGO.7-f)). Until (TSGO.7-e)
+// every program file was parsed a SECOND time by `-core`'s parser for that, and the two trees were paired by
+// (kind, position). This builds the same classes from the tree tsgo already parsed, node for node, recording the
+// pairing as it goes: one parse, and no pairing to miss. It reproduces the shapes `-core`'s parser gave the
+// lowering — `this` / `super` / `true` / `false` / `null` as identifiers, a statement-level declaration starting
+// AFTER its modifiers, an interface's call signature as a method named "" and its construct signature as a
+// method named `new`, positions in UTF-16. Until (TSGO.7-f) a differential held it to `-core`'s parser on every
+// KIR corpus program: equal but for one `-core` bug, raw template text (`KirTemplateEscapeTest`).
 
 /** One program file's tsgo tree as the lowering's syntax, and the pairing between the two. */
 internal class TsgoSyntax(private val file: TsgoSourceFile, private val fileName: String) {

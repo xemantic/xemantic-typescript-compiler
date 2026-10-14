@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler.kir.api
 
-import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.kir.ast.Node
 import com.xemantic.typescript.compiler.kir.model.Type
 import com.xemantic.typescript.compiler.kir.model.TypeFlags
 

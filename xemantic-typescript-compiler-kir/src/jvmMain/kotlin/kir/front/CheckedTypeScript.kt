@@ -25,10 +25,9 @@
 
 package com.xemantic.typescript.compiler.kir.front
 
-import com.xemantic.typescript.compiler.CompilerOptions
-import com.xemantic.typescript.compiler.Diagnostic
-import com.xemantic.typescript.compiler.DiagnosticCategory
-import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.model.Diagnostic
+import com.xemantic.typescript.compiler.kir.model.DiagnosticCategory
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.tsgo.compiler.getTypeChecker
 
 /**
@@ -39,6 +38,14 @@ import com.xemantic.typescript.tsgo.compiler.getTypeChecker
  * the [facts] are only obtainable while the checker walks it. Holding them
  * together is what lets the lowering be an ordinary syntax-directed walk.
  */
+/** The compiler options the KIR check honours; everything else is TypeScript 7's default. */
+public data class CheckOptions(
+    /** `strict`: TypeScript 7's default is true; false writes `"strict": false`. */
+    val strict: Boolean = true,
+    /** `useDefineForClassFields`; null keeps the default for the target. */
+    val useDefineForClassFields: Boolean? = null,
+)
+
 public class CheckedTypeScript internal constructor(
     public val sourceFile: SourceFile,
     public val facts: CheckedFacts,
@@ -61,18 +68,16 @@ public class CheckedTypeScript internal constructor(
  * after the check — see `TsgoFacts.kt`. The [CheckedTypeScript.sourceFile] the
  * lowering walks is tsgo's own tree, converted ([TsgoSyntax]).
  *
- * [options] is honoured for `strict` written false and for
- * `useDefineForClassFields`; the KIR has never been driven with anything else,
- * and the rest of `-core`'s option model has no single tsconfig spelling.
+ * [options] carries the two options the KIR is driven with.
  */
 public fun checkTypeScript(
     fileName: String,
     source: String,
-    options: CompilerOptions = CompilerOptions(useRealLibs = true),
+    options: CheckOptions = CheckOptions(),
 ): CheckedTypeScript {
     val absolute = if (fileName.startsWith("/")) fileName else "$SYNTHETIC_ROOT/$fileName"
     val compilerOptions = buildList {
-        if (options.strictExplicitlyFalse) add("\"strict\": false")
+        if (!options.strict) add("\"strict\": false")
         options.useDefineForClassFields?.let { add("\"useDefineForClassFields\": $it") }
     }.joinToString(", ")
     val config = "$SYNTHETIC_ROOT/tsconfig.json"

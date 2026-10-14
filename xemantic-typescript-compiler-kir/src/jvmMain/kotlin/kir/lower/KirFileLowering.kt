@@ -30,90 +30,90 @@
 
 package com.xemantic.typescript.compiler.kir.lower
 
-import com.xemantic.typescript.compiler.ArrayLiteralExpression
-import com.xemantic.typescript.compiler.ArrowFunction
-import com.xemantic.typescript.compiler.ArrayBindingPattern
-import com.xemantic.typescript.compiler.BindingElement
-import com.xemantic.typescript.compiler.ObjectBindingPattern
-import com.xemantic.typescript.compiler.AsExpression
-import com.xemantic.typescript.compiler.BigIntLiteralNode
-import com.xemantic.typescript.compiler.BinaryExpression
-import com.xemantic.typescript.compiler.Block
-import com.xemantic.typescript.compiler.BreakStatement
-import com.xemantic.typescript.compiler.CallExpression
-import com.xemantic.typescript.compiler.ClassDeclaration
-import com.xemantic.typescript.compiler.ConditionalExpression
-import com.xemantic.typescript.compiler.Constructor
-import com.xemantic.typescript.compiler.ContinueStatement
-import com.xemantic.typescript.compiler.ElementAccessExpression
-import com.xemantic.typescript.compiler.EnumDeclaration
-import com.xemantic.typescript.compiler.EnumMember
-import com.xemantic.typescript.compiler.ExportAssignment
-import com.xemantic.typescript.compiler.ExportDeclaration
-import com.xemantic.typescript.compiler.EmptyStatement
-import com.xemantic.typescript.compiler.Expression
-import com.xemantic.typescript.compiler.ExpressionStatement
-import com.xemantic.typescript.compiler.ForStatement
-import com.xemantic.typescript.compiler.FunctionExpression
-import com.xemantic.typescript.compiler.FunctionDeclaration
-import com.xemantic.typescript.compiler.GetAccessor
-import com.xemantic.typescript.compiler.SetAccessor
-import com.xemantic.typescript.compiler.Identifier
-import com.xemantic.typescript.compiler.IfStatement
-import com.xemantic.typescript.compiler.ExportSpecifier
-import com.xemantic.typescript.compiler.NamedExports
-import com.xemantic.typescript.compiler.NamespaceImport
-import com.xemantic.typescript.compiler.ImportDeclaration
-import com.xemantic.typescript.compiler.ImportEqualsDeclaration
-import com.xemantic.typescript.compiler.InterfaceDeclaration
-import com.xemantic.typescript.compiler.MethodDeclaration
-import com.xemantic.typescript.compiler.ModifierFlag
-import com.xemantic.typescript.compiler.NewExpression
-import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.NonNullExpression
-import com.xemantic.typescript.compiler.NoSubstitutionTemplateLiteralNode
-import com.xemantic.typescript.compiler.NodeBase
-import com.xemantic.typescript.compiler.NotEmittedStatement
-import com.xemantic.typescript.compiler.NumericLiteralNode
-import com.xemantic.typescript.compiler.ObjectLiteralExpression
-import com.xemantic.typescript.compiler.Parameter
-import com.xemantic.typescript.compiler.ParenthesizedExpression
-import com.xemantic.typescript.compiler.PostfixUnaryExpression
-import com.xemantic.typescript.compiler.PrefixUnaryExpression
-import com.xemantic.typescript.compiler.PropertyAccessExpression
-import com.xemantic.typescript.compiler.PropertyAssignment
-import com.xemantic.typescript.compiler.PropertyDeclaration
-import com.xemantic.typescript.compiler.RegularExpressionLiteralNode
-import com.xemantic.typescript.compiler.ReturnStatement
-import com.xemantic.typescript.compiler.ShorthandPropertyAssignment
-import com.xemantic.typescript.compiler.SpreadElement
-import com.xemantic.typescript.compiler.Statement
-import com.xemantic.typescript.compiler.StringLiteralNode
-import com.xemantic.typescript.compiler.SyntaxKind
-import com.xemantic.typescript.compiler.TemplateExpression
+import com.xemantic.typescript.compiler.kir.ast.ArrayLiteralExpression
+import com.xemantic.typescript.compiler.kir.ast.ArrowFunction
+import com.xemantic.typescript.compiler.kir.ast.ArrayBindingPattern
+import com.xemantic.typescript.compiler.kir.ast.BindingElement
+import com.xemantic.typescript.compiler.kir.ast.ObjectBindingPattern
+import com.xemantic.typescript.compiler.kir.ast.AsExpression
+import com.xemantic.typescript.compiler.kir.ast.BigIntLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.BinaryExpression
+import com.xemantic.typescript.compiler.kir.ast.Block
+import com.xemantic.typescript.compiler.kir.ast.BreakStatement
+import com.xemantic.typescript.compiler.kir.ast.CallExpression
+import com.xemantic.typescript.compiler.kir.ast.ClassDeclaration
+import com.xemantic.typescript.compiler.kir.ast.ConditionalExpression
+import com.xemantic.typescript.compiler.kir.ast.Constructor
+import com.xemantic.typescript.compiler.kir.ast.ContinueStatement
+import com.xemantic.typescript.compiler.kir.ast.ElementAccessExpression
+import com.xemantic.typescript.compiler.kir.ast.EnumDeclaration
+import com.xemantic.typescript.compiler.kir.ast.EnumMember
+import com.xemantic.typescript.compiler.kir.ast.ExportAssignment
+import com.xemantic.typescript.compiler.kir.ast.ExportDeclaration
+import com.xemantic.typescript.compiler.kir.ast.EmptyStatement
+import com.xemantic.typescript.compiler.kir.ast.Expression
+import com.xemantic.typescript.compiler.kir.ast.ExpressionStatement
+import com.xemantic.typescript.compiler.kir.ast.ForStatement
+import com.xemantic.typescript.compiler.kir.ast.FunctionExpression
+import com.xemantic.typescript.compiler.kir.ast.FunctionDeclaration
+import com.xemantic.typescript.compiler.kir.ast.GetAccessor
+import com.xemantic.typescript.compiler.kir.ast.SetAccessor
+import com.xemantic.typescript.compiler.kir.ast.Identifier
+import com.xemantic.typescript.compiler.kir.ast.IfStatement
+import com.xemantic.typescript.compiler.kir.ast.ExportSpecifier
+import com.xemantic.typescript.compiler.kir.ast.NamedExports
+import com.xemantic.typescript.compiler.kir.ast.NamespaceImport
+import com.xemantic.typescript.compiler.kir.ast.ImportDeclaration
+import com.xemantic.typescript.compiler.kir.ast.ImportEqualsDeclaration
+import com.xemantic.typescript.compiler.kir.ast.InterfaceDeclaration
+import com.xemantic.typescript.compiler.kir.ast.MethodDeclaration
+import com.xemantic.typescript.compiler.kir.ast.ModifierFlag
+import com.xemantic.typescript.compiler.kir.ast.NewExpression
+import com.xemantic.typescript.compiler.kir.ast.Node
+import com.xemantic.typescript.compiler.kir.ast.NonNullExpression
+import com.xemantic.typescript.compiler.kir.ast.NoSubstitutionTemplateLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.NodeBase
+import com.xemantic.typescript.compiler.kir.ast.NotEmittedStatement
+import com.xemantic.typescript.compiler.kir.ast.NumericLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.ObjectLiteralExpression
+import com.xemantic.typescript.compiler.kir.ast.Parameter
+import com.xemantic.typescript.compiler.kir.ast.ParenthesizedExpression
+import com.xemantic.typescript.compiler.kir.ast.PostfixUnaryExpression
+import com.xemantic.typescript.compiler.kir.ast.PrefixUnaryExpression
+import com.xemantic.typescript.compiler.kir.ast.PropertyAccessExpression
+import com.xemantic.typescript.compiler.kir.ast.PropertyAssignment
+import com.xemantic.typescript.compiler.kir.ast.PropertyDeclaration
+import com.xemantic.typescript.compiler.kir.ast.RegularExpressionLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.ReturnStatement
+import com.xemantic.typescript.compiler.kir.ast.ShorthandPropertyAssignment
+import com.xemantic.typescript.compiler.kir.ast.SpreadElement
+import com.xemantic.typescript.compiler.kir.ast.Statement
+import com.xemantic.typescript.compiler.kir.ast.StringLiteralNode
+import com.xemantic.typescript.compiler.kir.ast.SyntaxKind
+import com.xemantic.typescript.compiler.kir.ast.TemplateExpression
 import com.xemantic.typescript.compiler.kir.model.Type
-import com.xemantic.typescript.compiler.TypeAliasDeclaration
-import com.xemantic.typescript.compiler.TypeAssertionExpression
+import com.xemantic.typescript.compiler.kir.ast.TypeAliasDeclaration
+import com.xemantic.typescript.compiler.kir.ast.TypeAssertionExpression
 import com.xemantic.typescript.compiler.kir.model.TypeFlags
-import com.xemantic.typescript.compiler.TypeLiteral
-import com.xemantic.typescript.compiler.TypeOfExpression
-import com.xemantic.typescript.compiler.VariableStatement
-import com.xemantic.typescript.compiler.CaseClause
-import com.xemantic.typescript.compiler.DefaultClause
-import com.xemantic.typescript.compiler.DoStatement
-import com.xemantic.typescript.compiler.ForInStatement
-import com.xemantic.typescript.compiler.ForOfStatement
-import com.xemantic.typescript.compiler.SwitchStatement
-import com.xemantic.typescript.compiler.ThrowStatement
-import com.xemantic.typescript.compiler.TryStatement
-import com.xemantic.typescript.compiler.VariableDeclaration
-import com.xemantic.typescript.compiler.VariableDeclarationList
-import com.xemantic.typescript.compiler.VoidExpression
-import com.xemantic.typescript.compiler.WhileStatement
-import com.xemantic.typescript.compiler.forEachChild
+import com.xemantic.typescript.compiler.kir.ast.TypeLiteral
+import com.xemantic.typescript.compiler.kir.ast.TypeOfExpression
+import com.xemantic.typescript.compiler.kir.ast.VariableStatement
+import com.xemantic.typescript.compiler.kir.ast.CaseClause
+import com.xemantic.typescript.compiler.kir.ast.DefaultClause
+import com.xemantic.typescript.compiler.kir.ast.DoStatement
+import com.xemantic.typescript.compiler.kir.ast.ForInStatement
+import com.xemantic.typescript.compiler.kir.ast.ForOfStatement
+import com.xemantic.typescript.compiler.kir.ast.SwitchStatement
+import com.xemantic.typescript.compiler.kir.ast.ThrowStatement
+import com.xemantic.typescript.compiler.kir.ast.TryStatement
+import com.xemantic.typescript.compiler.kir.ast.VariableDeclaration
+import com.xemantic.typescript.compiler.kir.ast.VariableDeclarationList
+import com.xemantic.typescript.compiler.kir.ast.VoidExpression
+import com.xemantic.typescript.compiler.kir.ast.WhileStatement
+import com.xemantic.typescript.compiler.kir.ast.forEachChild
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import com.xemantic.typescript.compiler.kir.emit.irDouble
-import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.compiler.kir.model.Symbol
 import com.xemantic.typescript.compiler.kir.model.SymbolFlags
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
@@ -744,7 +744,7 @@ internal class KirFileLowering(
                     if (initializer.operator == SyntaxKind.Minus &&
                         initializer.operand is NumericLiteralNode
                     ) {
-                        val value = -numericValue(initializer.operand as NumericLiteralNode)
+                        val value = -numericValue(initializer.operand)
                         values[name] = value
                         next = value + 1.0
                     } else {
@@ -2439,7 +2439,7 @@ internal class KirFileLowering(
         val initializerList = when (val initializer = statement.initializer) {
             null -> null
             is VariableStatement -> initializer.declarationList
-            is com.xemantic.typescript.compiler.VariableDeclarationList -> initializer
+            is com.xemantic.typescript.compiler.kir.ast.VariableDeclarationList -> initializer
             is Expression -> {
                 outer.add(lowerExpression(initializer))
                 null
@@ -2547,9 +2547,9 @@ internal class KirFileLowering(
                 is ContinueStatement -> found = true
                 // A nested loop captures its own `continue`s.
                 is WhileStatement, is ForStatement,
-                is com.xemantic.typescript.compiler.DoStatement,
-                is com.xemantic.typescript.compiler.ForInStatement,
-                is com.xemantic.typescript.compiler.ForOfStatement -> {}
+                is com.xemantic.typescript.compiler.kir.ast.DoStatement,
+                is com.xemantic.typescript.compiler.kir.ast.ForInStatement,
+                is com.xemantic.typescript.compiler.kir.ast.ForOfStatement -> {}
                 else -> forEachChild(current) { visit(it) }
             }
         }
@@ -3074,7 +3074,7 @@ internal class KirFileLowering(
         val owner = when (declaration) {
             is ClassDeclaration -> declaration
             is MethodDeclaration, is PropertyDeclaration, is Constructor, is GetAccessor, is SetAccessor ->
-                (declaration as? com.xemantic.typescript.compiler.NodeBase)?.parent as? ClassDeclaration
+                (declaration as? com.xemantic.typescript.compiler.kir.ast.NodeBase)?.parent as? ClassDeclaration
             else -> null
         } ?: return null
         return owner.takeIf { it !in classes && tables.isProgramNode(it) }
@@ -4384,9 +4384,9 @@ internal class KirFileLowering(
         }
         val (typeOf, literal) = when {
             node.left is TypeOfExpression && node.right is StringLiteralNode ->
-                node.left as TypeOfExpression to node.right as StringLiteralNode
+                node.left to node.right
             node.right is TypeOfExpression && node.left is StringLiteralNode ->
-                node.right as TypeOfExpression to node.left as StringLiteralNode
+                node.right to node.left
             else -> return null
         }
         val operand = lowerExpression(typeOf.expression)

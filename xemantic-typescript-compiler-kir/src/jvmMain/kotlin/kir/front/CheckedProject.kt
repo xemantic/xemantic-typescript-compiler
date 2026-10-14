@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler.kir.front
 
-import com.xemantic.typescript.compiler.Diagnostic
-import com.xemantic.typescript.compiler.DiagnosticCategory
-import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.model.Diagnostic
+import com.xemantic.typescript.compiler.kir.model.DiagnosticCategory
+import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.tsgo.TsgoProject
 import com.xemantic.typescript.tsgo.runtime.GoString
 
