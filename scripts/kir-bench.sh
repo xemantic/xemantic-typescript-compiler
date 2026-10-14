@@ -4,10 +4,10 @@
 #
 #   arm 1  tsgo 7.0.2   -> JavaScript   -> node     (what these libraries run on)
 #   arm 2  xtsc -kir    -> JVM bytecode -> java     (the Kotlin-IR backend)
-#   arm 3  xtsc -core   -> JavaScript   -> node     (OUR JavaScript, same runtime)
+#   arm 3  xtsc         -> JavaScript   -> node     (OUR JavaScript — the tsgo port, `TsgoMain` — same runtime)
 #   arm 4  xtsc -kir    -> Kotlin/Native -> kexe    (KIR_BENCH_NATIVE=1, opt-in)
 #   arm 5  tsgo 7.0.2   -> JavaScript   -> bun      (KIR_BENCH_BUN=1, opt-in)
-#   arm 6  xtsc -core   -> JavaScript   -> bun      (KIR_BENCH_BUN=1, opt-in)
+#   arm 6  xtsc         -> JavaScript   -> bun      (KIR_BENCH_BUN=1, opt-in)
 #
 # The BUN arms re-run arms 1 and 3's OWN emitted files on a second JavaScript
 # engine, so the pair (1,5) and the pair (3,6) each hold the compiler AND the
@@ -24,6 +24,10 @@
 # of ad-hoc commands: arms 1 and 2 differ in BOTH the compiler and the target, so
 # a gap between them cannot be attributed. Arm 3 holds the runtime fixed and
 # varies only the compiler, which splits "our front end" from "our backend".
+# Since (TSGO.7-g) our JavaScript is the tsgo port's, which the run requires to be
+# BYTE-IDENTICAL to tsgo's (`diff -r` below), so arms 1 and 3 time the same bytes:
+# their gap is the run's own noise floor, and the arm 2 gap is all backend. (Runs
+# before 2026-10-14 emitted arm 3 with `-core`'s compiler.)
 #
 # WHAT IT MEASURES. Two numbers with different meanings, both reported:
 #   * STEADY-STATE throughput — the driver warms up, then times rounds itself and
@@ -96,13 +100,10 @@ fi
 [ -d "$PROJECTS/toml" ] || die "no acceptance projects at '$PROJECTS'"
 
 # ---- classpaths ------------------------------------------------------------
-# The CORE tail resolves through the shared guard, which refuses a cache older
-# than `gradle/libs.versions.toml` (round 858). The KIR module needs its own
-# resolution; `findProject`, never `project(":…")`, because an init script
-# applies to every build in the invocation and `build-logic` has no such project.
-# shellcheck source=scripts/lib/dep-classpath.sh
-. "$REPO/scripts/lib/dep-classpath.sh"
-CORE_CLASSES="$REPO/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main"
+# One resolution: the KIR module's runtime classpath carries the tsgo port too
+# (arm 3's `TsgoMain`), since (TSGO.7-g) in place of `-core`'s `MainKt`.
+# `findProject`, never `project(":…")`, because an init script applies to every
+# build in the invocation and `build-logic` has no such project.
 KIR_CLASSES="$REPO/xemantic-typescript-compiler-kir/build/classes/kotlin/jvm/main"
 
 resolve_kir_classpath() {
@@ -133,16 +134,12 @@ mkdir -p "$WORK"
 echo "kir-bench: resolving classpaths ..." >&2
 KIR_TAIL="$(resolve_kir_classpath)"
 [ -n "$KIR_TAIL" ] || die "could not resolve the KIR classpath"
-CORE_TAIL="$(xtsc_dep_classpath)" || die "could not resolve the core classpath"
 
 # POSITIVE CONTROL: the code under test must be in the directories we prepend,
 # or the run measures whatever else the classpath happens to carry (round 853).
-[ -f "$CORE_CLASSES/com/xemantic/typescript/compiler/MainKt.class" ] \
-    || die "no MainKt under $CORE_CLASSES — run ./gradlew :xemantic-typescript-compiler-core:compileKotlinJvm"
 [ -f "$KIR_CLASSES/com/xemantic/typescript/compiler/kir/TypeScriptToKotlinIrKt.class" ] \
     || die "no KIR classes under $KIR_CLASSES"
 
-CORE_CP="$CORE_CLASSES:$CORE_TAIL"
 KIR_CP="$KIR_CLASSES:$KIR_TAIL"
 
 # What a GENERATED program links against, and nothing else: the Kotlin standard
@@ -228,12 +225,16 @@ for lib in mitt toml; do
         if [ "$compiler" = tsgo ]; then
             "$TSGO" -p "$dir" > "$WORK/emit-$compiler-$lib.log" 2>&1
         else
-            java -cp "$CORE_CP" com.xemantic.typescript.compiler.MainKt "$dir" \
+            java -Xss4m -cp "$KIR_CP" com.xemantic.typescript.tsgo.cli.TsgoMainKt -p "$dir" \
                 > "$WORK/emit-$compiler-$lib.log" 2>&1
         fi
         [ -f "$dir/out/main.js" ] || die "$compiler emitted no main.js for $lib — see $WORK/emit-$compiler-$lib.log"
         runnable_esm "$dir/out"
     done
+    # The port emits what tsgo emits (the emit differential's invariant); a
+    # difference here is a defect to chase, never a faster arm.
+    diff -r "$WORK/tsgo-$lib/out" "$WORK/xtsc-$lib/out" > "$WORK/emit-diff-$lib.log" 2>&1 \
+        || die "xtsc's JavaScript for $lib differs from tsgo's — see $WORK/emit-diff-$lib.log"
     java -Xmx4g -cp "$KIR_CP:$WORK" KirBench "$WORK/src-$lib" main.ts "$WORK/jvm-$lib" \
         > "$WORK/emit-kir-$lib.log" 2>&1
     grep -q '^KIR_SUCCESS=true' "$WORK/emit-kir-$lib.log" \
