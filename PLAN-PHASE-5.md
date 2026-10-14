@@ -40,7 +40,10 @@ it is the live Phase 18 queue.
 - Found: `tsgo-ab-warm.sh` medianed the WARM-UP rebuilds since 2026-10-10 — fixed; correction note on the wall
   figures of docs/goport-perf.md §§ 13, 14, 19. Also seen: the G1 image at an extreme 200 MB cap can die with
   SubstrateVM's fatal error (99) when every goroutine fails at once (400 MB finishes) — pre-existing, not chased.
-- Gates: `-tsgo` jvmTest 153 / 0, `linuxX64Test` 91 / 0, warning-clean. Native CI not yet re-run.
+- Gates: `-tsgo` jvmTest 153 / 0, `linuxX64Test` 91 / 0, warning-clean. Native CI run 38561808134 green: G1 PGO image
+  replay 65 / 65 + both watch scenarios equal, no-GC image replay 65 / 65, out of memory exit 3 both ways. First V3
+  bench row (run 38561790753, compiler profile, check-only): warm 2.09 s, image (no PGO) 2.33 s, tsgo 1.76 s, 65 errors
+  in every arm.
 
 ### Round (TSGO.5-c) — `tsc --watch` AND `-b --watch` ON THE PORT: fswatch's core ported, only the OS layer replaced (inotify / WatchService); `select` and `go` lowered; (TSGO.5) DONE
 
