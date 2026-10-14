@@ -1,5 +1,10 @@
 # Status
 
+**(TSGO.7-b/c) DONE — the JVM-vendor bench on the port; KIR's `-core` front end removed (2026-10-14):** `bench-jvms.sh`
+times `CheckBenchMain` / `TsgoMain` (CI run 38647609748 green, 65 errors in every arm); its one rejected rep exposed a
+`CheckBenchMain` emit-counter race (fixed). Two flaky `--watch` pins fixed (atomic edits). KIR's `XTSC_KIR_ENGINE=core`
+front end and `StructuralCensus` deleted; KIR 306 / 0. Next: the lowering's value model, then its syntax tree.
+
 **(TSGO.7-a) DONE — the compile server, `xtsc`'s one-shot mode and `scripts/xtsc` run the port (2026-10-14):**
 `-daemon` depends on `-tsgo` instead of `-core`: `CompileServer` runs `TsgoCli.run` per request with the request's
 directory as tsc's current directory (nothing process-global installed or restored), `XtscMain`'s one-shot mode is

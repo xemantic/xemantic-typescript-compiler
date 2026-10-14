@@ -27,9 +27,7 @@ package com.xemantic.typescript.compiler.kir.front
 
 import com.xemantic.typescript.compiler.Diagnostic
 import com.xemantic.typescript.compiler.DiagnosticCategory
-import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.tsgo.TsgoProject
 import com.xemantic.typescript.tsgo.runtime.GoString
 
@@ -77,7 +75,6 @@ public class CheckedProject internal constructor(
  * this one is for; the check is the whole of what it needs.
  */
 public fun checkTypeScriptProject(projectPath: String): CheckedProject {
-    if (kirUsesCoreChecker) return checkTypeScriptProjectWithCore(projectPath)
     val path = java.io.File(projectPath).absoluteFile.normalize()
     val config = if (path.isDirectory) java.io.File(path, "tsconfig.json").path else path.path
     return TsgoPrograms.onDeepStack {
@@ -97,16 +94,3 @@ public fun checkTypeScriptProject(projectPath: String): CheckedProject {
     }
 }
 
-/** `-core`'s own project check (`XTSC_KIR_ENGINE=core`), as before (TSGO.4-c). */
-internal fun checkTypeScriptProjectWithCore(projectPath: String): CheckedProject {
-    val facts = CheckedFacts()
-    val result = ProjectCompiler(SystemVfs).build(projectPath, noEmit = true, checkedSink = facts)
-    // The sink sees exactly the files the spine walks, which is the program's
-    // own files: lib `.d.ts` files are bound through a separate path and are
-    // never walked. The intersection with `programFiles` is belt and braces,
-    // and it also fixes the ORDER to the crawl's, which is deterministic where
-    // check order is an implementation detail.
-    val byName = facts.files.associateBy { it.fileName }
-    val files = result.programFiles.mapNotNull { byName[it] }
-    return CheckedProject(files, facts, result.diagnostics, result.importEdges)
-}

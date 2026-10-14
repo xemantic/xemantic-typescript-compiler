@@ -26,24 +26,15 @@
 package com.xemantic.typescript.compiler.kir.front
 
 import com.xemantic.typescript.compiler.CallExpression
-import com.xemantic.typescript.compiler.CheckedLens
-import com.xemantic.typescript.compiler.CheckedNodeSink
-import com.xemantic.typescript.compiler.ClassDeclaration
 import com.xemantic.typescript.compiler.Expression
-import com.xemantic.typescript.compiler.FunctionDeclaration
-import com.xemantic.typescript.compiler.GetAccessor
 import com.xemantic.typescript.compiler.Identifier
-import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.NewExpression
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.PropertyAccessExpression
-import com.xemantic.typescript.compiler.PropertyDeclaration
-import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.Signature
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.Symbol
-import com.xemantic.typescript.compiler.SymbolFlags
 import com.xemantic.typescript.compiler.Type
 import java.util.IdentityHashMap
 
@@ -68,27 +59,14 @@ public class CallFact internal constructor(
 )
 
 /**
- * Everything the lowering will ask about, extracted DURING the checker's walk.
+ * Everything the lowering will ask about, answered by tsgo's checker after the
+ * check (`TsgoFacts`) and filed by node.
  *
- * The single most important property of this class is that it asks the lens and
- * throws it away: [CheckedLens] is valid only for the duration of the callback
- * that received it, because the ambient it reads — `currentLocalTypes`, the cta
- * frame stack, `currentFlowGraph` — is installed around the call and restored
- * afterwards. Asking later does not give a coarser answer, it gives a
- * confidently wrong one. The [Type] and [Symbol] objects it RETURNS outlive the
- * walk, which is what makes eager extraction possible at all.
- *
- * Keyed by NODE IDENTITY throughout, via [IdentityHashMap]. Two reasons, and
- * both are load-bearing here: an AST node is a Kotlin `data class`, so a
- * `HashMap` keyed by one deep-recurses `hashCode()` over its whole subtree; and
- * `nodeId` restarts at 0 in every `SourceFile`, so it is not a program-wide key
- * either.
- *
- * FIRST WINS for every fact. The spine may visit a node more than once, and the
- * first visit is the one under the tightest ambient it will ever have there —
- * which is `Checker.typeCaptureRecord`'s rule, adopted for the same reason.
+ * Keyed by NODE IDENTITY throughout, via [IdentityHashMap]: an AST node is a
+ * Kotlin `data class`, so a `HashMap` keyed by one deep-recurses `hashCode()`
+ * over its whole subtree.
  */
-public class CheckedFacts internal constructor() : CheckedNodeSink {
+public class CheckedFacts internal constructor() {
 
     private val checkedFiles = mutableListOf<SourceFile>()
     private val expressionTypes = IdentityHashMap<Expression, Type>()
@@ -112,9 +90,6 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
      */
     public val files: List<SourceFile> get() = checkedFiles
 
-    override fun file(node: SourceFile) {
-        if (checkedFiles.none { it === node }) checkedFiles.add(node)
-    }
 
     /** The type of [node] at its own position — narrowed, body-local-correct. */
     public fun typeOf(node: Expression): Type? = expressionTypes[node]
@@ -171,14 +146,15 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
     /** The checker's rendering of [type], if it was ever asked about. */
     public fun render(type: Type): String = renderings[type.id] ?: type.toString()
 
-    // ---- (TSGO.4-c) the writers the tsgo front end fills the tables through ----
+    // ---- the writers the tsgo front end fills the tables through ----
     //
-    // The `-core` checker fills them from inside its own walk (the sink
-    // callbacks below); the ported tsgo checker answers post hoc, so
-    // `TsgoFacts` walks the program once and writes every answer here. The
-    // tables, their keys and what a consumer reads are the same either way.
+    // The ported tsgo checker answers post hoc, so `TsgoFacts` walks the program
+    // once and writes every answer here. (Before (TSGO.7-c) `-core`'s checker
+    // could fill them from inside its own walk, through its `CheckedNodeSink`.)
 
-    internal fun putFile(node: SourceFile) = file(node)
+    internal fun putFile(node: SourceFile) {
+        if (checkedFiles.none { it === node }) checkedFiles.add(node)
+    }
 
     internal fun putType(node: Expression, type: Type) { expressionTypes[node] = type }
 
@@ -203,186 +179,5 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
     internal fun putMemberType(node: Node, type: Type) { declaredMemberTypes[node] = type }
 
     internal fun putRendering(type: Type, text: String) { renderings[type.id] = text }
-
-    override fun expression(node: Expression, lens: CheckedLens) {
-        if (node !in expressionTypes) remember(lens.typeOf(node), lens).also {
-            expressionTypes[node] = it
-        }
-        when (node) {
-            is CallExpression -> if (node !in calls) calls[node] = callFact(node, lens)
-            is NewExpression -> if (node !in constructions) {
-                val signatures = lens.constructSignatures(node)
-                constructions[node] =
-                    lens.selectOverload(signatures, node.arguments ?: emptyList())
-                        ?: signatures.singleOrNull()
-            }
-            is PropertyAccessExpression -> if (node !in members) {
-                val receiverType = remember(lens.typeOf(node.expression), lens)
-                lens.membersOf(receiverType, node.name.text).firstOrNull()
-                    ?.let { members[node] = it }
-            }
-            is Identifier -> if (node !in names) {
-                lens.resolveName(node.text)?.let { symbol ->
-                    // An IMPORTED name is recorded as what it NAMES, not as the
-                    // alias: the backend reaches its generated declaration
-                    // through this symbol, and an alias's own declaration is the
-                    // import specifier, which it generated nothing for.
-                    val named = lens.aliasTarget(symbol) ?: symbol
-                    names[node] = named
-                    // (LIB.8) Only a MODULE-flagged name pays for the export walk,
-                    // which is what keeps this off every identifier in the program.
-                    if (named.flags.hasAny(SymbolFlags.Module)) {
-                        lens.namespaceImportExports(node)?.let { namespaceExports[node] = it }
-                    }
-                }
-            }
-            else -> {}
-        }
-    }
-
-    override fun declaration(node: Node, lens: CheckedLens) {
-        when (node) {
-            is Parameter -> recordParameter(node, lens)
-            is FunctionDeclaration -> recordSignature(node, node.name, lens)
-            is MethodDeclaration -> recordMethodSignature(node, lens)
-            is PropertyDeclaration -> recordPropertyType(node, lens)
-            // An accessor pair presents as ONE member on the class's type, and
-            // its type is the getter's result — which is the type the backend
-            // needs and the one place it is stated.
-            is GetAccessor -> recordAccessorType(node, node.name, node.parent, lens)
-            is SetAccessor -> recordAccessorType(node, node.name, node.parent, lens)
-            else -> {}
-        }
-    }
-
-    private fun remember(type: Type, lens: CheckedLens): Type {
-        renderings.getOrPut(type.id) { lens.render(type) }
-        return type
-    }
-
-    private fun recordParameter(node: Parameter, lens: CheckedLens) {
-        if (node in parameterTypes) return
-        val name = node.name as? Identifier ?: run {
-            // A DESTRUCTURING parameter has no name to resolve, and a
-            // `Signature` deliberately drops it — so its ANNOTATION is the only
-            // statement of its type, and resolving one is what the lens is for.
-            node.type?.let { parameterTypes[node] = remember(lens.typeOfTypeNode(it), lens) }
-            return
-        }
-        // A parameter is deliberately absent from the binder's `nodeToSymbol` —
-        // `declareLexical` records into the SEPARATE scope-symbol id space — so the
-        // position's own lexical chain is what names it. And `declaredTypeOfSymbol`
-        // answers `any` for one: its worker has arms for the type-declaration kinds
-        // and an `else -> anyType` a value symbol falls through.
-        val symbol = lens.resolveName(name.text) ?: return
-        parameterTypes[node] = remember(lens.typeOfSymbol(symbol), lens)
-    }
-
-    private fun recordSignature(node: Node, name: Identifier?, lens: CheckedLens) {
-        if (node in declaredSignatures || name == null) return
-        lens.callSignatures(name).firstOrNull()?.let { declaredSignatures[node] = it }
-    }
-
-    /**
-     * A method's signature, reached through the CLASS's type.
-     *
-     * The obvious route — `callSignatures` of the method's own name node — is
-     * measured NOT to work: that asks what a free name `increment` is callable
-     * as, and a member name is bound by no scope, so it answers nothing. The
-     * class's member table is where a method lives, and its symbol's type is
-     * the function type whose one call signature carries the return type.
-     */
-    private fun recordMethodSignature(node: MethodDeclaration, lens: CheckedLens) {
-        if (node in declaredSignatures) return
-        val name = node.name as? Identifier ?: return
-        val member = classMember(node.parent, name.text, lens) ?: return
-        val memberType = remember(lens.typeOfSymbol(member), lens)
-        (memberType as? Type.Object)?.callSignatures?.firstOrNull()
-            ?.let { declaredSignatures[node] = it }
-    }
-
-    /**
-     * The call signatures of an IMPORTED name.
-     *
-     * `getCalleeType` — which the lens's `callSignatures` asks — answers nothing
-     * for an import alias, so a call of a function imported from another module
-     * arrives with ZERO signatures and no declaration, and the backend then has
-     * nothing to lower it to. Measured: the identical call resolves normally
-     * when the two files are concatenated, which is what makes this a property
-     * of the import rather than of the callee.
-     *
-     * The symbol's own type is the honest second question: an alias resolves to
-     * the symbol it aliases, and that symbol's type carries the call signature —
-     * including the DECLARATION, which is the node the declare pass keyed the
-     * generated IR function by.
-     */
-    private fun importedCallSignatures(callee: Expression, lens: CheckedLens): List<Signature> {
-        val name = callee as? Identifier ?: return emptyList()
-        val symbol = lens.resolveName(name.text) ?: return emptyList()
-        val type = remember(lens.typeOfSymbol(symbol), lens)
-        return (type as? Type.Object)?.callSignatures ?: emptyList()
-    }
-
-    /**
-     * The symbol a class member's name resolves to on the enclosing class's own
-     * type — the one question about a member that has an honest answer here.
-     */
-    private fun classMember(container: Node?, name: String, lens: CheckedLens): Symbol? {
-        val owner = container as? ClassDeclaration ?: return null
-        val ownerName = owner.name ?: return null
-        val classSymbol = lens.resolveName(ownerName.text) ?: return null
-        return lens.membersOf(lens.declaredTypeOfSymbol(classSymbol), name).firstOrNull()
-    }
-
-    /**
-     * Records a property's type by asking the ENCLOSING CLASS's type for the
-     * member, rather than asking the property's own name node.
-     *
-     * The name node route looks equivalent and is not: a member name is bound by
-     * no scope, so typing it resolves the SPELLING — it answers about whatever
-     * unrelated binding happens to share the name, and `any` only where nothing
-     * does. Here the class type is available and is the honest question.
-     */
-    private fun recordPropertyType(node: PropertyDeclaration, lens: CheckedLens) {
-        if (node in declaredMemberTypes) return
-        val name = node.name as? Identifier ?: return
-        val member = classMember(node.parent, name.text, lens) ?: return
-        declaredMemberTypes[node] = remember(lens.typeOfSymbol(member), lens)
-    }
-
-    private fun recordAccessorType(node: Node, name: Node, container: Node?, lens: CheckedLens) {
-        if (node in declaredMemberTypes) return
-        val memberName = (name as? Identifier)?.text ?: return
-        val member = classMember(container, memberName, lens) ?: return
-        declaredMemberTypes[node] = remember(lens.typeOfSymbol(member), lens)
-    }
-
-    /**
-     * The call fact, including the SELECTED overload.
-     *
-     * Asked here and nowhere else. Overload selection is neither memoised nor
-     * pure — it derives argument types through walk-scoped state and takes a
-     * second chance against the narrowed type — so the same signatures and the
-     * same argument nodes can select differently at a different point in the
-     * walk. This is the single reason the sink seam exists in `-core` at all.
-     *
-     * The `singleOrNull` fallback covers the shape where selection declines but
-     * there is nothing to choose between: a lone signature IS the answer, and
-     * refusing there would reject every ordinary call whose arguments needed a
-     * coercion selection does not model.
-     */
-    private fun callFact(node: CallExpression, lens: CheckedLens): CallFact {
-        val callee = node.expression
-        val signatures = lens.callSignatures(callee).ifEmpty { importedCallSignatures(callee, lens) }
-        val selected = lens.selectOverload(signatures, node.arguments)
-            ?: signatures.singleOrNull()
-        var receiverTypeText: String? = null
-        var memberName: String? = null
-        if (callee is PropertyAccessExpression) {
-            memberName = callee.name.text
-            receiverTypeText = render(remember(lens.typeOf(callee.expression), lens))
-        }
-        return CallFact(selected, signatures.size, receiverTypeText, memberName)
-    }
 
 }

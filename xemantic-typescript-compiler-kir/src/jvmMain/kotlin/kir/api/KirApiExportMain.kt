@@ -39,7 +39,7 @@ import kotlin.system.exitProcess
  *   <project-dir> <entry-file> <out.klib> [package] [runtime.klib]
  * ```
  *
- * The same shape as `…kir.census.StructuralCensusMain`: a `main` run off the
+ * A `main` run off the
  * module's classpath rather than a Gradle task or a shipped CLI entry point.
  * Deliberately so — the CLI is a GraalVM native image and this pipeline embeds
  * the Kotlin compiler, so putting it there would put kotlinc inside a binary

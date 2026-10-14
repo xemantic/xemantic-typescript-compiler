@@ -25,15 +25,10 @@
 
 package com.xemantic.typescript.compiler.kir.front
 
-import com.xemantic.typescript.compiler.Binder
-import com.xemantic.typescript.compiler.Checker
 import com.xemantic.typescript.compiler.CompilerOptions
 import com.xemantic.typescript.compiler.Diagnostic
 import com.xemantic.typescript.compiler.DiagnosticCategory
-import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.computeParserFlags
-import com.xemantic.typescript.compiler.runWithDeepStack
 import com.xemantic.typescript.tsgo.compiler.getTypeChecker
 
 /**
@@ -58,16 +53,6 @@ public class CheckedTypeScript internal constructor(
 }
 
 /**
- * Which checker answers the KIR front end's questions.
- *
- * (TSGO.4-c) The PORTED tsgo checker by default; `XTSC_KIR_ENGINE=core` keeps
- * `-core`'s, for an A/B of the two front ends (the `-core` sunset report,
- * (TSGO.4-d)) — the lowering and everything after it are the same either way.
- */
-internal val kirUsesCoreChecker: Boolean
-    get() = System.getenv("XTSC_KIR_ENGINE") == "core"
-
-/**
  * Parses and checks [source], collecting backend facts.
  *
  * (TSGO.4-c) The checker is the ported tsgo one: the file is checked as the
@@ -85,7 +70,6 @@ public fun checkTypeScript(
     source: String,
     options: CompilerOptions = CompilerOptions(useRealLibs = true),
 ): CheckedTypeScript {
-    if (kirUsesCoreChecker) return checkTypeScriptWithCore(fileName, source, options)
     val absolute = if (fileName.startsWith("/")) fileName else "$SYNTHETIC_ROOT/$fileName"
     val compilerOptions = buildList {
         if (options.strictExplicitlyFalse) add("\"strict\": false")
@@ -137,38 +121,4 @@ internal fun buildFacts(
     } finally {
         done?.invoke()
     }
-}
-
-/** `-core`'s own checker (`XTSC_KIR_ENGINE=core`), as the KIR front end was before (TSGO.4-c). */
-internal fun checkTypeScriptWithCore(
-    fileName: String,
-    source: String,
-    options: CompilerOptions,
-): CheckedTypeScript {
-    val flags = computeParserFlags(fileName, source, options)
-    val parser = Parser(
-        source,
-        fileName,
-        forceJsx = flags.forceJsx,
-        topLevelAwait = flags.topLevelAwait,
-        needsJsxFlag = flags.needsJsxFlag,
-        noImplicitAny = flags.noImplicitAny,
-    )
-    val sourceFile = parser.parse()
-    val parseDiagnostics = parser.getDiagnostics()
-    val binderResult = Binder(options).bind(sourceFile)
-    val facts = CheckedFacts()
-    val checker = runWithDeepStack {
-        Checker(
-            options,
-            listOf(binderResult),
-            isMultiFileSource = true,
-            checkedSink = facts,
-        )
-    }
-    return CheckedTypeScript(
-        sourceFile,
-        facts,
-        parseDiagnostics + checker.getDiagnostics(),
-    )
 }

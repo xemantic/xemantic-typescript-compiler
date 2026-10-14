@@ -25,6 +25,24 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.7-b/c) — THE JVM-VENDOR BENCH ON THE PORT; KIR'S `-core` FRONT END REMOVED
+
+- (7-b) `scripts/bench-jvms.sh` (`jvm-bench.yml`, manual) times the port: warm `CheckBenchMain` (a rep counts only with
+  constant diags / digest / emitted count, emitted > 0 exactly in emit mode), cold `TsgoMain -p`. Classpath resolution
+  shared with `bench-3way.sh` in `scripts/lib/tsgo-bench-classpath.sh`. CI run 38647609748 (1 rep, screening only): 65
+  errors in every arm; temurin26 warm 3.29 s check-only, graal-oracle25 −0.4% warm / −14.9% cold, graal-ce25 +29% warm.
+  Its one rejected rep (graal-oracle25 emit) exposed a HARNESS race: `CheckBenchMain` counted parallel emit writes in a
+  plain `var` (77 of 78) — now a concurrent set of paths (`9f569dfdb`; that commit also carries (7-c)'s file deletions,
+  staged earlier by mistake).
+- Build main 38646809396 / 38647609087 failed two `TsgoCliTest` `--watch` pins on the runner: a `writeText` edit is a
+  create + a modify and, on a loaded runner, became two rebuilds. Steps now move a staged file into place atomically
+  (one event); green under 8 saturated cores locally and on Build main 38648750825.
+- (7-c) KIR's `-core` front end (`XTSC_KIR_ENGINE=core`: `checkTypeScriptWithCore`, `checkTypeScriptProjectWithCore`,
+  `CheckedFacts`' `CheckedNodeSink` half, the `KirFrontEndCompareMain` probe) and `census/StructuralCensus*` (a census of
+  that sink) are gone; `CheckedFacts` is the tsgo front end's fact store only. KIR 306 / 0.
+- Next, KIR's lowering in three steps: (7-d) a KIR-owned value model, (7-e) a KIR-owned syntax tree converted from
+  tsgo's (replacing `-core`'s second parse and the position pairing `FileNodeMap`), (7-f) `-kir` without `api(-core)`.
+
 ### Round (TSGO.7-a) — THE COMPILE SERVER AND `scripts/xtsc` ON THE PORT
 
 - `-daemon` now depends on `-tsgo`, not `-core` (`api(project(":…-tsgo"))`; the queue item names this move). `CompileServer.compileCapturing`
@@ -521,7 +539,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.
 
-- [ ] **(TSGO.7) move the remaining consumers onto the port (§ 6 stage 3).** **IN PROGRESS — (7-a) `-daemon` + `scripts/xtsc` DONE 2026-10-14 (`CompileServer` serves `TsgoCli.run`, `XtscMain` dispatches to `TsgoMainKt`; serve-parity 31 / 31, compiler profile served byte-identical to tsgo; the published bench moved in the (OWNER 2026-10-14) round). OPEN: `jvm-bench.yml`; KIR's lowering.** `-daemon` and `scripts/xtsc` onto the (TSGO.5)
+- [ ] **(TSGO.7) move the remaining consumers onto the port (§ 6 stage 3).** **IN PROGRESS — (7-a) `-daemon` + `scripts/xtsc` DONE 2026-10-14 (`CompileServer` serves `TsgoCli.run`, `XtscMain` dispatches to `TsgoMainKt`; serve-parity 31 / 31, compiler profile served byte-identical to tsgo; the published bench moved in the (OWNER 2026-10-14) round). (7-b) `jvm-bench.yml` DONE 2026-10-14 (`bench-jvms.sh` times `CheckBenchMain` / `TsgoMain`; CI run 38647609748 green, 65 errors in every arm). (7-c) KIR's `-core` front end (`XTSC_KIR_ENGINE=core`, the `CheckedNodeSink` half of `CheckedFacts`) and `StructuralCensus` removed 2026-10-14 (KIR 306 / 0 = 313 − the 7 census pins). OPEN: KIR's lowering — (7-d) a KIR-owned value model (`Type` / `Symbol` / `Signature` built by `TsgoTranslator`), (7-e) a KIR-owned syntax tree converted from tsgo's (no second parse, no `FileNodeMap` pairing), (7-f) `-kir` without `api(-core)`.** `-daemon` and `scripts/xtsc` onto the (TSGO.5)
   CLI; the bench series (`bench.yml`, `bench-3way.sh`, `jvm-bench.yml`) onto the port; KIR's lowering onto tsgo's AST (the
   `KirFileLowering` rewrite). Each consumer its own sub-step with its existing gate.
 
