@@ -13,8 +13,11 @@
 # against are in docs/perf/jdk-jit-vendor-comparison.md, which also records a
 # clean sign-consistent 3/3 result that REVERSED on replication.
 #
+# THE CODE UNDER TEST IS THE tsgo PORT since (TSGO.7) 2026-10-14 (`CheckBenchMain` warm, `TsgoMain` cold;
+# scripts/bench-jvms.sh). Earlier reports under bench-history/jvm-runs/ measured `-core` and are not comparable.
+#
 # BOTH REGIMES MATTER and the defaults below run both only if you ask: the Graal
-# JIT loses cold and wins warm (measured −5.4%/−10.2% warm, +8.2%/+4.6% cold),
+# JIT loses cold and wins warm (measured on `-core`: −5.4%/−10.2% warm, +8.2%/+4.6% cold),
 # so a single-regime run picks its winner by accident.
 name: JVM bench
 
@@ -94,14 +97,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # Compiles main + test classes and materialises the bench profile, both of
-      # which the script needs before it stops the daemons (round 851: a gradle
-      # step AFTER the stop can be killed mid-compile and leave a wiped class
-      # dir behind an earlier BUILD SUCCESSFUL).
+      # Compiles the port's main + test classes and materialises the bench profile,
+      # both of which the script needs before it stops the daemons (round 851: a
+      # gradle step AFTER the stop can be killed mid-compile and leave a wiped
+      # class dir behind an earlier BUILD SUCCESSFUL).
       - name: Build and materialise the profile
         run: |
-          ./gradlew compileTestKotlinJvm
-          scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log --iterations 1
+          ./gradlew :xemantic-typescript-compiler-tsgo:jvmTestClasses
+          scripts/bench-compile-tsc.sh --project compiler --materialize-only
 
       - name: Assert every arm resolved to a real JDK
         run: |

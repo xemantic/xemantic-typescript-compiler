@@ -13,7 +13,7 @@
 # compiled method, and per-arm sd blew out to 16-38%).
 #
 # BOTH REGIMES, ALWAYS. The Graal JIT trades warm-up for peak: measured
-# 2026-08-10 it is -5.4% check-only / -10.2% emit WARM against Temurin and
+# 2026-08-10 (on `-core`) it is -5.4% check-only / -10.2% emit WARM against Temurin and
 # +8.2% / +4.6% COLD. Reporting one regime answers half the question and picks
 # the winner by accident. See docs/perf/jdk-jit-vendor-comparison.md.
 #
@@ -33,7 +33,7 @@ cd "$REPO_ROOT"
 
 declare -a ARM_NAMES=() ARM_PATHS=()
 BASELINE=""; PROFILE=""; WARMUP=6; ITERS=6; WARM_REPS=3; COLD_REPS=2
-MODES="noEmit,emit"; OUT_DIR="$REPO_ROOT/build/bench/jvms"; HEAP=4g
+MODES="noEmit,emit"; OUT_DIR="$REPO_ROOT/build/bench/jvms"; HEAP=6g
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -56,25 +56,24 @@ done
 [[ -n "$BASELINE" ]] || BASELINE="${ARM_NAMES[0]}"
 IFS=',' read -r -a MODE_LIST <<<"$MODES"
 
-MAIN="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main"
-TEST="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test"
+# (TSGO.7) The code under test is the tsgo PORT (`-tsgo`): warm = `CheckBenchMain` (tsgo's default parallel
+# checker, in-process rebuilds), cold = `TsgoMain` (the ported `tsc` command line). Runs before 2026-10-14 measured
+# `-core`'s hand-written checker (`BenchMain` / `MainKt`, 46 diagnostics where tsc and tsgo report 65) and are not
+# comparable with later ones; bench-history/jvm-runs/ keeps them.
+MAIN="$REPO_ROOT/xemantic-typescript-compiler-tsgo/build/classes/kotlin/jvm/main"
 
 # --- everything that may invoke gradle happens BEFORE the daemon stop -------
-# (round 851: a gate that re-triggers a compile which the stop then kills leaves
-# a WIPED class dir behind an earlier BUILD SUCCESSFUL.)
-if [[ ! -f "$TEST/com/xemantic/typescript/compiler/bench/BenchMainKt.class" ]]; then
-    ./gradlew -q compileTestKotlinJvm || { echo "error: could not build test classes" >&2; exit 1; }
-fi
 if [[ -z "$PROFILE" ]]; then
     PROFILE="$(ls -d "$REPO_ROOT"/build/bench/tsc-project-* 2>/dev/null | head -1 || true)"
 fi
 if [[ -z "$PROFILE" || ! -d "$PROFILE" ]]; then
-    scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log --iterations 1
-    PROFILE="$(ls -d "$REPO_ROOT"/build/bench/tsc-project-* | head -1)"
+    PROFILE="$(scripts/bench-compile-tsc.sh --project compiler --materialize-only | tail -1)"
 fi
-. "$REPO_ROOT/scripts/lib/dep-classpath.sh"
-CP_TAIL="$(xtsc_dep_classpath "$REPO_ROOT/build/bench/cp-warm.txt")" || {
-    echo "error: could not resolve the dependency tail" >&2; exit 1; }
+[[ -f "$PROFILE/tsconfig.json" ]] || { echo "error: no tsconfig.json in profile $PROFILE" >&2; exit 1; }
+WORK="$(mktemp -d)"; trap 'rm -rf -- "$WORK"' EXIT
+. "$REPO_ROOT/scripts/lib/tsgo-bench-classpath.sh"
+CP="$(xtsc_tsgo_bench_classpath "$WORK")" || { echo "error: could not resolve the -tsgo classpath" >&2; exit 1; }
+export XTSC_TSGO_LIB_DIR=""   # the bundled libs, as shipped
 
 ./gradlew --stop >/dev/null 2>&1 || true
 pkill -f 'KotlinCompile[D]aemon' 2>/dev/null
@@ -82,7 +81,7 @@ sleep 3
 
 # --- positive controls: is the code under test actually loadable? ----------
 n_main=$(find "$MAIN" -name '*.class' 2>/dev/null | wc -l)
-[[ "$n_main" -gt 500 ]] || { echo "error: only $n_main class files in $MAIN" >&2; exit 1; }
+[[ "$n_main" -gt 2000 ]] || { echo "error: only $n_main class files in $MAIN" >&2; exit 1; }
 for idx in "${!ARM_NAMES[@]}"; do
     jb="${ARM_PATHS[$idx]}"
     [[ -x "$jb" ]] || { echo "error: arm '${ARM_NAMES[$idx]}' has no executable java at $jb" >&2; exit 1; }
@@ -93,46 +92,46 @@ echo "controls OK: $n_main main classes, profile=$PROFILE"
 mkdir -p "$OUT_DIR"
 TSV="$OUT_DIR/results.tsv"
 : > "$TSV"; printf 'block\tarm\tmode\trep\tms\terrors\n' >> "$TSV"
-CP="$MAIN:$TEST:$CP_TAIL"
 NARMS=${#ARM_NAMES[@]}
 
 arm_path() { local n="$1" i; for i in "${!ARM_NAMES[@]}"; do
     [[ "${ARM_NAMES[$i]}" == "$n" ]] && { printf '%s' "${ARM_PATHS[$i]}"; return; }; done; }
 
 warm_run() { # arm mode rep
-    local arm="$1" mode="$2" rep="$3" jb out emitarg=off
-    jb="$(arm_path "$arm")"; [[ "$mode" == emit ]] && emitarg=emit
+    # One row per measured rebuild (`iter N meas total_ms=… diags=… digest=… emitted=…`). The rep is recorded as
+    # FAILED (no row) unless the diagnostic count, digest and emitted-file count are constant across the window
+    # and files were emitted exactly in emit mode — an emit that wrote nothing would read as a fast run.
+    local arm="$1" mode="$2" rep="$3" jb out flags=()
+    jb="$(arm_path "$arm")"; [[ "$mode" == emit ]] && flags=(emit)
     out="$(mktemp)"
-    "$jb" "-Xmx$HEAP" -cp "$CP" com.xemantic.typescript.compiler.bench.BenchMainKt \
-        "$PROFILE" "$WARMUP" "$ITERS" off "$emitarg" >"$out" 2>&1
+    "$jb" "-Xms2g" "-Xmx$HEAP" -cp "$CP" com.xemantic.typescript.tsgo.CheckBenchMainKt \
+        "$PROFILE/tsconfig.json" "$WARMUP" "$ITERS" nolib parallel ${flags[@]+"${flags[@]}"} >"$out" 2>&1
     python3 - "$out" "$arm" "$mode" "$rep" "$TSV" <<'PY'
-import json, statistics, sys
+import re, statistics, sys
 path, arm, mode, rep, tsv = sys.argv[1:6]
-its=[]; errors=-1
-for line in open(path, errors="replace"):
-    line=line.strip()
-    if not line.startswith("{"): continue
-    try: o=json.loads(line)
-    except Exception: continue
-    if "iter" in o: its.append(o["ms"]); errors=o["errors"]
-if not its:
-    print(f"WARN warm {arm}/{mode} rep{rep}: no iterations parsed"); sys.exit()
-med=statistics.median(its)
-open(tsv,"a").write(f"warm\t{arm}\t{mode}\t{rep}\t{med:.1f}\t{errors}\n")
-print(f"warm {arm:14s} {mode:7s} rep{rep} median={med:8.1f} n={len(its)} "
-      f"min={min(its):.0f} max={max(its):.0f} err={errors}")
+rows = [l for l in open(path, errors="replace") if l.startswith("iter ") and " meas " in l]
+ms = [float(re.search(r"total_ms=([\d.]+)", r).group(1)) for r in rows]
+diags = {re.search(r"diags=(\d+)", r).group(1) for r in rows}
+digests = {re.search(r"digest=(\S+)", r).group(1) for r in rows}
+emitted = {int(re.search(r"emitted=(\d+)", r).group(1)) for r in rows}
+if not rows or len(diags) != 1 or len(digests) != 1 or len(emitted) != 1 or (mode == "emit") != (min(emitted) > 0):
+    print(f"WARN warm {arm}/{mode} rep{rep}: no consistent measured iterations"); sys.exit()
+med = statistics.median(ms); errors = diags.pop()
+open(tsv, "a").write(f"warm\t{arm}\t{mode}\t{rep}\t{med:.1f}\t{errors}\n")
+print(f"warm {arm:14s} {mode:7s} rep{rep} median={med:8.1f} n={len(ms)} "
+      f"min={min(ms):.0f} max={max(ms):.0f} err={errors}")
 PY
     rm -f "$out"
 }
 
 cold_run() { # arm mode rep
     local arm="$1" mode="$2" rep="$3" jb out t0 t1 ms errors
-    local nef=(); [[ "$mode" == noEmit ]] && nef=(--noEmit)
+    local mopt=(--noEmit); [[ "$mode" == emit ]] && mopt=(--outDir "$WORK/emit-$arm-$rep")
     jb="$(arm_path "$arm")"
     out="$(mktemp)"
     t0=$(date +%s%N)
-    "$jb" "-Xmx$HEAP" -cp "$CP" com.xemantic.typescript.compiler.MainKt \
-        ${nef[@]+"${nef[@]}"} "$PROFILE" >"$out" 2>&1
+    "$jb" -Xss4m "-Xmx$HEAP" -cp "$CP" com.xemantic.typescript.tsgo.cli.TsgoMainKt \
+        -p "$PROFILE/tsconfig.json" "${mopt[@]}" >"$out" 2>&1
     t1=$(date +%s%N)
     ms=$(( (t1 - t0) / 1000000 ))
     errors=$(grep -c "error TS" "$out" 2>/dev/null | head -1)
@@ -175,8 +174,9 @@ g=defaultdict(list)
 for r in rows: g[(r["block"], r["arm"], r["mode"])].append(float(r["ms"]))
 
 L=[f"# JVM comparison — {os.path.basename(os.environ['PROFILE'])}", "",
-   f"Warm = median of {os.environ['ITERS']} in-process rebuilds after "
-   f"{os.environ['WARMUP']} warm-ups, one JVM per arm. Cold = process wall clock.",
+   "Code under test: the tsgo port (`-tsgo`, series since 2026-10-14; earlier runs measured `-core`).",
+   f"Warm = `CheckBenchMain` (tsgo's parallel checker), median of {os.environ['ITERS']} in-process rebuilds after "
+   f"{os.environ['WARMUP']} warm-ups, one JVM per arm. Cold = `TsgoMain`, process wall clock.",
    "Arms rotated per rep; all arms in ONE block, so deltas are within-round.",
    f"Baseline for deltas: **{base}**.", ""]
 

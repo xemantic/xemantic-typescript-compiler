@@ -116,27 +116,9 @@ FILES=$(find "$PROJ_DIR/src" -name '*.ts' | wc -l)
 LOC=$(find "$PROJ_DIR/src" -name '*.ts' -print0 | xargs -0 cat | wc -l)
 
 WORK="$(mktemp -d)"; trap 'rm -rf -- "$WORK"' EXIT
-cat > "$WORK/print-cp.init.gradle.kts" <<'G'
-rootProject {
-    findProject(":xemantic-typescript-compiler-tsgo")?.let { p ->
-        p.tasks.register("printBenchClasspath") {
-            dependsOn("jvmTestClasses")
-            val cp = p.configurations.getByName("jvmTestRuntimeClasspath")
-            doLast {
-                val dirs = listOf("classes/kotlin/jvm/main", "classes/kotlin/jvm/test", "processedResources/jvm/main", "processedResources/jvm/test")
-                    .map { p.layout.buildDirectory.dir(it).get().asFile }
-                println("BENCH_CP=" + (dirs + cp.files).joinToString(":"))
-            }
-        }
-    }
-}
-G
+. "$REPO_ROOT/scripts/lib/tsgo-bench-classpath.sh"
 echo "== resolving the -tsgo classpath (compiles jvmTest) =="
-./gradlew -q --console=plain -I "$WORK/print-cp.init.gradle.kts" \
-    :xemantic-typescript-compiler-tsgo:printBenchClasspath > "$WORK/cp.log" 2>&1 \
-    || { cat "$WORK/cp.log" >&2; exit 1; }
-[[ $(grep -ac '^BENCH_CP=' "$WORK/cp.log") == 1 ]] || { cat "$WORK/cp.log" >&2; exit 1; }
-CP="$(grep -a '^BENCH_CP=' "$WORK/cp.log" | sed 's/^BENCH_CP=//')"
+CP="$(xtsc_tsgo_bench_classpath "$WORK")" || exit 1
 JAVA1="${WARM_JVM1:-java}"
 
 # The cold JVM arm as an executable, so every process arm runs through run_proc.
