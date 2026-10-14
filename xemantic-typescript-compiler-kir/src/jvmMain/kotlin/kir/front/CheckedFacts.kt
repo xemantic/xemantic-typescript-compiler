@@ -32,10 +32,10 @@ import com.xemantic.typescript.compiler.NewExpression
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.PropertyAccessExpression
-import com.xemantic.typescript.compiler.Signature
+import com.xemantic.typescript.compiler.kir.model.Signature
 import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.Symbol
-import com.xemantic.typescript.compiler.Type
+import com.xemantic.typescript.compiler.kir.model.Symbol
+import com.xemantic.typescript.compiler.kir.model.Type
 import java.util.IdentityHashMap
 
 /**

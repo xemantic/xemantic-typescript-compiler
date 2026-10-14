@@ -26,8 +26,8 @@
 package com.xemantic.typescript.compiler.kir.api
 
 import com.xemantic.typescript.compiler.Node
-import com.xemantic.typescript.compiler.Type
-import com.xemantic.typescript.compiler.TypeFlags
+import com.xemantic.typescript.compiler.kir.model.Type
+import com.xemantic.typescript.compiler.kir.model.TypeFlags
 
 /**
  * TypeScript [Type] → [KotlinType], for a DECLARATION surface.

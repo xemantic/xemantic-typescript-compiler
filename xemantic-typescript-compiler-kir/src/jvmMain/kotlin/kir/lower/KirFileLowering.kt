@@ -91,10 +91,10 @@ import com.xemantic.typescript.compiler.Statement
 import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.SyntaxKind
 import com.xemantic.typescript.compiler.TemplateExpression
-import com.xemantic.typescript.compiler.Type
+import com.xemantic.typescript.compiler.kir.model.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeAssertionExpression
-import com.xemantic.typescript.compiler.TypeFlags
+import com.xemantic.typescript.compiler.kir.model.TypeFlags
 import com.xemantic.typescript.compiler.TypeLiteral
 import com.xemantic.typescript.compiler.TypeOfExpression
 import com.xemantic.typescript.compiler.VariableStatement
@@ -114,8 +114,8 @@ import com.xemantic.typescript.compiler.forEachChild
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import com.xemantic.typescript.compiler.kir.emit.irDouble
 import com.xemantic.typescript.compiler.SourceFile
-import com.xemantic.typescript.compiler.Symbol
-import com.xemantic.typescript.compiler.SymbolFlags
+import com.xemantic.typescript.compiler.kir.model.Symbol
+import com.xemantic.typescript.compiler.kir.model.SymbolFlags
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
 import com.xemantic.typescript.compiler.kir.refuse
 import org.jetbrains.kotlin.backend.common.lower.DeclarationIrBuilder
@@ -3209,14 +3209,13 @@ internal class KirFileLowering(
      * The declaration `ns.member` names, where `ns` is a namespace import.
      *
      * An export that is itself an alias — `export { x } from "./other"` — is
-     * followed to its target, which is the same hop [CheckedFacts] makes for a
-     * free name.
+     * already its target: the front end resolves aliases when it builds the
+     * table, the same hop [CheckedFacts] makes for a free name.
      */
     private fun namespaceMemberDeclaration(node: PropertyAccessExpression): Node? {
         val exports = moduleExportsOf(node.expression) ?: return null
         val symbol = exports[node.name.text] ?: return null
-        val target = symbol.target ?: symbol
-        return target.valueDeclaration ?: target.declarations.firstOrNull()
+        return symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
     }
 
     /** `ns.constant` — the declaring file's slot, through its accessor. */
@@ -3435,8 +3434,7 @@ internal class KirFileLowering(
         // declares them in the other order), which is a STATED divergence and
         // (P18.124)'s, not this round's.
         val exported = exports.mapNotNull { (name, export) ->
-            val target = export.target ?: export
-            val declaration = target.valueDeclaration ?: target.declarations.firstOrNull()
+            val declaration = export.valueDeclaration ?: export.declarations.firstOrNull()
             when (declaration) {
                 is VariableDeclaration ->
                     if (tables.moduleVariables.containsKey(declaration)) name to declaration

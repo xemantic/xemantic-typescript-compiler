@@ -44,29 +44,29 @@ import com.xemantic.typescript.compiler.PropertyAccessExpression
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.RegularExpressionLiteralNode
 import com.xemantic.typescript.compiler.SetAccessor
-import com.xemantic.typescript.compiler.Signature
+import com.xemantic.typescript.compiler.kir.model.Signature
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.StringLiteralNode
-import com.xemantic.typescript.compiler.Symbol
-import com.xemantic.typescript.compiler.SymbolFlags
-import com.xemantic.typescript.compiler.Type
-import com.xemantic.typescript.compiler.TypeFlags
+import com.xemantic.typescript.compiler.kir.model.Symbol
+import com.xemantic.typescript.compiler.kir.model.SymbolFlags
+import com.xemantic.typescript.compiler.kir.model.Type
+import com.xemantic.typescript.compiler.kir.model.TypeFlags
 import com.xemantic.typescript.compiler.TypeNode
-import com.xemantic.typescript.compiler.anyType
-import com.xemantic.typescript.compiler.bigintType
-import com.xemantic.typescript.compiler.booleanType
-import com.xemantic.typescript.compiler.esSymbolType
-import com.xemantic.typescript.compiler.falseType
+import com.xemantic.typescript.compiler.kir.model.anyType
+import com.xemantic.typescript.compiler.kir.model.bigintType
+import com.xemantic.typescript.compiler.kir.model.booleanType
+import com.xemantic.typescript.compiler.kir.model.esSymbolType
+import com.xemantic.typescript.compiler.kir.model.falseType
 import com.xemantic.typescript.compiler.forEachChild
-import com.xemantic.typescript.compiler.neverType
-import com.xemantic.typescript.compiler.nonPrimitiveType
-import com.xemantic.typescript.compiler.nullType
-import com.xemantic.typescript.compiler.numberType
-import com.xemantic.typescript.compiler.stringType
-import com.xemantic.typescript.compiler.trueType
-import com.xemantic.typescript.compiler.undefinedType
-import com.xemantic.typescript.compiler.unknownType
-import com.xemantic.typescript.compiler.voidType
+import com.xemantic.typescript.compiler.kir.model.neverType
+import com.xemantic.typescript.compiler.kir.model.nonPrimitiveType
+import com.xemantic.typescript.compiler.kir.model.nullType
+import com.xemantic.typescript.compiler.kir.model.numberType
+import com.xemantic.typescript.compiler.kir.model.stringType
+import com.xemantic.typescript.compiler.kir.model.trueType
+import com.xemantic.typescript.compiler.kir.model.undefinedType
+import com.xemantic.typescript.compiler.kir.model.unknownType
+import com.xemantic.typescript.compiler.kir.model.voidType
 import com.xemantic.typescript.tsgo.ast.forEachChild as tsgoForEachChild
 import com.xemantic.typescript.tsgo.ast.modifiers
 import com.xemantic.typescript.tsgo.ast.name
@@ -109,7 +109,7 @@ import com.xemantic.typescript.tsgo.checker.Type as TsgoType
 
 // (TSGO.4-c) THE KIR FRONT END ON THE PORTED tsgo CHECKER.
 //
-// The lowering walks `-core`'s AST and reads `-core`'s value classes (`Type`,
+// The lowering walks `-core`'s AST and reads KIR's own value classes (`Type`,
 // `Symbol`, `Signature`) off [CheckedFacts]. Re-basing it onto tsgo therefore
 // has two halves, both here:
 //
@@ -122,7 +122,7 @@ import com.xemantic.typescript.tsgo.checker.Type as TsgoType
 //    ancestor chain (`a.b.c` / `a.b`), paired outermost first.
 //
 // 2. VALUE TRANSLATION ([TsgoTranslator]). A tsgo type, symbol or signature is
-//    rebuilt as the `-core` value with the SHAPE `-core`'s checker gave it —
+//    rebuilt as a KIR value (`kir.model`) with the SHAPE `-core`'s checker gave it —
 //    flags by name, a union's members, an instantiation as a `Type.Reference`
 //    over its target `Type.Interface` (no symbol of its own, as `-core`
 //    reports it), a tuple's element types, call signatures with their
@@ -237,9 +237,9 @@ internal class FileNodeMap(val core: SourceFile, val tsgo: TsgoSourceFile) {
 }
 
 /**
- * Rebuilds tsgo's answers as `-core` values.
+ * Rebuilds tsgo's answers as KIR values (`kir.model`).
  *
- * Identity-memoized, so one tsgo type is one `-core` type (a union's member
+ * Identity-memoized, so one tsgo type is one KIR type (a union's member
  * and the same type met elsewhere are the same object), and DEFERRED: a type's
  * call signatures, a reference's type arguments, a signature's return type and
  * a symbol's declarations are filled after the shell is memoized, which is
@@ -445,8 +445,6 @@ internal class TsgoTranslator(
     private fun fillSignatures(t: TsgoType, core: Type.Object) {
         val calls = checker.getSignaturesOfType(t, SignatureKindCall)
         if (calls.len > 0) core.callSignatures = List(calls.len) { translateSignature(calls[it]!!) }
-        val constructs = checker.getSignaturesOfType(t, SignatureKindConstruct)
-        if (constructs.len > 0) core.constructSignatures = List(constructs.len) { translateSignature(constructs[it]!!) }
     }
 
     private fun translateSignature(s: TsgoSignature): Signature {
@@ -454,7 +452,6 @@ internal class TsgoTranslator(
         val core = Signature(
             declaration = coreNode(s.declaration),
             parameters = List(s.parameters.len) { translateSymbol(s.parameters[it]!!) },
-            minArgumentCount = s.minArgumentCount,
         )
         signatures[s] = core
         pending.add { core.resolvedReturnType = checker.getReturnTypeOfSignature(s)?.let { translate(it) } }
@@ -463,7 +460,7 @@ internal class TsgoTranslator(
 
     /** A signature like [s] but with NO declaration — see [constructionOf]. */
     fun withoutDeclaration(s: Signature): Signature =
-        Signature(null, s.typeParameters, s.parameters, s.resolvedReturnType, s.minArgumentCount)
+        Signature(null, s.parameters, s.resolvedReturnType)
 
     private fun translateSymbol(s: TsgoSymbol): Symbol {
         symbols[s]?.let { return it }
@@ -704,13 +701,13 @@ internal class TsgoFactsBuilder(
      * by it), and `ns === ns` holds only if every mention of `ns` hands it
      * the same table — measured, a table per mention printed `false`.
      */
-    private val namespaceTables = IdentityHashMap<TsgoSymbol, Map<String, com.xemantic.typescript.compiler.Symbol>?>()
+    private val namespaceTables = IdentityHashMap<TsgoSymbol, Map<String, com.xemantic.typescript.compiler.kir.model.Symbol>?>()
 
-    private fun namespaceExports(module: TsgoSymbol): Map<String, com.xemantic.typescript.compiler.Symbol>? =
+    private fun namespaceExports(module: TsgoSymbol): Map<String, com.xemantic.typescript.compiler.kir.model.Symbol>? =
         if (module in namespaceTables) namespaceTables[module]
         else buildNamespaceExports(module).also { namespaceTables[module] = it }
 
-    private fun buildNamespaceExports(module: TsgoSymbol): Map<String, com.xemantic.typescript.compiler.Symbol>? {
+    private fun buildNamespaceExports(module: TsgoSymbol): Map<String, com.xemantic.typescript.compiler.kir.model.Symbol>? {
         val exports = checker.getExportsOfModule(module)
         val byName = LinkedHashMap<String, TsgoSymbol>()
         for (i in 0 until exports.len) {
@@ -719,7 +716,7 @@ internal class TsgoFactsBuilder(
             if (name == "export=") return null
             byName[name] = export
         }
-        val out = LinkedHashMap<String, com.xemantic.typescript.compiler.Symbol>()
+        val out = LinkedHashMap<String, com.xemantic.typescript.compiler.kir.model.Symbol>()
         for (name in exportOrder(module, HashSet()) + byName.keys) {
             if (name in out) continue
             val export = byName[name] ?: continue

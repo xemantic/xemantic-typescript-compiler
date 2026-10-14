@@ -88,28 +88,10 @@ internal object TsgoPrograms {
      * virtual and committed lazily, as `runWithDeepStack` does for `-core`.
      */
     fun <R> onDeepStack(block: () -> R): R {
-        // `-core`'s Type and Symbol id sequences are THREAD-LOCAL and the facts
-        // mint `-core` values on this thread, so the caller's counters are
-        // handed over and back exactly as `runWithDeepStack` hands them: a
-        // sequence restarting at 1 would collide with the singleton intrinsics,
-        // and `CheckedFacts` keys its renderings by `Type.id`.
-        val typeId = com.xemantic.typescript.compiler.Type.captureThreadId()
-        val symbolIds = com.xemantic.typescript.compiler.Symbol.captureThreadIds()
         var result: Result<R>? = null
-        var advanced: Pair<Int, Pair<Int, Int>>? = null
-        val thread = Thread(null, {
-            com.xemantic.typescript.compiler.Type.restoreThreadId(typeId)
-            com.xemantic.typescript.compiler.Symbol.restoreThreadIds(symbolIds)
-            result = runCatching(block)
-            advanced = com.xemantic.typescript.compiler.Type.captureThreadId() to
-                com.xemantic.typescript.compiler.Symbol.captureThreadIds()
-        }, "xtsc-kir-tsgo", 1L shl 30)
+        val thread = Thread(null, { result = runCatching(block) }, "xtsc-kir-tsgo", 1L shl 30)
         thread.start()
         thread.join()
-        advanced?.let { (types, symbols) ->
-            com.xemantic.typescript.compiler.Type.restoreThreadId(types)
-            com.xemantic.typescript.compiler.Symbol.restoreThreadIds(symbols)
-        }
         return result!!.getOrThrow()
     }
 

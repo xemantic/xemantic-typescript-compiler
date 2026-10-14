@@ -37,8 +37,8 @@ import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.SetAccessor
-import com.xemantic.typescript.compiler.Type
-import com.xemantic.typescript.compiler.TypeFlags
+import com.xemantic.typescript.compiler.kir.model.Type
+import com.xemantic.typescript.compiler.kir.model.TypeFlags
 import org.jetbrains.kotlin.ir.IrBuiltIns
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.expressions.IrExpression
@@ -387,7 +387,7 @@ internal fun functionLikeParameters(node: Node?): List<Parameter>? = when (node)
 /**
  * Does [node] declare a rest parameter?
  *
- * `Signature` carries no such flag — [com.xemantic.typescript.compiler.Signature]
+ * `Signature` carries no such flag — [com.xemantic.typescript.compiler.kir.model.Signature]
  * has `parameters` and `minArgumentCount` and nothing that separates `f(a, b)`
  * from `f(a, ...b)` — so the fact is read back off the declaration, which is the
  * only place it exists.
