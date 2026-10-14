@@ -86,7 +86,7 @@ public fun checkTypeScriptProject(projectPath: String): CheckedProject {
             val file = sources[i] ?: return@mapNotNull null
             if (!TsgoPrograms.isProgramFile(program, file)) return@mapNotNull null
             val name = GoString.toUtf16(file.fileName)
-            FileNodeMap(parseForLowering(name, GoString.toUtf16(file.text)), file)
+            TsgoSyntax(file, name)
         }
         val facts = CheckedFacts()
         val edges = buildFacts(opened, maps, facts)

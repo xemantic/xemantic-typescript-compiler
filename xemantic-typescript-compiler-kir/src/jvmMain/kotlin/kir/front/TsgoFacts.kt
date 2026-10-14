@@ -113,13 +113,10 @@ import com.xemantic.typescript.tsgo.checker.Type as TsgoType
 // `Symbol`, `Signature`) off [CheckedFacts]. Re-basing it onto tsgo therefore
 // has two halves, both here:
 //
-// 1. NODE CORRESPONDENCE. Every program file is parsed twice — by tsgo, as part
-//    of its program, and by `-core`'s parser from the SAME text, as the syntax
-//    the lowering walks — and the two trees are paired node for node
-//    ([FileNodeMap]). The key is the node's KIND and its first-token position:
-//    `-core`'s `Node.pos` is tsc's `getStart()`, i.e. tsgo's
-//    `GetTokenPosOfNode`, and nodes of one kind starting at one offset are an
-//    ancestor chain (`a.b.c` / `a.b`), paired outermost first.
+// 1. NODE CORRESPONDENCE. The syntax the lowering walks is built from tsgo's
+//    own tree ([TsgoSyntax], (TSGO.7-e)), which records the pairing node for
+//    node as it converts. (Before, every file was parsed a second time by
+//    `-core`'s parser and the trees were paired by kind and position.)
 //
 // 2. VALUE TRANSLATION ([TsgoTranslator]). A tsgo type, symbol or signature is
 //    rebuilt as a KIR value (`kir.model`) with the SHAPE `-core`'s checker gave it —
@@ -133,109 +130,6 @@ import com.xemantic.typescript.tsgo.checker.Type as TsgoType
 // check, which is exactly what tsgo's checker supports (it is what its API
 // answers) and what `-core`'s could not do.
 
-/** The `-core` tree and the tsgo tree of one program file, paired node for node. */
-internal class FileNodeMap(val core: SourceFile, val tsgo: TsgoSourceFile) {
-
-    private val coreToTsgo = IdentityHashMap<Node, TsgoNode>()
-    private val tsgoToCore = IdentityHashMap<TsgoNode, Node>()
-
-    /** `-core` nodes the walk could not pair, for the census (`XTSC_KIR_MAP_DEBUG`). */
-    var unpairedCore: Int = 0
-        private set
-
-    init {
-        val offsets = Utf8Offsets(GoString.toUtf16(tsgo.text))
-        val tsgoGroups = HashMap<String, MutableList<TsgoNode>>()
-        fun visitTsgo(node: TsgoNode) {
-            val start = offsets.toUtf16(
-                com.xemantic.typescript.tsgo.scanner.getTokenPosOfNode(node, tsgo, false)
-            )
-            val kind = tsgoKindAlias(GoString.toUtf16(node.kind.string()).removePrefix("Kind"))
-            tsgoGroups.getOrPut("$start|$kind") { mutableListOf() }.add(node)
-            // `-core` starts a declaration AFTER its modifiers (`export default
-            // function f` is at `function`), where tsgo's first token is the
-            // first modifier — so a modified node answers to both offsets.
-            node.modifiers()?.nodeList?.takeIf { it.nodes.len > 0 }?.let { modifiers ->
-                val after = offsets.toUtf16(
-                    com.xemantic.typescript.tsgo.scanner.skipTrivia(tsgo.text, modifiers.loc.end())
-                )
-                if (after != start) tsgoGroups.getOrPut("$after|$kind") { mutableListOf() }.add(node)
-            }
-            node.tsgoForEachChild { child ->
-                if (child != null) visitTsgo(child)
-                false
-            }
-        }
-        tsgo.asNode().tsgoForEachChild { child ->
-            if (child != null) visitTsgo(child)
-            false
-        }
-        val coreGroups = HashMap<String, MutableList<Node>>()
-        fun visitCore(node: Node) {
-            coreGroups.getOrPut("${node.pos}|${coreKind(node)}") { mutableListOf() }.add(node)
-            forEachChild(node) { visitCore(it) }
-        }
-        forEachChild(core) { visitCore(it) }
-        for ((key, coreNodes) in coreGroups) {
-            val tsgoNodes = tsgoGroups[key]
-            if (tsgoNodes == null || tsgoNodes.size != coreNodes.size) {
-                unpairedCore += coreNodes.size
-                if (debug) System.err.println(
-                    "xtsc-kir-map: ${core.fileName} $key core=${coreNodes.size} tsgo=${tsgoNodes?.size ?: 0}"
-                )
-                // Pair what pairs safely: a lone node of each side.
-                if (tsgoNodes?.size == 1 && coreNodes.size == 1) pair(coreNodes[0], tsgoNodes[0])
-                continue
-            }
-            coreNodes.indices.forEach { pair(coreNodes[it], tsgoNodes[it]) }
-        }
-        tsgoToCore[tsgo.asNode()!!] = core
-        coreToTsgo[core] = tsgo.asNode()!!
-    }
-
-    private fun pair(coreNode: Node, tsgoNode: TsgoNode) {
-        coreToTsgo[coreNode] = tsgoNode
-        tsgoToCore[tsgoNode] = coreNode
-    }
-
-    fun tsgoOf(node: Node): TsgoNode? = coreToTsgo[node]
-
-    fun coreOf(node: TsgoNode): Node? = tsgoToCore[node]
-
-    private companion object {
-
-        val debug = System.getenv("XTSC_KIR_MAP_DEBUG") == "1"
-
-        /** tsgo's kind for an interface MEMBER, which `-core` parses as the class-member node. */
-        fun tsgoKindAlias(kind: String): String = when (kind) {
-            "PropertySignature" -> "PropertyDeclaration"
-            "MethodSignature" -> "MethodDeclaration"
-            "JsxExpression" -> "JsxExpressionContainer"
-            else -> kind
-        }
-
-        /** `-core`'s node class as tsgo's kind name. */
-        fun coreKind(node: Node): String = when (node) {
-            // `-core` parses the keyword expressions as identifiers.
-            is Identifier -> when (node.text) {
-                "this" -> "ThisKeyword"
-                "super" -> "SuperKeyword"
-                "true" -> "TrueKeyword"
-                "false" -> "FalseKeyword"
-                "null" -> "NullKeyword"
-                else -> "Identifier"
-            }
-            is StringLiteralNode -> "StringLiteral"
-            is NumericLiteralNode -> "NumericLiteral"
-            is BigIntLiteralNode -> "BigIntLiteral"
-            is RegularExpressionLiteralNode -> "RegularExpressionLiteral"
-            is NoSubstitutionTemplateLiteralNode -> "NoSubstitutionTemplateLiteral"
-            else -> node::class.simpleName ?: "?"
-        }
-    }
-
-}
-
 /**
  * Rebuilds tsgo's answers as KIR values (`kir.model`).
  *
@@ -247,7 +141,7 @@ internal class FileNodeMap(val core: SourceFile, val tsgo: TsgoSourceFile) {
  */
 internal class TsgoTranslator(
     private val checker: TsgoChecker,
-    private val maps: Map<TsgoSourceFile, FileNodeMap>,
+    private val maps: Map<TsgoSourceFile, TsgoSyntax>,
     private val facts: CheckedFacts,
 ) {
 
@@ -562,7 +456,7 @@ internal class TsgoTranslator(
  */
 internal class TsgoFactsBuilder(
     private val checker: TsgoChecker,
-    private val maps: List<FileNodeMap>,
+    private val maps: List<TsgoSyntax>,
     private val facts: CheckedFacts,
 ) {
 
@@ -579,7 +473,7 @@ internal class TsgoFactsBuilder(
         }
     }
 
-    private fun visit(node: Node, map: FileNodeMap) {
+    private fun visit(node: Node, map: TsgoSyntax) {
         // A TYPE annotation is syntax the lowering never asks the checker
         // about (a heritage clause's `extends Base` is not a `TypeNode` here).
         if (node is TypeNode) return
@@ -627,7 +521,7 @@ internal class TsgoFactsBuilder(
         }
     }
 
-    private fun record(node: Node, tsgo: TsgoNode, map: FileNodeMap) {
+    private fun record(node: Node, tsgo: TsgoNode, map: TsgoSyntax) {
         if (node is Expression) {
             translator.type(checker.getTypeAtLocation(tsgo))?.let { facts.putType(node, it) }
         }
@@ -757,7 +651,7 @@ internal class TsgoFactsBuilder(
         return names
     }
 
-    private fun callFact(node: CallExpression, tsgo: TsgoNode, map: FileNodeMap): CallFact {
+    private fun callFact(node: CallExpression, tsgo: TsgoNode, map: TsgoSyntax): CallFact {
         val callee = node.expression
         val calleeType = map.tsgoOf(callee)?.let { checker.getTypeAtLocation(it) }
         val signatures = calleeType?.let { checker.getSignaturesOfType(checker.getApparentType(it), SignatureKindCall) }
@@ -784,7 +678,7 @@ internal class TsgoFactsBuilder(
      * lowering takes the class from the callee instead — the shape `-core`'s
      * implicit constructor signature had.
      */
-    private fun constructionOf(node: NewExpression, tsgo: TsgoNode, map: FileNodeMap): Signature? {
+    private fun constructionOf(node: NewExpression, tsgo: TsgoNode, map: TsgoSyntax): Signature? {
         val calleeTsgo = map.tsgoOf(node.expression) ?: return null
         val calleeType = checker.getTypeAtLocation(calleeTsgo) ?: return null
         val constructs = checker.getSignaturesOfType(checker.getApparentType(calleeType), SignatureKindConstruct)
@@ -808,16 +702,3 @@ internal class TsgoFactsBuilder(
 
 }
 
-/** The `-core` parse of [text], which is the syntax the lowering walks. */
-internal fun parseForLowering(fileName: String, text: String): SourceFile {
-    val options = com.xemantic.typescript.compiler.CompilerOptions()
-    val flags = com.xemantic.typescript.compiler.computeParserFlags(fileName, text, options)
-    return com.xemantic.typescript.compiler.Parser(
-        text,
-        fileName,
-        forceJsx = flags.forceJsx,
-        topLevelAwait = flags.topLevelAwait,
-        needsJsxFlag = flags.needsJsxFlag,
-        noImplicitAny = flags.noImplicitAny,
-    ).parse()
-}

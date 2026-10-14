@@ -25,6 +25,26 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.7-d/e) — KIR'S VALUE MODEL AND SYNTAX OFF `-core`
+
+- (7-d) `kir/model/KirValues.kt`: KIR's own `Type` / `Symbol` / `Signature` / flags, only the fields the lowering reads
+  (compiler-driven: index infos, construct signatures, tuple rest/readonly, base types, type parameters, constraints,
+  `minArgumentCount` were written and never read). `Symbol.target` was never set — the alias hop on it is gone.
+- (7-e) `front/TsgoSyntax.kt` converts tsgo's tree into the lowering's syntax classes (still `-core`'s, moved in (7-f))
+  and records the pairing while converting — the second parse by `-core`'s parser and `FileNodeMap`'s (kind, position)
+  pairing are gone. It reproduces `-core`'s shapes the lowering relies on: `this`/`super`/`true`/`false`/`null` as
+  identifiers, a statement-level declaration starting after its modifiers (members and parameters at them), an
+  interface call / construct signature as a method named `""` / `new`, `import type`'s clause after `type`, the `null`
+  type as a keyword type, an array-pattern elision as `OmittedExpression`, UTF-16 positions.
+- Gate `TsgoSyntaxParityTest` (reflective, field by field; not compared: comments, layout fields, bookkeeping, and
+  `end` — `-core`'s overshoots to the end of the NEXT token, no lowering reads it): 44 / 44 corpus files equal but one.
+  That one is a `-core` BUG: its parser hands a template's middle / tail / substitution-free text over RAW, so the
+  lowering compiled `` `a\nb` `` to a backslash and an `n`; tsgo's is cooked. Pinned by `KirTemplateEscapeTest`
+  (fails 2 / 2 with the converter made raw). Sweep of tsc's 78 compiler sources (`TsgoSyntaxParityTestKt` main):
+  differences only in template text (that bug) and three type-node shapes no lowering reads (a type predicate's
+  name, named tuple members, `typeof import(…)`) — kept tsgo's.
+- KIR 309 / 0, warning-clean, `kir-bench.sh 1` equivalence green (mitt, toml).
+
 ### Round (TSGO.7-b/c) — THE JVM-VENDOR BENCH ON THE PORT; KIR'S `-core` FRONT END REMOVED
 
 - (7-b) `scripts/bench-jvms.sh` (`jvm-bench.yml`, manual) times the port: warm `CheckBenchMain` (a rep counts only with
@@ -539,7 +559,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.
 
-- [ ] **(TSGO.7) move the remaining consumers onto the port (§ 6 stage 3).** **IN PROGRESS — (7-a) `-daemon` + `scripts/xtsc` DONE 2026-10-14 (`CompileServer` serves `TsgoCli.run`, `XtscMain` dispatches to `TsgoMainKt`; serve-parity 31 / 31, compiler profile served byte-identical to tsgo; the published bench moved in the (OWNER 2026-10-14) round). (7-b) `jvm-bench.yml` DONE 2026-10-14 (`bench-jvms.sh` times `CheckBenchMain` / `TsgoMain`; CI run 38647609748 green, 65 errors in every arm). (7-c) KIR's `-core` front end (`XTSC_KIR_ENGINE=core`, the `CheckedNodeSink` half of `CheckedFacts`) and `StructuralCensus` removed 2026-10-14 (KIR 306 / 0 = 313 − the 7 census pins). (7-d) the KIR-owned value model DONE 2026-10-14 (`kir/model/KirValues.kt`: only the fields the lowering reads; KIR 306 / 0, `kir-bench.sh` equivalence gate green). OPEN: (7-e) a KIR-owned syntax tree converted from tsgo's (no second parse, no `FileNodeMap` pairing), (7-f) `-kir` without `api(-core)`.** `-daemon` and `scripts/xtsc` onto the (TSGO.5)
+- [ ] **(TSGO.7) move the remaining consumers onto the port (§ 6 stage 3).** **IN PROGRESS — (7-a) `-daemon` + `scripts/xtsc` DONE 2026-10-14 (`CompileServer` serves `TsgoCli.run`, `XtscMain` dispatches to `TsgoMainKt`; serve-parity 31 / 31, compiler profile served byte-identical to tsgo; the published bench moved in the (OWNER 2026-10-14) round). (7-b) `jvm-bench.yml` DONE 2026-10-14 (`bench-jvms.sh` times `CheckBenchMain` / `TsgoMain`; CI run 38647609748 green, 65 errors in every arm). (7-c) KIR's `-core` front end (`XTSC_KIR_ENGINE=core`, the `CheckedNodeSink` half of `CheckedFacts`) and `StructuralCensus` removed 2026-10-14 (KIR 306 / 0 = 313 − the 7 census pins). (7-d) the KIR-owned value model DONE 2026-10-14 (`kir/model/KirValues.kt`: only the fields the lowering reads; KIR 306 / 0, `kir-bench.sh` equivalence gate green). (7-e) the lowering walks tsgo's tree DONE 2026-10-14 (`front/TsgoSyntax.kt` converts it to the lowering's syntax classes and records the pairing; no second parse, `FileNodeMap` gone; `TsgoSyntaxParityTest` holds it to `-core`'s parser on all 44 corpus files; a `-core` template-escape bug fixed on the way, `KirTemplateEscapeTest`; KIR 309 / 0, `kir-bench.sh` equivalence green). OPEN: (7-f) the syntax classes, `Diagnostic` / `CompilerOptions` and the rest of `-kir`'s `-core` imports moved into `-kir`, `api(-core)` dropped.** `-daemon` and `scripts/xtsc` onto the (TSGO.5)
   CLI; the bench series (`bench.yml`, `bench-3way.sh`, `jvm-bench.yml`) onto the port; KIR's lowering onto tsgo's AST (the
   `KirFileLowering` rewrite). Each consumer its own sub-step with its existing gate.
 

@@ -58,8 +58,8 @@ public class CheckedTypeScript internal constructor(
  * (TSGO.4-c) The checker is the ported tsgo one: the file is checked as the
  * only file of a synthesized project (`files: [<it>]`, TypeScript 7's default
  * options and bundled libraries), and every fact is asked of tsgo's checker
- * after the check — see `TsgoFacts.kt`. `-core`'s parser still produces the
- * [CheckedTypeScript.sourceFile] the lowering walks.
+ * after the check — see `TsgoFacts.kt`. The [CheckedTypeScript.sourceFile] the
+ * lowering walks is tsgo's own tree, converted ([TsgoSyntax]).
  *
  * [options] is honoured for `strict` written false and for
  * `useDefineForClassFields`; the KIR has never been driven with anything else,
@@ -87,10 +87,10 @@ public fun checkTypeScript(
         val diagnostics = TsgoPrograms.diagnostics(opened) { if (it == absolute) fileName else it }
         val tsgoFile = opened.program.getSourceFile(com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(absolute))
             ?: error("tsgo did not load '$absolute'")
-        val coreFile = parseForLowering(fileName, source)
+        val syntax = TsgoSyntax(tsgoFile, fileName)
         val facts = CheckedFacts()
-        buildFacts(opened, listOf(FileNodeMap(coreFile, tsgoFile)), facts)
-        CheckedTypeScript(coreFile, facts, diagnostics)
+        buildFacts(opened, listOf(syntax), facts)
+        CheckedTypeScript(syntax.core, facts, diagnostics)
     }
 }
 
@@ -109,7 +109,7 @@ private fun jsonString(text: String): String =
  */
 internal fun buildFacts(
     opened: TsgoProgram,
-    maps: List<FileNodeMap>,
+    maps: List<TsgoSyntax>,
     facts: CheckedFacts,
 ): List<Pair<String, String>> {
     val ctx = com.xemantic.typescript.tsgo.go.context.background()
