@@ -25,6 +25,23 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (OWNER 2026-10-14) — THE OPT-IN NO-GC IMAGE AND THE PUBLISHED BENCH ON THE PORT (both owner-approved open decisions)
+
+- No-GC image: `-PnativeImageGc=epsilon` / `tsgo-native-image-pgo.sh --gc epsilon` → `xtsc-tsgo-pgo-epsilon`, never
+  the default. Against the G1 PGO image: mitt 40 → 20 ms, ky 90 → 60, zod 980 → 890, compiler profile 1,740 → 1,680,
+  services 2,470 → 2,320; peak RSS up to +50%; type-fest passes at 10.7 GB; native replay 121 / 121 equal.
+- Out of memory: the first no-GC probe HUNG at 0% CPU (no Java code can run after an Epsilon OOM, `Runtime.halt`
+  included) → built with `-R:+ExitOnOutOfMemoryError`, exit 3; at a 200 MB cap 90 / 91 parallel runs exit 3, one hung
+  (a race in SubstrateVM's exit path, documented). `TsgoMain`: a throwable escaping the command line is now fatal,
+  exit 2 (was the JVM's 1 = tsc's "errors, outputs skipped"; pin `TsgoCliTest`). `tsgo-native-ci.sh` step 6.
+- Bench: `bench.yml` / `bench-3way.sh` now measure the port (series V3): warm `CheckBenchMain` (gains `emit`), cold
+  `TsgoMain`, the `-tsgo` native image; ratios against tsgo; any diagnostic count differing from tsgo's is flagged.
+  Local: warm 1.91 s, PGO image 1.72 s, tsgo 1.99 s, 65 errors everywhere. `jvm-bench.yml` stays for (TSGO.7).
+- Found: `tsgo-ab-warm.sh` medianed the WARM-UP rebuilds since 2026-10-10 — fixed; correction note on the wall
+  figures of docs/goport-perf.md §§ 13, 14, 19. Also seen: the G1 image at an extreme 200 MB cap can die with
+  SubstrateVM's fatal error (99) when every goroutine fails at once (400 MB finishes) — pre-existing, not chased.
+- Gates: `-tsgo` jvmTest 153 / 0, `linuxX64Test` 91 / 0, warning-clean. Native CI not yet re-run.
+
 ### Round (TSGO.5-c) — `tsc --watch` AND `-b --watch` ON THE PORT: fswatch's core ported, only the OS layer replaced (inotify / WatchService); `select` and `go` lowered; (TSGO.5) DONE
 
 - Extraction: `execute`'s `Watcher`, `execute/watchmanager` whole; `vfs/trackingvfs`; `fswatch` partial, rooted at the

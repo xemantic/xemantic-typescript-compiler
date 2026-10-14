@@ -1,5 +1,12 @@
 # Status
 
+**(OWNER 2026-10-14) DONE — the opt-in no-GC image and the published bench on the port:** `-PnativeImageGc=epsilon`
+(`tsgo-native-image-pgo.sh --gc epsilon`) is faster than the G1 PGO image on every project measured (mitt 40 → 20 ms,
+services 2,470 → 2,320 ms) at up to +50% peak RSS; out of memory it exits 3 (`ExitOnOutOfMemoryError` — the first probe
+hung), and `TsgoMain` now ends a main-thread failure with Go's status 2. `bench.yml` measures the port (series V3: warm
+`CheckBenchMain`, cold `TsgoMain`, the `-tsgo` image, ratios against tsgo). `tsgo-ab-warm.sh` had medianed warm-up
+rebuilds — fixed, docs/goport-perf.md §§ 13/14/19 annotated. `-tsgo` 153 / 0, `linuxX64Test` 91 / 0, replay 121 / 121.
+
 **(TSGO.5-c) DONE — `tsc --watch` and `-b --watch` on the port; (TSGO.5) DONE (2026-10-13):** `execute`'s `Watcher`,
 `execute/watchmanager`, `vfs/trackingvfs` and fswatch's platform-independent core (coalescing, debounce, filtering) ported
 mechanically; only the OS layer is replaced — an overlay copy of `inotify_linux.go`'s backend over an `XtscNotifier`
@@ -38,10 +45,3 @@ builds it (the plain Gradle task is unchanged — owner decision). PGO + snapsho
 (docs/goport-perf.md § 21). CLI replay 106 / 106 with and without the snapshot, Diag 13,127 equal; native 79 / 0. Then
 (§§ 22-23): bounded spin guards (date-fns -10%), one `stat` per host question (16.7k -> 9.1k syscalls), in-place glob
 matching (date-fns config 73-86 -> 49-63 ms), and `TSGO_IO_STATS` / the case-sensitivity probe kept out of build-time init.
-
-**(TSGO.6-n) DONE — transparent wrappers: an `ast.Identifier` is 6 objects, not 13 (2026-10-10):** Go embeds by value;
-the port made each `*Base` wrapper level its own object. A porter rule lowers the 9 wrapper structs with no field or method
-of their own as `typealias`es of what they wrap (the expression chain onto `NodeDefault`), and a selection through one is
-no step. Warm wall **−5.8% single / −2.6% compiler parallel / −5.2% services**, allocation −5% (docs/goport-perf.md
-§ 19). The shipped PGO image is now 1,755 / 2,352 ms on tsc's compiler / services profiles against tsgo's 1,737 /
-2,286 ms (§ 20). Diag 13,127 equal, Emit/CLI/LS/API parity green; `-tsgo` 136 / 0, `-goport` 26 / 0, `-lsp` 38 / 0, native 79 / 0.
