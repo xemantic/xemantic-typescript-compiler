@@ -84,12 +84,12 @@ class CompileServerProtocolRefusalTest {
         try {
             val response = CompileServer.respondTo(
                 CompileRequest(
-                    args = listOf("--noEmit", dir.absolutePath),
+                    args = listOf("--noEmit"),
                     protocolVersion = XTSC_PROTOCOL_VERSION,
+                    workingDirectory = dir.absolutePath,
                 ),
             )
-            assert("FAILED —" in response.output)
-            assert("loud.ts" in response.output)
+            assert(response.output == "loud.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n")
             assert(response.exitCode == 1)
         } finally {
             dir.deleteRecursively()
@@ -102,15 +102,14 @@ class CompileServerProtocolRefusalTest {
         try {
             val response = CompileServer.respondTo(
                 CompileRequest(
-                    args = listOf("--noEmit", dir.absolutePath),
+                    args = listOf("--noEmit"),
                     protocolVersion = XTSC_PROTOCOL_VERSION - 1,
+                    workingDirectory = dir.absolutePath,
                 ),
             )
             assert(response.exitCode == XTSC_REFUSED)
-            // The compiler never ran: no summary line, and the project's own
-            // file is never named. Both are present in the control above.
-            assert("FAILED —" !in response.output)
-            assert("OK —" !in response.output)
+            // The compiler never ran: the project's own file is never named,
+            // as it is in the control above.
             assert("loud.ts" !in response.output)
             // Instant, which is the whole cost half of the fix.
             assert(response.elapsedMs == 0L)
@@ -136,10 +135,9 @@ class CompileServerProtocolRefusalTest {
         val dir = loudProject()
         try {
             val response = CompileServer.respondTo(
-                CompileRequest(args = listOf("--noEmit", dir.absolutePath)),
+                CompileRequest(args = listOf("--noEmit"), workingDirectory = dir.absolutePath),
             )
             assert(response.exitCode == XTSC_REFUSED)
-            assert("FAILED —" !in response.output)
             assert("loud.ts" !in response.output)
             assert(response.elapsedMs == 0L)
         } finally {
@@ -157,13 +155,12 @@ class CompileServerProtocolRefusalTest {
         try {
             val response = CompileServer.respondTo(
                 CompileRequest(
-                    args = listOf("--noEmit", dir.absolutePath),
+                    args = listOf("--noEmit"),
                     protocolVersion = XTSC_PROTOCOL_VERSION + 1,
                     workingDirectory = dir.absolutePath,
                 ),
             )
             assert(response.exitCode == XTSC_REFUSED)
-            assert("FAILED —" !in response.output)
             assert("loud.ts" !in response.output)
         } finally {
             dir.deleteRecursively()

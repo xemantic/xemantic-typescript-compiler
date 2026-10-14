@@ -27,11 +27,8 @@ package com.xemantic.typescript.compiler.server
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.typescript.compiler.clientRequest
-import com.xemantic.typescript.compiler.runCli
-import java.io.ByteArrayOutputStream
+import com.xemantic.typescript.tsgo.cli.runMain
 import java.io.File
-import java.io.PrintStream
-import java.nio.charset.StandardCharsets
 import kotlin.test.Test
 
 /**
@@ -47,8 +44,10 @@ import kotlin.test.Test
  * the word "FAILED"; the CLI had no code at all and reported only in its summary
  * line.
  *
- * Both now come from one place, [runCli]'s return value, and both follow `tsc`:
- * 0 for a clean compile, 1 when errors were found.
+ * Both now come from one place, tsc's own status (the ported tsc since
+ * (TSGO.7): [runMain] is the CLI, `TsgoCli.run` inside it is what the server
+ * runs): 0 for a clean compile, 1 when errors were found and outputs skipped,
+ * 2 when errors were found and outputs generated.
  *
  * ## What would break it again
  *
@@ -67,25 +66,18 @@ class ExitCodeParityTest {
         return dir
     }
 
-    /** Runs the CLI with stdout captured, so the suite's output stays readable. */
-    private fun cliExitCode(dir: File): Int {
-        val previous = System.out
-        return try {
-            System.setOut(PrintStream(ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
-            runCli(arrayOf("--noEmit", dir.absolutePath))
-        } finally {
-            System.setOut(previous)
-        }
-    }
+    /** The one-shot CLI's status (its output goes to this process's stdout). */
+    private fun cliExitCode(dir: File, vararg options: String): Int =
+        runMain(arrayOf(*options, "-p", dir.absolutePath))
 
-    private fun daemonExitCode(dir: File): Int =
-        CompileServer.respondTo(clientRequest(listOf("--noEmit", dir.absolutePath))).exitCode
+    private fun daemonExitCode(dir: File, vararg options: String): Int =
+        CompileServer.respondTo(clientRequest(listOf(*options, "-p", dir.absolutePath))).exitCode
 
     @Test
     fun `a clean compile exits zero on both paths`() {
         val dir = project("export const n: number = 1\n")
-        val cli = cliExitCode(dir)
-        val daemon = daemonExitCode(dir)
+        val cli = cliExitCode(dir, "--noEmit")
+        val daemon = daemonExitCode(dir, "--noEmit")
         assert(cli == 0)
         assert(daemon == cli)
         dir.deleteRecursively()
@@ -95,8 +87,8 @@ class ExitCodeParityTest {
     @Test
     fun `a compile with errors exits one on both paths`() {
         val dir = project("export const n: number = 'not a number'\n")
-        val cli = cliExitCode(dir)
-        val daemon = daemonExitCode(dir)
+        val cli = cliExitCode(dir, "--noEmit")
+        val daemon = daemonExitCode(dir, "--noEmit")
         assert(cli == 1)
         assert(daemon == cli)
         dir.deleteRecursively()
@@ -113,21 +105,26 @@ class ExitCodeParityTest {
             export const c: number = 'z'
             """.trimIndent()
         )
-        assert(cliExitCode(dir) == 1)
+        assert(cliExitCode(dir, "--noEmit") == 1)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `a compile with errors that still emits exits two on both paths`() {
+        val dir = project("export const n: number = 'not a number'\n")
+        val cli = cliExitCode(dir, "--outDir", File(dir, "cli-out").absolutePath)
+        val daemon = daemonExitCode(dir, "--outDir", File(dir, "daemon-out").absolutePath)
+        assert(cli == 2)
+        assert(daemon == cli)
+        assert(File(dir, "cli-out/a.js").isFile)
+        assert(File(dir, "daemon-out/a.js").isFile)
         dir.deleteRecursively()
     }
 
     // --help must not look like a failure to a shell that runs `xtsc --help`.
     @Test
     fun `asking for help exits zero`() {
-        val previous = System.out
-        val code = try {
-            System.setOut(PrintStream(ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
-            runCli(arrayOf("--help"))
-        } finally {
-            System.setOut(previous)
-        }
-        assert(code == 0)
+        assert(runMain(arrayOf("--help")) == 0)
     }
 
 }

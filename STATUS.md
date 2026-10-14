@@ -1,5 +1,13 @@
 # Status
 
+**(TSGO.7-a) DONE — the compile server, `xtsc`'s one-shot mode and `scripts/xtsc` run the port (2026-10-14):**
+`-daemon` depends on `-tsgo` instead of `-core`: `CompileServer` runs `TsgoCli.run` per request with the request's
+directory as tsc's current directory (nothing process-global installed or restored), `XtscMain`'s one-shot mode is
+`TsgoMainKt`'s `main` and the `--daemon` fallback its new `runMain`. `xtsc` now answers exactly as tsc 7 (`-p` for a
+project; exit 0 / 1 / 2). Serve-parity matrix 31 / 31 PASS; tsc's compiler profile served over a real socket: 75 lines
+byte-identical to tsgo on every request, emit tree identical (78 files), warm requests ~1.6 s server-side. `-daemon`
+63 / 0 (the two `-core` mode-leak pins retired), `-tsgo` 153 / 0, warning-clean.
+
 **(OWNER 2026-10-14) DONE — the opt-in no-GC image and the published bench on the port:** `-PnativeImageGc=epsilon`
 (`tsgo-native-image-pgo.sh --gc epsilon`) is faster than the G1 PGO image on every project measured (mitt 40 → 20 ms,
 services 2,470 → 2,320 ms) at up to +50% peak RSS; out of memory it exits 3 (`ExitOnOutOfMemoryError` — the first probe
@@ -36,12 +44,3 @@ hash (`getRelationKey` 1.5% → 0.3% of the thread; wall inside the A/B noise). 
 `tsgo-native-image` = `scripts/tsgo-native-ci.sh`: the PGO image replayed against tsgo 7.0.2's own output, 50 / 50
 equal locally; `tsgo-kotlin-native` = `linuxX64Test`) — green on GitHub (run 38298712635: replay 50 / 50, native 79 / 0): **(TSGO.6) DONE**.
 
-**(TSGO.6-o) DONE — the bundled libs parsed at image build time; the PGO image at or past tsgo on 5 of 6 projects
-(2026-10-10):** a lib `.d.ts` parse depends only on name, path and text, so `TsgoLibSnapshot` parses every bundled lib
-inside the GraalVM builder (the port initialized at build time, `GoProcs` excepted) into the image heap, and the
-`compilerHost.GetSourceFile` override answers a tree only for the same options and text. `scripts/tsgo-native-image-pgo.sh`
-builds it (the plain Gradle task is unchanged — owner decision). PGO + snapshot vs tsgo 7.0.2: tsc's compiler profile
-**1,722 / 1,728 ms**, services **2,305 / 2,335**, immer 544 / 549, ky 123 / 125, mitt **70 / 92**, date-fns 483 / 359
-(docs/goport-perf.md § 21). CLI replay 106 / 106 with and without the snapshot, Diag 13,127 equal; native 79 / 0. Then
-(§§ 22-23): bounded spin guards (date-fns -10%), one `stat` per host question (16.7k -> 9.1k syscalls), in-place glob
-matching (date-fns config 73-86 -> 49-63 ms), and `TSGO_IO_STATS` / the case-sensitivity probe kept out of build-time init.

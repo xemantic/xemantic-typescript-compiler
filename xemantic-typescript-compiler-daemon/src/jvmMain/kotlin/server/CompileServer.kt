@@ -25,7 +25,6 @@
 
 package com.xemantic.typescript.compiler.server
 
-import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.protocol.CompileRequest
 import com.xemantic.typescript.compiler.protocol.CompileResponse
 import com.xemantic.typescript.compiler.protocol.XTSC_PROTOCOL_VERSION
@@ -36,6 +35,7 @@ import com.xemantic.typescript.compiler.protocol.socketPathProblem
 import com.xemantic.typescript.compiler.protocol.writeFrame
 import com.xemantic.typescript.compiler.protocol.xtscProtocolJson
 import com.xemantic.typescript.compiler.protocol.xtscSocketPath
+import com.xemantic.typescript.tsgo.TsgoCli
 import io.ktor.network.selector.SelectorManager
 import io.ktor.network.sockets.UnixSocketAddress
 import io.ktor.network.sockets.aSocket
@@ -49,76 +49,41 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.PrintStream
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 import kotlin.time.TimeSource
 
 /**
- * (SERVER.1) Stage 1 — a pre-warmed compile server.
+ * (SERVER.1) Stage 1 — a pre-warmed compile server, serving the ported tsc ((TSGO.7), `-tsgo`'s [TsgoCli]).
  *
  * ## Why this exists
  *
- * The warm JVM is the fastest artifact this project has: ~~11,580 ms~~ on the
- * compiler profile against the AOT binary's 13,350 ms and a ~~26,272 ms~~ cold
- * CLI. All of that gap is JVM warm-up, which a one-shot CLI process can never
- * amortize. Holding one hot JVM and feeding it requests captures it.
- *
- * **Both absolutes superseded, round 843 (2026-08-07); the CLAIM is unchanged
- * and if anything stronger.** The 11,580/26,272 pair is round 771's, on the
- * retired 4-core box. Two independent later measurements, each self-consistent
- * and NOT comparable to the other (different boxes, different rounds — only
- * within-round pairs are quotable):
- *  - this box, round 843: cold **22,971 ms**, warm steady state **~7,030 ms**,
- *    and an eight-request ladder through this server reading 22,753 / 10,898 /
- *    7,754 / 7,606 / 7,447 / 7,410 / 7,447 / 7,100 ms of client wall — steady
- *    from request 3, reproducing the in-process harness to within ~3%.
- *  - the four-way run in commit `eb42b853`: warm daemon **3,322 ms** against
- *    **tsc 6.0.3 at 4,489 ms**, i.e. the first configuration on record in which
- *    this compiler BEATS the reference implementation on a real project.
- * The cause of the warm improvement over round 771 is unattributed; the leading
- * hypothesis is the (JIT.1) huge-method arc. See
- * `docs/perf/warm-jvm-attribution.md`. Note round 843's ladder was measured on
- * the PRE-MODULE-SPLIT server (commit `778faf2c`), before this file moved into
- * the daemon module and onto ktor sockets — the ladder SHAPE should survive
- * that, but it has not been re-measured here.
+ * The warm JVM is the fastest JVM arm this project has, and all of the gap to a one-shot CLI is JVM warm-up,
+ * which a one-shot process can never amortize. On tsc's compiler profile (published bench, series V3,
+ * 2026-10-14, GitHub runner): the port warm 2.09 s, the same port as a fresh JVM 14.56 s, tsgo 1.76 s.
+ * Holding one hot JVM and feeding it requests captures that difference. (The figures before (TSGO.7) were
+ * the frozen `-core` checker's; `bench-history/README.md` keeps them as the V2 archive.)
  *
  * ## What this deliberately does NOT do
  *
- * It does not retain program state between requests. Round 772 measured that
- * idea and it is worth nothing here: on tsc's own sources a *leaf* edit yields
- * a reverse-dependency closure of 77 of 78 files, because the sources are
- * `export *` barrels, so every file transitively depends on every other. Each
- * request therefore builds a **fresh program**, which is also what makes this
- * safe — see below.
+ * It does not retain program state between requests: each request runs the ordinary command line, which
+ * builds a fresh program — what makes serving safe. (Round 772 measured retained state worth nothing on
+ * tsc's sources: a leaf edit's reverse-dependency closure is 77 of 78 files, through `export *` barrels.)
  *
  * ## Three invariants a change here must preserve
  *
- * 1. **Requests are served SEQUENTIALLY, on ONE thread — and it is the SAME
- *    thread for every request.** This is stronger than "one at a time" and the
- *    difference is the whole reason [compileDispatcher] exists rather than a
- *    plain `Dispatchers.IO`. Symbol/Type id sequences are THREAD-LOCAL
- *    (INV.6(6c0)) and `runWithDeepStack` hands them off by capturing the
- *    caller's counters, seeding the compile thread, and writing the advanced
- *    values back on join. A coroutine that migrated to a different carrier
- *    thread between requests would hand off from a thread whose counters are
- *    still at zero, restarting ids at 1 and colliding with the singleton
- *    intrinsics — a failure that leaves **every byte of output identical** and
- *    is therefore invisible to any diff. `--workers` has separately been
- *    measured producing 62 diagnostics where the sequential path produces 46.
- * 2. **The request runs the ORDINARY [com.xemantic.typescript.compiler.main]**,
- *    with stdout captured. Nothing about argument parsing, diagnostic
- *    formatting or exit semantics is reimplemented here, so server output is
- *    identical to CLI output *by construction* rather than by testing — the
- *    tests then check that the construction holds. `System.setOut` is
- *    process-global, which is a second, independent reason serving cannot be
- *    concurrent.
+ * 1. **Requests are served SEQUENTIALLY, on ONE thread.** One compile at a time keeps the server's peak
+ *    memory that of one compile, and the port's goroutine run tokens (`GoProcs`, `TSGO_GOMAXPROCS`) are
+ *    process-wide: two concurrent compiles would share them. (Under `-core` the same thread was
+ *    load-bearing for its thread-local id counters; the port has none, but [compileDispatcher] keeps the
+ *    stronger property and `CompileThreadInvariantTest` still pins it.)
+ * 2. **The request runs the ORDINARY command line** ([TsgoCli.run], what `TsgoMainKt` and its native
+ *    image run), with its output captured. Nothing about argument parsing, diagnostic formatting or exit status
+ *    is reimplemented here, so server output is identical to CLI output *by construction* — the tests
+ *    then check that the construction holds.
  * 3. **The wire format lives in the `-api` module**, not here. The client is a
  *    separately-built binary, so a framing or schema change that reaches only
  *    one side presents as a HANG rather than as a type error.
- *
- * Reusing one JVM across compiles is not speculative: `BenchMain` runs twelve
- * in-process rebuilds and every one reports the same 78 files and 46 errors.
  *
  * ## Transport
  *
@@ -138,11 +103,7 @@ object CompileServer {
         user = System.getProperty("user.name") ?: "unknown",
     )
 
-    /**
-     * The one thread every compile runs on — see invariant 1. Single-threaded is
-     * load-bearing, not a throughput choice: the id handoff is only coherent
-     * while the same thread hands off each time.
-     */
+    /** The one thread every compile runs on — see invariant 1. */
     private val compileDispatcher by lazy {
         Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, COMPILE_THREAD_NAME).apply { isDaemon = true }
@@ -164,48 +125,38 @@ object CompileServer {
         withContext(compileDispatcher) { block() }
 
     /**
-     * Runs one compile with stdout captured, on the calling thread.
+     * Runs one compile with its output captured, on the calling thread.
      *
-     * The exit code is derived from the compiler's own summary line rather than
-     * recomputed, so it cannot drift from what the CLI reports.
+     * The ported tsc ((TSGO.7)): [TsgoCli.run] takes the directory and the output sink as arguments, so nothing
+     * process-global is installed for a request — no `System.setOut`, no working-directory override — and the
+     * exit status is tsc's own return value. An exception thrown on this thread is reported in the response
+     * with Go's fatal status 2 (the CLI's `fatal error:` exit); a throwable escaping one of the compile's
+     * goroutines is fatal to the whole server, as it is to `tsc` (CLAUDE.md, `goSpawn`), and the client then
+     * falls back to compiling in-process.
      */
     private fun compileCapturing(args: List<String>, workingDirectory: String): CompileResponse {
         val buffer = ByteArrayOutputStream()
-        val previous = System.out
-        val previousCwd = SystemVfs.workingDirectory
         val mark = TimeSource.Monotonic.markNow()
         var failed: Throwable? = null
         var code = 0
         try {
-            System.setOut(PrintStream(buffer, true, StandardCharsets.UTF_8))
-            // (SERVE.2) round 873. The request's directory, not this process's:
-            // every relative path on the command line means something THERE, and
-            // the most important one is the path a user did not type at all —
-            // the CLI defaults the project to `"."`, so before this a
-            // `xtsc --daemon --noEmit` compiled the DAEMON's directory and
-            // reported OK on a project full of errors. Install-and-restore, on
-            // the one compile thread, exactly like the round-848 mode ledger:
-            // this is process-global state and a request that left it set would
-            // reconfigure every later one.
-            SystemVfs.workingDirectory = workingDirectory.ifEmpty { null }
-            // `runCli`, NOT `main`: main ends the process, which inside the
-            // daemon would take the server down with the first project that has
-            // an error. runCli returns the same code instead — so the server
-            // reports the compiler's OWN verdict rather than deducing one by
-            // searching the captured stdout for the word "FAILED", which is what
-            // it used to do and which made the exit code depend on message
-            // wording.
-            code = com.xemantic.typescript.compiler.runCli(args.toTypedArray())
+            // (SERVE.2) round 873. The request's directory, not this process's: every relative path on the
+            // command line means something THERE, and the most important one is the path a user did not type
+            // at all — tsc looks for `tsconfig.json` in the current directory.
+            code = TsgoCli.run(
+                args = args,
+                currentDirectory = workingDirectory.ifEmpty { File(System.getProperty("user.dir")).absolutePath },
+                out = { buffer.write(it) },
+                libDirectory = System.getenv("XTSC_TSGO_LIB_DIR")?.takeIf { it.isNotEmpty() },
+                environment = { System.getenv(it) },
+            )
         } catch (e: Exception) {
             failed = e
-        } finally {
-            System.setOut(previous)
-            SystemVfs.workingDirectory = previousCwd
         }
         val elapsed = mark.elapsedNow().inWholeMilliseconds
         val text = buffer.toString(StandardCharsets.UTF_8) +
             (failed?.let { "\nserver: compile threw ${it::class.simpleName}: ${it.message}\n" } ?: "")
-        val exit = if (failed != null) 1 else code
+        val exit = if (failed != null) 2 else code
         return CompileResponse(
             output = text,
             exitCode = exit,
@@ -303,10 +254,7 @@ object CompileServer {
                 server.use {
                     Runtime.getRuntime().addShutdownHook(Thread { socketFile.delete() })
                     println("xtsc compile server listening on $socketPath")
-                    println(
-                        "  requests are served sequentially; the first is cold (~26 s), " +
-                            "later ones warm (~12 s)"
-                    )
+                    println("  requests are served sequentially; the first is cold, later ones warm")
                     var served = 0
                     while (true) {
                         val client = try {

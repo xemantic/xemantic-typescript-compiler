@@ -1,3 +1,13 @@
+**(TSGO.6-o) DONE — the bundled libs parsed at image build time; the PGO image at or past tsgo on 5 of 6 projects
+(2026-10-10):** a lib `.d.ts` parse depends only on name, path and text, so `TsgoLibSnapshot` parses every bundled lib
+inside the GraalVM builder (the port initialized at build time, `GoProcs` excepted) into the image heap, and the
+`compilerHost.GetSourceFile` override answers a tree only for the same options and text. `scripts/tsgo-native-image-pgo.sh`
+builds it (the plain Gradle task is unchanged — owner decision). PGO + snapshot vs tsgo 7.0.2: tsc's compiler profile
+**1,722 / 1,728 ms**, services **2,305 / 2,335**, immer 544 / 549, ky 123 / 125, mitt **70 / 92**, date-fns 483 / 359
+(docs/goport-perf.md § 21). CLI replay 106 / 106 with and without the snapshot, Diag 13,127 equal; native 79 / 0. Then
+(§§ 22-23): bounded spin guards (date-fns -10%), one `stat` per host question (16.7k -> 9.1k syscalls), in-place glob
+matching (date-fns config 73-86 -> 49-63 ms), and `TSGO_IO_STATS` / the case-sensitivity probe kept out of build-time init.
+
 **(TSGO.6-n) DONE — transparent wrappers: an `ast.Identifier` is 6 objects, not 13 (2026-10-10):** Go embeds by value;
 the port made each `*Base` wrapper level its own object. A porter rule lowers the 9 wrapper structs with no field or method
 of their own as `typealias`es of what they wrap (the expression chain onto `NodeDefault`), and a selection through one is

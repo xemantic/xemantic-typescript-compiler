@@ -332,13 +332,18 @@ class LauncherClientArmTest {
     @Test
     fun `an unreachable daemon still compiles in-process and leaves nothing behind`() {
         val dir = tmpDir()
+        File(dir, "tsconfig.json").writeText("""{ "compilerOptions": { "strict": true } }""")
+        File(dir, "a.ts").writeText("export const n: number = 'not a number'\n")
         val absent = File(dir, "absent.sock")
-        val (_, out, err) = run(
+        val (code, out, err) = run(
             mapOf("XTSC_AOT" to "off"),
-            "--daemon", "--socket", absent.absolutePath, "--noEmit", dir.absolutePath,
+            "--daemon", "--socket", absent.absolutePath, "--noEmit", "-p", dir.absolutePath,
         )
+        // tsc names the file relative to its current directory, the launcher's (`run`).
+        val shown = launcher()!!.parentFile.parentFile.toPath().relativize(File(dir, "a.ts").toPath())
         assert("no compile server on" in err)
-        assert("whole-project build" in out)
+        assert(out == "$shown(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n")
+        assert(code == 1)
         assert(!absent.exists())
         dir.deleteRecursively()
     }

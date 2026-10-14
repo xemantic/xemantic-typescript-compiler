@@ -25,6 +25,27 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.7-a) — THE COMPILE SERVER AND `scripts/xtsc` ON THE PORT
+
+- `-daemon` now depends on `-tsgo`, not `-core` (`api(project(":…-tsgo"))`; the queue item names this move). `CompileServer.compileCapturing`
+  runs `TsgoCli.run(args, currentDirectory = request.workingDirectory or the server's user.dir, out = buffer, libDirectory =
+  $XTSC_TSGO_LIB_DIR)`: no `System.setOut`, no `SystemVfs.workingDirectory` install/restore. A request-thread exception is
+  answered with status 2 (the CLI's fatal status); a goroutine's throwable still ends the server (`goSpawn`), the client then
+  falls back in-process. `XtscMain`: one-shot = `com.xemantic.typescript.tsgo.cli.main`, the `--daemon` fallback =
+  `runMain` (new in `TsgoMain.kt`: `main` minus `exitProcess`). `scripts/xtsc` / `xtsc-aot` follow (same main class).
+- User-visible: `xtsc` answers as tsc 7 — a positional directory is a ROOT FILE (TS6231), a project is `-p dir` or the cwd's
+  tsconfig; exit 0 / 1 / 2 (2 = errors, outputs generated). The old `-core` summary line (`OK — …` / `FAILED — …`) is gone.
+- Tests: `CompileServerModeLeakTest` / `CompileServerPassTimingTest` deleted (they pinned `-core`'s process-global flags; the
+  port's command line takes its directory and sink as arguments). The rest assert tsc's full output (checked against
+  `tools/tsgo-7.0.2/lib/tsc`); new pins: consecutive requests independent (fail / clean / fail), errors-with-emit exits 2
+  on both paths, a missing working directory answers as an empty one. Ablation (server ignores the request directory):
+  7 pins fail. `-daemon` 63 / 0, `-tsgo` 153 / 0, warning-clean.
+- Gates: `scripts/serve_parity.py` 31 / 31 PASS, 45 invocation pairs (its `--out` must be short: the socket lives there,
+  ~100-byte limit). Real socket, tsc's compiler profile: 6 JVM-dispatcher + 4 native-client requests all byte-identical to
+  tsgo (75 lines, exit 1), emit tree identical (78 files, exit 2); server-side 9.2 s cold, then 3.2 / 2.3 / ~1.6-1.8 s.
+  The local native client `.kexe` is a stale protocol-1 build (refused, then the launcher's JVM arm served) — rebuild it
+  before measuring that arm.
+
 ### Round (OWNER 2026-10-14) — THE OPT-IN NO-GC IMAGE AND THE PUBLISHED BENCH ON THE PORT (both owner-approved open decisions)
 
 - No-GC image: `-PnativeImageGc=epsilon` / `tsgo-native-image-pgo.sh --gc epsilon` → `xtsc-tsgo-pgo-epsilon`, never
@@ -500,7 +521,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   GraalVM image of the (TSGO.5) CLI; measure wall/RSS against `-core`'s image on the compiler profile. Native builds run ALONE
   under the memory protocol in CLAUDE.md.
 
-- [ ] **(TSGO.7) move the remaining consumers onto the port (§ 6 stage 3).** `-daemon` and `scripts/xtsc` onto the (TSGO.5)
+- [ ] **(TSGO.7) move the remaining consumers onto the port (§ 6 stage 3).** **IN PROGRESS — (7-a) `-daemon` + `scripts/xtsc` DONE 2026-10-14 (`CompileServer` serves `TsgoCli.run`, `XtscMain` dispatches to `TsgoMainKt`; serve-parity 31 / 31, compiler profile served byte-identical to tsgo; the published bench moved in the (OWNER 2026-10-14) round). OPEN: `jvm-bench.yml`; KIR's lowering.** `-daemon` and `scripts/xtsc` onto the (TSGO.5)
   CLI; the bench series (`bench.yml`, `bench-3way.sh`, `jvm-bench.yml`) onto the port; KIR's lowering onto tsgo's AST (the
   `KirFileLowering` rewrite). Each consumer its own sub-step with its existing gate.
 

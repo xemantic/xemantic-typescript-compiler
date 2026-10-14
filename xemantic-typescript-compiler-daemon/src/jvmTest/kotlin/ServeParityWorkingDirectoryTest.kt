@@ -42,17 +42,22 @@ import kotlin.test.Test
  * compiled the daemon's own directory and exited **0**, and `--outDir out`
  * emitted the user's JavaScript into it.
  *
- * Each test is written so it FAILS if the install is removed, not merely if the
- * compile breaks: every one names a symbol that exists only in the intended
- * project, so "compiled the wrong tree" and "compiled nothing" are different
- * failures.
+ * Each test is written so it FAILS if the request's directory is ignored, not
+ * merely if the compile breaks: every one names a file that exists only in the
+ * intended project, so "compiled the wrong tree" and "compiled nothing" are
+ * different failures. Since (TSGO.7) the directory is the ported tsc's current
+ * directory for the request (`TsgoCli.run`): nothing process-global is
+ * installed, so there is nothing to restore either.
  */
 class ServeParityWorkingDirectoryTest {
 
+    private val ts2322 = "error TS2322: Type 'string' is not assignable to type 'number'."
+
+    private fun tempDir(name: String): File =
+        File.createTempFile("xtsc-cwd-$name-", "").let { it.delete(); it.mkdirs(); it }
+
     private fun project(name: String, source: String): File {
-        val dir = File.createTempFile("xtsc-cwd-$name-", "").let {
-            it.delete(); it.mkdirs(); it
-        }
+        val dir = tempDir(name)
         File(dir, "tsconfig.json").writeText("""{ "compilerOptions": { "strict": true } }""")
         File(dir, "$name.ts").writeText(source)
         return dir
@@ -65,10 +70,7 @@ class ServeParityWorkingDirectoryTest {
             val response = CompileServer.respondTo(
                 clientRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
             )
-            // The file is only in THIS project, so naming it is proof the right
-            // tree was crawled — an exit code alone could not tell that from a
-            // different project that also fails.
-            assert("here.ts" in response.output)
+            assert(response.output == "here.ts(1,14): $ts2322\n")
             assert(response.exitCode == 1)
         } finally {
             dir.deleteRecursively()
@@ -76,18 +78,16 @@ class ServeParityWorkingDirectoryTest {
     }
 
     @Test
-    fun `a relative path argument resolves against the client's directory`() {
-        val parent = File.createTempFile("xtsc-cwd-parent-", "").let {
-            it.delete(); it.mkdirs(); it
-        }
+    fun `a relative project path resolves against the client's directory`() {
+        val parent = tempDir("parent")
         val dir = File(parent, "inner").apply { mkdirs() }
         File(dir, "tsconfig.json").writeText("""{ "compilerOptions": { "strict": true } }""")
         File(dir, "inner.ts").writeText("export const alsoWrong: number = 'a string'\n")
         try {
             val response = CompileServer.respondTo(
-                clientRequest(listOf("--noEmit", "inner"), workingDirectory = parent.absolutePath),
+                clientRequest(listOf("--noEmit", "-p", "inner"), workingDirectory = parent.absolutePath),
             )
-            assert("inner.ts" in response.output)
+            assert(response.output == "inner/inner.ts(1,14): $ts2322\n")
             assert(response.exitCode == 1)
         } finally {
             parent.deleteRecursively()
@@ -100,70 +100,51 @@ class ServeParityWorkingDirectoryTest {
         try {
             val response = CompileServer.respondTo(
                 clientRequest(
-                    listOf(".", "--outDir", "does-not-exist-yet"),
+                    listOf("--outDir", "does-not-exist-yet"),
                     workingDirectory = dir.absolutePath,
                 ),
             )
+            assert(response.output == "")
             assert(response.exitCode == 0)
-            // The whole defect in one assertion: this directory did not exist,
-            // so the old "rewrite an argument that names something existing
-            // here" rule left it alone and the daemon emitted into its own cwd.
-            assert(File(dir, "does-not-exist-yet/emitted.js").exists())
+            assert(File(dir, "does-not-exist-yet/emitted.js").readText() == "export const n = 1;\n")
         } finally {
             dir.deleteRecursively()
         }
     }
 
+    /**
+     * A directory that does not exist is tsc's business, not the server's: the
+     * answer is tsc's for a directory with no `tsconfig.json` (its help text,
+     * status 1), never a server failure.
+     */
     @Test
-    fun `the installed directory is restored when the request returns`() {
-        val dir = project("restored", "export const n: number = 1\n")
-        val before = SystemVfs.workingDirectory
+    fun `a missing working directory is answered as tsc answers an empty one`() {
+        val empty = tempDir("empty")
         try {
-            CompileServer.respondTo(
-                clientRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
-            )
-            // Process-global state, one long-lived JVM: a request that left this
-            // set would silently redirect every LATER request on the daemon —
-            // the round-848 failure mode with a directory instead of a flag.
-            assert(SystemVfs.workingDirectory == before)
-        } finally {
-            SystemVfs.workingDirectory = before
-            dir.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun `a request that throws still restores the directory`() {
-        val before = SystemVfs.workingDirectory
-        try {
-            // A path that cannot be a project at all; whatever the compile does
-            // with it, the finally in `compileCapturing` is what is under test.
-            CompileServer.respondTo(
+            val missing = CompileServer.respondTo(
                 clientRequest(listOf("--noEmit"), workingDirectory = "/xtsc-not-a-directory"),
             )
-            assert(SystemVfs.workingDirectory == before)
+            val none = CompileServer.respondTo(
+                clientRequest(listOf("--noEmit"), workingDirectory = empty.absolutePath),
+            )
+            assert(missing.output == none.output)
+            assert(missing.exitCode == 1)
+            assert(none.exitCode == 1)
         } finally {
-            SystemVfs.workingDirectory = before
+            empty.deleteRecursively()
         }
     }
 
     @Test
     fun `negative control - an empty working directory falls back to the server's own`() {
         val dir = project("ignored", "export const n: number = 1\n")
-        val before = SystemVfs.workingDirectory
         try {
-            // Empty is what a pre-version-2 client sends, and it must keep
-            // meaning "the server's own directory" rather than resolving to the
-            // filesystem root or throwing. This is also the control that the
-            // three tests above are measuring the INSTALL and not something the
-            // compiler would have done anyway.
             val response = CompileServer.respondTo(
-                clientRequest(listOf("--noEmit", dir.absolutePath), workingDirectory = ""),
+                clientRequest(listOf("--noEmit", "-p", dir.absolutePath), workingDirectory = ""),
             )
+            assert(response.output == "")
             assert(response.exitCode == 0)
-            assert(SystemVfs.workingDirectory == null)
         } finally {
-            SystemVfs.workingDirectory = before
             dir.deleteRecursively()
         }
     }

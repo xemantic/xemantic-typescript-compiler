@@ -8,6 +8,12 @@ purpose: that one is round 871's ATTRIBUTION of where a warm request spends its
 time. This one is a CONTRACT and a re-runnable gate — what `xtsc` answers, and
 whether the answer depends on which path served it.
 
+**(TSGO.7-a), 2026-10-14: both arms run the ported tsc** (`-daemon` serves `TsgoCli.run`, the one-shot arm is
+`TsgoMainKt`), so the answers are tsc 7's: a positional directory is a root file, not a project, and the `--workers` /
+mode cells now pass because both arms refuse the same unknown options. Matrix 31 / 31 PASS. Pass a short `--out`: the
+daemon's socket is created there and the OS limit is ~100 bytes. The round-848 mode-leak findings below are `-core`
+history.
+
 ---
 
 ## 0. Why the sweep happened

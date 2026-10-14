@@ -121,9 +121,9 @@ class XtscClientExitCodeTest {
     fun `the daemon's output is reproduced verbatim on stdout`() {
         val (_, out) = dispatch(
             arrayOf("--daemon", "--noEmit", "."),
-            response(1, "a.ts(1,7): error TS2322: nope\nFAILED — 1 error(s)\n"),
+            response(1, "a.ts(1,7): error TS2322: nope\n"),
         )
-        assert(out == "a.ts(1,7): error TS2322: nope\nFAILED — 1 error(s)\n")
+        assert(out == "a.ts(1,7): error TS2322: nope\n")
     }
 
     // The other half of the parity: with nothing answering, the dispatcher
@@ -135,7 +135,7 @@ class XtscClientExitCodeTest {
         val dir = File.createTempFile("xtsc-fallback-", "").let { it.delete(); it.mkdirs(); it }
         File(dir, "tsconfig.json").writeText("""{ "compilerOptions": { "strict": true } }""")
         File(dir, "a.ts").writeText("export const n: number = 'not a number'\n")
-        val (code, _) = dispatch(arrayOf("--daemon", "--noEmit", dir.absolutePath), null)
+        val (code, _) = dispatch(arrayOf("--daemon", "--noEmit", "-p", dir.absolutePath), null)
         assert(code == 1)
         dir.deleteRecursively()
     }
@@ -145,7 +145,7 @@ class XtscClientExitCodeTest {
         val dir = File.createTempFile("xtsc-fallback-ok-", "").let { it.delete(); it.mkdirs(); it }
         File(dir, "tsconfig.json").writeText("""{ "compilerOptions": { "strict": true } }""")
         File(dir, "a.ts").writeText("export const n: number = 1\n")
-        val (code, _) = dispatch(arrayOf("--daemon", "--noEmit", dir.absolutePath), null)
+        val (code, _) = dispatch(arrayOf("--daemon", "--noEmit", "-p", dir.absolutePath), null)
         assert(code == 0)
         dir.deleteRecursively()
     }

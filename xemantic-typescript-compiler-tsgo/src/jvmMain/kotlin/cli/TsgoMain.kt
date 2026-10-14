@@ -41,9 +41,19 @@ import kotlin.system.exitProcess
  * `tools/tsgo-7.0.2/lib`, so file names in diagnostics agree byte for byte).
  */
 fun main(args: Array<String>) {
+    exitProcess(runMain(args))
+}
+
+/**
+ * [main] without the exit: runs `tsc [args]` in this process's directory, writes tsc's output to stdout and
+ * returns tsc's exit status. For an entry point that dispatches to the compiler and then has more to do
+ * (`xemantic-typescript-compiler-daemon`'s `XtscMain` and its in-process fallback). A fatal error still ends the
+ * process (status 2), as in [main].
+ */
+fun runMain(args: Array<String>): Int {
     if (args.isNotEmpty() && (args[0] == "--lsp" || args[0] == "--api")) {
         System.err.println("${args[0]} is not served by this entry point (the language server is xemantic-typescript-compiler-lsp)")
-        exitProcess(1)
+        return 1
     }
     val stdout = BufferedOutputStream(FileOutputStream(FileDescriptor.out), 1 shl 16)
     // tsgo asks `term.IsTerminal(stdout)`. A JVM has a Console only for a terminal (before JDK 22), and since JDK 22
@@ -86,5 +96,5 @@ fun main(args: Array<String>) {
     }
     stdout.flush()
     if (com.xemantic.typescript.tsgo.go.os.GoSyscall.statsOn) System.err.println(com.xemantic.typescript.tsgo.go.os.GoSyscall.stats())
-    exitProcess(status)
+    return status
 }

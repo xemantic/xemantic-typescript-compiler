@@ -48,31 +48,18 @@ import com.xemantic.typescript.compiler.protocol.CompileResponse
  * figure is now ~7,030 ms** — see `docs/perf/warm-jvm-attribution.md`, and note
  * the two absolutes come from different rounds and boxes).
  *
- * **Exit codes match the CLI, and since 2026-08-08 both follow `tsc`**: 0 when
- * the compile found no errors, 1 when it found some. They used to return 0
- * unconditionally and report the outcome only in the summary line, which made
- * `xtsc` unusable as a build-failure signal in CI or a shell `&&` chain — and,
- * once the daemon existed, made the answer depend on whether one happened to be
- * running, since the server derived its own code by searching stdout for
- * "FAILED". The single source of truth is now
- * [com.xemantic.typescript.compiler.runCli]'s return value.
- *
- * The scripts that USED to read a non-zero exit as infrastructure failure were
- * updated with this change: `bench-compile-tsc.sh` now detects a failed run by
- * the absence of the compiler's summary line, which is the property that
- * actually distinguishes "did not run" from "ran and found errors".
+ * **Every mode runs the ported tsc** ((TSGO.7), `-tsgo`'s `TsgoMainKt` / `TsgoCli`): the one-shot mode IS
+ * [com.xemantic.typescript.tsgo.cli.main], the server runs the same command line per request, and the exit
+ * status is tsc's own in every mode (0 clean, 1 errors with outputs skipped, 2 errors with outputs
+ * generated) — one source of truth, so the answer never depends on whether a daemon happened to be running.
+ * Scripts that must tell "did not run" from "ran and found errors" cannot read the status alone.
  */
 fun main(args: Array<String>) {
     val socket = optionValue(args, "--socket") ?: CompileServer.defaultSocketPath()
     when {
         args.contains("--serve") -> CompileServer.serve(socket)
-        // Exits only on failure, exactly as `com.xemantic.typescript.compiler.main`
-        // does: an explicit `exitProcess(0)` would cut short whatever the runtime
-        // still wants to do on the way out.
-        args.contains("--daemon") -> runAsClient(args, socket).let {
-            if (it != 0) kotlin.system.exitProcess(it)
-        }
-        else -> com.xemantic.typescript.compiler.main(args)
+        args.contains("--daemon") -> kotlin.system.exitProcess(runAsClient(args, socket))
+        else -> com.xemantic.typescript.tsgo.cli.main(args)
     }
 }
 
@@ -85,7 +72,7 @@ private fun optionValue(args: Array<String>, name: String): String? {
  * Sends the request, or compiles here when nothing answers; returns the code.
  *
  * **It RETURNS the code rather than exiting**, for the same reason
- * [com.xemantic.typescript.compiler.runCli] does: a pin can then observe the
+ * [com.xemantic.typescript.tsgo.cli.runMain] does: a pin can then observe the
  * value, and `ExitCodeParityTest` proved that a pin one layer lower is not
  * enough. That test asserted the code the server puts IN the response, which
  * was always right; what this function used to do with it was propagate
@@ -109,10 +96,10 @@ internal fun runAsClient(
     val response = request(forwarded, socket)
     if (response == null) {
         // No server: do the work here rather than failing. The point of the
-        // server is latency, not capability. `runCli`, not `main`: the latter
+        // server is latency, not capability. `runMain`, not `main`: the latter
         // would exitProcess and there would be nothing left to return.
         System.err.println("xtsc: no compile server on $socket — compiling in-process")
-        return com.xemantic.typescript.compiler.runCli(forwarded.toTypedArray())
+        return com.xemantic.typescript.tsgo.cli.runMain(forwarded.toTypedArray())
     }
     print(response.output)
     System.out.flush()
@@ -143,5 +130,5 @@ private fun stripClientOptions(args: Array<String>): List<String> {
 // daemon then resolved against its OWN directory and compiled the wrong tree,
 // exiting 0 on a failing project) and a `--outDir` that does not exist yet (the
 // daemon emitted the user's JavaScript into its own directory). The directory
-// now travels in `CompileRequest.workingDirectory` and `SystemVfs` resolves
-// against it, which is the one place that HAS the option table.
+// now travels in `CompileRequest.workingDirectory` and is tsc's current directory
+// for the request (`TsgoCli.run`), which resolves every path the way tsc does.

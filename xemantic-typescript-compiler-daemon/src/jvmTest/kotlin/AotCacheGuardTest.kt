@@ -272,7 +272,7 @@ class AotCacheGuardTest {
      * compiles in-process. Both halves are asserted, so a launcher that reached
      * the dispatcher but stopped delegating would fail too.
      *
-     * Costs one ~1.3 s JVM start against an empty project (no sources to check).
+     * Costs one JVM start and a one-file compile.
      * `XTSC_AOT=off` keeps the user's real cache out of it.
      *
      * **It discriminates, and uniquely (round 840 ablation).** With BOTH scripts
@@ -288,11 +288,13 @@ class AotCacheGuardTest {
         val tmp = File.createTempFile("xtsc-dispatch-", "").let { it.delete(); it.mkdirs(); it }
         tmp.deleteOnExit()
         val project = File(tmp, "proj").apply { mkdirs() }
+        File(project, "tsconfig.json").writeText("""{ "compilerOptions": { "strict": true } }""")
+        File(project, "a.ts").writeText("export const n: number = 'not a number'\n")
         val absentSocket = File(tmp, "absent.sock")
         val pb = ProcessBuilder(
             File(scripts, "xtsc").absolutePath,
             "--daemon", "--socket", absentSocket.absolutePath,
-            "--noEmit", project.absolutePath
+            "--noEmit", "-p", project.absolutePath
         ).directory(tmp)
         pb.environment() += mapOf(
             "XTSC_CP" to testClasspath(),
@@ -307,8 +309,9 @@ class AotCacheGuardTest {
         p.waitFor()
         // Only …server.XtscMainKt prints this; …compiler.MainKt ignores the flag.
         assert("no compile server on" in err)
-        // …and it must still have delegated to the ordinary compiler.
-        assert("whole-project build" in out)
+        // …and it must still have delegated to the ordinary compiler (tsc's
+        // own output, the file named relative to the launcher's directory).
+        assert(out == "proj/a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n")
     }
 
     /**

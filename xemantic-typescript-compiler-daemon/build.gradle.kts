@@ -47,8 +47,9 @@ kotlin {
         jvmMain {
             dependencies {
                 // `api`: the dispatcher delegates to the compiler's own `main`,
-                // so a consumer of this module compiles against both.
-                api(project(":xemantic-typescript-compiler-core"))
+                // so a consumer of this module compiles against both. The
+                // ported tsc since (TSGO.7); `-core` is no longer reached.
+                api(project(":xemantic-typescript-compiler-tsgo"))
                 // `api`: CompileServer.request returns a CompileResponse, and
                 // the transport types appear in its signatures.
                 api(project(":xemantic-typescript-compiler-api"))

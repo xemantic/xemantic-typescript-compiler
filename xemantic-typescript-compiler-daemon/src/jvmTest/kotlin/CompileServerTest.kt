@@ -36,20 +36,12 @@ import kotlin.test.Test
  *
  * These exercise [CompileServer.respondTo] — the whole server behaviour minus
  * the socket. The socket plumbing is deliberately not bound here: parking a
- * thread in `accept()` inside a 13,000-test suite is a flakiness source, and
- * the framing is the part least likely to break silently. End-to-end transport
- * (four requests over a real Unix socket, warm-up curve, output identical to
- * the direct CLI, both fallback paths) was verified out of band.
+ * thread in `accept()` inside the suite is a flakiness source, and the framing
+ * is the part least likely to break silently.
  *
- * NOT pinned here, deliberately: "server output is character-identical to the
- * direct CLI". It needs TWO full compiles in one method and the suite runs at
- * Gradle's default 512 MB test heap, where that OOMs — and raising the
- * suite-wide heap for one test is the wrong trade on a memory-tight box. The
- * property is instead guaranteed structurally ([CompileServer.respondTo] calls
- * the ordinary `main` and captures its stdout; nothing re-formats anything) and
- * was verified out of band on the REAL compiler profile, where server output is
- * byte-identical to the CLI's across all 46 diagnostics — stronger evidence than
- * a toy project could give.
+ * The server runs the ported tsc ((TSGO.7)), so each response is asserted
+ * whole against what `tools/tsgo-7.0.2/lib/tsc` prints for the same project
+ * (non-pretty: stdout is not a terminal) and its exit status.
  */
 class CompileServerTest {
 
@@ -66,9 +58,9 @@ class CompileServerTest {
         val dir = tinyProject()
         File(dir, "a.ts").writeText("export const n: number = 1\n")
         val response = CompileServer.respondTo(
-            clientRequest(listOf("--noEmit", dir.absolutePath)),
+            clientRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
         )
-        assert("OK — 0 errors" in response.output)
+        assert(response.output == "")
         assert(response.exitCode == 0)
         dir.deleteRecursively()
     }
@@ -78,11 +70,34 @@ class CompileServerTest {
         val dir = tinyProject()
         File(dir, "a.ts").writeText("export const n: number = 'not a number'\n")
         val response = CompileServer.respondTo(
-            clientRequest(listOf("--noEmit", dir.absolutePath)),
+            clientRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
         )
-        assert("FAILED —" in response.output)
+        assert(response.output == "a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n")
         assert(response.exitCode == 1)
         dir.deleteRecursively()
+    }
+
+    /**
+     * Nothing a request does is left behind for the next one: the same
+     * server answers a failing project and then a clean one as two separate
+     * `tsc` runs would.
+     */
+    @Test
+    fun `consecutive requests are independent compiles`() {
+        val failing = tinyProject()
+        File(failing, "a.ts").writeText("export const n: number = 'not a number'\n")
+        val clean = tinyProject()
+        File(clean, "a.ts").writeText("export const n: number = 1\n")
+        val first = CompileServer.respondTo(clientRequest(listOf("--noEmit"), workingDirectory = failing.absolutePath))
+        val second = CompileServer.respondTo(clientRequest(listOf("--noEmit"), workingDirectory = clean.absolutePath))
+        val third = CompileServer.respondTo(clientRequest(listOf("--noEmit"), workingDirectory = failing.absolutePath))
+        assert(first.exitCode == 1)
+        assert(second.output == "")
+        assert(second.exitCode == 0)
+        assert(third.output == first.output)
+        assert(third.exitCode == 1)
+        failing.deleteRecursively()
+        clean.deleteRecursively()
     }
 
     @Test
