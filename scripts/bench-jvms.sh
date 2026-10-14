@@ -115,7 +115,8 @@ diags = {re.search(r"diags=(\d+)", r).group(1) for r in rows}
 digests = {re.search(r"digest=(\S+)", r).group(1) for r in rows}
 emitted = {int(re.search(r"emitted=(\d+)", r).group(1)) for r in rows}
 if not rows or len(diags) != 1 or len(digests) != 1 or len(emitted) != 1 or (mode == "emit") != (min(emitted) > 0):
-    print(f"WARN warm {arm}/{mode} rep{rep}: no consistent measured iterations"); sys.exit()
+    print(f"WARN warm {arm}/{mode} rep{rep}: no consistent measured iterations; the run's last lines:")
+    print("".join(open(path, errors="replace").readlines()[-20:])); sys.exit()
 med = statistics.median(ms); errors = diags.pop()
 open(tsv, "a").write(f"warm\t{arm}\t{mode}\t{rep}\t{med:.1f}\t{errors}\n")
 print(f"warm {arm:14s} {mode:7s} rep{rep} median={med:8.1f} n={len(ms)} "

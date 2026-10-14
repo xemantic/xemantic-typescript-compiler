@@ -150,10 +150,12 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
     fun run() {
         TsgoPort.init()
         val read: FS = if (osfs) com.xemantic.typescript.tsgo.vfs.osvfs.fs()!! else DiskFS()
-        var emitted = 0
+        // The DISTINCT paths written: emit writes from parallel goroutines (a plain counter lost updates
+        // and read 77 of 78 files on Oracle GraalVM).
+        val emitted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         val disk: FS = if (!emit) read else object : FS by read {
             override fun writeFile(p0: String, p1: String): GoError? {
-                emitted++
+                emitted.add(p0)
                 return null
             }
         }
@@ -194,7 +196,7 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val t3 = System.nanoTime()
             add(program.getSemanticDiagnostics(ctx, null))
             val t4 = System.nanoTime()
-            emitted = 0
+            emitted.clear()
             if (emit) program.emit(ctx, com.xemantic.typescript.tsgo.compiler.EmitOptions())
             val t5 = System.nanoTime()
             val cpu = (threads.currentThreadCpuTime - c0) / 1e6
@@ -214,7 +216,7 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val tag = if (i < warmup) "warm" else "meas"
             println(
                 "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f talloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f emit_ms=%.1f files=%d diags=%d emitted=%d digest=%08x"
-                    .format(ms, cpu, gc, alloc, talloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, (t5 - t4) / 1e6, program.getSourceFiles().len, n, emitted, digest),
+                    .format(ms, cpu, gc, alloc, talloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, (t5 - t4) / 1e6, program.getSourceFiles().len, n, emitted.size, digest),
             )
             if (i >= warmup) {
                 totals += ms
