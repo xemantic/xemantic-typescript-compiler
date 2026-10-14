@@ -866,6 +866,12 @@ sub-slices 1.6% (a shim composing four headers and a temporary), `filterType`/`m
 **Predicted before measuring**: the owned fields' sites are ~26% of headers and the pool stores ~2% of allocation
 (the temporary objects + `maybeKeysSet`'s copy): **−7..−9% allocation**, wall −1..−3% (inside the spread).
 
+> **CORRECTION (2026-10-14).** Until then `scripts/tsgo-ab-warm.sh` took its medians over the rows `CheckBenchMain`
+> tags `warm` — the WARM-UP rebuilds (1-6 of each process, JIT ramp included) — not the `meas` window. Every
+> `tsgo-ab-warm.sh` figure in §§ 13, 14 and 19 is therefore a median of warm-up rebuilds. Both arms were treated alike
+> under the same ABBA order, so a delta's SIGN is still evidence, but its SIZE is not a steady-state figure: re-measure
+> before quoting one. (Allocation and GC columns are per-rebuild and less sensitive to the ramp; wall is the most.)
+
 **Measured** (`scripts/tsgo-ab-warm.sh`, each arm its own JVM, `A B B A` + `B A A B`, 6 + 10 rebuilds, Zulu 26,
 `-Xms2g -Xmx6g`; A = HEAD `98b01e628`, B = this change; every run one digest — compiler `78feefbb`/65, services
 `ccb3b4c2`/65; medians of process medians [range], B's paired wins):

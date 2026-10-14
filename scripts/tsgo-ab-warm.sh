@@ -30,7 +30,7 @@ run() { # arm idx
   python3 - "$log" "$arm" <<'PY'
 import re, statistics, sys
 log, arm = sys.argv[1], sys.argv[2]
-rows = [l for l in open(log) if l.startswith("iter") and " warm " in l]
+rows = [l for l in open(log) if l.startswith("iter") and " meas " in l]  # the measured window, not the warm-up
 if not rows: print("no warm rows in", log); sys.exit(1)
 f = lambda k: [float(re.search(k + r"=([\d.]+)", r).group(1)) for r in rows]
 dig = sorted({re.search(r"digest=(\S+)", r).group(1) + "/" + re.search(r"diags=(\d+)", r).group(1) for r in rows})
