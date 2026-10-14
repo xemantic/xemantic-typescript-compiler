@@ -1,7 +1,8 @@
 # Three-way compile bench (xtsc vs reference JS tsc vs native tsgo) on the pinned
-# TypeScript `compiler` profile. Publishes a per-run Markdown report under
-# bench-history/runs/ and prepends a row to bench-history/README.md so performance
-# and compliance improvements are observable across runs.
+# TypeScript `compiler` profile. xtsc is the tsgo port (`-tsgo`) since the V3
+# series (2026-10-14); scripts/bench-3way.sh describes every arm. Publishes a
+# per-run Markdown report under bench-history/runs/ and prepends a row to
+# bench-history/README.md so performance and compliance are observable across runs.
 name: Bench
 
 on:
@@ -105,33 +106,22 @@ jobs:
           "$RUNNER_TEMP/bench-tools/tsc/node_modules/.bin/tsc" --version
           "$TSGO_BIN" --version
 
-      # PLAIN Oracle image, NOT the PGO one — deliberately, and the AOT column
-      # must be read accordingly.
+      # PLAIN Oracle image of the port, NOT the PGO one — deliberately: this runs on
+      # EVERY push to main, and the PGO cycle (scripts/tsgo-native-image-pgo.sh,
+      # two image builds plus training) belongs to native.yml. The column tracks
+      # the AOT trend, not the shipped image's speed.
       #
-      # This workflow runs on EVERY push to main, and the PGO cycle is three
-      # builds plus two training runs (~10 min against ~2). That latency is not
-      # worth paying per push for a column that is not the headline. PGO lives in
-      # native.yml, which BUILDS THE SHIPPED ARTIFACT and is manual-trigger only.
-      #
-      # CONSEQUENCE, stated so nobody misreads the series: this column is the
-      # Oracle BASE image and is ~14% (check-only) / ~20% (emit) SLOWER than the
-      # binary native.yml publishes. It tracks AOT trend, not shipped AOT
-      # performance; for the latter read docs/perf/aot-native-image.md § 10 or a
-      # native.yml run.
-      #
-      # ~2 min, and non-fatal on purpose: if the image fails to build the bench
-      # still publishes its 3-way row, with the AOT columns reading "—".
+      # Non-fatal on purpose: if the image fails to build the bench still
+      # publishes its row, with the native column reading "—".
       - name: Build the AOT binary (Oracle, no PGO — see comment)
         id: aot
         continue-on-error: true
         run: |
-          ./gradlew :xemantic-typescript-compiler-cli:nativeImage \
+          ./gradlew :xemantic-typescript-compiler-tsgo:nativeImage \
             --no-configuration-cache -PgraalvmHome="$GRAALVM_HOME"
-          # The image is built by the CLI module — the lean one-shot entry point,
-          # which carries the compiler and none of the daemon transport. This step
-          # is continue-on-error, so a stale path would SILENTLY drop the AOT arm
-          # instead of failing; assert it exists.
-          bin="$PWD/xemantic-typescript-compiler-cli/build/native/xtsc"
+          # continue-on-error: a stale path would SILENTLY drop the arm instead of
+          # failing; assert it exists.
+          bin="$PWD/xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo"
           test -x "$bin" || { echo "native image missing at $bin" >&2; exit 1; }
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
 
@@ -149,11 +139,9 @@ jobs:
           else
             echo "::warning::AOT binary unavailable — publishing the 3-way row without it"
           fi
-          # The WARM arm is the headline (see bench-3way.sh § 1a): the JVM is the
-          # fastest target and the one the perf arc optimises, so the series has
-          # to watch the number that converges on tsc. warmup 6 is the measured
-          # floor for a <1% between-process spread; 5 measured iterations keeps
-          # the added CI time near ~5 min per mode.
+          # The WARM arm is the headline (the daemon / language-server regime):
+          # warmup 6 is the measured floor for a <1% between-process spread; 5
+          # measured iterations keep the added CI time small.
           #
           # TWO warm arms, and this is why the series never has to pick a JVM.
           # The Graal JIT is a measured ~5% (check-only) / ~10% (emit) WARM win

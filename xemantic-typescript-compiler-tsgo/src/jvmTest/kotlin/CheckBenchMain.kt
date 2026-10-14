@@ -50,7 +50,7 @@ import kotlin.system.exitProcess
 /**
  * (TSGO.2) warm CHECK throughput of the ported compiler (docs/goport-perf.md § 6).
  *
- * `CheckBenchMain <tsconfig.json> [warmup=4] [iters=8] [libcache|nolib] [parallel|single]`
+ * `CheckBenchMain <tsconfig.json> [warmup=4] [iters=8] [libcache|nolib] [parallel|single] [osfs] [emit]`
  *
  * Every iteration does what `tsc --noEmit -p <project> --singleThreaded` does after reading the
  * files: parse the tsconfig, build a `compiler.Program` (parse + bind every root, the libs, the
@@ -58,7 +58,8 @@ import kotlin.system.exitProcess
  * File CONTENTS are read from disk once and served from memory (a warm host), so the figure is the
  * compiler's work. `libcache` additionally shares parsed bundled-lib `SourceFile`s across iterations
  * (the harness's cachedCompilerHost; tsgo's language server does the same). The diagnostic count is
- * printed per iteration and must equal tsgo's (65 on tsc's own sources).
+ * printed per iteration and must equal tsgo's (65 on tsc's own sources). `emit` then emits the program as
+ * `tsc -p` does, every output produced and discarded (the compiler's work, not the disk's; bench-3way.sh's emit row).
  */
 fun main(args: Array<String>) {
     val config = args.getOrNull(0) ?: run {
@@ -69,12 +70,14 @@ fun main(args: Array<String>) {
     val iters = args.getOrNull(2)?.toInt() ?: 8
     val libCache = args.getOrNull(3) == "libcache"
     val parallel = args.getOrNull(4) == "parallel"
+    val flags = args.drop(5).toSet()
     // "osfs": tsgo's own vfs/osvfs (every rebuild reads every file again, through the shim's syscall funnel)
-    val osfs = args.getOrNull(5) == "osfs"
+    val osfs = "osfs" in flags
+    val emit = "emit" in flags
     var failure: Throwable? = null
     val th = Thread(null, {
         try {
-            CheckBench(File(config).absoluteFile.normalize(), warmup, iters, libCache, parallel, osfs).run()
+            CheckBench(File(config).absoluteFile.normalize(), warmup, iters, libCache, parallel, osfs, emit).run()
         } catch (t: Throwable) {
             failure = t
         }
@@ -142,14 +145,21 @@ class LibCachingHost(private val inner: CompilerHost) : CompilerHost by inner {
     }
 }
 
-private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean, val parallel: Boolean, val osfs: Boolean) {
+private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean, val parallel: Boolean, val osfs: Boolean, val emit: Boolean) {
 
     fun run() {
         TsgoPort.init()
-        val disk: FS = if (osfs) com.xemantic.typescript.tsgo.vfs.osvfs.fs()!! else DiskFS()
+        val read: FS = if (osfs) com.xemantic.typescript.tsgo.vfs.osvfs.fs()!! else DiskFS()
+        var emitted = 0
+        val disk: FS = if (!emit) read else object : FS by read {
+            override fun writeFile(p0: String, p1: String): GoError? {
+                emitted++
+                return null
+            }
+        }
         val cwd = GoString.fromUtf16(config.parentFile.path)
         val configName = GoString.fromUtf16(config.path)
-        println("project=$config warmup=$warmup iters=$iters libcache=$libCache parallel=$parallel osfs=$osfs java=${System.getProperty("java.version")}")
+        println("project=$config warmup=$warmup iters=$iters libcache=$libCache parallel=$parallel osfs=$osfs emit=$emit java=${System.getProperty("java.version")}")
         val totals = ArrayList<Double>()
         val cpus = ArrayList<Double>()
         val gcs = ArrayList<Double>()
@@ -184,12 +194,15 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val t3 = System.nanoTime()
             add(program.getSemanticDiagnostics(ctx, null))
             val t4 = System.nanoTime()
+            emitted = 0
+            if (emit) program.emit(ctx, com.xemantic.typescript.tsgo.compiler.EmitOptions())
+            val t5 = System.nanoTime()
             val cpu = (threads.currentThreadCpuTime - c0) / 1e6
             val alloc = (threads.currentThreadAllocatedBytes - a0) / 1e6
             // every thread's allocation (the goroutines of a parallel check allocate off the bench thread)
             val talloc = (threads.totalThreadAllocatedBytes - ta0) / 1e6
             val gc = (gcMs() - g0).toDouble()
-            val ms = (t4 - t0) / 1e6
+            val ms = (t5 - t0) / 1e6
             val n = all.size
             // What the diagnostics SAY (file, span, code, message), order-independent: equal across iterations
             // and across the single-threaded and parallel checkers.
@@ -200,8 +213,8 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             checksum = checksum * 31 + n
             val tag = if (i < warmup) "warm" else "meas"
             println(
-                "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f talloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f files=%d diags=%d digest=%08x"
-                    .format(ms, cpu, gc, alloc, talloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, program.getSourceFiles().len, n, digest),
+                "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f talloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f emit_ms=%.1f files=%d diags=%d emitted=%d digest=%08x"
+                    .format(ms, cpu, gc, alloc, talloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, (t5 - t4) / 1e6, program.getSourceFiles().len, n, emitted, digest),
             )
             if (i >= warmup) {
                 totals += ms

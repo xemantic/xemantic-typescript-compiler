@@ -8,49 +8,50 @@
 # report under bench-history/runs/ and prepend rows to bench-history/README.md
 # so improvements are observable across runs (see .github/workflows/bench.yml).
 #
-# All three compile the SAME materialized project (the `compiler` profile that
-# scripts/bench-compile-tsc.sh builds from typescript-repo @ typeScriptCommit),
-# cold single process. Wall-clock is the comparable metric (xtsc also reports its
-# self-time, which excludes JVM startup/JIT).
+# xtsc IS THE tsgo PORT (`-tsgo`) since the V3 series (2026-10-14, owner): the
+# compiler that ships and is retiring `-core` ((TSGO.7)/(TSGO.8)). Rows before
+# that measured `-core`'s hand-written checker (46 diagnostics where tsc and tsgo
+# report 65) and live below the V3 table as an archive.
 #
-# TWO MODES, both measured, both like-for-like (round 739 — queue item (BENCH.1)):
+# All compilers compile the SAME materialized project (the `compiler` profile
+# that scripts/bench-compile-tsc.sh --materialize-only builds from
+# typescript-repo @ typeScriptCommit). Every arm's diagnostic count is reported:
+# the port must report what tsgo reports (all env-legit offline `@types/node`
+# rows — no `node_modules/@types` here).
 #
-#   check-only  every compiler runs with --noEmit / --no-emit: nothing is
-#               transformed, emitted or written. THIS is the mode the whole perf
-#               arc profiles (scripts/ab-interleaved.sh and scripts/cost_gate.py
-#               both pass --noEmit), so it is the mode a perf claim must quote.
+# TWO MODES, both measured, both like-for-like:
+#
+#   check-only  every compiler runs with --noEmit: nothing is transformed,
+#               emitted or written. The mode the perf arc profiles.
 #   emit        every compiler type-checks AND emits JavaScript to an outDir.
 #
-# Until round 739 only the emit mode was measured, and until round 738 xtsc's
-# --noEmit still ran the Transformer + Emitter and discarded the result — so a
-# check-only ratio had never been measured on either side. Do not compare a row
-# of one mode against a row of the other.
+# xtsc ARMS:
+#   warm      `CheckBenchMain` (-tsgo jvmTest): tsgo's default parallel checker,
+#             rebuilt from scratch per iteration in one JVM — tsconfig, program,
+#             every diagnostic (and in emit mode the emit, outputs discarded);
+#             file contents read once (a warm host). The headline: the daemon /
+#             language-server regime. Median of the MEASURED iterations.
+#   cold JVM  `TsgoMain` (the ported `tsc` command line) in a fresh JVM, no AOT
+#             cache: the one-shot CLI on a plain `java`.
+#   native    OPTIONAL — the -tsgo GraalVM image (`:…-tsgo:nativeImage`), run
+#             exactly as tsc/tsgo are.
 #
 # Usage: scripts/bench-3way.sh --tsc PATH --tsgo PATH [options]
 #   --tsc PATH        reference JS `tsc` binary (required)
 #   --tsgo PATH       native `tsgo` binary (required)
-#   --xtsc-native P   OPTIONAL ahead-of-time xtsc binary (./gradlew nativeImage ->
-#                     build/native/xtsc). When given, it is measured as a FOURTH
-#                     compiler in every mode. Omit it and the run is unchanged.
-#                     Round 771: ~1.97x the JVM cold, output byte-identical on all
-#                     8 profiles — see docs/perf/aot-native-image.md.
+#   --xtsc-native P   OPTIONAL -tsgo native image (build/native/xtsc-tsgo),
+#                     measured as a further compiler in every mode
 #   --project NAME    tsc subproject profile (default compiler)
-#   --xtsc-iters N    measured COLD xtsc runs, median (default 1; ~30s each in CI)
-#   --ref-iters N     measured tsc/tsgo runs, median (default 3; cheap)
-#   --xtsc-warmup N   in-process warm-up rebuilds before the warm arm's measured
-#                     window (default 6). SIX is measured, not chosen: two
-#                     identical 16-iteration ladders re-sliced per setting put two
-#                     IDENTICAL process medians 3.3% apart at warmup 2, 2.0% at 3,
-#                     0.8% at 6. Under three, the measured window sits in the JIT
-#                     ramp and the series' own noise floor swamps the trend it is
-#                     supposed to show.
+#   --xtsc-iters N    measured COLD JVM xtsc runs, median (default 1)
+#   --ref-iters N     measured tsc/tsgo/native runs, median (default 3)
+#   --xtsc-warmup N   warm-up rebuilds before the warm arm's measured window
+#                     (default 6)
 #   --xtsc-warm-iters N  measured warm rebuilds, median (default 8)
-#   --no-warm         skip the warm arm (cold-only, the pre-2026-08-10 behaviour)
+#   --no-warm         skip the warm arm
 #   --warm-jvm L=P    label + java binary for the primary warm arm (default: `java`)
 #   --warm-jvm2 L=P   OPTIONAL second warm arm on a DIFFERENT JVM, same bytecode,
-#                     same run. Exists because the Graal JIT is ~5%/~10% faster
-#                     WARM and 8-16% slower COLD than HotSpot, and warm is the
-#                     daemon regime — reporting both means never having to pick.
+#                     same run (the Graal JIT wins warm and loses cold against
+#                     HotSpot; reporting both means never having to pick)
 #   --modes LIST      comma-separated subset of check-only,emit (default both)
 #   --out-dir DIR     bench-history root (default bench-history)
 #   --label TEXT      free-text note stored in the report
@@ -95,7 +96,7 @@ done
 [[ -n "$TSGO_BIN" ]] || { echo "error: --tsgo PATH is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "error: python3 not found" >&2; exit 1; }
 
-# `tsc --version` prints "Version 6.0.3"; tsgo prints "Version 7.0.0-dev.NNN".
+# `tsc --version` prints "Version 6.0.3"; tsgo "Version 7.0.2".
 TSC_VER="$("$TSC_BIN"  --version 2>/dev/null | awk '{print $NF}' || echo '?')"
 TSGO_VER="$("$TSGO_BIN" --version 2>/dev/null | awk '{print $NF}' || echo '?')"
 [[ -n "$TSC_VER"  ]] || TSC_VER='?'
@@ -105,166 +106,53 @@ strip_ansi() { sed -E $'s/\x1b\\[[0-9;]*m//g'; }
 median() { printf '%s\n' "$@" | sort -n | awk '{a[NR]=$1} END{ if(NR%2) print a[(NR+1)/2]; else print int((a[NR/2]+a[NR/2+1])/2) }'; }
 
 # --------------------------------------------------------------------------
-# 1. xtsc: reuse bench-compile-tsc.sh (materializes the project, builds the
-#    compiler, resolves the classpath, runs MainKt). Parse its summary.
+# 1. The project, and the port's JVM classpath (main + test classes: the warm
+#    harness lives in jvmTest), both resolved once.
 # --------------------------------------------------------------------------
+PROJ_DIR="$("$REPO_ROOT/scripts/bench-compile-tsc.sh" --project "$PROJECT" --materialize-only | tail -1)"
+[[ -f "$PROJ_DIR/tsconfig.json" ]] || { echo "error: no materialized project at '$PROJ_DIR'" >&2; exit 1; }
 TS_COMMIT8="$(git -C "$REPO_ROOT/typescript-repo" rev-parse HEAD | cut -c1-8)"
-if [[ "$PROJECT" == compiler ]]; then PROJ_DIR="$REPO_ROOT/build/bench/tsc-project-$TS_COMMIT8"
-else PROJ_DIR="$REPO_ROOT/build/bench/tsc-$PROJECT-$TS_COMMIT8"; fi
+FILES=$(find "$PROJ_DIR/src" -name '*.ts' | wc -l)
+LOC=$(find "$PROJ_DIR/src" -name '*.ts' -print0 | xargs -0 cat | wc -l)
 
-run_xtsc() { # $1=mode ; sets xtsc_wall xtsc_self xtsc_err xtsc_files LOC
-    local mode="$1" xlog extra=()
-    [[ "$mode" == check-only ]] && extra=(--no-emit)
-    echo "== xtsc ($mode) =="
-    xlog="$(mktemp)"
-    "$REPO_ROOT/scripts/bench-compile-tsc.sh" --project "$PROJECT" --iterations "$XTSC_ITERS" \
-        --no-log ${extra[@]+"${extra[@]}"} | tee "$xlog" >&2 || { echo "xtsc bench failed" >&2; exit 1; }
-
-    # xtsc self/errors/files come from the MainKt RUN LOG (printed by the compiler
-    # itself, so correct on any OS — the bench summary's own stats are 0 on macOS
-    # BSD grep). wall and LOC come from the summary (date / wc, both fine).
-    # LOC is read off the `input:` line specifically: a bare `[0-9]+ LOC` also
-    # matches the `throughput: N LOC/s` line, and taking the LAST match silently
-    # published THROUGHPUT as the LOC count in every report before round 739.
-    xtsc_wall=$(sed -n 's/^compile:.*), *\([0-9]*\) ms wall$/\1/p' "$xlog" | head -1)
-    LOC=$(sed -n 's/^input:.*, \([0-9]*\) LOC$/\1/p' "$xlog" | head -1)
-    [[ -n "$xtsc_wall" ]] || xtsc_wall=0
-    [[ -n "$LOC" ]] || LOC=0
-    local runlog
-    runlog=$(grep -oE 'full output: .*' "$xlog" | head -1 | sed 's/^full output: //' || true)
-    if [[ -n "$runlog" && -f "$runlog" ]]; then
-        xtsc_self=$(grep -oE '^time:\s+[0-9]+' "$runlog" | grep -oE '[0-9]+' | head -1 || echo 0)
-        xtsc_err=$(grep -oE 'diagnostics:\s+[0-9]+ error' "$runlog" | grep -oE '[0-9]+' | head -1 || echo 0)
-        xtsc_files=$(grep -oE '[0-9]+ in program' "$runlog" | grep -oE '[0-9]+' | head -1 || echo 0)
-    else
-        xtsc_self=0; xtsc_err=0; xtsc_files=0
-    fi
-    rm -f "$xlog"
+WORK="$(mktemp -d)"; trap 'rm -rf -- "$WORK"' EXIT
+cat > "$WORK/print-cp.init.gradle.kts" <<'G'
+rootProject {
+    findProject(":xemantic-typescript-compiler-tsgo")?.let { p ->
+        p.tasks.register("printBenchClasspath") {
+            dependsOn("jvmTestClasses")
+            val cp = p.configurations.getByName("jvmTestRuntimeClasspath")
+            doLast {
+                val dirs = listOf("classes/kotlin/jvm/main", "classes/kotlin/jvm/test", "processedResources/jvm/main", "processedResources/jvm/test")
+                    .map { p.layout.buildDirectory.dir(it).get().asFile }
+                println("BENCH_CP=" + (dirs + cp.files).joinToString(":"))
+            }
+        }
+    }
 }
+G
+echo "== resolving the -tsgo classpath (compiles jvmTest) =="
+./gradlew -q --console=plain -I "$WORK/print-cp.init.gradle.kts" \
+    :xemantic-typescript-compiler-tsgo:printBenchClasspath > "$WORK/cp.log" 2>&1 \
+    || { cat "$WORK/cp.log" >&2; exit 1; }
+[[ $(grep -ac '^BENCH_CP=' "$WORK/cp.log") == 1 ]] || { cat "$WORK/cp.log" >&2; exit 1; }
+CP="$(grep -a '^BENCH_CP=' "$WORK/cp.log" | sed 's/^BENCH_CP=//')"
+JAVA1="${WARM_JVM1:-java}"
+
+# The cold JVM arm as an executable, so every process arm runs through run_proc.
+cat > "$WORK/xtsc-jvm" <<EOF
+#!/usr/bin/env bash
+exec "$JAVA1" -Xss4m -Xmx6g -cp "$CP" com.xemantic.typescript.tsgo.cli.TsgoMainKt "\$@"
+EOF
+chmod +x "$WORK/xtsc-jvm"
 
 # --------------------------------------------------------------------------
-# 1a. xtsc WARM — the arm this bench exists for.
-#
-# WHY THIS IS THE HEADLINE AND THE COLD ARM IS NOT. The JVM is the fastest
-# target and the one the perf arc optimises; a cold single-shot measures ~75%
-# JVM warm-up, so the cold ratio moves when HotSpot's ramp moves and barely
-# responds to the compiler getting faster. Measured on the dev box, same commit,
-# same profile: cold 27,996 ms against warm 6,481 ms check-only. A series meant
-# to show the moment xtsc MATCHES tsc has to watch the number that is actually
-# converging.
-#
-# The warm number is an in-process REBUILD, so it excludes JVM startup — it is
-# the daemon / `--serve` / watch figure, not the one-shot CLI figure. tsc and
-# tsgo are still whole processes, which slightly flatters xtsc: node's startup is
-# a few hundred ms of tsc's ~15 s and tsgo is native. The cold arm is kept in the
-# report precisely so both readings stay visible.
-#
-# `BenchMain` lives in commonTest, so this needs the TEST classes as well as the
-# main ones, and the dependency tail comes from the shared validating resolver —
-# never a hand-frozen cp file (round 858).
+# 2. Process arms (tsc, tsgo, xtsc cold JVM, xtsc native): the same command
+#    line, wall clock of the whole process, `error TS` lines counted.
 # --------------------------------------------------------------------------
-# The warm classpath, resolved ONCE. `BenchMain` lives in commonTest, so this
-# needs the TEST classes as well as the main ones, and the dependency tail comes
-# from the shared validating resolver — never a hand-frozen cp file (round 858).
-WARM_CP=""
-warm_classpath() {
-    [[ -n "$WARM_CP" ]] && { printf '%s' "$WARM_CP"; return 0; }
-    local main test cp_tail
-    main="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main"
-    test="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test"
-    if [[ ! -f "$test/com/xemantic/typescript/compiler/bench/BenchMainKt.class" ]]; then
-        echo "== xtsc-warm: compiling test classes ==" >&2
-        ./gradlew -q compileTestKotlinJvm >&2 || return 1
-    fi
-    # shellcheck source=lib/dep-classpath.sh
-    . "$REPO_ROOT/scripts/lib/dep-classpath.sh"
-    cp_tail="$(xtsc_dep_classpath "$REPO_ROOT/build/bench/cp-warm.txt")" || return 1
-    WARM_CP="$main:$test:$cp_tail"
-    printf '%s' "$WARM_CP"
-}
-
-# $1=mode $2=java binary $3=label ; sets warm_result (0 when unavailable)
-#
-# TWO warm arms are measured per mode, on the SAME bytecode in the SAME run: the
-# build JDK, and optionally a second JVM (--warm-jvm2). That exists because the
-# Graal JIT is a measured ~5% check-only / ~10% emit WARM win over HotSpot while
-# LOSING cold by 8-16% (docs/perf/jdk-jit-vendor-comparison.md § 2), and the warm
-# arm is the daemon regime. Reporting both means the series never has to pick a
-# JVM — and picking one would have forced either a re-baseline or a number that
-# does not describe what ships.
-run_xtsc_warm() {
-    warm_result=0
-    [[ "$WARM" -eq 1 ]] || return 0
-    local mode="$1" jb="$2" label="$3" emitarg="off" out cp
-    [[ "$mode" == emit ]] && emitarg="emit"
-    [[ -x "$jb" || "$jb" == java ]] || {
-        echo "::warning::warm arm '$label': no executable java at $jb" >&2; return 0; }
-    cp="$(warm_classpath)" || { echo "warm arm '$label': no classpath" >&2; return 0; }
-
-    echo "== xtsc-warm/$label ($mode, warmup $XTSC_WARMUP, iters $XTSC_WARM_ITERS) =="
-    out="$(mktemp)"
-    "$jb" -Xmx4g -cp "$cp" \
-        com.xemantic.typescript.compiler.bench.BenchMainKt \
-        "$PROJ_DIR" "$XTSC_WARMUP" "$XTSC_WARM_ITERS" off "$emitarg" >"$out" 2>&1 || true
-    # BenchMain self-falsifies: it prints files/errors per iteration and aborts on
-    # drift. Take the median of the `iter` lines; a run that produced none is a
-    # failed arm, reported as 0 rather than silently as a fast one.
-    warm_result="$(python3 - "$out" <<'PY'
-import json, statistics, sys
-its=[]
-for line in open(sys.argv[1], errors="replace"):
-    line=line.strip()
-    if not line.startswith("{"): continue
-    try: o=json.loads(line)
-    except Exception: continue
-    if "iter" in o: its.append(o["ms"])
-print(int(statistics.median(its)) if its else 0)
-PY
-)"
-    [[ "$warm_result" != 0 ]] || {
-        echo "::warning::warm arm '$label' produced no iterations" >&2; sed -n '1,20p' "$out" >&2; }
-    rm -f "$out"
-}
-
-# --------------------------------------------------------------------------
-# 1b. The ahead-of-time xtsc binary (optional), on the SAME project and mode.
-#
-# Uses xtsc's OWN CLI rather than bench-compile-tsc.sh, which drives `java`.
-# Emit mode needs no --outDir: xtsc writes to the outDir the materialized
-# tsconfig already sets, exactly as the JVM arm does.
-# --------------------------------------------------------------------------
-run_native() { # $1=mode ; sets nat_wall nat_self nat_err
-    local mode="$1" walls=() selfs=() out start end i
-    nat_wall=0; nat_self=0; nat_err=0
-    [[ -n "$XTSC_NATIVE" ]] || return 0
-    echo "== xtsc-native ($mode) =="
-    for ((i=1;i<=XTSC_ITERS;i++)); do
-        out="$(mktemp)"
-        start=$(date +%s%N)
-        if [[ "$mode" == check-only ]]; then
-            "$XTSC_NATIVE" --noEmit "$PROJ_DIR" >"$out" 2>&1 || true
-        else
-            "$XTSC_NATIVE" "$PROJ_DIR" >"$out" 2>&1 || true
-        fi
-        end=$(date +%s%N)
-        walls+=($(( (end-start)/1000000 )))
-        # Self time and errors come from the compiler's own output, so they are
-        # correct on any OS (the round-730 macOS BSD-grep trap hits parsed stats,
-        # not these).
-        selfs+=($(grep -oE '^time:[[:space:]]+[0-9]+' "$out" | grep -oE '[0-9]+' | head -1 || echo 0))
-        nat_err=$(grep -oE '[0-9]+ error\(s\)' "$out" | grep -oE '[0-9]+' | head -1 || echo 0)
-        rm -f "$out"
-    done
-    nat_wall=$(median "${walls[@]}")
-    nat_self=$(median "${selfs[@]}")
-}
-
-# --------------------------------------------------------------------------
-# 2. tsc / tsgo on the SAME materialized project, in the SAME mode.
-# --------------------------------------------------------------------------
-run_ref() { # $1=bin  $2=mode ; echoes "wall_ms err"
-    local bin="$1" mode="$2" walls=() out i start end err=0
-    for ((i=1;i<=REF_ITERS;i++)); do
+run_proc() { # $1=bin $2=mode $3=iters ; echoes "wall_ms err"
+    local bin="$1" mode="$2" iters="$3" walls=() out i start end err=0
+    for ((i=1;i<=iters;i++)); do
         out="$(mktemp)"
         start=$(date +%s%N)
         if [[ "$mode" == check-only ]]; then
@@ -280,23 +168,61 @@ run_ref() { # $1=bin  $2=mode ; echoes "wall_ms err"
     echo "$(median "${walls[@]}") ${err:-0}"
 }
 
-# Measure every requested mode; MODE_DATA rows are consumed by the reporter below.
+# --------------------------------------------------------------------------
+# 3. The warm arm: CheckBenchMain prints one `iter N meas total_ms=… diags=…`
+#    line per measured rebuild with its diagnostic digest and emitted-file count
+#    (equal across iterations, and non-zero exactly in emit mode). A run with no measured line is a
+#    failed arm, reported as 0 — never silently as a fast one.
+# --------------------------------------------------------------------------
+run_warm() { # $1=mode $2=java $3=label ; sets warm_ms warm_err
+    warm_ms=0; warm_err=0
+    [[ "$WARM" -eq 1 ]] || return 0
+    local mode="$1" jb="$2" label="$3" out flags=() res
+    [[ -x "$jb" || "$jb" == java ]] || {
+        echo "::warning::warm arm '$label': no executable java at $jb" >&2; return 0; }
+    [[ "$mode" == emit ]] && flags=(emit)
+    echo "== xtsc-warm/$label ($mode, warmup $XTSC_WARMUP, iters $XTSC_WARM_ITERS) =="
+    out="$WORK/warm-$label-$mode.log"
+    "$jb" -Xms2g -Xmx6g -cp "$CP" com.xemantic.typescript.tsgo.CheckBenchMainKt \
+        "$PROJ_DIR/tsconfig.json" "$XTSC_WARMUP" "$XTSC_WARM_ITERS" nolib parallel \
+        ${flags[@]+"${flags[@]}"} >"$out" 2>&1 || true
+    res="$(python3 - "$out" "$mode" <<'PY'
+import re, statistics, sys
+rows = [l for l in open(sys.argv[1], errors="replace") if l.startswith("iter ") and " meas " in l]
+emitted = {int(re.search(r"emitted=(\d+)", r).group(1)) for r in rows}
+ms = [float(re.search(r"total_ms=([\d.]+)", r).group(1)) for r in rows]
+diags = {re.search(r"diags=(\d+)", r).group(1) for r in rows}
+digests = {re.search(r"digest=(\S+)", r).group(1) for r in rows}
+# an emit run that wrote nothing would read as a fast one
+if not rows or len(diags) != 1 or len(digests) != 1 or len(emitted) != 1 or (sys.argv[2] == "emit") != (emitted.pop() > 0):
+    print("0 0")
+else:
+    print(int(statistics.median(ms)), diags.pop())
+PY
+)"
+    read -r warm_ms warm_err <<<"$res"
+    [[ "$warm_ms" != 0 ]] || {
+        echo "::warning::warm arm '$label' produced no consistent measured iterations" >&2; tail -20 "$out" >&2; }
+}
+
+export XTSC_TSGO_LIB_DIR=""   # every xtsc arm on its bundled libs, as shipped
 MODE_DATA=()
 for MODE in "${MODE_LIST[@]}"; do
-    run_xtsc "$MODE"
-    run_xtsc_warm "$MODE" "${WARM_JVM1:-java}" "$WARM_LABEL1"; xtsc_warm="$warm_result"
-    xtsc_warm2=0
-    if [[ -n "$WARM_JVM2" ]]; then
-        run_xtsc_warm "$MODE" "$WARM_JVM2" "$WARM_LABEL2"; xtsc_warm2="$warm_result"
+    run_warm "$MODE" "$JAVA1" "$WARM_LABEL1"; xw1="$warm_ms"; xwerr="$warm_err"
+    xw2=0
+    if [[ -n "$WARM_JVM2" ]]; then run_warm "$MODE" "$WARM_JVM2" "$WARM_LABEL2"; xw2="$warm_ms"; fi
+    echo "== xtsc cold JVM ($MODE) =="; read -r xc xcerr < <(run_proc "$WORK/xtsc-jvm" "$MODE" "$XTSC_ITERS")
+    echo "== tsc ($TSC_VER, $MODE) ==";   read -r tw terr < <(run_proc "$TSC_BIN"  "$MODE" "$REF_ITERS")
+    echo "== tsgo ($TSGO_VER, $MODE) =="; read -r gw gerr < <(run_proc "$TSGO_BIN" "$MODE" "$REF_ITERS")
+    nw=0; nerr=0
+    if [[ -n "$XTSC_NATIVE" ]]; then
+        echo "== xtsc native ($MODE) =="; read -r nw nerr < <(run_proc "$XTSC_NATIVE" "$MODE" "$REF_ITERS")
     fi
-    echo "== tsc ($TSC_VER, $MODE) ==";   read -r tsc_wall  tsc_err  < <(run_ref "$TSC_BIN"  "$MODE")
-    echo "== tsgo ($TSGO_VER, $MODE) =="; read -r tsgo_wall tsgo_err < <(run_ref "$TSGO_BIN" "$MODE")
-    run_native "$MODE"
-    MODE_DATA+=("$MODE $xtsc_wall $xtsc_self $xtsc_err $tsc_wall $tsc_err $tsgo_wall $tsgo_err $nat_wall $nat_self $nat_err $xtsc_warm $xtsc_warm2")
+    MODE_DATA+=("$MODE $xw1 $xw2 $xwerr $xc $xcerr $tw $terr $gw $gerr $nw $nerr")
 done
 
 # --------------------------------------------------------------------------
-# 3. Render the per-run report + update the index.
+# 4. Render the per-run report + update the index.
 # --------------------------------------------------------------------------
 XTSC_REV="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)"
 XTSC_REV_FULL="$(git -C "$REPO_ROOT" rev-parse HEAD)"
@@ -309,7 +235,7 @@ REPO_SLUG="${GITHUB_REPOSITORY:-xemantic/xemantic-typescript-compiler}"
 # run as command substitution. The delimiter is quoted so bash leaves the body verbatim.
 export B_OUT_DIR="$OUT_DIR" B_STAMP="$RUN_STAMP" B_REV="$XTSC_REV" B_REV_FULL="$XTSC_REV_FULL"
 export B_PROJECT="$PROJECT" B_RUNNER="$RUNNER" B_SLUG="$REPO_SLUG" B_LABEL="$LABEL"
-export B_TS_COMMIT="$TS_COMMIT8" B_FILES="$xtsc_files" B_LOC="$LOC"
+export B_TS_COMMIT="$TS_COMMIT8" B_FILES="$FILES" B_LOC="$LOC"
 export B_TSC_VER="$TSC_VER" B_TSGO_VER="$TSGO_VER"
 export B_XITERS="$XTSC_ITERS" B_REFITERS="$REF_ITERS"
 export B_WARMUP="$XTSC_WARMUP" B_WARMITERS="$XTSC_WARM_ITERS"
@@ -317,7 +243,7 @@ export B_WLABEL1="$WARM_LABEL1" B_WLABEL2="$WARM_LABEL2"
 B_MODE_DATA="$(printf '%s\n' "${MODE_DATA[@]}")"; export B_MODE_DATA
 
 python3 - <<'PYEOF'
-import os, re
+import os
 g = lambda k, d="": os.environ.get(k, d)
 i = lambda k: int(g(k) or 0)
 
@@ -333,122 +259,72 @@ xiters, refiters = i("B_XITERS"), i("B_REFITERS")
 warmup, warmiters = i("B_WARMUP"), i("B_WARMITERS")
 wlabel1, wlabel2 = g("B_WLABEL1", "jvm"), g("B_WLABEL2", "jvm2")
 
-# mode xtsc_wall xtsc_self xtsc_err tsc_wall tsc_err tsgo_wall tsgo_err
-#      nat_wall nat_self nat_err xtsc_warm xtsc_warm2
-# (nat_* are 0 without --xtsc-native; xtsc_warm is 0 under --no-warm;
-#  xtsc_warm2 is 0 unless --warm-jvm2 was given)
+# mode warm1 warm2 warm_err cold cold_err tsc tsc_err tsgo tsgo_err nat nat_err
+# (0 = arm not run or failed)
 modes = []
 for line in g("B_MODE_DATA").splitlines():
     p = line.split()
-    if len(p) == 13:
+    if len(p) == 12:
         modes.append((p[0],) + tuple(int(x) for x in p[1:]))
 
-def sec(ms): return f"{ms/1000:.2f}s" if ms else "n/a"
-def tput(ms): return f"{loc*1000//ms:,}" if ms and loc else "n/a"
-def ratio(a, b): return f"{a/b:.2f}×" if b else "n/a"
+def sec(ms): return f"{ms/1000:.2f}s" if ms else "—"
+def tput(ms): return f"{loc*1000//ms:,}" if ms and loc else "—"
+def ratio(a, b): return f"{a/b:.2f}×" if a and b else "—"
 
 date_h = f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]}"
 commit_url = f"https://github.com/{slug}/commit/{rev_full}"
 MODE_DOC = {
-    "check-only": "every compiler runs with `--noEmit`: type-check only, nothing "
-                  "transformed, emitted or written. **This is the mode the perf arc "
-                  "profiles** (`ab-interleaved.sh` / `cost_gate.py` both pass `--noEmit`).",
-    "emit":       "every compiler type-checks AND emits JavaScript to an `outDir`.",
+    "check-only": "every compiler runs with `--noEmit`: type-check only, nothing transformed, emitted or written.",
+    "emit":       "every compiler type-checks AND emits JavaScript to an `outDir` (the warm arm emits and discards).",
 }
 
-# ---- per-run report ----
 lines = [
     f"# Bench run {stamp}",
     "",
-    f"- **xtsc revision**: [`{rev}`]({commit_url})",
+    f"- **xtsc revision**: [`{rev}`]({commit_url}) — the tsgo port (`-tsgo`)",
     f"- **TypeScript pin**: `{ts_commit}` (typeScriptCommit)",
     f"- **Profile**: `{project}` — {files} files, {loc:,} LOC",
     f"- **Runner**: {runner}",
-    f"- **Method**: xtsc **warm** = median of {warmiters} in-process rebuilds after "
-    f"{warmup} warm-up rebuilds (the headline); xtsc **cold** = median of {xiters} "
-    f"single-shot process(es); tsc/tsgo = median of {refiters} processes.",
+    f"- **Method**: xtsc **warm** = `CheckBenchMain` (tsgo's parallel checker), median of {warmiters} "
+    f"in-process rebuilds after {warmup} warm-up rebuilds; xtsc **cold JVM** = `TsgoMain`, median of "
+    f"{xiters} process(es); tsc / tsgo / xtsc native = median of {refiters} processes.",
 ]
 if label:
     lines.append(f"- **Label**: {label}")
 
-for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm, xwarm2 in modes:
+for mode, xw1, xw2, xwerr, xc, xcerr, tw, terr, gw, gerr, nw, nerr in modes:
+    lines += ["", f"## {mode}", "", MODE_DOC.get(mode, ""), "",
+              "| Compiler | Version | Wall | Throughput | Errors |", "|---|---|---:|---:|---:|"]
+    if xw1:
+        lines.append(f"| **xtsc (warm, {wlabel1})** | {rev} | **{sec(xw1)}** | {tput(xw1)} LOC/s | {xwerr} |")
+    if xw2:
+        lines.append(f"| **xtsc (warm, {wlabel2})** | {rev} | **{sec(xw2)}** | {tput(xw2)} LOC/s | {xwerr} |")
+    lines.append(f"| xtsc (cold JVM) | {rev} | {sec(xc)} | {tput(xc)} LOC/s | {xcerr} |")
+    if nw:
+        lines.append(f"| xtsc (native image) | {rev} | {sec(nw)} | {tput(nw)} LOC/s | {nerr} |")
     lines += [
-        "",
-        f"## {mode}",
-        "",
-        MODE_DOC.get(mode, ""),
-        "",
-        "| Compiler | Version | Wall | Throughput | Errors |",
-        "|---|---|---:|---:|---:|",
-    ]
-    if xwarm:
-        lines.append(f"| **xtsc (warm, {wlabel1})** | {rev} | **{sec(xwarm)}** | {tput(xwarm)} LOC/s | {xerr} |")
-    if xwarm2:
-        lines.append(f"| **xtsc (warm, {wlabel2})** | {rev} | **{sec(xwarm2)}** | {tput(xwarm2)} LOC/s | {xerr} |")
-    lines += [
-        f"| xtsc (cold JVM) | {rev} | {sec(xw)} | {tput(xw)} LOC/s | {xerr} |",
-        f"| tsc | {tsc_ver} | {sec(tw)} | {tput(tw)} LOC/s | {terr} |",
         f"| tsgo | {tsgo_ver} | {sec(gw)} | {tput(gw)} LOC/s | {gerr} |",
-    ]
-    if nw:
-        lines.append(f"| xtsc-native | {rev} (AOT) | {sec(nw)} | {tput(nw)} LOC/s | {nerr} |")
-    if xwarm:
-        # Direction-aware: xtsc passed tsc in the warm regime on 2026-08-10
-        # (0.49x check-only), so a fixed "parity is 1.00x" line would describe a
-        # milestone already behind us and point the reader at the wrong gap.
-        def _vs(name, other):
-            if not other:
-                return f"n/a vs {name}"
-            r = xwarm / other
-            return (f"{1/r:.2f}x FASTER than {name}" if r < 1
-                    else f"{r:.2f}x {name} — parity at 1.00x")
-        lines += [
-            "",
-            f"**Warm JVM ({wlabel1}) — the target metric: {_vs('tsc', tw)}; {_vs('tsgo', gw)}.**",
-        ]
-        if xwarm2:
-            # The two warm arms are the SAME bytecode in the SAME run, so this
-            # delta is a within-round JVM comparison and nothing else.
-            d = (xwarm2 - xwarm) / xwarm * 100
-            lines.append(
-                f"Second warm JVM (`{wlabel2}`): **{sec(xwarm2)}**, "
-                f"**{d:+.1f}%** against `{wlabel1}` on identical bytecode — "
-                f"{ratio(xwarm2,tw)} tsc, {ratio(xwarm2,gw)} tsgo. One run is not a "
-                f"verdict on a few-percent difference (see "
-                f"docs/perf/jdk-jit-vendor-comparison.md); read the trend across rows."
-            )
-    lines += [
+        f"| tsc | {tsc_ver} | {sec(tw)} | {tput(tw)} LOC/s | {terr} |",
         "",
-        f"Cold JVM (one-shot CLI): **{ratio(xw,tw)}** tsc and **{ratio(xw,gw)}** tsgo; "
-        f"tsc is **{ratio(tw,gw)}** tsgo. "
-        f"xtsc self-reported time (excl. JVM startup/JIT): **{sec(xself)}**.",
+        f"Against tsgo (1.00× = parity): warm **{ratio(xw1, gw)}**"
+        + (f" ({wlabel2} {ratio(xw2, gw)})" if xw2 else "")
+        + f", cold JVM **{ratio(xc, gw)}**"
+        + (f", native image **{ratio(nw, gw)}**" if nw else "")
+        + f". Against tsc: warm {ratio(xw1, tw)}, cold JVM {ratio(xc, tw)}"
+        + (f", native image {ratio(nw, tw)}" if nw else "") + ".",
     ]
-    if nw:
-        lines += [
-            "",
-            # Deliberately does NOT name a distribution or claim PGO: bench.yml
-            # publishes the Oracle BASE image (PGO moved to native.yml, which
-            # builds the shipped artifact), so a hardcoded "Oracle + PGO" here
-            # would overstate this column by ~14% check-only / ~20% emit.
-            f"Ahead-of-time (GraalVM native-image): **{sec(nw)}** — "
-            f"**{ratio(nw,tw)}** tsc, **{ratio(nw,gw)}** tsgo, **{ratio(xw,nw)}** the COLD "
-            f"JVM arm and **{ratio(nw,xwarm) if xwarm else 'n/a'}** the WARM one. "
-            f"Same compiler, same output. The AOT image is expected to TRAIL the warm JVM "
-            f"(measured 8.4 s vs 6.5 s on the dev box) — its value is that it needs no "
-            f"warm-up at all, so it is the one-shot CLI answer while the warm JVM is the "
-            f"daemon answer (docs/perf/aot-native-image.md). NOTE: CI publishes the "
-            f"NON-PGO base image here; the shipped artifact (native.yml, Oracle + PGO) is "
-            f"~14% faster check-only and ~20% faster on emit.",
-        ]
+    errs = {n for n in (xwerr if xw1 else None, xcerr if xc else None, nerr if nw else None) if n is not None}
+    if errs and errs != {gerr}:
+        lines += ["", f"**DIAGNOSTIC COUNT DIFFERS FROM tsgo** ({gerr}): xtsc reported {sorted(errs)}."]
 lines += [
     "",
-    "> Compare a ratio only against a ratio of the SAME mode. A single xtsc run "
-    "carries the full spread of one cold JVM (the per-run ratio has ranged 1.9–2.7 "
-    "on an unchanged compiler), so read the median across runs, not one row.",
+    "> The warm arm is an in-process rebuild (no JVM start, files read once): the daemon / language-server "
+    "regime. tsc and tsgo are whole processes. In CI (bench.yml) the native column is the plain "
+    "`:…-tsgo:nativeImage` (G1, no PGO); the PGO image (`scripts/tsgo-native-image-pgo.sh`, native.yml) is faster. Compare a ratio only "
+    "against a ratio of the SAME mode, and read the trend across rows, not one run on a shared runner.",
     "",
-    "> Errors are all env-legit offline `@types/node` artifacts (no `node_modules/@types` "
-    "in CI); real tsc reports 0 on its own source. Counts differ slightly by how each "
-    "compiler models the missing ambient env, not by real diagnostics.",
+    "> Errors are env-legit offline `@types/node` artifacts (no `node_modules/@types` here); tsgo and the "
+    "port report the same rows.",
     "",
 ]
 run_name = f"{stamp}-{rev}.md"
@@ -456,47 +332,33 @@ with open(os.path.join(runs_dir, run_name), "w", encoding="utf-8", newline="\n")
     f.write("\n".join(lines))
 
 # ---- index (prepend newest rows, one per mode) ----
-# Rows live between explicit markers so the pre-739 single-mode archive below
-# them is never rewritten (its columns differ — see the README's archive note).
+# V3 MARKERS, 2026-10-14: the series restarts on the tsgo port. Everything already in
+# the file (the V2 `-core` table and the older archives) is kept below, never rewritten.
 index = os.path.join(out_dir, "README.md")
-# V2 MARKERS, 2026-08-10 — the series RESTARTS here (owner: "it does not matter
-# that much, we can restart it now"). The old table is left in place below,
-# untouched, under its own markers: its primary xtsc column is a COLD single-shot
-# and this one's is a WARM rebuild, so the two are not the same measurement and
-# must never share a column. Mixing them would show a ~4x "improvement" on the
-# day the harness changed.
-START, END = "<!-- BENCH-ROWS-V2-START -->", "<!-- BENCH-ROWS-V2-END -->"
-col = ("| Date | xtsc rev | Mode | xtsc warm | warm/tsc | warm/tsgo | tsc | tsgo "
-       "| xtsc cold | xtsc-nat | nat/tsc | err | Run | warm2 |\n"
+START, END = "<!-- BENCH-ROWS-V3-START -->", "<!-- BENCH-ROWS-V3-END -->"
+col = ("| Date | xtsc rev | Mode | xtsc warm | warm/tsgo | xtsc cold | cold/tsgo | xtsc native | native/tsgo "
+       "| tsgo | tsc | err xtsc/tsgo | Run | warm2 |\n"
        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|\n")
 new_rows = "".join(
-    f"| {date_h} | [`{rev}`]({commit_url}) | {mode} | {sec(xwarm) if xwarm else '—'} "
-    f"| {ratio(xwarm,tw) if xwarm else '—'} | {ratio(xwarm,gw) if xwarm else '—'} "
-    f"| {sec(tw)} | {sec(gw)} | {sec(xw)} "
-    f"| {sec(nw) if nw else '—'} | {ratio(nw,tw) if nw else '—'} | {xerr} "
-    f"| [report](runs/{run_name}) | {sec(xwarm2) if xwarm2 else '—'} |\n"
-    for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm, xwarm2 in modes)
+    f"| {date_h} | [`{rev}`]({commit_url}) | {mode} | {sec(xw1)} | {ratio(xw1, gw)} | {sec(xc)} | {ratio(xc, gw)} "
+    f"| {sec(nw)} | {ratio(nw, gw)} | {sec(gw)} | {sec(tw)} | {xcerr}/{gerr} "
+    f"| [report](runs/{run_name}) | {sec(xw2)} |\n"
+    for mode, xw1, xw2, xwerr, xc, xcerr, tw, terr, gw, gerr, nw, nerr in modes)
 
 txt = open(index, encoding="utf-8").read() if os.path.exists(index) else ""
 if START in txt and END in txt:
     head, rest = txt.split(START, 1)
     body, tail = rest.split(END, 1)
-    body_rows = "".join(l + "\n" for l in body.splitlines()
-                        if l.startswith("| 2"))          # data rows only
+    body_rows = "".join(l + "\n" for l in body.splitlines() if l.startswith("| 2"))  # data rows only
     txt = head + START + "\n\n" + col + new_rows + body_rows + "\n" + END + tail
 else:
-    # Bootstrap of the V2 block. Whatever is already in the file — including the
-    # entire V1 table with its own markers — is kept BELOW as the archive, so no
-    # historical row is rewritten or lost; only the primary table changes meaning.
-    header = "" if txt.lstrip().startswith("# ") else "# Bench history\n\n"
-    banner = ("\n> **Series restarted 2026-08-10.** The primary `xtsc` column is now a "
-              "**warm** in-process rebuild (the JVM is the fastest target and the one the "
-              "perf arc optimises; a cold single-shot was ~75% JVM warm-up and barely moved "
-              "when the compiler got faster). The AOT arm also switched from GraalVM CE to "
-              "**Oracle + PGO**. Rows below the V1 markers are the old cold-primary series "
-              "and are NOT comparable to these.\n\n")
-    txt = (header + banner + START + "\n\n" + col + new_rows + "\n" + END + "\n\n"
-           + "## Archive — V1 series (cold-primary xtsc column)\n\n" + txt)
+    banner = ("# Bench history\n\n> **Series restarted 2026-10-14 (V3): xtsc is the tsgo port (`-tsgo`).** "
+              "Warm = `CheckBenchMain` (tsgo's parallel checker, in-process rebuild); cold = the ported `tsc` "
+              "command line in a fresh JVM; native = the port's GraalVM image. Every row below the V3 markers "
+              "measured `-core`'s hand-written checker (46 diagnostics, not tsgo's 65) and is NOT comparable.\n\n")
+    old = txt[len("# Bench history"):].lstrip("\n") if txt.startswith("# Bench history") else txt
+    txt = (banner + START + "\n\n" + col + new_rows + "\n" + END + "\n\n"
+           + "## Archive — V2 series (`-core`, warm-primary)\n\n" + old)
 with open(index, "w", encoding="utf-8", newline="\n") as f:
     f.write(txt)
 
@@ -506,21 +368,12 @@ PYEOF
 echo
 echo "=== 3-way bench ($PROJECT @ $TS_COMMIT8) ==="
 for row in "${MODE_DATA[@]}"; do
-    # EVERY field must be named: `read` assigns the unconsumed remainder to the
-    # LAST variable, so a missing name here silently prints "6853 6480" as one
-    # number rather than failing.
-    read -r m xw xs xe tw te gw ge nw ns ne xwarm xwarm2 <<<"$row"
+    read -r m xw1 xw2 xwerr xc xcerr tw terr gw gerr nw nerr <<<"$row"
     echo "  -- $m --"
-    if [[ "$xwarm" != 0 ]]; then
-        printf '    %-8s %8s ms warm rebuild (%s)  <-- headline\n' xtsc-w "$xwarm" "$WARM_LABEL1"
-    fi
-    if [[ "${xwarm2:-0}" != 0 ]]; then
-        printf '    %-8s %8s ms warm rebuild (%s)\n' xtsc-w2 "$xwarm2" "$WARM_LABEL2"
-    fi
-    printf '    %-6s %8s ms wall  %6s errors\n' xtsc "$xw" "$xe"
-    printf '    %-6s %8s ms wall  %6s errors  (%s)\n' tsc  "$tw" "$te" "$TSC_VER"
-    printf '    %-6s %8s ms wall  %6s errors  (%s)\n' tsgo "$gw" "$ge" "$TSGO_VER"
-    if [[ "$nw" != 0 ]]; then
-        printf '    %-6s %8s ms wall  %6s errors  (AOT)\n' xtsc-n "$nw" "$ne"
-    fi
+    printf '    %-12s %8s ms  %4s errors  <-- headline\n' "warm/$WARM_LABEL1" "$xw1" "$xwerr"
+    if [[ "$xw2" != 0 ]]; then printf '    %-12s %8s ms\n' "warm/$WARM_LABEL2" "$xw2"; fi
+    printf '    %-12s %8s ms  %4s errors\n' "xtsc cold" "$xc" "$xcerr"
+    if [[ "$nw" != 0 ]]; then printf '    %-12s %8s ms  %4s errors\n' "xtsc native" "$nw" "$nerr"; fi
+    printf '    %-12s %8s ms  %4s errors  (%s)\n' tsgo "$gw" "$gerr" "$TSGO_VER"
+    printf '    %-12s %8s ms  %4s errors  (%s)\n' tsc "$tw" "$terr" "$TSC_VER"
 done
