@@ -108,7 +108,8 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
 - Do NOT release the run token around host file IO or hand IO to a pool — measured large
   slowdowns (docs/goport-perf.md § 9); `TSGO_IO_STATS=1` prices IO.
 - `goSpawn` makes a throwable escaping a goroutine fatal (exit 2, like a Go panic) — never route
-  around it; otherwise an OOM inside `WaitGroup` becomes a silent 0%-CPU hang.
+  around it; otherwise an OOM inside `WaitGroup` becomes a silent 0%-CPU hang. Under the no-GC image no Java
+  code runs after an OOM (`Runtime.halt` allocates): only `-R:+ExitOnOutOfMemoryError` (exit 3) ends it.
 - The KIR front end's tsgo program must be `singleThreaded` (`TsgoProgram.kt`): one query checker
   behind one lock, and a throwing parallel goroutine never releases it → parked JVM, no error.
 - `-core`'s declaration `Node.pos` is AFTER modifiers, tsgo's is not: `FileNodeMap` keys a

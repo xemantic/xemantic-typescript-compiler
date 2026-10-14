@@ -126,6 +126,13 @@ tasks.withType<Test>().configureEach {
 // default the image ran out of memory INSIDE goroutines and hung (now a fatal exit, `goSpawn`). G1 is Oracle
 // GraalVM only — GraalVM Community Edition builds with `-PnativeImageGc=serial`.
 //
+// `-PnativeImageGc=epsilon` (owner-approved 2026-10-14, an OPT-IN image, never the default): NO collector — memory is
+// only allocated, up to the default limit of 80% of RAM (`MaxRAMPercentage` is G1's option only). Measured on the non-PGO image (docs/goport-perf.md § 28): CPU −20..−30% everywhere,
+// wall −25..−30% on small projects (mitt 53 → 39 ms), flat or worse on large ones, peak RSS +20..+50%; a project past
+// the limit ends at once with `Terminating due to java.lang.OutOfMemoryError`, exit status 3 (`ExitOnOutOfMemoryError`:
+// with nothing ever freed, no Java code can run after the error — not even `Runtime.halt`, which allocates; the
+// port's own fatal handlers threw again and the process hung at 0% CPU).
+//
 // Not wired into `build`/`check` (needs GraalVM + a C toolchain). Builds run ALONE under CLAUDE.md's memory
 // protocol: the builder is a separate JVM of `-PnativeImageHeap` (default 8g — the port's closed world is
 // ~4,850 classes, over twice -core's) outside every Gradle heap, on a box with zero swap.
@@ -150,7 +157,8 @@ tasks.register("nativeImage") {
     val gcArgs = when (val gc = (project.findProperty("nativeImageGc") as String?) ?: "G1") {
         "G1" -> listOf("--gc=G1", "-R:MaxRAMPercentage=80")
         "serial" -> listOf("--gc=serial")
-        else -> error("-PnativeImageGc must be G1 or serial, not '$gc'")
+        "epsilon" -> listOf("--gc=epsilon", "-R:+ExitOnOutOfMemoryError")
+        else -> error("-PnativeImageGc must be G1, serial or epsilon, not '$gc'")
     }
     val outputName = (project.findProperty("nativeImageOutput") as String?) ?: "xtsc-tsgo"
     inputs.property("nativeImageArgs", extraArgs)

@@ -58,19 +58,32 @@ fun main(args: Array<String>) {
     if (watching) for (signal in listOf("INT", "TERM")) {
         runCatching { sun.misc.Signal.handle(sun.misc.Signal(signal)) { cancel() } }
     }
-    val status = TsgoCli.run(
-        args = args.toList(),
-        currentDirectory = java.io.File(System.getProperty("user.dir")).absolutePath,
-        out = {
-            stdout.write(it)
-            if (watching) stdout.flush()
-        },
-        libDirectory = System.getenv("XTSC_TSGO_LIB_DIR")?.takeIf { it.isNotEmpty() },
-        isTerminal = isTerminal,
-        terminalWidth = if (isTerminal) (System.getenv("COLUMNS")?.toIntOrNull() ?: 80) else 0,
-        environment = { System.getenv(it) },
-        context = context!!,
-    )
+    // A throwable escaping the command line is FATAL with Go's status 2 (`fatal error: runtime: out of memory`, a panic),
+    // as one escaping a goroutine already is (`GoProcs`): the JVM's own exit 1 would read as tsc's "errors, outputs
+    // skipped". (The no-GC image never gets here: it exits on its first out-of-memory error, `ExitOnOutOfMemoryError`.)
+    val status = try {
+        TsgoCli.run(
+            args = args.toList(),
+            currentDirectory = java.io.File(System.getProperty("user.dir")).absolutePath,
+            out = {
+                stdout.write(it)
+                if (watching) stdout.flush()
+            },
+            libDirectory = System.getenv("XTSC_TSGO_LIB_DIR")?.takeIf { it.isNotEmpty() },
+            isTerminal = isTerminal,
+            terminalWidth = if (isTerminal) (System.getenv("COLUMNS")?.toIntOrNull() ?: 80) else 0,
+            environment = { System.getenv(it) },
+            context = context!!,
+        )
+    } catch (e: Throwable) {
+        // try/finally, never runCatching (see startGoroutineThread)
+        try {
+            System.err.println("fatal error: $e")
+        } finally {
+            Runtime.getRuntime().halt(2)
+        }
+        throw e
+    }
     stdout.flush()
     if (com.xemantic.typescript.tsgo.go.os.GoSyscall.statsOn) System.err.println(com.xemantic.typescript.tsgo.go.os.GoSyscall.stats())
     exitProcess(status)

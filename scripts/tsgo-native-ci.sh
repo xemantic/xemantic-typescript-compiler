@@ -13,6 +13,9 @@
 #      (`scripts/tsgo-cli-native-replay.py`), which FAILS on any difference in stdout, exit status or written files.
 #   5. (TSGO.5-c) `--watch` and `-b --watch` under the same scripted edits as tsgo, ended by SIGTERM
 #      (`scripts/tsgo-watch-smoke.py`): stdout, exit status and the files left must agree.
+#   6. the opt-in no-GC image (`tsgo-native-image-pgo.sh --gc epsilon`) replayed on the same cases; out of memory (a
+#      capped heap) it must exit at once with status 3 (`-R:+ExitOnOutOfMemoryError`) through the main thread
+#      (`--singleThreaded`) and through a goroutine — never hang, as it did while Java handlers tried to exit.
 #
 # Usage: scripts/tsgo-native-ci.sh --graalvm <ORACLE_GRAALVM_HOME> [--workers N]
 set -euo pipefail
@@ -54,3 +57,15 @@ CASES=$(python3 scripts/tsgo-cli-oracle.py --list | grep -E '^(profile|cli|build
 python3 scripts/tsgo-cli-oracle.py --only "$CASES" --workers "$WORKERS"
 python3 scripts/tsgo-cli-native-replay.py --bin xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo --only "$CASES"
 python3 scripts/tsgo-watch-smoke.py --bin xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo
+scripts/tsgo-native-image-pgo.sh --graalvm "$GRAAL" --gc epsilon
+python3 scripts/tsgo-cli-native-replay.py --bin xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo-epsilon --only "$CASES"
+PROFILE=$(ls -d build/bench/tsc-project-* | head -1)
+for threads in "" --singleThreaded; do
+  status=0
+  timeout -k 5 120 xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo-epsilon -Xmx200m --noEmit -p "$PROFILE" \
+    $threads > /dev/null 2> build/oom-smoke.err || status=$?
+  first=$(grep -a -m1 . build/oom-smoke.err || true)
+  echo "out of memory, no-GC image, ${threads:-parallel}: exit $status, $first"
+  [[ $status == 3 && $first == "Terminating due to java.lang.OutOfMemoryError"* ]] \
+    || { echo "REFUSED: expected exit 3 and ExitOnOutOfMemoryError's message" >&2; exit 1; }
+done

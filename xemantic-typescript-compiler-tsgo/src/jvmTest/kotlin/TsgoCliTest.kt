@@ -207,6 +207,26 @@ class TsgoCliTest {
     }
 
     @Test
+    fun `the shipped main ends with Go's fatal status 2 when it runs out of memory`() {
+        // Go's `fatal error: runtime: out of memory` exits 2, never tsc's 1 (errors, outputs skipped), which a build would
+        // read as type errors.
+        // `--singleThreaded` keeps the check on the main thread (a goroutine's throwable is already fatal, `GoProcs`).
+        val dir = project("tsconfig.json" to """{ "compilerOptions": { "strict": true, "noEmit": true } }""", "a.ts" to "const b: boolean = 0;\n")
+        val java = File(System.getProperty("java.home"), "bin/java").path
+        val outFile = File.createTempFile("tsgo-cli", ".out")
+        val errFile = File.createTempFile("tsgo-cli", ".err")
+        val p = ProcessBuilder(java, "-Xss64m", "-Xmx24m", "-cp", System.getProperty("java.class.path"), "com.xemantic.typescript.tsgo.cli.TsgoMainKt", "--singleThreaded", "-p", ".")
+            .directory(dir).redirectOutput(outFile).redirectError(errFile).start()
+        val finished = p.waitFor(5, TimeUnit.MINUTES)
+        if (!finished) p.destroyForcibly()
+        assert(finished)
+        val exit = p.exitValue()
+        val stderr = errFile.readText()
+        assert(exit == 2)
+        assert(stderr.lines().first() == "fatal error: java.lang.OutOfMemoryError: Java heap space")
+    }
+
+    @Test
     fun `the shipped main in watch mode prints each cycle as it happens and exits 0 on SIGTERM`() {
         // tsgo 7.0.2: its status lines reach a pipe at once (Go's stdout is unbuffered) and SIGTERM cancels the
         // watch (signal.NotifyContext), exit status 0.

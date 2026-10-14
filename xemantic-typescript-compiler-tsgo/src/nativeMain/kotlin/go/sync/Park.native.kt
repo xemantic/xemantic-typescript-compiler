@@ -190,8 +190,13 @@ private fun runGoroutine(f: () -> Unit) {
     try {
         f()
     } catch (t: Throwable) {
-        runCatching { platform.posix.fputs("fatal error: goroutine: $t\n", platform.posix.stderr) }
-        platform.posix._exit(2)
+        // try/finally, never runCatching: the exit must run even when printing fails, and runCatching's own
+        // Result.Failure is one more allocation after an out-of-memory error.
+        try {
+            platform.posix.fputs("fatal error: goroutine: $t\n", platform.posix.stderr)
+        } finally {
+            platform.posix._exit(2)
+        }
     }
 }
 

@@ -226,3 +226,38 @@ PGO is the lever (15-23%, and it carries to projects it was not trained on); `-O
 is nothing on this Zen 2 (the default is already `x86-64-v3`, and Zen 2 has no AVX-512). A larger G1 young
 generation (`-Xmn512m`..`2g`) or fewer GC threads move the PGO image by under ~5%, both directions — not baked in.
 Memory stays ~1.6 GB on the compiler profile (tsgo 0.38 GB).
+
+**The opt-in no-GC image** (owner-approved 2026-10-14; `-PnativeImageGc=epsilon`, or
+`scripts/tsgo-native-image-pgo.sh --gc epsilon` → `build/native/xtsc-tsgo-pgo-epsilon`; never the default). GraalVM's
+Epsilon collector never collects: memory is only allocated, up to the default limit of 80% of RAM (`MaxRAMPercentage`
+is a G1-only option). A one-shot `tsc` frees almost nothing it could reuse before it exits, so the collector is pure
+cost on small projects. Measured 2026-10-14, both PGO images (same tree, same training), rotated medians of 3,
+`--noEmit`, 15.6 GB 8-core box; every arm's diagnostics and exit status equal to tsgo's:
+
+| project | tsgo 7.0.2 | PGO, G1 | **PGO, no GC** | peak RSS G1 → no GC (tsgo) |
+|---|---:|---:|---:|---|
+| mitt | 70 ms | 40 ms | **20 ms** | 85 → 50 MB (51) |
+| ky | 110 ms | 90 ms | **60 ms** | 128 → 90 MB (63) |
+| superstruct | 80 ms | 80 ms | **50 ms** | 126 → 91 MB (53) |
+| immer | 550 ms | 540 ms | **530 ms** | 324 → 419 MB (185) |
+| hono | 710 ms | 680 ms | **590 ms** | 705 → 724 MB (356) |
+| date-fns | 340 ms | 420 ms | **380 ms** | 379 → 448 MB (182) |
+| zod | 1,130 ms | 980 ms | **890 ms** | 708 → 729 MB (365) |
+| tsc's compiler profile | 1,750 ms | 1,740 ms | **1,680 ms** | 838 → 986 MB (378) |
+| tsc's services profile | 2,470 ms | 2,470 ms | **2,320 ms** | 950 → 1,362 MB (530) |
+| type-fest (1 run) | 17.1 s | 15.5 s | 15.5 s | 7.0 → 10.7 GB (5.7) |
+
+Faster on every project (−50% on mitt, −5..−10% from hono up), at up to +50% peak memory on the large ones.
+
+**Out of memory, the image exits at once with status 3** and `Terminating due to java.lang.OutOfMemoryError: …` on
+stderr (`-R:+ExitOnOutOfMemoryError`, baked in for this collector only). With nothing ever freed, no Java code can run
+after the error: the first probe (heap capped at 200 MB) HUNG at 0% CPU, every goroutine's fatal handler throwing again
+from inside itself; a two-line program shows that even `Runtime.halt` allocates there. Status 3 is also tsc's "invalid
+project, outputs skipped" — the stderr line tells them apart, and it is not 0 or tsc's 1/2. (The G1 image keeps Go's
+status 2 through `TsgoMain` and `startGoroutineThread`, which now `try`/`finally` the halt; at the extreme 200 MB cap
+its goroutines can still all fail together and the image dies with SubstrateVM's own fatal error, status 99 — at 400 MB
+it simply finishes.) `tsgo-native-ci.sh` step 6 replays the no-GC image and drives it out of memory both ways.
+Measured at the 200 MB cap: `--singleThreaded` exits 3 every time; parallel, 90 of 91 runs exited 3 and ONE hung
+(killed by `timeout`) — several goroutines run out of memory together and their "Terminating…" lines interleave, so the
+residue is a race inside SubstrateVM's own exit path, outside the port. A wrapper that must never wait should put a
+`timeout` around the no-GC image; the CI step does.

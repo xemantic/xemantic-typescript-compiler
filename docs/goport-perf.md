@@ -1293,7 +1293,10 @@ symbol-table / property lookups (`getPropertyOfTypeEx`, `getSymbol`, `getMergedS
 same-tree non-PGO G1 image, output identical on 7 projects: CPU −20..−30% everywhere (no GC threads), wall
 −25..−30% on small projects (mitt 53 → 39 ms, ky 122 → 86), flat or worse on large ones (compiler profile 2,622 both;
 immer 654 → 709 — first-touch page faults replace collection), peak RSS +20..+50% (compiler profile 929 → 1,379 MB).
-Not a default; an opt-in image for small projects would need `-PnativeImageGc=epsilon` (a build change, owner's call).
+Not a default. **Landed 2026-10-14 as an opt-in image** (owner-approved): `-PnativeImageGc=epsilon`, or
+`scripts/tsgo-native-image-pgo.sh --gc epsilon`. With PGO it is faster than the G1 PGO image on every project measured
+(mitt 40 → 20 ms, services 2,470 → 2,320 ms; type-fest passes at 10.7 GB) — table and the out-of-memory contract in
+docs/goport-cli.md § 4.
 
 **Landed — plain relation keys** (override `checker.getRelationKey`, ts-rust's `PlainRelationKey`). A relation key
 is only ever compared for equality (`Relation.results`, `maybeKeysSet`), so a non-generic pair's key is the 128-bit

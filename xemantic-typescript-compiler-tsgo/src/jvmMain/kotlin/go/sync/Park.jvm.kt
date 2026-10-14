@@ -93,8 +93,13 @@ internal actual fun startGoroutineThread(body: () -> Unit) {
         try {
             body()
         } catch (t: Throwable) {
-            runCatching { System.err.println("fatal error: goroutine: $t") }
-            Runtime.getRuntime().halt(2)
+            // try/finally, never runCatching: the halt must run even when printing fails, and runCatching's own
+            // Result.Failure is one more allocation after an out-of-memory error.
+            try {
+                System.err.println("fatal error: goroutine: $t")
+            } finally {
+                Runtime.getRuntime().halt(2)
+            }
         }
     }
 }
