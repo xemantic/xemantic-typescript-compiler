@@ -1,3 +1,18 @@
+# Bench history
+
+> **Series restarted 2026-10-14 (V3): xtsc is the tsgo port (`-tsgo`).** Warm = `CheckBenchMain` (tsgo's parallel checker, in-process rebuild); cold = the ported `tsc` command line in a fresh JVM; native = the port's GraalVM image. Every row below the V3 markers measured `-core`'s hand-written checker (46 diagnostics, not tsgo's 65) and is NOT comparable.
+
+<!-- BENCH-ROWS-V3-START -->
+
+| Date | xtsc rev | Mode | xtsc warm | warm/tsgo | xtsc cold | cold/tsgo | xtsc native | native/tsgo | tsgo | tsc | err xtsc/tsgo | Run | warm2 |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|
+| 2026-10-14 | [`a22309fe270e`](https://github.com/xemantic/xemantic-typescript-compiler/commit/a22309fe270e740bee43d60da391a1f169b3e3ae) | check-only | 2.09s | 1.18× | 14.56s | 8.26× | 2.33s | 1.32× | 1.76s | 11.33s | 65/65 | [report](runs/20261014T122608Z-a22309fe270e.md) | 2.16s |
+| 2026-10-14 | [`a22309fe270e`](https://github.com/xemantic/xemantic-typescript-compiler/commit/a22309fe270e740bee43d60da391a1f169b3e3ae) | emit | 2.78s | 1.12× | 18.78s | 7.53× | 3.48s | 1.40× | 2.49s | 13.81s | 65/65 | [report](runs/20261014T122608Z-a22309fe270e.md) | 3.16s |
+
+<!-- BENCH-ROWS-V3-END -->
+
+## Archive — V2 series (`-core`, warm-primary)
+
 
 > **Series restarted 2026-08-10.** The primary `xtsc` column is now a **warm** in-process rebuild (the JVM is the fastest target and the one the perf arc optimises; a cold single-shot was ~75% JVM warm-up and barely moved when the compiler got faster). The AOT arm also switched from GraalVM CE to **Oracle + PGO**. Rows below the V1 markers are the old cold-primary series and are NOT comparable to these.
 
