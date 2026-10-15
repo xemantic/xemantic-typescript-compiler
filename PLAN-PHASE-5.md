@@ -25,6 +25,20 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.9-b) — THE ATOMIC `id` / `facts` AS VOLATILE FIELDS
+
+- `INLINE_ATOMIC_FIELD_CANDIDATES` / `Program.computeInlineAtomicFields` / `atomicFieldOp` / `CallLowering.atomicFieldCall`:
+  a `sync/atomic` field whose every occurrence is the receiver of a `Load` / `Store` / `CompareAndSwap` call is a
+  `@kotlin.concurrent.Volatile @JvmField` primitive of its holder. A field some swap writes is "locked": its swaps and
+  stores run under one of 64 stripe locks (`runtime/GoAtomicField.kt`, `AtomicIntArray` spin; no field updater, so
+  `commonMain` stays Kotlin/Native-clean — `compileKotlinLinuxX64` and `linuxX64Test` 91 / 0 run locally). First run:
+  `Node.id`, `Symbol.id` (locked), `CompositeBase.facts` (plain volatile).
+- Pins: `LoweringRulesTest` (the fields, `GetNodeId`'s locked swap, `subtreeFactsWorker`'s plain store; the classifier —
+  fails when `Add` is admitted), `GoAtomicFieldTest` (8 threads × 200 k holders: one winner each — fails with the lock
+  removed). Gates: Diag/Emit 13,127, LS 21,614, API 594,007, CLI 120 / 121 equal; `-tsgo` 155 / 0, `-goport` 30 / 0.
+- A/B vs `d4daaccd0`: single −3.2% (3/4), GC −28% (4/4), parallel −2.6% (2/4, noise), allocation −3.6% / −3.3%; live AST
+  170 → 136 MB, a full check 327 → 270 MB live since this morning (docs/goport-perf.md § 31).
+
 ### Round (TSGO.9-a) — A NODE'S `Loc` AS A PACKED VALUE CLASS
 
 - Measured first (docs/goport-perf.md § 29, owner-requested): the AST is 58% of the live heap after a check (188 MB, 197 B
@@ -600,7 +614,8 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   object (`NodeDefault`'s `Node` as a superclass — § 19's "next representation step") and the remaining embedded base
   structs (`FlowNodeBase`, `CompositeBase`, `DeclarationBase`, …) flattened into their holder where no `&x.Base` needs
   them addressable. Target: ~2 objects and ~100 B per node. **(9-a) DONE 2026-10-15** (single −6.9%, allocation −7.1%,
-  live AST 188 → 170 MB; docs/goport-perf.md § 30).
+  live AST 188 → 170 MB; docs/goport-perf.md § 30). **(9-b) DONE 2026-10-15** (single −3.2%, GC −28%, live AST 170 → 136 MB;
+  § 31).
 
 - [ ] **(TSGO.8) delete `-core` (§ 6 stages 4-5).**
   BLOCKED-PENDING-USER: **delete `-core`** — proposal (updated 2026-10-14, after (TSGO.7)): stages 1-3 of

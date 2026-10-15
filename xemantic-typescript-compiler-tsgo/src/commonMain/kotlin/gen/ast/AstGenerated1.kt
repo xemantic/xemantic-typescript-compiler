@@ -27,7 +27,6 @@ import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.core.Arena
 import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 import com.xemantic.typescript.tsgo.synth.Iface_KindString_f376415e
-import com.xemantic.typescript.tsgo.go.sync.atomic.Uint32
 import com.xemantic.typescript.tsgo.core.new
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory 564d74c1
@@ -551,13 +550,13 @@ class FlowNodeBase(
 
 // go: github.com/microsoft/typescript-go/internal/ast.CompositeBase 099b90f5
 class CompositeBase(
-    @kotlin.jvm.JvmField var facts: Uint32 = Uint32(),
+    @kotlin.concurrent.Volatile @kotlin.jvm.JvmField var facts: Int = 0,
 ) {
 
-    fun goCopy(): CompositeBase = CompositeBase(facts = facts.goCopy())
+    fun goCopy(): CompositeBase = CompositeBase(facts = facts)
 
     fun goSet(o: CompositeBase) {
-        facts = o.facts.goCopy()
+        facts = o.facts
     }
 
     fun goEquals(o: CompositeBase): Boolean = facts == o.facts

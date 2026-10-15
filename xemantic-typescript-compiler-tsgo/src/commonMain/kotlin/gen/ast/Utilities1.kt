@@ -35,11 +35,11 @@ import com.xemantic.typescript.tsgo.core.getEmitModuleKind
 
 // go: github.com/microsoft/typescript-go/internal/ast.GetNodeId e617a279
 fun getNodeId(node: Node?): NodeId {
-    var id: ULong = node!!.id.load()
+    var id: ULong = node!!.id.toULong()
     if (id == 0uL) {
         id = nextNodeId.add(1uL)
-        if (!node!!.id.compareAndSwap(0uL, id)) {
-            id = node!!.id.load()
+        if (!run { val h1 = node!!; goAtomicCasLong(h1, { h1.id }, { h1.id = it }, (0uL).toLong(), (id).toLong()) }) {
+            id = node!!.id.toULong()
         }
     }
     return NodeId(id)
@@ -47,11 +47,11 @@ fun getNodeId(node: Node?): NodeId {
 
 // go: github.com/microsoft/typescript-go/internal/ast.GetSymbolId 2d51f4a5
 fun getSymbolId(symbol: Symbol?): SymbolId {
-    var id: ULong = symbol!!.id.load()
+    var id: ULong = symbol!!.id.toULong()
     if (id == 0uL) {
         id = nextSymbolId.add(1uL)
-        if (!symbol!!.id.compareAndSwap(0uL, id)) {
-            id = symbol!!.id.load()
+        if (!run { val h1 = symbol!!; goAtomicCasLong(h1, { h1.id }, { h1.id = it }, (0uL).toLong(), (id).toLong()) }) {
+            id = symbol!!.id.toULong()
         }
     }
     return SymbolId(id)

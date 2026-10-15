@@ -74,6 +74,36 @@ val PACKED_STRUCT_CANDIDATES = setOf(
 val PACKED_FIELD_KINDS = setOf("Int32", "Uint32", "Int16", "Uint16", "Int8", "Uint8", "Bool")
 
 /**
+ * `sync/atomic` fields that may be lowered as a `@Volatile` primitive field of their holder ([Program.inlineAtomicFields],
+ * docs/goport-perf.md § 31): every node's `id` and every symbol's (a 24-byte object each), and `CompositeBase.facts`
+ * (an `atomic.Uint32` and the `AtomicInt` inside it).
+ */
+val INLINE_ATOMIC_FIELD_CANDIDATES = setOf(
+    "github.com/microsoft/typescript-go/internal/ast.Node.id",
+    "github.com/microsoft/typescript-go/internal/ast.Symbol.id",
+    "github.com/microsoft/typescript-go/internal/ast.CompositeBase.facts",
+)
+
+/** The `sync/atomic` types an [INLINE_ATOMIC_FIELD_CANDIDATES] field may have, with the Kotlin type of the inlined field. */
+val INLINE_ATOMIC_KT = mapOf(
+    "sync/atomic.Uint64" to "Long", "sync/atomic.Int64" to "Long",
+    "sync/atomic.Uint32" to "Int", "sync/atomic.Int32" to "Int", "sync/atomic.Bool" to "Boolean",
+)
+
+/** The operations an inlined atomic field supports (each lowered in place by `CallLowering.atomicFieldCall`). */
+val INLINE_ATOMIC_OPS = setOf("Load", "Store", "CompareAndSwap")
+
+/**
+ * For an inlined atomic field of `sync/atomic` type [atomicKey] ([Program.inlineAtomicFields]): (the stored primitive ->
+ * the Go value `Load` answers, the Go value -> the stored primitive), as code transformers.
+ */
+fun inlineAtomicConv(atomicKey: String): Pair<(String) -> String, (String) -> String> = when (atomicKey.substringAfterLast('.')) {
+    "Uint64" -> Pair({ v: String -> "$v.toULong()" }, { v: String -> "$v.toLong()" })
+    "Uint32" -> Pair({ v: String -> "$v.toUInt()" }, { v: String -> "$v.toInt()" })
+    else -> Pair({ v: String -> v }, { v: String -> v })
+}
+
+/**
  * Struct types whose objects get a dense port-internal index (`runtime.GoLinkKey`, docs/goport-lowering.md § 3,
  * "Link keys"): the keys of tsgo's checker link stores, which the `core.LinkStore` override files by that index
  * instead of hashing the pointer (docs/goport-perf.md § 14).
@@ -1359,6 +1389,75 @@ class Program(
         packedStructs += cand
     }
 
+    // ---- inlined atomic fields (docs/goport-lowering.md § 3, "Inlined atomic fields") ----
+
+    /** Inlined atomic fields ([computeInlineAtomicFields]): field key -> the `sync/atomic` type's key. */
+    val inlineAtomicFields = HashMap<String, String>()
+
+    /** The [inlineAtomicFields] some `CompareAndSwap` writes: EVERY write of one takes the holder's stripe lock. */
+    val lockedAtomicFields = HashSet<String>()
+
+    /** Why each [INLINE_ATOMIC_FIELD_CANDIDATES] entry was refused (for the report and the pins). */
+    val inlineAtomicRefusals = HashMap<String, String>()
+
+    /**
+     * A field of a `sync/atomic` type whose every occurrence in the run is the receiver of a call of one of
+     * [INLINE_ATOMIC_OPS] (`x.id.Load()`, `x.facts.Store(v)`, `x.id.CompareAndSwap(0, v)`): never copied, compared,
+     * address-taken or handed on, so its storage can be a `@Volatile` primitive of the holder instead of an object.
+     */
+    fun computeInlineAtomicFields() {
+        inlineAtomicFields.clear()
+        lockedAtomicFields.clear()
+        inlineAtomicRefusals.clear()
+        val cand = HashMap<String, String>()
+        for (k in INLINE_ATOMIC_FIELD_CANDIDATES) {
+            val owner = k.substringBeforeLast('.')
+            val p = byPath[owner.substringBeforeLast('.')]
+            if (p == null || owner !in structTypes) { inlineAtomicRefusals[k] = "not a field of a struct declared in the run"; continue }
+            val tt = TypeTable(p)
+            var why: String? = "field not found"
+            for (i in 0 until tt.size) {
+                val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                if (n.key != owner || n.origin != null) continue
+                if (n.tparams.isNotEmpty()) { why = "a generic struct"; break }
+                val st = tt.under(n.id) as? com.xemantic.typescript.goport.types.StructType ?: break
+                val f = st.fields.firstOrNull { "$owner.${it.name}" == k } ?: break
+                val at = (tt.unalias(f.t) as? com.xemantic.typescript.goport.types.NamedType)?.key
+                why = when {
+                    f.embedded -> "embedded"
+                    at !in INLINE_ATOMIC_KT -> "not a sync/atomic field ($at)"
+                    else -> { cand[k] = at!!; null }
+                }
+                break
+            }
+            if (why != null) inlineAtomicRefusals[k] = why
+        }
+        if (cand.isEmpty()) return
+        val cas = HashSet<String>()
+        fun refuse(k: String, why: String) { if (cand.remove(k) != null) inlineAtomicRefusals[k] = why }
+        for (p in packages) {
+            val chain = ArrayList<Pair<Node, String>>()
+            fun visit(n: Node) {
+                if (n.str("k") == "SelectorExpr" && n.str("selk") == "field") {
+                    val key = n.obj("sel")?.int("obj")?.let { p.objects.getOrNull(it) }?.takeIf { it.str("k") == "field" }?.str("key")
+                    if (key != null && key in cand) {
+                        val op = atomicFieldOp(chain.map { it.first }, chain.map { it.second }) { id -> p.objects.getOrNull(id)?.str("key") }
+                        if (op == null) refuse(key, "${chain.lastOrNull()?.let { "${it.first.str("k")}.${it.second}" }} in ${p.path}")
+                        else if (op == "CompareAndSwap") cas += key
+                    }
+                }
+                for ((k, v) in n) when (v) {
+                    is kotlinx.serialization.json.JsonObject -> { chain += n to k; visit(v); chain.removeAt(chain.size - 1) }
+                    is kotlinx.serialization.json.JsonArray -> for (e in v) if (e is kotlinx.serialization.json.JsonObject) { chain += n to k; visit(e); chain.removeAt(chain.size - 1) }
+                    else -> {}
+                }
+            }
+            for (f in p.files) visit(f)
+        }
+        inlineAtomicFields += cand
+        lockedAtomicFields += cas.filter { it in cand }
+    }
+
     // ---- primitive func fields (docs/goport-lowering.md § 3, "Primitive func fields") ----
 
     /** Func-typed struct fields lowered as a generated primitive `fun interface` ([computePrimFuncFields]), by field key. */
@@ -1590,6 +1689,22 @@ class Program(
                 "UnaryExpr" -> if (n.str("op") == "&") listOf(unparen(n.obj("x")!!) to "&x.f of a field") else emptyList()
                 else -> emptyList()
             }
+        }
+
+        /**
+         * The `sync/atomic` operation an inlined-atomic field occurrence is the receiver of, or null when it is used any
+         * other way. [parents] / [keys] are the occurrence's ancestors, innermost last, and the key each holds it under:
+         * the field selection must be `x` of a METHOD selection that is the callee (`fun`) of a call of one of
+         * [INLINE_ATOMIC_OPS] — the method's key named by [methodKey] (the sel's object id → its key).
+         */
+        fun atomicFieldOp(parents: List<Node>, keys: List<String>, methodKey: (Int) -> String?): String? {
+            val m = parents.lastOrNull() ?: return null
+            if (keys.last() != "x" || m.str("k") != "SelectorExpr" || m.str("selk") != "method") return null
+            val call = parents.getOrNull(parents.size - 2) ?: return null
+            if (call.str("k") != "CallExpr" || keys[keys.size - 2] != "fun") return null
+            val mk = m.obj("sel")?.int("obj")?.let(methodKey) ?: return null
+            val op = mk.substringAfterLast('.')
+            return op.takeIf { mk.startsWith("sync/atomic.") && it in INLINE_ATOMIC_OPS }
         }
 
         fun primFuncUseAllowed(parent: Node, key: String): Boolean = when (parent.str("k")) {

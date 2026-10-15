@@ -1401,3 +1401,26 @@ Live heap (`CheckBenchMain … histo=`, § 29's table): what `newProgram` leaves
 6.70 M objects**; per node **197 → 177 B and 8.1 → 7.0 objects**. `Node` itself grows 40 → 48 B (the inline `long` plus
 alignment) against the 24 B `TextRange` object it no longer points to; bind and check are unchanged (21.6 / 116.8 MB).
 Next: the atomic `id` wrapper (24 B per node) and the one-object node (9-b, 9-c).
+
+## 31. (TSGO.9-b) The atomic `id` and `facts` as volatile fields of their holder (2026-10-15)
+
+Porter rule "Inlined atomic fields" (docs/goport-lowering.md § 3): `ast.Node.id`, `ast.Symbol.id` (`atomic.Uint64`, a
+24-byte object each) and `ast.CompositeBase.facts` (`atomic.Uint32` plus the `AtomicInt` inside it, 32 bytes) are only
+ever loaded, stored and compared-and-swapped, so each is a `@Volatile` primitive of its holder. `GetNodeId`'s swap takes
+a stripe lock (`runtime/GoAtomicField.kt`; common code, so Kotlin/Native keeps building — `linuxX64Test` 91 / 0).
+
+Same-session A/B against `d4daaccd0` ((9-a)), as § 30:
+
+| regime | A | B | Δ | B wins |
+|---|---:|---:|---:|---:|
+| single, ms | 2,874 [2,815-2,934] | 2,782 [2,728-2,868] | −3.2% | 3/4 |
+| single, GC ms | 138 | 99 | **−28%** | 4/4 |
+| parallel, ms | 1,587 [1,483-1,622] | 1,546 [1,511-1,586] | −2.6% (noise) | 2/4 |
+| allocation per rebuild, single / parallel, MB | 1,054 / 1,205 | 1,016 / 1,165 | −3.6% / −3.3% | 4/4 each |
+
+Live heap: the AST **169.7 → 135.8 MB** (5.06 M objects; **142 B and 5.3 objects per node**, from 197 B and 8.1 this
+morning); bind 21.6 → 20.1 MB; check 116.8 → 114.4 MB. A full check now leaves **270 MB** live where it left 327 MB.
+What remains per node: `Node` 48 B + `NodeDefault` 16 B + the kind's data class + its embedded bases (`FlowNodeBase`
+0.59 per node, `CompositeBase`, `DeclarationBase`, …). The bases are returned by address through `nodeData`'s accessors
+(`FlowNodeData() *FlowNodeBase { return &n.FlowNodeBase }`), so they stay objects; the next step is (9-c), the node and its
+data as one object.

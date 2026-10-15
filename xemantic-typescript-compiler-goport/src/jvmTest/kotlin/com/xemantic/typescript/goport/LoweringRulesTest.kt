@@ -339,6 +339,38 @@ class LoweringRulesTest {
     }
 
     @Test
+    fun `an inlined atomic field is a volatile primitive of its holder - Node id, Symbol id, CompositeBase facts`() {
+        val ast = File(gen, "ast/Ast.kt").readText()
+        assert(ast.contains("    @kotlin.concurrent.Volatile @kotlin.jvm.JvmField var id: Long = 0L,"))
+        assert(!ast.contains("var id: Uint64"))
+        assert(File(gen, "ast/AstGenerated1.kt").readText().contains("    @kotlin.concurrent.Volatile @kotlin.jvm.JvmField var facts: Int = 0,"))
+        // A load is a volatile read; a compare-and-swap runs under the holder's stripe lock.
+        val astPkg = "github.com/microsoft/typescript-go/internal/ast"
+        val getNodeId = genFunction("ast/Utilities1.kt", "$astPkg.GetNodeId")
+        assert(getNodeId.contains("var id: ULong = node!!.id.toULong()"))
+        assert(getNodeId.contains("goAtomicCasLong(h1, { h1.id }, { h1.id = it }, (0uL).toLong(), (id).toLong())"))
+        // facts is never compared-and-swapped, so its store is a plain volatile write.
+        val facts = genFunction("ast/Ast.kt", "$astPkg.CompositeBase.subtreeFactsWorker")
+        assert(facts.contains("run { this!!.facts = (facts.value).toInt() }"))
+    }
+
+    @Test
+    fun `an atomic field used other than as the receiver of Load, Store or CompareAndSwap is not inlined`() {
+        fun n(json: String) = Json.parseToJsonElement(json) as JsonObject
+        val keys = mapOf(1 to "sync/atomic.Uint64.Load", 2 to "sync/atomic.Uint64.Add", 3 to "sync/atomic.Uint64.CompareAndSwap")
+        fun method(obj: Int) = n("""{"k": "SelectorExpr", "selk": "method", "sel": {"k": "Ident", "obj": $obj}}""")
+        val call = n("""{"k": "CallExpr", "call": "method"}""")
+        // x.id.Load() and x.id.CompareAndSwap(…): the field is `x` of the method selection, which is the call's `fun`.
+        assert(Program.atomicFieldOp(listOf(call, method(1)), listOf("fun", "x"), keys::get) == "Load")
+        assert(Program.atomicFieldOp(listOf(call, method(3)), listOf("fun", "x"), keys::get) == "CompareAndSwap")
+        // An operation outside the set, a method VALUE (no call), and the field handed on or address-taken.
+        assert(Program.atomicFieldOp(listOf(call, method(2)), listOf("fun", "x"), keys::get) == null)
+        assert(Program.atomicFieldOp(listOf(n("""{"k": "AssignStmt"}"""), method(1)), listOf("rhs", "x"), keys::get) == null)
+        assert(Program.atomicFieldOp(listOf(call), listOf("args"), keys::get) == null)
+        assert(Program.atomicFieldOp(listOf(n("""{"k": "UnaryExpr", "op": "&"}""")), listOf("x"), keys::get) == null)
+    }
+
+    @Test
     fun `nodeData and TypeData are abstract classes and every implementer calls their constructor`() {
         val ast = File(gen, "ast/Ast.kt").readText()
         assert(ast.contains("abstract class nodeData {"))

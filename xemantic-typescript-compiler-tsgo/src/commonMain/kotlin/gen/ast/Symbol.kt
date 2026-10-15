@@ -24,7 +24,6 @@
 package com.xemantic.typescript.tsgo.ast
 
 import com.xemantic.typescript.tsgo.runtime.*
-import com.xemantic.typescript.tsgo.go.sync.atomic.Uint64
 
 // go: github.com/microsoft/typescript-go/internal/ast.Symbol d754f882
 class Symbol(
@@ -35,12 +34,12 @@ class Symbol(
     @kotlin.jvm.JvmField var valueDeclaration: Node? = null,
     @kotlin.jvm.JvmField var members: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()),
     @kotlin.jvm.JvmField var exports: SymbolTable = GoMap.nil<String, Symbol?>(GoElem.ref<Symbol?>()),
-    @kotlin.jvm.JvmField var id: Uint64 = Uint64(),
+    @kotlin.concurrent.Volatile @kotlin.jvm.JvmField var id: Long = 0L,
     @kotlin.jvm.JvmField var parent: Symbol? = null,
     @kotlin.jvm.JvmField var exportSymbol: Symbol? = null,
 ) : GoLinkKey() {
 
-    fun goCopy(): Symbol = Symbol(flags = flags, checkFlags = checkFlags, name = name, declarations = declarations, valueDeclaration = valueDeclaration, members = members, exports = exports, id = id.goCopy(), parent = parent, exportSymbol = exportSymbol)
+    fun goCopy(): Symbol = Symbol(flags = flags, checkFlags = checkFlags, name = name, declarations = declarations, valueDeclaration = valueDeclaration, members = members, exports = exports, id = id, parent = parent, exportSymbol = exportSymbol)
 
     fun goSet(o: Symbol) {
         flags = o.flags
@@ -50,7 +49,7 @@ class Symbol(
         valueDeclaration = o.valueDeclaration
         members = o.members
         exports = o.exports
-        id = o.id.goCopy()
+        id = o.id
         parent = o.parent
         exportSymbol = o.exportSymbol
     }

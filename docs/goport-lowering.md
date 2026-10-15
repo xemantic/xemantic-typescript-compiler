@@ -378,6 +378,18 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   cannot set an unaddressed value's unexported field either). Refusals are printed by the porter. Every node's
   `Loc` stops being an object (docs/goport-perf.md § 30). Pins: `LoweringRulesTest` (the class, a node's field,
   `&decl.Loc`, a call through `*TextRange`; the write classifier).
+- **Inlined atomic fields** ((TSGO.9-b), `Program.computeInlineAtomicFields`/`atomicFieldOp`, `CallLowering.atomicFieldCall`,
+  `Decls.structClass`; runtime `GoAtomicField.kt`). A `sync/atomic` field in `INLINE_ATOMIC_FIELD_CANDIDATES`
+  (`ast.Node.id`, `ast.Symbol.id`, `ast.CompositeBase.facts`) whose every occurrence in the run is the receiver of a
+  CALL of `Load`, `Store` or `CompareAndSwap` — never copied out, compared, address-taken, handed on or used as a method
+  value — is a `@kotlin.concurrent.Volatile @JvmField` primitive of its holder (`Long` for 64-bit kinds, `Int` for
+  32-bit, `Boolean`) instead of an atomic object. `Load` is a volatile read; `Store` a volatile write; `CompareAndSwap`
+  runs `goAtomicCas<Kt>` under one of 64 stripe locks chosen by the holder's hash, and when a field has any
+  compare-and-swap EVERY write of it takes that lock (`goAtomicLocked`), so a swap never interleaves with a store it did
+  not see — Go's linearizable semantics with no field updater, so `commonMain` stays Kotlin/Native-clean. A struct copy
+  copies the value; reflection sees a snapshot atomic. Pins: `LoweringRulesTest` (the fields, `GetNodeId`'s locked
+  swap, `subtreeFactsWorker`'s plain store; the use classifier), `GoAtomicFieldTest` (one winner per holder under 8
+  contending threads — fails with the lock removed).
 - **Abstract-class interfaces** ((TSGO.6-i), `Program.computeAbstractIfaces`, `Decls.ifaceDecl`/`superCall`). An
   interface in `ABSTRACT_IFACE_CANDIDATES` (`ast.nodeData`, `checker.TypeData`) is lowered as an `abstract class`
   (`abstract fun` members) when the whole run proves it legal: every named type whose IR `implements` lists it is a

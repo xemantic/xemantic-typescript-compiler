@@ -27,7 +27,6 @@ import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.core.Arena
 import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 import com.xemantic.typescript.tsgo.synth.Iface_KindString_f376415e
-import com.xemantic.typescript.tsgo.go.sync.atomic.Uint32
 import com.xemantic.typescript.tsgo.core.new
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateJSDocImportTag 3f2b2c1e

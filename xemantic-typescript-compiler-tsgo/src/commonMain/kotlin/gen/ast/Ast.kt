@@ -268,18 +268,18 @@ class Node(
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: Kind = Kind(0),
     @get:kotlin.jvm.JvmName("goGet_flags") @set:kotlin.jvm.JvmName("goSet_flags") var flags: NodeFlags = NodeFlags(0u),
     @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
-    @kotlin.jvm.JvmField var id: Uint64 = Uint64(),
+    @kotlin.concurrent.Volatile @kotlin.jvm.JvmField var id: Long = 0L,
     @kotlin.jvm.JvmField var parent: Node? = null,
     @kotlin.jvm.JvmField var data: com.xemantic.typescript.tsgo.ast.nodeData? = null,
 ) : GoLinkKey(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
-    fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc, id = id.goCopy(), parent = parent, data = data)
+    fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc, id = id, parent = parent, data = data)
 
     fun goSet(o: Node) {
         kind = o.kind
         flags = o.flags
         loc = o.loc
-        id = o.id.goCopy()
+        id = o.id
         parent = o.parent
         data = o.data
     }
@@ -309,7 +309,7 @@ class Node(
         0 -> GoFieldPtr(this, 0, { kind.value }, { kind = Kind(it as Int) })
         1 -> GoFieldPtr(this, 1, { flags.value }, { flags = NodeFlags(it as UInt) })
         2 -> GoFieldPtr(this, 2, { loc }, { loc = it as TextRange })
-        3 -> GoFieldPtr(this, 3, { id }, { id = (it as Uint64).goCopy() })
+        3 -> GoFieldPtr(this, 3, { Uint64().also { a -> a.store(id.toULong()) } }, { id = (it as Uint64).load().toLong() })
         4 -> GoFieldPtr(this, 4, { parent }, { parent = it as Node? })
         5 -> GoFieldPtr(this, 5, { data }, { data = it as com.xemantic.typescript.tsgo.ast.nodeData? })
         else -> goPanicIndex(i, 6)
@@ -2283,10 +2283,10 @@ fun Node?.eagerJSDoc(file_0: SourceFile?): GoSlice<Node?> {
 
 // go: github.com/microsoft/typescript-go/internal/ast.CompositeBase.subtreeFactsWorker e9f12360
 fun CompositeBase?.subtreeFactsWorker(self: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts {
-    var facts: SubtreeFacts = SubtreeFacts(this!!.facts.load())
+    var facts: SubtreeFacts = SubtreeFacts(this!!.facts.toUInt())
     if (facts.value and 33554432u == 0u) {
         facts = SubtreeFacts(facts.value or (self!!.computeSubtreeFacts().value or 33554432u))
-        this!!.facts.store(facts.value)
+        run { this!!.facts = (facts.value).toInt() }
     }
     return SubtreeFacts(facts.value and 33554432u.inv())
 }

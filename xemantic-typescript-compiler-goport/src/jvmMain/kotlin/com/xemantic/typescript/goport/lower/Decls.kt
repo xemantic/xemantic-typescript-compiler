@@ -751,8 +751,12 @@ class PackageEmitter(
         val big = prog.bigStruct(st)
         // Program.primFuncFields: a func field with a primitive result is a generated `fun interface` (no boxing).
         val primFn = st.fields.indices.filter { "$qname.${st.fields[it].name}" in prog.primFuncFields }.toSet()
-        fun fieldKt(i: Int): String = if (i in primFn) prog.primFuncIfaceName("$qname.${st.fields[i].name}") + "?" else tm.kt(st.fields[i].t)
-        fun fieldZero(i: Int): String = if (i in primFn) "null" else tm.zero(st.fields[i].t)
+        // Program.inlineAtomicFields: a sync/atomic field is a @Volatile primitive of this class (its value, not an object).
+        val atomicKt = st.fields.indices.mapNotNull { i -> prog.inlineAtomicFields["$qname.${st.fields[i].name}"]?.let { i to INLINE_ATOMIC_KT.getValue(it) } }.toMap()
+        fun fieldKt(i: Int): String = if (i in primFn) prog.primFuncIfaceName("$qname.${st.fields[i].name}") + "?" else atomicKt[i] ?: tm.kt(st.fields[i].t)
+        fun fieldZero(i: Int): String = if (i in primFn) "null" else atomicKt[i]?.let { when (it) { "Long" -> "0L"; "Int" -> "0"; else -> "false" } } ?: tm.zero(st.fields[i].t)
+        fun fieldAnn(i: Int): String = if (i in atomicKt) "@kotlin.concurrent.Volatile @kotlin.jvm.JvmField " else jvmField(fieldNames[i], st.fields[i].t, tm)
+        fun fieldCopy(i: Int, code: String): String = if (i in atomicKt) code else copyField(code, st.fields[i].t, tm, "$qname.${st.fields[i].name}" in prog.ownedSliceFields)
         val windowIdx = st.fields.indices.filter { "$qname.${st.fields[it].name}" in prog.windowFields }.toSet()
         if (big && windowIdx.isNotEmpty()) error("window field in a big struct: $qname")
         w.line("class $name$tpDecl(")
@@ -760,7 +764,7 @@ class PackageEmitter(
             for (tp in dict) w.line("@kotlin.jvm.JvmField val goElem_$tp: GoElem<${Naming.escape(tp)}>,")
             if (!big) st.fields.forEachIndexed { i, f ->
                 // @JvmField: no accessors (a Go `SetText` method would clash with `text`'s setter), and direct field access.
-                w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${fieldKt(i)} = ${fieldZero(i)},")
+                w.line("${fieldAnn(i)}var ${fieldNames[i]}: ${fieldKt(i)} = ${fieldZero(i)},")
                 if (i in windowIdx) {
                     // A window field (Program.windowFields): offset and length into the base above.
                     w.line("@kotlin.jvm.JvmField var ${fieldNames[i]}_o: Int = 0,")
@@ -771,13 +775,13 @@ class PackageEmitter(
         w.line(")${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
         w.indent {
             if (big) st.fields.forEachIndexed { i, f ->
-                w.line("${jvmField(fieldNames[i], f.t, tm)}var ${fieldNames[i]}: ${fieldKt(i)} = ${fieldZero(i)}")
+                w.line("${fieldAnn(i)}var ${fieldNames[i]}: ${fieldKt(i)} = ${fieldZero(i)}")
             }
             w.line()
             if (big) {
                 w.block("fun goCopy(): $self") {
                     w.line("val goOut = $name(${dict.joinToString(", ") { "goElem_$it = goElem_$it" }})")
-                    st.fields.indices.forEach { w.line("goOut.${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm, "$qname.${st.fields[it].name}" in prog.ownedSliceFields)}") }
+                    st.fields.indices.forEach { w.line("goOut.${fieldNames[it]} = ${fieldCopy(it, fieldNames[it])}") }
                     w.line("return goOut")
                 }
             } else {
@@ -786,7 +790,7 @@ class PackageEmitter(
                     w.line("fun goCopy(): $self = this")
                 } else {
                 val copyArgs = dict.map { "goElem_$it = goElem_$it" } + st.fields.indices.flatMap {
-                    listOf("${fieldNames[it]} = ${copyField(fieldNames[it], st.fields[it].t, tm, "$qname.${st.fields[it].name}" in prog.ownedSliceFields)}") +
+                    listOf("${fieldNames[it]} = ${fieldCopy(it, fieldNames[it])}") +
                         (if (it in windowIdx) listOf("${fieldNames[it]}_o = ${fieldNames[it]}_o", "${fieldNames[it]}_n = ${fieldNames[it]}_n") else emptyList())
                 }
                 w.line("fun goCopy(): $self = $name(${copyArgs.joinToString(", ")})")
@@ -795,7 +799,7 @@ class PackageEmitter(
             w.line()
             w.block("fun goSet(o: $self)") {
                 st.fields.forEachIndexed { i, f ->
-                    w.line("${fieldNames[i]} = ${copyField("o." + fieldNames[i], f.t, tm, "$qname.${f.name}" in prog.ownedSliceFields)}")
+                    w.line("${fieldNames[i]} = ${fieldCopy(i, "o." + fieldNames[i])}")
                     if (i in windowIdx) {
                         w.line("${fieldNames[i]}_o = o.${fieldNames[i]}_o")
                         w.line("${fieldNames[i]}_n = o.${fieldNames[i]}_n")
@@ -865,8 +869,14 @@ class PackageEmitter(
                         // A value-class field is handed out RAW (its underlying Kotlin value): json decodes
                         // a number into it; reflect wraps it back (go/reflect Value.field).
                         val box = (types.unalias(f.t) as? NamedType)?.takeIf { prog.hasValuePtrBox(it.key) }
+                        // An inlined atomic field: reflect sees a snapshot of the atomic, and a set stores its value.
+                        if (i in atomicKt) {
+                            val ak = prog.inlineAtomicFields.getValue("$qname.${f.name}")
+                            val (toGo, fromGo) = inlineAtomicConv(ak)
+                            w.line("$i -> GoFieldPtr(this, $i, { $kt().also { a -> a.store(${toGo(n)}) } }, { $n = ${fromGo("(it as $kt).load()")} })")
+                        }
                         // The box sits beside its value class: qualified, since an imported class's box is not imported.
-                        if (box != null) w.line("$i -> ${Naming.kotlinPackage((box.origin?.let { types.unalias(it) as NamedType } ?: box).pkg!!)}.${tm.namedRef(box).substringAfterLast('.')}_Ptr({ $n }, { $n = it })")
+                        else if (box != null) w.line("$i -> ${Naming.kotlinPackage((box.origin?.let { types.unalias(it) as NamedType } ?: box).pkg!!)}.${tm.namedRef(box).substringAfterLast('.')}_Ptr({ $n }, { $n = it })")
                         else if (tm.isValueClass(f.t)) w.line("$i -> GoFieldPtr(this, $i, { $n.value }, { $n = $kt(it as ${tm.kt(types.under(f.t).id)}) })")
                         else w.line("$i -> GoFieldPtr(this, $i, { $n }, { $n = $v })")
                     }

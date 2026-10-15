@@ -401,6 +401,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
     fun methodCall(e: Node): Ex {
         val sel = e.reqObj("fun").let { if (it.k == "ParenExpr") it.reqObj("x") else it }
         if (sel.k != "SelectorExpr") refuse("method-call-shape", sel.k)
+        atomicFieldCall(e, sel)?.let { return it }
         val (recv, name, _) = methodTarget(sel)
         val sig = sigOf(e)
         val mo = pc.obj(sel.reqObj("sel").int("obj")!!)
@@ -421,6 +422,33 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             return withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$wname(${codes.joinToString(", ")})"))
         }
         return withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$name(${inlineArgs(e, mo.str("key"), args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})"))
+    }
+
+    /**
+     * `x.f.Load()` / `x.f.Store(v)` / `x.f.CompareAndSwap(old, new)` on a [Program.inlineAtomicFields] field `f`: the
+     * field is a `@Volatile` primitive of `x`, so a load is a volatile read and a store a volatile write — under the
+     * holder's stripe lock when the field is in [Program.lockedAtomicFields], as every compare-and-swap is
+     * (`runtime.goAtomicCas*`), so a swap never interleaves with a write it did not see.
+     */
+    private fun atomicFieldCall(e: Node, sel: Node): Ex? {
+        val fx = sel.reqObj("x").let { if (it.k == "ParenExpr") it.reqObj("x") else it }
+        if (fx.k != "SelectorExpr" || fx.str("selk") != "field") return null
+        val key = fx.reqObj("sel").int("obj")?.let { pc.obj(it) }?.takeIf { it.str("k") == "field" }?.str("key") ?: return null
+        val atomicKey = prog.inlineAtomicFields[key] ?: return null
+        val op = pc.obj(sel.reqObj("sel").int("obj")!!).str("key")!!.substringAfterLast('.')
+        val (toGo, fromGo) = inlineAtomicConv(atomicKey)
+        val (owner, field) = fieldOwner(fx)
+        val h = fn.fresh("h")
+        val args = e.list("args").map { lower(it).code }
+        val locked = key in prog.lockedAtomicFields
+        val kt = INLINE_ATOMIC_KT.getValue(atomicKey)
+        return when (op) {
+            "Load" -> Ex.primary(toGo("${owner.at(PRIMARY)}.$field"))
+            "Store" -> if (locked) Ex.primary("run { val $h = ${owner.code}; goAtomicLocked($h) { $h.$field = ${fromGo("(${args[0]})")} } }")
+                else Ex.primary("run { ${owner.at(PRIMARY)}.$field = ${fromGo("(${args[0]})")} }")
+            "CompareAndSwap" -> Ex.primary("run { val $h = ${owner.code}; goAtomicCas$kt($h, { $h.$field }, { $h.$field = it }, ${fromGo("(${args[0]})")}, ${fromGo("(${args[1]})")}) }")
+            else -> error("goport: inlined atomic op $op on $key (Program.computeInlineAtomicFields admits only $INLINE_ATOMIC_OPS)")
+        }
     }
 
     fun methodExprCall(e: Node): Ex {

@@ -1,3 +1,10 @@
+**(OWNER 2026-10-14) DONE — the opt-in no-GC image and the published bench on the port:** `-PnativeImageGc=epsilon`
+(`tsgo-native-image-pgo.sh --gc epsilon`) is faster than the G1 PGO image on every project measured (mitt 40 → 20 ms,
+services 2,470 → 2,320 ms) at up to +50% peak RSS; out of memory it exits 3 (`ExitOnOutOfMemoryError` — the first probe
+hung), and `TsgoMain` now ends a main-thread failure with Go's status 2. `bench.yml` measures the port (series V3: warm
+`CheckBenchMain`, cold `TsgoMain`, the `-tsgo` image, ratios against tsgo). `tsgo-ab-warm.sh` had medianed warm-up
+rebuilds — fixed, docs/goport-perf.md §§ 13/14/19 annotated. `-tsgo` 153 / 0, `linuxX64Test` 91 / 0, replay 121 / 121.
+
 **(TSGO.5-c) DONE — `tsc --watch` and `-b --watch` on the port; (TSGO.5) DONE (2026-10-13):** `execute`'s `Watcher`,
 `execute/watchmanager`, `vfs/trackingvfs` and fswatch's platform-independent core (coalescing, debounce, filtering) ported
 mechanically; only the OS layer is replaced — an overlay copy of `inotify_linux.go`'s backend over an `XtscNotifier`
