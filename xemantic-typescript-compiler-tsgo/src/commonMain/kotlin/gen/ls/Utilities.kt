@@ -1360,12 +1360,12 @@ fun nodeSeenTracker(): ((Node?) -> Boolean)? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.toContextRange 414532a4
-fun toContextRange(textRange: TextRange?, contextFile: SourceFile?, context: Node?): TextRange? {
+fun toContextRange(textRange: GoPtr<TextRange>?, contextFile: SourceFile?, context: Node?): GoPtr<TextRange>? {
     if (context == null) {
         return textRange
     }
-    val contextRange: TextRange = getRangeOfNode(context, contextFile, null)
-    if (contextRange.pos() != textRange!!.pos() || contextRange.end() != textRange!!.end()) {
+    val contextRange: GoBox<TextRange> = GoBox(getRangeOfNode(context, contextFile, null))
+    if (contextRange.value.pos() != textRange!!.value.pos() || contextRange.value.end() != textRange!!.value.end()) {
         return contextRange
     }
     return null

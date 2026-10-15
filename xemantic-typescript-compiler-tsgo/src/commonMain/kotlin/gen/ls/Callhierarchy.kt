@@ -565,15 +565,15 @@ fun LanguageService?.createCallHierarchyItem(program: Program?, node: Node?): Ca
 // go: github.com/microsoft/typescript-go/internal/ls.callSite d4fe36a8
 class callSite(
     @kotlin.jvm.JvmField var declaration: Node? = null,
-    @kotlin.jvm.JvmField var textRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_textRange") @set:kotlin.jvm.JvmName("goSet_textRange") var textRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var sourceFile: Node? = null,
 ) {
 
-    fun goCopy(): callSite = callSite(declaration = declaration, textRange = textRange.goCopy(), sourceFile = sourceFile)
+    fun goCopy(): callSite = callSite(declaration = declaration, textRange = textRange, sourceFile = sourceFile)
 
     fun goSet(o: callSite) {
         declaration = o.declaration
-        textRange = o.textRange.goCopy()
+        textRange = o.textRange
         sourceFile = o.sourceFile
     }
 

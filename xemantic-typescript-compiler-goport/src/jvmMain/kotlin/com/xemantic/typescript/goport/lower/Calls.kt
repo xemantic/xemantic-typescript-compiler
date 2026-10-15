@@ -81,7 +81,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             if (generic != null && generic.params.getOrNull(minOf(i, generic.params.size - 1))?.t?.let { types.unalias(it) is TypeParamType } == true) return@mapIndexed code
             val node = argNodes.getOrNull(i)
             val under = types.under(pt)
-            val needs = (under is SignatureType || (under is PointerType && types.under(under.elem) is StructType)) &&
+            val needs = (under is SignatureType || (under is PointerType && tm.isStructValue(under.elem))) &&
                 node != null && node.k != "FuncLit" && !code.startsWith("*") && node.str("m") != "nil"
             if (needs) "${Ex(code, 0).at(PRIMARY)}!!" else code
         }
@@ -276,7 +276,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             val arg = argNodes.getOrNull(i) ?: return@mapIndexed code
             val at = types.under(ty(arg)) as? PointerType ?: return@mapIndexed code
             val elem = types.under(at.elem)
-            if (elem is StructType || elem is ArrayType || types.unalias(at.elem) is com.xemantic.typescript.goport.types.TypeParamType) return@mapIndexed code
+            if ((elem is StructType && !tm.isPacked(at.elem)) || elem is ArrayType || types.unalias(at.elem) is com.xemantic.typescript.goport.types.TypeParamType) return@mapIndexed code
             "${Ex(code, 0).at(PRIMARY)}?.value"
         }
     }

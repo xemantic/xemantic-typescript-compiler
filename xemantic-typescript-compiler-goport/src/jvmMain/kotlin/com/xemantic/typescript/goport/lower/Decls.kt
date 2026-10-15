@@ -485,7 +485,7 @@ class PackageEmitter(
                     // Program.transparentWrappers: the wrapper IS the struct it wraps (one allocation, as in Go).
                     val inner = (types.under(named.id) as StructType).fields[0].t
                     "${traceLine(qname, s.str("hash"))}\n// goport: transparent wrapper (docs/goport-lowering.md § 3)\ntypealias ${prog.typeName(qname, named.name)} = ${tm.kt(inner)}\n"
-                } else structClass(s, named, fc)
+                } else if (named.key in prog.packedStructs) packedClass(s, named, fc) else structClass(s, named, fc)
                 TypeMapper.NamedKind.IFACE -> ifaceDecl(s, named, fc)
                 TypeMapper.NamedKind.CONSTRAINT -> "${traceLine(qname, s.str("hash"))}\n// constraint-only interface ${named.name}: erased to its bound at each use\n"
                 TypeMapper.NamedKind.VALUE -> valueClass(s, named, fc)
@@ -607,6 +607,112 @@ class PackageEmitter(
     /** Kotlin member names of every method in [named]'s pointer method set (declared or promoted). */
     private fun methodSetNames(named: NamedType): Map<String, com.xemantic.typescript.goport.types.MethodSetEntry> =
         (types.msetPtr(named).ifEmpty { types.msetT(named) }).associateBy { prog.methodName(it.fn, it.name) }
+
+    /**
+     * A [Program.packedStructs] struct (docs/goport-lowering.md § 3, "Packed structs"): `@JvmInline value class X(val
+     * goPacked: Long)` whose fields are getters over 32-bit lanes (field 0 low, field 1 high) and whose secondary
+     * constructor takes the fields by name, so a composite literal and the zero value read as they do for a struct.
+     * No field is ever assigned (the run proves it), so there is no `goSet`; a copy is the value itself.
+     */
+    private fun packedClass(s: Node, named: NamedType, fc: FileCtx): String {
+        val qname = s.str("qname")!!
+        val tm = TypeMapper(fc)
+        val st = types.under(named.id) as StructType
+        val name = prog.typeName(qname, named.name)
+        val fieldNames = st.fields.mapIndexed { i, f -> prog.fieldName("$qname.${f.name}", f.name, i) }
+        checkCollisions(qname, fieldNames, "field")
+        val declared = pc.methodsOf(qname).filter { it.str("qname") !in prog.extensionMethods }
+        val mset = methodSetNames(named)
+        checkCollisions(qname, pc.methodsOf(qname).map { prog.methodName(it.str("qname")!!, it.str("name")!!) }, "method")
+        val (supers0, overrideNames) = supertypes(named, tm, mset.keys)
+        if (supers0.any { it.endsWith("()") }) error("goport: packed struct $qname has a superclass: $supers0")
+        val reflect = qname in prog.reflectStructs
+        val jsonIface = "com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct"
+        val json = reflect && prog.shims.hasTop("com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json", "GoJsonStruct")
+        val supers = supers0 + (if (reflect) listOf("GoReflectStruct") else emptyList()) + (if (json) listOf(jsonIface) else emptyList())
+        // Each field as a 32-bit Int lane: in (the field's Kotlin value -> Int) and out (Int -> the field's Kotlin value).
+        fun lane(i: Int): Pair<(String) -> String, (String) -> String> {
+            val t = st.fields[i].t
+            val b = types.under(t) as com.xemantic.typescript.goport.types.BasicType
+            val vc = tm.isValueClass(t)
+            val raw: (String) -> String = { if (vc) "$it.value" else it }
+            val wrap: (String) -> String = { if (vc) "${tm.kt(t)}($it)" else it }
+            return when (tm.rep(b)) {
+                TypeMapper.Rep.INT -> ({ v: String -> raw(v) } to { x: String -> wrap(x) })
+                TypeMapper.Rep.UINT -> ({ v: String -> "${raw(v)}.toInt()" } to { x: String -> wrap("$x.toUInt()") })
+                TypeMapper.Rep.BOOL -> ({ v: String -> "(if (${raw(v)}) 1 else 0)" } to { x: String -> wrap("($x != 0)") })
+                else -> error("goport: packed field kind ${b.kind} in $qname")
+            }
+        }
+        val lanes = st.fields.indices.map { lane(it) }
+        val w = CodeWriter()
+        w.line(traceLine(qname, s.str("hash")))
+        w.line("// goport: packed struct (docs/goport-lowering.md § 3)")
+        w.line("@kotlin.jvm.JvmInline")
+        w.line("value class $name(val goPacked: Long)${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
+        w.indent {
+            w.line()
+            val ps = st.fields.indices.joinToString(", ") { "${fieldNames[it]}: ${tm.kt(st.fields[it].t)} = ${tm.zero(st.fields[it].t)}" }
+            w.line("constructor($ps) : this(goPack(${st.fields.indices.joinToString(", ") { lanes[it].first(fieldNames[it]) }}))")
+            st.fields.indices.forEach { i ->
+                val bits = if (i == 0) "goPacked.toInt()" else "(goPacked ushr 32).toInt()"
+                w.line()
+                w.line("val ${fieldNames[i]}: ${tm.kt(st.fields[i].t)} get() = ${lanes[i].second(bits)}")
+            }
+            w.line()
+            w.line("fun goCopy(): $name = this")
+            if (named.comparable) {
+                w.line()
+                w.line("fun goEquals(o: $name): Boolean = goPacked == o.goPacked")
+                w.line()
+                val hs = st.fields.mapIndexed { i, f -> fieldHash(fieldNames[i], f.t, tm) }
+                w.line("fun goHash(): Int = ${hs.joinToString(" + ") { "31 * $it" }}")
+            }
+            val scope = ClassScope(emptyMap(), (fieldNames + mset.keys).toSet(), overrideNames, emptyMap())
+            for (m in declared) {
+                w.line()
+                w.raw(funcDecl(m, fc, extension = false, member = scope))
+            }
+            if (reflect) {
+                w.line()
+                w.line("override fun goStructInfo(): GoStructInfo = GO_STRUCT")
+                w.line()
+                // Go's reflect cannot set a field of a value it does not address; a packed struct's fields are never assigned.
+                w.block("override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i)") {
+                    st.fields.indices.forEach { i ->
+                        val raw = if (tm.isValueClass(st.fields[i].t)) "${fieldNames[i]}.value" else fieldNames[i]
+                        w.line("$i -> GoFieldPtr(this, $i, { $raw }, { goPanic(\"reflect: set of a packed struct field\") })")
+                    }
+                    w.line("else -> goPanicIndex(i, ${st.fields.size})")
+                }
+                if (json) {
+                    w.line()
+                    w.line("override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)")
+                }
+            }
+            w.line()
+            w.block("companion object") {
+                if (reflect) {
+                    w.block("val GO_STRUCT: GoStructInfo by lazy") {
+                        w.line("GoStructInfo(\"${pc.pkg.path.substringAfterLast('/')}.${named.name}\", listOf(")
+                        w.indent {
+                            st.fields.forEach { f ->
+                                val tag = f.tag.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$")
+                                w.line("GoFieldInfo(\"${f.name}\", \"$tag\", ${f.exported}, ${f.embedded}, ${tm.reflectTypeInfo(f.t)}),")
+                            }
+                        }
+                        w.line("))")
+                    }
+                }
+                w.line("val ELEM: GoElem<$name> = GoElem({ $name() }, { it })")
+                w.line()
+                val args = st.fields.indices.joinToString(", ") { "f$it: Int" }
+                w.line("fun goPack($args): Long = ${if (st.fields.size == 1) "f0.toLong() and 0xFFFFFFFFL" else "(f0.toLong() and 0xFFFFFFFFL) or (f1.toLong() shl 32)"}")
+            }
+        }
+        w.line("}")
+        return w.toString()
+    }
 
     private fun structClass(s: Node, named: NamedType, fc: FileCtx): String {
         val qname = s.str("qname")!!
@@ -814,7 +920,7 @@ class PackageEmitter(
     private fun jvmField(name: String, t: Int, tm: TypeMapper, mutable: Boolean = true): String {
         val n = name.trim('`')
         val rep = tm.repOf(t)
-        val valueClass = tm.isValueClass(t) || rep == TypeMapper.Rep.UINT || rep == TypeMapper.Rep.ULONG
+        val valueClass = tm.isValueClass(t) || tm.isPacked(t) || rep == TypeMapper.Rep.UINT || rep == TypeMapper.Rep.ULONG
         if (!valueClass) return "@kotlin.jvm.JvmField "
         return "@get:kotlin.jvm.JvmName(\"goGet_$n\") " + if (mutable) "@set:kotlin.jvm.JvmName(\"goSet_$n\") " else ""
     }
@@ -836,7 +942,7 @@ class PackageEmitter(
     private fun fieldEq(n: String, t: Int, tm: TypeMapper): String = when {
         tm.hasGoEquals(t) -> "$n.goEquals(o.$n)"
         types.under(t) is ArrayType -> "$n.goEquals(o.$n)"
-        types.under(t) is PointerType && types.under((types.under(t) as PointerType).elem) is StructType -> "$n === o.$n"
+        types.under(t) is PointerType && tm.isStructValue((types.under(t) as PointerType).elem) -> "$n === o.$n"
         else -> "$n == o.$n"
     }
 

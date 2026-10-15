@@ -136,7 +136,21 @@ class TypeMapper(
         return t is NamedType && namedKind(t) == NamedKind.VALUE
     }
 
-    fun isStructValue(id: Int): Boolean = types.under(id) is StructType
+    /**
+     * A struct with Go's VALUE semantics on the JVM, i.e. a mutable class whose copies are `goCopy()`s and whose
+     * pointer is the reference itself — every struct except a [Program.packedStructs] one, which is a value class.
+     */
+    fun isStructValue(id: Int): Boolean = types.under(id) is StructType && !isPacked(id)
+
+    /** A [Program.packedStructs] struct: a `@JvmInline value class` over a `Long`, its pointer a `GoPtr`. */
+    fun isPacked(id: Int): Boolean {
+        if (pc.prog.packedStructs.isEmpty()) return false
+        val t = types.unalias(id) as? NamedType ?: return false
+        return (t.origin?.let { types.unalias(it) as NamedType } ?: t).key in pc.prog.packedStructs
+    }
+
+    /** Whether a pointer to [elem] is the referenced object itself (a struct class or array), not a `GoPtr`. */
+    fun pointsToObject(elem: Int): Boolean = isStructValue(elem) || types.under(elem) is ArrayType
 
     fun isEmptyStruct(id: Int): Boolean = (types.under(id) as? StructType)?.fields?.isEmpty() ?: false
 
@@ -186,7 +200,7 @@ class TypeMapper(
             is PointerType -> {
                 when {
                     // A pointer to a struct or ARRAY is the (mutable) reference itself (design § 3).
-                    types.under(t.elem) is StructType || types.under(t.elem) is ArrayType -> kt(t.elem) + "?"
+                    pointsToObject(t.elem) -> kt(t.elem) + "?"
                     // `*T` for an opaque T: T stands for the reference (design § 3), and Go's nil pointer is null.
                     opaqueTP(t.elem) -> kt(t.elem).removeSuffix("?") + "?"
                     else -> "GoPtr<${kt(t.elem)}>?"
@@ -340,7 +354,7 @@ class TypeMapper(
                 append("class $name(\n")
                 for ((n, f) in fs) {
                     // A value-class field cannot be @JvmField (as in struct classes: a JvmName'd accessor).
-                    val vc = mt.isValueClass(f.t) || mt.repOf(f.t).let { it == Rep.UINT || it == Rep.ULONG }
+                    val vc = mt.isValueClass(f.t) || mt.isPacked(f.t) || mt.repOf(f.t).let { it == Rep.UINT || it == Rep.ULONG }
                     val ann = if (vc) "@get:kotlin.jvm.JvmName(\"goGet_${n.trim('`')}\") @set:kotlin.jvm.JvmName(\"goSet_${n.trim('`')}\")" else "@kotlin.jvm.JvmField"
                     append("    $ann var $n: ${mt.kt(f.t)} = ${mt.zero(f.t)},\n")
                 }

@@ -211,14 +211,14 @@ fun getDeclarationNameForKeyword(node: Node?): Node? {
 // go: github.com/microsoft/typescript-go/internal/ls.fileRange 36d0ee6b
 class fileRange(
     @kotlin.jvm.JvmField var fileName: String = "",
-    @kotlin.jvm.JvmField var fileRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_fileRange") @set:kotlin.jvm.JvmName("goSet_fileRange") var fileRange: TextRange = TextRange(),
 ) {
 
-    fun goCopy(): fileRange = fileRange(fileName = fileName, fileRange = fileRange.goCopy())
+    fun goCopy(): fileRange = fileRange(fileName = fileName, fileRange = fileRange)
 
     fun goSet(o: fileRange) {
         fileName = o.fileName
-        fileRange = o.fileRange.goCopy()
+        fileRange = o.fileRange
     }
 
     fun goEquals(o: fileRange): Boolean = fileName == o.fileName && fileRange.goEquals(o.fileRange)
@@ -248,17 +248,17 @@ fun LanguageService?.createDefinitionLocations(originSelectionRange: Range, clie
         val file: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(decl)
         val fileName: String = file!!.fileName()
         val name: Node? = com.xemantic.typescript.tsgo.core.orElse<Node?>(GoElem.ref<Node?>(), com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(decl), decl)
-        val nameRange: TextRange = TextRange()
+        val nameRange: GoBox<TextRange> = GoBox(TextRange())
         if (name!!.kind.value == 243) {
-            nameRange.goSet(com.xemantic.typescript.tsgo.core.newTextRange(name!!.pos(), name!!.pos()))
+            nameRange.value = com.xemantic.typescript.tsgo.core.newTextRange(name!!.pos(), name!!.pos())
         } else {
-            nameRange.goSet(createRangeFromNode(name, file))
+            nameRange.value = createRangeFromNode(name, file)
         }
-        if (locationRanges.addIfAbsent(com.xemantic.typescript.tsgo.ls.fileRange(fileName = fileName, fileRange = nameRange.goCopy()))) {
+        if (locationRanges.addIfAbsent(com.xemantic.typescript.tsgo.ls.fileRange(fileName = fileName, fileRange = nameRange.value.goCopy()))) {
             val contextNode: Node? = com.xemantic.typescript.tsgo.core.orElse<Node?>(GoElem.ref<Node?>(), getContextNode(decl), decl)
-            val contextRange: TextRange? = com.xemantic.typescript.tsgo.core.orElse<TextRange?>(GoElem.ref<TextRange?>(), toContextRange(nameRange, file, contextNode), nameRange)
-            val targetSelectionLoc: Location = this.getMappedLocation(fileName, nameRange.goCopy())
-            val targetLoc: Location = this.getMappedLocation(fileName, contextRange!!.goCopy())
+            val contextRange: GoPtr<TextRange>? = com.xemantic.typescript.tsgo.core.orElse<GoPtr<TextRange>?>(GoElem.ref<GoPtr<TextRange>?>(), toContextRange(nameRange, file, contextNode), nameRange)
+            val targetSelectionLoc: Location = this.getMappedLocation(fileName, nameRange.value.goCopy())
+            val targetLoc: Location = this.getMappedLocation(fileName, contextRange!!.value.goCopy())
             locations.value = locations.value.append1(LocationLink(originSelectionRange = originSelectionRange, targetSelectionRange = targetSelectionLoc.range.goCopy(), targetUri = targetLoc.uri, targetRange = targetLoc.range.goCopy()))
         }
     }

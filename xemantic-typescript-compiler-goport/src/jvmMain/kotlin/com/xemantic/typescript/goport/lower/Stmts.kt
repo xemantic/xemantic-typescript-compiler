@@ -364,7 +364,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         if (named.tparams.isNotEmpty() || named.origin != null) return false
         if ((types.unalias(ty(r)) as? NamedType)?.key != named.key) return false
         val st = types.under(pt.elem) as? StructType ?: return false
-        if (st.fields.isEmpty() || tm.isValueClass(pt.elem) || named.key in prog.immutableStructs) return false
+        if (st.fields.isEmpty() || tm.isValueClass(pt.elem) || tm.isPacked(pt.elem) || named.key in prog.immutableStructs) return false
         if (st.fields.any { "${named.key}.${it.name}".let { k -> k in prog.windowFields || k in prog.primFuncFields } }) return false
         val target = fn.fresh("lp")
         w.line("val $target = ${nn(lower(p)).code}")
@@ -581,7 +581,7 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             "StarExpr" -> {
                 val p = l.reqObj("x")
                 val pt = types.under(ty(p)) as PointerType
-                if (types.under(pt.elem) is StructType) w.line("${nn(lower(p)).code}.goSet(${value.code})")
+                if (tm.isStructValue(pt.elem)) w.line("${nn(lower(p)).code}.goSet(${value.code})")
                 else if (types.under(pt.elem) is ArrayType) w.line("goCopy(${nn(lower(p)).at(Ex.PRIMARY)}.slice(), ${value.at(Ex.PRIMARY)}.slice())")
                 else w.line("${lower(l).code} = ${value.code}")
             }

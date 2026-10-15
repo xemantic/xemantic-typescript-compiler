@@ -364,6 +364,20 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   a field, deref, or call another pure method (fixpoint). Such a local is then a plain rebindable reference
   (`var t = …; t = f()`), not an address-stable object assigned by `goSet`. Refusals are printed by the porter.
   Pin: `LoweringRulesTest`.
+- **Packed structs** ((TSGO.9-a), `Program.computePackedStructs`/`packedFieldWrites`, `Decls.packedClass`,
+  `TypeMapper.isPacked`/`pointsToObject`). A struct in `PACKED_STRUCT_CANDIDATES` (`core.TextRange`) with one or two
+  fields of 32-bit-or-narrower integer (or bool) kinds, no pointer-receiver method, and — over the whole run — no
+  field ever assigned (`=`, op-assign, `++`, a range target) or address-taken (`&x.pos`) is lowered as
+  `@JvmInline value class X(val goPacked: Long)`: field 0 in the low 32 bits, field 1 in the high; the fields are
+  getters; a secondary constructor takes them by name with their zero defaults, so a composite literal and the zero
+  value read as for a struct; `goCopy() = this`, no `goSet`, `goEquals` compares the `Long`. It is then NOT a struct
+  value to the lowering (`isStructValue` is false): a field of its type is a JVM `long` (`goGet_`/`goSet_` accessors,
+  as for a named basic value), and a pointer to it is a `GoPtr` exactly like a pointer to a named basic value —
+  `&n.Loc` a live `GoFieldPtr` on the holder's field, `&local` a boxed local, `*p` is `p!!.value`, a value-receiver
+  call through a pointer dereferences (`r!!.value.end()`). Reflection reads the fields; a reflective SET panics (Go
+  cannot set an unaddressed value's unexported field either). Refusals are printed by the porter. Every node's
+  `Loc` stops being an object (docs/goport-perf.md § 30). Pins: `LoweringRulesTest` (the class, a node's field,
+  `&decl.Loc`, a call through `*TextRange`; the write classifier).
 - **Abstract-class interfaces** ((TSGO.6-i), `Program.computeAbstractIfaces`, `Decls.ifaceDecl`/`superCall`). An
   interface in `ABSTRACT_IFACE_CANDIDATES` (`ast.nodeData`, `checker.TypeData`) is lowered as an `abstract class`
   (`abstract fun` members) when the whole run proves it legal: every named type whose IR `implements` lists it is a

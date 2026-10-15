@@ -723,14 +723,14 @@ fun uniqueDeclarationNodes(nodes: GoSlice<Node?>): GoSlice<Node?> {
 // go: github.com/microsoft/typescript-go/internal/ls.declarationKey_uniqueDeclarationNodes 
 class declarationKey_uniqueDeclarationNodes(
     @kotlin.jvm.JvmField var fileName: String = "",
-    @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
 ) {
 
-    fun goCopy(): declarationKey_uniqueDeclarationNodes = declarationKey_uniqueDeclarationNodes(fileName = fileName, loc = loc.goCopy())
+    fun goCopy(): declarationKey_uniqueDeclarationNodes = declarationKey_uniqueDeclarationNodes(fileName = fileName, loc = loc)
 
     fun goSet(o: declarationKey_uniqueDeclarationNodes) {
         fileName = o.fileName
-        loc = o.loc.goCopy()
+        loc = o.loc
     }
 
     fun goEquals(o: declarationKey_uniqueDeclarationNodes): Boolean = fileName == o.fileName && loc.goEquals(o.loc)

@@ -384,7 +384,7 @@ open class ExprLowering(val fn: FnCtx) {
         }
         return when {
             u is BasicType -> Ex("${raw(x).at(EQ + 1)} $k ${raw(y).at(EQ + 1)}", EQ)
-            u is PointerType && (types.under(u.elem) is StructType || types.under(u.elem) is ArrayType) && types.under(ty(y)) is PointerType ->
+            u is PointerType && tm.pointsToObject(u.elem) && types.under(ty(y)) is PointerType ->
                 Ex("${lower(x).at(EQ + 1)} ${if (neg) "!==" else "==="} ${lower(y).at(EQ + 1)}", EQ)
             u is StructType || u is ArrayType -> {
                 val gen = u is ArrayType || tm.hasGoEquals(xt)
@@ -465,7 +465,7 @@ open class ExprLowering(val fn: FnCtx) {
         val pt = types.under(ty(p)) as? PointerType ?: refuse("deref-non-pointer")
         val v = lower(p)
         return when {
-            types.under(pt.elem) is StructType || types.under(pt.elem) is ArrayType -> nn(v)
+            tm.pointsToObject(pt.elem) -> nn(v)
             // `*p` for an opaque T: the "pointer" IS the T value (it may itself be a nil pointer when T
             // is one — `*new(T)`), so no assertion; the cast only narrows the Kotlin type `T?` to `T`.
             tm.opaqueTP(pt.elem) -> Ex("${v.at(AS)} as ${tm.kt(pt.elem)}", AS)
@@ -601,6 +601,8 @@ open class ExprLowering(val fn: FnCtx) {
             r = nn(r)
         } else if (isPtr && !nilSafe) {
             r = nn(r)
+            // A packed struct's pointer is a GoPtr (Program.packedStructs): Go dereferences for a value receiver.
+            if (tm.isPacked((u as PointerType).elem)) r = Ex.primary("${r.at(PRIMARY)}.value")
         } else if (isPtr && nilSafe && !e.bool("ptrRecv")) {
             // a VALUE-receiver extension (non-null receiver) through a pointer: Go dereferences
             r = nn(r)

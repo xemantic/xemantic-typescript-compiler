@@ -63,6 +63,17 @@ val IMMUTABLE_STRUCT_CANDIDATES = setOf(
 )
 
 /**
+ * Struct types that may be lowered as PACKED value classes ([Program.packedStructs], docs/goport-perf.md § 29):
+ * `core.TextRange` (two `int32`s) is every node's `Loc` — an object per node and a hop on every position read.
+ */
+val PACKED_STRUCT_CANDIDATES = setOf(
+    "github.com/microsoft/typescript-go/internal/core.TextRange",
+)
+
+/** Basic kinds a [PACKED_STRUCT_CANDIDATES] field may have (each packs into 32 bits of the `Long`). */
+val PACKED_FIELD_KINDS = setOf("Int32", "Uint32", "Int16", "Uint16", "Int8", "Uint8", "Bool")
+
+/**
  * Struct types whose objects get a dense port-internal index (`runtime.GoLinkKey`, docs/goport-lowering.md § 3,
  * "Link keys"): the keys of tsgo's checker link stores, which the `core.LinkStore` override files by that index
  * instead of hashing the pointer (docs/goport-perf.md § 14).
@@ -1303,6 +1314,51 @@ class Program(
         immutableStructs += cand
     }
 
+    /**
+     * Named structs lowered as `@JvmInline value class X(val goPacked: Long)` ([computePackedStructs]), by key: at most two
+     * fields of 32-bit integer kinds, no field ever assigned or address-taken, no pointer-receiver method. A value class
+     * IS its value, so the struct is no object in its holder (a `long` field) and a copy is free; a pointer to one is a
+     * `GoPtr` like a pointer to a named basic value (`&n.Loc` is a live `GoFieldPtr` on the holder's field).
+     */
+    val packedStructs = HashSet<String>()
+
+    /** Why each [PACKED_STRUCT_CANDIDATES] entry was refused (for the report and the pins). */
+    val packedRefusals = HashMap<String, String>()
+
+    fun computePackedStructs() {
+        packedStructs.clear()
+        packedRefusals.clear()
+        val cand = HashSet<String>()
+        for (k in PACKED_STRUCT_CANDIDATES) {
+            val found = packages.firstNotNullOfOrNull { p ->
+                val tt = TypeTable(p)
+                (0 until tt.size).firstNotNullOfOrNull { i -> (tt[i] as? com.xemantic.typescript.goport.types.NamedType)?.takeIf { it.key == k && it.origin == null }?.let { tt to it } }
+            }
+            if (found == null || k !in structTypes) { packedRefusals[k] = "not a struct declared in the run"; continue }
+            val (tt, n) = found
+            val st = tt.under(n.id) as com.xemantic.typescript.goport.types.StructType
+            fun int32(id: Int): Boolean = (tt.under(id) as? com.xemantic.typescript.goport.types.BasicType)?.kind in PACKED_FIELD_KINDS
+            when {
+                n.tparams.isNotEmpty() -> packedRefusals[k] = "generic"
+                st.fields.isEmpty() || st.fields.size > 2 -> packedRefusals[k] = "${st.fields.size} fields (1 or 2 pack into a Long)"
+                st.fields.any { it.embedded || !int32(it.t) } -> packedRefusals[k] = "a field is not a 32-bit integer"
+                methodsByType[k].orEmpty().any { (_, d) -> d.obj("recv")!!.list("list").first().obj("type")?.str("star") == "pointerType" } ->
+                    packedRefusals[k] = "a pointer-receiver method"
+                else -> cand += k
+            }
+        }
+        if (cand.isEmpty()) return
+        fun refuse(k: String, why: String) { if (cand.remove(k)) packedRefusals[k] = why }
+        fun fieldOwner(p: IrPackage, sel: Node): String? =
+            if (sel.str("k") != "SelectorExpr" || sel.str("selk") != "field") null
+            else sel.obj("sel")?.int("obj")?.let { p.obj(it) }?.takeIf { it.str("k") == "field" }?.str("key")?.substringBeforeLast('.')
+        for (p in packages) for (f in p.files) walk(f) { n ->
+            for ((sel, why) in packedFieldWrites(n)) fieldOwner(p, sel)?.let { if (it in cand) refuse(it, "$why (${p.path})") }
+            true
+        }
+        packedStructs += cand
+    }
+
     // ---- primitive func fields (docs/goport-lowering.md § 3, "Primitive func fields") ----
 
     /** Func-typed struct fields lowered as a generated primitive `fun interface` ([computePrimFuncFields]), by field key. */
@@ -1520,6 +1576,22 @@ class Program(
          * lowers itself: a call of the field, the field handed to a function (adapted back to a Kotlin function type),
          * a nil comparison, or an assignment of a method value, a function literal or nil (SAM-converted there).
          */
+        /**
+         * The selections node [n] WRITES or takes the address of, with why: an assignment target (`=`, op-assign, a
+         * range target), `x.f++`, `&x.f`. A [packedStructs] candidate is refused when one of them selects its field —
+         * a value class has no storage to change in place.
+         */
+        fun packedFieldWrites(n: Node): List<Pair<Node, String>> {
+            fun unparen(x: Node): Node = if (x.str("k") == "ParenExpr") unparen(x.obj("x")!!) else x
+            return when (n.str("k")) {
+                "AssignStmt" -> n.list("lhs").map { unparen(it) to "a field is assigned" }
+                "IncDecStmt" -> listOfNotNull(n.obj("x")).map { unparen(it) to "a field is assigned" }
+                "RangeStmt" -> if (n.str("tok") == "=") listOfNotNull(n.obj("key"), n.obj("value")).map { unparen(it) to "a field is assigned" } else emptyList()
+                "UnaryExpr" -> if (n.str("op") == "&") listOf(unparen(n.obj("x")!!) to "&x.f of a field") else emptyList()
+                else -> emptyList()
+            }
+        }
+
         fun primFuncUseAllowed(parent: Node, key: String): Boolean = when (parent.str("k")) {
             "CallExpr" -> (key == "fun" && parent.str("call") == "dynamic") ||
                 (key == "args" && !parent.bool("ellipsis") && parent.int("variadicFrom") == null)

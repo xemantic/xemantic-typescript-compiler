@@ -51,14 +51,14 @@ import com.xemantic.typescript.tsgo.scanner.tokenFullStart
 
 // go: github.com/microsoft/typescript-go/internal/format.TextRangeWithKind 1580cef2
 class TextRangeWithKind(
-    @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: Kind = Kind(0),
 ) {
 
-    fun goCopy(): TextRangeWithKind = TextRangeWithKind(loc = loc.goCopy(), kind = kind)
+    fun goCopy(): TextRangeWithKind = TextRangeWithKind(loc = loc, kind = kind)
 
     fun goSet(o: TextRangeWithKind) {
-        loc = o.loc.goCopy()
+        loc = o.loc
         kind = o.kind
     }
 
@@ -414,8 +414,8 @@ fun com.xemantic.typescript.tsgo.format.formattingScanner?.isOnEOF(): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/format.formattingScanner.skipToEndOf 95314388
-fun com.xemantic.typescript.tsgo.format.formattingScanner?.skipToEndOf(r: TextRange?) {
-    this!!.s.resetTokenState(r!!.end())
+fun com.xemantic.typescript.tsgo.format.formattingScanner?.skipToEndOf(r: GoPtr<TextRange>?) {
+    this!!.s.resetTokenState(r!!.value.end())
     this!!.savedPos = this!!.s.tokenFullStart()
     this!!.lastScanAction = actionScan
     this!!.hasLastTokenInfo = false
@@ -425,8 +425,8 @@ fun com.xemantic.typescript.tsgo.format.formattingScanner?.skipToEndOf(r: TextRa
 }
 
 // go: github.com/microsoft/typescript-go/internal/format.formattingScanner.skipToStartOf d3584ab5
-fun com.xemantic.typescript.tsgo.format.formattingScanner?.skipToStartOf(r: TextRange?) {
-    this!!.s.resetTokenState(r!!.pos())
+fun com.xemantic.typescript.tsgo.format.formattingScanner?.skipToStartOf(r: GoPtr<TextRange>?) {
+    this!!.s.resetTokenState(r!!.value.pos())
     this!!.savedPos = this!!.s.tokenFullStart()
     this!!.lastScanAction = actionScan
     this!!.hasLastTokenInfo = false

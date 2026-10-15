@@ -29,14 +29,14 @@ import com.xemantic.typescript.tsgo.synth.Iface_End_22b3828e
 
 // go: github.com/microsoft/typescript-go/internal/core.TextChange 0a457ad7
 class TextChange(
-    @kotlin.jvm.JvmField var textRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_textRange") @set:kotlin.jvm.JvmName("goSet_textRange") var textRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var newText: String = "",
 ) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
-    fun goCopy(): TextChange = TextChange(textRange = textRange.goCopy(), newText = newText)
+    fun goCopy(): TextChange = TextChange(textRange = textRange, newText = newText)
 
     fun goSet(o: TextChange) {
-        textRange = o.textRange.goCopy()
+        textRange = o.textRange
         newText = o.newText
     }
 

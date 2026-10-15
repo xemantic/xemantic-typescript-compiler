@@ -664,10 +664,10 @@ fun tryGetEnd(node: Iface_End_22b3828e?): Tuple2<Int, Boolean> {
                 return Tuple2<Int, Boolean>(v_2!!.nodeList.end(), true)
             }
         }
-        x0 is TextRange -> {
-            val v_3: TextRange? = x0 as TextRange
+        x0 is GoPtr<*> -> {
+            val v_3: GoPtr<TextRange>? = x0 as GoPtr<TextRange>
             if (v_3 != null) {
-                return Tuple2<Int, Boolean>(v_3!!.end(), true)
+                return Tuple2<Int, Boolean>(v_3!!.value.end(), true)
             }
         }
         x0 is TextRange -> {

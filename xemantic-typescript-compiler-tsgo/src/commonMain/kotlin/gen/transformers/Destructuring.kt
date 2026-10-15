@@ -87,7 +87,7 @@ val FlattenLevelAll: FlattenLevel = FlattenLevel(0)
 val FlattenLevelObjectRest: FlattenLevel = FlattenLevel(1)
 
 // go: github.com/microsoft/typescript-go/internal/transformers.CreateAssignmentCallback b99c178c
-typealias CreateAssignmentCallback = ((Node?, Node?, TextRange?) -> Node?)?
+typealias CreateAssignmentCallback = ((Node?, Node?, GoPtr<TextRange>?) -> Node?)?
 
 // go: github.com/microsoft/typescript-go/internal/transformers.FlattenDestructuringAssignment 92f57536
 fun flattenDestructuringAssignment(tx: Transformer?, node: Node?, needsValue: Boolean, level: FlattenLevel, createAssignmentCallback: CreateAssignmentCallback): Node? {
@@ -106,17 +106,17 @@ class pendingDecl(
     @kotlin.jvm.JvmField var pendingExpressions: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
     @kotlin.jvm.JvmField var name: Node? = null,
     @kotlin.jvm.JvmField var value: Node? = null,
-    @kotlin.jvm.JvmField var location: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_location") @set:kotlin.jvm.JvmName("goSet_location") var location: TextRange = TextRange(),
     @kotlin.jvm.JvmField var original: Node? = null,
 ) {
 
-    fun goCopy(): pendingDecl = pendingDecl(pendingExpressions = pendingExpressions, name = name, value = value, location = location.goCopy(), original = original)
+    fun goCopy(): pendingDecl = pendingDecl(pendingExpressions = pendingExpressions, name = name, value = value, location = location, original = original)
 
     fun goSet(o: pendingDecl) {
         pendingExpressions = o.pendingExpressions
         name = o.name
         value = o.value
-        location = o.location.goCopy()
+        location = o.location
         original = o.original
     }
 
@@ -193,13 +193,14 @@ fun com.xemantic.typescript.tsgo.transformers.flattener?.createArrayAssignmentEl
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers.flattener.emitAssignment a578ace3
-fun com.xemantic.typescript.tsgo.transformers.flattener?.emitAssignment(target: Node?, value_1: Node?, location: TextRange, original: Node?) {
+fun com.xemantic.typescript.tsgo.transformers.flattener?.emitAssignment(target: Node?, value_1: Node?, location_0: TextRange, original: Node?) {
+    val location: GoBox<TextRange> = GoBox(location_0)
     var expression: Node? = null
     if (this!!.createAssignmentCallback != null && com.xemantic.typescript.tsgo.ast.isIdentifier(target)) {
         expression = this!!.createAssignmentCallback!!(target, value_1, location)
     } else {
         expression = this!!.tx.factory().newAssignmentExpression(this!!.tx.visitor().visitNode(target), value_1)
-        expression!!.loc = location.goCopy()
+        expression!!.loc = location.value.goCopy()
     }
     this!!.tx.emitContext().setOriginal(expression, original)
     this.emitExpression(expression)

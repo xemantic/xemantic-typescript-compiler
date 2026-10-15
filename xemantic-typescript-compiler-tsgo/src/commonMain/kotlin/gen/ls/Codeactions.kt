@@ -70,7 +70,7 @@ class CodeFixProvider(
 // go: github.com/microsoft/typescript-go/internal/ls.CodeFixContext 04333398
 class CodeFixContext(
     @kotlin.jvm.JvmField var sourceFile: SourceFile? = null,
-    @kotlin.jvm.JvmField var span: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_span") @set:kotlin.jvm.JvmName("goSet_span") var span: TextRange = TextRange(),
     @kotlin.jvm.JvmField var errorCode: Int = 0,
     @kotlin.jvm.JvmField var program: Program? = null,
     @kotlin.jvm.JvmField var ls: LanguageService? = null,
@@ -78,11 +78,11 @@ class CodeFixContext(
     @kotlin.jvm.JvmField var params: CodeActionParams? = null,
 ) {
 
-    fun goCopy(): CodeFixContext = CodeFixContext(sourceFile = sourceFile, span = span.goCopy(), errorCode = errorCode, program = program, ls = ls, diagnostic = diagnostic, params = params)
+    fun goCopy(): CodeFixContext = CodeFixContext(sourceFile = sourceFile, span = span, errorCode = errorCode, program = program, ls = ls, diagnostic = diagnostic, params = params)
 
     fun goSet(o: CodeFixContext) {
         sourceFile = o.sourceFile
-        span = o.span.goCopy()
+        span = o.span
         errorCode = o.errorCode
         program = o.program
         ls = o.ls

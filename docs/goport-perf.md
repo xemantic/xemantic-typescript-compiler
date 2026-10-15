@@ -1380,3 +1380,24 @@ scripts/tsgo-jvm-profile.sh warm build/bench/tsc-project-4d4f005c/tsconfig.json 
 scripts/tsgo_ap_phases.py build/tsgo-jvm-profile/warm-cpu.collapsed cpu check-bench
 scripts/tsgo_ap_phases.py build/tsgo-jvm-profile/warm-alloc.collapsed alloc
 ```
+
+## 30. (TSGO.9-a) A node's `Loc` as a packed value class (2026-10-15)
+
+§ 29's first porter rule (docs/goport-lowering.md § 3, "Packed structs"): `core.TextRange` is `@JvmInline value class
+TextRange(val goPacked: Long)`, so a node's `Loc` is a `long` field instead of an object, and `n.Loc.Pos()` is no hop.
+A pointer to one (`&decl.Loc` into the CommonJS transformer, `skipToEndOf(&child.Loc)` in the formatter) is a live
+`GoFieldPtr` on the holder's field, as for a named basic value — Go's meaning, not a snapshot.
+
+Measured against the same-session build of `f8a28ead2` (`scripts/tsgo-ab-warm.sh`, ABBA + BAAB, `-Xmx6g`, tsc's compiler
+profile; every process one digest, 65 diagnostics):
+
+| regime | A | B | Δ | B wins |
+|---|---:|---:|---:|---:|
+| single, ms | 3,138 [3,103-3,447] | 2,924 [2,904-3,125] | **−6.9%** | 4/4 |
+| parallel, ms | 1,636 [1,564-1,677] | 1,574 [1,550-1,601] | −3.8% | 3/4 |
+| allocation per rebuild, single / parallel (all threads), MB | 1,127 / 1,275 | 1,047 / 1,202 | **−7.1% / −5.7%** | 4/4 each |
+
+Live heap (`CheckBenchMain … histo=`, § 29's table): what `newProgram` leaves live **188.4 → 169.7 MB** (−10%), **7.80 M →
+6.70 M objects**; per node **197 → 177 B and 8.1 → 7.0 objects**. `Node` itself grows 40 → 48 B (the inline `long` plus
+alignment) against the 24 B `TextRange` object it no longer points to; bind and check are unchanged (21.6 / 116.8 MB).
+Next: the atomic `id` wrapper (24 B per node) and the one-object node (9-b, 9-c).

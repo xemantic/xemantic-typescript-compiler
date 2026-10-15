@@ -25,6 +25,21 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.9-a) — A NODE'S `Loc` AS A PACKED VALUE CLASS
+
+- Measured first (docs/goport-perf.md § 29, owner-requested): the AST is 58% of the live heap after a check (188 MB, 197 B
+  and 8.1 objects per node), parse 11% of the bench thread and 34% of allocation, `ast` accessors 12.5% of check. A
+  tsc-rs-style rewrite would buy ~10-15% CPU at most; the objects per node are lowering artifacts, so (TSGO.9) is porter rules.
+- (9-a) `PACKED_STRUCT_CANDIDATES` / `Program.computePackedStructs` / `Decls.packedClass`: `core.TextRange` →
+  `@JvmInline value class TextRange(val goPacked: Long)` (fields as 32-bit lanes, a named-argument secondary constructor so
+  literals and zero values are unchanged, `goCopy() = this`, no `goSet`). `isStructValue` is false for it, so every pointer
+  path treats it as a named basic value: `*TextRange` is `GoPtr`, `&n.Loc` a live `GoFieldPtr`, `*p` reads `.value`, and a
+  value-receiver call through a pointer dereferences (`methodTarget`; the one compile error class after the first regen, 9
+  sites). Eight sites that tested `under(...) is StructType` for "a pointer is the object" now ask `pointsToObject`.
+- Pins: `LoweringRulesTest` (the class, a node's `long` field, `&decl.Loc`, `skipToEndOf`'s `GoPtr`; the write classifier
+  `packedFieldWrites` — fails with an assignment ignored). Gates: Diag/Emit 13,127, LS, API 594,007, CLI 120 / 121 equal.
+- Warm A/B vs `f8a28ead2`: single −6.9% (4/4), parallel −3.8% (3/4), allocation −7.1% / −5.7%; live AST 188 → 170 MB.
+
 ### Round (TSGO.7-f) — `-kir` NO LONGER DEPENDS ON `-core`
 
 - `kir/ast/Syntax.kt` + `SyntaxKind.kt`: `-core`'s AST classes, generated from `Ast.kt` with a nesting-aware comment
@@ -575,6 +590,17 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
 - [x] **(TSGO.7) move the remaining consumers onto the port (§ 6 stage 3).** **DONE 2026-10-14 — (7-a) `-daemon` + `scripts/xtsc` DONE 2026-10-14 (`CompileServer` serves `TsgoCli.run`, `XtscMain` dispatches to `TsgoMainKt`; serve-parity 31 / 31, compiler profile served byte-identical to tsgo; the published bench moved in the (OWNER 2026-10-14) round). (7-b) `jvm-bench.yml` DONE 2026-10-14 (`bench-jvms.sh` times `CheckBenchMain` / `TsgoMain`; CI run 38647609748 green, 65 errors in every arm). (7-c) KIR's `-core` front end (`XTSC_KIR_ENGINE=core`, the `CheckedNodeSink` half of `CheckedFacts`) and `StructuralCensus` removed 2026-10-14 (KIR 306 / 0 = 313 − the 7 census pins). (7-d) the KIR-owned value model DONE 2026-10-14 (`kir/model/KirValues.kt`: only the fields the lowering reads; KIR 306 / 0, `kir-bench.sh` equivalence gate green). (7-e) the lowering walks tsgo's tree DONE 2026-10-14 (`front/TsgoSyntax.kt` converts it to the lowering's syntax classes and records the pairing; no second parse, `FileNodeMap` gone; `TsgoSyntaxParityTest` holds it to `-core`'s parser on all 44 corpus files; a `-core` template-escape bug fixed on the way, `KirTemplateEscapeTest`; KIR 309 / 0, `kir-bench.sh` equivalence green). (7-f) `-kir` off `-core` DONE 2026-10-14 (`kir.ast` = `-core`'s AST classes minus comment / bookkeeping fields, a `when`-dispatched `forEachChild`; `kir.model.Diagnostic`; `CheckOptions` replaces `CompilerOptions`; `api(-core)` dropped, `-core` off `-kir`'s runtime classpath; KIR 308 / 0, `kir-bench.sh` equivalence green). (7-g) `kir-bench.sh`'s arm 3 / 6 emit with the port's `TsgoMain` DONE 2026-10-14 (the run now refuses unless that JavaScript is byte-identical to tsgo's; mitt and toml are). Remaining `-core` consumers are (TSGO.8)'s: `-project`, `-cli`, the corpus / grid scripts.** `-daemon` and `scripts/xtsc` onto the (TSGO.5)
   CLI; the bench series (`bench.yml`, `bench-3way.sh`, `jvm-bench.yml`) onto the port; KIR's lowering onto tsgo's AST (the
   `KirFileLowering` rewrite). Each consumer its own sub-step with its existing gate.
+
+- [ ] **(TSGO.9) a denser AST through porter rules (docs/goport-perf.md § 29; owner-requested 2026-10-15).** The AST is 58%
+  of the live heap after a check (197 B and 8.1 objects per node against Go's one allocation); most of those objects are
+  lowering artifacts, not tsgo's design. Each sub-step is a porter rule (never a hand edit of `gen/`), gated by the diag,
+  emit, LS/API and CLI differentials plus `scripts/tsgo-ab-warm.sh` and the `CheckBenchMain … histo=` live-heap table:
+  (9-a) a node's `Loc` (`core.TextRange`) as a packed value class over a `Long`; (9-b) the atomic `id`/`facts` wrappers
+  (`atomic.Uint64`/`Uint32`, the latter two objects) as fields of their holder; (9-c) the node and its data struct as ONE
+  object (`NodeDefault`'s `Node` as a superclass — § 19's "next representation step") and the remaining embedded base
+  structs (`FlowNodeBase`, `CompositeBase`, `DeclarationBase`, …) flattened into their holder where no `&x.Base` needs
+  them addressable. Target: ~2 objects and ~100 B per node. **(9-a) DONE 2026-10-15** (single −6.9%, allocation −7.1%,
+  live AST 188 → 170 MB; docs/goport-perf.md § 30).
 
 - [ ] **(TSGO.8) delete `-core` (§ 6 stages 4-5).**
   BLOCKED-PENDING-USER: **delete `-core`** — proposal (updated 2026-10-14, after (TSGO.7)): stages 1-3 of

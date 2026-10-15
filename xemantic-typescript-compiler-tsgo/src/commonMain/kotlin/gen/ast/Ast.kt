@@ -173,14 +173,14 @@ fun cloneNode(updated: Node?, original: Node?, hooks: NodeFactoryHooks): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeList ea4691ec
 class NodeList(
-    @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
     @kotlin.jvm.JvmField var nodes: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice,
 ) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
-    fun goCopy(): NodeList = NodeList(loc = loc.goCopy(), nodes = nodes)
+    fun goCopy(): NodeList = NodeList(loc = loc, nodes = nodes)
 
     fun goSet(o: NodeList) {
-        loc = o.loc.goCopy()
+        loc = o.loc
         nodes = o.nodes
     }
 
@@ -267,18 +267,18 @@ fun ModifierList?.clone(f: NodeFactory?): ModifierList? {
 class Node(
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: Kind = Kind(0),
     @get:kotlin.jvm.JvmName("goGet_flags") @set:kotlin.jvm.JvmName("goSet_flags") var flags: NodeFlags = NodeFlags(0u),
-    @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
     @kotlin.jvm.JvmField var id: Uint64 = Uint64(),
     @kotlin.jvm.JvmField var parent: Node? = null,
     @kotlin.jvm.JvmField var data: com.xemantic.typescript.tsgo.ast.nodeData? = null,
 ) : GoLinkKey(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
-    fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc.goCopy(), id = id.goCopy(), parent = parent, data = data)
+    fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc, id = id.goCopy(), parent = parent, data = data)
 
     fun goSet(o: Node) {
         kind = o.kind
         flags = o.flags
-        loc = o.loc.goCopy()
+        loc = o.loc
         id = o.id.goCopy()
         parent = o.parent
         data = o.data
@@ -308,7 +308,7 @@ class Node(
     override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
         0 -> GoFieldPtr(this, 0, { kind.value }, { kind = Kind(it as Int) })
         1 -> GoFieldPtr(this, 1, { flags.value }, { flags = NodeFlags(it as UInt) })
-        2 -> GoFieldPtr(this, 2, { loc }, { loc = (it as TextRange).goCopy() })
+        2 -> GoFieldPtr(this, 2, { loc }, { loc = it as TextRange })
         3 -> GoFieldPtr(this, 3, { id }, { id = (it as Uint64).goCopy() })
         4 -> GoFieldPtr(this, 4, { parent }, { parent = it as Node? })
         5 -> GoFieldPtr(this, 5, { data }, { data = it as com.xemantic.typescript.tsgo.ast.nodeData? })
@@ -2468,14 +2468,14 @@ val CommentDirectiveKindIgnore: CommentDirectiveKind = CommentDirectiveKind(2)
 
 // go: github.com/microsoft/typescript-go/internal/ast.CommentDirective 2aeb5997
 class CommentDirective(
-    @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: CommentDirectiveKind = CommentDirectiveKind(0),
 ) {
 
-    fun goCopy(): CommentDirective = CommentDirective(loc = loc.goCopy(), kind = kind)
+    fun goCopy(): CommentDirective = CommentDirective(loc = loc, kind = kind)
 
     fun goSet(o: CommentDirective) {
-        loc = o.loc.goCopy()
+        loc = o.loc
         kind = o.kind
     }
 
@@ -2642,14 +2642,14 @@ interface HasFileName {
 // go: github.com/microsoft/typescript-go/internal/ast.TokenCacheKey f231be11
 class TokenCacheKey(
     @kotlin.jvm.JvmField var parent: Node? = null,
-    @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
 ) {
 
-    fun goCopy(): TokenCacheKey = TokenCacheKey(parent = parent, loc = loc.goCopy())
+    fun goCopy(): TokenCacheKey = TokenCacheKey(parent = parent, loc = loc)
 
     fun goSet(o: TokenCacheKey) {
         parent = o.parent
-        loc = o.loc.goCopy()
+        loc = o.loc
     }
 
     fun goEquals(o: TokenCacheKey): Boolean = parent === o.parent && loc.goEquals(o.loc)
@@ -3335,15 +3335,15 @@ interface SourceFileLike {
 
 // go: github.com/microsoft/typescript-go/internal/ast.CommentRange c14f9c36
 class CommentRange(
-    @kotlin.jvm.JvmField var textRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_textRange") @set:kotlin.jvm.JvmName("goSet_textRange") var textRange: TextRange = TextRange(),
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: Kind = Kind(0),
     @kotlin.jvm.JvmField var hasTrailingNewLine: Boolean = false,
 ) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
-    fun goCopy(): CommentRange = CommentRange(textRange = textRange.goCopy(), kind = kind, hasTrailingNewLine = hasTrailingNewLine)
+    fun goCopy(): CommentRange = CommentRange(textRange = textRange, kind = kind, hasTrailingNewLine = hasTrailingNewLine)
 
     fun goSet(o: CommentRange) {
-        textRange = o.textRange.goCopy()
+        textRange = o.textRange
         kind = o.kind
         hasTrailingNewLine = o.hasTrailingNewLine
     }
@@ -3368,16 +3368,16 @@ fun NodeFactory?.newCommentRange(kind: Kind, pos: Int, end: Int, hasTrailingNewL
 
 // go: github.com/microsoft/typescript-go/internal/ast.FileReference 569e22a5
 class FileReference(
-    @kotlin.jvm.JvmField var textRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_textRange") @set:kotlin.jvm.JvmName("goSet_textRange") var textRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var fileName: String = "",
     @get:kotlin.jvm.JvmName("goGet_resolutionMode") @set:kotlin.jvm.JvmName("goSet_resolutionMode") var resolutionMode: ModuleKind = ModuleKind(0),
     @kotlin.jvm.JvmField var preserve: Boolean = false,
 ) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
-    fun goCopy(): FileReference = FileReference(textRange = textRange.goCopy(), fileName = fileName, resolutionMode = resolutionMode, preserve = preserve)
+    fun goCopy(): FileReference = FileReference(textRange = textRange, fileName = fileName, resolutionMode = resolutionMode, preserve = preserve)
 
     fun goSet(o: FileReference) {
-        textRange = o.textRange.goCopy()
+        textRange = o.textRange
         fileName = o.fileName
         resolutionMode = o.resolutionMode
         preserve = o.preserve
@@ -3398,15 +3398,15 @@ class FileReference(
 
 // go: github.com/microsoft/typescript-go/internal/ast.PragmaArgument 45757e39
 class PragmaArgument(
-    @kotlin.jvm.JvmField var textRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_textRange") @set:kotlin.jvm.JvmName("goSet_textRange") var textRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var name: String = "",
     @kotlin.jvm.JvmField var value: String = "",
 ) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
-    fun goCopy(): PragmaArgument = PragmaArgument(textRange = textRange.goCopy(), name = name, value = value)
+    fun goCopy(): PragmaArgument = PragmaArgument(textRange = textRange, name = name, value = value)
 
     fun goSet(o: PragmaArgument) {
-        textRange = o.textRange.goCopy()
+        textRange = o.textRange
         name = o.name
         value = o.value
     }

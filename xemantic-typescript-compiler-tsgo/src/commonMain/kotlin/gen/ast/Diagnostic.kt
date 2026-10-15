@@ -92,7 +92,7 @@ class RepopulateDiagnosticInfo(
 // go: github.com/microsoft/typescript-go/internal/ast.Diagnostic 0da02857
 class Diagnostic(
     @kotlin.jvm.JvmField var file: SourceFile? = null,
-    @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
     @kotlin.jvm.JvmField var code: Int = 0,
     @get:kotlin.jvm.JvmName("goGet_category") @set:kotlin.jvm.JvmName("goSet_category") var category: Category = Category(0),
     @kotlin.jvm.JvmField var message: Message? = null,
@@ -106,11 +106,11 @@ class Diagnostic(
     @kotlin.jvm.JvmField var repopulateInfo: RepopulateDiagnosticInfo? = null,
 ) : Stringer, com.xemantic.typescript.tsgo.glob.element, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
 
-    fun goCopy(): Diagnostic = Diagnostic(file = file, loc = loc.goCopy(), code = code, category = category, message = message, messageKey = messageKey, messageArgs = messageArgs, messageChain = messageChain, relatedInformation = relatedInformation, reportsUnnecessary = reportsUnnecessary, reportsDeprecated = reportsDeprecated, skippedOnNoEmit = skippedOnNoEmit, repopulateInfo = repopulateInfo)
+    fun goCopy(): Diagnostic = Diagnostic(file = file, loc = loc, code = code, category = category, message = message, messageKey = messageKey, messageArgs = messageArgs, messageChain = messageChain, relatedInformation = relatedInformation, reportsUnnecessary = reportsUnnecessary, reportsDeprecated = reportsDeprecated, skippedOnNoEmit = skippedOnNoEmit, repopulateInfo = repopulateInfo)
 
     fun goSet(o: Diagnostic) {
         file = o.file
-        loc = o.loc.goCopy()
+        loc = o.loc
         code = o.code
         category = o.category
         message = o.message

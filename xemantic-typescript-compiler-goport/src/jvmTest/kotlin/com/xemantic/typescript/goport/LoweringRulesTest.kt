@@ -306,6 +306,39 @@ class LoweringRulesTest {
     }
 
     @Test
+    fun `a packed struct is a value class over a Long and a pointer to one is a live GoPtr - TextRange`() {
+        val text = File(gen, "core/Text.kt").readText()
+        assert(text.contains("@kotlin.jvm.JvmInline\nvalue class TextRange(val goPacked: Long) : "))
+        assert(text.contains("    constructor(pos: TextPos = TextPos(0), end: TextPos = TextPos(0)) : this(goPack(pos.value, end.value))"))
+        assert(text.contains("    val end: TextPos get() = TextPos((goPacked ushr 32).toInt())"))
+        assert(text.contains("    fun goCopy(): TextRange = this"))
+        assert(!text.contains("fun goSet(o: TextRange)"))
+        // Every node's Loc is the value itself (a `long` field), not an object.
+        assert(File(gen, "ast/Ast.kt").readText().contains("@get:kotlin.jvm.JvmName(\"goGet_loc\") @set:kotlin.jvm.JvmName(\"goSet_loc\") var loc: TextRange = TextRange(),"))
+        // `&decl.Loc` is a live pointer to the holder's field, and a value-receiver call through it dereferences.
+        assert(File(gen, "transformers/moduletransforms/Commonjsmodule.kt").readText().contains("run { val o1 = decl!!; GoFieldPtr(o1, 2, { o1.loc }, { o1.loc = it }) }"))
+        val format = "github.com/microsoft/typescript-go/internal/format"
+        val skip = genFunction("format/Scanner.kt", "$format.formattingScanner.skipToEndOf")
+        assert(skip.contains("skipToEndOf(r: GoPtr<TextRange>?)"))
+        assert(skip.contains("this!!.s.resetTokenState(r!!.value.end())"))
+    }
+
+    @Test
+    fun `a write to or the address of a struct field is what refuses a packed struct`() {
+        fun n(json: String) = Json.parseToJsonElement(json) as JsonObject
+        val field = """{"k": "SelectorExpr", "selk": "field", "x": {"k": "Ident"}}"""
+        assert(Program.packedFieldWrites(n("""{"k": "AssignStmt", "tok": "=", "lhs": [$field], "rhs": [{"k": "Ident"}]}""")).single().second == "a field is assigned")
+        assert(Program.packedFieldWrites(n("""{"k": "AssignStmt", "tok": "+=", "lhs": [{"k": "ParenExpr", "x": $field}], "rhs": [{"k": "Ident"}]}""")).single().first["selk"].toString() == "\"field\"")
+        assert(Program.packedFieldWrites(n("""{"k": "IncDecStmt", "tok": "++", "x": $field}""")).size == 1)
+        assert(Program.packedFieldWrites(n("""{"k": "RangeStmt", "tok": "=", "key": $field, "x": {"k": "Ident"}}""")).size == 1)
+        assert(Program.packedFieldWrites(n("""{"k": "UnaryExpr", "op": "&", "x": $field}""")).single().second == "&x.f of a field")
+        // Reads, a `:=` range and other unary operators write nothing.
+        assert(Program.packedFieldWrites(n("""{"k": "RangeStmt", "tok": ":=", "key": {"k": "Ident"}, "x": $field}""")).isEmpty())
+        assert(Program.packedFieldWrites(n("""{"k": "UnaryExpr", "op": "-", "x": $field}""")).isEmpty())
+        assert(Program.packedFieldWrites(n("""{"k": "ReturnStmt", "results": [$field]}""")).isEmpty())
+    }
+
+    @Test
     fun `nodeData and TypeData are abstract classes and every implementer calls their constructor`() {
         val ast = File(gen, "ast/Ast.kt").readText()
         assert(ast.contains("abstract class nodeData {"))

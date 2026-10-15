@@ -152,7 +152,7 @@ class pathCompletion(
     @kotlin.jvm.JvmField var name: String = "",
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: ScriptElementKind = ScriptElementKind(0),
     @kotlin.jvm.JvmField var extension: String = "",
-    @kotlin.jvm.JvmField var textRange: TextRange? = null,
+    @kotlin.jvm.JvmField var textRange: GoPtr<TextRange>? = null,
 ) {
 
     fun goCopy(): pathCompletion = pathCompletion(name = name, kind = kind, extension = extension, textRange = textRange)
@@ -164,7 +164,7 @@ class pathCompletion(
         textRange = o.textRange
     }
 
-    fun goEquals(o: pathCompletion): Boolean = name == o.name && kind == o.kind && extension == o.extension && textRange === o.textRange
+    fun goEquals(o: pathCompletion): Boolean = name == o.name && kind == o.kind && extension == o.extension && textRange == o.textRange
 
     fun goHash(): Int = 31 * name.hashCode() + 31 * kind.hashCode() + 31 * extension.hashCode() + 31 * textRange.hashCode()
 
@@ -262,7 +262,7 @@ fun LanguageService?.convertPathCompletions(ctx: Context?, pathCompletions: GoSl
     val items: GoSlice<CompletionItem?> = com.xemantic.typescript.tsgo.core.map<com.xemantic.typescript.tsgo.ls.pathCompletion?, CompletionItem?>(GoElem.ref<com.xemantic.typescript.tsgo.ls.pathCompletion?>(), GoElem.ref<CompletionItem?>(), pathCompletions, fun(pathCompletion: com.xemantic.typescript.tsgo.ls.pathCompletion?): CompletionItem? {
         var replacementSpan: Range? = null
         if (pathCompletion!!.textRange != null) {
-            replacementSpan = this.createLspRangeFromBounds(pathCompletion!!.textRange!!.pos(), pathCompletion!!.textRange!!.end(), file).goCopy()
+            replacementSpan = this.createLspRangeFromBounds(pathCompletion!!.textRange!!.value.pos(), pathCompletion!!.textRange!!.value.end(), file).goCopy()
         }
         val detail: GoBox<String> = GoBox(pathCompletion!!.name)
         if (!com.xemantic.typescript.tsgo.go.strings.hasSuffix(pathCompletion!!.name, pathCompletion!!.extension)) {
@@ -495,7 +495,7 @@ fun LanguageService?.getStringLiteralCompletionsFromModuleNames(file: SourceFile
 
 // go: github.com/microsoft/typescript-go/internal/ls.addReplacementSpans 164b517b
 fun addReplacementSpans(text: String, textStart: Int, names: GoSlice<com.xemantic.typescript.tsgo.ls.moduleCompletionNameAndKind>): GoSlice<com.xemantic.typescript.tsgo.ls.pathCompletion?> {
-    val textRange: TextRange? = getDirectoryFragmentRange(text, textStart)
+    val textRange: GoPtr<TextRange>? = getDirectoryFragmentRange(text, textStart)
     return com.xemantic.typescript.tsgo.core.map<com.xemantic.typescript.tsgo.ls.moduleCompletionNameAndKind, com.xemantic.typescript.tsgo.ls.pathCompletion?>(com.xemantic.typescript.tsgo.ls.moduleCompletionNameAndKind.ELEM, GoElem.ref<com.xemantic.typescript.tsgo.ls.pathCompletion?>(), names, fun(nameAndKind: com.xemantic.typescript.tsgo.ls.moduleCompletionNameAndKind): com.xemantic.typescript.tsgo.ls.pathCompletion? {
         return com.xemantic.typescript.tsgo.ls.pathCompletion(name = nameAndKind.name, kind = moduletToScriptElementKind(nameAndKind.kind), extension = nameAndKind.extension, textRange = textRange)
     })
@@ -523,7 +523,7 @@ fun isAnyDirectorySeparator(r: Int): Boolean {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.getDirectoryFragmentRange 4bbda6ae
-fun getDirectoryFragmentRange(text: String, textStart: Int): TextRange? {
+fun getDirectoryFragmentRange(text: String, textStart: Int): GoPtr<TextRange>? {
     val index: Int = com.xemantic.typescript.tsgo.go.strings.lastIndexFunc(text, (fun(p0: Int): Boolean = isAnyDirectorySeparator(p0))!!)
     var offset: Int = 0
     if (index != -1) {
@@ -533,7 +533,7 @@ fun getDirectoryFragmentRange(text: String, textStart: Int): TextRange? {
     if (length == 0) {
         return null
     }
-    return com.xemantic.typescript.tsgo.core.newTextRange(textStart + offset, textStart + offset + length).goCopy()
+    return GoBox<TextRange>(com.xemantic.typescript.tsgo.core.newTextRange(textStart + offset, textStart + offset + length))
 }
 
 // go: github.com/microsoft/typescript-go/internal/ls.LanguageService.getStringLiteralCompletionsFromModuleNamesWorker afbb1cd6

@@ -330,7 +330,7 @@ class ReferenceEntry(
     @kotlin.jvm.JvmField var node: Node? = null,
     @kotlin.jvm.JvmField var context: Node? = null,
     @kotlin.jvm.JvmField var fileName: String = "",
-    @kotlin.jvm.JvmField var textRange: TextRange? = null,
+    @kotlin.jvm.JvmField var textRange: GoPtr<TextRange>? = null,
     @kotlin.jvm.JvmField var lspRange: Location? = null,
 ) {
 
@@ -345,7 +345,7 @@ class ReferenceEntry(
         lspRange = o.lspRange
     }
 
-    fun goEquals(o: ReferenceEntry): Boolean = kind == o.kind && node === o.node && context === o.context && fileName == o.fileName && textRange === o.textRange && lspRange === o.lspRange
+    fun goEquals(o: ReferenceEntry): Boolean = kind == o.kind && node === o.node && context === o.context && fileName == o.fileName && textRange == o.textRange && lspRange === o.lspRange
 
     fun goHash(): Int = 31 * kind.hashCode() + 31 * node.hashCode() + 31 * context.hashCode() + 31 * fileName.hashCode() + 31 * textRange.hashCode() + 31 * lspRange.hashCode()
 
@@ -429,12 +429,12 @@ fun LanguageService?.getLocationOfEntry(entry: ReferenceEntry?): Location {
 fun LanguageService?.resolveEntry(entry: ReferenceEntry?): ReferenceEntry? {
     if (entry!!.textRange == null) {
         val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(entry!!.node)
-        val textRange: TextRange = getRangeOfNode(entry!!.node, sourceFile, null)
+        val textRange: GoBox<TextRange> = GoBox(getRangeOfNode(entry!!.node, sourceFile, null))
         entry!!.textRange = textRange
         entry!!.fileName = sourceFile!!.fileName()
     }
     if (entry!!.lspRange == null) {
-        val location: Location = this.getMappedLocation(entry!!.fileName, entry!!.textRange!!.goCopy())
+        val location: Location = this.getMappedLocation(entry!!.fileName, entry!!.textRange!!.value.goCopy())
         entry!!.lspRange = location
     }
     return entry
@@ -1200,9 +1200,9 @@ fun LanguageService?.convertEntriesToLocationLinks(entries: GoSlice<ReferenceEnt
         val targetSelectionRange: Range = loc.range.goCopy()
         var targetRange: Range = targetSelectionRange.goCopy()
         if (entry!!.node != null) {
-            val contextTextRange: TextRange? = toContextRange(entry!!.textRange, this!!.program!!.getSourceFile(entry!!.fileName), entry!!.context)
+            val contextTextRange: GoPtr<TextRange>? = toContextRange(entry!!.textRange, this!!.program!!.getSourceFile(entry!!.fileName), entry!!.context)
             if (contextTextRange != null) {
-                val contextLocation: Location = this.getMappedLocation(entry!!.fileName, contextTextRange!!.goCopy())
+                val contextLocation: Location = this.getMappedLocation(entry!!.fileName, contextTextRange!!.value.goCopy())
                 targetRange = contextLocation.range.goCopy()
             }
         }
@@ -1776,15 +1776,15 @@ fun LanguageService?.getReferencedSymbolsForModule(ctx: Context?, program: Progr
                     return newNodeEntry(rangeNode)
                 }
                 1 -> {
-                    return ReferenceEntry(kind = entryKindRange, fileName = reference.referencingFile!!.fileName(), textRange = reference.ref!!.textRange)
+                    return ReferenceEntry(kind = entryKindRange, fileName = reference.referencingFile!!.fileName(), textRange = run { val o3 = reference.ref!!; GoFieldPtr(o3, 0, { o3.textRange }, { o3.textRange = it }) })
                 }
             }
             return null
         })
         if (symbol!!.declarations.len > 0) {
-            val s3 = symbol!!.declarations
-            l1@ for (i4 in 0 until s3.len) {
-                val decl: Node? = s3[i4]
+            val s4 = symbol!!.declarations
+            l1@ for (i5 in 0 until s4.len) {
+                val decl: Node? = s4[i5]
                 when (decl!!.kind.value) {
                     307 -> {
                         continue@l1
@@ -1802,9 +1802,9 @@ fun LanguageService?.getReferencedSymbolsForModule(ctx: Context?, program: Progr
         }
         val exported: Symbol? = symbol!!.exports["export="]
         if (exported != null && exported!!.declarations.len > 0) {
-            val s5 = exported!!.declarations
-            l3@ for (i6 in 0 until s5.len) {
-                val decl_1: Node? = s5[i6]
+            val s6 = exported!!.declarations
+            l3@ for (i7 in 0 until s6.len) {
+                val decl_1: Node? = s6[i7]
                 val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(decl_1)
                 if (sourceFilesSet.has(sourceFile!!.fileName())) {
                     var node: Node? = null

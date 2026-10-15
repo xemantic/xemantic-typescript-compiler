@@ -750,7 +750,7 @@ fun CommonJSModuleTransformer?.appendExportsOfClassOrFunctionDeclaration(stateme
             exportName = this!!.transformer.factory().getDeclarationName(decl)
         }
         val exportValue: Node? = this!!.transformer.factory().getLocalName(decl)
-        statements = this.appendExportStatement(statements, seen, exportName, exportValue, decl!!.loc, false, false)
+        statements = this.appendExportStatement(statements, seen, exportName, exportValue, run { val o1 = decl!!; GoFieldPtr(o1, 2, { o1.loc }, { o1.loc = it }) }, false, false)
     }
     if (decl.name() != null) {
         return this.appendExportsOfDeclaration(statements, decl, seen, false)
@@ -777,7 +777,7 @@ fun CommonJSModuleTransformer?.appendExportsOfDeclaration(statements_0: GoSlice<
             val s2 = exportSpecifiers
             l0@ for (i3 in 0 until s2.len) {
                 val exportSpecifier: ExportSpecifier? = s2[i3]
-                statements = this.appendExportStatement(statements, seen, exportSpecifier!!.name(), exportValue, exportSpecifier!!.name()!!.loc, false, liveBinding)
+                statements = this.appendExportStatement(statements, seen, exportSpecifier!!.name(), exportValue, run { val o4 = exportSpecifier!!.name()!!; GoFieldPtr(o4, 2, { o4.loc }, { o4.loc = it }) }, false, liveBinding)
             }
         }
     }
@@ -785,7 +785,7 @@ fun CommonJSModuleTransformer?.appendExportsOfDeclaration(statements_0: GoSlice<
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.appendExportStatement d940356e
-fun CommonJSModuleTransformer?.appendExportStatement(statements_0: GoSlice<Node?>, seen: com.xemantic.typescript.tsgo.collections.Set<String>?, exportName: Node?, expression: Node?, location: TextRange?, allowComments: Boolean, liveBinding: Boolean): GoSlice<Node?> {
+fun CommonJSModuleTransformer?.appendExportStatement(statements_0: GoSlice<Node?>, seen: com.xemantic.typescript.tsgo.collections.Set<String>?, exportName: Node?, expression: Node?, location: GoPtr<TextRange>?, allowComments: Boolean, liveBinding: Boolean): GoSlice<Node?> {
     var statements: GoSlice<Node?> = statements_0
     if (exportName!!.kind.value != 10) {
         if (seen.has(exportName.text())) {
@@ -798,10 +798,10 @@ fun CommonJSModuleTransformer?.appendExportStatement(statements_0: GoSlice<Node?
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.createExportStatement 3e0e4cbe
-fun CommonJSModuleTransformer?.createExportStatement(name: Node?, value_1: Node?, location: TextRange?, allowComments: Boolean, liveBinding: Boolean): Node? {
+fun CommonJSModuleTransformer?.createExportStatement(name: Node?, value_1: Node?, location: GoPtr<TextRange>?, allowComments: Boolean, liveBinding: Boolean): Node? {
     val statement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(this.createExportExpression(name, value_1, null, liveBinding))
     if (location != null) {
-        this!!.transformer.emitContext().setCommentRange(statement, location!!.goCopy())
+        this!!.transformer.emitContext().setCommentRange(statement, location!!.value.goCopy())
     }
     this!!.transformer.emitContext().addEmitFlags(statement, EmitFlags(524288u))
     if (!allowComments) {
@@ -811,7 +811,7 @@ fun CommonJSModuleTransformer?.createExportStatement(name: Node?, value_1: Node?
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.createExportExpression cc77cda1
-fun CommonJSModuleTransformer?.createExportExpression(name: Node?, value_1: Node?, location: TextRange?, liveBinding: Boolean): Node? {
+fun CommonJSModuleTransformer?.createExportExpression(name: Node?, value_1: Node?, location: GoPtr<TextRange>?, liveBinding: Boolean): Node? {
     var expression: Node? = null
     if (liveBinding) {
         expression = this!!.transformer.factory()!!.nodeFactory.newCallExpression(this!!.transformer.factory()!!.nodeFactory.newPropertyAccessExpression(this!!.transformer.factory()!!.nodeFactory.newIdentifier("Object"), null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("defineProperty"), NodeFlags(0u)), null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newIdentifier("exports"), this!!.transformer.factory().newStringLiteralFromNode(name), this!!.transformer.factory()!!.nodeFactory.newObjectLiteralExpression(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newPropertyAssignment(null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("enumerable"), null, null, this!!.transformer.factory().newTrueExpression()), this!!.transformer.factory()!!.nodeFactory.newPropertyAssignment(null, this!!.transformer.factory()!!.nodeFactory.newIdentifier("get"), null, null, this!!.transformer.factory()!!.nodeFactory.newFunctionExpression(null, null, null, null, this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.make(GoElem.ref<Node?>(), 0)), null, null, this!!.transformer.factory()!!.nodeFactory.newBlock(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoSlice.of(GoElem.ref<Node?>(), this!!.transformer.factory()!!.nodeFactory.newReturnStatement(value_1))), false))))), false))), NodeFlags(0u))
@@ -825,7 +825,7 @@ fun CommonJSModuleTransformer?.createExportExpression(name: Node?, value_1: Node
         expression = this!!.transformer.factory().newAssignmentExpression(left, value_1)
     }
     if (location != null) {
-        this!!.transformer.emitContext().setCommentRange(expression, location!!.goCopy())
+        this!!.transformer.emitContext().setCommentRange(expression, location!!.value.goCopy())
     }
     return expression
 }
@@ -893,7 +893,7 @@ fun CommonJSModuleTransformer?.visitTopLevelImportEqualsDeclaration(node: Import
     }
     var statements: GoSlice<Node?> = GoElem.ref<Node?>().nilSlice
     if (com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node!!.statementBase.nodeBase.asNode(), ModifierFlags(32u))) {
-        val statement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(this.createExportExpression(node!!.name(), this.createRequireCall(node!!.statementBase.nodeBase.asNode()), node!!.statementBase.nodeBase.node.loc, false))
+        val statement: Node? = this!!.transformer.factory()!!.nodeFactory.newExpressionStatement(this.createExportExpression(node!!.name(), this.createRequireCall(node!!.statementBase.nodeBase.asNode()), run { val o0 = node!!.statementBase.nodeBase.node; GoFieldPtr(o0, 2, { o0.loc }, { o0.loc = it }) }, false))
         this!!.transformer.emitContext().setOriginal(statement, node!!.statementBase.nodeBase.asNode())
         this!!.transformer.emitContext().assignCommentAndSourceMapRanges(statement, node!!.statementBase.nodeBase.asNode())
         statements = statements.append1(statement)
@@ -972,7 +972,7 @@ fun CommonJSModuleTransformer?.visitTopLevelExportAssignment(node: ExportAssignm
     if (node!!.isExportEquals) {
         return null
     }
-    return this.createExportStatement(this!!.transformer.factory()!!.nodeFactory.newIdentifier("default"), this!!.transformer.visitor().visitNode(node!!.expression), node!!.statementBase.nodeBase.node.loc, true, false)
+    return this.createExportStatement(this!!.transformer.factory()!!.nodeFactory.newIdentifier("default"), this!!.transformer.visitor().visitNode(node!!.expression), run { val o0 = node!!.statementBase.nodeBase.node; GoFieldPtr(o0, 2, { o0.loc }, { o0.loc = it }) }, true, false)
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.visitTopLevelFunctionDeclaration a6f4037f
@@ -1269,7 +1269,7 @@ fun CommonJSModuleTransformer?.visitAssignmentExpression(node: BinaryExpression?
             val s0 = exportedNames
             l0@ for (i1 in 0 until s0.len) {
                 val exportName: Node? = s0[i1]
-                expression = this.createExportExpression(exportName, expression, node!!.expressionBase.node.loc, false)
+                expression = this.createExportExpression(exportName, expression, run { val o2 = node!!.expressionBase.node; GoFieldPtr(o2, 2, { o2.loc }, { o2.loc = it }) }, false)
             }
             return expression
         }
@@ -1280,7 +1280,7 @@ fun CommonJSModuleTransformer?.visitAssignmentExpression(node: BinaryExpression?
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.visitDestructuringAssignment 72df91e0
 fun CommonJSModuleTransformer?.visitDestructuringAssignment(node: BinaryExpression?, valueIsDiscarded: Boolean): Node? {
     if (this.destructuringNeedsFlattening(node!!.left)) {
-        return com.xemantic.typescript.tsgo.transformers.flattenDestructuringAssignment(this!!.transformer, node!!.expressionBase.asNode(), !valueIsDiscarded, FlattenLevel(0), run { val r0 = this; fun(p0: Node?, p1: Node?, p2: TextRange?): Node? = r0.createAllExportExpressions(p0, p1, p2) })
+        return com.xemantic.typescript.tsgo.transformers.flattenDestructuringAssignment(this!!.transformer, node!!.expressionBase.asNode(), !valueIsDiscarded, FlattenLevel(0), run { val r0 = this; fun(p0: Node?, p1: Node?, p2: GoPtr<TextRange>?): Node? = r0.createAllExportExpressions(p0, p1, p2) })
     }
     return this!!.transformer.visitor().visitEachChild(node!!.expressionBase.asNode())
 }
@@ -1341,7 +1341,7 @@ fun CommonJSModuleTransformer?.destructuringNeedsFlattening(node: Node?): Boolea
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/moduletransforms.CommonJSModuleTransformer.createAllExportExpressions d9040ce9
-fun CommonJSModuleTransformer?.createAllExportExpressions(name: Node?, value_1: Node?, location: TextRange?): Node? {
+fun CommonJSModuleTransformer?.createAllExportExpressions(name: Node?, value_1: Node?, location: GoPtr<TextRange>?): Node? {
     val exportedNames: GoSlice<Node?> = this.getExports(name)
     if (exportedNames.len > 0) {
         var expression: Node? = null

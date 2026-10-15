@@ -53,7 +53,7 @@ import com.xemantic.typescript.tsgo.scanner.token
 import com.xemantic.typescript.tsgo.scanner.tokenStart
 
 // go: github.com/microsoft/typescript-go/internal/format.GetIndentationForNode 7d171a6c
-fun getIndentationForNode(n: Node?, ignoreActualIndentationRange: TextRange?, sourceFile: SourceFile?, options: FormatCodeSettings): Int {
+fun getIndentationForNode(n: Node?, ignoreActualIndentationRange: GoPtr<TextRange>?, sourceFile: SourceFile?, options: FormatCodeSettings): Int {
     val t0 = com.xemantic.typescript.tsgo.scanner.getECMALineAndByteOffsetOfPosition(sourceFile, com.xemantic.typescript.tsgo.scanner.getTokenPosOfNode(n, sourceFile, false))
     val startline: Int = t0.first
     val startpos: Int = t0.second
@@ -283,7 +283,7 @@ fun getSmartIndent(sourceFile: SourceFile?, position: Int, precedingToken: Node?
 }
 
 // go: github.com/microsoft/typescript-go/internal/format.getIndentationForNodeWorker e8c9c1f0
-fun getIndentationForNodeWorker(current_0: Node?, currentStartLine_1: Int, currentStartCharacter_2: Int, ignoreActualIndentationRange: TextRange?, indentationDelta_3: Int, sourceFile: SourceFile?, isNextChild: Boolean, options: FormatCodeSettings): Int {
+fun getIndentationForNodeWorker(current_0: Node?, currentStartLine_1: Int, currentStartCharacter_2: Int, ignoreActualIndentationRange: GoPtr<TextRange>?, indentationDelta_3: Int, sourceFile: SourceFile?, isNextChild: Boolean, options: FormatCodeSettings): Int {
     var current: Node? = current_0
     var currentStartLine: Int = currentStartLine_1
     var currentStartCharacter: Int = currentStartCharacter_2
@@ -293,7 +293,7 @@ fun getIndentationForNodeWorker(current_0: Node?, currentStartLine_1: Int, curre
         var useActualIndentation: Boolean = true
         if (ignoreActualIndentationRange != null) {
             val start: Int = com.xemantic.typescript.tsgo.scanner.getTokenPosOfNode(current, sourceFile, false)
-            useActualIndentation = start < ignoreActualIndentationRange!!.pos() || start > ignoreActualIndentationRange!!.end()
+            useActualIndentation = start < ignoreActualIndentationRange!!.value.pos() || start > ignoreActualIndentationRange!!.value.end()
         }
         val t4 = getContainingListOrParentStart(parent, current, sourceFile)
         val containingListOrParentStartLine: Int = t4.first

@@ -146,7 +146,7 @@ fun prepareRangeContainsErrorFunction(errors: GoSlice<Diagnostic?>, originalRang
 
 // go: github.com/microsoft/typescript-go/internal/format.formatSpanWorker da4a6381
 class formatSpanWorker(
-    @kotlin.jvm.JvmField var originalRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_originalRange") @set:kotlin.jvm.JvmName("goSet_originalRange") var originalRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var enclosingNode: Node? = null,
     @kotlin.jvm.JvmField var initialIndentation: Int = 0,
     @kotlin.jvm.JvmField var delta: Int = 0,
@@ -172,10 +172,10 @@ class formatSpanWorker(
     @kotlin.jvm.JvmField var currentRules: GoSlice<com.xemantic.typescript.tsgo.format.ruleImpl?> = GoElem.ref<com.xemantic.typescript.tsgo.format.ruleImpl?>().nilSlice,
 ) {
 
-    fun goCopy(): formatSpanWorker = formatSpanWorker(originalRange = originalRange.goCopy(), enclosingNode = enclosingNode, initialIndentation = initialIndentation, delta = delta, requestKind = requestKind, rangeContainsError = rangeContainsError, sourceFile = sourceFile, ctx = ctx, formattingScanner = formattingScanner, formattingContext = formattingContext, edits = edits, previousRange = previousRange.goCopy(), previousRangeTriviaEnd = previousRangeTriviaEnd, previousParent = previousParent, previousRangeStartLine = previousRangeStartLine, childContextNode = childContextNode, lastIndentedLine = lastIndentedLine, indentationOnLastIndentedLine = indentationOnLastIndentedLine, visitor = visitor, visitingNode = visitingNode, visitingIndenter = visitingIndenter, visitingNodeStartLine = visitingNodeStartLine, visitingUndecoratedNodeStartLine = visitingUndecoratedNodeStartLine, currentRules = currentRules)
+    fun goCopy(): formatSpanWorker = formatSpanWorker(originalRange = originalRange, enclosingNode = enclosingNode, initialIndentation = initialIndentation, delta = delta, requestKind = requestKind, rangeContainsError = rangeContainsError, sourceFile = sourceFile, ctx = ctx, formattingScanner = formattingScanner, formattingContext = formattingContext, edits = edits, previousRange = previousRange.goCopy(), previousRangeTriviaEnd = previousRangeTriviaEnd, previousParent = previousParent, previousRangeStartLine = previousRangeStartLine, childContextNode = childContextNode, lastIndentedLine = lastIndentedLine, indentationOnLastIndentedLine = indentationOnLastIndentedLine, visitor = visitor, visitingNode = visitingNode, visitingIndenter = visitingIndenter, visitingNodeStartLine = visitingNodeStartLine, visitingUndecoratedNodeStartLine = visitingUndecoratedNodeStartLine, currentRules = currentRules)
 
     fun goSet(o: formatSpanWorker) {
-        originalRange = o.originalRange.goCopy()
+        originalRange = o.originalRange
         enclosingNode = o.enclosingNode
         initialIndentation = o.initialIndentation
         delta = o.delta
@@ -317,7 +317,7 @@ fun com.xemantic.typescript.tsgo.format.formatSpanWorker?.processChildNode(node:
     }
     if (!this!!.originalRange.overlaps(child!!.loc.goCopy())) {
         if (child!!.end() < this!!.originalRange.pos()) {
-            this!!.formattingScanner.skipToEndOf(child!!.loc)
+            this!!.formattingScanner.skipToEndOf(run { val o1 = child!!; GoFieldPtr(o1, 2, { o1.loc }, { o1.loc = it }) })
         }
         return inheritedIndentation
     }
@@ -331,7 +331,7 @@ fun com.xemantic.typescript.tsgo.format.formatSpanWorker?.processChildNode(node:
         }
         if (tokenInfo.token.loc.end() > childStartPos) {
             if (tokenInfo.token.loc.pos() > childStartPos) {
-                this!!.formattingScanner.skipToStartOf(child!!.loc)
+                this!!.formattingScanner.skipToStartOf(run { val o2 = child!!; GoFieldPtr(o2, 2, { o2.loc }, { o2.loc = it }) })
             }
             break@l0
         }
@@ -352,9 +352,9 @@ fun com.xemantic.typescript.tsgo.format.formatSpanWorker?.processChildNode(node:
     if (child!!.kind.value == 171) {
         effectiveParentStartLine = childStartLine
     }
-    val t1 = this.computeIndentation(child, childStartLine, childIndentationAmount, node, parentDynamicIndentation, effectiveParentStartLine)
-    val childIndentation: Int = t1.first
-    val delta: Int = t1.second
+    val t3 = this.computeIndentation(child, childStartLine, childIndentationAmount, node, parentDynamicIndentation, effectiveParentStartLine)
+    val childIndentation: Int = t3.first
+    val delta: Int = t3.second
     this.processNode(child, this!!.childContextNode, childStartLine, undecoratedChildStartLine, childIndentation, delta)
     this!!.childContextNode = node
     if (isFirstListItem && parent!!.kind.value == 210 && inheritedIndentation == -1) {
@@ -373,7 +373,7 @@ fun com.xemantic.typescript.tsgo.format.formatSpanWorker?.processChildNodes(node
     var startLine: Int = parentStartLine
     if (!this!!.originalRange.overlaps(nodes!!.loc.goCopy())) {
         if (nodes!!.end() < this!!.originalRange.pos() && (nodes!!.nodes.len == 0 || nodes!!.nodes[0]!!.flags.value and 8u == 0u)) {
-            this!!.formattingScanner.skipToEndOf(nodes!!.loc)
+            this!!.formattingScanner.skipToEndOf(run { val o0 = nodes!!; GoFieldPtr(o0, 0, { o0.loc }, { o0.loc = it }) })
         }
         return
     }
@@ -399,8 +399,8 @@ fun com.xemantic.typescript.tsgo.format.formatSpanWorker?.processChildNodes(node
         }
     }
     var inheritedIndentation: Int = -1
-    l1@ for (i0 in 0 until nodes!!.nodes.len) {
-        val i: Int = i0
+    l1@ for (i1 in 0 until nodes!!.nodes.len) {
+        val i: Int = i1
         val child: Node? = nodes!!.nodes[i]
         inheritedIndentation = this.processChildNode(node, indenter, nodeStartLine, undecoratedNodeStartLine, child, inheritedIndentation, node, listDynamicIndentation, startLine, startLine, true, i == 0)
     }

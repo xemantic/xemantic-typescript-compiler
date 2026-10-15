@@ -565,17 +565,17 @@ class detachedCommentsInfo(
 // go: github.com/microsoft/typescript-go/internal/printer.commentState 6026d421
 class commentState(
     @get:kotlin.jvm.JvmName("goGet_emitFlags") @set:kotlin.jvm.JvmName("goSet_emitFlags") var emitFlags: EmitFlags = EmitFlags(0u),
-    @kotlin.jvm.JvmField var commentRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_commentRange") @set:kotlin.jvm.JvmName("goSet_commentRange") var commentRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var containerPos: Int = 0,
     @kotlin.jvm.JvmField var containerEnd: Int = 0,
     @kotlin.jvm.JvmField var declarationListContainerEnd: Int = 0,
 ) {
 
-    fun goCopy(): commentState = commentState(emitFlags = emitFlags, commentRange = commentRange.goCopy(), containerPos = containerPos, containerEnd = containerEnd, declarationListContainerEnd = declarationListContainerEnd)
+    fun goCopy(): commentState = commentState(emitFlags = emitFlags, commentRange = commentRange, containerPos = containerPos, containerEnd = containerEnd, declarationListContainerEnd = declarationListContainerEnd)
 
     fun goSet(o: commentState) {
         emitFlags = o.emitFlags
-        commentRange = o.commentRange.goCopy()
+        commentRange = o.commentRange
         containerPos = o.containerPos
         containerEnd = o.containerEnd
         declarationListContainerEnd = o.declarationListContainerEnd
@@ -593,15 +593,15 @@ class commentState(
 // go: github.com/microsoft/typescript-go/internal/printer.sourceMapState 557131f7
 class sourceMapState(
     @get:kotlin.jvm.JvmName("goGet_emitFlags") @set:kotlin.jvm.JvmName("goSet_emitFlags") var emitFlags: EmitFlags = EmitFlags(0u),
-    @kotlin.jvm.JvmField var sourceMapRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_sourceMapRange") @set:kotlin.jvm.JvmName("goSet_sourceMapRange") var sourceMapRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var hasTokenSourceMapRange: Boolean = false,
 ) {
 
-    fun goCopy(): sourceMapState = sourceMapState(emitFlags = emitFlags, sourceMapRange = sourceMapRange.goCopy(), hasTokenSourceMapRange = hasTokenSourceMapRange)
+    fun goCopy(): sourceMapState = sourceMapState(emitFlags = emitFlags, sourceMapRange = sourceMapRange, hasTokenSourceMapRange = hasTokenSourceMapRange)
 
     fun goSet(o: sourceMapState) {
         emitFlags = o.emitFlags
-        sourceMapRange = o.sourceMapRange.goCopy()
+        sourceMapRange = o.sourceMapRange
         hasTokenSourceMapRange = o.hasTokenSourceMapRange
     }
 

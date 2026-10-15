@@ -147,7 +147,7 @@ fun LanguageService?.provideInlayHint(ctx: Context?, params: InlayHintParams?): 
 // go: github.com/microsoft/typescript-go/internal/ls.inlayHintState b73657ce
 class inlayHintState(
     @kotlin.jvm.JvmField var ctx: Context? = null,
-    @kotlin.jvm.JvmField var span: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_span") @set:kotlin.jvm.JvmName("goSet_span") var span: TextRange = TextRange(),
     @kotlin.jvm.JvmField var preferences: InlayHintsPreferences = InlayHintsPreferences(),
     @get:kotlin.jvm.JvmName("goGet_quotePreference") @set:kotlin.jvm.JvmName("goSet_quotePreference") var quotePreference: QuotePreference = QuotePreference(""),
     @kotlin.jvm.JvmField var file: SourceFile? = null,
@@ -156,11 +156,11 @@ class inlayHintState(
     @kotlin.jvm.JvmField var result: GoSlice<InlayHint?> = GoElem.ref<InlayHint?>().nilSlice,
 ) {
 
-    fun goCopy(): inlayHintState = inlayHintState(ctx = ctx, span = span.goCopy(), preferences = preferences.goCopy(), quotePreference = quotePreference, file = file, checker = checker, converters = converters, result = result)
+    fun goCopy(): inlayHintState = inlayHintState(ctx = ctx, span = span, preferences = preferences.goCopy(), quotePreference = quotePreference, file = file, checker = checker, converters = converters, result = result)
 
     fun goSet(o: inlayHintState) {
         ctx = o.ctx
-        span = o.span.goCopy()
+        span = o.span
         preferences = o.preferences.goCopy()
         quotePreference = o.quotePreference
         file = o.file

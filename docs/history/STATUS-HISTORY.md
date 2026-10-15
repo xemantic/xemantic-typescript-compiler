@@ -1,3 +1,14 @@
+**(TSGO.5-c) DONE — `tsc --watch` and `-b --watch` on the port; (TSGO.5) DONE (2026-10-13):** `execute`'s `Watcher`,
+`execute/watchmanager`, `vfs/trackingvfs` and fswatch's platform-independent core (coalescing, debounce, filtering) ported
+mechanically; only the OS layer is replaced — an overlay copy of `inotify_linux.go`'s backend over an `XtscNotifier`
+(`runtime/FsNotify`: inotify on Kotlin/Native, `WatchService` on the JVM). New porter rules: `select`, `go`, interfaces
+extending shimmed external ones structurally; `context.WithCancel`, `time.After`; a failing `WaitGroup` goroutine now
+poisons only its own group's channel waits (a process-wide poison killed `--watch`'s debounce loop). `TsgoMain`: SIGINT/SIGTERM
+end a watch with exit 0, stdout flushed per write. `scripts/tsgo-watch-smoke.py` (tsgo vs the JVM main: both scenarios
+equal) joins the native CI script. Diag/Emit 13,127, LS 21,614, API 594,007, CLI 120 / 121 equal; `-tsgo` 152 / 0,
+`-goport` 26 / 0, `-lsp` 38 / 0, `linuxX64Test` 91 / 0; warning-clean (docs/goport-cli.md § 2c). Native CI run 38388249235
+green: image replay 65 / 65 and both watch scenarios equal to tsgo through the PGO image.
+
 **(TSGO.5-b) DONE — `tsc --build` on the port (2026-10-12):** `internal/execute/build` ported; its task graph runs on Go
 channels, now lowered onto `runtime.GoChan` (a failing goroutine poisons channel waits instead of hanging them). The
 buildinfo reader decodes by STATIC type where the json shim cannot see one (`reflect.goJsonTarget`), so `-b`'s up-to-date

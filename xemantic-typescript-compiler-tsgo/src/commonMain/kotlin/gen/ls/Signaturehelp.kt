@@ -1017,17 +1017,17 @@ fun getImmediatelyContainingArgumentOrContextualParameterInfo(node: Node?, posit
 class argumentListInfo(
     @kotlin.jvm.JvmField var isTypeParameterList: Boolean = false,
     @kotlin.jvm.JvmField var invocation: com.xemantic.typescript.tsgo.ls.invocation? = null,
-    @kotlin.jvm.JvmField var argumentsSpan: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_argumentsSpan") @set:kotlin.jvm.JvmName("goSet_argumentsSpan") var argumentsSpan: TextRange = TextRange(),
     @kotlin.jvm.JvmField var argumentIndex: Int = 0,
     @kotlin.jvm.JvmField var argumentCount: Int = 0,
 ) {
 
-    fun goCopy(): argumentListInfo = argumentListInfo(isTypeParameterList = isTypeParameterList, invocation = invocation, argumentsSpan = argumentsSpan.goCopy(), argumentIndex = argumentIndex, argumentCount = argumentCount)
+    fun goCopy(): argumentListInfo = argumentListInfo(isTypeParameterList = isTypeParameterList, invocation = invocation, argumentsSpan = argumentsSpan, argumentIndex = argumentIndex, argumentCount = argumentCount)
 
     fun goSet(o: argumentListInfo) {
         isTypeParameterList = o.isTypeParameterList
         invocation = o.invocation
-        argumentsSpan = o.argumentsSpan.goCopy()
+        argumentsSpan = o.argumentsSpan
         argumentIndex = o.argumentIndex
         argumentCount = o.argumentCount
     }
@@ -1137,16 +1137,16 @@ class contextualSignatureLocationInfo(
     @kotlin.jvm.JvmField var contextualType: Type? = null,
     @kotlin.jvm.JvmField var argumentIndex: Int = 0,
     @kotlin.jvm.JvmField var argumentCount: Int = 0,
-    @kotlin.jvm.JvmField var argumentsSpan: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_argumentsSpan") @set:kotlin.jvm.JvmName("goSet_argumentsSpan") var argumentsSpan: TextRange = TextRange(),
 ) {
 
-    fun goCopy(): contextualSignatureLocationInfo = contextualSignatureLocationInfo(contextualType = contextualType, argumentIndex = argumentIndex, argumentCount = argumentCount, argumentsSpan = argumentsSpan.goCopy())
+    fun goCopy(): contextualSignatureLocationInfo = contextualSignatureLocationInfo(contextualType = contextualType, argumentIndex = argumentIndex, argumentCount = argumentCount, argumentsSpan = argumentsSpan)
 
     fun goSet(o: contextualSignatureLocationInfo) {
         contextualType = o.contextualType
         argumentIndex = o.argumentIndex
         argumentCount = o.argumentCount
-        argumentsSpan = o.argumentsSpan.goCopy()
+        argumentsSpan = o.argumentsSpan
     }
 
     fun goEquals(o: contextualSignatureLocationInfo): Boolean = contextualType === o.contextualType && argumentIndex == o.argumentIndex && argumentCount == o.argumentCount && argumentsSpan.goEquals(o.argumentsSpan)
@@ -1236,16 +1236,16 @@ class argumentOrParameterListInfo(
     @kotlin.jvm.JvmField var list: NodeList? = null,
     @kotlin.jvm.JvmField var argumentIndex: Int = 0,
     @kotlin.jvm.JvmField var argumentCount: Int = 0,
-    @kotlin.jvm.JvmField var argumentsSpan: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_argumentsSpan") @set:kotlin.jvm.JvmName("goSet_argumentsSpan") var argumentsSpan: TextRange = TextRange(),
 ) {
 
-    fun goCopy(): argumentOrParameterListInfo = argumentOrParameterListInfo(list = list, argumentIndex = argumentIndex, argumentCount = argumentCount, argumentsSpan = argumentsSpan.goCopy())
+    fun goCopy(): argumentOrParameterListInfo = argumentOrParameterListInfo(list = list, argumentIndex = argumentIndex, argumentCount = argumentCount, argumentsSpan = argumentsSpan)
 
     fun goSet(o: argumentOrParameterListInfo) {
         list = o.list
         argumentIndex = o.argumentIndex
         argumentCount = o.argumentCount
-        argumentsSpan = o.argumentsSpan.goCopy()
+        argumentsSpan = o.argumentsSpan
     }
 
     fun goEquals(o: argumentOrParameterListInfo): Boolean = list === o.list && argumentIndex == o.argumentIndex && argumentCount == o.argumentCount && argumentsSpan.goEquals(o.argumentsSpan)

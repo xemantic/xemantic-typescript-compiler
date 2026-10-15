@@ -42,19 +42,19 @@ value class TextPos(val value: Int) : Comparable<TextPos>, GoBasicValue {
 }
 
 // go: github.com/microsoft/typescript-go/internal/core.TextRange 3128f875
-class TextRange(
-    @get:kotlin.jvm.JvmName("goGet_pos") @set:kotlin.jvm.JvmName("goSet_pos") var pos: TextPos = TextPos(0),
-    @get:kotlin.jvm.JvmName("goGet_end") @set:kotlin.jvm.JvmName("goSet_end") var end: TextPos = TextPos(0),
-) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
+// goport: packed struct (docs/goport-lowering.md § 3)
+@kotlin.jvm.JvmInline
+value class TextRange(val goPacked: Long) : com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
-    fun goCopy(): TextRange = TextRange(pos = pos, end = end)
+    constructor(pos: TextPos = TextPos(0), end: TextPos = TextPos(0)) : this(goPack(pos.value, end.value))
 
-    fun goSet(o: TextRange) {
-        pos = o.pos
-        end = o.end
-    }
+    val pos: TextPos get() = TextPos(goPacked.toInt())
 
-    fun goEquals(o: TextRange): Boolean = pos == o.pos && end == o.end
+    val end: TextPos get() = TextPos((goPacked ushr 32).toInt())
+
+    fun goCopy(): TextRange = this
+
+    fun goEquals(o: TextRange): Boolean = goPacked == o.goPacked
 
     fun goHash(): Int = 31 * pos.hashCode() + 31 * end.hashCode()
 
@@ -125,8 +125,8 @@ class TextRange(
     override fun goStructInfo(): GoStructInfo = GO_STRUCT
 
     override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
-        0 -> GoFieldPtr(this, 0, { pos.value }, { pos = TextPos(it as Int) })
-        1 -> GoFieldPtr(this, 1, { end.value }, { end = TextPos(it as Int) })
+        0 -> GoFieldPtr(this, 0, { pos.value }, { goPanic("reflect: set of a packed struct field") })
+        1 -> GoFieldPtr(this, 1, { end.value }, { goPanic("reflect: set of a packed struct field") })
         else -> goPanicIndex(i, 2)
     }
 
@@ -139,7 +139,9 @@ class TextRange(
                 GoFieldInfo("end", "", false, false, GoTypeInfo(5, "core.TextPos", cls = TextPos::class, zero = { TextPos(0) })),
             ))
         }
-        val ELEM: GoElem<TextRange> = GoElem({ TextRange() }, { it.goCopy() })
+        val ELEM: GoElem<TextRange> = GoElem({ TextRange() }, { it })
+
+        fun goPack(f0: Int, f1: Int): Long = (f0.toLong() and 0xFFFFFFFFL) or (f1.toLong() shl 32)
     }
 }
 

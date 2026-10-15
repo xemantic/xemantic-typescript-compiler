@@ -119,10 +119,11 @@ fun getNewLineOrDefaultFromContext(ctx: Context?): String {
 }
 
 // go: github.com/microsoft/typescript-go/internal/format.FormatSpan 1c9e852a
-fun formatSpan(ctx: Context?, span: TextRange, file: SourceFile?, kind: FormatRequestKind): GoSlice<TextChange> {
-    val enclosingNode: Node? = findEnclosingNode(span.goCopy(), file)
+fun formatSpan(ctx: Context?, span_0: TextRange, file: SourceFile?, kind: FormatRequestKind): GoSlice<TextChange> {
+    val span: GoBox<TextRange> = GoBox(span_0)
+    val enclosingNode: Node? = findEnclosingNode(span.value.goCopy(), file)
     val opts: FormatCodeSettings = getFormatCodeSettingsFromContext(ctx)
-    return newFormattingScanner(file!!.text(), file!!.languageVariant, getScanStartPosition(enclosingNode, span.goCopy(), file), span.end(), newFormatSpanWorker(ctx, span.goCopy(), enclosingNode, getIndentationForNode(enclosingNode, span, file, opts.goCopy()), getOwnOrInheritedDelta(enclosingNode, opts.goCopy(), file), kind, prepareRangeContainsErrorFunction(file.diagnostics(), span.goCopy()), file))
+    return newFormattingScanner(file!!.text(), file!!.languageVariant, getScanStartPosition(enclosingNode, span.value.goCopy(), file), span.value.end(), newFormatSpanWorker(ctx, span.value.goCopy(), enclosingNode, getIndentationForNode(enclosingNode, span, file, opts.goCopy()), getOwnOrInheritedDelta(enclosingNode, opts.goCopy(), file), kind, prepareRangeContainsErrorFunction(file.diagnostics(), span.value.goCopy()), file))
 }
 
 // go: github.com/microsoft/typescript-go/internal/format.FormatNodeGivenIndentation 9a99ae26

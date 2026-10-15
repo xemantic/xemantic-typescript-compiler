@@ -664,7 +664,7 @@ fun RuntimeSyntaxTransformer?.visitVariableStatement(node: VariableStatement?): 
                 continue@l0
             }
             if (com.xemantic.typescript.tsgo.ast.isBindingPattern(v!!.name())) {
-                val expression: Node? = com.xemantic.typescript.tsgo.transformers.flattenDestructuringAssignment(this!!.transformer, this!!.transformer.visitor().visitNode(declaration), false, FlattenLevel(0), run { val r2 = this; fun(p0: Node?, p1: Node?, p2: TextRange?): Node? = r2.createNamespaceExportExpression(p0, p1, p2) })
+                val expression: Node? = com.xemantic.typescript.tsgo.transformers.flattenDestructuringAssignment(this!!.transformer, this!!.transformer.visitor().visitNode(declaration), false, FlattenLevel(0), run { val r2 = this; fun(p0: Node?, p1: Node?, p2: GoPtr<TextRange>?): Node? = r2.createNamespaceExportExpression(p0, p1, p2) })
                 if (expression != null) {
                     expressions = expressions.append1(expression)
                 }
@@ -692,11 +692,11 @@ fun RuntimeSyntaxTransformer?.visitVariableStatement(node: VariableStatement?): 
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.RuntimeSyntaxTransformer.createNamespaceExportExpression 073f9205
-fun RuntimeSyntaxTransformer?.createNamespaceExportExpression(exportName: Node?, exportValue: Node?, location: TextRange?): Node? {
+fun RuntimeSyntaxTransformer?.createNamespaceExportExpression(exportName: Node?, exportValue: Node?, location: GoPtr<TextRange>?): Node? {
     val memberName: Node? = this.getNamespaceQualifiedProperty(this.getNamespaceContainerName(this!!.currentNamespace), exportName)
     val expression: Node? = this!!.transformer.factory().newAssignmentExpression(memberName, exportValue)
     if (location != null) {
-        expression!!.loc = location!!.goCopy()
+        expression!!.loc = location!!.value.goCopy()
     }
     return expression
 }

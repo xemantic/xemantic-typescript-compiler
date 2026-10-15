@@ -637,17 +637,17 @@ val hasSourceMapRange: com.xemantic.typescript.tsgo.printer.emitNodeFlags = com.
 // go: github.com/microsoft/typescript-go/internal/printer.SynthesizedComment 2c277324
 class SynthesizedComment(
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: Kind = Kind(0),
-    @kotlin.jvm.JvmField var loc: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
     @kotlin.jvm.JvmField var hasLeadingNewLine: Boolean = false,
     @kotlin.jvm.JvmField var hasTrailingNewLine: Boolean = false,
     @kotlin.jvm.JvmField var text: String = "",
 ) {
 
-    fun goCopy(): SynthesizedComment = SynthesizedComment(kind = kind, loc = loc.goCopy(), hasLeadingNewLine = hasLeadingNewLine, hasTrailingNewLine = hasTrailingNewLine, text = text)
+    fun goCopy(): SynthesizedComment = SynthesizedComment(kind = kind, loc = loc, hasLeadingNewLine = hasLeadingNewLine, hasTrailingNewLine = hasTrailingNewLine, text = text)
 
     fun goSet(o: SynthesizedComment) {
         kind = o.kind
-        loc = o.loc.goCopy()
+        loc = o.loc
         hasLeadingNewLine = o.hasLeadingNewLine
         hasTrailingNewLine = o.hasTrailingNewLine
         text = o.text
@@ -666,8 +666,8 @@ class SynthesizedComment(
 class emitNode(
     @get:kotlin.jvm.JvmName("goGet_flags") @set:kotlin.jvm.JvmName("goSet_flags") var flags: com.xemantic.typescript.tsgo.printer.emitNodeFlags = com.xemantic.typescript.tsgo.printer.emitNodeFlags(0u),
     @get:kotlin.jvm.JvmName("goGet_emitFlags") @set:kotlin.jvm.JvmName("goSet_emitFlags") var emitFlags: EmitFlags = EmitFlags(0u),
-    @kotlin.jvm.JvmField var commentRange: TextRange = TextRange(),
-    @kotlin.jvm.JvmField var sourceMapRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_commentRange") @set:kotlin.jvm.JvmName("goSet_commentRange") var commentRange: TextRange = TextRange(),
+    @get:kotlin.jvm.JvmName("goGet_sourceMapRange") @set:kotlin.jvm.JvmName("goSet_sourceMapRange") var sourceMapRange: TextRange = TextRange(),
     @kotlin.jvm.JvmField var tokenSourceMapRanges: GoMap<Kind, TextRange> = GoMap.nil<Kind, TextRange>(TextRange.ELEM),
     @kotlin.jvm.JvmField var helpers: GoSlice<EmitHelper?> = GoElem.ref<EmitHelper?>().nilSlice,
     @kotlin.jvm.JvmField var externalHelpersModuleName: Node? = null,
@@ -676,13 +676,13 @@ class emitNode(
     @kotlin.jvm.JvmField var typeNode: Node? = null,
 ) {
 
-    fun goCopy(): emitNode = emitNode(flags = flags, emitFlags = emitFlags, commentRange = commentRange.goCopy(), sourceMapRange = sourceMapRange.goCopy(), tokenSourceMapRanges = tokenSourceMapRanges, helpers = helpers, externalHelpersModuleName = externalHelpersModuleName, leadingComments = leadingComments, trailingComments = trailingComments, typeNode = typeNode)
+    fun goCopy(): emitNode = emitNode(flags = flags, emitFlags = emitFlags, commentRange = commentRange, sourceMapRange = sourceMapRange, tokenSourceMapRanges = tokenSourceMapRanges, helpers = helpers, externalHelpersModuleName = externalHelpersModuleName, leadingComments = leadingComments, trailingComments = trailingComments, typeNode = typeNode)
 
     fun goSet(o: emitNode) {
         flags = o.flags
         emitFlags = o.emitFlags
-        commentRange = o.commentRange.goCopy()
-        sourceMapRange = o.sourceMapRange.goCopy()
+        commentRange = o.commentRange
+        sourceMapRange = o.sourceMapRange
         tokenSourceMapRanges = o.tokenSourceMapRanges
         helpers = o.helpers
         externalHelpersModuleName = o.externalHelpersModuleName
@@ -783,7 +783,7 @@ fun EmitContext?.tokenSourceMapRange(node: Node?, kind: Kind): Tuple2<TextRange,
     val emitNode: com.xemantic.typescript.tsgo.printer.emitNode? = this!!.emitNodes.tryGet(node)
     if (emitNode != null && !emitNode!!.tokenSourceMapRanges.isNil) {
         val t0 = emitNode!!.tokenSourceMapRanges.probe(kind)
-        val loc: TextRange = goProbeValue<TextRange>(t0) { TextRange() }.goCopy()
+        val loc: TextRange = goProbeValue<TextRange>(t0) { TextRange() }
         val ok: Boolean = t0 !== GoMapAbsent
         if (ok) {
             return Tuple2<TextRange, Boolean>(loc.goCopy(), true)

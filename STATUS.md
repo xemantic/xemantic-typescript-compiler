@@ -1,5 +1,13 @@
 # Status
 
+**(TSGO.9-a) DONE — a node's `Loc` is a packed value class, not an object (2026-10-15):** the AST is 58% of the live heap
+after a check, at 197 B and 8.1 objects per node (docs/goport-perf.md § 29); most of those objects are lowering artifacts.
+First porter rule ("Packed structs", docs/goport-lowering.md § 3): `core.TextRange` is a `@JvmInline value class` over a
+`Long` (the run proves no field is ever assigned or address-taken), a pointer to one a live `GoPtr`. Warm, compiler
+profile: single **−6.9%** (4/4), parallel −3.8% (3/4), allocation −7.1% / −5.7%; the AST's live heap 188 → 170 MB.
+Diag/Emit 13,127, LS, API 594,007, CLI 120 / 121 equal; `-tsgo` 153 / 0 (`GoProcsTest`'s timing pin flaked once under the
+full suite, 3/3 alone), `-goport` 28 / 0. Next: (9-b) the atomic `id` wrapper, (9-c) one object per node.
+
 **(TSGO.7) DONE — every consumer moved; (TSGO.7-d/e/f/g) `-kir` no longer depends on `-core` (2026-10-14):** KIR's value model is its own
 (`kir.model`); the lowering walks tsgo's tree converted to KIR's own syntax classes (`front/TsgoSyntax.kt`, `kir.ast`)
 instead of a second parse by `-core`'s parser paired by position. The converter was held to `-core`'s parser on all 44
@@ -26,15 +34,3 @@ services 2,470 → 2,320 ms) at up to +50% peak RSS; out of memory it exits 3 (`
 hung), and `TsgoMain` now ends a main-thread failure with Go's status 2. `bench.yml` measures the port (series V3: warm
 `CheckBenchMain`, cold `TsgoMain`, the `-tsgo` image, ratios against tsgo). `tsgo-ab-warm.sh` had medianed warm-up
 rebuilds — fixed, docs/goport-perf.md §§ 13/14/19 annotated. `-tsgo` 153 / 0, `linuxX64Test` 91 / 0, replay 121 / 121.
-
-**(TSGO.5-c) DONE — `tsc --watch` and `-b --watch` on the port; (TSGO.5) DONE (2026-10-13):** `execute`'s `Watcher`,
-`execute/watchmanager`, `vfs/trackingvfs` and fswatch's platform-independent core (coalescing, debounce, filtering) ported
-mechanically; only the OS layer is replaced — an overlay copy of `inotify_linux.go`'s backend over an `XtscNotifier`
-(`runtime/FsNotify`: inotify on Kotlin/Native, `WatchService` on the JVM). New porter rules: `select`, `go`, interfaces
-extending shimmed external ones structurally; `context.WithCancel`, `time.After`; a failing `WaitGroup` goroutine now
-poisons only its own group's channel waits (a process-wide poison killed `--watch`'s debounce loop). `TsgoMain`: SIGINT/SIGTERM
-end a watch with exit 0, stdout flushed per write. `scripts/tsgo-watch-smoke.py` (tsgo vs the JVM main: both scenarios
-equal) joins the native CI script. Diag/Emit 13,127, LS 21,614, API 594,007, CLI 120 / 121 equal; `-tsgo` 152 / 0,
-`-goport` 26 / 0, `-lsp` 38 / 0, `linuxX64Test` 91 / 0; warning-clean (docs/goport-cli.md § 2c). Native CI run 38388249235
-green: image replay 65 / 65 and both watch scenarios equal to tsgo through the PGO image.
-
