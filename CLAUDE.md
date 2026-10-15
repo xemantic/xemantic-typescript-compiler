@@ -110,6 +110,8 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
 - `goSpawn` makes a throwable escaping a goroutine fatal (exit 2, like a Go panic) — never route
   around it; otherwise an OOM inside `WaitGroup` becomes a silent 0%-CPU hang. Under the no-GC image no Java
   code runs after an OOM (`Runtime.halt` allocates): only `-R:+ExitOnOutOfMemoryError` (exit 3) ends it.
+- A node, its data and its embedding chain are ONE object (`Identifier : NodeDefault : nodeData : Node`, porter rule
+  "One object per node"): all or nothing — after a tsgo upgrade check the port log for `one object per node: REFUSED`.
 - The KIR front end's tsgo program must be `singleThreaded` (`TsgoProgram.kt`): one query checker
   behind one lock, and a throwing parallel goroutine never releases it → parked JVM, no error.
 - `-core`'s declaration `Node.pos` is AFTER modifiers, tsgo's is not: `FileNodeMap` keys a

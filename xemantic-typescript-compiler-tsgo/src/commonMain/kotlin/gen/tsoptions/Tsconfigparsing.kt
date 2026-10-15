@@ -1529,7 +1529,7 @@ fun validateSpecs(specs: Any?, disallowTrailingRecursion: Boolean, jsonSourceFil
         val element: StringLiteral? = getTsConfigPropArrayElementValue(jsonSourceFile, specKey, spec)
         var node: Node? = null
         if (element != null) {
-            node = element!!.literalExpressionBase.primaryExpressionBase.asNode()
+            node = element!!.asNode()
         }
         return createDiagnosticForNodeInSourceFileOrCompilerDiagnostic(jsonSourceFile, node, message, GoSlice.of(GoElem.ref<Any?>(), spec))
     }

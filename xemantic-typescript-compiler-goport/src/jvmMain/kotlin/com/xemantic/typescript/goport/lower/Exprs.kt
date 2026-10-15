@@ -528,7 +528,8 @@ open class ExprLowering(val fn: FnCtx) {
             val st = types.under(target) as? StructType ?: refuse("path-through-non-struct", types[target].key)
             // A transparent wrapper's only field is the wrapper itself (Program.transparentWrappers): no step.
             val ownerKey = (types.unalias(target) as? NamedType)?.let { n -> n.origin?.let { (types.unalias(it) as NamedType).key } ?: n.key }
-            if (ownerKey !in prog.transparentWrappers) {
+            // ... and a node-chain class's chain field is its superclass (Program.nodeChain): the object itself.
+            if (ownerKey !in prog.transparentWrappers && prog.nodeChain[ownerKey]?.first != i) {
                 val name = fieldNameOf(target, i)
                 code = Ex.primary("${code.at(PRIMARY)}.$name")
             }
@@ -847,6 +848,11 @@ open class ExprLowering(val fn: FnCtx) {
                     // Program.transparentWrappers: `W{E: v}` is `v` (a value copy), `W{}` the wrapped struct's zero.
                     val el = elts.singleOrNull() ?: return Ex.primary("${tm.kt(t).removeSuffix("?")}()")
                     return flow(if (el.k == "KeyValueExpr") el.reqObj("value") else el)
+                }
+                (types.unalias(t) as? NamedType)?.let { nt -> prog.nodeChain[nt.key] }?.let { (ci, _) ->
+                    // Program.nodeChain: the chain field is the superclass; a literal naming it has no constructor slot.
+                    val named = elts.any { el -> el.k != "KeyValueExpr" || u.fields.indexOfFirst { it.name == el.reqObj("key").str("name") } == ci }
+                    if (named) refuse("node-chain-literal", types[t].key)
                 }
                 if (types.unalias(t) is StructType) {
                     val args = elts.map { el ->

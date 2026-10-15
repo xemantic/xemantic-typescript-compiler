@@ -133,7 +133,7 @@ fun getExternalModuleIndicator(file: SourceFile?, opts: ExternalModuleIndicatorO
         }
     }
     if (opts.force) {
-        return file!!.nodeBase.asNode()
+        return file!!.asNode()
     }
     return null
 }
@@ -157,8 +157,8 @@ fun isAnExternalModuleIndicatorNode(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.getImportMetaIfNecessary c8b7cef2
 fun getImportMetaIfNecessary(sourceFile: SourceFile?): Node? {
-    if (sourceFile!!.nodeBase.asNode()!!.flags.value and 1048576u != 0u) {
-        return findChildNode(sourceFile!!.nodeBase.asNode(), fun(p0: Node?): Boolean = isImportMeta(p0))
+    if (sourceFile!!.asNode()!!.flags.value and 1048576u != 0u) {
+        return findChildNode(sourceFile!!.asNode(), fun(p0: Node?): Boolean = isImportMeta(p0))
     }
     return null
 }
@@ -180,7 +180,7 @@ fun findChildNode(root: Node?, check: ((Node?) -> Boolean)?): Node? {
 
 // go: github.com/microsoft/typescript-go/internal/ast.isFileModuleFromUsingJSXTag 4294b2ca
 fun isFileModuleFromUsingJSXTag(file: SourceFile?): Node? {
-    return walkTreeForJSXTags(file!!.nodeBase.asNode())
+    return walkTreeForJSXTags(file!!.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.walkTreeForJSXTags 6503d797

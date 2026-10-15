@@ -1424,3 +1424,39 @@ What remains per node: `Node` 48 B + `NodeDefault` 16 B + the kind's data class 
 0.59 per node, `CompositeBase`, `DeclarationBase`, …). The bases are returned by address through `nodeData`'s accessors
 (`FlowNodeData() *FlowNodeBase { return &n.FlowNodeBase }`), so they stay objects; the next step is (9-c), the node and its
 data as one object.
+
+## 32. (TSGO.9-c) One object per node — and where (TSGO.9) leaves the AST (2026-10-15)
+
+Porter rule "One object per node" (docs/goport-lowering.md § 3): every data struct EXTENDS its node-embedding parent
+(`Identifier : NodeDefault`, `ClassDeclaration : StatementBase : NodeDefault`), `NodeDefault : nodeData : Node`, so a node,
+its data and every embedded level of the chain are one object; 205 classes, 10 extended. The porter refuses the rule
+unless the run proves Go cannot tell the merged objects apart (interface identity, type assertions, static vs virtual
+dispatch); it holds on tsgo 7.0.2 with one rename (`SourceFile.data`).
+
+Same-session A/B against `355ac13f3` ((9-b)), as § 30:
+
+| regime | A | B | Δ | B wins |
+|---|---:|---:|---:|---:|
+| single, ms | 2,779 [2,731-2,880] | 2,713 [2,698-2,754] | −2.4% | 3/4 |
+| single, GC ms | 80 | 64 | −21% | 3/4 |
+| parallel, ms | 1,556 [1,492-1,597] | 1,434 [1,374-1,564] | **−7.8%** | 4/4 |
+| parallel, GC ms | 154 | 68 | **−55%** | 4/4 |
+| allocation per rebuild, single / parallel, MB | 1,013 / 1,161 | 984 / 1,138 | −2.9% / −2.0% | 4/4 each |
+
+Live heap: the AST **135.8 → 100.2 MB**, 5.06 M → **2.89 M objects: 105 B and 3.0 objects per node**; bind 20.0 MB, check
+114.0 MB (unchanged). A full check leaves **234 MB** live.
+
+**(TSGO.9) in sum** (each step against its predecessor, same session, tsc's compiler profile):
+
+| | before (9-a) | after (9-c) |
+|---|---:|---:|
+| AST live heap | 188.4 MB | 100.2 MB (−47%) |
+| per node | 197 B, 8.1 objects | 105 B, 3.0 objects |
+| live after a full check | 327 MB | 234 MB (−28%) |
+| single, chained Δ | | −6.9%, −3.2%, −2.4% (≈ −12%) |
+| parallel, chained Δ | | −3.8%, −2.6% (noise), −7.8% (≈ −14%) |
+
+What remains per node is the node object itself plus the embedded bases tsgo returns BY ADDRESS through `nodeData`
+(`FlowNodeData() *FlowNodeBase { return &n.FlowNodeBase }`: `FlowNodeBase` 0.59 per node, `CompositeBase`,
+`DeclarationBase`, …), which must stay addressable objects. tsc-rs's ~42-byte header is a different data model (§ 28);
+§ 29's ceiling said the AST was not where its lead lives, and (TSGO.9) took most of what porter rules can.

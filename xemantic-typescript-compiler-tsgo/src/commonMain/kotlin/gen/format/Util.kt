@@ -146,7 +146,7 @@ fun isGrammarError(parent: Node?, child: Node?): Boolean {
         return isGrammarErrorElement(parent.typeParameterList(), child, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isTypeParameterDeclaration(p0))
     }
     if (com.xemantic.typescript.tsgo.ast.isSetAccessorDeclaration(parent)) {
-        return child === parent.asSetAccessorDeclaration()!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type || isGrammarErrorElement(parent.typeParameterList(), child, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isTypeParameterDeclaration(p0))
+        return child === parent.asSetAccessorDeclaration()!!.functionLikeWithBodyBase.functionLikeBase.type || isGrammarErrorElement(parent.typeParameterList(), child, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isTypeParameterDeclaration(p0))
     }
     if (com.xemantic.typescript.tsgo.ast.isNamespaceExportDeclaration(parent)) {
         val mods_2: ModifierList? = parent.asNamespaceExportDeclaration()!!.modifiersBase.modifiers()

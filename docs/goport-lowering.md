@@ -390,6 +390,27 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   copies the value; reflection sees a snapshot atomic. Pins: `LoweringRulesTest` (the fields, `GetNodeId`'s locked
   swap, `subtreeFactsWorker`'s plain store; the use classifier), `GoAtomicFieldTest` (one winner per holder under 8
   contending threads — fails with the lock removed).
+- **One object per node** ((TSGO.9-c), `Program.computeNodeChain`, `Decls.structClass`/`chainSteps`/`ifaceDecl`,
+  `Exprs.walkPath`/`composite`). Go allocates a node as ONE struct: the data struct embeds (through `ExpressionBase`,
+  `StatementBase`, …) `NodeDefault`, which embeds `Node`, and `newNode` points `n.data` at the data. The port made
+  each level its own object. Now every struct whose embedded fields reach `ast.NodeDefault` EXTENDS the unique shallowest
+  one (its "chain field", a transparent wrapper resolved to the class it names) instead of holding it; `NodeDefault`
+  extends `nodeData`'s abstract class, which extends `Node`. So `data.AsNode()`, `node.data` and the node are one
+  object, and a selection through a chain field is no step. A chain class copies as `S().also { it.goSet(this) }` with
+  `goSet`/`goEquals`/`goHash` chaining to `super`; a member reached only through chain steps is inherited (no delegate),
+  a nil-safe one is called through `goNullable(this)`. The rule is all or nothing and refused unless the whole run
+  proves Go cannot tell the merged objects apart:
+  - no chain class is generic or reflected; every `nodeData` implementer is on the chain; no chain class's field
+    shadows an ancestor's (`ast.SourceFile.data` is renamed `sourceFileData` in `renames.txt`);
+  - identity: no interface may hold both a `*Node` and a chain pointer, propagated through interface-to-interface
+    conversions; no `x.(*Node)` on one that may hold a chain pointer, and no assertion or type-switch case to a chain
+    type or `nodeData` on one that may hold a `*Node`; none to a class something extends (`is` would match subclasses);
+  - dispatch: a MEMBER call reached only through chain steps on a class something extends is virtual in Kotlin but
+    static in Go — refused when a descendant declares the same method. A nil-safe method is an extension, which is
+    resolved statically.
+  First run: 205 classes, 10 of them extended. Hand-written code reaches inherited fields directly
+  (`r.typeArguments`, not `r.nodeWithTypeArgumentsBase.typeArguments`). Pins: `LoweringRulesTest` (the hierarchy, a
+  copy, `AsNode`, the rename), `NodeShapeTest` (a factory-made identifier IS its data and its `AsNode`).
 - **Abstract-class interfaces** ((TSGO.6-i), `Program.computeAbstractIfaces`, `Decls.ifaceDecl`/`superCall`). An
   interface in `ABSTRACT_IFACE_CANDIDATES` (`ast.nodeData`, `checker.TypeData`) is lowered as an `abstract class`
   (`abstract fun` members) when the whole run proves it legal: every named type whose IR `implements` lists it is a

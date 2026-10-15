@@ -98,7 +98,7 @@ fun shouldUseUriStyleNodeCoreModules(file: SourceFile?, program: Program?): Tris
 
 // go: github.com/microsoft/typescript-go/internal/ls/lsutil.QuotePreferenceFromString b0e6efa0
 fun quotePreferenceFromString(str: StringLiteral?): QuotePreference {
-    if (str!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value and 65536 != 0) {
+    if (str!!.literalLikeNodeBase.tokenFlags.value and 65536 != 0) {
         return QuotePreferenceSingle
     }
     return QuotePreferenceDouble

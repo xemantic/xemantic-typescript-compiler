@@ -414,7 +414,7 @@ fun tryGetAutoImportableReferenceFromTypeNode(importTypeNode: Node?, idToSymbol:
                 qualifier = importTypeNode_1!!.qualifier
             }
             symbols = symbols.append1(symbol)
-            val typeArguments: NodeList? = visitor.visitNodes(importTypeNode_1!!.nodeWithTypeArgumentsBase.typeArguments)
+            val typeArguments: NodeList? = visitor.visitNodes(importTypeNode_1!!.typeArguments)
             return factory.newTypeReferenceNode(qualifier, typeArguments)
         }
         return visitor.visitEachChild(node)

@@ -264,7 +264,7 @@ fun ModifierList?.clone(f: NodeFactory?): ModifierList? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.Node 7684355d
-class Node(
+open class Node(
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: Kind = Kind(0),
     @get:kotlin.jvm.JvmName("goGet_flags") @set:kotlin.jvm.JvmName("goSet_flags") var flags: NodeFlags = NodeFlags(0u),
     @get:kotlin.jvm.JvmName("goGet_loc") @set:kotlin.jvm.JvmName("goSet_loc") var loc: TextRange = TextRange(),
@@ -273,7 +273,7 @@ class Node(
     @kotlin.jvm.JvmField var data: com.xemantic.typescript.tsgo.ast.nodeData? = null,
 ) : GoLinkKey(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
-    fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc, id = id, parent = parent, data = data)
+    open fun goCopy(): Node = Node(kind = kind, flags = flags, loc = loc, id = id, parent = parent, data = data)
 
     fun goSet(o: Node) {
         kind = o.kind
@@ -286,7 +286,7 @@ class Node(
 
     fun goEquals(o: Node): Boolean = kind == o.kind && flags == o.flags && loc.goEquals(o.loc) && id == o.id && parent === o.parent && data == o.data
 
-    fun goHash(): Int = 31 * kind.hashCode() + 31 * flags.hashCode() + 31 * loc.goHash() + 31 * id.hashCode() + 31 * parent.hashCode() + 31 * data.hashCode()
+    open fun goHash(): Int = 31 * kind.hashCode() + 31 * flags.hashCode() + 31 * loc.goHash() + 31 * id.hashCode() + 31 * parent.hashCode() + 31 * data.hashCode()
 
     // go: github.com/microsoft/typescript-go/internal/ast.Node.Pos 2bfa0f3f
     override fun pos(): Int {
@@ -503,13 +503,13 @@ fun Node?.text(): String {
             return this.asPrivateIdentifier()!!.text
         }
         10 -> {
-            return this.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.text
+            return this.asStringLiteral()!!.literalLikeNodeBase.text
         }
         8 -> {
-            return this.asNumericLiteral()!!.literalExpressionBase.literalLikeNodeBase.text
+            return this.asNumericLiteral()!!.literalLikeNodeBase.text
         }
         9 -> {
-            return this.asBigIntLiteral()!!.literalExpressionBase.literalLikeNodeBase.text
+            return this.asBigIntLiteral()!!.literalLikeNodeBase.text
         }
         237 -> {
             return this.asMetaProperty()!!.name().text()
@@ -530,19 +530,19 @@ fun Node?.text(): String {
             return this.asJsxNamespacedName()!!.namespace.text() + ":" + this.asJsxNamespacedName()!!.name.text()
         }
         13 -> {
-            return this.asRegularExpressionLiteral()!!.literalExpressionBase.literalLikeNodeBase.text
+            return this.asRegularExpressionLiteral()!!.literalLikeNodeBase.text
         }
         316 -> {
-            return com.xemantic.typescript.tsgo.go.strings.join(this.asJSDocText()!!.jsDocCommentBase.text, "")
+            return com.xemantic.typescript.tsgo.go.strings.join(this.asJSDocText()!!.text, "")
         }
         319 -> {
-            return com.xemantic.typescript.tsgo.go.strings.join(this.asJSDocLink()!!.jsDocCommentBase.text, "")
+            return com.xemantic.typescript.tsgo.go.strings.join(this.asJSDocLink()!!.text, "")
         }
         320 -> {
-            return com.xemantic.typescript.tsgo.go.strings.join(this.asJSDocLinkCode()!!.jsDocCommentBase.text, "")
+            return com.xemantic.typescript.tsgo.go.strings.join(this.asJSDocLinkCode()!!.text, "")
         }
         321 -> {
-            return com.xemantic.typescript.tsgo.go.strings.join(this.asJSDocLinkPlain()!!.jsDocCommentBase.text, "")
+            return com.xemantic.typescript.tsgo.go.strings.join(this.asJSDocLinkPlain()!!.text, "")
         }
     }
     goPanic(com.xemantic.typescript.tsgo.go.fmt.sprintf("Unhandled case in Node.Text: %T", this!!.data))
@@ -826,16 +826,16 @@ fun Node?.typeArgumentList(): NodeList? {
             return this.asTaggedTemplateExpression()!!.typeArguments
         }
         184 -> {
-            return this.asTypeReferenceNode()!!.nodeWithTypeArgumentsBase.typeArguments
+            return this.asTypeReferenceNode()!!.typeArguments
         }
         234 -> {
             return this.asExpressionWithTypeArguments()!!.typeArguments
         }
         206 -> {
-            return this.asImportTypeNode()!!.nodeWithTypeArgumentsBase.typeArguments
+            return this.asImportTypeNode()!!.typeArguments
         }
         187 -> {
-            return this.asTypeQueryNode()!!.nodeWithTypeArgumentsBase.typeArguments
+            return this.asTypeQueryNode()!!.typeArguments
         }
         287 -> {
             return this.asJsxOpeningElement()!!.typeArguments
@@ -1254,67 +1254,67 @@ fun Node?.tagName(): Node? {
             return this.asJsxSelfClosingElement()!!.tagName
         }
         322 -> {
-            return this.asJSDocUnknownTag()!!.jsDocTagBase.tagName
+            return this.asJSDocUnknownTag()!!.tagName
         }
         323 -> {
-            return this.asJSDocAugmentsTag()!!.jsDocTagBase.tagName
+            return this.asJSDocAugmentsTag()!!.tagName
         }
         324 -> {
-            return this.asJSDocImplementsTag()!!.jsDocTagBase.tagName
+            return this.asJSDocImplementsTag()!!.tagName
         }
         325 -> {
-            return this.asJSDocDeprecatedTag()!!.jsDocTagBase.tagName
+            return this.asJSDocDeprecatedTag()!!.tagName
         }
         326 -> {
-            return this.asJSDocPublicTag()!!.jsDocTagBase.tagName
+            return this.asJSDocPublicTag()!!.tagName
         }
         327 -> {
-            return this.asJSDocPrivateTag()!!.jsDocTagBase.tagName
+            return this.asJSDocPrivateTag()!!.tagName
         }
         328 -> {
-            return this.asJSDocProtectedTag()!!.jsDocTagBase.tagName
+            return this.asJSDocProtectedTag()!!.tagName
         }
         329 -> {
-            return this.asJSDocReadonlyTag()!!.jsDocTagBase.tagName
+            return this.asJSDocReadonlyTag()!!.tagName
         }
         330 -> {
-            return this.asJSDocOverrideTag()!!.jsDocTagBase.tagName
+            return this.asJSDocOverrideTag()!!.tagName
         }
         331 -> {
-            return this.asJSDocCallbackTag()!!.jsDocTagBase.tagName
+            return this.asJSDocCallbackTag()!!.tagName
         }
         332 -> {
-            return this.asJSDocOverloadTag()!!.jsDocTagBase.tagName
+            return this.asJSDocOverloadTag()!!.tagName
         }
         333, 340 -> {
-            return this.asJSDocParameterOrPropertyTag()!!.jsDocTagBase.tagName
+            return this.asJSDocParameterOrPropertyTag()!!.tagName
         }
         334 -> {
-            return this.asJSDocReturnTag()!!.jsDocTagBase.tagName
+            return this.asJSDocReturnTag()!!.tagName
         }
         335 -> {
-            return this.asJSDocThisTag()!!.jsDocTagBase.tagName
+            return this.asJSDocThisTag()!!.tagName
         }
         336 -> {
-            return this.asJSDocTypeTag()!!.jsDocTagBase.tagName
+            return this.asJSDocTypeTag()!!.tagName
         }
         337 -> {
-            return this.asJSDocTemplateTag()!!.jsDocTagBase.tagName
+            return this.asJSDocTemplateTag()!!.tagName
         }
         338 -> {
-            return this.asJSDocTypedefTag()!!.jsDocTagBase.tagName
+            return this.asJSDocTypedefTag()!!.tagName
         }
         339 -> {
-            return this.asJSDocSeeTag()!!.jsDocTagBase.tagName
+            return this.asJSDocSeeTag()!!.tagName
         }
         342 -> {
-            return this.asJSDocSatisfiesTag()!!.jsDocTagBase.tagName
+            return this.asJSDocSatisfiesTag()!!.tagName
         }
         341 -> {
-            return this.asJSDocThrowsTag()!!.jsDocTagBase.tagName
+            return this.asJSDocThrowsTag()!!.tagName
         }
         343 -> {
-            return this.asJSDocImportTag()!!.jsDocTagBase.tagName
+            return this.asJSDocImportTag()!!.tagName
         }
     }
     goPanic("Unhandled case in Node.TagName: " + this!!.kind.string())
@@ -1374,67 +1374,67 @@ fun Node?.commentList(): NodeList? {
             return this.asJSDoc()!!.comment
         }
         322 -> {
-            return this.asJSDocUnknownTag()!!.jsDocTagBase.comment
+            return this.asJSDocUnknownTag()!!.comment
         }
         323 -> {
-            return this.asJSDocAugmentsTag()!!.jsDocTagBase.comment
+            return this.asJSDocAugmentsTag()!!.comment
         }
         324 -> {
-            return this.asJSDocImplementsTag()!!.jsDocTagBase.comment
+            return this.asJSDocImplementsTag()!!.comment
         }
         325 -> {
-            return this.asJSDocDeprecatedTag()!!.jsDocTagBase.comment
+            return this.asJSDocDeprecatedTag()!!.comment
         }
         326 -> {
-            return this.asJSDocPublicTag()!!.jsDocTagBase.comment
+            return this.asJSDocPublicTag()!!.comment
         }
         327 -> {
-            return this.asJSDocPrivateTag()!!.jsDocTagBase.comment
+            return this.asJSDocPrivateTag()!!.comment
         }
         328 -> {
-            return this.asJSDocProtectedTag()!!.jsDocTagBase.comment
+            return this.asJSDocProtectedTag()!!.comment
         }
         329 -> {
-            return this.asJSDocReadonlyTag()!!.jsDocTagBase.comment
+            return this.asJSDocReadonlyTag()!!.comment
         }
         330 -> {
-            return this.asJSDocOverrideTag()!!.jsDocTagBase.comment
+            return this.asJSDocOverrideTag()!!.comment
         }
         331 -> {
-            return this.asJSDocCallbackTag()!!.jsDocTagBase.comment
+            return this.asJSDocCallbackTag()!!.comment
         }
         332 -> {
-            return this.asJSDocOverloadTag()!!.jsDocTagBase.comment
+            return this.asJSDocOverloadTag()!!.comment
         }
         333, 340 -> {
-            return this.asJSDocParameterOrPropertyTag()!!.jsDocTagBase.comment
+            return this.asJSDocParameterOrPropertyTag()!!.comment
         }
         334 -> {
-            return this.asJSDocReturnTag()!!.jsDocTagBase.comment
+            return this.asJSDocReturnTag()!!.comment
         }
         335 -> {
-            return this.asJSDocThisTag()!!.jsDocTagBase.comment
+            return this.asJSDocThisTag()!!.comment
         }
         336 -> {
-            return this.asJSDocTypeTag()!!.jsDocTagBase.comment
+            return this.asJSDocTypeTag()!!.comment
         }
         337 -> {
-            return this.asJSDocTemplateTag()!!.jsDocTagBase.comment
+            return this.asJSDocTemplateTag()!!.comment
         }
         338 -> {
-            return this.asJSDocTypedefTag()!!.jsDocTagBase.comment
+            return this.asJSDocTypedefTag()!!.comment
         }
         339 -> {
-            return this.asJSDocSeeTag()!!.jsDocTagBase.comment
+            return this.asJSDocSeeTag()!!.comment
         }
         342 -> {
-            return this.asJSDocSatisfiesTag()!!.jsDocTagBase.comment
+            return this.asJSDocSatisfiesTag()!!.comment
         }
         341 -> {
-            return this.asJSDocThrowsTag()!!.jsDocTagBase.comment
+            return this.asJSDocThrowsTag()!!.comment
         }
         343 -> {
-            return this.asJSDocImportTag()!!.jsDocTagBase.comment
+            return this.asJSDocImportTag()!!.comment
         }
     }
     goPanic("Unhandled case in Node.CommentList: " + this!!.kind.string())
@@ -1524,13 +1524,13 @@ fun Node?.importClause(): Node? {
 fun Node?.statement(): Node? {
     when (this!!.kind.value) {
         247 -> {
-            return this.asDoStatement()!!.iterationStatementBase.statement
+            return this.asDoStatement()!!.statement
         }
         248 -> {
-            return this.asWhileStatement()!!.iterationStatementBase.statement
+            return this.asWhileStatement()!!.statement
         }
         249 -> {
-            return this.asForStatement()!!.iterationStatementBase.statement
+            return this.asForStatement()!!.statement
         }
         250, 251 -> {
             return this.asForInOrOfStatement()!!.statement
@@ -1623,10 +1623,10 @@ fun Node?.postfixToken(): Node? {
             return this.asEnumMember()!!.namedMemberBase.postfixToken
         }
         178 -> {
-            return this.asGetAccessorDeclaration()!!.accessorDeclarationBase.namedMemberBase.postfixToken
+            return this.asGetAccessorDeclaration()!!.namedMemberBase.postfixToken
         }
         179 -> {
-            return this.asSetAccessorDeclaration()!!.accessorDeclarationBase.namedMemberBase.postfixToken
+            return this.asSetAccessorDeclaration()!!.namedMemberBase.postfixToken
         }
     }
     return null
@@ -1742,7 +1742,7 @@ fun Node?.asFlowReduceLabelData(): FlowReduceLabelData? {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.nodeData 90438737
-abstract class nodeData {
+abstract class nodeData : Node() {
     abstract fun asNode(): Node?
     abstract fun bodyData(): BodyBase?
     abstract fun classLikeData(): ClassLikeBase?
@@ -1766,23 +1766,22 @@ abstract class nodeData {
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault f6cfb78c
-class NodeDefault(
-    @kotlin.jvm.JvmField var node: Node = Node(),
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+open class NodeDefault(
+) : nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
-    fun goCopy(): NodeDefault = NodeDefault(node = node.goCopy())
+    override fun goCopy(): NodeDefault = NodeDefault().also { it.goSet(this) }
 
     fun goSet(o: NodeDefault) {
-        node = o.node.goCopy()
+        super.goSet(o)
     }
 
-    fun goEquals(o: NodeDefault): Boolean = node.goEquals(o.node)
+    fun goEquals(o: NodeDefault): Boolean = super.goEquals(o)
 
-    fun goHash(): Int = 31 * node.goHash()
+    override fun goHash(): Int = 31 * super.goHash()
 
     // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault.AsNode eaeaa617
     override fun asNode(): Node? {
-        return this.node
+        return this
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault.ForEachChild 89598898
@@ -1861,7 +1860,7 @@ class NodeDefault(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault.SubtreeFacts d371c114
     override fun subtreeFacts(): SubtreeFacts {
-        return this.node.data!!.subtreeFactsWorker(this.node.data)
+        return this.data!!.subtreeFactsWorker(this.data)
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault.subtreeFactsWorker b70a9ac3
@@ -1876,14 +1875,8 @@ class NodeDefault(
 
     // go: github.com/microsoft/typescript-go/internal/ast.NodeDefault.propagateSubtreeFacts f79e5495
     override fun propagateSubtreeFacts(): SubtreeFacts {
-        return SubtreeFacts(this.node.data!!.subtreeFacts().value and 4261412863u)
+        return SubtreeFacts(this.data!!.subtreeFacts().value and 4261412863u)
     }
-
-    override fun end(): Int = this.node.end()
-
-    override fun kindString(): String = this.node.kindString()
-
-    override fun pos(): Int = this.node.pos()
 
     companion object {
         val ELEM: GoElem<NodeDefault> = GoElem({ NodeDefault() }, { it.goCopy() })
@@ -2013,10 +2006,10 @@ fun declarationIsWriteAccess(decl: Node?): Boolean {
                     return decl.asMethodDeclaration()!!.functionLikeWithBodyBase.bodyBase.body != null
                 }
                 178 -> {
-                    return decl.asGetAccessorDeclaration()!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body != null
+                    return decl.asGetAccessorDeclaration()!!.functionLikeWithBodyBase.bodyBase.body != null
                 }
                 179 -> {
-                    return decl.asSetAccessorDeclaration()!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body != null
+                    return decl.asSetAccessorDeclaration()!!.functionLikeWithBodyBase.bodyBase.body != null
                 }
             }
             return false
@@ -2596,17 +2589,17 @@ fun <T> getSourceFileDataCell(goElem_T: GoElem<T>, file: SourceFile?, key: Sourc
         file!!.dataMu.lock()
         val dr1 = file!!.dataMu
         df0.defer { dr1.unlock() }
-        if (file!!.data.isNil) {
-            file!!.data = GoMap.make<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?>(GoElem.ref<Any?>())
+        if (file!!.sourceFileData.isNil) {
+            file!!.sourceFileData = GoMap.make<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?>(GoElem.ref<Any?>())
         }
-        val t2 = file!!.data.probe(key!!.key)
+        val t2 = file!!.sourceFileData.probe(key!!.key)
         val cell: Any? = goProbeValue<Any?>(t2) { null }
         val ok: Boolean = t2 !== GoMapAbsent
         if (ok) {
             return cell as com.xemantic.typescript.tsgo.ast.sourceFileDataCell<T>
         }
         val cell_1: com.xemantic.typescript.tsgo.ast.sourceFileDataCell<T>? = com.xemantic.typescript.tsgo.ast.sourceFileDataCell<T>(goElem_T = goElem_T)
-        file!!.data[key!!.key] = cell_1
+        file!!.sourceFileData[key!!.key] = cell_1
         return cell_1
     }
 }
@@ -2667,7 +2660,6 @@ class TokenCacheKey(
 
 // go: github.com/microsoft/typescript-go/internal/ast.SourceFile 707b9228
 class SourceFile(
-    @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var declarationBase: DeclarationBase = DeclarationBase(),
     @kotlin.jvm.JvmField var localsContainerBase: LocalsContainerBase = LocalsContainerBase(),
     @kotlin.jvm.JvmField var compositeBase: CompositeBase = CompositeBase(),
@@ -2677,7 +2669,7 @@ class SourceFile(
     @kotlin.jvm.JvmField var statements: NodeList? = null,
     @kotlin.jvm.JvmField var endOfFileToken: Node? = null,
     @kotlin.jvm.JvmField var dataMu: Mutex = Mutex(),
-    @kotlin.jvm.JvmField var data: GoMap<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?> = GoMap.nil<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?>(GoElem.ref<Any?>()),
+    @kotlin.jvm.JvmField var sourceFileData: GoMap<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?> = GoMap.nil<com.xemantic.typescript.tsgo.ast.sourceFileDataKey, Any?>(GoElem.ref<Any?>()),
     @kotlin.jvm.JvmField var diagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
     @kotlin.jvm.JvmField var jsDiagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
     @kotlin.jvm.JvmField var jsdocDiagnostics: GoSlice<Diagnostic?> = GoElem.ref<Diagnostic?>().nilSlice,
@@ -2726,12 +2718,12 @@ class SourceFile(
     @kotlin.jvm.JvmField var nameTable: GoMap<String, Int> = GoMap.nil<String, Int>(GoElem.INT),
     @kotlin.jvm.JvmField var positionMapOnce: Once = Once(),
     @kotlin.jvm.JvmField var positionMap: PositionMap? = null,
-) : HasFileName, SourceFileLike, com.xemantic.typescript.tsgo.ast.nodeData(), FileLike, Script, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : NodeDefault(), HasFileName, SourceFileLike, FileLike, Script, SourceFileForSpecifierGeneration, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Source, Iface_End_22b3828e, Iface_KindString_f376415e {
 
-    fun goCopy(): SourceFile = SourceFile(nodeBase = nodeBase.goCopy(), declarationBase = declarationBase.goCopy(), localsContainerBase = localsContainerBase.goCopy(), compositeBase = compositeBase.goCopy(), fileName = fileName, parseOptions = parseOptions.goCopy(), text = text, statements = statements, endOfFileToken = endOfFileToken, dataMu = dataMu.goCopy(), data = data, diagnostics = diagnostics, jsDiagnostics = jsDiagnostics, jsdocDiagnostics = jsdocDiagnostics, languageVariant = languageVariant, scriptKind = scriptKind, isDeclarationFile = isDeclarationFile, containsNonASCII = containsNonASCII, usesUriStyleNodeCoreModules = usesUriStyleNodeCoreModules, identifiers = identifiers, identifierCount = identifierCount, imports = imports, moduleAugmentations = moduleAugmentations, ambientModuleNames = ambientModuleNames, commentDirectives = commentDirectives, jsdocCache = jsdocCache, jsdocMu = jsdocMu.goCopy(), hasLazyJSDoc = hasLazyJSDoc, reparsedClones = reparsedClones, pragmas = pragmas, referencedFiles = referencedFiles, typeReferenceDirectives = typeReferenceDirectives, libReferenceDirectives = libReferenceDirectives, checkJsDirective = checkJsDirective, nodeCount = nodeCount, textCount = textCount, commonJSModuleIndicator = commonJSModuleIndicator, externalModuleIndicator = externalModuleIndicator, isBound = isBound.goCopy(), bindOnce = bindOnce.goCopy(), bindDiagnostics = bindDiagnostics, bindSuggestionDiagnostics = bindSuggestionDiagnostics, endFlowNode = endFlowNode, symbolCount = symbolCount, classifiableNames = classifiableNames.goCopy(), patternAmbientModules = patternAmbientModules.ownedCopy(), globalExports = globalExports, ecmaLineMapMu = ecmaLineMapMu.goCopy(), ecmaLineMap = ecmaLineMap, hash = hash, tokenCacheMu = tokenCacheMu.goCopy(), tokenCache = tokenCache, tokenFactory = tokenFactory, declarationMapMu = declarationMapMu.goCopy(), declarationMap = declarationMap, nameTableOnce = nameTableOnce.goCopy(), nameTable = nameTable, positionMapOnce = positionMapOnce.goCopy(), positionMap = positionMap)
+    override fun goCopy(): SourceFile = SourceFile().also { it.goSet(this) }
 
     fun goSet(o: SourceFile) {
-        nodeBase = o.nodeBase.goCopy()
+        super.goSet(o)
         declarationBase = o.declarationBase.goCopy()
         localsContainerBase = o.localsContainerBase.goCopy()
         compositeBase = o.compositeBase.goCopy()
@@ -2741,7 +2733,7 @@ class SourceFile(
         statements = o.statements
         endOfFileToken = o.endOfFileToken
         dataMu = o.dataMu.goCopy()
-        data = o.data
+        sourceFileData = o.sourceFileData
         diagnostics = o.diagnostics
         jsDiagnostics = o.jsDiagnostics
         jsdocDiagnostics = o.jsdocDiagnostics
@@ -2832,7 +2824,7 @@ class SourceFile(
         val updated: Node? = f!!.asNodeFactory().newSourceFile(this.parseOptions.goCopy(), this.text, this.statements, this.endOfFileToken)
         val newFile: SourceFile? = updated.asSourceFile()
         newFile.copyFrom(this)
-        return cloneNode(updated, this.nodeBase.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
+        return cloneNode(updated, this.asNode(), f!!.asNodeFactory()!!.hooks.goCopy())
     }
 
     // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.computeSubtreeFacts 6281e5de
@@ -2860,43 +2852,11 @@ class SourceFile(
         }
     }
 
-    override fun asNode(): Node? = this.nodeBase.asNode()
-
-    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
-
     override fun declarationData(): DeclarationBase? = this.declarationBase.declarationData()
-
-    override fun end(): Int = this.nodeBase.node.end()
-
-    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
-
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
-
-    override fun kindString(): String = this.nodeBase.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
 
     override fun localsContainerData(): LocalsContainerBase? = this.localsContainerBase.localsContainerData()
 
-    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
-
-    override fun name(): Node? = this.nodeBase.name()
-
-    override fun pos(): Int = this.nodeBase.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
-
     override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.compositeBase.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
 
     companion object {
         val ELEM: GoElem<SourceFile> = GoElem({ SourceFile() }, { it.goCopy() })
@@ -3024,7 +2984,7 @@ fun SourceFile?.copyFrom(other: SourceFile?) {
     this!!.libReferenceDirectives = other!!.libReferenceDirectives
     this!!.commonJSModuleIndicator = other!!.commonJSModuleIndicator
     this!!.externalModuleIndicator = other!!.externalModuleIndicator
-    this!!.nodeBase.node.flags = NodeFlags(this!!.nodeBase.node.flags.value or other!!.nodeBase.node.flags.value)
+    this!!.flags = NodeFlags(this!!.flags.value or other!!.flags.value)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.UpdateSourceFile faaa6213
@@ -3032,9 +2992,9 @@ fun NodeFactory?.updateSourceFile(node: SourceFile?, statements: NodeList?, endO
     if (statements !== node!!.statements || endOfFileToken !== node!!.endOfFileToken) {
         val updated: SourceFile? = this.newSourceFile(node!!.parseOptions.goCopy(), node!!.text, statements, endOfFileToken).asSourceFile()
         updated.copyFrom(node)
-        return updateNode(updated!!.nodeBase.asNode(), node!!.nodeBase.asNode(), this!!.hooks.goCopy())
+        return updateNode(updated!!.asNode(), node!!.asNode(), this!!.hooks.goCopy())
     }
-    return node!!.nodeBase.asNode()
+    return node!!.asNode()
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.SourceFile.GetNameTable c1ec8490
@@ -3515,12 +3475,12 @@ fun PragmaSpecification?.isTripleSlash(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.forEachChild_JSDocParameterOrPropertyTag 9d769b00
 fun forEachChild_JSDocParameterOrPropertyTag(node: JSDocParameterOrPropertyTag?, v: Visitor): Boolean {
-    return visit(v!!, node!!.jsDocTagBase.tagName) || (node!!.isNameFirst && (visit(v!!, node!!.name) || visit(v!!, node!!.typeExpression))) || (!node!!.isNameFirst && (visit(v!!, node!!.typeExpression) || visit(v!!, node!!.name))) || visitNodeList(v, node!!.jsDocTagBase.comment)
+    return visit(v!!, node!!.tagName) || (node!!.isNameFirst && (visit(v!!, node!!.name) || visit(v!!, node!!.typeExpression))) || (!node!!.isNameFirst && (visit(v!!, node!!.typeExpression) || visit(v!!, node!!.name))) || visitNodeList(v, node!!.comment)
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.visitEachChild_JSDocParameterOrPropertyTag ac98a9a7
 fun visitEachChild_JSDocParameterOrPropertyTag(node: JSDocParameterOrPropertyTag?, v: NodeVisitor?): Node? {
-    return v!!.factory.updateJSDocParameterOrPropertyTag(node, v.visitNodeImpl(node!!.jsDocTagBase.tagName), v.visitNodeImpl(node!!.name), node!!.isBracketed, v.visitNodeImpl(node!!.typeExpression), node!!.isNameFirst, v.visitNodesImpl(node!!.jsDocTagBase.comment))
+    return v!!.factory.updateJSDocParameterOrPropertyTag(node, v.visitNodeImpl(node!!.tagName), v.visitNodeImpl(node!!.name), node!!.isBracketed, v.visitNodeImpl(node!!.typeExpression), node!!.isNameFirst, v.visitNodesImpl(node!!.comment))
 }
 
 // go: github.com/microsoft/typescript-go/internal/ast.NodeFactory.ReleaseArenas 73d7d30b

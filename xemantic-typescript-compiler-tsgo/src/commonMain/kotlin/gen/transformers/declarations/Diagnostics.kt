@@ -529,10 +529,10 @@ fun createAccessorTypeError(node: Node?): Diagnostic? {
     }
     val diag: Diagnostic? = createDiagnosticForNode(targetNode, getErrorByDeclarationKind(node!!.kind), GoElem.ref<Any?>().nilSlice)
     if (setAccessor != null) {
-        diag.addRelatedInfo(createDiagnosticForNode(setAccessor!!.accessorDeclarationBase.nodeBase.asNode(), getRelatedSuggestionByDeclarationKind(setAccessor!!.accessorDeclarationBase.nodeBase.node.kind), GoElem.ref<Any?>().nilSlice))
+        diag.addRelatedInfo(createDiagnosticForNode(setAccessor!!.asNode(), getRelatedSuggestionByDeclarationKind(setAccessor!!.kind), GoElem.ref<Any?>().nilSlice))
     }
     if (getAccessor != null) {
-        diag.addRelatedInfo(createDiagnosticForNode(getAccessor!!.accessorDeclarationBase.nodeBase.asNode(), getRelatedSuggestionByDeclarationKind(getAccessor!!.accessorDeclarationBase.nodeBase.node.kind), GoElem.ref<Any?>().nilSlice))
+        diag.addRelatedInfo(createDiagnosticForNode(getAccessor!!.asNode(), getRelatedSuggestionByDeclarationKind(getAccessor!!.kind), GoElem.ref<Any?>().nilSlice))
     }
     return diag
 }

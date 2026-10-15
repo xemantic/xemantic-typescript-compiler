@@ -371,9 +371,30 @@ class LoweringRulesTest {
     }
 
     @Test
+    fun `a node and its data are one object - every data class extends its node-embedding parent`() {
+        val ast = File(gen, "ast/Ast.kt").readText()
+        val ast1 = File(gen, "ast/AstGenerated1.kt").readText()
+        // Node <- nodeData <- NodeDefault <- (StatementBase, …) <- the data classes; the chain field is gone.
+        assert(ast.contains("open class Node(\n"))
+        assert(ast.contains("abstract class nodeData : Node() {"))
+        assert(ast.contains("open class NodeDefault(\n) : nodeData(), "))
+        assert(!ast.contains("var node: Node = Node()"))
+        assert(ast1.contains("class Identifier(\n    @kotlin.jvm.JvmField var flowNodeBase: FlowNodeBase = FlowNodeBase(),\n    @kotlin.jvm.JvmField var text: String = \"\",\n) : NodeDefault(), "))
+        assert(ast1.contains("open class StatementBase(\n"))
+        // A copy is a fresh object of the class with every superclass's fields set through the super chain.
+        assert(ast1.contains("    override fun goCopy(): Identifier = Identifier().also { it.goSet(this) }\n\n    fun goSet(o: Identifier) {\n        super.goSet(o)\n"))
+        // `data.AsNode()` is the object itself; a member reached through the chain is inherited, not delegated.
+        val astPkg = "github.com/microsoft/typescript-go/internal/ast"
+        assert(genFunction("ast/Ast.kt", "$astPkg.NodeDefault.AsNode").contains("return this"))
+        assert(!ast1.contains("override fun asNode(): Node? = this.asNode()"))
+        // ast.SourceFile's own `data` field is renamed (it would shadow Node.data).
+        assert(File(gen, "ast/Ast.kt").readText().contains("var sourceFileData: "))
+    }
+
+    @Test
     fun `nodeData and TypeData are abstract classes and every implementer calls their constructor`() {
         val ast = File(gen, "ast/Ast.kt").readText()
-        assert(ast.contains("abstract class nodeData {"))
+        assert(ast.contains("abstract class nodeData : Node() {"))
         assert(ast.contains("    abstract fun localsContainerData(): LocalsContainerBase?"))
         assert(!ast.contains("interface nodeData"))
         val types = File(gen, "checker/Types.kt").readText()
@@ -437,9 +458,10 @@ class LoweringRulesTest {
         assert(ast1.contains("typealias ExpressionBase = NodeBase\n"))
         assert(ast1.contains("typealias PrimaryExpressionBase = MemberExpressionBase\n"))
         assert(File(gen, "ast/Ast.kt").readText().contains("typealias NodeBase = NodeDefault\n"))
-        // Identifier → PrimaryExpressionBase → … → NodeDefault was seven objects; now its field IS the NodeDefault.
-        assert(ast1.contains("    override fun asNode(): Node? = this.primaryExpressionBase.asNode()\n"))
-        assert(!ast1.contains("primaryExpressionBase.memberExpressionBase"))
+        // Identifier → PrimaryExpressionBase → … → NodeDefault was seven objects; the chain names one class, which
+        // Identifier now EXTENDS (one object per node, below), so no selection through it remains.
+        assert(ast1.contains(") : NodeDefault(), com.xemantic.typescript.tsgo.printer.triviaPositionKey"))
+        assert(!ast1.contains("primaryExpressionBase"))
         // NodeDefault declares methods (AsNode, ForEachChild, …): it stays a class.
         assert(!File(gen, "ast/Ast.kt").readText().contains("typealias NodeDefault ="))
     }

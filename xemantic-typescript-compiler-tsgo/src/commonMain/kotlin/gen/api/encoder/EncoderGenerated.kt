@@ -416,15 +416,15 @@ private fun getChildrenPropertyMask_goPart0(node: Node?): Int {
         }
         247 -> {
             val n_4: DoStatement? = node.asDoStatement()
-            return goUint8(boolToByte(n_4!!.iterationStatementBase.statement != null) shl 0) or goUint8(boolToByte(n_4!!.expression != null) shl 1)
+            return goUint8(boolToByte(n_4!!.statement != null) shl 0) or goUint8(boolToByte(n_4!!.expression != null) shl 1)
         }
         248 -> {
             val n_5: WhileStatement? = node.asWhileStatement()
-            return goUint8(boolToByte(n_5!!.expression != null) shl 0) or goUint8(boolToByte(n_5!!.iterationStatementBase.statement != null) shl 1)
+            return goUint8(boolToByte(n_5!!.expression != null) shl 0) or goUint8(boolToByte(n_5!!.statement != null) shl 1)
         }
         249 -> {
             val n_6: ForStatement? = node.asForStatement()
-            return goUint8(boolToByte(n_6!!.initializer != null) shl 0) or goUint8(boolToByte(n_6!!.condition != null) shl 1) or goUint8(boolToByte(n_6!!.incrementor != null) shl 2) or goUint8(boolToByte(n_6!!.iterationStatementBase.statement != null) shl 3)
+            return goUint8(boolToByte(n_6!!.initializer != null) shl 0) or goUint8(boolToByte(n_6!!.condition != null) shl 1) or goUint8(boolToByte(n_6!!.incrementor != null) shl 2) or goUint8(boolToByte(n_6!!.statement != null) shl 3)
         }
         250, 251 -> {
             val n_7: ForInOrOfStatement? = node.asForInOrOfStatement()
@@ -606,11 +606,11 @@ private fun getChildrenPropertyMask_goPart1(node: Node?): Int {
         }
         178 -> {
             val n_2: GetAccessorDeclaration? = node.asGetAccessorDeclaration()
-            return goUint8(boolToByte(hasModifiers(n_2!!.accessorDeclarationBase.namedMemberBase.modifiers())) shl 0) or goUint8(boolToByte(n_2!!.name() != null) shl 1) or goUint8(boolToByte(n_2!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters != null) shl 2) or goUint8(boolToByte(n_2!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters != null) shl 3) or goUint8(boolToByte(n_2!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type != null) shl 4) or goUint8(boolToByte(n_2!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body != null) shl 5)
+            return goUint8(boolToByte(hasModifiers(n_2!!.namedMemberBase.modifiers())) shl 0) or goUint8(boolToByte(n_2!!.name() != null) shl 1) or goUint8(boolToByte(n_2!!.functionLikeWithBodyBase.functionLikeBase.typeParameters != null) shl 2) or goUint8(boolToByte(n_2!!.functionLikeWithBodyBase.functionLikeBase.parameters != null) shl 3) or goUint8(boolToByte(n_2!!.functionLikeWithBodyBase.functionLikeBase.type != null) shl 4) or goUint8(boolToByte(n_2!!.functionLikeWithBodyBase.bodyBase.body != null) shl 5)
         }
         179 -> {
             val n_3: SetAccessorDeclaration? = node.asSetAccessorDeclaration()
-            return goUint8(boolToByte(hasModifiers(n_3!!.accessorDeclarationBase.namedMemberBase.modifiers())) shl 0) or goUint8(boolToByte(n_3!!.name() != null) shl 1) or goUint8(boolToByte(n_3!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.typeParameters != null) shl 2) or goUint8(boolToByte(n_3!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters != null) shl 3) or goUint8(boolToByte(n_3!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type != null) shl 4) or goUint8(boolToByte(n_3!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body != null) shl 5)
+            return goUint8(boolToByte(hasModifiers(n_3!!.namedMemberBase.modifiers())) shl 0) or goUint8(boolToByte(n_3!!.name() != null) shl 1) or goUint8(boolToByte(n_3!!.functionLikeWithBodyBase.functionLikeBase.typeParameters != null) shl 2) or goUint8(boolToByte(n_3!!.functionLikeWithBodyBase.functionLikeBase.parameters != null) shl 3) or goUint8(boolToByte(n_3!!.functionLikeWithBodyBase.functionLikeBase.type != null) shl 4) or goUint8(boolToByte(n_3!!.functionLikeWithBodyBase.bodyBase.body != null) shl 5)
         }
         182 -> {
             val n_4: IndexSignatureDeclaration? = node.asIndexSignatureDeclaration()
@@ -796,7 +796,7 @@ private fun getChildrenPropertyMask_goPart2(node: Node?): Int {
         }
         184 -> {
             val n_8: TypeReferenceNode? = node.asTypeReferenceNode()
-            return goUint8(boolToByte(n_8!!.typeName != null) shl 0) or goUint8(boolToByte(n_8!!.nodeWithTypeArgumentsBase.typeArguments != null) shl 1)
+            return goUint8(boolToByte(n_8!!.typeName != null) shl 0) or goUint8(boolToByte(n_8!!.typeArguments != null) shl 1)
         }
         234 -> {
             val n_9: ExpressionWithTypeArguments? = node.asExpressionWithTypeArguments()
@@ -820,7 +820,7 @@ private fun getChildrenPropertyMask_goPart2(node: Node?): Int {
         }
         187 -> {
             val n_14: TypeQueryNode? = node.asTypeQueryNode()
-            return goUint8(boolToByte(n_14!!.exprName != null) shl 0) or goUint8(boolToByte(n_14!!.nodeWithTypeArgumentsBase.typeArguments != null) shl 1)
+            return goUint8(boolToByte(n_14!!.exprName != null) shl 0) or goUint8(boolToByte(n_14!!.typeArguments != null) shl 1)
         }
         201 -> {
             val n_15: MappedTypeNode? = node.asMappedTypeNode()
@@ -944,39 +944,39 @@ private fun getChildrenPropertyMask_goPart2(node: Node?): Int {
         }
         336 -> {
             val n_45: JSDocTypeTag? = node.asJSDocTypeTag()
-            return goUint8(boolToByte(n_45!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_45!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_45!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_45!!.tagName != null) shl 0) or goUint8(boolToByte(n_45!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_45!!.comment != null) shl 2)
         }
         322 -> {
             val n_46: JSDocUnknownTag? = node.asJSDocUnknownTag()
-            return goUint8(boolToByte(n_46!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_46!!.jsDocTagBase.comment != null) shl 1)
+            return goUint8(boolToByte(n_46!!.tagName != null) shl 0) or goUint8(boolToByte(n_46!!.comment != null) shl 1)
         }
         337 -> {
             val n_47: JSDocTemplateTag? = node.asJSDocTemplateTag()
-            return goUint8(boolToByte(n_47!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_47!!.constraint != null) shl 1) or goUint8(boolToByte(n_47!!.typeParameters != null) shl 2) or goUint8(boolToByte(n_47!!.jsDocTagBase.comment != null) shl 3)
+            return goUint8(boolToByte(n_47!!.tagName != null) shl 0) or goUint8(boolToByte(n_47!!.constraint != null) shl 1) or goUint8(boolToByte(n_47!!.typeParameters != null) shl 2) or goUint8(boolToByte(n_47!!.comment != null) shl 3)
         }
         334 -> {
             val n_48: JSDocReturnTag? = node.asJSDocReturnTag()
-            return goUint8(boolToByte(n_48!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_48!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_48!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_48!!.tagName != null) shl 0) or goUint8(boolToByte(n_48!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_48!!.comment != null) shl 2)
         }
         326 -> {
             val n_49: JSDocPublicTag? = node.asJSDocPublicTag()
-            return goUint8(boolToByte(n_49!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_49!!.jsDocTagBase.comment != null) shl 1)
+            return goUint8(boolToByte(n_49!!.tagName != null) shl 0) or goUint8(boolToByte(n_49!!.comment != null) shl 1)
         }
         327 -> {
             val n_50: JSDocPrivateTag? = node.asJSDocPrivateTag()
-            return goUint8(boolToByte(n_50!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_50!!.jsDocTagBase.comment != null) shl 1)
+            return goUint8(boolToByte(n_50!!.tagName != null) shl 0) or goUint8(boolToByte(n_50!!.comment != null) shl 1)
         }
         328 -> {
             val n_51: JSDocProtectedTag? = node.asJSDocProtectedTag()
-            return goUint8(boolToByte(n_51!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_51!!.jsDocTagBase.comment != null) shl 1)
+            return goUint8(boolToByte(n_51!!.tagName != null) shl 0) or goUint8(boolToByte(n_51!!.comment != null) shl 1)
         }
         329 -> {
             val n_52: JSDocReadonlyTag? = node.asJSDocReadonlyTag()
-            return goUint8(boolToByte(n_52!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_52!!.jsDocTagBase.comment != null) shl 1)
+            return goUint8(boolToByte(n_52!!.tagName != null) shl 0) or goUint8(boolToByte(n_52!!.comment != null) shl 1)
         }
         330 -> {
             val n_53: JSDocOverrideTag? = node.asJSDocOverrideTag()
-            return goUint8(boolToByte(n_53!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_53!!.jsDocTagBase.comment != null) shl 1)
+            return goUint8(boolToByte(n_53!!.tagName != null) shl 0) or goUint8(boolToByte(n_53!!.comment != null) shl 1)
         }
         else -> {
             return 0
@@ -990,47 +990,47 @@ private fun getChildrenPropertyMask_goPart3(node: Node?): Int {
     when (node!!.kind.value) {
         325 -> {
             val n: JSDocDeprecatedTag? = node.asJSDocDeprecatedTag()
-            return goUint8(boolToByte(n!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n!!.jsDocTagBase.comment != null) shl 1)
+            return goUint8(boolToByte(n!!.tagName != null) shl 0) or goUint8(boolToByte(n!!.comment != null) shl 1)
         }
         339 -> {
             val n_1: JSDocSeeTag? = node.asJSDocSeeTag()
-            return goUint8(boolToByte(n_1!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_1!!.nameExpression != null) shl 1) or goUint8(boolToByte(n_1!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_1!!.tagName != null) shl 0) or goUint8(boolToByte(n_1!!.nameExpression != null) shl 1) or goUint8(boolToByte(n_1!!.comment != null) shl 2)
         }
         324 -> {
             val n_2: JSDocImplementsTag? = node.asJSDocImplementsTag()
-            return goUint8(boolToByte(n_2!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_2!!.className != null) shl 1) or goUint8(boolToByte(n_2!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_2!!.tagName != null) shl 0) or goUint8(boolToByte(n_2!!.className != null) shl 1) or goUint8(boolToByte(n_2!!.comment != null) shl 2)
         }
         323 -> {
             val n_3: JSDocAugmentsTag? = node.asJSDocAugmentsTag()
-            return goUint8(boolToByte(n_3!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_3!!.className != null) shl 1) or goUint8(boolToByte(n_3!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_3!!.tagName != null) shl 0) or goUint8(boolToByte(n_3!!.className != null) shl 1) or goUint8(boolToByte(n_3!!.comment != null) shl 2)
         }
         342 -> {
             val n_4: JSDocSatisfiesTag? = node.asJSDocSatisfiesTag()
-            return goUint8(boolToByte(n_4!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_4!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_4!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_4!!.tagName != null) shl 0) or goUint8(boolToByte(n_4!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_4!!.comment != null) shl 2)
         }
         341 -> {
             val n_5: JSDocThrowsTag? = node.asJSDocThrowsTag()
-            return goUint8(boolToByte(n_5!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_5!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_5!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_5!!.tagName != null) shl 0) or goUint8(boolToByte(n_5!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_5!!.comment != null) shl 2)
         }
         335 -> {
             val n_6: JSDocThisTag? = node.asJSDocThisTag()
-            return goUint8(boolToByte(n_6!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_6!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_6!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_6!!.tagName != null) shl 0) or goUint8(boolToByte(n_6!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_6!!.comment != null) shl 2)
         }
         343 -> {
             val n_7: JSDocImportTag? = node.asJSDocImportTag()
-            return goUint8(boolToByte(n_7!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_7!!.importClause != null) shl 1) or goUint8(boolToByte(n_7!!.moduleSpecifier != null) shl 2) or goUint8(boolToByte(n_7!!.attributes != null) shl 3) or goUint8(boolToByte(n_7!!.jsDocTagBase.comment != null) shl 4)
+            return goUint8(boolToByte(n_7!!.tagName != null) shl 0) or goUint8(boolToByte(n_7!!.importClause != null) shl 1) or goUint8(boolToByte(n_7!!.moduleSpecifier != null) shl 2) or goUint8(boolToByte(n_7!!.attributes != null) shl 3) or goUint8(boolToByte(n_7!!.comment != null) shl 4)
         }
         331 -> {
             val n_8: JSDocCallbackTag? = node.asJSDocCallbackTag()
-            return goUint8(boolToByte(n_8!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_8!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_8!!.name() != null) shl 2) or goUint8(boolToByte(n_8!!.jsDocTagBase.comment != null) shl 3)
+            return goUint8(boolToByte(n_8!!.tagName != null) shl 0) or goUint8(boolToByte(n_8!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_8!!.name() != null) shl 2) or goUint8(boolToByte(n_8!!.comment != null) shl 3)
         }
         332 -> {
             val n_9: JSDocOverloadTag? = node.asJSDocOverloadTag()
-            return goUint8(boolToByte(n_9!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_9!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_9!!.jsDocTagBase.comment != null) shl 2)
+            return goUint8(boolToByte(n_9!!.tagName != null) shl 0) or goUint8(boolToByte(n_9!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_9!!.comment != null) shl 2)
         }
         338 -> {
             val n_10: JSDocTypedefTag? = node.asJSDocTypedefTag()
-            return goUint8(boolToByte(n_10!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_10!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_10!!.name() != null) shl 2) or goUint8(boolToByte(n_10!!.jsDocTagBase.comment != null) shl 3)
+            return goUint8(boolToByte(n_10!!.tagName != null) shl 0) or goUint8(boolToByte(n_10!!.typeExpression != null) shl 1) or goUint8(boolToByte(n_10!!.name() != null) shl 2) or goUint8(boolToByte(n_10!!.comment != null) shl 3)
         }
         318 -> {
             val n_11: JSDocSignature? = node.asJSDocSignature()
@@ -1054,7 +1054,7 @@ private fun getChildrenPropertyMask_goPart3(node: Node?): Int {
         }
         206 -> {
             val n_16: ImportTypeNode? = node.asImportTypeNode()
-            return goUint8(boolToByte(n_16!!.argument != null) shl 0) or goUint8(boolToByte(n_16!!.attributes != null) shl 1) or goUint8(boolToByte(n_16!!.qualifier != null) shl 2) or goUint8(boolToByte(n_16!!.nodeWithTypeArgumentsBase.typeArguments != null) shl 3)
+            return goUint8(boolToByte(n_16!!.argument != null) shl 0) or goUint8(boolToByte(n_16!!.attributes != null) shl 1) or goUint8(boolToByte(n_16!!.qualifier != null) shl 2) or goUint8(boolToByte(n_16!!.typeArguments != null) shl 3)
         }
         274 -> {
             val n_17: ImportClause? = node.asImportClause()
@@ -1090,7 +1090,7 @@ private fun getChildrenPropertyMask_goPart3(node: Node?): Int {
         }
         333, 340 -> {
             val n_25: JSDocParameterOrPropertyTag? = node.asJSDocParameterOrPropertyTag()
-            return goUint8(boolToByte(n_25!!.jsDocTagBase.tagName != null) shl 0) or goUint8(boolToByte(n_25!!.name() != null) shl 1) or goUint8(boolToByte(n_25!!.typeExpression != null) shl 2) or goUint8(boolToByte(n_25!!.jsDocTagBase.comment != null) shl 3)
+            return goUint8(boolToByte(n_25!!.tagName != null) shl 0) or goUint8(boolToByte(n_25!!.name() != null) shl 1) or goUint8(boolToByte(n_25!!.typeExpression != null) shl 2) or goUint8(boolToByte(n_25!!.comment != null) shl 3)
         }
         else -> {
             return 0
@@ -1268,16 +1268,16 @@ fun recordNodeStrings(node: Node?, strs: com.xemantic.typescript.tsgo.api.encode
             return strs.add(node.asJsxText()!!.literalLikeNodeBase.text, node!!.kind, node!!.pos(), node!!.end())
         }
         316 -> {
-            return strs.add(node.asJSDocText()!!.jsDocCommentBase.nodeBase.node.text(), node!!.kind, node!!.pos(), node!!.end())
+            return strs.add(node.asJSDocText()!!.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         319 -> {
-            return strs.add(node.asJSDocLink()!!.jsDocCommentBase.nodeBase.node.text(), node!!.kind, node!!.pos(), node!!.end())
+            return strs.add(node.asJSDocLink()!!.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         321 -> {
-            return strs.add(node.asJSDocLinkPlain()!!.jsDocCommentBase.nodeBase.node.text(), node!!.kind, node!!.pos(), node!!.end())
+            return strs.add(node.asJSDocLinkPlain()!!.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         320 -> {
-            return strs.add(node.asJSDocLinkCode()!!.jsDocCommentBase.nodeBase.node.text(), node!!.kind, node!!.pos(), node!!.end())
+            return strs.add(node.asJSDocLinkCode()!!.text(), node!!.kind, node!!.pos(), node!!.end())
         }
         else -> {
             goPanic(com.xemantic.typescript.tsgo.go.fmt.sprintf("Unexpected node kind %v", node!!.kind))

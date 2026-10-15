@@ -197,9 +197,9 @@ fun PseudoChecker?.typeFromVariable(declaration: VariableDeclaration?): PseudoTy
     }
     val init: Node? = declaration!!.initializer
     if (init != null && (declaration!!.declarationBase.symbol!!.declarations.len == 1 || com.xemantic.typescript.tsgo.core.countWhere<Node?>(GoElem.ref<Node?>(), declaration!!.declarationBase.symbol!!.declarations, fun(p0: Node?): Boolean = com.xemantic.typescript.tsgo.ast.isVariableDeclaration(p0)) == 1)) {
-        if (!isContextuallyTyped(declaration!!.nodeBase.asNode())) {
-            if (com.xemantic.typescript.tsgo.ast.isVarConst(declaration!!.nodeBase.asNode()) && com.xemantic.typescript.tsgo.ast.isTemplateExpression(init)) {
-                return newPseudoTypeNoResult(declaration!!.nodeBase.asNode())
+        if (!isContextuallyTyped(declaration!!.asNode())) {
+            if (com.xemantic.typescript.tsgo.ast.isVarConst(declaration!!.asNode()) && com.xemantic.typescript.tsgo.ast.isTemplateExpression(init)) {
+                return newPseudoTypeNoResult(declaration!!.asNode())
             }
             val expr: PseudoType? = this.typeFromExpression(init)
             if (expr != null && (expr!!.kind.value != 1 || expr.asPseudoTypeInferred()!!.errorNodes.len > 0)) {
@@ -207,7 +207,7 @@ fun PseudoChecker?.typeFromVariable(declaration: VariableDeclaration?): PseudoTy
             }
         }
     }
-    return newPseudoTypeNoResult(declaration!!.nodeBase.asNode())
+    return newPseudoTypeNoResult(declaration!!.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoChecker.typeFromAccessor 58154ca7
@@ -218,11 +218,11 @@ fun PseudoChecker?.typeFromAccessor(accessor: Node?): PseudoType? {
         return newPseudoTypeDirect(accessorType)
     }
     if (accessorDeclarations.getAccessor != null) {
-        var res: PseudoType? = this.createReturnFromSignature(accessorDeclarations.getAccessor!!.accessorDeclarationBase.nodeBase.asNode())
+        var res: PseudoType? = this.createReturnFromSignature(accessorDeclarations.getAccessor!!.asNode())
         if (res!!.kind.value == 1 && res.asPseudoTypeInferred()!!.errorNodes.len == 0) {
-            var errorNodes: GoSlice<Node?> = GoSlice.of(GoElem.ref<Node?>(), accessorDeclarations.getAccessor!!.accessorDeclarationBase.nodeBase.asNode())
+            var errorNodes: GoSlice<Node?> = GoSlice.of(GoElem.ref<Node?>(), accessorDeclarations.getAccessor!!.asNode())
             if (accessorDeclarations.setAccessor != null) {
-                errorNodes = errorNodes.append1(accessorDeclarations.setAccessor!!.accessorDeclarationBase.nodeBase.asNode())
+                errorNodes = errorNodes.append1(accessorDeclarations.setAccessor!!.asNode())
             }
             res = newPseudoTypeInferredWithErrors(res.asPseudoTypeInferred()!!.expression, res.asPseudoTypeInferred()!!.isSignatureReturn, errorNodes)
         }
@@ -249,13 +249,13 @@ fun PseudoChecker?.getTypeAnnotationFromAccessor(node: Node?): Node? {
         return null
     }
     if (node!!.kind.value == 178) {
-        return node.asGetAccessorDeclaration()!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type
+        return node.asGetAccessorDeclaration()!!.functionLikeWithBodyBase.functionLikeBase.type
     }
     val set: SetAccessorDeclaration? = node.asSetAccessorDeclaration()
-    if (set!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters == null || set!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes.len < 1) {
+    if (set!!.functionLikeWithBodyBase.functionLikeBase.parameters == null || set!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes.len < 1) {
         return null
     }
-    val p: Node? = set!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[0]
+    val p: Node? = set!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[0]
     if (!com.xemantic.typescript.tsgo.ast.isParameterDeclaration(p)) {
         return null
     }
@@ -399,7 +399,7 @@ fun PseudoChecker?.typeFromExpression(node: Node?): PseudoType? {
 fun PseudoChecker?.typeFromObjectLiteral(node: ObjectLiteralExpression?): PseudoType? {
     val errorNodes: GoSlice<Node?> = this.canGetTypeFromObjectLiteral(node)
     if (!errorNodes.isNil) {
-        return newPseudoTypeInferredWithErrors(node!!.primaryExpressionBase.asNode(), false, errorNodes)
+        return newPseudoTypeInferredWithErrors(node!!.asNode(), false, errorNodes)
     }
     if (node!!.properties == null || node!!.properties!!.nodes.len == 0) {
         return newPseudoTypeObjectLiteral(GoElem.ref<PseudoObjectElement?>().nilSlice)
@@ -434,11 +434,11 @@ fun PseudoChecker?.typeFromObjectLiteral(node: ObjectLiteralExpression?): Pseudo
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoChecker.getAccessorMember a1dc55a9
 fun PseudoChecker?.getAccessorMember(accessor: Node?, name: Node?): PseudoObjectElement? {
     val allAccessors: AllAccessorDeclarations = com.xemantic.typescript.tsgo.ast.getAllAccessorDeclarationsForDeclaration(accessor, accessor.symbol()!!.declarations)
-    if (allAccessors.getAccessor != null && allAccessors.getAccessor!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type != null && allAccessors.setAccessor != null && allAccessors.setAccessor!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes.len > 0 && allAccessors.setAccessor!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[0].asParameterDeclaration()!!.type != null) {
+    if (allAccessors.getAccessor != null && allAccessors.getAccessor!!.functionLikeWithBodyBase.functionLikeBase.type != null && allAccessors.setAccessor != null && allAccessors.setAccessor!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes.len > 0 && allAccessors.setAccessor!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[0].asParameterDeclaration()!!.type != null) {
         if (com.xemantic.typescript.tsgo.ast.isGetAccessorDeclaration(accessor)) {
             return newPseudoGetAccessor(accessor, name, false, this.typeFromAccessor(accessor))
         } else {
-            return newPseudoSetAccessor(accessor, name, false, this.cloneParameters(accessor.asSetAccessorDeclaration()!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters)[0])
+            return newPseudoSetAccessor(accessor, name, false, this.cloneParameters(accessor.asSetAccessorDeclaration()!!.functionLikeWithBodyBase.functionLikeBase.parameters)[0])
         }
     }
     if (accessor === allAccessors.firstAccessor) {
@@ -488,10 +488,10 @@ fun PseudoChecker?.canGetTypeFromObjectLiteral(node: ObjectLiteralExpression?): 
 fun PseudoChecker?.typeFromArrayLiteral(node: ArrayLiteralExpression?): PseudoType? {
     val errorNodes: GoSlice<Node?> = this.canGetTypeFromArrayLiteral(node)
     if (!errorNodes.isNil) {
-        return newPseudoTypeInferredWithErrors(node!!.primaryExpressionBase.asNode(), false, errorNodes)
+        return newPseudoTypeInferredWithErrors(node!!.asNode(), false, errorNodes)
     }
-    if (isInConstContext(node!!.primaryExpressionBase.asNode()) && isContextuallyTyped(node!!.primaryExpressionBase.asNode())) {
-        return newPseudoTypeInferred(node!!.primaryExpressionBase.asNode(), false)
+    if (isInConstContext(node!!.asNode()) && isContextuallyTyped(node!!.asNode())) {
+        return newPseudoTypeInferred(node!!.asNode(), false)
     }
     var results: GoSlice<PseudoType?> = GoSlice.make(GoElem.ref<PseudoType?>(), 0, node!!.elements!!.nodes.len)
     val s0 = node!!.elements!!.nodes
@@ -504,8 +504,8 @@ fun PseudoChecker?.typeFromArrayLiteral(node: ArrayLiteralExpression?): PseudoTy
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoChecker.canGetTypeFromArrayLiteral ded03a1e
 fun PseudoChecker?.canGetTypeFromArrayLiteral(node: ArrayLiteralExpression?): GoSlice<Node?> {
-    if (!isInConstContext(node!!.primaryExpressionBase.asNode())) {
-        return GoSlice.of(GoElem.ref<Node?>(), node!!.primaryExpressionBase.asNode())
+    if (!isInConstContext(node!!.asNode())) {
+        return GoSlice.of(GoElem.ref<Node?>(), node!!.asNode())
     }
     val s0 = node!!.elements!!.nodes
     l0@ for (i1 in 0 until s0.len) {
@@ -537,16 +537,16 @@ fun isInConstContext(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoChecker.typeFromPrimitiveLiteralPrefix 41040bc0
 fun PseudoChecker?.typeFromPrimitiveLiteralPrefix(node: PrefixUnaryExpression?): PseudoType? {
-    var expr: Node? = node!!.updateExpressionBase.asNode()
+    var expr: Node? = node!!.asNode()
     if (node!!.operator.value == 39) {
         expr = node!!.operand
     }
     val inner: Node? = node!!.operand
     if (inner!!.kind.value == 9) {
-        return newPseudoTypeMaybeConstLocation(node!!.updateExpressionBase.asNode(), newPseudoTypeBigIntLiteral(expr.asNode()), pseudoTypeBigInt)
+        return newPseudoTypeMaybeConstLocation(node!!.asNode(), newPseudoTypeBigIntLiteral(expr.asNode()), pseudoTypeBigInt)
     }
     if (inner!!.kind.value == 8) {
-        return newPseudoTypeMaybeConstLocation(node!!.updateExpressionBase.asNode(), newPseudoTypeNumericLiteral(expr.asNode()), pseudoTypeNumber)
+        return newPseudoTypeMaybeConstLocation(node!!.asNode(), newPseudoTypeNumericLiteral(expr.asNode()), pseudoTypeNumber)
     }
     com.xemantic.typescript.tsgo.debug.failBadSyntaxKind(inner, GoElem.ref<Any?>().nilSlice)
     return null
@@ -678,7 +678,7 @@ fun addUndefinedIfDefinitelyRequired(expr: PseudoType?): PseudoType? {
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoChecker.typeFromParameter 5f9fce32
 fun PseudoChecker?.typeFromParameter(node: ParameterDeclaration?): PseudoType? {
-    val parent: Node? = node!!.nodeBase.node.parent
+    val parent: Node? = node!!.parent
     if (parent!!.kind.value == 179) {
         return this.getTypeOfAccessor(parent)
     }
@@ -686,17 +686,17 @@ fun PseudoChecker?.typeFromParameter(node: ParameterDeclaration?): PseudoType? {
         if (node!!.type != null) {
             return newPseudoTypeDirect(node!!.type)
         }
-        return newPseudoTypeNoResult(node!!.nodeBase.asNode())
+        return newPseudoTypeNoResult(node!!.asNode())
     }
     val p: GoSlice<Node?> = parent.parameters()
-    val selfIdx: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(p, node!!.nodeBase.asNode())
+    val selfIdx: Int = com.xemantic.typescript.tsgo.go.slices.index<Node?>(p, node!!.asNode())
     val lastRequired: Int = lastRequiredParamIndex(p)
     return this.typeFromParameterWorker(node, selfIdx, lastRequired)
 }
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoChecker.typeFromParameterWorker 7ece46aa
 fun PseudoChecker?.typeFromParameterWorker(node: ParameterDeclaration?, selfIdx: Int, lastRequired: Int): PseudoType? {
-    val parent: Node? = node!!.nodeBase.node.parent
+    val parent: Node? = node!!.parent
     if (parent!!.kind.value == 179) {
         return this.getTypeOfAccessor(parent)
     }
@@ -709,10 +709,10 @@ fun PseudoChecker?.typeFromParameterWorker(node: ParameterDeclaration?, selfIdx:
         }
         return result
     }
-    if (node!!.initializer != null && com.xemantic.typescript.tsgo.ast.isIdentifier(node!!.name()) && !isContextuallyTyped(node!!.nodeBase.asNode())) {
+    if (node!!.initializer != null && com.xemantic.typescript.tsgo.ast.isIdentifier(node!!.name()) && !isContextuallyTyped(node!!.asNode())) {
         var expr: PseudoType? = this.typeFromExpression(node!!.initializer)
         if (expr != null && (expr!!.kind.value == 1 && expr.asPseudoTypeInferred()!!.errorNodes.len == 0)) {
-            expr = newPseudoTypeInferredWithErrors(expr.asPseudoTypeInferred()!!.expression, false, GoSlice.of(GoElem.ref<Node?>(), node!!.nodeBase.asNode()))
+            expr = newPseudoTypeInferredWithErrors(expr.asPseudoTypeInferred()!!.expression, false, GoSlice.of(GoElem.ref<Node?>(), node!!.asNode()))
         }
         if (!this!!.strictNullChecks) {
             return expr
@@ -722,7 +722,7 @@ fun PseudoChecker?.typeFromParameterWorker(node: ParameterDeclaration?, selfIdx:
         }
         return addUndefinedIfDefinitelyRequired(expr)
     }
-    return newPseudoTypeNoResult(node!!.nodeBase.asNode())
+    return newPseudoTypeNoResult(node!!.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/pseudochecker.PseudoChecker.cloneParameters 5a6e7dde

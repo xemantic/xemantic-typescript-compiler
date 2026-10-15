@@ -82,7 +82,7 @@ fun LanguageService?.provideCodeLenses(ctx: Context?, documentURI: DocumentUri):
         lastSymbol = savedLastSymbol
         return false
     }
-    visit!!(file!!.nodeBase.asNode())
+    visit!!(file!!.asNode())
     return Tuple2<CodeLensesOrNull, GoError?>(CodeLensesOrNull(codeLenses = result), null)
 }
 

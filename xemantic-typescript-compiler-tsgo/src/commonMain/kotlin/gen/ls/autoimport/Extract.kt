@@ -260,7 +260,7 @@ fun com.xemantic.typescript.tsgo.ls.autoimport.exportExtractor?.extractFromModul
     val s3 = moduleAugmentations
     l2@ for (i4 in 0 until s3.len) {
         val decl_2: ModuleDeclaration? = s3[i4]
-        val name_2: String = decl_2!!.name().asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.text
+        val name_2: String = decl_2!!.name().asStringLiteral()!!.literalLikeNodeBase.text
         var moduleID_1: ModuleID = ModuleID(name_2)
         var moduleFileName: String = ""
         if (com.xemantic.typescript.tsgo.tspath.isExternalModuleNameRelative(name_2)) {

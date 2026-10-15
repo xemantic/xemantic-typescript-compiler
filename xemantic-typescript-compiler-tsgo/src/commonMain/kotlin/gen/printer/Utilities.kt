@@ -265,7 +265,7 @@ fun canUseOriginalText(node: Node?, flags: com.xemantic.typescript.tsgo.printer.
         return false
     }
     if (node!!.kind.value == 8) {
-        val tokenFlags: TokenFlags = node.asNumericLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags
+        val tokenFlags: TokenFlags = node.asNumericLiteral()!!.literalLikeNodeBase.tokenFlags
         if (tokenFlags.value and 26656 != 0) {
             return false
         }
@@ -285,7 +285,7 @@ fun getLiteralText(node: Node?, sourceFile: SourceFile?, flags: com.xemantic.typ
         10 -> {
             val b: Builder = Builder()
             var quoteChar: QuoteChar = QuoteChar(0)
-            if (node.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value and 65536 != 0) {
+            if (node.asStringLiteral()!!.literalLikeNodeBase.tokenFlags.value and 65536 != 0) {
                 quoteChar = QuoteCharSingleQuote
             } else {
                 quoteChar = QuoteCharDoubleQuote

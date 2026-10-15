@@ -2170,13 +2170,13 @@ fun Parser?.parseElementAccessExpressionRest(pos: Int, expression: Node?, questi
         val argument: Node? = this.parseExpressionAllowIn()
         when (argument!!.kind.value) {
             10 -> {
-                argument.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.text = this.internIdentifier(argument.text())
+                argument.asStringLiteral()!!.literalLikeNodeBase.text = this.internIdentifier(argument.text())
             }
             14 -> {
                 argument.asNoSubstitutionTemplateLiteral()!!.templateLiteralLikeNodeBase.literalLikeNodeBase.text = this.internIdentifier(argument.text())
             }
             8 -> {
-                argument.asNumericLiteral()!!.literalExpressionBase.literalLikeNodeBase.text = this.internIdentifier(argument.text())
+                argument.asNumericLiteral()!!.literalLikeNodeBase.text = this.internIdentifier(argument.text())
             }
         }
         argumentExpression = argument

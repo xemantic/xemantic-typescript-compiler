@@ -576,8 +576,8 @@ fun NodeBuilderImpl?.appendReferenceToType(root: Node?, ref: Node?): Node? {
         return this!!.f.updateImportTypeNode(imprt, imprt!!.isTypeOf, imprt!!.argument, imprt!!.attributes, qualifier, ref.typeArgumentList())
     } else if (com.xemantic.typescript.tsgo.ast.isTypeReferenceNode(root)) {
         val typeRef: TypeReferenceNode? = root.asTypeReferenceNode()
-        if (this!!.ctx!!.flags.value and 1073741824u != 0u && typeRef!!.nodeWithTypeArgumentsBase.typeArguments != null && typeRef!!.nodeWithTypeArgumentsBase.typeArguments!!.nodes.len != 0) {
-            var expr: Node? = this.createExpressionWithTypeArguments(this.createAccessExpression(typeRef!!.typeName), typeRef!!.nodeWithTypeArgumentsBase.typeArguments)
+        if (this!!.ctx!!.flags.value and 1073741824u != 0u && typeRef!!.typeArguments != null && typeRef!!.typeArguments!!.nodes.len != 0) {
+            var expr: Node? = this.createExpressionWithTypeArguments(this.createAccessExpression(typeRef!!.typeName), typeRef!!.typeArguments)
             val s2 = getAccessStack(ref)
             l1@ for (i3 in 0 until s2.len) {
                 val id_1: Node? = s2[i3]
@@ -1586,7 +1586,7 @@ fun NodeBuilderImpl?.typeParameterToDeclarationWithConstraint(typeParameter: Typ
         defaultParameterDeclarationNode = this.typeToTypeNode(defaultParameter)
     }
     restoreFlags!!()
-    return this!!.f.newTypeParameterDeclaration(modifiersList, name!!.primaryExpressionBase.asNode(), constraintNode, null, defaultParameterDeclarationNode)
+    return this!!.f.newTypeParameterDeclaration(modifiersList, name!!.asNode(), constraintNode, null, defaultParameterDeclarationNode)
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.setTextRange e20c9a8c
@@ -1708,7 +1708,7 @@ fun NodeBuilderImpl?.createMappedTypeNodeFromType(t: Type?): Node? {
             val newConstraintParam: Type? = this!!.ch.newTypeParameter(this!!.ch.newSymbol(SymbolFlags(262144u), "T"))
             val name: Identifier? = this.typeParameterToName(newConstraintParam)
             val target: Type? = t.target()
-            newTypeVariable = this!!.f.newTypeReferenceNode(name!!.primaryExpressionBase.asNode(), null)
+            newTypeVariable = this!!.f.newTypeReferenceNode(name!!.asNode(), null)
             templateType = this!!.ch.instantiateType(this!!.ch.getTemplateTypeFromMappedType(target), newTypeMapper(GoSlice.of(GoElem.ref<Type?>(), this!!.ch.getTypeParameterFromMappedType(target), this!!.ch.getModifiersTypeFromMappedType(target)), GoSlice.of(GoElem.ref<Type?>(), typeParameter, newConstraintParam)))
         }
         var indexTarget: Node? = newTypeVariable
@@ -1719,12 +1719,12 @@ fun NodeBuilderImpl?.createMappedTypeNodeFromType(t: Type?): Node? {
     } else if (needsModifierPreservingWrapper) {
         val newParam: Type? = this!!.ch.newTypeParameter(this!!.ch.newSymbol(SymbolFlags(262144u), "T"))
         val name_1: Identifier? = this.typeParameterToName(newParam)
-        newTypeVariable = this!!.f.newTypeReferenceNode(name_1!!.primaryExpressionBase.asNode(), null)
+        newTypeVariable = this!!.f.newTypeReferenceNode(name_1!!.asNode(), null)
         appropriateConstraintTypeNode = newTypeVariable
     } else {
         appropriateConstraintTypeNode = this.typeToTypeNode(this!!.ch.getConstraintTypeFromMappedType(t))
     }
-    val cleanup: (() -> Unit)? = this.enterNewScope(mapped!!.declaration!!.typeNodeBase.nodeBase.asNode(), GoElem.ref<Symbol?>().nilSlice, GoSlice.of(GoElem.ref<Type?>(), this!!.ch.getTypeParameterFromMappedType(t)), GoElem.ref<Symbol?>().nilSlice, null)
+    val cleanup: (() -> Unit)? = this.enterNewScope(mapped!!.declaration!!.asNode(), GoElem.ref<Symbol?>().nilSlice, GoSlice.of(GoElem.ref<Type?>(), this!!.ch.getTypeParameterFromMappedType(t)), GoElem.ref<Symbol?>().nilSlice, null)
     val typeParameterDeclarationNode: Node? = this.typeParameterToDeclarationWithConstraint(typeParameter, appropriateConstraintTypeNode)
     var nameTypeNode: Node? = null
     if (mapped!!.declaration!!.nameType != null) {
@@ -2573,7 +2573,7 @@ fun NodeBuilderImpl?.isStringNamed(d: Node?): Boolean {
 // go: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.isSingleQuotedStringNamed 8f3bfa05
 fun NodeBuilderImpl?.isSingleQuotedStringNamed(d: Node?): Boolean {
     val name: Node? = com.xemantic.typescript.tsgo.ast.getNameOfDeclaration(d)
-    return name != null && com.xemantic.typescript.tsgo.ast.isStringLiteral(name) && name.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value and 65536 != 0
+    return name != null && com.xemantic.typescript.tsgo.ast.isStringLiteral(name) && name.asStringLiteral()!!.literalLikeNodeBase.tokenFlags.value and 65536 != 0
 }
 
 // go: github.com/microsoft/typescript-go/internal/checker.NodeBuilderImpl.getPropertyNameNodeForSymbol 4bb8f5e1
@@ -3047,7 +3047,7 @@ fun NodeBuilderImpl?.conditionalTypeToTypeNode(_t: Type?): Node? {
     if (this!!.ctx!!.flags.value and 4u != 0u && t!!.root!!.isDistributive && t!!.checkType!!.flags.value and 524288u == 0u) {
         val newParam: Type? = this!!.ch.newTypeParameter(this!!.ch.newSymbol(SymbolFlags(262144u), "T"))
         val name: Identifier? = this.typeParameterToName(newParam)
-        val newTypeVariable: Node? = this!!.f.newTypeReferenceNode(name!!.primaryExpressionBase.asNode(), null)
+        val newTypeVariable: Node? = this!!.f.newTypeReferenceNode(name!!.asNode(), null)
         this!!.ctx!!.approximateLength += 37
         val newMapper: TypeMapper? = prependTypeMapping(t!!.root!!.checkType, newParam, t!!.mapper)
         val saveInferTypeParameters: GoSlice<Type?> = this!!.ctx!!.inferTypeParameters
@@ -3222,7 +3222,7 @@ fun NodeBuilderImpl?.visitAndTransformType(t: Type?, transform: ((NodeBuilderImp
             id = CompositeSymbolIdentity(isConstructorNode = false, symbolId = SymbolId(0uL), nodeId = com.xemantic.typescript.tsgo.ast.getNodeId(t.asTypeReference()!!.node))
         }
         t!!.flags.value and 67108864u != 0u -> {
-            id = CompositeSymbolIdentity(isConstructorNode = false, symbolId = SymbolId(0uL), nodeId = com.xemantic.typescript.tsgo.ast.getNodeId(t.asConditionalType()!!.root!!.node!!.typeNodeBase.nodeBase.asNode()))
+            id = CompositeSymbolIdentity(isConstructorNode = false, symbolId = SymbolId(0uL), nodeId = com.xemantic.typescript.tsgo.ast.getNodeId(t.asConditionalType()!!.root!!.node!!.asNode()))
         }
         t!!.symbol != null -> {
             id = CompositeSymbolIdentity(isConstructorNode = isConstructorObject, symbolId = com.xemantic.typescript.tsgo.ast.getSymbolId(t!!.symbol), nodeId = NodeId(0uL))

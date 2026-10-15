@@ -984,7 +984,7 @@ fun isObjectOrObjectArrayTypeReference(node: Node?): Boolean {
         else -> {
             if (com.xemantic.typescript.tsgo.ast.isTypeReferenceNode(node)) {
                 val ref: TypeReferenceNode? = node.asTypeReferenceNode()
-                return com.xemantic.typescript.tsgo.ast.isIdentifier(ref!!.typeName) && ref!!.typeName.text() == "Object" && ref!!.nodeWithTypeArgumentsBase.typeArguments == null
+                return com.xemantic.typescript.tsgo.ast.isIdentifier(ref!!.typeName) && ref!!.typeName.text() == "Object" && ref!!.typeArguments == null
             }
             return false
         }

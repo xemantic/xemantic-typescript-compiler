@@ -487,7 +487,7 @@ fun getExistingNodeTreeVisitor(b: NodeBuilderImpl?, bound: com.xemantic.typescri
                 if (sym != null) {
                     type_ = b!!.ch.getDeclaredTypeOfSymbolImpl(sym)
                     if (sym!!.flags.value and 262144u != 0u) {
-                        name = b.typeParameterToName(type_)!!.primaryExpressionBase.asNode()
+                        name = b.typeParameterToName(type_)!!.asNode()
                     }
                 }
                 if (name == null) {
@@ -574,9 +574,9 @@ fun getExistingNodeTreeVisitor(b: NodeBuilderImpl?, bound: com.xemantic.typescri
         val introducesError_1: Boolean = t0.first
         val exprName: Node? = t0.second
         if (!introducesError_1) {
-            return b.setTextRange(b!!.f.updateTypeQueryNode(node_5.asTypeQueryNode(), exprName, visitor.visitNodes(node_5.asTypeQueryNode()!!.nodeWithTypeArgumentsBase.typeArguments)), node_5)
+            return b.setTextRange(b!!.f.updateTypeQueryNode(node_5.asTypeQueryNode(), exprName, visitor.visitNodes(node_5.asTypeQueryNode()!!.typeArguments)), node_5)
         }
-        val serializedName: Node? = b.serializeTypeName(node_5.asTypeQueryNode()!!.exprName, true, visitor.visitNodes(node_5.asTypeQueryNode()!!.nodeWithTypeArgumentsBase.typeArguments))
+        val serializedName: Node? = b.serializeTypeName(node_5.asTypeQueryNode()!!.exprName, true, visitor.visitNodes(node_5.asTypeQueryNode()!!.typeArguments))
         if (serializedName != null) {
             return b.setTextRange(serializedName, node_5.asTypeQueryNode()!!.exprName)
         }
@@ -603,10 +603,10 @@ fun getExistingNodeTreeVisitor(b: NodeBuilderImpl?, bound: com.xemantic.typescri
         val introducesError_2: Boolean = t1.first
         val newName: Node? = t1.second
         if (!introducesError_2) {
-            val typeArguments: NodeList? = visitor.visitNodes(node_6.asTypeReferenceNode()!!.nodeWithTypeArgumentsBase.typeArguments)
+            val typeArguments: NodeList? = visitor.visitNodes(node_6.asTypeReferenceNode()!!.typeArguments)
             return b.setTextRange(b!!.f.updateTypeReferenceNode(node_6.asTypeReferenceNode(), newName, typeArguments), node_6)
         } else {
-            val serializedName_1: Node? = b.serializeTypeName(node_6.asTypeReferenceNode()!!.typeName, false, visitor.visitNodes(node_6.asTypeReferenceNode()!!.nodeWithTypeArgumentsBase.typeArguments))
+            val serializedName_1: Node? = b.serializeTypeName(node_6.asTypeReferenceNode()!!.typeName, false, visitor.visitNodes(node_6.asTypeReferenceNode()!!.typeArguments))
             if (serializedName_1 != null) {
                 return b.setTextRange(serializedName_1, node_6.asTypeReferenceNode()!!.typeName)
             }
@@ -760,7 +760,7 @@ fun getExistingNodeTreeVisitor(b: NodeBuilderImpl?, bound: com.xemantic.typescri
             if (specifier !== originalSpec) {
                 arg = factory.newLiteralTypeNode(specifier)
             }
-            return factory.updateImportTypeNode(node_8.asImportTypeNode(), node_8.asImportTypeNode()!!.isTypeOf, arg, visitor.visitNode(node_8.asImportTypeNode()!!.attributes), visitor.visitNode(node_8.asImportTypeNode()!!.qualifier), visitor.visitNodes(node_8.asImportTypeNode()!!.nodeWithTypeArgumentsBase.typeArguments))
+            return factory.updateImportTypeNode(node_8.asImportTypeNode(), node_8.asImportTypeNode()!!.isTypeOf, arg, visitor.visitNode(node_8.asImportTypeNode()!!.attributes), visitor.visitNode(node_8.asImportTypeNode()!!.qualifier), visitor.visitNodes(node_8.asImportTypeNode()!!.typeArguments))
         }
         if (node_8.name() != null && node_8.name()!!.kind.value == 168 && !b!!.ch.hasLateBindableName(node_8)) {
             if (!com.xemantic.typescript.tsgo.ast.hasDynamicName(node_8)) {
@@ -857,8 +857,8 @@ fun getExistingNodeTreeVisitor(b: NodeBuilderImpl?, bound: com.xemantic.typescri
         }
         if (com.xemantic.typescript.tsgo.ast.isStringLiteralLike(node_8)) {
             val c: Node? = node_8.clone(b!!.f)
-            if (com.xemantic.typescript.tsgo.ast.isStringLiteral(node_8) && b!!.ctx!!.flags.value and 268435456u != 0u && node_8.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value and 65536 == 0) {
-                c.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags = TokenFlags(c.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value xor 65536)
+            if (com.xemantic.typescript.tsgo.ast.isStringLiteral(node_8) && b!!.ctx!!.flags.value and 268435456u != 0u && node_8.asStringLiteral()!!.literalLikeNodeBase.tokenFlags.value and 65536 == 0) {
+                c.asStringLiteral()!!.literalLikeNodeBase.tokenFlags = TokenFlags(c.asStringLiteral()!!.literalLikeNodeBase.tokenFlags.value xor 65536)
             }
             b!!.e.addEmitFlags(c, EmitFlags(131072u))
             return c

@@ -1,5 +1,13 @@
 # Status
 
+**(TSGO.9) DONE — a denser AST through porter rules (2026-10-15):** (9-c) one object per node — every data struct
+EXTENDS its node-embedding parent (`NodeDefault : nodeData : Node`), so a node, its data and the embedding chain are one
+object (205 classes; the porter proves interface identity, type assertions and dispatch cannot tell them apart). (9-c)
+alone: parallel **−7.8%** (4/4, GC −55%), single −2.4%. Across (9-a..c) on tsc's compiler profile: the AST's live heap
+**188 → 100 MB** (197 B / 8.1 objects per node → 105 B / 3.0), a full check 327 → 234 MB live, warm single ≈ −12% and
+parallel ≈ −14% chained. Diag/Emit 13,127, LS 21,614, API 594,007, CLI 120 / 121 equal; `-tsgo` 156 / 0, `-goport` 31 / 0,
+KIR 308 / 0, `-daemon` 63 / 0, `-lsp` 38 / 0, `-externals` 291 / 0, `linuxX64Test` 91 / 0. Next: (TSGO.8), the owner's decision.
+
 **(TSGO.9-b) DONE — the atomic `id`/`facts` wrappers are volatile fields of their holder (2026-10-15):** porter rule
 "Inlined atomic fields" (docs/goport-lowering.md § 3): `Node.id`, `Symbol.id` and `CompositeBase.facts` are only ever
 loaded, stored and compared-and-swapped, so each is a `@Volatile` primitive; a swap takes a stripe lock (common code —
@@ -21,16 +29,3 @@ instead of a second parse by `-core`'s parser paired by position. The converter 
 corpus files (equal but one — a `-core` bug: raw template text compiled `\n` to backslash-n; fixed and pinned,
 `KirTemplateEscapeTest`). KIR 308 / 0, `kir-bench.sh` equivalence green, its JavaScript arm on the port (byte-identical
 to tsgo's). Next: (TSGO.8) — the owner's decision on `-core` (`-project`, `-cli`'s image, coordinates).
-
-**(TSGO.7-b/c) DONE — the JVM-vendor bench on the port; KIR's `-core` front end removed (2026-10-14):** `bench-jvms.sh`
-times `CheckBenchMain` / `TsgoMain` (CI run 38647609748 green, 65 errors in every arm); its one rejected rep exposed a
-`CheckBenchMain` emit-counter race (fixed). Two flaky `--watch` pins fixed (atomic edits). KIR's `XTSC_KIR_ENGINE=core`
-front end and `StructuralCensus` deleted; KIR 306 / 0. Next: the lowering's value model, then its syntax tree.
-
-**(TSGO.7-a) DONE — the compile server, `xtsc`'s one-shot mode and `scripts/xtsc` run the port (2026-10-14):**
-`-daemon` depends on `-tsgo` instead of `-core`: `CompileServer` runs `TsgoCli.run` per request with the request's
-directory as tsc's current directory (nothing process-global installed or restored), `XtscMain`'s one-shot mode is
-`TsgoMainKt`'s `main` and the `--daemon` fallback its new `runMain`. `xtsc` now answers exactly as tsc 7 (`-p` for a
-project; exit 0 / 1 / 2). Serve-parity matrix 31 / 31 PASS; tsc's compiler profile served over a real socket: 75 lines
-byte-identical to tsgo on every request, emit tree identical (78 files), warm requests ~1.6 s server-side. `-daemon`
-63 / 0 (the two `-core` mode-leak pins retired), `-tsgo` 153 / 0, warning-clean.

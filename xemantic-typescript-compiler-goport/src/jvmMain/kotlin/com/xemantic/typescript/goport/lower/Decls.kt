@@ -725,6 +725,11 @@ class PackageEmitter(
         val tm = TypeMapper(fc, tpNames, tpElems)
         val st = types.under(named.id) as StructType
         val name = prog.typeName(qname, named.name)
+        // Program.nodeChain: the embedded node-chain field is this class's SUPERCLASS, not a field (one object per node).
+        val chain = prog.nodeChain[qname]
+        val chainIdx = chain?.first ?: -1
+        val ownIdx = st.fields.indices.filter { it != chainIdx }
+        val chainOpen = qname in prog.nodeChainOpen
         val tpDecl = tm.typeParamDecl(named.tparams)
         val tpUse = if (named.tparams.isEmpty()) "" else named.tparams.joinToString(", ", "<", ">") { tpNames.getValue(it) }
         val self = "$name$tpUse"
@@ -742,8 +747,13 @@ class PackageEmitter(
         // LINK_KEY_TYPES: the runtime's GoLinkKey base class gives the object a dense link-store index.
         val linkKey = qname in LINK_KEY_TYPES && named.tparams.isEmpty()
         if (linkKey && supers0.any { it.endsWith("()") }) error("goport: link key $qname already has a superclass: $supers0")
-        val supers = (if (linkKey) listOf("GoLinkKey()") else emptyList()) + supers0 +
+        val supers1 = (if (linkKey) listOf("GoLinkKey()") else emptyList()) + supers0 +
             (if (reflect) listOf("GoReflectStruct") else emptyList()) + (if (json) listOf(jsonIface) else emptyList())
+        val supers = if (chain == null) supers1 else {
+            val parent = if (chain.second == NODE_STRUCT) fc.typeRef(Naming.kotlinPackage(NODE_DATA_IFACE.substringBeforeLast('.')), "nodeData") + "()"
+                else fc.typeRef(Naming.kotlinPackage(chain.second.substringBeforeLast('.')), prog.typeName(chain.second, chain.second.substringAfterLast('.'))) + "()"
+            listOf(parent) + supers1.filter { !it.endsWith("nodeData()") }
+        }
         val w = CodeWriter()
         w.line(traceLine(qname, s.str("hash")))
         // A struct with more fields than a JVM constructor takes arguments (255 slots: `checker.Checker`)
@@ -759,10 +769,10 @@ class PackageEmitter(
         fun fieldCopy(i: Int, code: String): String = if (i in atomicKt) code else copyField(code, st.fields[i].t, tm, "$qname.${st.fields[i].name}" in prog.ownedSliceFields)
         val windowIdx = st.fields.indices.filter { "$qname.${st.fields[it].name}" in prog.windowFields }.toSet()
         if (big && windowIdx.isNotEmpty()) error("window field in a big struct: $qname")
-        w.line("class $name$tpDecl(")
+        w.line("${if (chainOpen) "open " else ""}class $name$tpDecl(")
         w.indent {
             for (tp in dict) w.line("@kotlin.jvm.JvmField val goElem_$tp: GoElem<${Naming.escape(tp)}>,")
-            if (!big) st.fields.forEachIndexed { i, f ->
+            if (!big) ownIdx.forEach { i ->
                 // @JvmField: no accessors (a Go `SetText` method would clash with `text`'s setter), and direct field access.
                 w.line("${fieldAnn(i)}var ${fieldNames[i]}: ${fieldKt(i)} = ${fieldZero(i)},")
                 if (i in windowIdx) {
@@ -774,11 +784,14 @@ class PackageEmitter(
         }
         w.line(")${if (supers.isEmpty()) "" else " : " + supers.joinToString(", ")} {")
         w.indent {
-            if (big) st.fields.forEachIndexed { i, f ->
+            if (big) ownIdx.forEach { i ->
                 w.line("${fieldAnn(i)}var ${fieldNames[i]}: ${fieldKt(i)} = ${fieldZero(i)}")
             }
             w.line()
-            if (big) {
+            if (chain != null) {
+                // A chain class: a fresh object of this class, its own fields and every superclass's set from this one.
+                w.line("override fun goCopy(): $self = $name().also { it.goSet(this) }")
+            } else if (big) {
                 w.block("fun goCopy(): $self") {
                     w.line("val goOut = $name(${dict.joinToString(", ") { "goElem_$it = goElem_$it" }})")
                     st.fields.indices.forEach { w.line("goOut.${fieldNames[it]} = ${fieldCopy(it, fieldNames[it])}") }
@@ -793,12 +806,13 @@ class PackageEmitter(
                     listOf("${fieldNames[it]} = ${fieldCopy(it, fieldNames[it])}") +
                         (if (it in windowIdx) listOf("${fieldNames[it]}_o = ${fieldNames[it]}_o", "${fieldNames[it]}_n = ${fieldNames[it]}_n") else emptyList())
                 }
-                w.line("fun goCopy(): $self = $name(${copyArgs.joinToString(", ")})")
+                w.line("${if (chainOpen) "open " else ""}fun goCopy(): $self = $name(${copyArgs.joinToString(", ")})")
                 }
             }
             w.line()
             w.block("fun goSet(o: $self)") {
-                st.fields.forEachIndexed { i, f ->
+                if (chain != null) w.line("super.goSet(o)")
+                ownIdx.forEach { i ->
                     w.line("${fieldNames[i]} = ${fieldCopy(i, "o." + fieldNames[i])}")
                     if (i in windowIdx) {
                         w.line("${fieldNames[i]}_o = o.${fieldNames[i]}_o")
@@ -819,11 +833,13 @@ class PackageEmitter(
             // A generic struct is comparable per instantiation (`Expected[string]` in a comparable struct).
             if (named.comparable || named.isGenericOrigin) {
                 w.line()
-                val eqs = st.fields.mapIndexed { i, f -> fieldEq(fieldNames[i], f.t, tm) }
+                val eqs = (if (chain != null) listOf("super.goEquals(o)") else emptyList()) + ownIdx.map { i -> fieldEq(fieldNames[i], st.fields[i].t, tm) }
                 w.line("fun goEquals(o: $self): Boolean = ${if (eqs.isEmpty()) "true" else eqs.joinToString(" && ")}")
                 w.line()
-                val hs = st.fields.mapIndexed { i, f -> fieldHash(fieldNames[i], f.t, tm) }
-                w.line("fun goHash(): Int = ${if (hs.isEmpty()) "0" else hs.joinToString(" + ") { "31 * $it" }}")
+                val hs = (if (chain != null) listOf("super.goHash()") else emptyList()) + ownIdx.map { i -> fieldHash(fieldNames[i], st.fields[i].t, tm) }
+                val hashMod = if (chain != null) "override " else if (chainOpen) "open " else ""
+                w.line("${hashMod}fun goHash(): Int = ${if (hs.isEmpty()) "0" else hs.joinToString(" + ") { "31 * $it" }}")
+                if ((chain != null || chainOpen) && qname in prog.structKeys) error("goport: node chain class $qname is a map key by value")
                 if (qname in prog.structKeys) {
                     // A map keyed by this struct VALUE: Go compares keys structurally.
                     val star = if (named.tparams.isEmpty()) "" else named.tparams.joinToString(", ", "<", ">") { "*" }
@@ -842,6 +858,18 @@ class PackageEmitter(
             for (mn in overrideNames.sorted()) {
                 if (mn in declaredNames) continue
                 val e = mset[mn] ?: continue
+                if (chain != null && e.path.size >= 2 && chainSteps(qname, e.path.dropLast(1)) == e.path.size - 1) {
+                    // Reached through the node chain only: a member of a superclass is inherited (Program.nodeChain); a
+                    // nil-safe method (an extension on `T?`) is called through a nullable receiver, never a member.
+                    if (e.fn !in prog.extensionMethods) continue
+                    val sig = types.unalias(e.sig) as SignatureType
+                    val ps = sig.params.mapIndexed { i, p -> "p$i: ${tm.kt(p.t)}" }
+                    w.line()
+                    w.line("override fun $mn(${ps.joinToString(", ")})${tm.returns(sig.results.map { it.t })} = " +
+                        "com.xemantic.typescript.tsgo.synth.goNullable(this).$mn(${sig.params.indices.joinToString(", ") { "p$it" }})")
+                    prog.synth.needNullable = true
+                    continue
+                }
                 if (e.path.size < 2) {
                     // A NIL-SAFE method (an extension on `T?`, callable on a nil pointer) an interface
                     // requires: the member delegates to the extension through a nullable receiver.
@@ -978,14 +1006,30 @@ class PackageEmitter(
             val f = st.fields[idx]
             val owner = types.unalias(target) as NamedType
             val origin = owner.origin?.let { types.unalias(it) as NamedType } ?: owner
-            // A transparent wrapper's only field is the wrapper itself (Program.transparentWrappers): no step.
-            if (origin.key !in prog.transparentWrappers) code += "." + prog.fieldName(origin.key + "." + f.name, f.name, idx)
+            // A transparent wrapper's only field is the wrapper itself (Program.transparentWrappers), and a node-chain
+            // class's chain field is its superclass (Program.nodeChain): no step.
+            if (origin.key !in prog.transparentWrappers && prog.nodeChain[origin.key]?.first != idx) code += "." + prog.fieldName(origin.key + "." + f.name, f.name, idx)
             cur = f.t
         }
         if (types.under(cur) is PointerType || types.under(cur) is InterfaceType) {
             if (e.fn !in prog.extensionMethods) code += "!!"
         }
         return "override fun $name($decl)${tm.returns(sig.results.map { it.t })} = $code.$name(${ps.joinToString(", ")})\n"
+    }
+
+    /** How many leading steps of [path] from struct [key] stay on the node chain (chain fields and transparent wrappers). */
+    private fun chainSteps(key: String, path: List<Int>): Int {
+        var cur = key
+        var n = 0
+        for (i in path) {
+            val w = prog.transparentWrappers[cur]
+            if (w != null) { cur = w; n++; continue }
+            val c = prog.nodeChain[cur] ?: return n
+            if (c.first != i) return n
+            cur = prog.nodeChainNext.getValue(cur)
+            n++
+        }
+        return n
     }
 
     private fun checkCollisions(owner: String, names: List<String>, what: String) {
@@ -1020,7 +1064,10 @@ class PackageEmitter(
         w.line(traceLine(qname, s.str("hash")))
         // Program.abstractIfaces: an abstract class (vtable dispatch); every implementer is a struct class.
         val abstract = named.key in prog.abstractIfaces
-        w.line("${if (abstract) "abstract class" else "interface"} $name${tm.typeParamDecl(named.tparams)}${if (allSupers.isEmpty()) "" else " : " + allSupers.joinToString(", ")} {")
+        // Program.nodeChain: nodeData's abstract class extends Node — a node and its data are one object.
+        val supersN = if (abstract && named.key == NODE_DATA_IFACE && prog.nodeChain.isNotEmpty())
+            listOf(fc.typeRef(Naming.kotlinPackage(NODE_STRUCT.substringBeforeLast('.')), "Node") + "()") + allSupers else allSupers
+        w.line("${if (abstract) "abstract class" else "interface"} $name${tm.typeParamDecl(named.tparams)}${if (supersN.isEmpty()) "" else " : " + supersN.joinToString(", ")} {")
         w.indent {
             for (m in it.methods) {
                 val sig = types.unalias(m.sig) as SignatureType

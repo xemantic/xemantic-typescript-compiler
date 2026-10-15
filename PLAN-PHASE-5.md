@@ -25,6 +25,28 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.9-c) — ONE OBJECT PER NODE; (TSGO.9) DONE
+
+- `Program.computeNodeChain` (all or nothing): every struct whose embedded fields reach `ast.NodeDefault` extends the
+  unique shallowest one (`nodeChain`: field index + superclass key; `nodeChainNext`: the immediate type, which is how
+  Go's selection paths step — the first emission walked to the superclass and generated 54 self-calling delegates);
+  `NodeDefault` extends `nodeData`'s abstract class, which extends `Node`. Proven before emitting, each a census first:
+  no chain class generic/reflected; every `nodeData` implementer on the chain; no field shadowing (`SourceFile.data` →
+  `sourceFileData`, renames.txt); no interface holding both a `*Node` and a chain pointer (closed over iface→iface
+  conversions; only `*SourceFile` reaches non-`nodeData` interfaces); no assertion that could tell them apart (the one
+  `x.(*Node)`, on `TypeSystemEntity`, never sees a data pointer); none to a non-leaf class; no member call reached only
+  through chain steps on a class whose descendant declares it (a nil-safe method is an extension — static).
+- Emission: `open class` for extended ones; the chain field leaves the constructor; `goCopy` = `S().also { it.goSet(this) }`,
+  `goSet`/`goEquals`/`goHash` chain to `super`; a delegate reached only through the chain is inherited (a nil-safe one
+  goes through `goNullable(this)`); `walkPath`/`promotedDelegate` take no step for a chain field; a literal naming one
+  refuses. KIR's `TsgoSyntax` reads `r.typeArguments` (inherited).
+- Pins: `LoweringRulesTest` (the hierarchy, copy, `AsNode`, rename; § 19's wrapper pin and the abstract-class pin
+  re-pointed), `NodeShapeTest` (an identifier IS its data and its `AsNode` — does not even compile against `355ac13f3`:
+  Kotlin proves `node is Identifier` always false there). Gates all equal; `-tsgo` 156, `-goport` 31, KIR 308, `-daemon` 63,
+  `-lsp` 38, `-externals` 291, `linuxX64Test` 91 — all / 0.
+- A/B vs `355ac13f3`: parallel −7.8% (4/4, GC −55%), single −2.4% (3/4), allocation −2.9%; live AST 136 → 100 MB
+  (105 B, 3.0 objects per node). (TSGO.9) total and what remains: docs/goport-perf.md § 32.
+
 ### Round (TSGO.9-b) — THE ATOMIC `id` / `facts` AS VOLATILE FIELDS
 
 - `INLINE_ATOMIC_FIELD_CANDIDATES` / `Program.computeInlineAtomicFields` / `atomicFieldOp` / `CallLowering.atomicFieldCall`:
@@ -605,7 +627,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   CLI; the bench series (`bench.yml`, `bench-3way.sh`, `jvm-bench.yml`) onto the port; KIR's lowering onto tsgo's AST (the
   `KirFileLowering` rewrite). Each consumer its own sub-step with its existing gate.
 
-- [ ] **(TSGO.9) a denser AST through porter rules (docs/goport-perf.md § 29; owner-requested 2026-10-15).** The AST is 58%
+- [x] **(TSGO.9) a denser AST through porter rules (docs/goport-perf.md § 29; owner-requested 2026-10-15).** The AST is 58%
   of the live heap after a check (197 B and 8.1 objects per node against Go's one allocation); most of those objects are
   lowering artifacts, not tsgo's design. Each sub-step is a porter rule (never a hand edit of `gen/`), gated by the diag,
   emit, LS/API and CLI differentials plus `scripts/tsgo-ab-warm.sh` and the `CheckBenchMain … histo=` live-heap table:
@@ -615,7 +637,8 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   structs (`FlowNodeBase`, `CompositeBase`, `DeclarationBase`, …) flattened into their holder where no `&x.Base` needs
   them addressable. Target: ~2 objects and ~100 B per node. **(9-a) DONE 2026-10-15** (single −6.9%, allocation −7.1%,
   live AST 188 → 170 MB; docs/goport-perf.md § 30). **(9-b) DONE 2026-10-15** (single −3.2%, GC −28%, live AST 170 → 136 MB;
-  § 31).
+  § 31). **(9-c) DONE 2026-10-15** (parallel −7.8%, GC −55%; live AST 136 → 100 MB, 105 B / 3.0 objects per node).
+  **(TSGO.9) DONE 2026-10-15** — AST 188 → 100 MB, a full check 327 → 234 MB live (docs/goport-perf.md § 32).
 
 - [ ] **(TSGO.8) delete `-core` (§ 6 stages 4-5).**
   BLOCKED-PENDING-USER: **delete `-core`** — proposal (updated 2026-10-14, after (TSGO.7)): stages 1-3 of

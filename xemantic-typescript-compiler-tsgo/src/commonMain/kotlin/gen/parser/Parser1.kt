@@ -718,7 +718,7 @@ fun Parser?.validateJsonValue(sourceFile: SourceFile?, valueExpression: Node?) {
 
 // go: github.com/microsoft/typescript-go/internal/parser.isDoubleQuotedString d8544894
 fun isDoubleQuotedString(node: Node?): Boolean {
-    return com.xemantic.typescript.tsgo.ast.isStringLiteral(node) && node.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value and 65536 == 0
+    return com.xemantic.typescript.tsgo.ast.isStringLiteral(node) && node.asStringLiteral()!!.literalLikeNodeBase.tokenFlags.value and 65536 == 0
 }
 
 // go: github.com/microsoft/typescript-go/internal/parser.Parser.validateJsonObjectLiteral 2c5f7db0
@@ -967,7 +967,7 @@ fun Parser?.finishSourceFile(result: SourceFile?, isDeclarationFile: Boolean) {
     result!!.isDeclarationFile = isDeclarationFile
     result!!.languageVariant = this!!.languageVariant
     result!!.scriptKind = this!!.scriptKind
-    result!!.nodeBase.node.flags = NodeFlags(result!!.nodeBase.node.flags.value or this!!.sourceFlags.value)
+    result!!.flags = NodeFlags(result!!.flags.value or this!!.sourceFlags.value)
     result!!.identifiers = this!!.identifiers
     result!!.nodeCount = this!!.factory.nodeCount()
     result!!.textCount = this!!.factory.textCount()

@@ -20,3 +20,7 @@ github.com/microsoft/typescript-go/internal/binder.bindSourceFile bindSourceFile
 # that runtime class is SHADOWED by it ((TSGO.5): `m.Get(name)` resolved to GoMap.get and lost the lower-case
 # fallback, so --showConfig printed no compilerOptions). The porter refuses the build until it is renamed.
 github.com/microsoft/typescript-go/internal/tsoptions.CommandLineOptionNameMap.Get getOption
+
+# One object per node (docs/goport-lowering.md § 3): ast.SourceFile EXTENDS ast.Node there, whose `data` field
+# (the node's nodeData) it would shadow; Go keeps them apart as a promoted field and a shallower one.
+github.com/microsoft/typescript-go/internal/ast.SourceFile.data sourceFileData

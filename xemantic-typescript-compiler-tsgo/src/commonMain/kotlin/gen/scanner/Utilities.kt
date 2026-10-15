@@ -61,7 +61,7 @@ fun getTextOfNodeFromSourceText(sourceText: String, node: Node?, includeTrivia: 
     val text: String = sourceText.substring(pos, node!!.end())
     if (node!!.flags.value and 268435456u != 0u) {
         if (com.xemantic.typescript.tsgo.ast.isStringLiteral(node)) {
-            if (node.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags.value and 65536 != 0) {
+            if (node.asStringLiteral()!!.literalLikeNodeBase.tokenFlags.value and 65536 != 0) {
                 return "'" + text + "'"
             }
             return "\"" + text + "\""

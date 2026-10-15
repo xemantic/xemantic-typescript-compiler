@@ -61,10 +61,10 @@ fun replaceModifiers(factory: NodeFactory?, node: Node?, modifierArray: Modifier
             return factory.updateConstructorDeclaration(node.asConstructorDeclaration(), modifierArray, node.typeParameterList(), node.parameterList(), node.type(), node.asConstructorDeclaration()!!.functionLikeWithBodyBase.functionLikeBase.fullSignature, node.body())
         }
         178 -> {
-            return factory.updateGetAccessorDeclaration(node.asGetAccessorDeclaration(), modifierArray, node.name(), node.typeParameterList(), node.parameterList(), node.type(), node.asGetAccessorDeclaration()!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature, node.body())
+            return factory.updateGetAccessorDeclaration(node.asGetAccessorDeclaration(), modifierArray, node.name(), node.typeParameterList(), node.parameterList(), node.type(), node.asGetAccessorDeclaration()!!.functionLikeWithBodyBase.functionLikeBase.fullSignature, node.body())
         }
         179 -> {
-            return factory.updateSetAccessorDeclaration(node.asSetAccessorDeclaration(), modifierArray, node.name(), node.typeParameterList(), node.parameterList(), node.type(), node.asSetAccessorDeclaration()!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.fullSignature, node.body())
+            return factory.updateSetAccessorDeclaration(node.asSetAccessorDeclaration(), modifierArray, node.name(), node.typeParameterList(), node.parameterList(), node.type(), node.asSetAccessorDeclaration()!!.functionLikeWithBodyBase.functionLikeBase.fullSignature, node.body())
         }
         182 -> {
             return factory.updateIndexSignatureDeclaration(node.asIndexSignatureDeclaration(), modifierArray, node.parameterList(), node.type())
@@ -875,7 +875,7 @@ fun classElementOrClassElementParameterIsDecorated(useLegacyDecorators: Boolean,
             return false
         }
         if (decls.setAccessor != null) {
-            parameters = decls.setAccessor!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters
+            parameters = decls.setAccessor!!.functionLikeWithBodyBase.functionLikeBase.parameters
         }
     } else if (isMethodDeclaration(node)) {
         parameters = node.parameterList()
@@ -1039,8 +1039,8 @@ fun getRestParameterElementType(node: Node?): Node? {
     if (node!!.kind.value == 189) {
         return node.asArrayTypeNode()!!.elementType
     }
-    if (node!!.kind.value == 184 && node.asTypeReferenceNode()!!.nodeWithTypeArgumentsBase.typeArguments != null) {
-        return com.xemantic.typescript.tsgo.core.firstOrNil<Node?>(GoElem.ref<Node?>(), node.asTypeReferenceNode()!!.nodeWithTypeArgumentsBase.typeArguments!!.nodes)
+    if (node!!.kind.value == 184 && node.asTypeReferenceNode()!!.typeArguments != null) {
+        return com.xemantic.typescript.tsgo.core.firstOrNil<Node?>(GoElem.ref<Node?>(), node.asTypeReferenceNode()!!.typeArguments!!.nodes)
     }
     return null
 }

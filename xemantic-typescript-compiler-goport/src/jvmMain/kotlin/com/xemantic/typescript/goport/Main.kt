@@ -185,6 +185,8 @@ fun main(argv: Array<String>) {
     for ((k, why) in prog.immutableRefusals) println("goport: immutable struct refused: $k — $why")
     prog.computeAbstractIfaces()
     for ((k, why) in prog.abstractIfaceRefusals) println("goport: abstract-class interface refused: $k — $why")
+    prog.computeNodeChain()
+    println("goport: one object per node: ${prog.nodeChainRefusal?.let { "REFUSED — $it" } ?: "${prog.nodeChain.size} classes, ${prog.nodeChainOpen.size} extended"}")
     prog.computeWindowFuncs(overrides.keys)
     prog.computePrimFuncFields()
     println("goport: primitive func fields: ${prog.primFuncFields.sorted()}")

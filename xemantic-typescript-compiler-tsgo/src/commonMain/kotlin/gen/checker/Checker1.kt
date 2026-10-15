@@ -3852,14 +3852,14 @@ fun Checker?.isUsedInFunctionOrInstanceProperty(usage: Node?, declaration: Node?
         if (current!!.parent != null && com.xemantic.typescript.tsgo.ast.isDecorator(current!!.parent)) {
             val decorator: Decorator? = current!!.parent.asDecorator()
             if (decorator!!.expression === current) {
-                if (com.xemantic.typescript.tsgo.ast.isParameterDeclaration(decorator!!.nodeBase.node.parent)) {
-                    if (this.isUsedInFunctionOrInstanceProperty(decorator!!.nodeBase.node.parent!!.parent!!.parent, declaration, declContainer)) {
+                if (com.xemantic.typescript.tsgo.ast.isParameterDeclaration(decorator!!.parent)) {
+                    if (this.isUsedInFunctionOrInstanceProperty(decorator!!.parent!!.parent!!.parent, declaration, declContainer)) {
                         return FindAncestorResult(1)
                     }
                     return FindAncestorResult(2)
                 }
-                if (com.xemantic.typescript.tsgo.ast.isMethodDeclaration(decorator!!.nodeBase.node.parent)) {
-                    if (this.isUsedInFunctionOrInstanceProperty(decorator!!.nodeBase.node.parent!!.parent, declaration, declContainer)) {
+                if (com.xemantic.typescript.tsgo.ast.isMethodDeclaration(decorator!!.parent)) {
+                    if (this.isUsedInFunctionOrInstanceProperty(decorator!!.parent!!.parent, declaration, declContainer)) {
                         return FindAncestorResult(1)
                     }
                     return FindAncestorResult(2)
@@ -4010,8 +4010,8 @@ fun Checker?.checkSourceFile(ctx: Context?, sourceFile: SourceFile?, checkUnused
             this.checkSourceElements(sourceFile!!.statements!!.nodes)
             this.checkDeferredNodes(sourceFile)
             if (com.xemantic.typescript.tsgo.ast.isExternalOrCommonJSModule(sourceFile)) {
-                this.checkExternalModuleExports(sourceFile!!.nodeBase.asNode())
-                this.registerForUnusedIdentifiersCheck(sourceFile!!.nodeBase.asNode())
+                this.checkExternalModuleExports(sourceFile!!.asNode())
+                this.registerForUnusedIdentifiersCheck(sourceFile!!.asNode())
             }
             if (!sourceFile!!.isDeclarationFile && !this.isCanceled()) {
                 this.checkUnusedRenamedBindingElements()
@@ -4835,7 +4835,7 @@ fun Checker?.checkTypeReferenceNode(node: Node?) {
     this.checkGrammarTypeArguments(node, node.typeArgumentList())
     if (com.xemantic.typescript.tsgo.ast.isTypeReferenceNode(node) && node!!.flags.value and 4194304u == 0u) {
         val data: TypeReferenceNode? = node.asTypeReferenceNode()
-        if (data!!.nodeWithTypeArgumentsBase.typeArguments != null && data!!.typeName!!.end() != data!!.nodeWithTypeArgumentsBase.typeArguments!!.pos()) {
+        if (data!!.typeArguments != null && data!!.typeName!!.end() != data!!.typeArguments!!.pos()) {
             val sourceFile: SourceFile? = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(node)
             if (com.xemantic.typescript.tsgo.scanner.scanTokenAtPosition(sourceFile, data!!.typeName!!.end()).value == 24) {
                 this.grammarErrorAtPos(node, com.xemantic.typescript.tsgo.scanner.skipTrivia(sourceFile!!.text(), data!!.typeName!!.end()), 1, com.xemantic.typescript.tsgo.diagnostics.jsDoc_types_can_only_be_used_inside_documentation_comments, GoElem.ref<Any?>().nilSlice)
@@ -5231,7 +5231,7 @@ fun Checker?.checkImportType(node: Node?) {
 fun Checker?.getResolutionModeOverrideImpl(node: ImportAttributes?, reportErrors: Boolean): ModuleKind {
     if (node!!.attributes!!.nodes.len != 1) {
         if (reportErrors) {
-            this.grammarErrorOnNode(node!!.nodeBase.asNode(), com.xemantic.typescript.tsgo.diagnostics.type_import_attributes_should_have_exactly_one_key_resolution_mode_with_value_import_or_require, GoElem.ref<Any?>().nilSlice)
+            this.grammarErrorOnNode(node!!.asNode(), com.xemantic.typescript.tsgo.diagnostics.type_import_attributes_should_have_exactly_one_key_resolution_mode_with_value_import_or_require, GoElem.ref<Any?>().nilSlice)
         }
         return ModuleKind(0)
     }

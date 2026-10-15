@@ -413,7 +413,7 @@ fun getImportKindOrder(s1: Node?): Int {
                 return 0
             }
             val importClause: ImportClause? = importDecl!!.importClause.asImportClause()
-            if (importClause!!.nodeBase.node.isTypeOnly()) {
+            if (importClause!!.isTypeOnly()) {
                 return 1
             }
             if (importClause!!.namedBindings != null && importClause!!.namedBindings!!.kind.value == 275) {

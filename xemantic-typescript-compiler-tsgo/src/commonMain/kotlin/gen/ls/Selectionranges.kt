@@ -133,10 +133,10 @@ fun getSmartSelectionRange(l: LanguageService?, sourceFile: SourceFile?, pos: In
         }
         return false
     }
-    val fullRange: Range = l!!.converters.toLSPRange(sourceFile, com.xemantic.typescript.tsgo.core.newTextRange(sourceFile!!.nodeBase.node.pos(), sourceFile!!.nodeBase.node.end()))
+    val fullRange: Range = l!!.converters.toLSPRange(sourceFile, com.xemantic.typescript.tsgo.core.newTextRange(sourceFile!!.pos(), sourceFile!!.end()))
     var result: SelectionRange? = SelectionRange(range = fullRange.goCopy())
     var current_2: Node? = null
-    current_2 = sourceFile!!.nodeBase.asNode()
+    current_2 = sourceFile!!.asNode()
     l1@ while (current_2 != null) {
         var next: Node? = null
         val parent_1: Node? = current_2

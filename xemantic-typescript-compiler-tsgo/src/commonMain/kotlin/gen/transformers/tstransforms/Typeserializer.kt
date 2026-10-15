@@ -179,11 +179,11 @@ fun com.xemantic.typescript.tsgo.transformers.tstransforms.metadataSerializer?.s
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.GetSetAccessorValueParameter ffb1c0b7
 fun getSetAccessorValueParameter(node: SetAccessorDeclaration?): Node? {
-    if (node != null && node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes.len > 0) {
-        if (node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes.len >= 2 && com.xemantic.typescript.tsgo.ast.isThisParameter(node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[0])) {
-            return node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[1]
+    if (node != null && node!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes.len > 0) {
+        if (node!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes.len >= 2 && com.xemantic.typescript.tsgo.ast.isThisParameter(node!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[0])) {
+            return node!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[1]
         }
-        return node!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[0]
+        return node!!.functionLikeWithBodyBase.functionLikeBase.parameters!!.nodes[0]
     }
     return null
 }
@@ -204,7 +204,7 @@ fun getAccessorTypeNode(node: Node?, container: Node?): Node? {
         return getSetAccessorTypeAnnotationNode(accessors.setAccessor)
     }
     if (accessors.getAccessor != null) {
-        return accessors.getAccessor!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.type
+        return accessors.getAccessor!!.functionLikeWithBodyBase.functionLikeBase.type
     }
     return null
 }
@@ -262,7 +262,7 @@ fun getParametersOfDecoratedDeclaration(node: Node?, container: Node?): NodeList
     if (container != null && node!!.kind.value == 178) {
         val acc: AllAccessorDeclarations = com.xemantic.typescript.tsgo.ast.getAllAccessorDeclarations(container.members(), node)
         if (acc.setAccessor != null) {
-            return acc.setAccessor!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters
+            return acc.setAccessor!!.functionLikeWithBodyBase.functionLikeBase.parameters
         }
     }
     return node.parameterList()

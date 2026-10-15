@@ -236,11 +236,11 @@ fun newAsyncTransformer(opts: TransformOptions?): Transformer? {
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.asyncTransformer.visitSourceFile 6c4ff0f6
 fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.visitSourceFile(node: SourceFile?): Node? {
     if (node!!.isDeclarationFile) {
-        return node!!.nodeBase.asNode()
+        return node!!.asNode()
     }
     this.setContextFlag(asyncContextNonTopLevel, false)
     this.setContextFlag(asyncContextHasLexicalThis, false)
-    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.nodeBase.asNode())
+    val visited: Node? = this!!.transformer.visitor().visitEachChild(node!!.asNode())
     this!!.transformer.emitContext().addEmitHelper(visited, this!!.transformer.emitContext().readEmitHelpers())
     return visited
 }
@@ -416,11 +416,11 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.vis
     if (catchClauseUnshadowedNames != null) {
         val savedEnclosingFunctionParameterNames: com.xemantic.typescript.tsgo.collections.Set<String>? = this!!.enclosingFunctionParameterNames
         this!!.enclosingFunctionParameterNames = catchClauseUnshadowedNames
-        val result: Node? = this!!.asyncBodyVisitor.visitEachChild(node!!.nodeBase.asNode())
+        val result: Node? = this!!.asyncBodyVisitor.visitEachChild(node!!.asNode())
         this!!.enclosingFunctionParameterNames = savedEnclosingFunctionParameterNames
         return result
     }
-    return this!!.asyncBodyVisitor.visitEachChild(node!!.nodeBase.asNode())
+    return this!!.asyncBodyVisitor.visitEachChild(node!!.asNode())
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.asyncTransformer.visitVariableStatementInAsyncBody 993f3285
@@ -467,17 +467,17 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.vis
     } else {
         visitedInitializer = this!!.transformer.visitor().visitNode(node!!.initializer)
     }
-    return this!!.transformer.factory()!!.nodeFactory.updateForStatement(node, visitedInitializer, this!!.transformer.visitor().visitNode(node!!.condition), this!!.transformer.visitor().visitNode(node!!.incrementor), this!!.asyncBodyVisitor.visitEmbeddedStatement(node!!.iterationStatementBase.statement))
+    return this!!.transformer.factory()!!.nodeFactory.updateForStatement(node, visitedInitializer, this!!.transformer.visitor().visitNode(node!!.condition), this!!.transformer.visitor().visitNode(node!!.incrementor), this!!.asyncBodyVisitor.visitEmbeddedStatement(node!!.statement))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/estransforms.asyncTransformer.visitAwaitExpression 593d31d3
 fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.visitAwaitExpression(node: AwaitExpression?): Node? {
     if (this.inTopLevelContext()) {
-        return this!!.transformer.visitor().visitEachChild(node!!.unaryExpressionBase.asNode())
+        return this!!.transformer.visitor().visitEachChild(node!!.asNode())
     }
     val yieldExpr: Node? = this!!.transformer.factory()!!.nodeFactory.newYieldExpression(null, this!!.transformer.visitor().visitNode(node!!.expression))
-    yieldExpr!!.loc = node!!.unaryExpressionBase.node.loc.goCopy()
-    this!!.transformer.emitContext().setOriginal(yieldExpr, node!!.unaryExpressionBase.asNode())
+    yieldExpr!!.loc = node!!.loc.goCopy()
+    this!!.transformer.emitContext().setOriginal(yieldExpr, node!!.asNode())
     return yieldExpr
 }
 
@@ -516,7 +516,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.vis
     val decl: GetAccessorDeclaration? = node.asGetAccessorDeclaration()
     val savedLexicalArguments: com.xemantic.typescript.tsgo.transformers.estransforms.lexicalArgumentsInfo = this!!.lexicalArguments.goCopy()
     this!!.lexicalArguments = com.xemantic.typescript.tsgo.transformers.estransforms.lexicalArgumentsInfo()
-    val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(decl, this!!.transformer.visitor().visitModifiers(decl!!.accessorDeclarationBase.namedMemberBase.modifiers()), decl!!.name(), null, this!!.transformer.emitContext().visitParameters(decl!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters, this!!.transformer.visitor()), null, null, this.transformMethodBody(node))
+    val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(decl, this!!.transformer.visitor().visitModifiers(decl!!.namedMemberBase.modifiers()), decl!!.name(), null, this!!.transformer.emitContext().visitParameters(decl!!.functionLikeWithBodyBase.functionLikeBase.parameters, this!!.transformer.visitor()), null, null, this.transformMethodBody(node))
     this!!.lexicalArguments = savedLexicalArguments.goCopy()
     return updated
 }
@@ -526,7 +526,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.vis
     val decl: SetAccessorDeclaration? = node.asSetAccessorDeclaration()
     val savedLexicalArguments: com.xemantic.typescript.tsgo.transformers.estransforms.lexicalArgumentsInfo = this!!.lexicalArguments.goCopy()
     this!!.lexicalArguments = com.xemantic.typescript.tsgo.transformers.estransforms.lexicalArgumentsInfo()
-    val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(decl, this!!.transformer.visitor().visitModifiers(decl!!.accessorDeclarationBase.namedMemberBase.modifiers()), decl!!.name(), null, this!!.transformer.emitContext().visitParameters(decl!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters, this!!.transformer.visitor()), null, null, this.transformMethodBody(node))
+    val updated: Node? = this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(decl, this!!.transformer.visitor().visitModifiers(decl!!.namedMemberBase.modifiers()), decl!!.name(), null, this!!.transformer.emitContext().visitParameters(decl!!.functionLikeWithBodyBase.functionLikeBase.parameters, this!!.transformer.visitor()), null, null, this.transformMethodBody(node))
     this!!.lexicalArguments = savedLexicalArguments.goCopy()
     return updated
 }
@@ -690,7 +690,7 @@ fun com.xemantic.typescript.tsgo.transformers.estransforms.asyncTransformer?.tra
         target = node!!.name()
     }
     val converted: Node? = this!!.transformer.factory().newAssignmentExpression(target, node!!.initializer)
-    this!!.transformer.emitContext().setSourceMapRange(converted, node!!.nodeBase.node.loc.goCopy())
+    this!!.transformer.emitContext().setSourceMapRange(converted, node!!.loc.goCopy())
     return this!!.transformer.visitor().visitNode(converted)
 }
 

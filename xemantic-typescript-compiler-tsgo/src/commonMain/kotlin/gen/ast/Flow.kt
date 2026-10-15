@@ -137,70 +137,23 @@ class FlowList(
 
 // go: github.com/microsoft/typescript-go/internal/ast.FlowSwitchClauseData eade4eb9
 class FlowSwitchClauseData(
-    @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var switchStatement: Node? = null,
     @kotlin.jvm.JvmField var clauseStart: Int = 0,
     @kotlin.jvm.JvmField var clauseEnd: Int = 0,
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : NodeDefault(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
-    fun goCopy(): FlowSwitchClauseData = FlowSwitchClauseData(nodeBase = nodeBase.goCopy(), switchStatement = switchStatement, clauseStart = clauseStart, clauseEnd = clauseEnd)
+    override fun goCopy(): FlowSwitchClauseData = FlowSwitchClauseData().also { it.goSet(this) }
 
     fun goSet(o: FlowSwitchClauseData) {
-        nodeBase = o.nodeBase.goCopy()
+        super.goSet(o)
         switchStatement = o.switchStatement
         clauseStart = o.clauseStart
         clauseEnd = o.clauseEnd
     }
 
-    fun goEquals(o: FlowSwitchClauseData): Boolean = nodeBase.goEquals(o.nodeBase) && switchStatement === o.switchStatement && clauseStart == o.clauseStart && clauseEnd == o.clauseEnd
+    fun goEquals(o: FlowSwitchClauseData): Boolean = super.goEquals(o) && switchStatement === o.switchStatement && clauseStart == o.clauseStart && clauseEnd == o.clauseEnd
 
-    fun goHash(): Int = 31 * nodeBase.goHash() + 31 * switchStatement.hashCode() + 31 * clauseStart.hashCode() + 31 * clauseEnd.hashCode()
-
-    override fun asNode(): Node? = this.nodeBase.asNode()
-
-    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
-
-    override fun end(): Int = this.nodeBase.node.end()
-
-    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
-
-    override fun kindString(): String = this.nodeBase.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
-
-    override fun name(): Node? = this.nodeBase.name()
-
-    override fun pos(): Int = this.nodeBase.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
+    override fun goHash(): Int = 31 * super.goHash() + 31 * switchStatement.hashCode() + 31 * clauseStart.hashCode() + 31 * clauseEnd.hashCode()
 
     companion object {
         val ELEM: GoElem<FlowSwitchClauseData> = GoElem({ FlowSwitchClauseData() }, { it.goCopy() })
@@ -223,68 +176,21 @@ fun FlowSwitchClauseData?.isEmpty(): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/ast.FlowReduceLabelData 34584262
 class FlowReduceLabelData(
-    @kotlin.jvm.JvmField var nodeBase: NodeBase = NodeBase(),
     @kotlin.jvm.JvmField var target: FlowNode? = null,
     @kotlin.jvm.JvmField var antecedents: FlowList? = null,
-) : com.xemantic.typescript.tsgo.ast.nodeData(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
+) : NodeDefault(), com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e, Iface_KindString_f376415e {
 
-    fun goCopy(): FlowReduceLabelData = FlowReduceLabelData(nodeBase = nodeBase.goCopy(), target = target, antecedents = antecedents)
+    override fun goCopy(): FlowReduceLabelData = FlowReduceLabelData().also { it.goSet(this) }
 
     fun goSet(o: FlowReduceLabelData) {
-        nodeBase = o.nodeBase.goCopy()
+        super.goSet(o)
         target = o.target
         antecedents = o.antecedents
     }
 
-    fun goEquals(o: FlowReduceLabelData): Boolean = nodeBase.goEquals(o.nodeBase) && target === o.target && antecedents === o.antecedents
+    fun goEquals(o: FlowReduceLabelData): Boolean = super.goEquals(o) && target === o.target && antecedents === o.antecedents
 
-    fun goHash(): Int = 31 * nodeBase.goHash() + 31 * target.hashCode() + 31 * antecedents.hashCode()
-
-    override fun asNode(): Node? = this.nodeBase.asNode()
-
-    override fun bodyData(): BodyBase? = this.nodeBase.bodyData()
-
-    override fun classLikeData(): ClassLikeBase? = this.nodeBase.classLikeData()
-
-    override fun clone(p0: NodeFactoryCoercible?): Node? = this.nodeBase.clone(p0)
-
-    override fun computeSubtreeFacts(): SubtreeFacts = this.nodeBase.computeSubtreeFacts()
-
-    override fun declarationData(): DeclarationBase? = this.nodeBase.declarationData()
-
-    override fun end(): Int = this.nodeBase.node.end()
-
-    override fun exportableData(): ExportableBase? = this.nodeBase.exportableData()
-
-    override fun flowNodeData(): FlowNodeBase? = this.nodeBase.flowNodeData()
-
-    override fun forEachChild(p0: Visitor): Boolean = this.nodeBase.forEachChild(p0)
-
-    override fun functionLikeData(): FunctionLikeBase? = this.nodeBase.functionLikeData()
-
-    override fun kindString(): String = this.nodeBase.node.kindString()
-
-    override fun literalLikeData(): LiteralLikeNodeBase? = this.nodeBase.literalLikeData()
-
-    override fun localsContainerData(): LocalsContainerBase? = this.nodeBase.localsContainerData()
-
-    override fun modifiers(): ModifierList? = this.nodeBase.modifiers()
-
-    override fun name(): Node? = this.nodeBase.name()
-
-    override fun pos(): Int = this.nodeBase.node.pos()
-
-    override fun propagateSubtreeFacts(): SubtreeFacts = this.nodeBase.propagateSubtreeFacts()
-
-    override fun setModifiers(p0: ModifierList?) = this.nodeBase.setModifiers(p0)
-
-    override fun subtreeFacts(): SubtreeFacts = this.nodeBase.subtreeFacts()
-
-    override fun subtreeFactsWorker(p0: com.xemantic.typescript.tsgo.ast.nodeData?): SubtreeFacts = this.nodeBase.subtreeFactsWorker(p0)
-
-    override fun templateLiteralLikeData(): TemplateLiteralLikeNodeBase? = this.nodeBase.templateLiteralLikeData()
-
-    override fun visitEachChild(p0: NodeVisitor?): Node? = this.nodeBase.visitEachChild(p0)
+    override fun goHash(): Int = 31 * super.goHash() + 31 * target.hashCode() + 31 * antecedents.hashCode()
 
     companion object {
         val ELEM: GoElem<FlowReduceLabelData> = GoElem({ FlowReduceLabelData() }, { it.goCopy() })

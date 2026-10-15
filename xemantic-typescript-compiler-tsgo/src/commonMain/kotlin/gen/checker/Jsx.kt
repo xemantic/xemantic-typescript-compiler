@@ -1537,7 +1537,7 @@ fun Checker?.getJsxNamespaceContainerForImplicitImport(location: Node?): Symbol?
     if (location != null) {
         file = com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(location)
         if (file != null) {
-            links = this!!.jsxElementLinks.get(file!!.nodeBase.asNode())
+            links = this!!.jsxElementLinks.get(file!!.asNode())
         }
     }
     if (links != null && links!!.jsxImplicitImportContainer != null) {

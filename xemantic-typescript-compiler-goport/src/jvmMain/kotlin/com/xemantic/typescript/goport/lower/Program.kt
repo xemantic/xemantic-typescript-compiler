@@ -103,6 +103,11 @@ fun inlineAtomicConv(atomicKey: String): Pair<(String) -> String, (String) -> St
     else -> Pair({ v: String -> v }, { v: String -> v })
 }
 
+/** One object per node ([Program.nodeChain], docs/goport-lowering.md § 3): the struct every node data struct embeds. */
+const val NODE_CHAIN_ROOT = "github.com/microsoft/typescript-go/internal/ast.NodeDefault"
+const val NODE_STRUCT = "github.com/microsoft/typescript-go/internal/ast.Node"
+const val NODE_DATA_IFACE = "github.com/microsoft/typescript-go/internal/ast.nodeData"
+
 /**
  * Struct types whose objects get a dense port-internal index (`runtime.GoLinkKey`, docs/goport-lowering.md § 3,
  * "Link keys"): the keys of tsgo's checker link stores, which the `core.LinkStore` override files by that index
@@ -1235,6 +1240,191 @@ class Program(
             if (other != null && other != b.key) { refuse(b.key, "$t also implements $other"); refuse(other, "$t also implements ${b.key}") }
         }
         abstractIfaces += cand
+    }
+
+    // ---- one object per node (docs/goport-lowering.md § 3, "One object per node") ----
+
+    /**
+     * Struct classes merged into ONE node hierarchy ([computeNodeChain]), by key: (the index of the embedded field the
+     * class EXTENDS instead of holding, the key of that superclass). Go allocates a node as one struct — the data struct
+     * embeds `NodeDefault`, which embeds `Node` — and `newNode` points the `Node` at it; here the data class extends its
+     * node-embedding parent, `NodeDefault` extends `nodeData`, which extends `Node`, so `data.AsNode()`, `node.data` and
+     * every selection through the chain are the same object. `NodeDefault`'s own entry names `Node`.
+     */
+    val nodeChain = HashMap<String, Pair<Int, String>>()
+
+    /** Each [nodeChain] class's chain field's IMMEDIATE type (a transparent wrapper stays itself): how Go's paths step. */
+    val nodeChainNext = HashMap<String, String>()
+
+    /** The chain classes something extends (Kotlin `open`), [NODE_STRUCT] included. */
+    val nodeChainOpen = HashSet<String>()
+
+    /** Why the whole rule was refused (null when it holds); the rule is all or nothing. */
+    var nodeChainRefusal: String? = null
+
+    fun computeNodeChain() {
+        nodeChain.clear()
+        nodeChainNext.clear()
+        nodeChainOpen.clear()
+        nodeChainRefusal = null
+        fun refuse(why: String) { if (nodeChainRefusal == null) nodeChainRefusal = why; nodeChain.clear(); nodeChainNext.clear(); nodeChainOpen.clear() }
+        if (NODE_CHAIN_ROOT !in structTypes || NODE_STRUCT !in structTypes) return refuse("ast.NodeDefault / ast.Node not in the run")
+        if (NODE_DATA_IFACE !in abstractIfaces) return refuse("ast.nodeData is not an abstract class (Program.abstractIfaces)")
+        // Every named struct's embedded struct fields: (field index, the embedded type's key).
+        val embeds = HashMap<String, List<Pair<Int, String>>>()
+        val generic = HashSet<String>()
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (i in 0 until tt.size) {
+                val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                if (n.origin != null || n.pkg != p.path) continue
+                val st = tt.under(n.id) as? com.xemantic.typescript.goport.types.StructType ?: continue
+                if (n.tparams.isNotEmpty()) generic += n.key
+                embeds[n.key] = st.fields.mapIndexedNotNull { j, f ->
+                    if (!f.embedded) return@mapIndexedNotNull null
+                    val e = tt.unalias(f.t) as? com.xemantic.typescript.goport.types.NamedType ?: return@mapIndexedNotNull null
+                    if (tt.under(e.id) !is com.xemantic.typescript.goport.types.StructType) null else j to (e.origin?.let { (tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType).key } ?: e.key)
+                }
+            }
+        }
+        // Go's embedding depth from each struct to NodeDefault (null: none).
+        val depth = HashMap<String, Int?>()
+        fun depthOf(k: String, guard: Int = 0): Int? {
+            if (k == NODE_CHAIN_ROOT) return 0
+            if (guard > 32) return null
+            if (k in depth) return depth[k]
+            val d = embeds[k].orEmpty().mapNotNull { (_, e) -> depthOf(e, guard + 1)?.plus(1) }.minOrNull()
+            depth[k] = d
+            return d
+        }
+        for (k in embeds.keys) {
+            if (k == NODE_CHAIN_ROOT || k in transparentWrappers) continue
+            val ds = embeds.getValue(k).mapNotNull { (j, e) -> depthOf(e)?.let { Triple(j, e, it) } }
+            if (ds.isEmpty()) continue
+            val min = ds.minOf { it.third }
+            val best = ds.filter { it.third == min }
+            if (best.size != 1) return refuse("$k embeds the node chain twice at depth ${min + 1}")
+            if (k in generic) return refuse("$k is generic")
+            if (k in reflectStructs) return refuse("$k is reflected")
+            nodeChain[k] = best[0].first to wrapperTarget(best[0].second)
+            nodeChainNext[k] = best[0].second
+        }
+        val nodeIdx = embeds.getValue(NODE_CHAIN_ROOT).firstOrNull { it.second == NODE_STRUCT }?.first ?: return refuse("NodeDefault does not embed Node")
+        nodeChain[NODE_CHAIN_ROOT] = nodeIdx to NODE_STRUCT
+        nodeChainNext[NODE_CHAIN_ROOT] = NODE_STRUCT
+        nodeChainOpen += nodeChain.values.map { it.second }
+        for ((t, _) in ifaceImplementers[NODE_DATA_IFACE].orEmpty()) if (wrapperTarget(t) !in nodeChain) return refuse("nodeData implementer $t is not on the chain")
+        // A chain class's fields may not shadow an ancestor's (Kotlin: one class, one member per name).
+        fun ownFields(k: String): Set<String> {
+            val p = byPath[k.substringBeforeLast('.')] ?: return emptySet()
+            val tt = TypeTable(p)
+            val n = (0 until tt.size).firstNotNullOfOrNull { (tt[it] as? com.xemantic.typescript.goport.types.NamedType)?.takeIf { t -> t.key == k && t.origin == null } } ?: return emptySet()
+            val st = tt.under(n.id) as com.xemantic.typescript.goport.types.StructType
+            val skip = nodeChain[k]?.first
+            return st.fields.mapIndexedNotNull { j, f -> if (j == skip) null else fieldName("$k.${f.name}", f.name, j) }.toSet()
+        }
+        val fieldsOf = HashMap<String, Set<String>>()
+        for (k in nodeChain.keys + NODE_STRUCT) fieldsOf[k] = ownFields(k)
+        for (k in nodeChain.keys) {
+            var a: String? = nodeChain[k]?.second
+            while (a != null) {
+                val clash = fieldsOf.getValue(k) intersect fieldsOf[a].orEmpty()
+                if (clash.isNotEmpty()) return refuse("$k field $clash shadows $a's — rename it (renames.txt)")
+                a = nodeChain[a]?.second
+            }
+        }
+        // Identity: a node and its data are one object now. Go tells *Node from a data pointer by DYNAMIC TYPE in an
+        // interface; Kotlin by class, and every data object IS a Node. Refuse any interface that may hold both, any
+        // assertion to *Node on one that may hold a data pointer, and any to a data type / nodeData on one that may hold
+        // a *Node; and any assertion to a class something extends (Kotlin's `is` would also match its subclasses).
+        val chainPtr = HashSet<String>()
+        val nodePtr = HashSet<String>()
+        val flowsTo = HashMap<String, MutableSet<String>>()
+        fun typeKey(tt: TypeTable, id: Int?): String? = id?.let { tt[it].key }
+        fun ptrElemKey(tt: TypeTable, id: Int?): String? {
+            val t = id?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.PointerType ?: return null
+            val e = tt.unalias(t.elem) as? com.xemantic.typescript.goport.types.NamedType ?: return null
+            return e.origin?.let { (tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType).key } ?: e.key
+        }
+        val asserts = ArrayList<Triple<String, String, String>>() // (operand type key, target, where)
+        for (p in packages) {
+            val tt = TypeTable(p)
+            fun target(id: Int?): String? = ptrElemKey(tt, id)?.let { "*$it" } ?: (id?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.NamedType)?.key
+            for (f in p.files) walk(f) { n ->
+                n.obj("impl")?.takeIf { it.str("k") == "iface" }?.let { im ->
+                    val to = typeKey(tt, im.int("to")) ?: return@let
+                    val from = im.int("from")
+                    val fe = ptrElemKey(tt, from)
+                    when {
+                        fe == NODE_STRUCT -> nodePtr += to
+                        fe != null && fe in nodeChain -> chainPtr += to
+                        from != null && tt.under(from) is com.xemantic.typescript.goport.types.InterfaceType -> flowsTo.getOrPut(typeKey(tt, from)!!) { HashSet() } += to
+                    }
+                }
+                when (n.str("k")) {
+                    "TypeAssertExpr" -> n.obj("type")?.let { ty -> target(ty.int("t"))?.let { asserts += Triple(typeKey(tt, n.obj("x")?.int("t")) ?: "?", it, p.path) } }
+                    "TypeSwitchStmt" -> {
+                        var x = n.obj("x")
+                        while (x != null && x.str("k") != "TypeAssertExpr") x = x.obj("x") ?: x.list("rhs").firstOrNull()
+                        val op = typeKey(tt, x?.obj("x")?.int("t")) ?: "?"
+                        n.list("clauses").forEach { c -> c.list("types").forEach { ty -> target(ty.int("t"))?.let { asserts += Triple(op, it, p.path) } } }
+                    }
+                }
+                true
+            }
+        }
+        val nodeDataKey = packages.firstNotNullOfOrNull { p -> TypeTable(p).let { tt -> (0 until tt.size).firstNotNullOfOrNull { i -> (tt[i] as? com.xemantic.typescript.goport.types.NamedType)?.takeIf { it.key == NODE_DATA_IFACE }?.key } } }
+        if (nodeDataKey != null) chainPtr += nodeDataKey
+        fun close(seed: MutableSet<String>) {
+            val work = ArrayDeque(seed)
+            while (work.isNotEmpty()) for (t in flowsTo[work.removeFirst()].orEmpty()) if (seed.add(t)) work += t
+        }
+        close(chainPtr)
+        close(nodePtr)
+        (chainPtr intersect nodePtr).firstOrNull()?.let { return refuse("interface $it may hold both a *Node and a node data pointer") }
+        for ((op, tgt, where) in asserts) {
+            val tk = tgt.removePrefix("*")
+            when {
+                tgt == "*$NODE_STRUCT" && op in chainPtr -> return refuse("x.(*Node) on $op, which may hold a data pointer ($where)")
+                (tgt.startsWith("*") && tk in nodeChain || tgt == NODE_DATA_IFACE) && op in nodePtr -> return refuse("x.($tgt) on $op, which may hold a *Node ($where)")
+                tgt.startsWith("*") && tk in nodeChainOpen && tk != NODE_STRUCT -> return refuse("x.($tgt) names a class the chain extends ($where)")
+            }
+        }
+        // Dispatch: a call reached only through chain steps is a Kotlin member call — virtual — where Go's is static.
+        // Refuse one on a class something extends whose descendant declares the same method.
+        val children = HashMap<String, MutableSet<String>>()
+        for ((k, v) in nodeChain) children.getOrPut(v.second) { HashSet() } += k
+        fun declares(k: String, m: String) = methodsByType[k].orEmpty().any { it.second.str("name") == m }
+        fun descendantDeclares(k: String, m: String): String? {
+            val work = ArrayDeque(children[k].orEmpty())
+            while (work.isNotEmpty()) { val c = work.removeFirst(); if (declares(c, m)) return c; work += children[c].orEmpty() }
+            return null
+        }
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (f in p.files) walk(f) { n ->
+                if (n.str("k") == "SelectorExpr" && n.str("selk") == "method") {
+                    val rt = n.int("recv") ?: n.obj("x")?.int("t")
+                    val b = ptrElemKey(tt, rt) ?: (rt?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.NamedType)?.key
+                    if (b != null && b in nodeChainOpen) {
+                        // Only chain steps (or none): the call lands on a chain class's member.
+                        var cur: String = b
+                        var onChain = true
+                        for (i in n.ints("path").dropLast(1)) {
+                            if (cur in transparentWrappers) { cur = transparentWrappers.getValue(cur); continue }
+                            val step = nodeChain[cur]
+                            if (step == null || step.first != i) { onChain = false; break }
+                            cur = nodeChainNext.getValue(cur)
+                        }
+                        val m = n.obj("sel")?.str("name")
+                        // A nil-safe method is a Kotlin EXTENSION: resolved statically, as Go resolves it.
+                        val member = n.obj("sel")?.int("obj")?.let { p.objects.getOrNull(it)?.str("key") }?.let { it !in extensionMethods } ?: true
+                        if (onChain && member && m != null) descendantDeclares(b, m)?.let { d -> return@walk refuse("${b.substringAfterLast('/')}.$m() is static in Go, but $d overrides it (${p.path})").let { false } }
+                    }
+                }
+                nodeChainRefusal == null
+            }
+        }
     }
 
     // ---- immutable structs (docs/goport-lowering.md § 3, "Immutable structs") ----

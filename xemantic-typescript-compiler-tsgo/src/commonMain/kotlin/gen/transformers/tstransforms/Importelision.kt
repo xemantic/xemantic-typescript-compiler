@@ -212,7 +212,7 @@ fun ImportElisionTransformer?.shouldEmitAliasDeclaration(node: Node?): Boolean {
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.ImportElisionTransformer.shouldEmitImportEqualsDeclaration 9385e508
 fun ImportElisionTransformer?.shouldEmitImportEqualsDeclaration(node: ImportEqualsDeclaration?): Boolean {
-    return this.shouldEmitAliasDeclaration(node!!.statementBase.nodeBase.asNode()) || (!com.xemantic.typescript.tsgo.ast.isExternalModule(this!!.currentSourceFile) && this.isTopLevelValueImportEqualsWithEntityName(node!!.statementBase.nodeBase.asNode()))
+    return this.shouldEmitAliasDeclaration(node!!.asNode()) || (!com.xemantic.typescript.tsgo.ast.isExternalModule(this!!.currentSourceFile) && this.isTopLevelValueImportEqualsWithEntityName(node!!.asNode()))
 }
 
 // go: github.com/microsoft/typescript-go/internal/transformers/tstransforms.ImportElisionTransformer.isReferencedAliasDeclaration 06661ce7

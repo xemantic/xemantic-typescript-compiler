@@ -1082,7 +1082,7 @@ fun getAdditionalJSSyntacticDiagnostics(file: SourceFile?, options: CompilerOpti
         node.forEachChild(walk)
         return false
     }
-    file!!.nodeBase.asNode().forEachChild(walk)
+    file!!.asNode().forEachChild(walk)
     return diags
 }
 

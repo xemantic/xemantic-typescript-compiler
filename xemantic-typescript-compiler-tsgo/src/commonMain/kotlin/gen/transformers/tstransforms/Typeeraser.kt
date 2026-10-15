@@ -262,25 +262,25 @@ fun TypeEraserTransformer?.visit(node: Node?): Node? {
             }
             178 -> {
                 val n_5: GetAccessorDeclaration? = node.asGetAccessorDeclaration()
-                if (com.xemantic.typescript.tsgo.ast.nodeIsMissing(n_5!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body) && com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node, ModifierFlags(64u))) {
+                if (com.xemantic.typescript.tsgo.ast.nodeIsMissing(n_5!!.functionLikeWithBodyBase.bodyBase.body) && com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node, ModifierFlags(64u))) {
                     return null
                 }
-                var body: Node? = this!!.transformer.visitor().visitNode(n_5!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body)
+                var body: Node? = this!!.transformer.visitor().visitNode(n_5!!.functionLikeWithBodyBase.bodyBase.body)
                 if (body == null) {
                     body = this!!.transformer.factory()!!.nodeFactory.newBlock(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoElem.ref<Node?>().nilSlice), false)
                 }
-                return this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(n_5, this!!.transformer.visitor().visitModifiers(n_5!!.accessorDeclarationBase.namedMemberBase.modifiers()), this!!.transformer.visitor().visitNode(n_5!!.name()), null, this!!.transformer.visitor().visitNodes(n_5!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, body)
+                return this!!.transformer.factory()!!.nodeFactory.updateGetAccessorDeclaration(n_5, this!!.transformer.visitor().visitModifiers(n_5!!.namedMemberBase.modifiers()), this!!.transformer.visitor().visitNode(n_5!!.name()), null, this!!.transformer.visitor().visitNodes(n_5!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, body)
             }
             179 -> {
                 val n_6: SetAccessorDeclaration? = node.asSetAccessorDeclaration()
-                if (com.xemantic.typescript.tsgo.ast.nodeIsMissing(n_6!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body) && com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node, ModifierFlags(64u))) {
+                if (com.xemantic.typescript.tsgo.ast.nodeIsMissing(n_6!!.functionLikeWithBodyBase.bodyBase.body) && com.xemantic.typescript.tsgo.ast.hasSyntacticModifier(node, ModifierFlags(64u))) {
                     return null
                 }
-                var body_1: Node? = this!!.transformer.visitor().visitNode(n_6!!.accessorDeclarationBase.functionLikeWithBodyBase.bodyBase.body)
+                var body_1: Node? = this!!.transformer.visitor().visitNode(n_6!!.functionLikeWithBodyBase.bodyBase.body)
                 if (body_1 == null) {
                     body_1 = this!!.transformer.factory()!!.nodeFactory.newBlock(this!!.transformer.factory()!!.nodeFactory.newNodeList(GoElem.ref<Node?>().nilSlice), false)
                 }
-                return this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(n_6, this!!.transformer.visitor().visitModifiers(n_6!!.accessorDeclarationBase.namedMemberBase.modifiers()), this!!.transformer.visitor().visitNode(n_6!!.name()), null, this!!.transformer.visitor().visitNodes(n_6!!.accessorDeclarationBase.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, body_1)
+                return this!!.transformer.factory()!!.nodeFactory.updateSetAccessorDeclaration(n_6, this!!.transformer.visitor().visitModifiers(n_6!!.namedMemberBase.modifiers()), this!!.transformer.visitor().visitNode(n_6!!.name()), null, this!!.transformer.visitor().visitNodes(n_6!!.functionLikeWithBodyBase.functionLikeBase.parameters), null, null, body_1)
             }
             261 -> {
                 val n_7: VariableDeclaration? = node.asVariableDeclaration()
@@ -343,7 +343,7 @@ fun TypeEraserTransformer?.visit(node: Node?): Node? {
             }
             214 -> {
                 val n_15: CallExpression? = node.asCallExpression()
-                return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(n_15, this!!.transformer.visitor().visitNode(n_15!!.expression), n_15!!.questionDotToken, null, this!!.transformer.visitor().visitNodes(n_15!!.arguments), n_15!!.leftHandSideExpressionBase.node.flags)
+                return this!!.transformer.factory()!!.nodeFactory.updateCallExpression(n_15, this!!.transformer.visitor().visitNode(n_15!!.expression), n_15!!.questionDotToken, null, this!!.transformer.visitor().visitNodes(n_15!!.arguments), n_15!!.flags)
             }
             215 -> {
                 val n_16: NewExpression? = node.asNewExpression()
@@ -351,7 +351,7 @@ fun TypeEraserTransformer?.visit(node: Node?): Node? {
             }
             216 -> {
                 val n_17: TaggedTemplateExpression? = node.asTaggedTemplateExpression()
-                return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(n_17, this!!.transformer.visitor().visitNode(n_17!!.tag), n_17!!.questionDotToken, null, this!!.transformer.visitor().visitNode(n_17!!.template), n_17!!.memberExpressionBase.node.flags)
+                return this!!.transformer.factory()!!.nodeFactory.updateTaggedTemplateExpression(n_17, this!!.transformer.visitor().visitNode(n_17!!.tag), n_17!!.questionDotToken, null, this!!.transformer.visitor().visitNode(n_17!!.template), n_17!!.flags)
             }
             236, 217, 235, 239 -> {
                 val partial: Node? = this!!.transformer.factory()!!.nodeFactory.newPartiallyEmittedExpression(this!!.transformer.visitor().visitNode(node.expression()))
@@ -400,7 +400,7 @@ fun TypeEraserTransformer?.visit(node: Node?): Node? {
             }
             274 -> {
                 val n_23: ImportClause? = node.asImportClause()
-                if (n_23!!.nodeBase.node.isTypeOnly()) {
+                if (n_23!!.isTypeOnly()) {
                     return null
                 }
                 val name: Node? = n_23!!.name()

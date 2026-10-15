@@ -610,7 +610,7 @@ internal class TsgoSyntax(private val file: TsgoSourceFile, private val fileName
             // type nodes
             "TypeReference" -> run {
                 val r = n.asTypeReferenceNode()!!
-                TypeReference(typeName = node(r.typeName!!), typeArguments = typeArguments(r.nodeWithTypeArgumentsBase.typeArguments), pos = start(n), end = end(n))
+                TypeReference(typeName = node(r.typeName!!), typeArguments = typeArguments(r.typeArguments), pos = start(n), end = end(n))
             }
             "FunctionType" -> FunctionType(
                 typeParameters = typeParameters(n), parameters = parameters(n), type = ty(n.type()!!), pos = start(n), end = end(n),
@@ -621,7 +621,7 @@ internal class TsgoSyntax(private val file: TsgoSourceFile, private val fileName
             )
             "TypeQuery" -> run {
                 val q = n.asTypeQueryNode()!!
-                TypeQuery(exprName = node(q.exprName!!), typeArguments = typeArguments(q.nodeWithTypeArgumentsBase.typeArguments), pos = start(n), end = end(n))
+                TypeQuery(exprName = node(q.exprName!!), typeArguments = typeArguments(q.typeArguments), pos = start(n), end = end(n))
             }
             "TypeLiteral" -> TypeLiteral(members = list(n.members()) { member(it) }, pos = start(n), end = end(n))
             "ArrayType" -> run {
@@ -685,7 +685,7 @@ internal class TsgoSyntax(private val file: TsgoSourceFile, private val fileName
             "ImportType" -> n.asImportTypeNode()!!.let { i ->
                 ImportType(
                     argument = ty(i.argument!!), qualifier = i.qualifier?.let { node(it) },
-                    typeArguments = typeArguments(i.nodeWithTypeArgumentsBase.typeArguments), isTypeOf = i.isTypeOf,
+                    typeArguments = typeArguments(i.typeArguments), isTypeOf = i.isTypeOf,
                     pos = start(n), end = end(n),
                 )
             }

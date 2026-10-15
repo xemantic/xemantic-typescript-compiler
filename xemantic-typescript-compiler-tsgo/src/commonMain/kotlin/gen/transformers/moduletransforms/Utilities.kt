@@ -64,7 +64,7 @@ fun rewriteModuleSpecifier(emitContext: EmitContext?, node: Node?, compilerOptio
     }
     val updatedText: String = com.xemantic.typescript.tsgo.tspath.changeExtension(node.text(), com.xemantic.typescript.tsgo.outputpaths.getOutputExtension(node.text(), compilerOptions!!.jsx))
     if (updatedText != node.text()) {
-        val updated: Node? = emitContext!!.factory!!.nodeFactory.newStringLiteral(updatedText, node.asStringLiteral()!!.literalExpressionBase.literalLikeNodeBase.tokenFlags)
+        val updated: Node? = emitContext!!.factory!!.nodeFactory.newStringLiteral(updatedText, node.asStringLiteral()!!.literalLikeNodeBase.tokenFlags)
         emitContext.setOriginal(updated, node)
         emitContext.assignCommentAndSourceMapRanges(updated, node)
         return updated
