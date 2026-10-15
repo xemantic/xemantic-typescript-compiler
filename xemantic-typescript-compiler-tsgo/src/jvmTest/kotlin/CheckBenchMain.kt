@@ -50,7 +50,7 @@ import kotlin.system.exitProcess
 /**
  * (TSGO.2) warm CHECK throughput of the ported compiler (docs/goport-perf.md § 6).
  *
- * `CheckBenchMain <tsconfig.json> [warmup=4] [iters=8] [libcache|nolib] [parallel|single] [osfs] [emit]`
+ * `CheckBenchMain <tsconfig.json> [warmup=4] [iters=8] [libcache|nolib] [parallel|single] [osfs] [emit] [histo=<dir>]`
  *
  * Every iteration does what `tsc --noEmit -p <project> --singleThreaded` does after reading the
  * files: parse the tsconfig, build a `compiler.Program` (parse + bind every root, the libs, the
@@ -60,6 +60,10 @@ import kotlin.system.exitProcess
  * (the harness's cachedCompilerHost; tsgo's language server does the same). The diagnostic count is
  * printed per iteration and must equal tsgo's (65 on tsc's own sources). `emit` then emits the program as
  * `tsc -p` does, every output produced and discarded (the compiler's work, not the disk's; bench-3way.sh's emit row).
+ * `histo=<dir>` runs one more, unmeasured iteration that writes the live-object class histogram (a full GC) into `<dir>`
+ * before the program (`0-before-program.txt`), after it is built (`1-after-program.txt`), after the syntactic and
+ * global diagnostics (`2-after-global.txt`) and after the semantic ones (`3-after-check.txt`) — what each phase leaves
+ * live (docs/goport-perf.md § 29).
  */
 fun main(args: Array<String>) {
     val config = args.getOrNull(0) ?: run {
@@ -74,10 +78,11 @@ fun main(args: Array<String>) {
     // "osfs": tsgo's own vfs/osvfs (every rebuild reads every file again, through the shim's syscall funnel)
     val osfs = "osfs" in flags
     val emit = "emit" in flags
+    val histo = flags.firstOrNull { it.startsWith("histo=") }?.removePrefix("histo=")?.let { File(it).apply { mkdirs() } }
     var failure: Throwable? = null
     val th = Thread(null, {
         try {
-            CheckBench(File(config).absoluteFile.normalize(), warmup, iters, libCache, parallel, osfs, emit).run()
+            CheckBench(File(config).absoluteFile.normalize(), warmup, iters, libCache, parallel, osfs, emit, histo).run()
         } catch (t: Throwable) {
             failure = t
         }
@@ -145,7 +150,18 @@ class LibCachingHost(private val inner: CompilerHost) : CompilerHost by inner {
     }
 }
 
-private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean, val parallel: Boolean, val osfs: Boolean, val emit: Boolean) {
+private class CheckBench(val config: File, val warmup: Int, val iters: Int, val libCache: Boolean, val parallel: Boolean, val osfs: Boolean, val emit: Boolean, val histo: File?) {
+
+    /** The live-object class histogram (`jcmd GC.class_histogram`, which collects first) written to `histo/name`. */
+    fun histogram(name: String) {
+        val server = java.lang.management.ManagementFactory.getPlatformMBeanServer()
+        val text = server.invoke(
+            javax.management.ObjectName("com.sun.management:type=DiagnosticCommand"),
+            "gcClassHistogram", arrayOf<Any?>(arrayOf<String>()), arrayOf(Array<String>::class.java.name),
+        ) as String
+        File(histo!!, name).writeText(text)
+    }
+
 
     fun run() {
         TsgoPort.init()
@@ -172,7 +188,10 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
         // ZGC's "… Cycles" beans time whole concurrent cycles; only its "… Pauses" beans are pauses (G1's beans are pauses)
         fun gcMs() = gcBeans.filter { !it.name.endsWith("Cycles") }.sumOf { it.collectionTime.coerceAtLeast(0) }
         var checksum = 0L
-        for (i in 0 until warmup + iters) {
+        val runs = warmup + iters + if (histo != null) 1 else 0
+        for (i in 0 until runs) {
+            val probe = histo != null && i == runs - 1
+            if (probe) histogram("0-before-program.txt")
             val c0 = threads.currentThreadCpuTime
             val a0 = threads.currentThreadAllocatedBytes
             val ta0 = threads.totalThreadAllocatedBytes
@@ -184,6 +203,7 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(configName, null, null, host, null)
             val t1 = System.nanoTime()
             val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = parsed, singleThreaded = if (parallel) com.xemantic.typescript.tsgo.core.TSFalse else TSTrue))!!
+            if (probe) histogram("1-after-program.txt")
             val t2 = System.nanoTime()
             val ctx = com.xemantic.typescript.tsgo.go.context.background()
             val all = ArrayList<Diagnostic>()
@@ -193,8 +213,10 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             add(program.getProgramDiagnostics())
             add(program.getSyntacticDiagnostics(ctx, null))
             add(program.getGlobalDiagnostics(ctx))
+            if (probe) histogram("2-after-global.txt")
             val t3 = System.nanoTime()
             add(program.getSemanticDiagnostics(ctx, null))
+            if (probe) histogram("3-after-check.txt")
             val t4 = System.nanoTime()
             emitted.clear()
             if (emit) program.emit(ctx, com.xemantic.typescript.tsgo.compiler.EmitOptions())
@@ -213,12 +235,12 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
                     GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))
             }.sorted().joinToString("\n").hashCode()
             checksum = checksum * 31 + n
-            val tag = if (i < warmup) "warm" else "meas"
+            val tag = if (probe) "histo" else if (i < warmup) "warm" else "meas"
             println(
                 "iter ${i + 1} $tag total_ms=%.1f cpu_ms=%.1f gc_ms=%.0f alloc_mb=%.0f talloc_mb=%.0f config_ms=%.1f program_ms=%.1f syn_ms=%.1f check_ms=%.1f emit_ms=%.1f files=%d diags=%d emitted=%d digest=%08x"
                     .format(ms, cpu, gc, alloc, talloc, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6, (t4 - t3) / 1e6, (t5 - t4) / 1e6, program.getSourceFiles().len, n, emitted.size, digest),
             )
-            if (i >= warmup) {
+            if (i >= warmup && !probe) {
                 totals += ms
                 cpus += cpu
                 gcs += gc

@@ -1316,3 +1316,67 @@ Kept as exact work removed. Pin: `CheckerSmokeTest` "a cached relation in one di
 What transfers is therefore small: tsc-rs's lead over tsgo is the cost of Go's object graph itself (and of our
 port's, which mirrors it), not a missing cache. Matching it would mean leaving the mechanical port for the
 checker's core data model.
+
+## 29. What a tsc-rs-style AST would buy: the AST's share of time, allocation and live heap (2026-10-15)
+
+The question: should the port replace tsgo's pointer AST with its own dense model (tsc-rs's column store, § 28)?
+Priced on tsc's compiler profile (`build/bench/tsc-project-4d4f005c`, 123 files with the libs, 957,687 nodes),
+warm, single-threaded, `nolib`, OpenJDK 26.0.2, `-Xms2g -Xmx6g`, G1. Median 3.00 s per rebuild (2.74-3.36,
+n=8), 1.13 GB allocated per rebuild, 65 diagnostics, digest equal on every iteration.
+
+**Live heap** — `CheckBenchMain … histo=<dir>` (new): class histograms (each a full GC) around the phases of one
+extra unmeasured iteration.
+
+| phase leaves live | MB | objects |
+|---|---:|---:|
+| `newProgram` (parse + resolution) | **188.4** | 7.80 M |
+| syntactic + global diagnostics (bind) | 21.6 | 0.51 M |
+| semantic diagnostics (the checker) | 117.2 | 2.88 M |
+
+The AST is **58% of the program's live heap** after a full check: **197 bytes and 8.1 objects per node**. Go's
+tsgo allocates a node as ONE struct (the data struct embeds `Node`: 48 bytes of header plus the payload); tsc-rs's
+header is ~42 bytes. Our per-node objects, by class: `Node` 40 B, `core.TextRange` 24 B (`loc` is an object;
+1.15 per node), `atomic.Uint64` 24 B (`id` is an object), `NodeDefault` 16 B (one per node), the kind's data
+class, and one object per EMBEDDED Go base struct (`FlowNodeBase` 0.59 per node, `CompositeBase` + its
+`atomic.Uint32`, `DeclarationBase`, `StatementBase`, `TypeNodeBase`, `ModifiersBase`, …).
+
+**CPU** — async-profiler, 40 s of steady-state rebuilds (`scripts/tsgo-jvm-profile.sh warm … cpu single 45 40`).
+Process: bench thread 71.6%, GC 20.3% (16.1% parallel workers + 4.2% concurrent), JIT 8.0%. The bench thread by
+phase (any parser/scanner frame = parse, else binder = bind, else checker = check): **parse 11.0%, bind 11.2%,
+check 76.3%**. Inside check, by the nearest ported frame owning the leaf: checker code 54.0%, **`ast` accessors and
+walks 12.5%**, `GoMap` 9.0%, `GoSlice` 7.2%, VM dispatch stubs 3.4% (about half `nodeData`, § 7.2), node/symbol
+side tables (`LinkStore`/`GoLinkTable`) 3.2%, xxh3 2.9%.
+
+**Allocation** — async-profiler `alloc`, same run shape: **parse 34.4%** (of it `TextRange` 22.6%, `Node` 11.0%,
+`GoSlice` 9.8%, `Object[]` 6.8%, `atomic.Uint64` 6.0%), bind 4.1%, **check 61.0%** (of it `GoSlice` headers 29.0%,
+`Object[]` 14.9%, `xxh3.Uint128` 5.6%, `Tuple2` 5.1%, `FlowType` 4.2% — none of it AST).
+
+**The ceiling.** If the AST cost NOTHING — parse free, every `ast` accessor free, node side tables free, the
+`nodeData` stubs free, and GC charged for the AST in proportion to its allocation — the process would save about
+parse 7.9% + accessors 6.8% + side tables 1.8% + stubs 0.9% + GC ~7% ≈ **24% of process CPU** (up to ~32% if the
+binder's whole 8.0% is counted as AST work, which it is not: it allocates symbols and flow nodes). A real dense
+model does not make those free: tsc-rs parses ~2.4x faster than tsgo (§ 28), i.e. saves ~58% of parse, so a
+realistic yield is **~10-15% of process CPU — about 0.3-0.45 s of this 3.0 s rebuild** — and roughly **halves the
+live heap**. tsc-rs's lead on this profile is 1.9x on single-threaded check CPU (1.44 s vs 2.76 s, § 28): 54% of our
+check time is the checker's own code and 16% is `GoSlice`/`GoMap`, so the AST is not where that lead lives.
+
+**What the table points at instead — porter rules, not a redesign.** Most of the 8.1 objects per node are lowering
+artifacts, not tsgo's design: a value struct held by value (`TextRange`, `atomic.Uint64`/`Uint32`) and an embedded
+base struct each become a separate heap object. Inlining the value structs as primitive fields and flattening
+embedded bases into their holder (the direction § 19 started) would bring a node to ~2 objects and roughly Go's
+density (an estimate: ~100 B per node, ~95 MB instead of 188), and remove most of `TextRange`'s 22.6% of parse
+allocation (§ 7.2 already named its three per node). It survives tsgo upgrades, unlike a hand-written AST. Its
+risk is address-taken embedded fields (`&n.FlowNodeBase`), which the porter would have to keep addressable.
+
+Reproduce:
+
+```bash
+. scripts/lib/tsgo-bench-classpath.sh; CP="$(xtsc_tsgo_bench_classpath "$WORK")"
+XTSC_TSGO_LIB_DIR=$PWD/tools/tsgo-7.0.2/lib java -Xms2g -Xmx6g -cp "$CP" com.xemantic.typescript.tsgo.CheckBenchMainKt \
+  build/bench/tsc-project-4d4f005c/tsconfig.json 6 8 nolib single histo=$WORK/histo
+scripts/tsgo_histo_diff.py $WORK/histo/0-before-program.txt $WORK/histo/1-after-program.txt   # 1→2, 2→3 likewise
+scripts/tsgo-jvm-profile.sh warm build/bench/tsc-project-4d4f005c/tsconfig.json cpu single 45 40
+scripts/tsgo-jvm-profile.sh warm build/bench/tsc-project-4d4f005c/tsconfig.json alloc single 45 30
+scripts/tsgo_ap_phases.py build/tsgo-jvm-profile/warm-cpu.collapsed cpu check-bench
+scripts/tsgo_ap_phases.py build/tsgo-jvm-profile/warm-alloc.collapsed alloc
+```
