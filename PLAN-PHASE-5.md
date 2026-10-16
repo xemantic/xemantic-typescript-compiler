@@ -32,7 +32,7 @@ it is the live Phase 18 queue.
 - `docs/reposition` (d805fc67a, one commit on main) replaces them with the port's: tsgo 7.0.2 ported by
   `-goport`; `TsgoLanguageService` / `TsgoProject` in section 1 (`Project` deprecated); `@types/node` per-module;
   tsc 7's command line; bench run 20261016T075835Z; the four parity gates + native replay; snapshot coordinates;
-  typescript-go's Apache-2.0 / NOTICE. Positioning prose unchanged. Awaits the owner's review before merging to main.
+  typescript-go's Apache-2.0 / NOTICE. Positioning prose unchanged. Owner approved 2026-10-16; on main as 1da3e9801.
 
 ### Round (TSGO.8-d) — `-project` deprecated
 
