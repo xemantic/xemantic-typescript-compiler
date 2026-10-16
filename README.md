@@ -1,7 +1,7 @@
 # xemantic-typescript-compiler
 
-**TypeScript for the JVM and Kotlin.** The TypeScript compiler — scanner, parser,
-binder, **type checker**, transformer and emitter — rewritten from scratch in Kotlin
+**TypeScript for the JVM and Kotlin.** TypeScript 7's own compiler — `tsgo`'s scanner,
+parser, binder, **type checker**, emitter and language service — ported from Go to Kotlin
 Multiplatform. **No Node.js and no Go anywhere in the toolchain.**
 
 [<img alt="GitHub Release Date" src="https://img.shields.io/github/release-date/xemantic/xemantic-typescript-compiler">](https://github.com/xemantic/xemantic-typescript-compiler/releases)
@@ -28,55 +28,73 @@ This project exists for the places `tsgo` cannot go:
 
 1. **Type-check and compile TypeScript with nothing but a JVM** — no Node, no Go, no
    npm anywhere in the toolchain. One artifact, or a native binary.
-2. **Embed a whole-program TypeScript checker in a Kotlin application** — the entire
-   IDE surface (hover, definitions, completions, rename, project diagnostics) is a
-   function call on a live object, not an LSP process you shell out to.
+2. **Embed TypeScript's own checker in a Kotlin application** — the type oracle and the
+   IDE surface (hover, definitions, references, completions, diagnostics) are function
+   calls on a live object, not an LSP process you shell out to.
 3. **Generate Kotlin externals with resolved types** — from the *checked* program, not
    from `.d.ts` syntax. The gap [Dukat](https://github.com/Kotlin/dukat) and
-   [Karakum](https://github.com/karakum-team/karakum) never closed. *(in progress —
-   the current demo target)*
+   [Karakum](https://github.com/karakum-team/karakum) never closed.
 4. **Run TypeScript as JVM bytecode** — a backend lowers the checked program to Kotlin
    IR and hands it to kotlinc's own JVM phases. Real npm libraries already run this way.
 
-## 1. Embed it — the whole IDE surface is a function call
+### Why a port, and not a rewrite
 
-No LSP process, no protocol, no `tsserver`. Open a project, feed it your unsaved editor
-buffers, ask it questions:
+The checker is not a re-implementation chasing `tsc`'s behaviour: it *is* `tsgo` 7.0.2,
+lowered from Go to Kotlin by a porter in this repository (`-goport`: mechanical,
+go/types-driven, with recorded overrides — the generated sources are never hand-edited).
+So the answers are TypeScript's own answers — the same diagnostics, the same JavaScript,
+the same hover — and code checks here exactly as it does in VS Code. Following a new
+TypeScript release is a re-run of the porter, not a parity project.
+
+## 1. Embed it — the checker is a function call
+
+No LSP process, no protocol, no `tsserver`. Open a project and ask it questions — the
+language service:
 
 ```kotlin
-val project = Project.open("/path/to/my-app")
+val ls = TsgoLanguageService.open("/path/to/my-app/tsconfig.json")
 
-project.updateFile("/path/to/my-app/src/a.ts", editorBuffer)  // never touches disk
-
-project.quickInfoAt(file, offset)          // hover
-project.definitionsAt(file, offset)        // go to definition
-project.completionsAt(file, offset)        // completions, with accessibility + keywords
-project.signatureHelpAt(file, offset)      // every overload
-project.referencesAt(file, offset)         // find references, read vs write
-project.renameAt(file, offset, "newName")  // a plan — applied and RECOMPILED before you see it
-project.fileSemantics(file)                // hover + definition for a whole file, in ONE compile
-project.diagnostics()                      // the WHOLE project — a call tsgo's LSP does not have
+ls.hover(file, offset)              // hover, as tsgo's language server renders it
+ls.definition(file, offset)         // go to definition
+ls.references(file, offset)         // find references
+ls.completions(file, offset)        // completions
+ls.diagnostics(file)                // a file's diagnostics
+ls.request("textDocument/signatureHelp", paramsJson)  // any request the server answers, as JSON
 ```
 
-Everything crossing that surface is a value — no AST, no `Symbol`, no `Type` — and every
-answer is either right or an explicit refusal *with its reason*. A go-to-definition that
-jumps to a same-spelled binding looks like it worked, so this compiler declines instead.
+— and the type oracle, `tsc --api`'s session in process:
 
-→ **[docs/language-service.md](docs/language-service.md)** — cost model, position
-conventions, and every known gap, listed.
+```kotlin
+val project = TsgoProject.open("/path/to/my-app/tsconfig.json")
 
-## 2. Generate Kotlin externals — with resolved types *(in progress)*
+val type = project.typeAtPosition(file, offset)
+project.typeToString(type!!)
+project.propertiesOfType(type)
+project.isTypeAssignableTo(source, target)
+project.resolvedSignature(project.nodeAt(file, offset)!!)  // which overload a call picked
+```
+
+Every answer comes out of the very handler code `tsc --lsp` and `tsc --api` run for that
+request, and is gated against the real `tsgo` binary: **21,614 / 21,614** language-service
+answers and **594,007 / 594,007** API answers equal. A project is read through an `FS` you
+can supply, so unsaved editor buffers never have to touch disk.
+
+The earlier embedding API — `-project`'s `Project`, built on the hand-written checker this
+port replaced — is **deprecated**; see its KDoc for what has not carried over yet.
+
+→ **[docs/goport-ls.md](docs/goport-ls.md)** and **[docs/goport-api.md](docs/goport-api.md)**
+
+## 2. Generate Kotlin externals — with resolved types
 
 Every Kotlin/JS interop generator so far has translated **declaration syntax**: Dukat
 (archived) and Karakum both walk `.d.ts` ASTs and meet the same wall — conditional
 types, mapped types, overload selection, generic instantiation — everything whose answer
 is not in the syntax. `xtsc` sits on the other side of that wall: it *has* the checked
-program. The externals generator consumes the checker's resolved type graph — the same
-facts interface the JVM backend already consumes — and emits Kotlin `external`
-declarations whose types are the checker's answers, with one **documented** fallback for
-every shape Kotlin cannot express, never a silent `dynamic`.
+program. The externals generator consumes the checker's resolved types and emits Kotlin
+`external` declarations whose types are the checker's answers, with one **documented**
+fallback for every shape Kotlin cannot express, never a silent `dynamic`.
 
-Status: every rung of the fixture ladder is green, and the gate at each one is that the
+Every rung of the fixture ladder is green, and the gate at each one is that the
 generated Kotlin **compiles** — as Kotlin/JS, annotations and all, not just as metadata:
 
 | library | what is generated | Kotlin errors |
@@ -85,12 +103,11 @@ generated Kotlin **compiles** — as Kotlin/JS, annotations and all, not just as
 | [`smol-toml`](https://github.com/squirrelchat/smol-toml) 1.7.1 | 7 declaration files | 0 |
 | [RxJS](https://github.com/ReactiveX/rxjs) 7.8.2 | all 250 files of `dist/types` | 0 |
 | `typescript.d.ts` 6.0.3 | 11,448 lines in, 9,792 lines of Kotlin out | 0 |
-| [`@types/node`](https://www.npmjs.com/package/@types/node) 20.19.43 | 66 files | 0 |
+| [`@types/node`](https://www.npmjs.com/package/@types/node) 20.19.43 | 51 modules, one Kotlin package each, compiled together | 0 |
 
-Still open: a type package that declares **many modules** (`@types/node` declares `net`,
-`fs`, `fs/promises`, …) is generated into one flat scope today, so the 112 names it
-declares in more than one module — `Socket` in both `dgram` and `net` — collapse
-first-wins. Per-module generation is the next rung.
+A package that declares many modules is generated per module: `Socket` lands in both
+`node.dgram` and `node.net`, and `Socket extends stream.Duplex` crosses packages as a real
+Kotlin supertype.
 
 ## 3. Run TypeScript on the JVM — as bytecode
 
@@ -108,6 +125,8 @@ Real, unmodified npm libraries already compile and run this way:
 | [`mitt`](https://github.com/developit/mitt) 3.0.1 | runs, and is imported as a module by a second file | **1.41× faster** (61 ns/emit) |
 | [`smol-toml`](https://github.com/squirrelchat/smol-toml) (1,082 lines, 7 files) | parses a TOML document, verified against Python's `tomllib` | 2.08× slower (47 µs/parse) |
 
+(The timings predate the backend's move onto the port's checker.)
+
 This works because the backend is the first consumer of the type graph: which overload a
 call picked, what a union narrowed to, whether `+` concatenates — the checker already
 knows. Stopping at IR is the point: JS, Native and Wasm are then a change of backend phase,
@@ -118,86 +137,92 @@ cannot yet lower)
 
 ## 4. And still a full compiler CLI
 
-Point it at your `tsconfig.json`, get `tsc`'s diagnostics and `tsc`'s JavaScript:
+`xtsc` *is* `tsc` 7's command line, ported — same flags, same output, same exit codes:
 
 ```shell
 xtsc --noEmit -p .          # type-check
 xtsc -p . --outDir build    # type-check and emit
 xtsc --watch -p .           # stay up, rebuild on change
+xtsc -b                     # project references, with --incremental build info
 ```
 
-The JVM is slow to start and fast once running, so the CLI splits the two: a compile
-daemon holds the warm compiler, and a **native** thin client (7 ms, no JVM) talks to it.
+It ships as a GraalVM native image (`xtsc-linux-x64`, built with profile-guided
+optimization), which starts in milliseconds and is the way to run it from a shell. On the
+JVM, start-up dominates a one-shot run, so the JVM launcher (`scripts/xtsc`) adds a compile
+daemon that holds the warm compiler, and a Kotlin/Native thin client (7 ms) talks to it:
 
 ```shell
-xtsc --serve &        # the warm compiler
-xtsc --daemon -p .    # ~2 ms of protocol on top of a warm rebuild
+scripts/xtsc --serve &        # the warm compiler
+scripts/xtsc --daemon -p .    # ~2 ms of protocol on top of a warm rebuild
 ```
-
-Also available: `--workers N` (parallel share-nothing checking), `--incremental`, and a
-GraalVM native image for one-shot use where there is nothing to keep warm.
 
 ## How fast, exactly
 
 Speed is published for honesty, not as the pitch. TypeScript's own compiler — 78 files,
-194,702 LOC — on CI (`ubuntu-latest`, JDK 26):
+194,702 LOC — on CI (`ubuntu-latest`, JDK 26), every compiler reporting the same 65 errors:
 
 | | check-only | emit |
 |---|---:|---:|
-| **xtsc** (warm JVM) | **3.96 s** | **4.82 s** |
-| xtsc (GraalVM native image) | 6.00 s | 7.06 s |
-| `tsc` 6.0.3 — TypeScript's JavaScript compiler | 10.73 s | 13.16 s |
-| `tsc` 7.0.2 — `tsgo`, the Go rewrite | 1.70 s | 2.44 s |
+| **xtsc** (native image) | **2.42 s** | **3.54 s** |
+| **xtsc** (warm JVM) | **1.91 s** | **2.67 s** |
+| xtsc (cold JVM, one-shot) | 14.62 s | 18.32 s |
+| `tsc` 7.0.2 — `tsgo`, the Go compiler | 1.77 s | 2.50 s |
+| `tsc` 6.0.3 — TypeScript's last JavaScript compiler | 11.26 s | 13.90 s |
 
-Both rows are called `tsc`, so read the comparison carefully: **2.7× faster than the
-JavaScript compiler, 2.3× slower than the Go one** — and the Go one is what
-`npm install typescript` puts on your machine today. Every push re-runs this; the whole
-series is in [bench-history/](bench-history/README.md).
+Across recent runs the warm port takes **1.1–1.3×** `tsgo`'s time and the native binary
+about **1.4×**.
+A cold JVM is not a way to run a compiler — use the native image or the daemon. Shared CI
+runners are noisy, so read the ratios, not the seconds: every push re-runs this, and the
+whole series is in [bench-history/](bench-history/README.md).
 
 ## How correct
 
-- **17,169 tests, 0 failures.** 8,837 of them are generated from **TypeScript's own test
-  suite** and compare emitted JavaScript and error baselines **character-for-character**
-  against the output of pristine `tsc`.
-- It **compiles the TypeScript compiler itself** — all eight source profiles, up to 273
-  files — with **zero false positives**. On those 194,702 lines it reports 46 errors where
-  `tsc` reports 65; the gap is checks not yet implemented, not disagreement.
-- The corpus also runs on **Kotlin/Native**, and the native image's output is verified
-  byte-identical to the JVM's on every build.
+The port is gated against the `tsgo` 7.0.2 binary itself — never against hand-written
+expectations:
+
+- **Diagnostics**: all **13,127** configurations of the compiler test suites `tsgo` runs
+  (its own and TypeScript's conformance suite) report exactly what `tsgo` reports.
+- **Emit**: the same 13,127 configurations emit byte-identical JavaScript, declarations
+  and source maps, and TypeScript's own 78 sources emit a `diff -r`-identical tree.
+- **Language service and API**: 21,614 / 21,614 and 594,007 / 594,007 answers equal.
+- **Command line**: 120 / 121 recorded `tsc` runs equal, including `--build` and
+  `--incremental` (the 121st, type-fest, needs an 8 GB heap and is skipped below it).
+- **Native**: the shipped image replays `tsgo`'s recorded output — stdout, exit status and
+  written files — with no difference, on every native build; the port's runtime suite
+  also runs on **Kotlin/Native**.
 
 ## Getting it
 
-Pre-1.0 and not released yet — build it:
+Pre-1.0 and not released yet. Snapshots are published to the
+[Maven Central snapshot repository](https://central.sonatype.com/repository/maven-snapshots/):
+
+```kotlin
+repositories {
+    maven("https://central.sonatype.com/repository/maven-snapshots/")
+}
+
+dependencies {
+    implementation("com.xemantic.typescript:xemantic-typescript-compiler:0.1.0-SNAPSHOT")
+}
+```
+
+Or build it:
 
 ```shell
 ./gradlew assemble                                       # JVM distribution + scripts/xtsc
 ./gradlew :xemantic-typescript-compiler-tsgo:nativeImage # the native binary (needs GraalVM)
 ```
 
-The published coordinates (group `com.xemantic.typescript`) will be
-`xemantic-typescript-compiler` for the compiler and
-`xemantic-typescript-compiler-project` for the embedding API, which pulls the core in
-transitively:
-
-```kotlin
-dependencies {
-    implementation("com.xemantic.typescript:xemantic-typescript-compiler-project:$xtscVersion")
-}
-```
-
 ## Honest limits
 
-- **Other people's code still finds bugs.** Conformance was driven by `tsc`'s own sources,
-  which is one codebase's style. Pointing the checker at an unfamiliar library still
-  surfaces false positives (`yaml` 2.7.0: 24 errors where `tsgo` reports 5) — each one a
-  real defect, and each one gets fixed.
-- **The CLI flag surface is a subset of `tsc`'s** — enough for a `tsconfig.json`-driven
-  build, not for every corner of the option space.
-- **The language service is embeddable, and slower than `tsgo`'s LSP.** A semantic query
-  narrows the rebuild to the file you asked about — measured 93–217 ms warm on
-  TypeScript's own 78 sources — where `tsgo`'s LSP answers the same hover in 12–18 ms,
-  because it types nodes lazily and this checker types the file. Batch your carets
-  (`fileSemantics`) and debounce.
+- **It is as fast as a JVM can make Go's design, not faster.** Warm it is close to `tsgo`;
+  as a native binary it is behind; as a cold JVM process it is slow (see above).
+- **The language service is embeddable, but not yet incremental.** An edit means opening
+  the project again; the measured design for in-session updates is queued. Rename and
+  auto-import completions are not ported yet (configure
+  `{"suggest": {"autoImports": false}}`).
+- **It follows one TypeScript version.** It is `tsgo` 7.0.2; a newer TypeScript arrives
+  when the porter is re-run against it.
 - **The JVM backend is a spike.** It refuses what it cannot lower rather than guessing.
 
 ## License
@@ -206,3 +231,7 @@ dependencies {
 **[output exception](LICENSE-EXCEPTION)**: anything this compiler produces from *your*
 input — JavaScript, declarations, source maps, diagnostics, emitted runtime helpers — is
 yours, unencumbered.
+
+The ported compiler is derived from [typescript-go](https://github.com/microsoft/typescript-go),
+Copyright (c) Microsoft Corporation, licensed under Apache-2.0; its `LICENSE` and
+`NOTICE.txt` ship inside the artifact (`META-INF/typescript-go/`) and in the module's sources.
