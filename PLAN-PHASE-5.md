@@ -25,6 +25,18 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.8-a) — Arm B's generator; the incremental bench on the port
+
+- `scripts/gen-many-small-project.py` gained `--lib` and `--edits`; `… build/bench/many-small-2400-dom 48 50 --lib
+  es2020,dom --edits build/bench/inc90-edits-app` reproduces the local fixture: `src/` (2,401 files) and the four
+  variants `diff -r`-identical, tsconfig JSON-equal (the old one was the generator's output re-serialised).
+- `scripts/tsgo-incremental-bench.sh` takes `TSC_BIN`; `scripts/inc46-vs-tsgo.sh` is now that harness over the port's
+  native image (PGO, then plain; `XTSC_BIN` overrides; REFUSED exit 2 without one). The `-project` in-session arm retires
+  with `-project`. The port honours `--incremental` (writes `tsconfig.tsbuildinfo`, same TS2322 row as tsgo).
+- Indicative (2 reps, the 2026-10-14 PGO image — before (TSGO.9)): port 735 / 559 / 644 / 633 ms, tsgo 409 / 253 / 298 /
+  316 (cold / no-op / body / signature), rows 1 everywhere. The port's no-op at 559 ms is ~2.2x tsgo's: the per-process
+  floor, not checking — a target for (TSGO.10)'s in-session system, not this item.
+
 ### Round (TSGO.8) — the owner's decisions recorded
 
 - Owner 2026-10-16, answering the § 7 list: retire `-core`; `-project` deprecated (option b), its incremental learnings
@@ -656,7 +668,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   generator before anything is deleted; (7) a real project build defaults to TypeScript 7.0 — the port is 7.0 by
   construction, so this lands with (8-b). (P18.86)'s harness arm and `-core`'s `simulatedVersion` default go with `-core`.
   Sub-steps, one commit each:
-  - [ ] (8-a) a checked-in generator for the Arm B fixture (`build/bench/many-small-2400-dom`), and
+  - [x] (8-a) a checked-in generator for the Arm B fixture (`build/bench/many-small-2400-dom`), and
     `scripts/inc46-vs-tsgo.sh` pointed at the port.
   - [ ] (8-b) the shipped native image is the port's: `native.yml` uploads the port's PGO image as `xtsc-linux-x64`
     (binary `xtsc`); `-cli` becomes the lean one-shot CLI over `-tsgo`; `-cli`'s own image task,

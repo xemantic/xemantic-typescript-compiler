@@ -15,6 +15,8 @@
 #
 # usage: tsgo-incremental-bench.sh <projectDir> <editFileRelative> <editsDir> [reps]
 #   <editsDir> holds orig.ts / body.ts / sig.ts (or the legacy binder.<v>.ts names).
+#   TSC_BIN=<binary> times another tsc-compatible command line instead of tsgo's — how
+#   `scripts/inc46-vs-tsgo.sh` runs the port through the identical protocol.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,7 +24,7 @@ P="${1:-build/bench/tsgo-bench}"
 EDIT_REL="${2:-src/compiler/binder.ts}"
 EDITS="${3:-/tmp/claude-1000}"
 REPS="${4:-3}"
-TSGO=tools/tsgo-7.0.2/lib/tsc
+TSGO="${TSC_BIN:-tools/tsgo-7.0.2/lib/tsc}"
 F="$P/$EDIT_REL"
 
 [[ -x $TSGO ]] || { echo "REFUSED: no tsgo binary at $TSGO" >&2; exit 2; }
@@ -55,6 +57,7 @@ run() {
 }
 med() { printf '%s\n' "$@" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}'; }
 
+echo "compiler: $TSGO"
 echo "project : $P"
 echo "edited  : $EDIT_REL"
 echo "edits   : $EDITS"

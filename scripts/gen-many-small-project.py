@@ -12,12 +12,39 @@ from the layer below, declares a handful of types and functions, and exports
 them. One file carries a deliberate type error, because
 `FloorDecompositionMain` REFUSES a project whose full build is silent (a floor
 of zero would then be no evidence that the checker was narrowed).
-"""
-import os, sys, shutil
 
-out = sys.argv[1]
-layers = int(sys.argv[2]) if len(sys.argv) > 2 else 24
-per_layer = int(sys.argv[3]) if len(sys.argv) > 3 else 50
+usage: gen-many-small-project.py <out> [layers] [perLayer] [--lib a,b] [--edits <dir>]
+
+`--lib` replaces `"lib": ["es2020"]` (an unset `lib` would mean `dom`, ~2,242 globals
+against ~185 — a front-end figure is a claim about this line too). `--edits` writes the
+incremental benches' edit variants of `src/layer00/m0_0.ts` (the deepest dependency) to
+<dir>: `orig.ts`, `body.ts` (one line inside a function body, no exported signature
+moves), `sig.ts` (an export appended), `sigtop.ts` (the same export prepended).
+
+**Arm B** of docs/perf/incremental-vs-tsgo.md, `build/bench/many-small-2400-dom` with its
+variants in `build/bench/inc90-edits-app`, is exactly:
+
+    scripts/gen-many-small-project.py build/bench/many-small-2400-dom 48 50 \
+        --lib es2020,dom --edits build/bench/inc90-edits-app
+"""
+import json, os, sys, shutil
+
+args = sys.argv[1:]
+lib = ["es2020"]
+edits = None
+for flag in ("--lib", "--edits"):
+    if flag in args:
+        i = args.index(flag)
+        if i + 1 >= len(args):
+            sys.exit(f"REFUSED: {flag} needs a value")
+        if flag == "--lib":
+            lib = args[i + 1].split(",")
+        else:
+            edits = args[i + 1]
+        del args[i:i + 2]
+out = args[0]
+layers = int(args[1]) if len(args) > 1 else 24
+per_layer = int(args[2]) if len(args) > 2 else 50
 
 shutil.rmtree(out, ignore_errors=True)
 src = os.path.join(out, "src")
@@ -28,7 +55,7 @@ with open(os.path.join(out, "tsconfig.json"), "w") as f:
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "lib": ["es2020"],
+    "lib": LIB,
     "target": "es2020",
     "module": "esnext",
     "moduleResolution": "bundler",
@@ -38,7 +65,7 @@ with open(os.path.join(out, "tsconfig.json"), "w") as f:
   },
   "include": ["src/**/*"]
 }
-""")
+""".replace("LIB", json.dumps(lib)))
 
 def mod(layer, idx):
     return f"m{layer}_{idx}"
@@ -102,6 +129,24 @@ for layer in range(layers):
 with open(os.path.join(src, "faulty.ts"), "w") as f:
     f.write('import { m0_0Value } from "./layer00/m0_0";\n\n'
             'export const broken: number = m0_0Value.id;\n')
+
+if edits is not None:
+    shutil.rmtree(edits, ignore_errors=True)
+    os.makedirs(edits)
+    with open(os.path.join(src, "layer00", "m0_0.ts")) as f:
+        orig = f.read()
+    anchor = "    parts.push(tag.toUpperCase());\n"
+    extra = "export const m0_0Extra: number = 1;\n"
+    assert orig.count(anchor) == 1, "the body edit's anchor moved"
+    variants = {
+        "orig": orig,
+        "body": orig.replace(anchor, anchor + "    if (parts.length > 9000) parts.pop();\n"),
+        "sig": orig + "\n" + extra,
+        "sigtop": extra + "\n" + orig,
+    }
+    for v, text in variants.items():
+        with open(os.path.join(edits, v + ".ts"), "w") as f:
+            f.write(text)
 
 n = sum(len(files) for _, _, files in os.walk(src))
 total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(src) for f in fs)
