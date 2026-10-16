@@ -216,6 +216,11 @@ is plumbing and native packaging, all of which can move. Do not delete before st
 
 ## 7. What the owner must decide
 
+**DECIDED 2026-10-16** (PLAN-PHASE-5.md (TSGO.8)): retire `-core`; `-project` is deprecated in favour of the port's
+`TsgoProject` / `TsgoLanguageService`, with its incremental design kept for a later port ((TSGO.10)); the port's
+image replaces `-cli`'s as `xtsc-linux-x64`; the tsgo-based module takes the `xemantic-typescript-compiler`
+coordinates and the `xtsc` binary name; a real project build defaults to TypeScript 7.0.
+
 1. **Retire `-core` at all** — recommended yes, after stage 2's native measurement.
 2. **The `-project` API**: keep it as a facade over the port (compatibility for the IntelliJ plugin) or
    replace it with a tsgo-shaped API (`TsgoProject`/`TsgoLanguageService` grown into a project system).

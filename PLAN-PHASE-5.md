@@ -25,6 +25,14 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.8) — the owner's decisions recorded
+
+- Owner 2026-10-16, answering the § 7 list: retire `-core`; `-project` deprecated (option b), its incremental learnings
+  kept for later — queued as (TSGO.10); the port's image replaces `-cli`'s `xtsc-linux-x64`; the tsgo-based module is
+  the default artifact; check in a generator for Arm B; a real project build defaults to TypeScript 7.0 (the port is 7.0
+  by construction). (TSGO.8) is split into (8-a)..(8-e); (8-e), the deletion itself, waits for a release to ship the
+  deprecation — a proposal, not yet decided.
+
 ### Round (TSGO.9-c) — ONE OBJECT PER NODE; (TSGO.9) DONE
 
 - `Program.computeNodeChain` (all or nothing): every struct whose embedded fields reach `ast.NodeDefault` extends the
@@ -640,17 +648,34 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   § 31). **(9-c) DONE 2026-10-15** (parallel −7.8%, GC −55%; live AST 136 → 100 MB, 105 B / 3.0 objects per node).
   **(TSGO.9) DONE 2026-10-15** — AST 188 → 100 MB, a full check 327 → 234 MB live (docs/goport-perf.md § 32).
 
-- [ ] **(TSGO.8) delete `-core` (§ 6 stages 4-5).**
-  BLOCKED-PENDING-USER: **delete `-core`** — proposal (updated 2026-10-14, after (TSGO.7)): stages 1-3 of
-    `docs/core-sunset.md` § 6 are DONE — the port's CLI (CLI parity 120 / 121), its native image (PGO, replay 65 / 65 in
-    CI, no-GC opt-in), and every consumer the queue named (`-daemon` / `scripts/xtsc`, the bench series, KIR, which no
-    longer depends on `-core` at all). What still uses `-core`: **`-project`** (published; the IntelliJ plugin's API —
-    port tsgo's `internal/project` behind a `Project`-shaped facade, or ship a tsgo-shaped API and deprecate it), **`-cli`**
-    (the lean one-shot CLI and the GraalVM image `native.yml` builds and uploads as `xtsc-linux-x64` — replace with the
-    `-tsgo` image, which CI already builds as `xtsc-tsgo-linux-x64`), `-tsgo`'s test-only `ParseBenchMain` comparison, the
-    frozen-era grid / corpus scripts, and `-core`'s own CI job (whose Kotlin/Native leg fails on `@Volatile`). The owner
-    decides: retire at all; `-project`'s compatibility path; which artifact carries the `xemantic-typescript-compiler`
-    coordinates and the `xtsc` binary name; then stage 5 (delete the module, its CI job, corpus generator and scripts).
+- [ ] **(TSGO.8) retire `-core` (§ 6 stages 4-5) — OWNER DECIDED 2026-10-16.** Retire it: (2) **`-project` is
+  deprecated, not ported** — the supported embedding API is the port's own (`TsgoProject` / `TsgoLanguageService`); the
+  incremental learnings (`-project`'s design, the INC.91 soundness lesson, saved state) are kept for a later item, (TSGO.10);
+  (3) the port's image replaces `-cli`'s as `xtsc-linux-x64`; (4) the tsgo-based module becomes the default artifact
+  (the `xemantic-typescript-compiler` coordinates and the `xtsc` binary); (5) the Arm B fixture gets a checked-in
+  generator before anything is deleted; (7) a real project build defaults to TypeScript 7.0 — the port is 7.0 by
+  construction, so this lands with (8-b). (P18.86)'s harness arm and `-core`'s `simulatedVersion` default go with `-core`.
+  Sub-steps, one commit each:
+  - [ ] (8-a) a checked-in generator for the Arm B fixture (`build/bench/many-small-2400-dom`), and
+    `scripts/inc46-vs-tsgo.sh` pointed at the port.
+  - [ ] (8-b) the shipped native image is the port's: `native.yml` uploads the port's PGO image as `xtsc-linux-x64`
+    (binary `xtsc`); `-cli` becomes the lean one-shot CLI over `-tsgo`; `-cli`'s own image task,
+    `scripts/build-native-pgo.sh` and the `-core` image job retire.
+  - [ ] (8-c) `-tsgo` is published, carrying the `xemantic-typescript-compiler` coordinates and jar name (`-core` takes
+    `project.name`); `scripts/xtsc` and the AOT scripts follow the jar.
+  - [ ] (8-d) `-project` deprecated: `@Deprecated` pointing at `TsgoProject` / `TsgoLanguageService`, README and docs
+    updated; (TSGO.10) queued with the incremental learnings.
+  - [ ] (8-e) delete `-core` and `-project` (stage 5: modules, CI jobs, corpus generator, frozen-era scripts; archive
+    CLAUDE.md's `-core` sections). BLOCKED-PENDING-USER on WHEN: a deprecation means something only once a release ships
+    it, so the proposal is to delete after the next release.
+
+- [ ] **(TSGO.10) an incremental project system on the port — LATER (owner 2026-10-16: keep the learnings, implement
+  later; not before (TSGO.8)).** `TsgoProject` opens a fresh program per change. What `-project` proved and the port should
+  inherit (docs/goport-perf.md, docs/history): body edit 137-226 ms and a no-op 0 ms through per-file invalidation;
+  `diagnosticsOf` partitioned per file; **pruning dependants by signature fingerprint was UNSOUND (INC.91)** — the safe
+  shape is the transitive importer closure (12.8x on layered Arm B); `saveState`/`restoreState` answered in 155-175 ms
+  (CRaC restore ~30 ms); measure with row-count receipts, a served-vs-fell-back receipt and ABBA ordering. Candidate
+  route: port tsgo's `internal/project` (11.0k Go lines) through the porter rather than re-inventing it.
 
 - [x] **(CHK.134) CLOSED 2026-09-12 ((P18.81) note: (2) `bind` — `Checker.bindType`, the two real overloads built per call, `OmitThisParameter` as the receiver itself when its `this` is absent/`unknown`/`any`; residues: a union receiver, an optional-chain receiver, a spread partial, the bare `f.bind` display, a class value displayed without `typeof`). (1) `call`/`apply` LANDED 2026-09-12 ((P18.80) note) — `functionObjectMemberType` /
   `bindCallApplyType` BUILD the member from the receiver's last signature (no inference: each of `T`/`A`/`R` has one
