@@ -242,6 +242,22 @@ private const val DEFAULT_EXPORT_NAME = "default"
  */
 private const val MAX_ALIAS_CLOSURE_PASSES = 4
 
+/**
+ * **DEPRECATED (owner decision 2026-10-16, (TSGO.8)).** This API runs on `-core`, the
+ * hand-written checker that is being retired. Its successor is the tsgo port's own API in
+ * `com.xemantic.typescript:xemantic-typescript-compiler`: [com.xemantic.typescript.tsgo.TsgoProject]
+ * (tsgo's type oracle, `tsc --api`'s handlers in process) and
+ * [com.xemantic.typescript.tsgo.TsgoLanguageService] (hover, definition, references,
+ * completions, diagnostics). Their answers are tsgo 7.0.2's by construction.
+ *
+ * Not yet carried over: the incremental updates this class does in session ([updateFile],
+ * partitioned diagnostics, [saveState]) — the port opens a fresh program per change until
+ * (TSGO.10).
+ */
+@Deprecated(
+    "Runs on the retired -core checker. Use com.xemantic.typescript.tsgo.TsgoProject and " +
+        "TsgoLanguageService from com.xemantic.typescript:xemantic-typescript-compiler.",
+)
 public class Project private constructor(
     /** The project path as given to [open], normalized and absolute. */
     private val projectPath: String,

@@ -58,6 +58,12 @@ kotlin {
     // out-of-tree callers, so its surface is declared rather than inferred.
     explicitApi()
 
+    // (TSGO.8-d) `Project` is deprecated for its CALLERS; inside this module, using it is the point,
+    // so the module's own deprecation warnings are off (the build stays warning-clean).
+    compilerOptions {
+        freeCompilerArgs.add("-Xwarning-level=DEPRECATION:disabled")
+    }
+
     // JVM only, deliberately, and for the same reason `-core` is: this module
     // pulls the whole compiler in, and Checker.kt costs minutes per native link
     // (CLAUDE.md's native-build protocol). `src/commonMain` / `src/commonTest`

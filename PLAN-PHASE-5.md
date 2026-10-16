@@ -25,6 +25,18 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.8-d) — `-project` deprecated
+
+- `@Deprecated` (WARNING) on `Project`, message naming `com.xemantic.typescript.tsgo.TsgoProject`,
+  `TsgoLanguageService` and the artifact; the KDoc lists what the port does not do yet (in-session `updateFile`,
+  partitioned diagnostics, `saveState`) and points at (TSGO.10). Only the entry class: every other `-project` type is
+  reachable only through it.
+- `-project/build.gradle.kts`: `-Xwarning-level=DEPRECATION:disabled` for the module's own compilations — without it 251
+  warnings (main + tests), with it 0 (gate proven live both ways).
+- `ProjectDeprecationTest` (jvmTest; `kotlin.Deprecated` is RUNTIME-retained) fails with the annotation removed.
+- CLAUDE.md's mission line names the port's API as the embeddable checker. README untouched (repositioning belongs on
+  `docs/reposition`, which predates the port and awaits the owner).
+
 ### Round (TSGO.8-c) — the port carries the product coordinates
 
 - `-tsgo/build.gradle.kts`: `maven.publish` applied; `coordinates(artifactId = "xemantic-typescript-compiler")`,
@@ -704,7 +716,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
     `scripts/build-native-pgo.sh` and the `-core` image job retire.
   - [x] (8-c) `-tsgo` is published, carrying the `xemantic-typescript-compiler` coordinates and jar name (`-core` takes
     `project.name`); `scripts/xtsc` and the AOT scripts follow the jar.
-  - [ ] (8-d) `-project` deprecated: `@Deprecated` pointing at `TsgoProject` / `TsgoLanguageService`, README and docs
+  - [x] (8-d) `-project` deprecated: `@Deprecated` pointing at `TsgoProject` / `TsgoLanguageService`, README and docs
     updated; (TSGO.10) queued with the incremental learnings.
   - [ ] (8-e) delete `-core` and `-project` (stage 5: modules, CI jobs, corpus generator, frozen-era scripts; archive
     CLAUDE.md's `-core` sections). BLOCKED-PENDING-USER on WHEN: a deprecation means something only once a release ships

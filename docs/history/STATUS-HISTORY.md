@@ -1,3 +1,10 @@
+**(TSGO.9-b) DONE — the atomic `id`/`facts` wrappers are volatile fields of their holder (2026-10-15):** porter rule
+"Inlined atomic fields" (docs/goport-lowering.md § 3): `Node.id`, `Symbol.id` and `CompositeBase.facts` are only ever
+loaded, stored and compared-and-swapped, so each is a `@Volatile` primitive; a swap takes a stripe lock (common code —
+`linuxX64Test` 91 / 0). Single −3.2% (3/4), GC −28%, allocation −3.6%; the AST's live heap 170 → 136 MB (142 B and 5.3
+objects per node, from 197 B / 8.1 before (9-a)); a full check leaves 270 MB live, was 327. Diag/Emit 13,127, LS 21,614,
+API 594,007, CLI 120 / 121 equal; `-tsgo` 155 / 0, `-goport` 30 / 0. Next: (9-c) a node and its data as one object.
+
 **(TSGO.9-a) DONE — a node's `Loc` is a packed value class, not an object (2026-10-15):** the AST is 58% of the live heap
 after a check, at 197 B and 8.1 objects per node (docs/goport-perf.md § 29); most of those objects are lowering artifacts.
 First porter rule ("Packed structs", docs/goport-lowering.md § 3): `core.TextRange` is a `@JvmInline value class` over a
