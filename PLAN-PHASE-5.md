@@ -25,6 +25,15 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (DOC.3) — the README on the port, on `docs/reposition` for owner review
+
+- Correction to (TSGO.8-d)'s note: the repositioned README is NOT pending — it was approved and merged to main
+  2026-09-03 (f08a2e933 + the fact refresh 6e95c9a9b). What was stale was its `-core` facts.
+- `docs/reposition` (d805fc67a, one commit on main) replaces them with the port's: tsgo 7.0.2 ported by
+  `-goport`; `TsgoLanguageService` / `TsgoProject` in section 1 (`Project` deprecated); `@types/node` per-module;
+  tsc 7's command line; bench run 20261016T075835Z; the four parity gates + native replay; snapshot coordinates;
+  typescript-go's Apache-2.0 / NOTICE. Positioning prose unchanged. Awaits the owner's review before merging to main.
+
 ### Round (TSGO.8-d) — `-project` deprecated
 
 - `@Deprecated` (WARNING) on `Project`, message naming `com.xemantic.typescript.tsgo.TsgoProject`,
