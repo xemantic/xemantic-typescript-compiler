@@ -25,14 +25,14 @@
 
 package com.xemantic.typescript.compiler.cli
 
-import com.xemantic.typescript.compiler.runCli
+import com.xemantic.typescript.tsgo.cli.runMain
 import kotlin.system.exitProcess
 
 /**
  * Exit code for a daemon-only option this binary cannot honour.
  *
  * Non-zero, and deliberately NOT 1: 1 is "the compile ran and found errors"
- * (`tsc` semantics, and [runCli]'s contract since 2026-08-08), so a script that
+ * (`tsc` semantics, and [runMain]'s), so a script that
  * branches on the exit code can tell "your project has type errors" from "this
  * binary does not do that".
  *
@@ -57,32 +57,23 @@ public const val XTSC_NO_DAEMON_SUPPORT: Int = 2
 private val DAEMON_ONLY_OPTIONS = listOf("--serve", "--daemon", "--socket")
 
 /**
- * (MOD.7) The LEAN entry point — the one the GraalVM native image is built from.
+ * (MOD.7) The LEAN one-shot entry point: the ported tsc ((TSGO.8-b), `-tsgo`'s
+ * [runMain]) with no transport on the classpath.
  *
  * ```
- *   xtsc [options] [project]      compile in this process, exactly as the CLI does
+ *   xtsc [options] [project]      compile in this process, exactly as tsc does
  *   xtsc --serve | --daemon | --socket   REFUSED, with exit XTSC_NO_DAEMON_SUPPORT
  * ```
  *
- * **WHY THIS EXISTS AT ALL, AND WHY IT IS NOT SIMPLY `…compiler.MainKt`.** The
- * image used to be built from the daemon module's mode dispatcher
- * (`…compiler.server.XtscMainKt`), which drags the whole transport — ktor-
- * network, slf4j, the socket machinery — into the closed-world analysis of a
- * one-shot binary that can never serve or contact anything. Pointing it back at
- * the bare `…compiler.MainKt` is the OTHER failure, and it is worse than a
- * missing feature: measured on the stale 2026-07-30 binary (round 840),
- * `--serve --socket /tmp/x.sock` bound no socket, took the socket path as the
- * PROJECT, emitted 173 files and exited **0**. A silent wrong success that
- * writes to disk.
+ * The refusal predates the port: `-core`'s argument loop took an unknown flag's
+ * VALUE as the project (round 840: `--serve --socket /tmp/x.sock` emitted 173
+ * files and exited 0). The port rejects the flags itself (TS5023, exit 1), but
+ * the refusal still says WHERE the daemon modes live and answers with a code a
+ * script can tell from "the project has errors". `LeanCliEntryPointTest` pins it.
  *
- * So the refusal below is not politeness — it is the third option, and the only
- * one that is both lean and honest. `LeanCliEntryPointTest` fails if it is
- * removed, by asserting that nothing was compiled rather than merely that
- * something was printed.
- *
- * The JVM launcher (`scripts/xtsc`, `scripts/xtsc-aot`) keeps running the
- * dispatcher — it HAS a daemon to reach — so `--serve`/`--daemon` are
- * unaffected there. This is the native arm only.
+ * The shipped native image is built from the port's own entry
+ * (`TsgoMainKt`), not from this one; the JVM launcher (`scripts/xtsc`) runs the
+ * daemon's dispatcher, which HAS a daemon to reach.
  */
 public fun main(args: Array<String>) {
     val code = runLeanCli(args)
@@ -104,7 +95,7 @@ public fun main(args: Array<String>) {
 internal fun runLeanCli(
     args: Array<String>,
     err: (String) -> Unit = { System.err.println(it) },
-    compile: (Array<String>) -> Int = ::runCli,
+    compile: (Array<String>) -> Int = ::runMain,
 ): Int {
     val refused = DAEMON_ONLY_OPTIONS.filter { it in args }
     if (refused.isNotEmpty()) {

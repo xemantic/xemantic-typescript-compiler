@@ -5,6 +5,11 @@ queue item. Nothing in the build system was changed: the image is built from the
 existing `build/classes/kotlin/jvm/main` + `build/bench/cp.txt` classpath by a
 standalone `native-image` invocation.*
 
+> **(TSGO.8-b), 2026-10-16 — THIS PAGE MEASURES `-core`'s IMAGE, WHICH NO LONGER SHIPS.** The shipped
+> `xtsc` (`xtsc-linux-x64`) is the tsgo port's image, `:xemantic-typescript-compiler-tsgo:nativeImage` with
+> PGO by `scripts/tsgo-native-image-pgo.sh` (docs/goport-runtime.md, docs/goport-perf.md); `-cli`'s
+> `nativeImage` task and `scripts/build-native-pgo.sh` are deleted. The commands below are historical.
+
 > **(MOD.7), 2026-08-10 — WHICH MODULE BUILDS THE IMAGE, AND WHAT IT NO LONGER CARRIES.**
 > The `nativeImage` task moved from `:xemantic-typescript-compiler-daemon` to
 > `:xemantic-typescript-compiler-cli`, and the image's entry point is now

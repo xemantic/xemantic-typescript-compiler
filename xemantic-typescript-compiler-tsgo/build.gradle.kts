@@ -136,6 +136,8 @@ tasks.withType<Test>().configureEach {
 // Not wired into `build`/`check` (needs GraalVM + a C toolchain). Builds run ALONE under CLAUDE.md's memory
 // protocol: the builder is a separate JVM of `-PnativeImageHeap` (default 8g — the port's closed world is
 // ~4,850 classes, over twice -core's) outside every Gradle heap, on a box with zero swap.
+// THE SHIPPED `xtsc` IMAGE since (TSGO.8-b) (native.yml uploads it as `xtsc-linux-x64`). `-cli`'s
+// `NativeImageEntryPointTest` reads the next line — keep it a single `val … = "…"` assignment.
 val tsgoNativeImageMainClass = "com.xemantic.typescript.tsgo.cli.TsgoMainKt"
 
 tasks.register("nativeImage") {

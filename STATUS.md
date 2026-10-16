@@ -1,5 +1,12 @@
 # Status
 
+**(TSGO.8-b) DONE — the shipped `xtsc` image is the port's (2026-10-16):** `native.yml` uploads the port's PGO image
+(replayed against tsgo 7.0.2 in the same job) as `xtsc-linux-x64`, binary `xtsc`; `-core`'s image job,
+`scripts/build-native-pgo.sh` and `-cli`'s `nativeImage` task are gone. `-cli` is the lean one-shot JVM CLI over the
+port (`api(-tsgo)`, still refusing `--serve`/`--daemon`/`--socket` with exit 2); `-core` is off its classpath
+(`LeanClasspathTest`), and `NativeImageEntryPointTest` pins the shipped artifact to the port's image (fails on the old
+workflow). A real project build is now TypeScript 7.0 wherever `xtsc` ships. `-cli` 18 / 0. Next: (8-c) coordinates.
+
 **(TSGO.8-a) DONE — Arm B has a checked-in generator; the incremental bench runs the port (2026-10-16):** the owner
 decided (TSGO.8) — retire `-core`, deprecate `-project` (its incremental learnings queued as (TSGO.10)), ship the port's
 image as `xtsc-linux-x64`, the tsgo-based module is the default artifact. `scripts/gen-many-small-project.py … 48 50
@@ -30,10 +37,3 @@ First porter rule ("Packed structs", docs/goport-lowering.md § 3): `core.TextRa
 profile: single **−6.9%** (4/4), parallel −3.8% (3/4), allocation −7.1% / −5.7%; the AST's live heap 188 → 170 MB.
 Diag/Emit 13,127, LS, API 594,007, CLI 120 / 121 equal; `-tsgo` 153 / 0 (`GoProcsTest`'s timing pin flaked once under the
 full suite, 3/3 alone), `-goport` 28 / 0. Next: (9-b) the atomic `id` wrapper, (9-c) one object per node.
-
-**(TSGO.7) DONE — every consumer moved; (TSGO.7-d/e/f/g) `-kir` no longer depends on `-core` (2026-10-14):** KIR's value model is its own
-(`kir.model`); the lowering walks tsgo's tree converted to KIR's own syntax classes (`front/TsgoSyntax.kt`, `kir.ast`)
-instead of a second parse by `-core`'s parser paired by position. The converter was held to `-core`'s parser on all 44
-corpus files (equal but one — a `-core` bug: raw template text compiled `\n` to backslash-n; fixed and pinned,
-`KirTemplateEscapeTest`). KIR 308 / 0, `kir-bench.sh` equivalence green, its JavaScript arm on the port (byte-identical
-to tsgo's). Next: (TSGO.8) — the owner's decision on `-core` (`-project`, `-cli`'s image, coordinates).

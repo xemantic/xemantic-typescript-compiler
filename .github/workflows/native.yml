@@ -1,10 +1,9 @@
 # The NATIVE toolchains, all manual-trigger only:
-#   * `native-image` — the GraalVM AOT executable (round 771).
-#   * `kotlin-native` — the Kotlin/Native linuxX64 target and the corpus suite
-#     run against it (round 775).
-#   * `tsgo-native-image` / `tsgo-kotlin-native` — the same two for the tsgo port
-#     (`-tsgo`, (TSGO.6)): its PGO image replayed against tsgo 7.0.2's own output,
-#     and its common suite on linuxX64.
+#   * `tsgo-native-image` — THE SHIPPED `xtsc` IMAGE (`xtsc-linux-x64`, since
+#     (TSGO.8-b)): the tsgo port's PGO image, replayed against tsgo 7.0.2's own output.
+#   * `tsgo-kotlin-native` — the port's common suite on Kotlin/Native linuxX64.
+#   * `kotlin-native` — the retiring `-core`'s corpus suite on linuxX64 (round 775);
+#     it leaves with `-core` ((TSGO.8-e)). `-core`'s own GraalVM image job left in (8-b).
 #
 # MANUAL TRIGGER ONLY, deliberately. Neither is a correctness gate for a normal
 # push — the JVM suite is — and both are slow. Attaching the AOT binary to
@@ -29,14 +28,6 @@ name: Native
 on:
   workflow_dispatch:
     inputs:
-      graalvm:
-        description: "Build the GraalVM native image"
-        type: boolean
-        default: true
-      verify:
-        description: "Run the native binary against the compiler bench profile and diff it against the JVM"
-        type: boolean
-        default: true
       kotlin_native:
         description: "Compile the Kotlin/Native linuxX64 target and run the corpus suite on it"
         type: boolean
@@ -47,76 +38,6 @@ on:
         default: true
 
 jobs:
-  native:
-    if: ${{ inputs.graalvm }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      # ORACLE GraalVM, not Community — PGO is an Oracle-only feature and it is
-      # the biggest single lever ever measured on this compiler (2026-08-10:
-      # -13.9% check-only / -19.5% emit over the Oracle base, and Oracle base is
-      # itself ahead of CE). `distribution: graalvm` is Oracle GraalVM under the
-      # GraalVM Free Terms and Conditions, which permits production use and
-      # redistribution of the images built with it.
-      #
-      # 25, not 26: GraalVM ships NO JDK 26 build in either distribution
-      # (Oracle's graalvm-jdk-26 404s, CE's newest is graal-25.2.4 / JDK 25.0.4),
-      # which is exactly why `javaTarget` is 25 and not 26 — native-image cannot
-      # read a class file its own JVM rejects. Raise both together, or neither.
-      - name: Set up GraalVM (Oracle, for PGO)
-        uses: graalvm/setup-graalvm@v1
-        with:
-          java-version: '25'
-          distribution: 'graalvm'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          cache: 'gradle'
-
-      # Three builds and two training runs — see the script's header for the
-      # recipe and the both-modes trap. Not inlined here: bench.yml runs the same
-      # cycle, and two copies of it would drift silently.
-      - name: Build native image (Oracle + PGO)
-        run: scripts/build-native-pgo.sh --graalvm-home "$GRAALVM_HOME"
-
-      - name: Report binary
-        run: |
-          ls -la xemantic-typescript-compiler-cli/build/native/xtsc
-          ./xemantic-typescript-compiler-cli/build/native/xtsc --help | head -5 || true
-
-      # The gate is byte-identity against the JVM, never a diagnostic COUNT: two
-      # runs can agree on 46 and disagree on which 46.
-      - name: Verify against the JVM (byte-identity)
-        if: ${{ inputs.verify }}
-        run: |
-          set -euo pipefail
-          scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log --iterations 1
-          PROFILE=$(ls -d build/bench/tsc-project-* | head -1)
-          # NOT `cat build/bench/cp.txt` (which is what this line used to be):
-          # that file lives under gitignored build/, NOTHING in CI writes it, and
-          # `DepClasspathGuardTest` — which exists to stop exactly this — only
-          # walks scripts/, so a workflow reading it is outside the guard. An
-          # empty tail would have left `java` unable to find the Kotlin stdlib,
-          # and the `|| true` below would have captured the resulting stack trace
-          # into jvm.raw and failed the diff as if the NATIVE image were wrong.
-          CP="xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$(scripts/lib/dep-classpath.sh --print)"
-          # The compiler exits 1 when it finds errors (tsc semantics, 2026-08-08)
-          # and this profile has 46. Under `set -euo pipefail` that would fail the
-          # PIPELINE, so each run is captured first and filtered afterwards; the
-          # byte-identity gate below is unchanged.
-          java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
-            --noEmit --listAll "$PROFILE" > jvm.raw 2>&1 || true
-          grep -v '^time:' jvm.raw | sort > jvm.txt
-          ./xemantic-typescript-compiler-cli/build/native/xtsc \
-            --noEmit --listAll "$PROFILE" > native.raw 2>&1 || true
-          grep -v '^time:' native.raw | sort > native.txt
-          diff jvm.txt native.txt && echo "native output is byte-identical to the JVM"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: xtsc-linux-x64
-          path: xemantic-typescript-compiler-cli/build/native/xtsc
-          if-no-files-found: error
-
   # Kotlin/Native (linuxX64) — compile, link, and run the WHOLE corpus suite
   # against the native binary. This is the only gate that can see a native-only
   # divergence at all: `jvmTest` compiles commonTest with the JVM compiler, which
@@ -194,10 +115,18 @@ jobs:
       - name: Build the PGO image and replay tsgo 7.0.2 through it
         run: scripts/tsgo-native-ci.sh --graalvm "$GRAALVM_HOME"
 
+      # The shipped binary: named `xtsc`, uploaded as `xtsc-linux-x64` — the name `-core`'s image carried
+      # until (TSGO.8-b) (owner decision 2026-10-16: the port's image replaces it).
+      - name: Name the binary xtsc
+        run: |
+          mkdir -p dist
+          cp xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo dist/xtsc
+          ./dist/xtsc --version
+
       - uses: actions/upload-artifact@v4
         with:
-          name: xtsc-tsgo-linux-x64
-          path: xemantic-typescript-compiler-tsgo/build/native/xtsc-tsgo-pgo
+          name: xtsc-linux-x64
+          path: dist/xtsc
           if-no-files-found: error
 
       - name: Upload the replay on failure

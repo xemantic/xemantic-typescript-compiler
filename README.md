@@ -171,7 +171,7 @@ Pre-1.0 and not released yet — build it:
 
 ```shell
 ./gradlew assemble                                       # JVM distribution + scripts/xtsc
-./gradlew :xemantic-typescript-compiler-cli:nativeImage  # the native binary (needs GraalVM)
+./gradlew :xemantic-typescript-compiler-tsgo:nativeImage # the native binary (needs GraalVM)
 ```
 
 The published coordinates (group `com.xemantic.typescript`) will be

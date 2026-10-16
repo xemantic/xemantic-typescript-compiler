@@ -1,3 +1,10 @@
+**(TSGO.7) DONE — every consumer moved; (TSGO.7-d/e/f/g) `-kir` no longer depends on `-core` (2026-10-14):** KIR's value model is its own
+(`kir.model`); the lowering walks tsgo's tree converted to KIR's own syntax classes (`front/TsgoSyntax.kt`, `kir.ast`)
+instead of a second parse by `-core`'s parser paired by position. The converter was held to `-core`'s parser on all 44
+corpus files (equal but one — a `-core` bug: raw template text compiled `\n` to backslash-n; fixed and pinned,
+`KirTemplateEscapeTest`). KIR 308 / 0, `kir-bench.sh` equivalence green, its JavaScript arm on the port (byte-identical
+to tsgo's). Next: (TSGO.8) — the owner's decision on `-core` (`-project`, `-cli`'s image, coordinates).
+
 **(TSGO.7-b/c) DONE — the JVM-vendor bench on the port; KIR's `-core` front end removed (2026-10-14):** `bench-jvms.sh`
 times `CheckBenchMain` / `TsgoMain` (CI run 38647609748 green, 65 errors in every arm); its one rejected rep exposed a
 `CheckBenchMain` emit-counter race (fixed). Two flaky `--watch` pins fixed (atomic edits). KIR's `XTSC_KIR_ENGINE=core`

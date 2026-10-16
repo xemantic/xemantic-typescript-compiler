@@ -29,33 +29,25 @@ import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
- * (MOD.7) The pin on the module edge itself: what the native image's classpath
+ * (MOD.7) The pin on the module edge itself: what the lean CLI's classpath
  * must NOT contain.
  *
  * A dependency edge added in a build script is invisible until something reads
- * the graph, and "the image got bigger" is not a signal anyone watches. So this
- * asserts the property directly, at run time, over the classpath the tests
- * actually run on — which for this module is its `jvmRuntimeClasspath` plus the
- * two test libraries, and therefore a faithful stand-in for what native-image
- * analyses.
+ * the graph. So this asserts the property directly, at run time, over the
+ * classpath the tests actually run on — this module's `jvmRuntimeClasspath`
+ * plus the two test libraries.
  *
- * **IT DISCRIMINATES AT THE ONLY MOMENT THAT MATTERS.** Add
- * `:xemantic-typescript-compiler-daemon` (or `-api`, which exports
- * ktor-network) to this module and [theTransportIsAbsent] reddens in the same
- * build — before a 2-minute image build, and before anyone has to explain a size
- * regression.
+ * Add `:xemantic-typescript-compiler-daemon` (or `-api`, which exports
+ * ktor-network) to this module and the transport pin reddens in the same build;
+ * put `-core` back and the retired-core pin does.
  *
- * **WHAT IS NOT CLAIMED, said rather than implied.** kotlinx-serialization is
- * still here and this class ASSERTS that it is, so the record cannot rot into a
- * false claim: `TsConfigLoader` parses tsconfig.json with it, so it arrives
- * through the compiler core and is reachable from every entry point this project
- * has. The split removes the ktor transport and its slf4j tail; it does not
- * remove serialization, and nothing short of changing how the core reads
- * tsconfig would.
+ * Not pinned, because no run-time check here can see it: kotlinx-serialization
+ * left this module's runtime classpath with `-core`, but the test classpath
+ * still has it through `xemantic-kotlin-test`.
  *
  * The POSITIVE CONTROL is not decoration: round 853 lost three rounds to gates
- * that were green because they were pointed at nothing. If the compiler core
- * itself were missing, every absence assertion below would pass vacuously.
+ * that were green because they were pointed at nothing. If the compiler itself
+ * were missing, every absence assertion below would pass vacuously.
  */
 class LeanClasspathTest {
 
@@ -66,9 +58,16 @@ class LeanClasspathTest {
 
     /** POSITIVE CONTROL — the thing under test is here at all. */
     @Test
-    fun `the compiler core is on the classpath`() {
-        assert(onClasspath("com.xemantic.typescript.compiler.MainKt"))
-        assert(onClasspath("com.xemantic.typescript.compiler.Checker"))
+    fun `the ported compiler is on the classpath`() {
+        assert(onClasspath("com.xemantic.typescript.tsgo.cli.TsgoMainKt"))
+        assert(onClasspath("com.xemantic.typescript.tsgo.TsgoCli"))
+    }
+
+    /** (TSGO.8-b) The retired hand-written compiler does not come along. */
+    @Test
+    fun `the retired compiler core is absent`() {
+        assert(!onClasspath("com.xemantic.typescript.compiler.MainKt"))
+        assert(!onClasspath("com.xemantic.typescript.compiler.Checker"))
     }
 
     /**
@@ -89,16 +88,5 @@ class LeanClasspathTest {
     fun `the wire protocol is absent`() {
         assert(!onClasspath("com.xemantic.typescript.compiler.protocol.CompileRequest"))
         assert(!onClasspath("com.xemantic.typescript.compiler.client.XtscClient"))
-    }
-
-    /**
-     * TRUTHFUL RECORD, not an aspiration: serialization stays, because the core
-     * parses tsconfig.json with it. Written as an assertion so that if it ever
-     * DOES leave, this pin fails and the documentation above gets corrected
-     * instead of quietly becoming wrong.
-     */
-    @Test
-    fun `serialization stays because the core parses tsconfig with it`() {
-        assert(onClasspath("kotlinx.serialization.json.Json"))
     }
 }

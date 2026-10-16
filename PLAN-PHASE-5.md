@@ -25,6 +25,21 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.8-b) — the port's image ships as `xtsc-linux-x64`
+
+- `native.yml`: the `native` job (`-core`'s image via `scripts/build-native-pgo.sh`, its JVM byte-identity check) and the
+  `graalvm`/`verify` inputs are deleted; `tsgo-native-image` copies `xtsc-tsgo-pgo` to `dist/xtsc` (`--version` smoke)
+  and uploads it as `xtsc-linux-x64`. `kotlin-native` (`-core`'s linuxX64 suite) stays until (8-e).
+- `-cli`: `api(-tsgo)` instead of `-core`; `runLeanCli`'s default compile is the port's `runMain`. The refusal stays —
+  the port rejects `--serve` itself (TS5023, exit 1, nothing emitted — probed on the PGO image) but the lean CLI's
+  message and exit 2 still say where the daemon modes live. Its `nativeImage` task (≈170 lines) is deleted: the port's
+  image settings (G1 + `MaxRAMPercentage=80`, the 8g builder, PGO with `TsgoLibSnapshot`) live in `-tsgo`'s task.
+- Pins: `LeanClasspathTest` — the port present, `-core`'s `MainKt`/`Checker` absent (the old positive control asserted
+  them present); the serialization pin is dropped, not inverted: `xemantic-kotlin-test` puts it on the TEST classpath, so
+  no run-time check here can see the runtime classpath lost it. `NativeImageEntryPointTest` reads `-tsgo`'s
+  `tsgoNativeImageMainClass` and `native.yml`'s upload; the workflow pin fails against the old `native.yml`.
+- `docs/perf/aot-native-image.md` marked historical (it measures `-core`'s image); README's build line points at `-tsgo`.
+
 ### Round (TSGO.8-a) — Arm B's generator; the incremental bench on the port
 
 - `scripts/gen-many-small-project.py` gained `--lib` and `--edits`; `… build/bench/many-small-2400-dom 48 50 --lib
@@ -670,7 +685,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   Sub-steps, one commit each:
   - [x] (8-a) a checked-in generator for the Arm B fixture (`build/bench/many-small-2400-dom`), and
     `scripts/inc46-vs-tsgo.sh` pointed at the port.
-  - [ ] (8-b) the shipped native image is the port's: `native.yml` uploads the port's PGO image as `xtsc-linux-x64`
+  - [x] (8-b) the shipped native image is the port's: `native.yml` uploads the port's PGO image as `xtsc-linux-x64`
     (binary `xtsc`); `-cli` becomes the lean one-shot CLI over `-tsgo`; `-cli`'s own image task,
     `scripts/build-native-pgo.sh` and the `-core` image job retire.
   - [ ] (8-c) `-tsgo` is published, carrying the `xemantic-typescript-compiler` coordinates and jar name (`-core` takes
