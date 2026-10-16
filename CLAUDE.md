@@ -22,7 +22,7 @@ EVERY session, so every line costs context on every turn.
 
 xtsc is **TypeScript for the JVM and Kotlin** (owner directive 2026-09-01): type-check and
 compile TypeScript with no Node and no Go in the toolchain; a whole-program checker embeddable
-in Kotlin (the `Project` API); a Kotlin externals generator with resolved types; a JVM bytecode
+in Kotlin (the port's `TsgoProject` / `TsgoLanguageService`; `-project`'s `Project` is deprecated); a Kotlin externals generator with resolved types; a JVM bytecode
 backend (KIR); an LSP. It is not "a compiler competing with tsgo".
 
 - **OWNER DECISION 2026-10-06 — PORT tsgo TO KOTLIN.** `-goport` (mechanical go/types-driven +
