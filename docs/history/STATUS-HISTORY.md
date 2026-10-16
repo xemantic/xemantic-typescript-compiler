@@ -1,3 +1,11 @@
+**(TSGO.9-a) DONE — a node's `Loc` is a packed value class, not an object (2026-10-15):** the AST is 58% of the live heap
+after a check, at 197 B and 8.1 objects per node (docs/goport-perf.md § 29); most of those objects are lowering artifacts.
+First porter rule ("Packed structs", docs/goport-lowering.md § 3): `core.TextRange` is a `@JvmInline value class` over a
+`Long` (the run proves no field is ever assigned or address-taken), a pointer to one a live `GoPtr`. Warm, compiler
+profile: single **−6.9%** (4/4), parallel −3.8% (3/4), allocation −7.1% / −5.7%; the AST's live heap 188 → 170 MB.
+Diag/Emit 13,127, LS, API 594,007, CLI 120 / 121 equal; `-tsgo` 153 / 0 (`GoProcsTest`'s timing pin flaked once under the
+full suite, 3/3 alone), `-goport` 28 / 0. Next: (9-b) the atomic `id` wrapper, (9-c) one object per node.
+
 **(TSGO.7) DONE — every consumer moved; (TSGO.7-d/e/f/g) `-kir` no longer depends on `-core` (2026-10-14):** KIR's value model is its own
 (`kir.model`); the lowering walks tsgo's tree converted to KIR's own syntax classes (`front/TsgoSyntax.kt`, `kir.ast`)
 instead of a second parse by `-core`'s parser paired by position. The converter was held to `-core`'s parser on all 44

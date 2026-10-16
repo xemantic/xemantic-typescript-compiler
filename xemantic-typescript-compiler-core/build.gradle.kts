@@ -45,13 +45,10 @@ plugins {
 // leave `archivesName` unset here; without this, configuring `jvmJar` fails with
 // "archiveBaseName has no value available".
 //
-// DELIBERATELY the product name and NOT `project.name`: the jar keeps the name
-// it has always had, `xemantic-typescript-compiler-jvm-<version>.jar`. That name
-// is a contract — `scripts/xtsc-aot-lib.sh` globs for it in both the development
-// tree and an installed `XTSC_HOME/lib`, and `-core` is an internal module
-// boundary that the shipped distribution has no reason to learn about.
+// `project.name` since (TSGO.8-c): the product name `xemantic-typescript-compiler`
+// (jar and Maven coordinates) belongs to the tsgo port, the default artifact.
 base {
-    archivesName = "xemantic-typescript-compiler"
+    archivesName = project.name
 }
 
 

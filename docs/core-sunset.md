@@ -47,7 +47,7 @@ CLI native image), `jvm-bench.yml` + `bench-compile-tsc.sh` (`-core`'s `BenchMai
 (`-core`'s checker counters — meaningless for the port), `huge_methods.py` (defaults to `-core`'s classes),
 `corpus-screen.sh`, the 8-profile grid scripts, `kir-bench.sh` (arm 3/6 compile JavaScript with `-core`),
 `native.yml` (runs `-core`'s `linuxX64Test`). `build-main.yml` publishes `-core`, `-cli`, `-daemon`,
-`-project`, `-client`; **`-tsgo` is not published today**.
+`-project`, `-client`; **`-tsgo` is not published today** — since (TSGO.8-c) it is, as the default artifact `com.xemantic.typescript:xemantic-typescript-compiler`.
 
 ## 2. Parity
 

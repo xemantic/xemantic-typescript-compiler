@@ -23,13 +23,49 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinMultiplatform
+import com.vanniktech.maven.publish.SourcesJar
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
+    alias(libs.plugins.maven.publish)
     id("xemantic-typescript-compiler.convention")
 }
 
+// (TSGO.8-c) THE DEFAULT ARTIFACT (owner decision 2026-10-16): the port carries the product name — the jar is
+// `xemantic-typescript-compiler-jvm-<version>.jar` and the Maven coordinates `com.xemantic.typescript:
+// xemantic-typescript-compiler` (`-jvm` for the JVM variant). The module directory keeps its `-tsgo` name.
 base {
-    archivesName = project.name
+    archivesName = "xemantic-typescript-compiler"
+}
+
+mavenPublishing {
+    coordinates(artifactId = "xemantic-typescript-compiler")
+    // An EMPTY javadoc jar (Maven Central requires one), not Dokka: the API is tsgo's, documented upstream, and Dokka
+    // over the generated sources would be the slowest task of every publishing build.
+    configure(KotlinMultiplatform(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
+    pom {
+        name = "xemantic-typescript-compiler"
+        // The port is a modified work of typescript-go (D2): its Apache-2.0 licence travels with it, beside the root's
+        // AGPL entries, and the jars carry its LICENSE / NOTICE.txt under META-INF/typescript-go/.
+        licenses {
+            license {
+                name = "Apache-2.0 (typescript-go, the work this port is derived from)"
+                url = "https://github.com/xemantic/xemantic-typescript-compiler/blob/main/xemantic-typescript-compiler-tsgo/LICENSE"
+                distribution = "repo"
+            }
+        }
+    }
+}
+
+tasks.withType<Jar>().configureEach {
+    metaInf {
+        from(projectDir) {
+            include("LICENSE", "LICENSE-GO", "LICENSE-patience", "NOTICE.txt")
+            into("typescript-go")
+        }
+    }
 }
 
 // (TSGO.1) THE tsgo PORT (owner decision 2026-10-06, docs/tsgo-port-plan.md).

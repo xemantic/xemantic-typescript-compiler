@@ -36,8 +36,7 @@ plugins {
 //
 // `project.name`, so the jar is `xemantic-typescript-compiler-project-jvm-
 // <ver>.jar` and cannot collide with the compiler's own
-// `xemantic-typescript-compiler-jvm-*.jar` — a name the AOT scripts GLOB for
-// (CLAUDE.md's jar-naming contract).
+// `xemantic-typescript-compiler-jvm-*.jar` (the port, the default artifact).
 base {
     archivesName = project.name
 }

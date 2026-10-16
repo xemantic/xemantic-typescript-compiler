@@ -36,7 +36,7 @@ plugins {
 //
 // `project.name`, so the jar is `xemantic-typescript-compiler-cli-jvm-<ver>.jar`
 // and cannot collide with the compiler's own `xemantic-typescript-compiler-jvm-
-// *.jar` — a name the AOT scripts GLOB for.
+// *.jar` (the port, the default artifact).
 base {
     archivesName = project.name
 }

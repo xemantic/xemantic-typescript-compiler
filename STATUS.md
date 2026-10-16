@@ -1,5 +1,13 @@
 # Status
 
+**(TSGO.8-c) DONE — the port is the default artifact (2026-10-16):** `-tsgo` is published as
+`com.xemantic.typescript:xemantic-typescript-compiler` (`-jvm`), jar `xemantic-typescript-compiler-jvm-<ver>.jar`, with
+sources, an empty javadoc jar and typescript-go's `LICENSE` / `NOTICE.txt` under `META-INF/typescript-go/` (POM: the AGPL
+entries plus Apache-2.0 for the upstream). `-core` takes `xemantic-typescript-compiler-core` for its jar too; `-cli` and
+`-daemon` POMs now depend on `xemantic-typescript-compiler-jvm`. Nothing was ever released (snapshots only), so no
+consumer's coordinates move. `DefaultArtifactTest` pins the jar name and licence files (fails on the old build).
+`-cli` 20 / 0, `-daemon` 63 / 0, `-lsp` 38 / 0, `-externals` 291 / 0, KIR 308 / 0, `-tsgo` 156 / 0. Next: (8-d).
+
 **(TSGO.8-b) DONE — the shipped `xtsc` image is the port's (2026-10-16):** `native.yml` uploads the port's PGO image
 (replayed against tsgo 7.0.2 in the same job) as `xtsc-linux-x64`, binary `xtsc`; `-core`'s image job,
 `scripts/build-native-pgo.sh` and `-cli`'s `nativeImage` task are gone. `-cli` is the lean one-shot JVM CLI over the
@@ -29,11 +37,3 @@ loaded, stored and compared-and-swapped, so each is a `@Volatile` primitive; a s
 `linuxX64Test` 91 / 0). Single −3.2% (3/4), GC −28%, allocation −3.6%; the AST's live heap 170 → 136 MB (142 B and 5.3
 objects per node, from 197 B / 8.1 before (9-a)); a full check leaves 270 MB live, was 327. Diag/Emit 13,127, LS 21,614,
 API 594,007, CLI 120 / 121 equal; `-tsgo` 155 / 0, `-goport` 30 / 0. Next: (9-c) a node and its data as one object.
-
-**(TSGO.9-a) DONE — a node's `Loc` is a packed value class, not an object (2026-10-15):** the AST is 58% of the live heap
-after a check, at 197 B and 8.1 objects per node (docs/goport-perf.md § 29); most of those objects are lowering artifacts.
-First porter rule ("Packed structs", docs/goport-lowering.md § 3): `core.TextRange` is a `@JvmInline value class` over a
-`Long` (the run proves no field is ever assigned or address-taken), a pointer to one a live `GoPtr`. Warm, compiler
-profile: single **−6.9%** (4/4), parallel −3.8% (3/4), allocation −7.1% / −5.7%; the AST's live heap 188 → 170 MB.
-Diag/Emit 13,127, LS, API 594,007, CLI 120 / 121 equal; `-tsgo` 153 / 0 (`GoProcsTest`'s timing pin flaked once under the
-full suite, 3/3 alone), `-goport` 28 / 0. Next: (9-b) the atomic `id` wrapper, (9-c) one object per node.

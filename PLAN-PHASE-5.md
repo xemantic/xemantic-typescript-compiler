@@ -25,6 +25,20 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.8-c) — the port carries the product coordinates
+
+- `-tsgo/build.gradle.kts`: `maven.publish` applied; `coordinates(artifactId = "xemantic-typescript-compiler")`,
+  `archivesName` likewise (the module directory keeps `-tsgo`); `KotlinMultiplatform(JavadocJar.Empty(),
+  SourcesJar.Sources())` — no Dokka over the generated sources; the POM adds an Apache-2.0 entry for typescript-go and
+  every jar carries `LICENSE`, `LICENSE-GO`, `LICENSE-patience`, `NOTICE.txt` under `META-INF/typescript-go/` (D2).
+  `-core`'s jar is `project.name` now. The "AOT scripts glob the jar name" contract was stale: `xtsc-aot-lib.sh` takes
+  every `*.jar` of the daemon's install lib; only frozen-era scratch scripts (round871-*, aot-corpus-suite) name it.
+- Receipt: `publishToMavenLocal` into a scratch repo → `xemantic-typescript-compiler{,-jvm}` and
+  `xemantic-typescript-compiler-core{,-jvm}`; `-cli`/`-daemon` POMs depend on `xemantic-typescript-compiler-jvm`. Maven
+  Central has no release of any module (404), the snapshot repo only `0.1.0-SNAPSHOT`.
+- Pin: `-cli`'s `DefaultArtifactTest` reads the jar the port's classes load from (a project dependency arrives as its
+  jar) — name and licence entries; both tests fail with the old `-tsgo` build file.
+
 ### Round (TSGO.8-b) — the port's image ships as `xtsc-linux-x64`
 
 - `native.yml`: the `native` job (`-core`'s image via `scripts/build-native-pgo.sh`, its JVM byte-identity check) and the
@@ -688,7 +702,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   - [x] (8-b) the shipped native image is the port's: `native.yml` uploads the port's PGO image as `xtsc-linux-x64`
     (binary `xtsc`); `-cli` becomes the lean one-shot CLI over `-tsgo`; `-cli`'s own image task,
     `scripts/build-native-pgo.sh` and the `-core` image job retire.
-  - [ ] (8-c) `-tsgo` is published, carrying the `xemantic-typescript-compiler` coordinates and jar name (`-core` takes
+  - [x] (8-c) `-tsgo` is published, carrying the `xemantic-typescript-compiler` coordinates and jar name (`-core` takes
     `project.name`); `scripts/xtsc` and the AOT scripts follow the jar.
   - [ ] (8-d) `-project` deprecated: `@Deprecated` pointing at `TsgoProject` / `TsgoLanguageService`, README and docs
     updated; (TSGO.10) queued with the incremental learnings.
