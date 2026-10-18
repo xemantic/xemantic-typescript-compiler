@@ -55,21 +55,16 @@ import kotlin.test.Test
  * characterised that way before anything was built; where the two diverge it is
  * named as a divergence and its reason is stated.
  *
- * ## What landed, and what the CHECKER made impossible
+ * ## What landed
  *
- * The FUNCTION half. The obvious design — a real local IR function, so a direct
- * call costs no dynamic operation, mirroring what (KIR.LOWER.6) does for a
- * top-level one — was BUILT and does not work, for a reason that is a fact
- * about the checker rather than about the IR: a nested declaration is never
- * BOUND (CLAUDE.md's B83.5), so `CheckedFacts.signatureOf` answers **null** for
- * it and there is no declared return type and no erased parameter type to build
- * a typed function from. The refusal simply moved from *cannot lower the
- * reference* to *the checker gave no signature for this declaration*.
- *
- * The EXPRESSION form needs no oracle at all — every slot is `Any?` and every
- * name comes from the syntax — so a nested declaration reuses it verbatim, into
- * a hoisted local slot. The measured price is one `jsCall` per call where a
- * top-level function costs none.
+ * The FUNCTION half. (P18.129) shipped it on the EXPRESSION form, into a
+ * hoisted local slot — every slot `Any?`, every name from the syntax — because
+ * `-core`'s binder never bound a nested declaration and a typed function had
+ * no signature to be built from; the price was one `jsCall` per call.
+ * (KIR.BIND.1), on tsgo's checker: the declaration IS bound, so it lowers to a
+ * typed local IR function and a call past its emission is direct; the slot
+ * still holds the function object for value positions and identity. The
+ * `shape -` pins below say where a call is direct and where it stays dynamic.
  *
  * ## The CLASS half is refused, and the measurement that decides it
  *
@@ -184,16 +179,15 @@ class KirNestedDeclarationTest {
     // ---- M1a: the declaration, its call and its shape ----------------------
 
     /**
-     * SHAPE — a nested function's call is one `jsCall` and constructs nothing.
+     * SHAPE — (KIR.BIND.1) a nested function's call is DIRECT: no `jsCall`, no `jsNew`.
      *
-     * The measured PRICE of reusing the expression form: a top-level function's
-     * call is direct and costs no dynamic operation, and this one cannot be,
-     * because the checker gives a nested declaration no signature to build a
-     * typed IR function from. Asserted rather than left implicit, so the day
-     * the binder changes this pin is what says the price moved.
+     * Under `-core`'s binder a nested declaration had no signature and its call
+     * paid one `jsCall` through the expression form; this pin read `1` and said
+     * so. On tsgo's checker the declaration is bound, so it lowers to a typed
+     * local IR function and the call costs what a top-level one does.
      */
     @Test
-    fun `shape - a nested function call is one jsCall and no jsNew`() {
+    fun `shape - a nested function call is direct`() {
         val lowered = lower(
             """
             function outer(): number {
@@ -204,9 +198,111 @@ class KirNestedDeclarationTest {
             """
         )
         assert(lowered.compiled)
-        assert(lowered.jsCall == 1)
+        assert(lowered.jsCall == 0)
         assert(lowered.jsNew == 0)
         assert(lowered.stdout == "2\n")
+    }
+
+    /** SHAPE — a HOISTED body is emitted at the top of its list, so a call ABOVE it is direct too. */
+    @Test
+    fun `shape - a call above a hoisted nested function is direct`() {
+        val lowered = lower(
+            """
+            function outer(): number {
+              const a = helper(1)
+              function helper(x: number): number { return x + 1 }
+              return a
+            }
+            console.log(outer())
+            """
+        )
+        assert(lowered.compiled)
+        assert(lowered.jsCall == 0)
+        assert(lowered.stdout == "2\n")
+    }
+
+    /**
+     * SHAPE — a CAPTURING (deferred) nested function is direct below its declaration,
+     * and a recursive one calls itself directly.
+     */
+    @Test
+    fun `shape - a capturing and a recursive nested function are direct`() {
+        val lowered = lower(
+            """
+            function outer(n: number): number {
+              let acc = 10
+              function add(x: number): number { acc = acc + x; return acc }
+              function fact(x: number): number { return x <= 1 ? 1 : x * fact(x - 1) }
+              add(1)
+              return add(fact(n))
+            }
+            console.log(outer(4))
+            """
+        )
+        assert(lowered.compiled)
+        assert(lowered.jsCall == 0)
+        assert(lowered.stdout == "35\n")
+    }
+
+    /**
+     * SHAPE — a call lowered BEFORE its target is emitted stays dynamic.
+     *
+     * `isEven`'s body is built at its own statement, where `isOdd` does not
+     * exist yet, so that one call goes through the slot; `isOdd` calling
+     * `isEven` and the outer call are direct. One `jsCall`, not three.
+     */
+    @Test
+    fun `shape - mutual recursion is direct except the forward call`() {
+        val lowered = lower(
+            """
+            function outer(n: number): string {
+              function isEven(x: number): boolean { return x === 0 ? true : isOdd(x - 1) }
+              function isOdd(x: number): boolean { return x === 0 ? false : isEven(x - 1) }
+              return isEven(n) ? "even" : "odd"
+            }
+            console.log(outer(4) + "," + outer(7))
+            """
+        )
+        assert(lowered.compiled)
+        assert(lowered.jsCall == 1)
+        assert(lowered.stdout == "even,odd\n")
+    }
+
+    /** SHAPE — a call resolved to an OVERLOAD signature reaches the implementation directly. */
+    @Test
+    fun `shape - a nested overload call is direct`() {
+        val lowered = lower(
+            """
+            function outer(): string {
+              function pick(a: number): string
+              function pick(a: string): string
+              function pick(a: any): string { return "v:" + a }
+              return pick(1) + "/" + pick("x")
+            }
+            console.log(outer())
+            """
+        )
+        assert(lowered.compiled)
+        assert(lowered.jsCall == 0)
+        assert(lowered.stdout == "v:1/v:x\n")
+    }
+
+    /** SHAPE — a REST parameter: the direct call packs the array, the value is a `JsVarargFunction`. */
+    @Test
+    fun `shape - a nested function with a rest parameter is direct and still a value`() {
+        val lowered = lower(
+            """
+            function outer(): string {
+              function g(a: number, ...rest: number[]): string { return a + ":" + rest.length }
+              const f: (...xs: number[]) => string = g
+              return g(1, 2, 3) + "/" + f(1, 2, 3, 4)
+            }
+            console.log(outer())
+            """
+        )
+        assert(lowered.compiled)
+        assert(lowered.jsCall == 1)
+        assert(lowered.stdout == "1:2/1:3\n")
     }
 
     /** node prints `2` — a helper declared above its use. */
@@ -932,6 +1028,8 @@ class KirNestedDeclarationTest {
             """
         )
         assert(lowered.compiled)
+        // Dynamic, through the still-`null` slot: the body is emitted below the call.
+        assert(lowered.jsCall == 1)
         assert(lowered.exitCode != 0)
         // node: `ReferenceError: Cannot access 'n' before initialization`.
         assert(lowered.stderr.contains("undefined is not a function"))

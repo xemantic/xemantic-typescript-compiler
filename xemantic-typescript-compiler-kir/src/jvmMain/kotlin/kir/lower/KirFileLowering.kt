@@ -294,19 +294,13 @@ internal class KirFileLowering(
      * `const innerFn = function () {}`, the EXPRESSION form, which has worked
      * since the first closures landed.
      *
-     * ## Why the EXPRESSION form's lowering, and not a local IR function
+     * ## The slot holds the OBJECT; calls go to a typed local function
      *
-     * Measured, and it is a CHECKER fact rather than a preference: a nested
-     * declaration is never BOUND (CLAUDE.md's B83.5 — `Binder.bindStatement`
-     * recurses into a `SourceFile`'s own statement list and a `ModuleBlock`'s
-     * and into nothing else), so `CheckedFacts.signatureOf` answers **null**
-     * for it and `facts.typeOf(parameter)` has no symbol to ask about. A real
-     * local IR function needs both — a declared return type and an erased type
-     * per parameter — so that route is shut until the binder changes. The
-     * expression form needs NEITHER: every slot is `Any?` and every name comes
-     * from the syntax, which is exactly why `const innerFn = function () {}`
-     * has always worked. The price is that each call is a `jsCall` rather than
-     * a direct one, which is the price the expression form has always paid.
+     * (KIR.BIND.1) On tsgo's checker a nested declaration is bound, so it gets
+     * a typed local IR function ([localFunctions]) and a call already past its
+     * emission is direct. The slot keeps what only an object can give: value
+     * positions and per-invocation identity. (Under `-core`'s binder the
+     * declaration had no signature, and every call went through this slot.)
      *
      * ## Why a VARIABLE and not a static
      *
@@ -334,6 +328,39 @@ internal class KirFileLowering(
         java.util.Collections.newSetFromMap(
             java.util.IdentityHashMap<FunctionDeclaration, Boolean>()
         )
+
+    /**
+     * (KIR.BIND.1) A nested `function`'s TYPED local IR function, by declaration.
+     *
+     * On tsgo's checker a nested declaration is bound like any other, so
+     * `CheckedFacts.signatureOf` answers for it and the function can be built
+     * with its declared return and parameter types — what a top-level one gets.
+     * A call that resolves to it is then DIRECT, where the expression form paid
+     * one `jsCall` per call; the slot still holds the function OBJECT (a
+     * forwarder to this function), so value positions and per-invocation
+     * identity are unchanged.
+     */
+    private val localFunctions =
+        java.util.IdentityHashMap<FunctionDeclaration, IrSimpleFunction>()
+
+    /**
+     * (KIR.BIND.1) The nested functions whose IR declaration has been EMITTED.
+     *
+     * A call lowered before its target is emitted stays dynamic, through the
+     * slot. That is what keeps the order rules [hoistLocalFunctions] states:
+     * a deferred body may close over a local declared above its own statement,
+     * and a direct call placed earlier would hand Kotlin's closure lowering a
+     * variable that does not exist yet — where `node` throws, and so does a
+     * read of the still-`null` slot.
+     */
+    private val emittedLocalFunctions =
+        java.util.Collections.newSetFromMap(
+            java.util.IdentityHashMap<FunctionDeclaration, Boolean>()
+        )
+
+    /** (KIR.BIND.1) A nested OVERLOAD signature, by declaration, to its implementation. */
+    private val localOverloads =
+        java.util.IdentityHashMap<FunctionDeclaration, FunctionDeclaration>()
 
     /** What makes a generated shape class's name unique across FILES. */
     private val shapeFilePrefix: String =
@@ -2020,6 +2047,19 @@ internal class KirFileLowering(
         val nested = statements.filterIsInstance<FunctionDeclaration>()
             .filter { it !in functions && it.body != null }
         if (nested.isEmpty()) return
+        // Each bodyless OVERLOAD names the implementation that follows it, as
+        // [declareFunction]'s `pendingOverloads` does at the top level.
+        val pending = HashMap<String, MutableList<FunctionDeclaration>>()
+        statements.filterIsInstance<FunctionDeclaration>()
+            .filter { it !in functions }
+            .forEach { declaration ->
+                val name = declaration.name?.text ?: return@forEach
+                if (declaration.body == null) {
+                    pending.getOrPut(name) { mutableListOf() }.add(declaration)
+                } else {
+                    pending.remove(name)?.forEach { localOverloads[it] = declaration }
+                }
+            }
         val declaredHere = namesDeclaredIn(statements)
         // Every slot first, so a body lowered below can already see its
         // neighbour's — mutual recursion is two reads of two slots.
@@ -2033,7 +2073,7 @@ internal class KirFileLowering(
             val reads = declaration.parameters + listOfNotNull(declaration.body)
             if (reads.none { mentionsAny(it, declaredHere) }) {
                 hoistedLocalFunctions.add(declaration)
-                out.add(assignLocalFunction(declaration))
+                out.addAll(emitLocalFunction(declaration))
             }
         }
     }
@@ -2066,6 +2106,57 @@ internal class KirFileLowering(
         localFunctionSlots[declaration] = variable
         scopes.last()[name.text] = variable
         return variable
+    }
+
+    /**
+     * (KIR.BIND.1) A nested function at the point its value becomes available:
+     * the TYPED local IR function, then the slot filled with a forwarder to it.
+     *
+     * Falls back to the expression form ([assignLocalFunction]) only where the
+     * checker gave the declaration no signature — the case the binder used to
+     * make universal.
+     */
+    private fun emitLocalFunction(declaration: FunctionDeclaration): List<IrStatement> {
+        if (facts.signatureOf(declaration) == null) return listOf(assignLocalFunction(declaration))
+        val slot = localFunctionSlots.getValue(declaration)
+        val body = declaration.body!!
+        val function = builder.irFactory.buildFun {
+            name = Name.identifier(kotlinName(declaration.name!!.text))
+            returnType = declaredReturnType(declaration)
+            visibility = DescriptorVisibilities.LOCAL
+            modality = Modality.FINAL
+            origin = builder.generatedOrigin
+        }
+        function.parent = frame.irFunction
+        addParameters(function, declaration.parameters)
+        localFunctions[declaration] = function
+        // Before the body, so the function may call itself directly.
+        emittedLocalFunctions.add(declaration)
+        // No receiver: a `function` declaration binds its own `this`, so one
+        // reading it refuses rather than taking the enclosing method's.
+        inFunction(function, function.returnType, null, null) {
+            function.body = blockBody(function, declaration.parameters, body.statements, body)
+        }
+        return listOf(
+            function,
+            scope.irSet(slot, coerce(declaration, localFunctionObject(function), types.anyNullable)),
+        )
+    }
+
+    /**
+     * The function OBJECT for a local IR function: a per-evaluation forwarder,
+     * a `JsVarargFunction` when it has a rest parameter — [buildFunctionValue]'s
+     * two carriers without its static, because a nested function's identity is
+     * per invocation.
+     */
+    private fun localFunctionObject(target: IrSimpleFunction): IrExpression {
+        val regular = target.parameters.filter { it.kind == IrParameterKind.Regular }
+        val restIndex = regular.indexOfFirst { it in restParameters }
+        if (restIndex < 0) return forwardingLambda(target)
+        return scope.irCall(intrinsics.jsVarargFunction, intrinsics.jsVarargFunctionType).apply {
+            arguments[0] = scope.irInt(restIndex)
+            arguments[1] = varargForwardingLambda(target, regular, restIndex)
+        }
     }
 
     /** Fills a slot with the function value — the EXPRESSION form's own lowering. */
@@ -2192,7 +2283,7 @@ internal class KirFileLowering(
                 if (statement in localFunctionSlots &&
                     statement !in hoistedLocalFunctions
                 ) {
-                    out.add(assignLocalFunction(statement))
+                    out.addAll(emitLocalFunction(statement))
                 }
             }
             is ClassDeclaration, is EnumDeclaration,
@@ -4420,6 +4511,16 @@ internal class KirFileLowering(
                 bindArguments(node, target.parameters, offset = 0)
             }
         }
+        // (KIR.BIND.1) A nested function already EMITTED is called directly.
+        (declaration as? FunctionDeclaration)
+            ?.let { localOverloads[it] ?: it }
+            ?.takeIf { it in emittedLocalFunctions }
+            ?.let { localFunctions[it] }
+            ?.let { target ->
+                return scope.irCall(target.symbol).apply {
+                    bindArguments(node, target.parameters, offset = 0)
+                }
+            }
         // (LIB.7) `ns.f(…)` — the checker offers NO signature for a member of a
         // namespace import (measured: `signatureCount == 0`), so the arm above
         // cannot fire however ordinary the call is. The declaration is reached

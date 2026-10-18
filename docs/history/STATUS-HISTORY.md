@@ -1,3 +1,11 @@
+**(TSGO.8-a) DONE — Arm B has a checked-in generator; the incremental bench runs the port (2026-10-16):** the owner
+decided (TSGO.8) — retire `-core`, deprecate `-project` (its incremental learnings queued as (TSGO.10)), ship the port's
+image as `xtsc-linux-x64`, the tsgo-based module is the default artifact. `scripts/gen-many-small-project.py … 48 50
+--lib es2020,dom --edits …` regenerates Arm B (`many-small-2400-dom`) and its four edit variants byte-identical;
+`scripts/inc46-vs-tsgo.sh` times the port's native CLI through tsgo's own harness (`TSC_BIN`). Indicative, 2 reps, a
+pre-(TSGO.9) image: port cold 735 / no-op 559 / body 644 / signature 633 ms against tsgo's 409 / 253 / 298 / 316, one
+row in every cell. Next: (8-b) the shipped image.
+
 **(TSGO.9) DONE — a denser AST through porter rules (2026-10-15):** (9-c) one object per node — every data struct
 EXTENDS its node-embedding parent (`NodeDefault : nodeData : Node`), so a node, its data and the embedding chain are one
 object (205 classes; the porter proves interface identity, type assertions and dispatch cannot tell them apart). (9-c)

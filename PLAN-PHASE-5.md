@@ -25,6 +25,22 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (KIR.BIND.1) — nested functions lower to typed local functions; calls are direct
+
+- Re-measured on the port: `TsgoFacts` records a signature for every `FunctionDeclaration` at any depth, so the
+  item's blocker ("a nested declaration is never bound", `-core`'s B83.5) is gone.
+- `KirFileLowering`: `emitLocalFunction` builds a LOCAL `IrSimpleFunction` (declared return/parameter types via
+  `declaredReturnType` / `addParameters`, no receiver) at the point the expression form's lambda was built — so the
+  hoist/defer rule and its TDZ reasoning are unchanged — and fills the slot with `localFunctionObject` (forwarder or
+  `JsVarargFunction`). `lowerCall` calls it directly once it is in `emittedLocalFunctions` (added before the body,
+  so self-recursion is direct); nested overload signatures map through `localOverloads`. Falls back to the
+  expression form only when the checker gives no signature.
+- Pins (`KirNestedDeclarationTest`): the old `jsCall == 1` pin now reads 0; new — call above a hoisted function,
+  capturing + recursive, mutual recursion (exactly the one forward call dynamic), overload, rest parameter
+  (direct call + value through `jsCall`), and the TDZ divergence asserts its call stays dynamic. Ablating the
+  direct arm turns all six shape pins red. KIR 313 / 0; `kir-bench.sh 1` equivalence: mitt and toml agree in all
+  three arms.
+
 ### Round (TSGO.8-e) — `-core` and `-project` deleted
 
 - Owner 2026-10-18: "please delete the core, and then work on KIR". Deleted `-core`, `-project`, `-core`'s
@@ -5140,7 +5156,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   ordering within the statement list, the (P18.122) bag protocol over its own slots, the `super` chain, and a
   per-invocation carrier — each needing its own pins. 14 shapes are characterised and pinned as named refusals in
   `KirNestedDeclarationTest`, so the round starts from a measured table rather than a probe.
-- [ ] **(KIR.BIND.1) A NESTED FUNCTION COSTS ONE `jsCall` PER CALL WHERE A TOP-LEVEL ONE IS DIRECT, AND THE
+- [x] **(KIR.BIND.1) A NESTED FUNCTION COSTS ONE `jsCall` PER CALL WHERE A TOP-LEVEL ONE IS DIRECT, AND THE
   UNBLOCKER IS IN THE *BINDER*, NOT THE BACKEND (measured 2026-09-17 by (P18.129), which BUILT the typed design
   and watched the refusal MOVE rather than disappear).** A declaration nested in a body is never bound (B83.5), so
   `CheckedFacts.signatureOf` answers null and a parameter has no symbol to type — a typed local `IrSimpleFunction`

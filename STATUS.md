@@ -1,5 +1,14 @@
 # Status
 
+**(KIR.BIND.1) DONE — a nested `function` is a typed local function and its calls are direct (2026-10-18):** the
+blocker was `-core`'s binder (a nested declaration had no signature); tsgo binds it, so the lowering now builds a
+typed local IR function where the expression form's lambda used to be built (top of the list when hoistable, else
+at its own statement) and a call already past that point is DIRECT — 0 `jsCall` where it was 1. The slot keeps the
+function object (a forwarder; `JsVarargFunction` for a rest parameter), so value positions and per-invocation
+identity are unchanged; a call lowered before emission (a forward call in mutual recursion, the TDZ case) stays
+dynamic. Overload signatures map to their implementation. 5 new shape pins (all red with the direct arm ablated);
+KIR 313 / 0, warning-clean, `kir-bench.sh` equivalence green (mitt, toml). Next: (KIR.LOWER.7), nested classes.
+
 **(TSGO.8-e) DONE — `-core` and `-project` deleted (2026-10-18, owner: "please delete the core"):** both modules
 gone with `-core`'s Kotlin/Native CI job, the generated-corpus pipeline, the `partition-gate` fixture, the
 `corpus-triage` skill and ~380 frozen-era scripts (scripts/ 497 → 61 files: what CI, CLAUDE.md, the port's and KIR's
@@ -30,11 +39,3 @@ consumer's coordinates move. `DefaultArtifactTest` pins the jar name and licence
 port (`api(-tsgo)`, still refusing `--serve`/`--daemon`/`--socket` with exit 2); `-core` is off its classpath
 (`LeanClasspathTest`), and `NativeImageEntryPointTest` pins the shipped artifact to the port's image (fails on the old
 workflow). A real project build is now TypeScript 7.0 wherever `xtsc` ships. `-cli` 18 / 0. Next: (8-c) coordinates.
-
-**(TSGO.8-a) DONE — Arm B has a checked-in generator; the incremental bench runs the port (2026-10-16):** the owner
-decided (TSGO.8) — retire `-core`, deprecate `-project` (its incremental learnings queued as (TSGO.10)), ship the port's
-image as `xtsc-linux-x64`, the tsgo-based module is the default artifact. `scripts/gen-many-small-project.py … 48 50
---lib es2020,dom --edits …` regenerates Arm B (`many-small-2400-dom`) and its four edit variants byte-identical;
-`scripts/inc46-vs-tsgo.sh` times the port's native CLI through tsgo's own harness (`TSC_BIN`). Indicative, 2 reps, a
-pre-(TSGO.9) image: port cold 735 / no-op 559 / body 644 / signature 633 ms against tsgo's 409 / 253 / 298 / 316, one
-row in every cell. Next: (8-b) the shipped image.
