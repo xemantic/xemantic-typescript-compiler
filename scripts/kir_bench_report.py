@@ -30,6 +30,7 @@ START, END = "<!-- KIR-BENCH-TABLE-START -->", "<!-- KIR-BENCH-TABLE-END -->"
 ARMS = {
     "tsgo": ("tsgo 7.0.2 -> JS -> node", "runtime peer (baseline)"),
     "tbun": ("tsgo 7.0.2 -> JS -> bun", "runtime peer"),
+    "perry": ("Perry -> native (LLVM)", "TS-to-native peer"),
     "xtsc": ("xtsc -> JS -> node", "control: our front end, same runtime"),
     "xbun": ("xtsc -> JS -> bun", "control: our front end, same runtime"),
     "kir": ("xtsc -> JVM bytecode -> java", "ours"),
@@ -98,7 +99,8 @@ def render(run):
         f"Run `{os.path.basename(run['_path'])}` — commit `{run['commit'][:12]}`"
         + (" (dirty tree)" if run.get("dirty") else "")
         + f", {run['utc']}, {run['processes']} processes per arm, interleaved.",
-        f"Box: {box['cpu']}, {box['cores']} cores, {box['mem_gb']} GB; java {box['java']}, node {box['node']}.",
+        f"Box: {box['cpu']}, {box['cores']} cores, {box['mem_gb']} GB; java {box['java']}, node {box['node']}"
+        + (f", {box['perry']}" if box.get("perry") else "") + ".",
         # (BENCH.2) A placement change is a recipe change: runs with different placements are not comparable.
         "Placement: " + ", ".join(f"{arm} {where}" for arm, where in
                                   run.get("placement", {a: "os scheduler (not recorded)" for a in run["arms"]}).items())

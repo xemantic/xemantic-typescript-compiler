@@ -8,6 +8,15 @@
 #   arm 4  xtsc -kir    -> Kotlin/Native -> kexe    (KIR_BENCH_NATIVE=1, opt-in)
 #   arm 5  tsgo 7.0.2   -> JavaScript   -> bun      (KIR_BENCH_BUN=1, opt-in)
 #   arm 6  xtsc         -> JavaScript   -> bun      (KIR_BENCH_BUN=1, opt-in)
+#   arm 7  Perry        -> native (LLVM) -> elf     (KIR_BENCH_PERRY=1, opt-in)
+#
+# The PERRY arm ((BENCH.4)) is the TS-to-native PEER: the one compiler of that
+# category that takes the fixture bytes UNMODIFIED, so the equivalence gate can
+# hold it like any other arm. It has no type checker (SWC parses, LLVM
+# generates), so it is a peer for what it computes, not for what it accepts. It
+# is opt-in for the reason `wasi` is: measured 2026-10-18 at ~61x node's time on
+# mitt and ~19x on toml, so one process of it is ~8 minutes where the others
+# are seconds. It needs clang (Perry assembles its statepoint rewrite with it).
 #
 # The BUN arms re-run arms 1 and 3's OWN emitted files on a second JavaScript
 # engine, so the pair (1,5) and the pair (3,6) each hold the compiler AND the
@@ -45,6 +54,7 @@
 #       KIR_BENCH_NATIVE=1 scripts/kir-bench.sh 3   (adds the Kotlin/Native arm)
 #       KIR_BENCH_WASM=1      scripts/kir-bench.sh 3   (adds WebAssembly under V8)
 #       KIR_BENCH_WASM_WASI=1 scripts/kir-bench.sh 1   (adds WebAssembly under wasmtime)
+#       KIR_BENCH_PERRY=1     scripts/kir-bench.sh 3   (adds Perry, the TS-to-native peer)
 #
 # THE TWO WASM ARMS ARE SEPARATE FLAGS BECAUSE THEY COST THREE ORDERS OF
 # MAGNITUDE APART. `wjs` is an ordinary arm. `wasi` runs `toml` at ~1.7 ms/parse
@@ -74,6 +84,9 @@ TSGO="${KIR_BENCH_TSGO:-$REPO/tools/tsgo-7.0.2/lib/tsc}"
 WASM_ARM="${KIR_BENCH_WASM:-0}"
 WASI_ARM="${KIR_BENCH_WASM_WASI:-0}"
 WASMTIME="${KIR_BENCH_WASMTIME:-wasmtime}"
+PERRY_ARM="${KIR_BENCH_PERRY:-0}"
+PERRY="${KIR_BENCH_PERRY_BIN:-$REPO/tools/perry/node_modules/@perryts/perry-linux-x64/bin/perry}"
+PERRY_CLANG="${PERRY_LLVM_CLANG:-$REPO/tools/llvm-22/bin/clang}"
 # (BENCH.2) PLACEMENT — an OPTION, never a silent default. KIR_BENCH_PIN=<cpu list> runs
 # every single-threaded-loop arm (node, bun, native, wasm) under `taskset -c <list>`;
 # the JVM arm is NEVER pinned by it, because its JIT compiler threads are part of the
@@ -108,6 +121,15 @@ if [ "$WASI_ARM" = "1" ]; then
         || die "no wasmtime on PATH — set KIR_BENCH_WASMTIME. It is NOT in the repo:
   curl https://wasmtime.dev/install.sh -sSf | bash
 The wasm-js arm additionally needs the node above, which already gates."
+fi
+if [ "$PERRY_ARM" = "1" ]; then
+    [ -x "$PERRY" ] || die "no perry at '$PERRY' — set KIR_BENCH_PERRY_BIN. It is NOT in the repo:
+  mkdir -p tools/perry && (cd tools/perry && ../node/bin/npm install @perryts/perry@0.5.1520)"
+    # Perry's LLVM is 22.1.8, and it refuses to compile at all without a clang to
+    # assemble with (`perry doctor` says which). Only bin/clang* and lib/clang/ are needed.
+    [ -x "$PERRY_CLANG" ] || die "no clang at '$PERRY_CLANG' — set PERRY_LLVM_CLANG. It is NOT in the repo:
+  mkdir -p tools/llvm-22 && curl -sL https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz \\
+    | tar xJ -C tools/llvm-22 --strip-components=1 --wildcards 'LLVM-22.1.8-Linux-X64/bin/clang*' 'LLVM-22.1.8-Linux-X64/lib/clang/*'"
 fi
 [ -d "$PROJECTS/toml" ] || die "no acceptance projects at '$PROJECTS'"
 
@@ -227,6 +249,7 @@ ARMS=(tsgo xtsc kir)
 [ "$WASI_ARM" = "1" ] && ARMS+=(wasi)
 # The bun arms need NO build of their own: they run the files arms 1 and 3 emit.
 [ "$BUN_ARM" = "1" ] && ARMS+=(tbun xbun)
+[ "$PERRY_ARM" = "1" ] && ARMS+=(perry)
 
 # The banner is the positive control on the instrument: a run says where it ran.
 placement_of() {                                # placement_of <arm>
@@ -279,6 +302,15 @@ for lib in mitt toml; do
     # The WASM arms go through the same lowering again — `scripts/kir-wasm.sh`
     # carries its own positive control that the plugin ran, so a module built
     # from the empty seed cannot reach the gate below.
+    # The PERRY arm compiles the SAME assembled sources, in a copy of its own:
+    # perry writes a node_modules/.cache into the directory it runs in.
+    if [ "$PERRY_ARM" = "1" ]; then
+        rm -rf "$WORK/perry-src-$lib"; cp -r "$WORK/src-$lib" "$WORK/perry-src-$lib"
+        rm -f "$WORK/perry-$lib"
+        (cd "$WORK/perry-src-$lib" && PERRY_LLVM_CLANG="$PERRY_CLANG" "$PERRY" compile src/main.ts \
+            -o "$WORK/perry-$lib") > "$WORK/emit-perry-$lib.log" 2>&1
+        [ -x "$WORK/perry-$lib" ] || die "perry built no binary for $lib — see $WORK/emit-perry-$lib.log"
+    fi
     if [ "$WASM_ARM" = "1" ] || [ "$WASI_ARM" = "1" ]; then
         targets=()
         [ "$WASM_ARM" = "1" ] && targets+=(wasm-js)
@@ -306,6 +338,7 @@ run_arm() {                                    # run_arm <arm> <lib>
         nat)  "${pin[@]}" "$WORK/native-$2.kexe" ;;
         wasi) "${pin[@]}" "$WASMTIME" $WASMTIME_FLAGS "$WORK/wasm-wasi-$2/$2.wasm" ;;
         wjs)  "${pin[@]}" "$NODE" "$WORK/wasm-js-$2/$2.mjs" ;;
+        perry) "${pin[@]}" "$WORK/perry-$2" ;;
     esac
 }
 
@@ -348,6 +381,7 @@ KB_CORES="$(nproc)" \
 KB_MEM_GB="$(awk '/MemTotal/ {printf "%.1f", $2 / 1048576}' /proc/meminfo)" \
 KB_JAVA="$(java -version 2>&1 | head -1 | sed 's/"//g')" \
 KB_NODE="$("$NODE" --version)" \
+KB_PERRY="$([ "$PERRY_ARM" = "1" ] && "$PERRY" --version)" \
 KB_ARMS="${ARMS[*]}" KB_PROCESSES="$PROCESSES" KB_PIN="$PIN" \
 python3 - "$TSV" "$EQUIV" "$JSON" <<'PY'
 import collections, datetime, json, os, statistics, sys
@@ -363,8 +397,9 @@ UNIT = {"mitt": (4_000_000, 1e6, "ns/emit"), "toml": (20_000, 1e3, "us/parse")}
 NAME = {"tsgo": "tsgo  -> JS     -> node", "xtsc": "xtsc  -> JS     -> node",
         "kir":  "xtsc  -> JVM    -> java", "nat": "xtsc  -> NATIVE -> kexe",
         "wasi": "xtsc  -> WASM   -> wasmtime", "wjs": "xtsc  -> WASM   -> node",
-        "tbun": "tsgo  -> JS     -> bun ", "xbun": "xtsc  -> JS     -> bun "}
-ORDER = [a for a in ("tsgo", "tbun", "xtsc", "xbun", "kir", "nat", "wasi", "wjs")
+        "tbun": "tsgo  -> JS     -> bun ", "xbun": "xtsc  -> JS     -> bun ",
+        "perry": "perry -> NATIVE -> elf"}
+ORDER = [a for a in ("tsgo", "tbun", "perry", "xtsc", "xbun", "kir", "nat", "wasi", "wjs")
          if (("mitt", a) in rows)]
 for lib in ("mitt", "toml"):
     ops, scale, unit = UNIT[lib]
@@ -391,7 +426,8 @@ run = {
     "libs": ["mitt", "toml"],
     "box": {"cpu": os.environ["KB_CPU"], "cores": int(os.environ["KB_CORES"]),
             "mem_gb": float(os.environ["KB_MEM_GB"]), "java": os.environ["KB_JAVA"],
-            "node": os.environ["KB_NODE"]},
+            "node": os.environ["KB_NODE"],
+            **({"perry": os.environ["KB_PERRY"]} if os.environ["KB_PERRY"] else {})},
     "units": {lib: {"ops": UNIT[lib][0], "scale": UNIT[lib][1], "name": UNIT[lib][2]} for lib in UNIT},
     "equivalence": {lib: {"verdict": "agree" if len(set(s.values())) == 1 and set(s) == set(arms) else "disagree",
                           "sinks": s} for lib, s in equivalence.items()},
