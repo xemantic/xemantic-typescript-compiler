@@ -99,6 +99,10 @@ def render(run):
         + (" (dirty tree)" if run.get("dirty") else "")
         + f", {run['utc']}, {run['processes']} processes per arm, interleaved.",
         f"Box: {box['cpu']}, {box['cores']} cores, {box['mem_gb']} GB; java {box['java']}, node {box['node']}.",
+        # (BENCH.2) A placement change is a recipe change: runs with different placements are not comparable.
+        "Placement: " + ", ".join(f"{arm} {where}" for arm, where in
+                                  run.get("placement", {a: "os scheduler (not recorded)" for a in run["arms"]}).items())
+        + ".",
         "",
     ]
     for lib in run["libs"]:

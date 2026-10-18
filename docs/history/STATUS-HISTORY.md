@@ -1,3 +1,12 @@
+**(TSGO.8-e) DONE — `-core` and `-project` deleted (2026-10-18, owner: "please delete the core"):** both modules
+gone with `-core`'s Kotlin/Native CI job, the generated-corpus pipeline, the `partition-gate` fixture, the
+`corpus-triage` skill and ~380 frozen-era scripts (scripts/ 497 → 61 files: what CI, CLAUDE.md, the port's and KIR's
+docs reach). The pinned `cloneTypeScriptRepo` / `cloneTypeScriptGoRepo` tasks moved to the root build;
+`bench-compile-tsc.sh` is the profiles' materializer only; `ParseBenchMain` keeps its `tsgo` arm. 119 superseded queue
+items closed; the WORK ORDER is now KIR. Two (TSGO.9-c) warnings fixed. `-tsgo` 156, `-goport` 31, `-cli` 20,
+`-daemon` 63, `-client` 20, `-api` 30, `-lsp` 38, KIR 308, `-externals` 291 — all 0 failures; warning-clean.
+Next: KIR — (KIR.LOWER.7).
+
 **(TSGO.8-d) DONE — `-project` deprecated (2026-10-16):** `Project` carries `@Deprecated` naming its successors, the
 port's `TsgoProject` (type oracle) and `TsgoLanguageService` (language features) in
 `com.xemantic.typescript:xemantic-typescript-compiler`; its KDoc says what is not carried over yet (in-session

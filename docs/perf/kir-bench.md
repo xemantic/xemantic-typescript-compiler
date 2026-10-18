@@ -19,10 +19,15 @@ How to read it:
   (TSGO.7-g), so its gap to the baseline is the run's noise floor; *ours* are the KIR backends. Losses are printed as
   losses.
 - A run on one developer box is one draw on one box: the box line says which.
+- **Placement** is recorded per arm. `KIR_BENCH_PIN=<cpus>` pins the single-threaded-loop arms with `taskset` and
+  never the JVM arm (its JIT threads are part of it); it is opt-in and stays so: the paired grading of (BENCH.2) —
+  unpinned, pinned, unpinned, pinned, 5 processes each, `bench-history/kir-runs/placement-ab-20261018/` — narrowed
+  the control arm's spread but not the baseline's, so the default recipe (and the series) is unchanged.
 
 <!-- KIR-BENCH-TABLE-START -->
 Run `20261018T142401Z-852b3b3c76e3.json` — commit `852b3b3c76e3` (dirty tree), 2026-10-18T14:24:01Z, 5 processes per arm, interleaved.
 Box: AMD EPYC-Rome Processor, 8 cores, 15.2 GB; java openjdk version 26.0.2 2026-07-21, node v22.20.0.
+Placement: tsgo os scheduler (not recorded), xtsc os scheduler (not recorded), kir os scheduler (not recorded).
 
 **mitt** — 4,000,000 ops/round; every arm printed `sink=128000000`.
 

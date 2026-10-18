@@ -74,6 +74,13 @@ TSGO="${KIR_BENCH_TSGO:-$REPO/tools/tsgo-7.0.2/lib/tsc}"
 WASM_ARM="${KIR_BENCH_WASM:-0}"
 WASI_ARM="${KIR_BENCH_WASM_WASI:-0}"
 WASMTIME="${KIR_BENCH_WASMTIME:-wasmtime}"
+# (BENCH.2) PLACEMENT — an OPTION, never a silent default. KIR_BENCH_PIN=<cpu list> runs
+# every single-threaded-loop arm (node, bun, native, wasm) under `taskset -c <list>`;
+# the JVM arm is NEVER pinned by it, because its JIT compiler threads are part of the
+# arm: round 824 measured a "single-threaded" run on ~4.2 of 8 cores, and pinning it
+# to one would serialise C1/C2 against the program and time a different one. Which
+# placement each arm got is printed at the top and recorded in the run's JSON.
+PIN="${KIR_BENCH_PIN:-}"
 # Kotlin/Wasm emits GC types and the new exception proposal. A host without them
 # REFUSES the module rather than running it slowly, so these are not tuning.
 WASMTIME_FLAGS="-W gc=y,function-references=y,exceptions=y"
@@ -221,6 +228,16 @@ ARMS=(tsgo xtsc kir)
 # The bun arms need NO build of their own: they run the files arms 1 and 3 emit.
 [ "$BUN_ARM" = "1" ] && ARMS+=(tbun xbun)
 
+# The banner is the positive control on the instrument: a run says where it ran.
+placement_of() {                                # placement_of <arm>
+    if [ -n "$PIN" ] && [ "$1" != "kir" ]; then echo "taskset -c $PIN"; else echo "os scheduler"; fi
+}
+if [ -n "$PIN" ]; then
+    taskset -c "$PIN" true 2> /dev/null || die "KIR_BENCH_PIN='$PIN' is not a usable CPU list for taskset"
+fi
+echo "kir-bench: placement:" >&2
+for arm in "${ARMS[@]}"; do echo "  $arm: $(placement_of "$arm")" >&2; done
+
 echo "kir-bench: building ${#ARMS[@]} arms (${ARMS[*]}) ..." >&2
 for lib in mitt toml; do
     for compiler in tsgo xtsc; do
@@ -278,15 +295,17 @@ done
 
 # ---- arms ------------------------------------------------------------------
 run_arm() {                                    # run_arm <arm> <lib>
+    local pin=()
+    [ -n "$PIN" ] && [ "$1" != "kir" ] && pin=(taskset -c "$PIN")
     case "$1" in
-        tsgo) "$NODE" "$WORK/tsgo-$2/out/main.js" ;;
-        xtsc) "$NODE" "$WORK/xtsc-$2/out/main.js" ;;
-        tbun) "$BUN"  "$WORK/tsgo-$2/out/main.js" ;;
-        xbun) "$BUN"  "$WORK/xtsc-$2/out/main.js" ;;
+        tsgo) "${pin[@]}" "$NODE" "$WORK/tsgo-$2/out/main.js" ;;
+        xtsc) "${pin[@]}" "$NODE" "$WORK/xtsc-$2/out/main.js" ;;
+        tbun) "${pin[@]}" "$BUN"  "$WORK/tsgo-$2/out/main.js" ;;
+        xbun) "${pin[@]}" "$BUN"  "$WORK/xtsc-$2/out/main.js" ;;
         kir)  java -cp "$WORK/jvm-$2:$RUN_CP_TAIL" program.MainKt ;;
-        nat)  "$WORK/native-$2.kexe" ;;
-        wasi) "$WASMTIME" $WASMTIME_FLAGS "$WORK/wasm-wasi-$2/$2.wasm" ;;
-        wjs)  "$NODE" "$WORK/wasm-js-$2/$2.mjs" ;;
+        nat)  "${pin[@]}" "$WORK/native-$2.kexe" ;;
+        wasi) "${pin[@]}" "$WASMTIME" $WASMTIME_FLAGS "$WORK/wasm-wasi-$2/$2.wasm" ;;
+        wjs)  "${pin[@]}" "$NODE" "$WORK/wasm-js-$2/$2.mjs" ;;
     esac
 }
 
@@ -329,7 +348,7 @@ KB_CORES="$(nproc)" \
 KB_MEM_GB="$(awk '/MemTotal/ {printf "%.1f", $2 / 1048576}' /proc/meminfo)" \
 KB_JAVA="$(java -version 2>&1 | head -1 | sed 's/"//g')" \
 KB_NODE="$("$NODE" --version)" \
-KB_ARMS="${ARMS[*]}" KB_PROCESSES="$PROCESSES" \
+KB_ARMS="${ARMS[*]}" KB_PROCESSES="$PROCESSES" KB_PIN="$PIN" \
 python3 - "$TSV" "$EQUIV" "$JSON" <<'PY'
 import collections, datetime, json, os, statistics, sys
 rows = collections.defaultdict(list)
@@ -367,6 +386,8 @@ run = {
     "utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "processes": int(os.environ["KB_PROCESSES"]),
     "arms": arms,
+    "placement": {arm: (f"taskset -c {os.environ['KB_PIN']}" if os.environ["KB_PIN"] and arm != "kir"
+                        else "os scheduler") for arm in arms},
     "libs": ["mitt", "toml"],
     "box": {"cpu": os.environ["KB_CPU"], "cores": int(os.environ["KB_CORES"]),
             "mem_gb": float(os.environ["KB_MEM_GB"]), "java": os.environ["KB_JAVA"],
