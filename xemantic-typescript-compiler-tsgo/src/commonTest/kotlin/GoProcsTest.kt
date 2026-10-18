@@ -113,6 +113,12 @@ class GoProcsTest {
             repeat(200) {
                 wg.go {
                     running.enter()
+                    // The positive control below (`peak >= 2`) must not depend on 300k iterations
+                    // happening to overlap: on a 2-vCPU runner they ran back to back (peak 1, a CI
+                    // flake). So each goroutine, holding its token, waits for a second one to be
+                    // running — capped, so a serializing scheduler still fails the pin rather than hangs.
+                    val mark = TimeSource.Monotonic.markNow()
+                    while (running.now.load() < 2 && mark.elapsedNow() < 2.seconds) probe.load()
                     work(probe, 300_000)
                     running.leave()
                 }
