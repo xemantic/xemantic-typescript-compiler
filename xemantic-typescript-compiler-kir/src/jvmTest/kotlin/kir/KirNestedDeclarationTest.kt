@@ -66,14 +66,14 @@ import kotlin.test.Test
  * still holds the function object for value positions and identity. The
  * `shape -` pins below say where a call is direct and where it stays dynamic.
  *
- * ## The CLASS half is refused, and the measurement that decides it
+ * ## The CLASS half
  *
  * `function outer() { class P {} ; return P }` answers **`outer() !== outer()`**
- * in `node`, and an instance made by one invocation is **not** `instanceof`
- * another invocation's `P`. So a nested class's identity is per INVOCATION, and
- * the lazy STATIC carrier (KIR.LOWER.5)/(KIR.LOWER.6) give a top-level class
- * value is the wrong shape for it — which is the question this family raises
- * that no previous round had to answer. It refuses by a message that says so.
+ * in `node`: a nested class's identity is per INVOCATION, so the lazy STATIC
+ * carrier a top-level class value uses is the wrong shape for it. (KIR.LOWER.7)
+ * lowers it as a local class with a per-invocation value; `KirNestedClassTest`
+ * holds that family, including the one divergence (`instanceof` across
+ * invocations).
  *
  * ## Why every shape assertion has a behaviour assertion beside it
  *
@@ -932,15 +932,11 @@ class KirNestedDeclarationTest {
     // ---- negative controls, each asserting the MESSAGE ---------------------
 
     /**
-     * negative control — a CLASS declared in a body refuses, and the message
-     * names the capability rather than the name.
-     *
-     * The measurement behind the refusal is in this class's own KDoc: a nested
-     * class's identity is per INVOCATION, so the lazy static carrier a
-     * top-level class value uses is the wrong shape for it.
+     * A CLASS declared in a body (node: `P:p`) — RE-POINTED by (KIR.LOWER.7)
+     * from the class half's named refusal; `KirNestedClassTest` holds the family.
      */
     @Test
-    fun `negative control - a class declared in a body is refused by name`() {
+    fun `a class declared in a body`() {
         val lowered = lower(
             """
             function outer(): string {
@@ -950,18 +946,13 @@ class KirNestedDeclarationTest {
             console.log(outer())
             """
         )
-        assert(!lowered.compiled)
-        assert(
-            lowered.report.contains(
-                "a `class` declared inside a function body or a block is out of the spike subset"
-            )
-        )
-        assert(lowered.report.contains("per INVOCATION rather than per file"))
+        assert(lowered.compiled)
+        assert(lowered.stdout == "P:p\n")
     }
 
-    /** negative control — the same for a class whose value is merely READ. */
+    /** The same for a class whose value is READ (node: `1`) — RE-POINTED by (KIR.LOWER.7). */
     @Test
-    fun `negative control - a class declared in a body is refused in a value position`() {
+    fun `a class declared in a body read as a value`() {
         val lowered = lower(
             """
             function outer(): string {
@@ -972,13 +963,8 @@ class KirNestedDeclarationTest {
             console.log(outer())
             """
         )
-        assert(!lowered.compiled)
-        assert(
-            lowered.report.contains(
-                "a `class` declared inside a function body or a block is out of the spike subset"
-            )
-        )
-        assert(lowered.report.contains("'P'"))
+        assert(lowered.compiled)
+        assert(lowered.stdout == "1\n")
     }
 
     /**

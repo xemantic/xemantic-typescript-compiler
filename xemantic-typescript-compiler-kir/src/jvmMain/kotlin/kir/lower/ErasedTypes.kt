@@ -34,6 +34,7 @@ import com.xemantic.typescript.compiler.kir.ast.FunctionType
 import com.xemantic.typescript.compiler.kir.ast.GetAccessor
 import com.xemantic.typescript.compiler.kir.ast.IndexSignature
 import com.xemantic.typescript.compiler.kir.ast.MethodDeclaration
+import com.xemantic.typescript.compiler.kir.ast.ClassDeclaration
 import com.xemantic.typescript.compiler.kir.ast.Node
 import com.xemantic.typescript.compiler.kir.ast.Parameter
 import com.xemantic.typescript.compiler.kir.ast.SetAccessor
@@ -90,6 +91,8 @@ internal class ErasedTypes(
     private val enumErasure: (Node) -> IrType?,
     /** `bigint` — `java.math.BigInteger`, per the design doc's type table. */
     private val bigIntegerType: () -> IrType,
+    /** A class's STATIC side (`typeof C`) — the `JsConstructor` carrier a class value is. */
+    private val constructorType: () -> IrType,
 ) {
 
     /** `number`, and every numeric literal type — JS numbers are IEEE-754 doubles. */
@@ -192,6 +195,17 @@ internal class ErasedTypes(
         // An ENUM erases to the type its members' VALUES have — it has no
         // runtime object here, so `Kind` and `Kind.A` are one JVM type.
         declaration?.let { enumErasure(it) }?.let { return it }
+        // A class's INSTANCE type is its `Interface` (or an instantiation of
+        // it); the same symbol on a plain anonymous object type is the class's
+        // STATIC side, `typeof C` — its value, a `JsConstructor` — and must not
+        // erase to the instance type.
+        if (declaration is ClassDeclaration && type !is Type.Interface && type !is Type.Reference &&
+            // A nested class not built yet is still a class: its value is a
+            // `JsConstructor` whenever it exists ((KIR.LOWER.7)).
+            (classForDeclaration(declaration) != null || isOwnStructuralDeclaration(declaration))
+        ) {
+            return constructorType()
+        }
         declaration?.let { classForDeclaration(it) }?.let { return it.defaultType }
         mapCallable(type)?.let { return it }
         // An anonymous object type — an object literal's own type, or a type

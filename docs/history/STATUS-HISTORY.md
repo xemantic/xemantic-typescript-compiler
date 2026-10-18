@@ -1,3 +1,10 @@
+**(TSGO.8-b) DONE — the shipped `xtsc` image is the port's (2026-10-16):** `native.yml` uploads the port's PGO image
+(replayed against tsgo 7.0.2 in the same job) as `xtsc-linux-x64`, binary `xtsc`; `-core`'s image job,
+`scripts/build-native-pgo.sh` and `-cli`'s `nativeImage` task are gone. `-cli` is the lean one-shot JVM CLI over the
+port (`api(-tsgo)`, still refusing `--serve`/`--daemon`/`--socket` with exit 2); `-core` is off its classpath
+(`LeanClasspathTest`), and `NativeImageEntryPointTest` pins the shipped artifact to the port's image (fails on the old
+workflow). A real project build is now TypeScript 7.0 wherever `xtsc` ships. `-cli` 18 / 0. Next: (8-c) coordinates.
+
 **(TSGO.8-a) DONE — Arm B has a checked-in generator; the incremental bench runs the port (2026-10-16):** the owner
 decided (TSGO.8) — retire `-core`, deprecate `-project` (its incremental learnings queued as (TSGO.10)), ship the port's
 image as `xtsc-linux-x64`, the tsgo-based module is the default artifact. `scripts/gen-many-small-project.py … 48 50

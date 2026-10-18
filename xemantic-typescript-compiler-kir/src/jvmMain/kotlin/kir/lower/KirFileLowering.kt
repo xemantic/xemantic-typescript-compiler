@@ -113,6 +113,7 @@ import com.xemantic.typescript.compiler.kir.ast.WhileStatement
 import com.xemantic.typescript.compiler.kir.ast.forEachChild
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import com.xemantic.typescript.compiler.kir.emit.irDouble
+import com.xemantic.typescript.compiler.kir.ast.ModuleBlock
 import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.compiler.kir.model.Symbol
 import com.xemantic.typescript.compiler.kir.model.SymbolFlags
@@ -384,6 +385,7 @@ internal class KirFileLowering(
         isOwnStructuralDeclaration = ::isOwnStructuralDeclaration,
         enumErasure = ::enumErasure,
         bigIntegerType = { intrinsics.bigIntegerType },
+        constructorType = { intrinsics.jsConstructorType },
     )
 
     /**
@@ -425,8 +427,20 @@ internal class KirFileLowering(
             // `-core` typed a namespace import `any`, tsgo types it as the
             // module, and what the lowering builds for it is a `JsObject`
             // subclass (`namespaceObjectFor`) — a property bag by construction.
-            declaration is SourceFile
+            declaration is SourceFile ||
+            // (KIR.LOWER.7) A class declared inside a body, wherever its local
+            // IR class does not exist yet — the enclosing function's own
+            // signature, erased in pass 1, and anything lowered above the class
+            // statement. A generated class with no runtime base IS a `JsObject`
+            // (see [declareClass]), so the bag is its upper bound.
+            (declaration is ClassDeclaration && isNestedClass(declaration))
         return structural && tables.isProgramNode(declaration)
+    }
+
+    /** (KIR.LOWER.7) A class declared in a function body or a block — not at a file's or a namespace's top level. */
+    private fun isNestedClass(declaration: ClassDeclaration): Boolean {
+        val parent = (declaration as? com.xemantic.typescript.compiler.kir.ast.NodeBase)?.parent
+        return parent !is SourceFile && parent !is ModuleBlock
     }
 
     // ---- the define pass's walk state --------------------------------------
@@ -517,14 +531,16 @@ internal class KirFileLowering(
      * and a base-typed receiver keeps calling the base's.
      */
     fun linkOverrides() {
-        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach { declaration ->
-            declaration.members.filterIsInstance<MethodDeclaration>().forEach { member ->
-                if (ModifierFlag.Static in member.modifiers) return@forEach
-                val name = (member.name as? Identifier)?.text ?: return@forEach
-                val function = methods[member] ?: return@forEach
-                overriddenIn(declaration, name, member.parameters.size)?.let {
-                    function.overriddenSymbols = listOf(it.symbol)
-                }
+        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach(::linkClassOverrides)
+    }
+
+    private fun linkClassOverrides(declaration: ClassDeclaration) {
+        declaration.members.filterIsInstance<MethodDeclaration>().forEach { member ->
+            if (ModifierFlag.Static in member.modifiers) return@forEach
+            val name = (member.name as? Identifier)?.text ?: return@forEach
+            val function = methods[member] ?: return@forEach
+            overriddenIn(declaration, name, member.parameters.size)?.let {
+                function.overriddenSymbols = listOf(it.symbol)
             }
         }
     }
@@ -2286,7 +2302,12 @@ internal class KirFileLowering(
                     out.addAll(emitLocalFunction(statement))
                 }
             }
-            is ClassDeclaration, is EnumDeclaration,
+            // (KIR.LOWER.7) A class declared in a body is built HERE, where it
+            // is declared: a class is not hoisted (its name is in its temporal
+            // dead zone above the statement), so its own position is the one
+            // every reference after it may rely on.
+            is ClassDeclaration -> if (statement !in classes) out.addAll(emitLocalClass(statement))
+            is EnumDeclaration,
             is InterfaceDeclaration, is TypeAliasDeclaration,
             is ImportDeclaration, is ExportDeclaration, is ImportEqualsDeclaration -> {}
             // `export default X` where X is a NAME emits nothing: the importing
@@ -3171,12 +3192,89 @@ internal class KirFileLowering(
         return owner.takeIf { it !in classes && tables.isProgramNode(it) }
     }
 
+    /**
+     * (KIR.LOWER.7) A class declared in a function body or a block: a Kotlin IR
+     * LOCAL class, built whole at its statement, and its value per invocation.
+     *
+     * The top-level passes (shell, declare, link overrides, define) run here for
+     * this one class, in that order. Kotlin's own closure lowering then gives a
+     * method that reads an enclosing local its capture, as it does for a lambda.
+     *
+     * The VALUE is a `JsConstructor` built each time the statement runs, held
+     * in a block-scoped slot under the class's name — so `outer() !== outer()`,
+     * as `node` answers, where a top-level class's lazy static would make every
+     * invocation's value one object. `new P()` constructs directly and never
+     * reads the slot.
+     */
+    private fun emitLocalClass(declaration: ClassDeclaration): List<IrStatement> {
+        val name = declaration.name
+            ?: refuse(tsFile, declaration, "cannot lower an anonymous class")
+        declaration.members.firstOrNull { member ->
+            ModifierFlag.Static in when (member) {
+                is PropertyDeclaration -> member.modifiers
+                is MethodDeclaration -> member.modifiers
+                else -> accessorModifiers(member)
+            }
+        }?.let { member ->
+            refuse(
+                tsFile, member,
+                "a `static` member of a class declared inside a function body or a block is " +
+                    "out of the spike subset: a JVM static is one per program, and this class " +
+                    "is one per invocation"
+            )
+        }
+        val irClass = builder.irFactory.buildClass {
+            this.name = Name.identifier(kotlinName(name.text))
+            visibility = DescriptorVisibilities.LOCAL
+            modality = Modality.OPEN
+            origin = builder.generatedOrigin
+        }
+        irClass.parent = frame.irFunction
+        irClass.createThisReceiverParameter()
+        classes[declaration] = irClass
+        declareClass(declaration)
+        if (tables.runtimeSuperclasses[declaration] != null) {
+            refuse(
+                tsFile, declaration,
+                "a class declared inside a function body or a block may not extend a runtime " +
+                    "class: its type erases to the property bag outside its statement"
+            )
+        }
+        linkClassOverrides(declaration)
+        // (LIB.6) The property-bag protocol, so a read through `any` finds the
+        // fields: its base, nested or top-level, already has its own.
+        declareBagProtocol(declaration)
+        defineBagProtocol(declaration)
+        defineClass(declaration)
+        val constructor = constructorsByDeclaration.getValue(declaration)
+        val slot = buildVariable(
+            frame.irFunction as IrDeclarationParent,
+            UNDEFINED,
+            UNDEFINED,
+            builder.generatedOrigin,
+            Name.identifier(kotlinName(name.text) + "\$class"),
+            intrinsics.jsConstructorType,
+            isVar = false,
+        )
+        slot.initializer = scope.irCall(intrinsics.jsConstructor, intrinsics.jsConstructorType).apply {
+            arguments[0] = scope.irString(name.text)
+            // As [buildConstructorValue]: the smallest count leaving no non-nullable parameter `undefined`.
+            arguments[1] = scope.irInt(
+                constructor.parameters
+                    .filter { it.kind == IrParameterKind.Regular }
+                    .indexOfLast { !it.type.isNullable() } + 1
+            )
+            arguments[2] = constructionLambda(irClass, constructor)
+        }
+        scopes.last()[name.text] = slot
+        return listOf(irClass, slot)
+    }
+
     private fun refuseNestedClass(node: Node, name: String): Nothing = refuse(
         tsFile, node,
-        "a `class` declared inside a function body or a block is out of the spike " +
-            "subset: '$name' reaches no declaration table, and its identity is " +
-            "per INVOCATION rather than per file, so the lazy static a top-level class " +
-            "value uses is the wrong carrier for it"
+        "a `class` declared inside a function body or a block is used here before its " +
+            "statement is lowered: '$name' is built where it is declared ((KIR.LOWER.7)), " +
+            "and a reference lowered above that point has no class to reach"
     )
 
     /**
@@ -4903,7 +5001,13 @@ internal class KirFileLowering(
             // not constructable (TS2351). So construct on what the value turns
             // out to be, exactly as `lowerCall` already calls on one.
             ?: if (signature == null) return lowerDynamicNew(node)
-            else refuse(tsFile, node, "cannot lower `new` on a non-class")
+            else {
+                (node.expression as? Identifier)?.let { name ->
+                    facts.nameAt(name)?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
+                }?.let { nestedClassOf(it) }?.let { refuseNestedClass(node, it.name?.text ?: "?") }
+                refuse(tsFile, node, "cannot lower `new` on a non-class")
+            }
+        nestedClassOf(owner)?.let { refuseNestedClass(node, it.name?.text ?: "?") }
         val constructor = constructorsByDeclaration[owner]
             ?: refuse(tsFile, node, "cannot lower `new` on a class this backend did not generate")
         val irClass = classes.getValue(owner)
@@ -5816,9 +5920,13 @@ internal class KirFileLowering(
      * 33x on one n-body.
      */
     fun declareBagProtocols() {
-        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach { declaration ->
-            if (!isBagBacked(declaration)) return@forEach
-            val irClass = classes[declaration] ?: return@forEach
+        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach(::declareBagProtocol)
+    }
+
+    private fun declareBagProtocol(declaration: ClassDeclaration) {
+        run {
+            if (!isBagBacked(declaration)) return
+            val irClass = classes[declaration] ?: return
             val table = tables.bagProtocols.getOrPut(declaration) { mutableMapOf() }
             if (ownBagSlots(declaration).isNotEmpty()) {
                 table["get"] =
@@ -5860,8 +5968,12 @@ internal class KirFileLowering(
 
     /** Pass 1d: fills those bodies, once every file has declared its own. */
     fun defineBagProtocols() {
-        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach { declaration ->
-            val table = tables.bagProtocols[declaration] ?: return@forEach
+        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach(::defineBagProtocol)
+    }
+
+    private fun defineBagProtocol(declaration: ClassDeclaration) {
+        run {
+            val table = tables.bagProtocols[declaration] ?: return
             val slots = ownBagSlots(declaration)
             table["get"]?.let { buildClassGet(declaration, it, slots) }
             table["set"]?.let { buildClassSet(declaration, it, slots) }

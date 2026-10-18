@@ -25,6 +25,22 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (KIR.LOWER.7) — nested classes as local IR classes with a per-invocation value
+
+- `emitLocalClass` (at the `ClassDeclaration` statement in `lowerStatement`): `IrClass` with LOCAL visibility, parent
+  the current function; `declareClass` → `linkClassOverrides` (extracted from `linkOverrides`) → `declareBagProtocol`
+  / `defineBagProtocol` (extracted per class) → `defineClass`; then a `$class` slot initialised with
+  `jsConstructor(name, required, constructionLambda(...))`, registered in the block scope under the class name.
+- `isOwnStructuralDeclaration` treats a nested class as the bag wherever its IR class does not exist yet;
+  `ErasedTypes.mapObject` erases a class's STATIC side (a plain `Type.Object` carrying the class symbol, as opposed to
+  its `Interface`/`Reference` instance type) to `JsConstructor` — top-level classes included (pin: `return C`).
+- `lowerNew` names the nested-class refusal before the generic "non-class" one; message now says "used here before
+  its statement is lowered".
+- Tried and REMOVED: casting a method call's receiver to the owner class — ablated, the escape pin stayed green
+  (kotlinc's JVM codegen inserts the checkcast).
+- Ablations: removing the bag protocol call turned the dynamic-`new` pin red (seen before it was added); removing the
+  static-side arm turns `value is one per invocation` and `return C` red.
+
 ### Round (KIR.BIND.1) — nested functions lower to typed local functions; calls are direct
 
 - Re-measured on the port: `TsgoFacts` records a signature for every `FunctionDeclaration` at any depth, so the
@@ -5146,7 +5162,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   and re-types NOTHING — so (P18.127)'s backend workaround stands. It forced a THIRD mechanism: closing the FP
   would have left an abstract-class alias silent on erroneous code, so the TS2511 family learned the INFERRED
   alias spelling beside the annotated one.**
-- [ ] **(KIR.LOWER.7) A CLASS DECLARED INSIDE A BODY — REFUSED BY NAME 2026-09-17 with its price measured
+- [x] **(KIR.LOWER.7) A CLASS DECLARED INSIDE A BODY — REFUSED BY NAME 2026-09-17 with its price measured
   ((P18.129) note), and the refusal ANSWERS the question the three carrier rounds never had to: a nested class's
   identity is PER INVOCATION.** Measured in node: `function outer() { class P {} ; return P }` gives
   `outer() !== outer()`, and an instance from one invocation is NOT `instanceof` another's `P` — so

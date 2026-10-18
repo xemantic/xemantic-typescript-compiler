@@ -598,9 +598,11 @@ class KirDynamicNewTest {
     }
 
     /**
-     * negative control — a `new` whose CALLEE cannot be lowered still refuses
-     * at the callee, so the dynamic arm cannot turn a missing reference into a
-     * run-time error.
+     * A dynamic `new` on a class declared INSIDE a function body (node: `d`).
+     *
+     * RE-POINTED by (KIR.LOWER.7), which lowers a nested class. Until then this
+     * was the negative control below: a `new` whose CALLEE could not be lowered
+     * still refused at the callee.
      *
      * RE-POINTED by (KIR.LOWER.6), against the measured answer rather than
      * edited to whatever the new code prints. This test used to hold a
@@ -618,7 +620,7 @@ class KirDynamicNewTest {
      * paper over a callee the lowering could not build.
      */
     @Test
-    fun `negative control - a new whose callee cannot be lowered still refuses`() {
+    fun `a dynamic new on a class declared in a body`() {
         val lowered = lower(
             "main.ts" to """
                 function outer(): string {
@@ -629,17 +631,8 @@ class KirDynamicNewTest {
                 console.log(outer())
             """,
         )
-        assert(!lowered.compiled)
-        // RE-POINTED by (P18.129): the refusal is unchanged and its MESSAGE is
-        // not. That round landed the nested-FUNCTION half of this family and
-        // gave the class half a refusal naming the capability, where this used
-        // to read the generic *cannot lower the reference 'Local'*.
-        assert(
-            lowered.report.contains(
-                "a `class` declared inside a function body or a block is out of the spike subset"
-            )
-        )
-        assert(lowered.report.contains("'Local'"))
+        assert(lowered.compiled)
+        assert(lowered.stdout == "d\n")
     }
 
 }

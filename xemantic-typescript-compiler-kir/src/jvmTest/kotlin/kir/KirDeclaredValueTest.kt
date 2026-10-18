@@ -819,7 +819,10 @@ class KirDeclaredValueTest {
     }
 
     /**
-     * negative control — the same for a CLASS declared in a body; node: `function`.
+     * A CLASS declared in a body, read as a value; node: `function`.
+     *
+     * RE-POINTED by (KIR.LOWER.7), which lowers a nested class: this was the
+     * class half's named refusal, and the same program now prints node's answer.
      *
      * RE-POINTED by (P18.129) against the measured answer rather than edited to
      * whatever the new code prints. It used to assert *cannot lower the
@@ -830,7 +833,7 @@ class KirDeclaredValueTest {
      * to be this pin's twin for a function — is now a positive pin.
      */
     @Test
-    fun `negative control - a class declared in a body is refused`() {
+    fun `a class declared in a body is a value`() {
         val lowered = lower(
             "main.ts" to """
                 function outer(): string {
@@ -841,13 +844,8 @@ class KirDeclaredValueTest {
                 console.log(outer())
             """,
         )
-        assert(!lowered.compiled)
-        assert(
-            lowered.report.contains(
-                "a `class` declared inside a function body or a block is out of the spike subset"
-            )
-        )
-        assert(lowered.report.contains("'Local'"))
+        assert(lowered.compiled)
+        assert(lowered.stdout == "function\n")
     }
 
     /**
