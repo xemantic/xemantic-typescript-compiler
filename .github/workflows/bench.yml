@@ -176,16 +176,39 @@ jobs:
         run: |
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          # Stage first, then check the staged diff — the new run .md is untracked,
-          # so a plain `git diff` would miss it.
           git add bench-history/
           if git diff --cached --quiet -- bench-history/; then
             echo "no bench-history changes"; exit 0
           fi
-          git commit -m "chore(bench): 3-way run @ ${GITHUB_SHA::12} [skip ci]"
+          # checkout@ checks out the PUSHED sha, not the branch tip, so a run queued
+          # behind another (the concurrency group above) never sees that run's
+          # result commit — and both prepend a row at the same README line, so a
+          # `git pull --rebase` conflicts every time. Instead, keep this run's
+          # outputs aside (the new run report + the new index rows) and re-apply
+          # them onto the fresh tip on every attempt.
+          keep="$RUNNER_TEMP/bench-keep"; mkdir -p "$keep/runs"
+          git diff --cached --name-only --diff-filter=A -- bench-history/runs/ \
+            | xargs -r -I{} cp {} "$keep/runs/"
+          git diff --cached -U0 -- bench-history/README.md | grep '^+| 2' | cut -c2- > "$keep/rows" || true
+          test -s "$keep/rows" || { echo "no new index rows found" >&2; exit 1; }
           for attempt in 1 2 3; do
-            if git pull --rebase --autostash origin "$GITHUB_REF_NAME" \
-               && git push origin "HEAD:$GITHUB_REF_NAME"; then exit 0; fi
+            git fetch -q origin "$GITHUB_REF_NAME"
+            git reset -q --hard "origin/$GITHUB_REF_NAME"
+            cp "$keep"/runs/* bench-history/runs/
+            # newest first: insert directly under the V3 table's separator row
+            python3 - "$keep/rows" <<'PY'
+          import sys
+          p = "bench-history/README.md"
+          rows = open(sys.argv[1]).read()
+          txt = open(p).read()
+          i = txt.index("<!-- BENCH-ROWS-V3-START -->")
+          j = txt.index("|---|", i)
+          j = txt.index("\n", j) + 1
+          open(p, "w").write(txt[:j] + rows + txt[j:])
+          PY
+            git add bench-history/
+            git commit -q -m "chore(bench): 3-way run @ ${GITHUB_SHA::12} [skip ci]"
+            if git push origin "HEAD:$GITHUB_REF_NAME"; then exit 0; fi
             echo "push attempt $attempt failed; retrying"; sleep $((attempt * 5))
           done
           echo "error: could not push bench results after retries" >&2; exit 1
