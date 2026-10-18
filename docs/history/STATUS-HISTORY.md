@@ -1,3 +1,10 @@
+**(TSGO.8-d) DONE — `-project` deprecated (2026-10-16):** `Project` carries `@Deprecated` naming its successors, the
+port's `TsgoProject` (type oracle) and `TsgoLanguageService` (language features) in
+`com.xemantic.typescript:xemantic-typescript-compiler`; its KDoc says what is not carried over yet (in-session
+incremental updates, partitioned diagnostics, saved state — (TSGO.10), queued with the measured learnings). Callers see
+the warning (251 sites inside `-project` would); the module silences its own (`-Xwarning-level=DEPRECATION:disabled`).
+`ProjectDeprecationTest` pins it; `-project` 957 / 0. Next: (8-e) the deletion — BLOCKED-PENDING-USER on when.
+
 **(TSGO.8-c) DONE — the port is the default artifact (2026-10-16):** `-tsgo` is published as
 `com.xemantic.typescript:xemantic-typescript-compiler` (`-jvm`), jar `xemantic-typescript-compiler-jvm-<ver>.jar`, with
 sources, an empty javadoc jar and typescript-go's `LICENSE` / `NOTICE.txt` under `META-INF/typescript-go/` (POM: the AGPL

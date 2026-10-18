@@ -57,6 +57,11 @@
 set -uo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# (BENCH.3) `--record` keeps the run: its JSON goes to bench-history/kir-runs/ and
+# scripts/kir_bench_report.py regenerates docs/perf/kir-bench.md from it — the
+# table is never typed by hand. Without it the JSON is still written, to $WORK.
+RECORD=0
+if [ "${1:-}" = "--record" ]; then RECORD=1; shift; fi
 PROCESSES="${1:-5}"
 WORK="${KIR_BENCH_WORK:-$REPO/build/bench/kir-bench}"
 NATIVE="${KIR_BENCH_NATIVE:-0}"
@@ -288,6 +293,7 @@ run_arm() {                                    # run_arm <arm> <lib>
 # EQUIVALENCE BEFORE TIMING. One `sink=` per arm; a disagreement means the arms
 # are not running the same program and no timing below would mean anything.
 echo "kir-bench: equivalence gate ..." >&2
+EQUIV="$WORK/equivalence.tsv"; : > "$EQUIV"
 for lib in mitt toml; do
     sinks=""
     for arm in "${ARMS[@]}"; do
@@ -295,6 +301,7 @@ for lib in mitt toml; do
         s="$(grep -o 'sink=[-0-9]*' <<< "$out")"
         [ -n "$s" ] || die "arm '$arm' printed no sink for $lib: $out"
         sinks="$sinks $arm:$s"
+        printf '%s\t%s\t%s\n' "$lib" "$arm" "${s#sink=}" >> "$EQUIV"
     done
     distinct="$(tr ' ' '\n' <<< "$sinks" | sed 's/.*sink=//' | sort -u | grep -c .)"
     [ "$distinct" = 1 ] || die "the arms disagree on $lib —$sinks"
@@ -314,12 +321,25 @@ for i in $(seq 1 "$PROCESSES"); do
     echo "  cycle $i/$PROCESSES" >&2
 done
 
-python3 - "$TSV" <<'PY'
-import collections, statistics, sys
+JSON="$WORK/kir-bench.json"
+KB_COMMIT="$(git -C "$REPO" rev-parse HEAD)" \
+KB_DIRTY="$(git -C "$REPO" status --porcelain | grep -c . || true)" \
+KB_CPU="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')" \
+KB_CORES="$(nproc)" \
+KB_MEM_GB="$(awk '/MemTotal/ {printf "%.1f", $2 / 1048576}' /proc/meminfo)" \
+KB_JAVA="$(java -version 2>&1 | head -1 | sed 's/"//g')" \
+KB_NODE="$("$NODE" --version)" \
+KB_ARMS="${ARMS[*]}" KB_PROCESSES="$PROCESSES" \
+python3 - "$TSV" "$EQUIV" "$JSON" <<'PY'
+import collections, datetime, json, os, statistics, sys
 rows = collections.defaultdict(list)
 for line in open(sys.argv[1]):
     arm, lib, ms = line.split()
     rows[(lib, arm)].append(int(ms))
+equivalence = collections.defaultdict(dict)
+for line in open(sys.argv[2]):
+    lib, arm, sink = line.split()
+    equivalence[lib][arm] = sink
 UNIT = {"mitt": (4_000_000, 1e6, "ns/emit"), "toml": (20_000, 1e3, "us/parse")}
 NAME = {"tsgo": "tsgo  -> JS     -> node", "xtsc": "xtsc  -> JS     -> node",
         "kir":  "xtsc  -> JVM    -> java", "nat": "xtsc  -> NATIVE -> kexe",
@@ -338,4 +358,35 @@ for lib in ("mitt", "toml"):
         tag = "baseline" if arm == "tsgo" else (f"{1/rel:.2f}x faster" if rel < 1 else f"{rel:.2f}x slower")
         print(f"  {NAME[arm]:<26}  {med:7.0f} ms  {med*scale/ops:8.2f} {unit}  "
               f"[{v[0]}..{v[-1]}]  {tag}")
+# (BENCH.3) The run as data, schema 1 — what scripts/kir_bench_report.py renders and refuses.
+arms = os.environ["KB_ARMS"].split()
+run = {
+    "schema": 1,
+    "commit": os.environ["KB_COMMIT"],
+    "dirty": int(os.environ["KB_DIRTY"] or 0) > 0,
+    "utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "processes": int(os.environ["KB_PROCESSES"]),
+    "arms": arms,
+    "libs": ["mitt", "toml"],
+    "box": {"cpu": os.environ["KB_CPU"], "cores": int(os.environ["KB_CORES"]),
+            "mem_gb": float(os.environ["KB_MEM_GB"]), "java": os.environ["KB_JAVA"],
+            "node": os.environ["KB_NODE"]},
+    "units": {lib: {"ops": UNIT[lib][0], "scale": UNIT[lib][1], "name": UNIT[lib][2]} for lib in UNIT},
+    "equivalence": {lib: {"verdict": "agree" if len(set(s.values())) == 1 and set(s) == set(arms) else "disagree",
+                          "sinks": s} for lib, s in equivalence.items()},
+    "rows": [{"lib": lib, "arm": arm, "samples": rows[(lib, arm)],
+              "median": statistics.median(rows[(lib, arm)]),
+              "sigma": statistics.pstdev(rows[(lib, arm)]),
+              "min": min(rows[(lib, arm)]), "max": max(rows[(lib, arm)])}
+             for lib in ("mitt", "toml") for arm in arms if (lib, arm) in rows],
+}
+json.dump(run, open(sys.argv[3], "w"), indent=1)
 PY
+if [ "$RECORD" = "1" ]; then
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)-$(git -C "$REPO" rev-parse --short=12 HEAD)"
+    mkdir -p "$REPO/bench-history/kir-runs"
+    cp "$JSON" "$REPO/bench-history/kir-runs/$stamp.json"
+    python3 "$REPO/scripts/kir_bench_report.py" \
+        || die "the report generator REFUSED this run — bench-history/kir-runs/$stamp.json kept for inspection"
+    echo "kir-bench: recorded bench-history/kir-runs/$stamp.json" >&2
+fi

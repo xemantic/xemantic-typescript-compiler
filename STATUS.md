@@ -1,5 +1,15 @@
 # Status
 
+**(BENCH.3) DONE — the KIR bench's table is generated and refuses itself (2026-10-18):** `scripts/kir-bench.sh` writes
+the run as schema-1 JSON (commit, dirty flag, box, the arms actually run, per-process samples, median/sigma/min/max,
+each library's `sink=` verdict); `--record` commits it under `bench-history/kir-runs/` and
+`scripts/kir_bench_report.py` regenerates `docs/perf/kir-bench.md` between markers, losses included and labelled
+(runtime peer / control / ours). The generator refuses a run with non-positive medians, a ratio disagreeing with its
+medians, rows short of arms × libraries, sample counts off the process count, or a split equivalence verdict —
+`--self-test` proves all five (and fails when the checks are ablated). First recorded run (5 processes): mitt KIR
+1.18× faster than tsgo/node, toml 1.49× slower; README's KIR row now cites it instead of pre-port prose.
+Next: (BENCH.2).
+
 **(KIR.NATIVE.2) DONE — a TypeScript `function main()` compiles, and a backend clash no longer reads as success
 (2026-10-18):** re-measured on the JVM first: a top-level `function main()` (or `moduleInit()`) has the generated
 entry's / initializer's JVM signature, the backend files `CONFLICTING_JVM_DECLARATIONS` with the generation state's
@@ -38,10 +48,3 @@ docs reach). The pinned `cloneTypeScriptRepo` / `cloneTypeScriptGoRepo` tasks mo
 items closed; the WORK ORDER is now KIR. Two (TSGO.9-c) warnings fixed. `-tsgo` 156, `-goport` 31, `-cli` 20,
 `-daemon` 63, `-client` 20, `-api` 30, `-lsp` 38, KIR 308, `-externals` 291 — all 0 failures; warning-clean.
 Next: KIR — (KIR.LOWER.7).
-
-**(TSGO.8-d) DONE — `-project` deprecated (2026-10-16):** `Project` carries `@Deprecated` naming its successors, the
-port's `TsgoProject` (type oracle) and `TsgoLanguageService` (language features) in
-`com.xemantic.typescript:xemantic-typescript-compiler`; its KDoc says what is not carried over yet (in-session
-incremental updates, partitioned diagnostics, saved state — (TSGO.10), queued with the measured learnings). Callers see
-the warning (251 sites inside `-project` would); the module silences its own (`-Xwarning-level=DEPRECATION:disabled`).
-`ProjectDeprecationTest` pins it; `-project` 957 / 0. Next: (8-e) the deletion — BLOCKED-PENDING-USER on when.

@@ -122,10 +122,10 @@ Real, unmodified npm libraries already compile and run this way:
 
 | library | what happens | vs. the same library on Node |
 |---|---|---|
-| [`mitt`](https://github.com/developit/mitt) 3.0.1 | runs, and is imported as a module by a second file | **1.41× faster** (61 ns/emit) |
-| [`smol-toml`](https://github.com/squirrelchat/smol-toml) (1,082 lines, 7 files) | parses a TOML document, verified against Python's `tomllib` | 2.08× slower (47 µs/parse) |
+| [`mitt`](https://github.com/developit/mitt) 3.0.1 | runs, and is imported as a module by a second file | **1.18× faster** (77 ns/emit) |
+| [`smol-toml`](https://github.com/squirrelchat/smol-toml) (1,082 lines, 7 files) | parses a TOML document, verified against Python's `tomllib` | 1.49× slower (36 µs/parse) |
 
-(The timings predate the backend's move onto the port's checker.)
+(One recorded run on one box, generated rather than typed: [docs/perf/kir-bench.md](docs/perf/kir-bench.md).)
 
 This works because the backend is the first consumer of the type graph: which overload a
 call picked, what a union narrowed to, whether `+` concatenates — the checker already

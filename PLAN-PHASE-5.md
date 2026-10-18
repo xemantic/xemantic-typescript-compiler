@@ -25,6 +25,18 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (BENCH.3) — a generated, self-refusing KIR bench table
+
+- `kir-bench.sh`: equivalence sinks to `$WORK/equivalence.tsv`; the report block also writes `$WORK/kir-bench.json`
+  (schema 1); `--record` copies it to `bench-history/kir-runs/<UTC>-<rev>.json` and runs the generator, dying (run
+  kept) when it refuses.
+- `scripts/kir_bench_report.py`: renders the latest run between `KIR-BENCH-TABLE-START/END` in
+  `docs/perf/kir-bench.md`; the ratio column is derived and re-checked against the medians. `--self-test`: the good
+  run renders its exact row text; zeroed medians, a contradicting ratio, a missing row, a short sample list and a
+  split verdict each refuse. Ablation (`check` returning nothing) fails the self-test.
+- First recorded run `20261018T142401Z-852b3b3c76e3` (5 processes, dirty only in the bench scripts): control within
+  1% of tsgo on both libraries; KIR mitt 307 vs 361 ms, toml 710 vs 478 ms. README KIR numbers updated to it.
+
 ### Round (KIR.NATIVE.2) — generated-name collisions and the silent empty emit
 
 - Probe (JVM): `function main(): void {…}; main()` and the same with `moduleInit` both reported success with 0 class
@@ -5220,7 +5232,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   `kir-bench` figure quoted in this file becomes incomparable exactly as `BENCH-ROWS-V2` did
   for the dashboard — bank the decision with a paired before/after in ONE round or not at all.
 
-- [ ] **(BENCH.3) `kir-bench.sh` PRINTS ITS TABLE TO A TERMINAL AND NOTHING COMMITS IT, SO
+- [x] **(BENCH.3) `kir-bench.sh` PRINTS ITS TABLE TO A TERMINAL AND NOTHING COMMITS IT, SO
   EVERY KIR NUMBER IN THIS FILE IS HAND-TYPED PROSE — WHICH IS THE EXACT FAILURE MODE FOUND
   IN THE HARNESS WE ARE COPYING FROM (2026-08-28, measured by reading Perry's own artifacts).**
   Perry's README quotes convolution at **Perry 354 ms / Rust 392 ms** and cites
