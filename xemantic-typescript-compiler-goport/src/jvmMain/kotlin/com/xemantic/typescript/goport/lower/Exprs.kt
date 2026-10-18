@@ -603,7 +603,7 @@ open class ExprLowering(val fn: FnCtx) {
         } else if (isPtr && !nilSafe) {
             r = nn(r)
             // A packed struct's pointer is a GoPtr (Program.packedStructs): Go dereferences for a value receiver.
-            if (tm.isPacked((u as PointerType).elem)) r = Ex.primary("${r.at(PRIMARY)}.value")
+            if (tm.isPacked(u.elem)) r = Ex.primary("${r.at(PRIMARY)}.value")
         } else if (isPtr && nilSafe && !e.bool("ptrRecv")) {
             // a VALUE-receiver extension (non-null receiver) through a pointer: Go dereferences
             r = nn(r)

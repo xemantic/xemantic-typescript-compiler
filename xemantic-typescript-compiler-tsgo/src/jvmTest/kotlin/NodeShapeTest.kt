@@ -49,7 +49,6 @@ class NodeShapeTest {
         val data = node.asIdentifier()!!
         val same = node === data && node.data === node && data.asNode() === node
         assert(same)
-        assert(node is Identifier)
         assert(GoString.toUtf16(node.text()) == "x")
         // A second node is a second object.
         val other = factory.newIdentifier(GoString.fromUtf16("y"))!!

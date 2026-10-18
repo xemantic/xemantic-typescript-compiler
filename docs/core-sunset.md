@@ -1,5 +1,10 @@
 # `-core` sunset — a measured report for the owner's decision ((TSGO.4-d))
 
+> **DONE 2026-10-18 ((TSGO.8-e)):** `-core` and `-project` are deleted — the modules, `-core`'s
+> Kotlin/Native CI job, the generated-corpus pipeline and ~370 frozen-era scripts. The two upstream
+> checkouts' clone tasks moved to the root build. This report is kept as the record of why; the
+> sources are in git history before the deletion commit.
+
 Written 2026-10-08 on `main` at `a53970cd3` (the -tsgo gates re-verified on `19a3779c5` the same day).
 Nothing in `-core` was deleted, disabled or edited, and no module's dependencies were changed: the
 deletion is an **owner decision** (`PLAN-PHASE-5.md`, (TSGO.4-d), `BLOCKED-PENDING-USER`). Every number

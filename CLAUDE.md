@@ -11,18 +11,19 @@ EVERY session, so every line costs context on every turn.
   B-numbers, measurement tables or test-name narratives — those go in the commit message, the
   PLAN-PHASE-5.md session note, or the relevant `docs/goport-*.md`.
 - File entries under the matching topical section; do not add per-round sections.
-- **History**: everything from the `-core` era (the hand-written checker, frozen since
-  (TSGO.0) 2026-10-07) — per-walker/per-diagnostic gotchas, corpus/pin/ledger rules,
+- **History**: everything from the `-core` era (the hand-written checker, frozen at (TSGO.0)
+  2026-10-07, deleted with `-project` at (TSGO.8-e) 2026-10-18 — `git log` before that commit has
+  the sources) — per-walker/per-diagnostic gotchas, corpus/pin/ledger rules,
   INC/INV/CHK/KIR measurements, the Phase 17/18 protocol detail — is in
   `docs/history/CLAUDE-CORE-ERA.md` (verbatim snapshot) and the older
   `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`. **Grep them (never read them whole — they are
-  hundreds of KB)** before touching `-core`, a corpus regression, or a frozen subsystem.
+  hundreds of KB)** when a question reaches back into that era.
 
 ## Mission
 
 xtsc is **TypeScript for the JVM and Kotlin** (owner directive 2026-09-01): type-check and
 compile TypeScript with no Node and no Go in the toolchain; a whole-program checker embeddable
-in Kotlin (the port's `TsgoProject` / `TsgoLanguageService`; `-project`'s `Project` is deprecated); a Kotlin externals generator with resolved types; a JVM bytecode
+in Kotlin (the port's `TsgoProject` / `TsgoLanguageService`); a Kotlin externals generator with resolved types; a JVM bytecode
 backend (KIR); an LSP. It is not "a compiler competing with tsgo".
 
 - **OWNER DECISION 2026-10-06 — PORT tsgo TO KOTLIN.** `-goport` (mechanical go/types-driven +
@@ -31,8 +32,8 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
   `-tsgo/src/commonMain/kotlin/gen/`** — every fix is a porter rule or a hash-pinned override.
 - **(TSGO.0) decided 2026-10-07**: Go 1.27.1 at gitignored `tools/go/` (run
   `GOTOOLCHAIN=local tools/go/bin/go`); `-tsgo` is AGPL-3.0-only + output exception (Microsoft
-  copyright, Apache `LICENSE` + `NOTICE.txt`, porter-emitted headers); **`-core` is FROZEN** —
-  no (CHK.\*)/(INV.\*)/(LIBS.\*) parity or extraction rounds; it takes only fixes a product needs now.
+  copyright, Apache `LICENSE` + `NOTICE.txt`, porter-emitted headers). The hand-written `-core` checker is deleted ((TSGO.8-e)): every
+  compiler question is answered by the port.
 - **TypeScript 7.0 is the ONLY compatibility target** (2026-09-12). Reference:
   `tools/tsgo-7.0.2/lib/tsc` (gitignored). TS 6 is not an adjudicator.
 - **Compatibility is an invariant on the shared surface** (2026-09-21): a semantic divergence
@@ -48,7 +49,6 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
 - Build system changes (Gradle config, dependency add/remove/upgrade, Kotlin version bump).
   Pre-approved: `-externals` and `-lsp` modules; the LSP uses `kotlinx-serialization-json` +
   `kotlinx-io` only — **lsp4j is NOT approved**.
-- Test-generation pipeline changes (`generateTypeScriptTests`, baseline format).
 - README repositioning lands on branch `docs/reposition`, never main.
 
 ## Execution protocol
@@ -114,8 +114,6 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
   "One object per node"): all or nothing — after a tsgo upgrade check the port log for `one object per node: REFUSED`.
 - The KIR front end's tsgo program must be `singleThreaded` (`TsgoProgram.kt`): one query checker
   behind one lock, and a throwing parallel goroutine never releases it → parked JVM, no error.
-- `-core`'s declaration `Node.pos` is AFTER modifiers, tsgo's is not: `FileNodeMap` keys a
-  modified tsgo node under both offsets.
 
 ## Native image / JVM runtime
 
@@ -146,7 +144,7 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
   `0 0 0`, indistinguishable from a suite that never ran. Wipe the whole results dir, not
   `/binary`. Count with a real XML parser, never a regex (passed testcases self-close).
 - `--tests '*Name*'` wipes the XMLs — rerun the full suite before any XML-reading script.
-- Always `grep -a` on Gradle output AND on large sources (`Checker.kt`, `Project.kt` trip grep's
+- Always `grep -a` on Gradle output AND on large sources (the generated `-tsgo` files trip grep's
   binary heuristic and silently match nothing). Retry a surprising empty grep with `-a`.
 - Warning gate: the build is warning-clean; check with
   `./gradlew compileKotlinJvm compileTestKotlinJvm --rerun-tasks 2>&1 | grep -a '^w:'`. Never

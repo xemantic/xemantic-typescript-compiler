@@ -1,3 +1,11 @@
+**(TSGO.9) DONE — a denser AST through porter rules (2026-10-15):** (9-c) one object per node — every data struct
+EXTENDS its node-embedding parent (`NodeDefault : nodeData : Node`), so a node, its data and the embedding chain are one
+object (205 classes; the porter proves interface identity, type assertions and dispatch cannot tell them apart). (9-c)
+alone: parallel **−7.8%** (4/4, GC −55%), single −2.4%. Across (9-a..c) on tsc's compiler profile: the AST's live heap
+**188 → 100 MB** (197 B / 8.1 objects per node → 105 B / 3.0), a full check 327 → 234 MB live, warm single ≈ −12% and
+parallel ≈ −14% chained. Diag/Emit 13,127, LS 21,614, API 594,007, CLI 120 / 121 equal; `-tsgo` 156 / 0, `-goport` 31 / 0,
+KIR 308 / 0, `-daemon` 63 / 0, `-lsp` 38 / 0, `-externals` 291 / 0, `linuxX64Test` 91 / 0. Next: (TSGO.8), the owner's decision.
+
 **(TSGO.9-b) DONE — the atomic `id`/`facts` wrappers are volatile fields of their holder (2026-10-15):** porter rule
 "Inlined atomic fields" (docs/goport-lowering.md § 3): `Node.id`, `Symbol.id` and `CompositeBase.facts` are only ever
 loaded, stored and compared-and-swapped, so each is a `@Volatile` primitive; a swap takes a stripe lock (common code —

@@ -80,7 +80,7 @@ answers and **594,007 / 594,007** API answers equal. A project is read through a
 can supply, so unsaved editor buffers never have to touch disk.
 
 The earlier embedding API — `-project`'s `Project`, built on the hand-written checker this
-port replaced — is **deprecated**; see its KDoc for what has not carried over yet.
+port replaced — has been removed together with that checker.
 
 → **[docs/goport-ls.md](docs/goport-ls.md)** and **[docs/goport-api.md](docs/goport-api.md)**
 

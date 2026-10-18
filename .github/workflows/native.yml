@@ -2,8 +2,7 @@
 #   * `tsgo-native-image` — THE SHIPPED `xtsc` IMAGE (`xtsc-linux-x64`, since
 #     (TSGO.8-b)): the tsgo port's PGO image, replayed against tsgo 7.0.2's own output.
 #   * `tsgo-kotlin-native` — the port's common suite on Kotlin/Native linuxX64.
-#   * `kotlin-native` — the retiring `-core`'s corpus suite on linuxX64 (round 775);
-#     it leaves with `-core` ((TSGO.8-e)). `-core`'s own GraalVM image job left in (8-b).
+#   `-core`'s GraalVM image job left in (TSGO.8-b), its Kotlin/Native corpus job with `-core` in (8-e).
 #
 # MANUAL TRIGGER ONLY, deliberately. Neither is a correctness gate for a normal
 # push — the JVM suite is — and both are slow. Attaching the AOT binary to
@@ -28,68 +27,12 @@ name: Native
 on:
   workflow_dispatch:
     inputs:
-      kotlin_native:
-        description: "Compile the Kotlin/Native linuxX64 target and run the corpus suite on it"
-        type: boolean
-        default: true
       tsgo:
         description: "The tsgo port: its PGO image against tsgo 7.0.2, and its suite on Kotlin/Native"
         type: boolean
         default: true
 
 jobs:
-  # Kotlin/Native (linuxX64) — compile, link, and run the WHOLE corpus suite
-  # against the native binary. This is the only gate that can see a native-only
-  # divergence at all: `jvmTest` compiles commonTest with the JVM compiler, which
-  # is looser than Kotlin/Native on backtick test names, `kotlin.assert` and
-  # JVM-only stdlib (CLAUDE.md § "must compile for Kotlin/Native").
-  #
-  # Round 775 measured, locally, before local native work was forbidden:
-  # compile (main + test) 2m10s, `linkDebugTestLinuxX64` 1m03s, the suite
-  # 14m28s — 9,161 tests, 2 failures. DEBUG, not release, is the lever: round
-  # 772's RELEASE test link died to the OS OOM-killer after ~22 min on the dev
-  # box. If a release-mode native artifact is ever wanted, treat it as a
-  # separate, separately-measured job.
-  #
-  # MEMORY: Kotlin/Native compiles INSIDE THE GRADLE DAEMON, so its heap is
-  # `org.gradle.jvmargs` — which gradle.properties pins at 1g to leave room for
-  # the 5g Kotlin JVM daemon on the dev box, and 1g does not link this module.
-  # `-Dorg.gradle.jvmargs` on the command line is the override; 6g measured
-  # sufficient (round 772) and fits a 16 GB runner.
-  kotlin-native:
-    if: ${{ inputs.kotlin_native }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Set up JDK 26
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '26'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      # The property gate is the whole point: without it the linuxX64 target does
-      # not register, so nothing about a normal build changes.
-      - name: Run the corpus suite on Kotlin/Native (linuxX64)
-        run: |
-          ./gradlew -PenableNativeTargets=true \
-            -Dorg.gradle.jvmargs=-Xmx6g \
-            linuxX64Test
-
-      - name: Upload native test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: linuxX64-test-results
-          path: |
-            xemantic-typescript-compiler-core/build/test-results/linuxX64Test
-            build/reports/tests/linuxX64Test
-          if-no-files-found: warn
-
   # The tsgo port's GraalVM image, gated against tsgo 7.0.2 itself (not against
   # the JVM): scripts/tsgo-native-ci.sh fetches the official tsgo binary (sha1
   # pinned), materializes the 8 tsc profiles, builds the PGO image (Oracle
@@ -140,8 +83,12 @@ jobs:
           if-no-files-found: warn
 
   # The tsgo port's common suite (runtime shims, Go oracle vectors, the port's
-  # concurrency model) compiled and run on Kotlin/Native linuxX64. The heap
-  # override is the kotlin-native job's, for the same reason.
+  # concurrency model) compiled and run on Kotlin/Native linuxX64.
+  #
+  # MEMORY: Kotlin/Native compiles INSIDE THE GRADLE DAEMON, so its heap is
+  # `org.gradle.jvmargs` — which gradle.properties pins low for the dev box;
+  # `-Dorg.gradle.jvmargs` on the command line is the override, and fits a
+  # 16 GB runner.
   tsgo-kotlin-native:
     if: ${{ inputs.tsgo }}
     runs-on: ubuntu-latest

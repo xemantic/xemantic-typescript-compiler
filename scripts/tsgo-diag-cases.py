@@ -58,7 +58,6 @@ OUT = os.path.join(REPO, "build/goport/diag-cases")
 TOOL = os.path.join(REPO, "build/goport/bin/tsgo-oracle")
 ORACLE_GO = os.path.join(REPO, "xemantic-typescript-compiler-goport/oracle-go")
 TS_SUBMODULE = os.path.join(REPO, "build/goport/ts-submodule")
-GRADLE_CORE = os.path.join(REPO, "xemantic-typescript-compiler-core/build.gradle.kts")
 MATERIALIZE_VERSION = 1  # bump when the project-directory layout changes
 
 
@@ -147,11 +146,10 @@ def tool_env():
 
 
 def conformance_categories():
-    src = open(GRADLE_CORE).read()
-    m = re.search(r"val conformanceCategories = listOf\((.*?)\n\)", src, re.S)
-    if not m:
-        die("cannot find conformanceCategories in build.gradle.kts")
-    return re.findall(r'^\s*"([^"]+)"', m.group(1), re.M)
+    """The conformance categories `-core`'s generated corpus had adopted, frozen when `-core` was deleted
+    ((TSGO.8-e)): they only set each case's informational `inCorpus` flag, and the manifest's cache key
+    does not depend on them."""
+    return ["expressions/functions", "es6/defaultParameters", "es6/restParameters", "expressions/commaOperator"]
 
 
 SUITES = ("compiler/", "conformance/", "local/compiler/", "local/conformance/")

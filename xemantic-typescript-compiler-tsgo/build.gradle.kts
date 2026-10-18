@@ -119,14 +119,6 @@ kotlin {
             }
         }
 
-        // TEST SCOPE ONLY: ParseBenchMain compares the port's parser with -core's (the
-        // (TSGO.1) throughput gate, docs/goport-perf.md). commonMain must never depend on -core.
-        jvmTest {
-            dependencies {
-                implementation(project(":xemantic-typescript-compiler-core"))
-            }
-        }
-
     }
 
 }

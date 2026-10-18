@@ -51,7 +51,7 @@ xtsc_dep_cache_inputs() {
         "$root/build.gradle.kts" \
         "$root/settings.gradle.kts" \
         "$root/gradle.properties" \
-        "$root/xemantic-typescript-compiler-core/build.gradle.kts"
+        "$root/xemantic-typescript-compiler-tsgo/build.gradle.kts"
 }
 
 # xtsc_dep_validate <cache-file>
@@ -105,11 +105,11 @@ xtsc_dep_resolve_fresh() {
     root="$(xtsc_dep_root)"
     init="$root/build/bench/print-classpath.init.gradle.kts"
     [ -f "$init" ] || {
-        echo "dep-classpath: $init missing — run scripts/bench-compile-tsc.sh once" >&2
+        echo "dep-classpath: $init missing — run scripts/bench-compile-tsc.sh --materialize-only once" >&2
         return 1
     }
-    grep -q 'xemantic-typescript-compiler-core' "$init" || {
-        echo "dep-classpath: $init predates the module split — re-run bench-compile-tsc.sh" >&2
+    grep -q 'xemantic-typescript-compiler-tsgo' "$init" || {
+        echo "dep-classpath: $init names a deleted module — re-run bench-compile-tsc.sh --materialize-only" >&2
         return 1
     }
     echo "dep-classpath: resolving jvmRuntimeClasspath (gradle) ..." >&2

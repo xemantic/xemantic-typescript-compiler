@@ -1,5 +1,14 @@
 # Status
 
+**(TSGO.8-e) DONE — `-core` and `-project` deleted (2026-10-18, owner: "please delete the core"):** both modules
+gone with `-core`'s Kotlin/Native CI job, the generated-corpus pipeline, the `partition-gate` fixture, the
+`corpus-triage` skill and ~380 frozen-era scripts (scripts/ 497 → 61 files: what CI, CLAUDE.md, the port's and KIR's
+docs reach). The pinned `cloneTypeScriptRepo` / `cloneTypeScriptGoRepo` tasks moved to the root build;
+`bench-compile-tsc.sh` is the profiles' materializer only; `ParseBenchMain` keeps its `tsgo` arm. 119 superseded queue
+items closed; the WORK ORDER is now KIR. Two (TSGO.9-c) warnings fixed. `-tsgo` 156, `-goport` 31, `-cli` 20,
+`-daemon` 63, `-client` 20, `-api` 30, `-lsp` 38, KIR 308, `-externals` 291 — all 0 failures; warning-clean.
+Next: KIR — (KIR.LOWER.7).
+
 **(TSGO.8-d) DONE — `-project` deprecated (2026-10-16):** `Project` carries `@Deprecated` naming its successors, the
 port's `TsgoProject` (type oracle) and `TsgoLanguageService` (language features) in
 `com.xemantic.typescript:xemantic-typescript-compiler`; its KDoc says what is not carried over yet (in-session
@@ -29,11 +38,3 @@ image as `xtsc-linux-x64`, the tsgo-based module is the default artifact. `scrip
 `scripts/inc46-vs-tsgo.sh` times the port's native CLI through tsgo's own harness (`TSC_BIN`). Indicative, 2 reps, a
 pre-(TSGO.9) image: port cold 735 / no-op 559 / body 644 / signature 633 ms against tsgo's 409 / 253 / 298 / 316, one
 row in every cell. Next: (8-b) the shipped image.
-
-**(TSGO.9) DONE — a denser AST through porter rules (2026-10-15):** (9-c) one object per node — every data struct
-EXTENDS its node-embedding parent (`NodeDefault : nodeData : Node`), so a node, its data and the embedding chain are one
-object (205 classes; the porter proves interface identity, type assertions and dispatch cannot tell them apart). (9-c)
-alone: parallel **−7.8%** (4/4, GC −55%), single −2.4%. Across (9-a..c) on tsc's compiler profile: the AST's live heap
-**188 → 100 MB** (197 B / 8.1 objects per node → 105 B / 3.0), a full check 327 → 234 MB live, warm single ≈ −12% and
-parallel ≈ −14% chained. Diag/Emit 13,127, LS 21,614, API 594,007, CLI 120 / 121 equal; `-tsgo` 156 / 0, `-goport` 31 / 0,
-KIR 308 / 0, `-daemon` 63 / 0, `-lsp` 38 / 0, `-externals` 291 / 0, `linuxX64Test` 91 / 0. Next: (TSGO.8), the owner's decision.

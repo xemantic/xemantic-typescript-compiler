@@ -33,22 +33,22 @@ import java.io.File
 import kotlin.system.exitProcess
 
 /**
- * (TSGO.1) gate: "parse throughput, JVM warm, tsc's 78 sources: within 1.5x of `-core`'s
- * `Parser`" (docs/tsgo-port-plan.md § 4.1). Results: docs/goport-perf.md; driver:
- * scripts/tsgo-parse-bench.sh (one arm per JVM, ABBA across processes).
+ * The port's parse throughput on tsc's 78 sources, JVM warm — the (TSGO.1) harness
+ * (docs/goport-perf.md). Its `-core` comparison arm and ABBA driver left with `-core` ((TSGO.8-e));
+ * the `tsgo` arm stays as the profiling target of scripts/tsgo_parse_profile.py.
  *
- * `ParseBenchMain <tsgo|core> <repoRoot> [warmup=8] [iters=12]`
+ * `ParseBenchMain tsgo <repoRoot> [warmup=8] [iters=12]`
  *
- * Both arms start from the same Kotlin UTF-16 texts (read and decoded once, outside the timed
+ * It starts from Kotlin UTF-16 texts (read and decoded once, outside the timed
  * loop — a host holds its sources as Kotlin strings). The `tsgo` arm pays the conversion to
  * Go's byte-string representation ([GoString.fromUtf16]) inside the timed iteration and reports
  * it as its own column. Every iteration parses all 78 files and folds the parsers' own node
- * counts into a checksum that is printed, so no parse is dead code. Runs on a 1 GB-stack thread
- * (both arms), as the port and `-core` both do in production.
+ * counts into a checksum that is printed, so no parse is dead code. Runs on a 1 GB-stack thread,
+ * as the port does in production.
  */
 fun main(args: Array<String>) {
     val arm = args.getOrNull(0) ?: run {
-        System.err.println("usage: ParseBenchMain <tsgo|core> <repoRoot> [warmup] [iters]")
+        System.err.println("usage: ParseBenchMain tsgo <repoRoot> [warmup] [iters]")
         exitProcess(2)
     }
     val repo = File(args.getOrElse(1) { ".." }).absoluteFile.normalize()
@@ -110,11 +110,6 @@ private class ParseBench(val arm: String, val repo: File, val warmup: Int, val i
                     convNs += System.nanoTime() - c0
                     val sf = com.xemantic.typescript.tsgo.parser.parseSourceFile(opts[k], bytes, kinds[k])!!
                     nodes += sf.nodeCount + sf.diagnostics.len
-                }
-                "core" -> for (input in inputs) {
-                    val p = com.xemantic.typescript.compiler.Parser(input.text, input.fileName)
-                    val sf = p.parse()
-                    nodes += sf.nodeCount + p.getDiagnostics().size
                 }
                 else -> error("unknown arm $arm")
             }

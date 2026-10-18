@@ -198,7 +198,7 @@ internal fun notificationMessage(method: String, params: JsonElement): String =
 /**
  * (LSP.2) A refusal a REQUEST handler raises to answer a JSON-RPC error instead of
  * a result — the rename path's contract: a [RenamePlan refusal]
- * [com.xemantic.typescript.compiler.project.RenameRefusal] becomes an LSP error
+ * `RenameRefusal` (of the deleted `-project`) becomes an LSP error
  * CARRYING ITS REASON, never an empty edit that looks like success.
  *
  * [code] defaults to LSP 3.17's `RequestFailed`: the request was valid and the

@@ -85,7 +85,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # INSIDE the suite, locating the classes from a marker resource on the test
 # classpath (which is exactly why CLAUDE.md insists on the second instrument).
 # Do not "simplify" this back to a bare REPO-relative path.
-MODULE = "xemantic-typescript-compiler-core"
+MODULE = "xemantic-typescript-compiler-tsgo"
 CLASSES = os.path.join(REPO, MODULE, "build", "classes", "kotlin", "jvm", "main")
 LEGACY_CLASSES = os.path.join(REPO, "build", "classes", "kotlin", "jvm", "main")
 

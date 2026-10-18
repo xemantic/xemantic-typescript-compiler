@@ -31,11 +31,9 @@ rootProject.name = "xemantic-typescript-compiler"
 
 include(
     "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
     "xemantic-typescript-compiler-cli",
     "xemantic-typescript-compiler-daemon",
     "xemantic-typescript-compiler-client",
-    "xemantic-typescript-compiler-project",
     // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
     "xemantic-typescript-compiler-kir",
     // PHASE 18 (owner directive 2026-09-01): the Kotlin externals generator
