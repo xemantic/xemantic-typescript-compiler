@@ -1,5 +1,12 @@
 # Status
 
+**(KIR.LOWER.2) DONE — a named library type with no runtime class is refused, not erased to the bag (2026-10-18):**
+the lead held on the port: `function f(p: Promise<string>) { p.then(…) }` COMPILED, because an instantiation carries
+no symbol of its own and `ErasedTypes.mapObject` read its declaration as null ("anonymous object" → bag). It now
+falls back to the reference's TARGET symbol, so the type has its lib declaration and refuses ("cannot map the type
+'Promise<string>'"); `WeakMap` still maps to `JsMap` by design. No other erasure moved: KIR 334 / 0 and the
+`kir-bench.sh` equivalence gate agree on mitt and toml. Pin red under ablation. Next: (KAPI.2).
+
 **(BENCH.2) DONE — placement is an option with a banner, graded and NOT adopted as the default (2026-10-18):**
 `KIR_BENCH_PIN=<cpus>` runs the node/bun/native/wasm arms under `taskset -c`, never the JVM arm (its C1/C2 threads are
 part of it); every run prints each arm's placement first and records it in the JSON, and the generated table shows
@@ -39,12 +46,3 @@ classes apart. Fixed on the way: a class's STATIC side (`typeof C`) erased to it
 `JsConstructor`. `KirNestedClassTest` 17 pins from node (all characterised against tsgo 7.0.2 + node); the four old
 refusal pins re-pointed to node's answers. KIR 330 / 0, warning-clean, `kir-bench.sh` equivalence green.
 Next: (KIR.NATIVE.2).
-
-**(KIR.BIND.1) DONE — a nested `function` is a typed local function and its calls are direct (2026-10-18):** the
-blocker was `-core`'s binder (a nested declaration had no signature); tsgo binds it, so the lowering now builds a
-typed local IR function where the expression form's lambda used to be built (top of the list when hoistable, else
-at its own statement) and a call already past that point is DIRECT — 0 `jsCall` where it was 1. The slot keeps the
-function object (a forwarder; `JsVarargFunction` for a rest parameter), so value positions and per-invocation
-identity are unchanged; a call lowered before emission (a forward call in mutual recursion, the TDZ case) stays
-dynamic. Overload signatures map to their implementation. 5 new shape pins (all red with the direct arm ablated);
-KIR 313 / 0, warning-clean, `kir-bench.sh` equivalence green (mitt, toml). Next: (KIR.LOWER.7), nested classes.

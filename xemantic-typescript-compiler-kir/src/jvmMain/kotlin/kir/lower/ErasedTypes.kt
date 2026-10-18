@@ -190,7 +190,13 @@ internal class ErasedTypes(
         // nothing at all, and must never fall through to the property bag —
         // see [isOwnStructuralDeclaration].
         libraryName(type)?.let { name -> libraryType(name)?.let { return it } }
-        val symbol = type.symbol
+        // (KIR.LOWER.2) An instantiation (`Promise<string>`) carries no symbol of
+        // its own; its TARGET does. Without this fallback the declaration read
+        // null below — "an anonymous object type" — and a named LIBRARY type
+        // outside the runtime's table erased to the property bag, so `p.then(…)`
+        // compiled into a bag-slot call. With it, such a type has a declaration
+        // in a lib file, is not the program's own, and is refused.
+        val symbol = type.symbol ?: (type as? Type.Reference)?.target?.symbol
         val declaration = symbol?.valueDeclaration ?: symbol?.declarations?.firstOrNull()
         // An ENUM erases to the type its members' VALUES have — it has no
         // runtime object here, so `Kind` and `Kind.A` are one JVM type.

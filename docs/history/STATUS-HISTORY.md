@@ -1,3 +1,12 @@
+**(KIR.BIND.1) DONE — a nested `function` is a typed local function and its calls are direct (2026-10-18):** the
+blocker was `-core`'s binder (a nested declaration had no signature); tsgo binds it, so the lowering now builds a
+typed local IR function where the expression form's lambda used to be built (top of the list when hoistable, else
+at its own statement) and a call already past that point is DIRECT — 0 `jsCall` where it was 1. The slot keeps the
+function object (a forwarder; `JsVarargFunction` for a rest parameter), so value positions and per-invocation
+identity are unchanged; a call lowered before emission (a forward call in mutual recursion, the TDZ case) stays
+dynamic. Overload signatures map to their implementation. 5 new shape pins (all red with the direct arm ablated);
+KIR 313 / 0, warning-clean, `kir-bench.sh` equivalence green (mitt, toml). Next: (KIR.LOWER.7), nested classes.
+
 **(TSGO.8-e) DONE — `-core` and `-project` deleted (2026-10-18, owner: "please delete the core"):** both modules
 gone with `-core`'s Kotlin/Native CI job, the generated-corpus pipeline, the `partition-gate` fixture, the
 `corpus-triage` skill and ~380 frozen-era scripts (scripts/ 497 → 61 files: what CI, CLAUDE.md, the port's and KIR's

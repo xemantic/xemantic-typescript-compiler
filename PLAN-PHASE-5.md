@@ -25,6 +25,14 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (KIR.LOWER.2) — the target-symbol fallback in `ErasedTypes.mapObject`
+
+- Probe (port front end): a `Promise<string>` parameter and `p.then(...)` compiled and ran; `WeakMap<object, number>`
+  compiled (mapped to `JsMap` in `KirIntrinsics.libraryClass`, intended); `ReadonlyMap` refused on its constructor.
+- Fix: `val symbol = type.symbol ?: (type as? Type.Reference)?.target?.symbol`. Pin
+  `KirLibraryTypeErasureTest` (refusal message); reverting the line makes it compile again (red). KIR 334 / 0,
+  warning-clean; `kir-bench.sh 1` equivalence: all arms agree on both libraries.
+
 ### Round (BENCH.2) — KIR bench placement: option + banner, graded, default unchanged
 
 - `kir-bench.sh`: `KIR_BENCH_PIN` (validated with `taskset -c … true`), `run_arm` prefixes non-JVM arms with
@@ -9042,7 +9050,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   `populateParameterLocalTypes` is invisible to the body walkers, so a probe must FAIL if the
   change is inert.
 
-- [ ] **(KIR.LOWER.2) THE SAME ABSENT-DECLARATION TRAP MAY BE LIVE IN `ErasedTypes` — a LEAD, not a
+- [x] **(KIR.LOWER.2) THE SAME ABSENT-DECLARATION TRAP MAY BE LIVE IN `ErasedTypes` — a LEAD, not a
   finding.** `ErasedTypes.mapObject` ends `if (declaration == null) return jsObjectType()`, which
   (KAPI.4) measured to be reached by a `Promise<string>` on the API side: a `Type.Reference`'s own
   symbol carries no declaration, so a named library type outside `libraryClass`'s table erases to a
