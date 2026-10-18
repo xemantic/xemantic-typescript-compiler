@@ -13,8 +13,8 @@ the compiler type their calls.
 
 This is the DECLARATION half of using a TypeScript library from Kotlin. The
 other half — a platform artifact whose signatures match — is what the KIR JVM
-and Native backends already produce for whole programs; making the two agree is
-§6, and it is deliberately not claimed here.
+and Native backends would provide; §5.2 measures that today they do not, and
+why.
 
 ```
 .ts ──▶ Parser/Binder/Checker ──▶ CheckedProject ──▶ export surface walk
@@ -264,15 +264,62 @@ that matters is "declared here, absent there" — that one types a consumer's ca
 against a method nothing implements, and the consumer's compiler cannot see it,
 because the consumer compiles against the metadata.
 
+### 5.2 The platform half, measured ((KAPI.2), 2026-10-18)
+
+`KirPlatformAgreementTest` builds two consumers of ONE export: one reference per
+exported declaration (`::greet`, `Counter::class`, `::Counter`,
+`Counter::increment`, `Kind::Alpha`), one per line, compiled as common code
+against the klib and as JVM code against the classes the KIR backend emits from
+the same program. Its positive control compiles the exported API source with
+kotlinc's own JVM compiler — what an agreeing platform artifact looks like —
+and the same JVM consumer resolves every reference against that, so a JVM-side
+failure is a fact about the classes, not about the harness.
+
+What it measured, each pinned as a known divergence (the pin fails, and is
+updated, the moment one moves):
+
+1. **The JVM consumer resolves nothing.** Every class the backend writes carries
+   `@Metadata(k = 3)` — the SYNTHETIC-class kind — with empty data: hand-built IR
+   has no metadata source for the JVM backend to serialize, and kotlinc skips a
+   synthetic class on its classpath entirely, so the classes are not even visible
+   as Java classes. This holds for `mitt` and `smol-toml` as for the synthetic
+   library.
+2. **Beneath it, the JVM names disagree** with what kotlinc writes for the
+   exported API: the facade is `<package>.MainKt` (for a project too — one facade
+   for the program, not one per file) where kotlinc's is the API file's
+   (`ApiKt`); a module variable is `name$get`/`name$set` where Kotlin's accessors
+   are `getName`/`setName`; a name the lowering escapes (`object$`) is not the
+   JVM name a backticked Kotlin `object` gets; an `enum` has no class where the
+   metadata declares an `object`; and a library facade carries the program's
+   `main`/`moduleInit`. Class members agree: `Counter(double)` and
+   `increment(double): double` are the same JVM signatures on both sides, as is
+   `mitt`'s and `parse`'s erasure.
+
+Fixing (2) alone changes nothing a consumer sees, because of (1). The decision
+that fixes both is which side states the declarations:
+
+- **kotlinc declares, KIR defines (proposed).** Seed the KIR JVM pipeline with the
+  exported API source instead of the empty seed, so FIR produces the declarations
+  — with real metadata and kotlinc's JVM names, from the same text the klib was
+  compiled from — and have the lowering fill those declarations' bodies (and an
+  exported class's fields and bag protocol) rather than create its own. Agreement
+  is then by construction, and this pin stays as its proof. Top-level functions
+  and properties can delegate to the lowered implementation; an exported CLASS
+  cannot (a wrapper breaks identity), so the declare pass must bind a TypeScript
+  class to the fir2ir-produced `IrClass`.
+- **Transplant the metadata** from a kotlinc compile of the API onto the KIR
+  classes after renaming their members to match. Smaller, but a second copy of
+  kotlinc's naming rules that breaks silently whenever they move.
+
 ## 6. What is not done yet
 
 In rough order of what a user would miss first.
 
 1. **The platform half.** The metadata declares signatures; the JVM classes the
    KIR backend emits must match them (package, name, erased JVM signature) for a
-   `jvmMain` compilation to link. Nothing pins that agreement yet, and until it
-   does this artifact types a consumer's common code without linking its
-   platform code. That is the next slice.
+   `jvmMain` compilation to link. The agreement is now PINNED (§5.2) and it does
+   not hold: a JVM consumer resolves nothing the backend emits. Making it hold is
+   the design decision §5.2 ends on.
 2. **Interfaces as shapes.** An interface is a property bag at run time, so a
    Kotlin `interface` would be a claim about a representation that does not
    exist; `docs/kir-structural-typing.md` §7 is where the nominal encoding that

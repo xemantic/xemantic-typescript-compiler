@@ -25,6 +25,8 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(KAPI.2) 2026-10-18 session note.** Instrument, not a fix: two consumers of one export, per-declaration references (one per line, errors mapped back by line), plus a kotlinc-compiled stub of the API as the positive control (the harness resolves all 10 references there and 0 against KIR — the same harness discriminating is the ablation). The plan's expected `MittKt` facade did not materialise: a project has ONE `<package>.MainKt` facade. The root divergence is that hand-built IR gets `k=3` synthetic metadata, so name fixes alone would change nothing a consumer sees; proposal recorded as (KAPI.4), owner to choose (doc §5.2). Also this session: bench.yml "Commit results" now re-applies onto the fresh tip (the concurrency group was already there; checkout@ of the pushed sha was the cause).
+
 ### Round (KIR.LOWER.2) — the target-symbol fallback in `ErasedTypes.mapObject`
 
 - Probe (port front end): a `Promise<string>` parameter and `p.then(...)` compiled and ran; `WeakMap<object, number>`
@@ -9060,7 +9062,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   (`scripts/kir-bench.sh`'s equivalence gate is the instrument), and if it does not, add the
   refusal: a named type with no reachable declaration is one this backend does not know.
 
-- [ ] **(KAPI.2) THE PLATFORM HALF: pin that the emitted JVM classes match the exported
+- [x] **(KAPI.2) THE PLATFORM HALF: pin that the emitted JVM classes match the exported
   metadata.** `(KAPI.1)` declares a library's API as Kotlin metadata for `commonMain`; a
   `jvmMain` compilation links against the CLASSES the KIR backend emits, and nothing asserts
   the two agree on package, name and erased JVM signature. The failure is the worst-shaped
@@ -9071,6 +9073,19 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   facade after the file (`MittKt`) where the metadata puts every declaration in one package,
   and module variables are reached through generated `name$get` accessors rather than as
   properties. `docs/kir-kotlin-metadata.md` §6 item 1.
+  **INSTRUMENT LANDED 2026-10-18 — the agreement does NOT hold, and is pinned as known
+  divergences** (`KirPlatformAgreementTest`, `docs/kir-kotlin-metadata.md` §5.2): a JVM consumer
+  resolves NOTHING the backend emits (every class is `@Metadata(k=3)`, synthetic, empty), and
+  beneath that the names disagree (`MainKt` vs `ApiKt`, `x$get` vs `getX`, `object$` vs `object`,
+  no enum class). Positive control: kotlinc's own JVM compile of the API resolves all of it.
+
+- [ ] **(KAPI.4) MAKE THE PLATFORM HALF AGREE — BLOCKED-PENDING-USER (design choice, proposed
+  2026-10-18).** Proposal: "kotlinc declares, KIR defines" — seed the KIR JVM pipeline with the
+  exported API source so FIR states the declarations (real metadata, kotlinc's JVM names, the
+  klib's own text) and the lowering fills their bodies; an exported class must be BOUND to the
+  fir2ir `IrClass`, not wrapped (identity). Alternative: transplant `@Metadata` from a kotlinc
+  compile of the API after renaming KIR's members (a second copy of kotlinc's naming rules).
+  `KirPlatformAgreementTest` is the acceptance pin either way. §5.2 of the doc has the detail.
 
 - [x] **(KAPI.3) A RUNTIME METADATA KLIB — LANDED 2026-08-22, same session.** A SECOND metadata
   klib declares `JsObject` and `JsArray` under their real fully qualified names, is written by

@@ -1,3 +1,14 @@
+**(KIR.LOWER.7) DONE — a class declared in a body lowers (2026-10-18):** a Kotlin IR LOCAL class built whole at its
+own statement (shell, members, override links, the (LIB.6) bag protocol, bodies — a class is not hoisted), so Kotlin's
+closure lowering gives methods their captures; its VALUE is a fresh `JsConstructor` per execution, in a block-scoped
+slot, so `outer() !== outer()` as in node, while `new P()` constructs directly. Before the statement (the enclosing
+function's pass-1 signature) its type erases to the bag. Named refusals: a `static` member (a JVM static is per
+program), a reference lowered above the statement. One divergence pinned: `instanceof` does not tell two invocations'
+classes apart. Fixed on the way: a class's STATIC side (`typeof C`) erased to its INSTANCE type for every class — now
+`JsConstructor`. `KirNestedClassTest` 17 pins from node (all characterised against tsgo 7.0.2 + node); the four old
+refusal pins re-pointed to node's answers. KIR 330 / 0, warning-clean, `kir-bench.sh` equivalence green.
+Next: (KIR.NATIVE.2).
+
 **(KIR.BIND.1) DONE — a nested `function` is a typed local function and its calls are direct (2026-10-18):** the
 blocker was `-core`'s binder (a nested declaration had no signature); tsgo binds it, so the lowering now builds a
 typed local IR function where the expression form's lambda used to be built (top of the list when hoistable, else
