@@ -1,5 +1,15 @@
 # Status
 
+**(KIR.NATIVE.2) DONE — a TypeScript `function main()` compiles, and a backend clash no longer reads as success
+(2026-10-18):** re-measured on the JVM first: a top-level `function main()` (or `moduleInit()`) has the generated
+entry's / initializer's JVM signature, the backend files `CONFLICTING_JVM_DECLARATIONS` with the generation state's
+reporter, which `KotlinIrEmitter`'s hand-assembled pipeline never forwarded — the result said "emit succeeded, 0
+class file(s)" and the program died on a missing class. Now: the backend's errors are the failure reason, an emit
+that wrote no class file fails, and user top-level functions named `main` / `moduleInit` get the `$` suffix a keyword
+gets — which also leaves the native plugin's by-name lookup exactly one entry. Three pins, each red under its
+ablation. KIR 333 / 0, warning-clean, `kir-bench.sh` equivalence green. The native link itself was not run here
+(Kotlin/Native lives in CI). Next: (BENCH.2).
+
 **(KIR.LOWER.7) DONE — a class declared in a body lowers (2026-10-18):** a Kotlin IR LOCAL class built whole at its
 own statement (shell, members, override links, the (LIB.6) bag protocol, bodies — a class is not hoisted), so Kotlin's
 closure lowering gives methods their captures; its VALUE is a fresh `JsConstructor` per execution, in a block-scoped
@@ -35,11 +45,3 @@ port's `TsgoProject` (type oracle) and `TsgoLanguageService` (language features)
 incremental updates, partitioned diagnostics, saved state — (TSGO.10), queued with the measured learnings). Callers see
 the warning (251 sites inside `-project` would); the module silences its own (`-Xwarning-level=DEPRECATION:disabled`).
 `ProjectDeprecationTest` pins it; `-project` 957 / 0. Next: (8-e) the deletion — BLOCKED-PENDING-USER on when.
-
-**(TSGO.8-c) DONE — the port is the default artifact (2026-10-16):** `-tsgo` is published as
-`com.xemantic.typescript:xemantic-typescript-compiler` (`-jvm`), jar `xemantic-typescript-compiler-jvm-<ver>.jar`, with
-sources, an empty javadoc jar and typescript-go's `LICENSE` / `NOTICE.txt` under `META-INF/typescript-go/` (POM: the AGPL
-entries plus Apache-2.0 for the upstream). `-core` takes `xemantic-typescript-compiler-core` for its jar too; `-cli` and
-`-daemon` POMs now depend on `xemantic-typescript-compiler-jvm`. Nothing was ever released (snapshots only), so no
-consumer's coordinates move. `DefaultArtifactTest` pins the jar name and licence files (fails on the old build).
-`-cli` 20 / 0, `-daemon` 63 / 0, `-lsp` 38 / 0, `-externals` 291 / 0, KIR 308 / 0, `-tsgo` 156 / 0. Next: (8-d).

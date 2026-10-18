@@ -830,7 +830,7 @@ internal class KirFileLowering(
             refuse(tsFile, declaration, "generators and `async` are out of the spike subset")
         }
         val function = builder.irFactory.buildFun {
-            this.name = Name.identifier(kotlinName(name.text))
+            this.name = Name.identifier(topLevelFunctionName(name.text))
             returnType = declaredReturnType(declaration)
             visibility = DescriptorVisibilities.PUBLIC
             modality = Modality.FINAL
@@ -7299,6 +7299,18 @@ internal class KirFileLowering(
         if (name in KOTLIN_HARD_KEYWORDS) "$name$" else name
 
     /**
+     * (KIR.NATIVE.2) A TOP-LEVEL function's JVM name: [kotlinName], and never one
+     * this lowering generates in the same file — the program's `main` and each
+     * file's `moduleInit`. A TypeScript `function main()` otherwise has the
+     * generated entry's JVM signature (`main()V`): the JVM backend reported a
+     * platform declaration clash, and the Kotlin/Native plugin found two
+     * entries. Mangled as a keyword is, with a `$` suffix; every call site
+     * binds the IR symbol, so nothing observable reads the spelling.
+     */
+    private fun topLevelFunctionName(name: String): String =
+        if (name in GENERATED_TOP_LEVEL_NAMES) "$name$" else kotlinName(name)
+
+    /**
      * The JVM name of a class MEMBER — [kotlinName], plus the bag protocol.
      *
      * (LIB.6) makes every lowered class a [JsObject], so a TypeScript member
@@ -7358,6 +7370,9 @@ internal class KirFileLowering(
             ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected,
             ModifierFlag.Readonly,
         )
+
+        /** The top-level functions the lowering itself emits ([buildEntryPoint], [buildModuleInit]). */
+        val GENERATED_TOP_LEVEL_NAMES = setOf("main", "moduleInit")
 
         val KOTLIN_HARD_KEYWORDS = setOf(
             "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if",

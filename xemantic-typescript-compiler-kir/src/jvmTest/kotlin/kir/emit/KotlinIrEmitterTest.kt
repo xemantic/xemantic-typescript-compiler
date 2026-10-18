@@ -156,6 +156,27 @@ class KotlinIrEmitterTest {
      * rather than an exception escaping into the caller — not the coverage of
      * the verifier.
      */
+    /**
+     * (KIR.NATIVE.2) A JVM PLATFORM DECLARATION CLASH fails the result.
+     *
+     * The backend files it with the generation state's own reporter, which this
+     * hand-assembled pipeline did not forward, and the write phase then wrote
+     * nothing: the result read "emit succeeded, 0 class file(s)" and the program
+     * died later on a missing class. Two functions with one JVM signature in one
+     * file is the smallest such tree.
+     */
+    @Test
+    fun `should report a JVM declaration clash as a failed result`() {
+        val output = outputDirectory()
+        val result = KotlinIrEmitter(output).emit {
+            val file = file("app", "Main.kt")
+            function(file, "main", irBuiltIns.unitType) {}
+            function(file, "main", irBuiltIns.unitType) {}
+        }
+        assert(!result.successful)
+        assert(result.errors.any { it.contains("CONFLICTING_JVM_DECLARATIONS") })
+    }
+
     @Test
     fun `should report a malformed IR tree as a failed result`() {
         val output = outputDirectory()

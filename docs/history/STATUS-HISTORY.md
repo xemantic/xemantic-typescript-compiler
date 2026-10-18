@@ -1,3 +1,11 @@
+**(TSGO.8-c) DONE — the port is the default artifact (2026-10-16):** `-tsgo` is published as
+`com.xemantic.typescript:xemantic-typescript-compiler` (`-jvm`), jar `xemantic-typescript-compiler-jvm-<ver>.jar`, with
+sources, an empty javadoc jar and typescript-go's `LICENSE` / `NOTICE.txt` under `META-INF/typescript-go/` (POM: the AGPL
+entries plus Apache-2.0 for the upstream). `-core` takes `xemantic-typescript-compiler-core` for its jar too; `-cli` and
+`-daemon` POMs now depend on `xemantic-typescript-compiler-jvm`. Nothing was ever released (snapshots only), so no
+consumer's coordinates move. `DefaultArtifactTest` pins the jar name and licence files (fails on the old build).
+`-cli` 20 / 0, `-daemon` 63 / 0, `-lsp` 38 / 0, `-externals` 291 / 0, KIR 308 / 0, `-tsgo` 156 / 0. Next: (8-d).
+
 **(TSGO.8-b) DONE — the shipped `xtsc` image is the port's (2026-10-16):** `native.yml` uploads the port's PGO image
 (replayed against tsgo 7.0.2 in the same job) as `xtsc-linux-x64`, binary `xtsc`; `-core`'s image job,
 `scripts/build-native-pgo.sh` and `-cli`'s `nativeImage` task are gone. `-cli` is the lean one-shot JVM CLI over the

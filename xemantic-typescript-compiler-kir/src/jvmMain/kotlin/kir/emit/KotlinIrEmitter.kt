@@ -181,10 +181,16 @@ public class KotlinIrEmitter(
             @OptIn(kotlin.io.path.ExperimentalPathApi::class)
             seedDirectory.deleteRecursively()
         }
+        val classFiles = writtenClassFiles()
+        // A program is at least its entry class: an emit that wrote nothing has
+        // failed, whatever else claimed it did not.
+        if (failureReason == null && !messages.hasErrors() && classFiles.isEmpty()) {
+            failureReason = "the JVM backend wrote no class file"
+        }
         val reasons = listOfNotNull(failureReason)
         return EmitResult(
             successful = failureReason == null && !messages.hasErrors(),
-            classFiles = writtenClassFiles(),
+            classFiles = classFiles,
             messages = messages.all + reasons,
             errors = messages.errors + reasons
         )
@@ -219,6 +225,22 @@ public class KotlinIrEmitter(
         // pipeline signals failure by reporting to the collector, not by
         // returning nothing.
         val backend = JvmBackendPipelinePhase.executePhase(fir2ir)
+        // The backend's own diagnostics — a JVM "platform declaration clash"
+        // among them — go to the GENERATION STATE's reporter, which this
+        // hand-assembled pipeline never forwards to the collector; the write
+        // phase then quietly writes nothing. Measured: a TypeScript
+        // `function main()` beside the generated entry reported "emit
+        // succeeded, 0 class file(s)" and died at run time on a missing class.
+        val backendErrors = backend.outputs
+            .flatMap { state ->
+                (state.diagnosticReporter as? org.jetbrains.kotlin.diagnostics.impl.BaseDiagnosticsCollector)
+                    ?.diagnostics.orEmpty()
+            }
+            .filter { it.severity == org.jetbrains.kotlin.diagnostics.Severity.ERROR }
+        if (backendErrors.isNotEmpty()) {
+            return "the JVM backend reported " +
+                backendErrors.joinToString("; ") { "${it.factoryName}: ${it.renderMessage()}" }
+        }
         JvmWriteOutputsPhase.executePhase(backend)
         return null
     }

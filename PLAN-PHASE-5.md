@@ -25,6 +25,21 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (KIR.NATIVE.2) — generated-name collisions and the silent empty emit
+
+- Probe (JVM): `function main(): void {…}; main()` and the same with `moduleInit` both reported success with 0 class
+  files and failed at run time (`Could not find or load main class program.MainKt`).
+- `KotlinIrEmitter.runPipeline`: collects ERROR diagnostics from each `GenerationState.diagnosticReporter`
+  (`BaseDiagnosticsCollector`) and returns them as the failure reason before the write phase; `emit` fails a run that
+  wrote no class file.
+- `KirFileLowering.topLevelFunctionName`: `main` / `moduleInit` (`GENERATED_TOP_LEVEL_NAMES`) get a `$` suffix in
+  `declareFunction`. The API extractor spells keywords with backticks while the lowering suffixes `$` — the existing
+  metadata/class mismatch (KAPI.2) now covers these two names too.
+- `KirNativePlugin` unchanged: with the user function renamed, `singleOrNull { name == "main" }` over the generated
+  files finds the one entry. Not linked locally (Kotlin/Native is CI-only by owner directive).
+- Pins: `KotlinIrEmitterTest` clash (two `main`s in one IR file), `KirGeneratedNameTest` main / moduleInit (node's
+  output); ablating the reporter forwarding or the mangling turns the respective pins red.
+
 ### Round (KIR.LOWER.7) — nested classes as local IR classes with a per-invocation value
 
 - `emitLocalClass` (at the `ClassDeclaration` statement in `lowerStatement`): `IrClass` with LOCAL visibility, parent
@@ -5178,7 +5193,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   `CheckedFacts.signatureOf` answers null and a parameter has no symbol to type — a typed local `IrSimpleFunction`
   needs both. The expression-form lowering needs neither, which is why it works and why it is what shipped. The
   shape pin in `KirNestedDeclarationTest` is what will say the price moved; a value position already costs zero.
-- [ ] **(KIR.NATIVE.2) A TYPESCRIPT PROGRAM THAT DECLARES ITS OWN `function main()` FAILS THE
+- [x] **(KIR.NATIVE.2) A TYPESCRIPT PROGRAM THAT DECLARES ITS OWN `function main()` FAILS THE
   NATIVE BUILD WITH "the lowering produced no entry point" (2026-08-27).**
   `KirNativePlugin.kt:149` picks the generated entry with `singleOrNull { name == "main" }`,
   so a user `main` makes it TWO and the `?: error(...)` reports absence where the truth is
