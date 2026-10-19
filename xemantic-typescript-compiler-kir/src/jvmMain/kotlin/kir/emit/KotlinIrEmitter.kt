@@ -100,8 +100,17 @@ public class KotlinIrEmitter(
      * [EmitResult], as is an IR validation error and a codegen failure — a
      * caller compiling somebody's TypeScript should get a diagnostic, not a
      * stack trace.
+     *
+     * [sources] are Kotlin files compiled WITH the seed, by name: the
+     * frontend declares what they declare — with the metadata a Kotlin
+     * consumer reads — and [build] finds them in the module fragment, where it
+     * may fill their bodies. That is how a TypeScript library's exported API
+     * is stated by kotlinc rather than reconstructed (`KirApiDefinition`).
      */
-    public fun emit(build: IrProgramBuilder.() -> Unit): EmitResult {
+    public fun emit(
+        sources: Map<String, String> = emptyMap(),
+        build: IrProgramBuilder.() -> Unit,
+    ): EmitResult {
         val messages = RecordingMessageCollector()
         // The pipeline insists on a GroupingMessageCollector, which buffers
         // located diagnostics until `flush()` — so nothing may be read out of
@@ -115,9 +124,12 @@ public class KotlinIrEmitter(
         try {
             val seedFile = seedDirectory.resolve("Seed.kt")
             Files.writeString(seedFile, "package $SEED_PACKAGE\n")
+            val sourceFiles = sources.map { (name, text) ->
+                seedDirectory.resolve(name).also { Files.writeString(it, text) }
+            }
             Files.createDirectories(outputDirectory)
             val arguments = K2JVMCompilerArguments().apply {
-                freeArgs = listOf(seedFile.toString())
+                freeArgs = listOf(seedFile.toString()) + sourceFiles.map { it.toString() }
                 destination = outputDirectory.toString()
                 classpath = this@KotlinIrEmitter.classpath.joinToString(File.pathSeparator)
                 moduleName = this@KotlinIrEmitter.moduleName

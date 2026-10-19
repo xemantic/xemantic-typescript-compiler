@@ -1,3 +1,13 @@
+**(BENCH.3) DONE — the KIR bench's table is generated and refuses itself (2026-10-18):** `scripts/kir-bench.sh` writes
+the run as schema-1 JSON (commit, dirty flag, box, the arms actually run, per-process samples, median/sigma/min/max,
+each library's `sink=` verdict); `--record` commits it under `bench-history/kir-runs/` and
+`scripts/kir_bench_report.py` regenerates `docs/perf/kir-bench.md` between markers, losses included and labelled
+(runtime peer / control / ours). The generator refuses a run with non-positive medians, a ratio disagreeing with its
+medians, rows short of arms × libraries, sample counts off the process count, or a split equivalence verdict —
+`--self-test` proves all five (and fails when the checks are ablated). First recorded run (5 processes): mitt KIR
+1.18× faster than tsgo/node, toml 1.49× slower; README's KIR row now cites it instead of pre-port prose.
+Next: (BENCH.2).
+
 **(KIR.NATIVE.2) DONE — a TypeScript `function main()` compiles, and a backend clash no longer reads as success
 (2026-10-18):** re-measured on the JVM first: a top-level `function main()` (or `moduleInit()`) has the generated
 entry's / initializer's JVM signature, the backend files `CONFLICTING_JVM_DECLARATIONS` with the generation state's

@@ -403,6 +403,7 @@ internal class TypeScriptApiExtractor(
             parameters,
             erasure.map(returnType),
             origin(file, declaration),
+            source = declaration,
         )
     }
 
@@ -421,7 +422,7 @@ internal class TypeScriptApiExtractor(
         }
         val list = declaration.parent as? VariableDeclarationList
         val mutable = list != null && list.flags != SyntaxKind.ConstKeyword
-        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, declaration))
+        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, declaration), declaration)
     }
 
     private fun classDeclaration(
@@ -443,7 +444,7 @@ internal class TypeScriptApiExtractor(
                 else -> null
             }
         }
-        return KotlinClass(kotlinName(name), constructorParameters, members, origin(file, declaration))
+        return KotlinClass(kotlinName(name), constructorParameters, members, origin(file, declaration), declaration)
     }
 
     private fun method(member: MethodDeclaration, file: SourceFile): KotlinFunction? {
@@ -459,6 +460,7 @@ internal class TypeScriptApiExtractor(
             parameters,
             erasure.map(returnType),
             origin(file, member),
+            source = member,
         )
     }
 
@@ -470,7 +472,7 @@ internal class TypeScriptApiExtractor(
             return null
         }
         val mutable = ModifierFlag.Readonly !in member.modifiers
-        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, member))
+        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, member), member)
     }
 
     private fun accessor(
@@ -489,7 +491,7 @@ internal class TypeScriptApiExtractor(
         val mutable = owner.members.any {
             it is SetAccessor && (it.name as? Identifier)?.text == name
         }
-        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, member))
+        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, member), member)
     }
 
     private fun isPublicInstanceMember(modifiers: Set<ModifierFlag>): Boolean =
@@ -535,10 +537,10 @@ internal class TypeScriptApiExtractor(
         }
         val members = declaration.members.mapNotNull { member ->
             (member.name as? Identifier)?.text?.let {
-                KotlinProperty(kotlinName(it), valueType, mutable = false, origin(file, member))
+                KotlinProperty(kotlinName(it), valueType, mutable = false, origin(file, member), member)
             }
         }
-        return KotlinConstantObject(kotlinName(name), members, origin(file, declaration))
+        return KotlinConstantObject(kotlinName(name), members, origin(file, declaration), declaration)
     }
 
     /**

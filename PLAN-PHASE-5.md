@@ -25,6 +25,8 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(KAPI.4) 2026-10-19 session note.** Binding a TS class to the fir2ir `IrClass` (the plan's wording) proved unnecessary: lending the stub's `metadata` to KIR's own class works because the class-member JVM signatures already agreed (KAPI.2's measurement), and kotlinc serializes from FIR, not from IR members. Two traps hit: (1) `ClassCodegen` refuses class metadata unless the containing IrFile has `MetadataSource.File` — reusing the API file's would make the lowered facade list the API twice, so an empty seeded `TypeScriptLowered.kt` lends it; (2) a moved property's ACCESSORS need re-parenting too, or IR validation fails "Declaration with wrong parent". `compileTypeScript*ToJvm` gained `@JvmOverloads` because the Java bench harness (`scripts/kir-bench/KirBench.java`) calls them positionally. Native has no API half yet (doc §6 item 1).
+
 **(BENCH.4) 2026-10-18 session note.** Owner approved installing Perry. npm `@perryts/perry@0.5.1520` into `tools/perry`; it refused to compile without clang ("statepoint compact-map rewrite needs an assembler"), no sudo → LLVM 22.1.8 release clang only (bin/clang-22 + lib/clang, 370 MB) into `tools/llvm-22`. The 3-process `--record` run was abandoned inside the equivalence gate (mitt still running at 30 min); a standalone mitt process was stopped at 60 min. The superlinear growth is Perry's (per-round times rise monotonically at 1/40 scale), not the driver's: node/JVM rounds are flat. Trap for the next agent: `pkill -f <pattern>` kills the Bash tool's own shell when the pattern appears in the command line — kill by PID.
 
 **(KAPI.2) 2026-10-18 session note.** Instrument, not a fix: two consumers of one export, per-declaration references (one per line, errors mapped back by line), plus a kotlinc-compiled stub of the API as the positive control (the harness resolves all 10 references there and 0 against KIR — the same harness discriminating is the ablation). The plan's expected `MittKt` facade did not materialise: a project has ONE `<package>.MainKt` facade. The root divergence is that hand-built IR gets `k=3` synthetic metadata, so name fixes alone would change nothing a consumer sees; proposal recorded as (KAPI.4), owner to choose (doc §5.2). Also this session: bench.yml "Commit results" now re-applies onto the fresh tip (the concurrency group was already there; checkout@ of the pushed sha was the cause).
@@ -9081,8 +9083,8 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   beneath that the names disagree (`MainKt` vs `ApiKt`, `x$get` vs `getX`, `object$` vs `object`,
   no enum class). Positive control: kotlinc's own JVM compile of the API resolves all of it.
 
-- [ ] **(KAPI.4) MAKE THE PLATFORM HALF AGREE — BLOCKED-PENDING-USER (design choice, proposed
-  2026-10-18).** Proposal: "kotlinc declares, KIR defines" — seed the KIR JVM pipeline with the
+- [x] **(KAPI.4) MAKE THE PLATFORM HALF AGREE — owner chose the proposal 2026-10-19 ("kotlinc declares,
+  KIR defines"); proposed 2026-10-18.** Proposal: "kotlinc declares, KIR defines" — seed the KIR JVM pipeline with the
   exported API source so FIR states the declarations (real metadata, kotlinc's JVM names, the
   klib's own text) and the lowering fills their bodies; an exported class must be BOUND to the
   fir2ir `IrClass`, not wrapped (identity). Alternative: transplant `@Metadata` from a kotlinc

@@ -25,6 +25,8 @@
 
 package com.xemantic.typescript.compiler.kir.api
 
+import com.xemantic.typescript.compiler.kir.ast.Node
+
 /**
  * A Kotlin type as it appears in an exported API surface.
  *
@@ -147,6 +149,12 @@ public sealed class KotlinDeclaration {
     /** Where in the TypeScript sources it came from, for diagnostics. */
     public abstract val origin: String
 
+    /**
+     * The TypeScript declaration it was exported from, when there is one — what
+     * the JVM half (`KirApiDefinition`) fills this declaration's body from.
+     */
+    public abstract val source: Node?
+
 }
 
 public class KotlinFunction(
@@ -162,6 +170,7 @@ public class KotlinFunction(
      * indexing operators in the Kotlin the runtime is written in.
      */
     public val isOperator: Boolean = false,
+    override val source: Node? = null,
 ) : KotlinDeclaration()
 
 public class KotlinProperty(
@@ -170,6 +179,7 @@ public class KotlinProperty(
     /** A `var` where TypeScript wrote `let`/`var` or a mutable member. */
     public val mutable: Boolean,
     override val origin: String,
+    override val source: Node? = null,
 ) : KotlinDeclaration()
 
 public class KotlinClass(
@@ -178,6 +188,7 @@ public class KotlinClass(
     public val constructorParameters: List<KotlinParameter>?,
     public val members: List<KotlinDeclaration>,
     override val origin: String,
+    override val source: Node? = null,
 ) : KotlinDeclaration()
 
 /**
@@ -192,6 +203,7 @@ public class KotlinConstantObject(
     override val name: String,
     public val members: List<KotlinProperty>,
     override val origin: String,
+    override val source: Node? = null,
 ) : KotlinDeclaration()
 
 /**

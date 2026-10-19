@@ -28,6 +28,7 @@ package com.xemantic.typescript.compiler.kir.lower
 import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
+import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 
 /**
  * Lowers a whole checked PROGRAM: every file, then one entry point.
@@ -55,6 +56,13 @@ internal class KirProgramLowering(
     private val importEdges: List<Pair<String, String>> = emptyList(),
 ) {
 
+    /** The program-wide tables, for whoever completes the program after [lower]. */
+    lateinit var tables: KirProgramTables
+        private set
+
+    /** Each file's module init, by file name, in initialization order; files with none are absent. */
+    private val moduleInits = LinkedHashMap<String, IrSimpleFunction>()
+
     fun lower() {
         // A DECLARATION file has no runtime content — it is types and ambient
         // declarations only, which is what `.d.ts` means — so it is not lowered
@@ -62,6 +70,7 @@ internal class KirProgramLowering(
         // which is the only way they were ever going to.
         val files = files.filterNot { it.fileName.endsWith(".d.ts") }
         val tables = KirProgramTables(files)
+        this.tables = tables
         val facades = facadeNames()
         val lowerings = files.map { file ->
             file to KirFileLowering(
@@ -93,8 +102,27 @@ internal class KirProgramLowering(
         // before the file that imports it runs, which is the whole reason the
         // order is computed rather than taken as the crawl's.
         val byName = lowerings.associate { (file, lowering) -> file.fileName to lowering }
-        val inits = initializationOrder().mapNotNull { byName[it]?.buildModuleInit() }
-        lowerings.single { (file, _) -> file === entryFile }.second.buildEntryPoint(inits)
+        initializationOrder().forEach { name ->
+            byName[name]?.buildModuleInit()?.let { moduleInits[name] = it }
+        }
+        lowerings.single { (file, _) -> file === entryFile }.second.buildEntryPoint(moduleInits.values.toList())
+    }
+
+    /**
+     * The module inits a LIBRARY whose entry is [entry] runs: the files its
+     * imports reach, transitively, in initialization order — which is what
+     * importing that entry evaluates in JavaScript, and not, say, the program's
+     * own driver that happens to share its `tsconfig.json`.
+     */
+    fun moduleInitsReachableFrom(entry: SourceFile): List<IrSimpleFunction> {
+        val imports = importEdges.groupBy({ it.first }, { it.second })
+        val reached = HashSet<String>()
+        val pending = ArrayDeque(listOf(entry.fileName))
+        while (pending.isNotEmpty()) {
+            val name = pending.removeFirst()
+            if (reached.add(name)) imports[name]?.let { pending.addAll(it) }
+        }
+        return moduleInits.filterKeys { it in reached }.values.toList()
     }
 
     /**

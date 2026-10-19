@@ -34,6 +34,10 @@ import com.xemantic.typescript.compiler.kir.ast.SourceFile
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
 import com.xemantic.typescript.compiler.kir.front.checkTypeScript
 import com.xemantic.typescript.compiler.kir.front.checkTypeScriptProject
+import com.xemantic.typescript.compiler.kir.api.KotlinApiModule
+import com.xemantic.typescript.compiler.kir.api.TypeScriptApiExtractor
+import com.xemantic.typescript.compiler.kir.api.renderForJvm
+import com.xemantic.typescript.compiler.kir.lower.KirApiDefinition
 import com.xemantic.typescript.compiler.kir.lower.KirProgramLowering
 import java.nio.file.Path
 
@@ -49,6 +53,13 @@ public class KirCompilation internal constructor(
     public val refusals: List<KirDiagnostic>,
     /** What kotlinc reported about the IR it was handed. */
     public val emit: EmitResult?,
+    /**
+     * (KAPI.4) The exported API the classes carry as Kotlin declarations, when one
+     * was asked for — the same surface `exportTypeScriptApi` writes to a klib.
+     */
+    public val api: KotlinApiModule? = null,
+    /** Exported declarations the API omitted, each with its position — see `KotlinMetadataExport.refusals`. */
+    public val apiRefusals: List<KirDiagnostic> = emptyList(),
 ) {
 
     override fun toString(): String = buildString {
@@ -79,7 +90,14 @@ public class KirCompilation internal constructor(
  * @param source its contents.
  * @param outputDirectory where the `.class` files land.
  * @param packageName the generated package; the entry point is `<it>.MainKt`.
+ * @param exportApi whether the file's exports are also emitted as KOTLIN
+ *   declarations a JVM Kotlin consumer resolves — the platform half of the
+ *   metadata klib `exportTypeScriptApi` writes from the same source
+ *   (`docs/kir-kotlin-metadata.md` §5.2).
+ * @param apiRuntimeTypes the export's `runtimeKlib` choice, which the klib and
+ *   these classes must share: object types as `JsObject`, or as `Any?`.
  */
+@JvmOverloads
 public fun compileTypeScriptToJvm(
     fileName: String,
     source: String,
@@ -87,6 +105,8 @@ public fun compileTypeScriptToJvm(
     packageName: String = "program",
     options: CheckOptions = CheckOptions(),
     classpath: List<Path> = GeneratedProgramClasspath.minimal(),
+    exportApi: Boolean = false,
+    apiRuntimeTypes: Boolean = true,
 ): KirCompilation {
     val mainClass = "$packageName.MainKt"
     val checked = checkTypeScript(fileName, source, options)
@@ -101,6 +121,7 @@ public fun compileTypeScriptToJvm(
         outputDirectory,
         packageName,
         classpath,
+        api = if (exportApi) ApiRequest(checked.sourceFile, apiRuntimeTypes) else null,
     )
 }
 
@@ -118,13 +139,21 @@ public fun compileTypeScriptToJvm(
  * @param entryFileName the file whose top-level statements become `main`; the
  *   only file allowed to have any, since running the others would need module
  *   initialization order, which is a design question and not a default.
+ * @param apiEntryFileName the module whose exports are ALSO emitted as Kotlin
+ *   declarations — a library's entry, as `exportTypeScriptProjectApi` takes it —
+ *   or null for a program with no API. Its imports' module inits run when the
+ *   API is first used, without `main`.
+ * @param apiRuntimeTypes see [compileTypeScriptToJvm].
  */
+@JvmOverloads
 public fun compileTypeScriptProjectToJvm(
     projectPath: String,
     entryFileName: String,
     outputDirectory: Path,
     packageName: String = "program",
     classpath: List<Path> = GeneratedProgramClasspath.minimal(),
+    apiEntryFileName: String? = null,
+    apiRuntimeTypes: Boolean = true,
 ): KirCompilation {
     val mainClass = "$packageName.MainKt"
     val checked = checkTypeScriptProject(projectPath)
@@ -147,6 +176,15 @@ public fun compileTypeScriptProjectToJvm(
             ),
             emit = null,
         )
+    val api = apiEntryFileName?.let { name ->
+        val apiEntry = checked.files.firstOrNull { it.fileName.endsWith(name) }
+            ?: return KirCompilation(
+                false, mainClass, emptyList(),
+                listOf(KirDiagnostic("no program file named '$name' to export an API from", name, 1, 1)),
+                null,
+            )
+        ApiRequest(apiEntry, apiRuntimeTypes)
+    }
     return lowerAndEmit(
         mainClass,
         checked.files,
@@ -156,8 +194,27 @@ public fun compileTypeScriptProjectToJvm(
         packageName,
         classpath,
         checked.importEdges,
+        api,
     )
 }
+
+/** Which module's exports to emit as Kotlin declarations, and with which erasure. */
+private class ApiRequest(val entry: SourceFile, val runtimeTypes: Boolean)
+
+/**
+ * The file the exported API is compiled from, and so the JVM facade a Java caller
+ * sees (`TypeScriptApiKt`). A name the lowering's own facades — one per
+ * TypeScript file, `Main.kt` for the entry — would only reach for a TypeScript file
+ * called `typeScriptApi.ts`.
+ */
+private const val API_FILE = "TypeScriptApi.kt"
+
+/**
+ * An EMPTY Kotlin file in the API's package, whose only use is its file metadata:
+ * kotlinc serializes a class's metadata only inside a file that has some, and the
+ * lowering's files have none — see `KirApiDefinition`.
+ */
+private const val LOWERED_FILE = "TypeScriptLowered.kt"
 
 private fun lowerAndEmit(
     mainClass: String,
@@ -168,11 +225,30 @@ private fun lowerAndEmit(
     packageName: String,
     classpath: List<Path>,
     importEdges: List<Pair<String, String>> = emptyList(),
+    api: ApiRequest? = null,
 ): KirCompilation {
     val refusals = mutableListOf<KirDiagnostic>()
-    val emit = KotlinIrEmitter(outputDirectory, classpath).emit {
+    val extracted = api?.let {
+        TypeScriptApiExtractor(files, facts, packageName, runtimeTypes = it.runtimeTypes).extract(it.entry)
+    }
+    val sources = extracted?.let {
+        mapOf(API_FILE to it.module.renderForJvm(), LOWERED_FILE to "package $packageName\n")
+    } ?: emptyMap()
+    val emit = KotlinIrEmitter(outputDirectory, classpath).emit(sources) {
         try {
-            KirProgramLowering(this, facts, files, entry, packageName, importEdges).lower()
+            val lowering = KirProgramLowering(this, facts, files, entry, packageName, importEdges)
+            lowering.lower()
+            if (api != null && extracted != null) {
+                fun seeded(name: String) = moduleFragment.files.single { it.fileEntry.name.endsWith("/$name") }
+                KirApiDefinition(
+                    this,
+                    lowering.tables,
+                    extracted.module,
+                    seeded(API_FILE),
+                    seeded(LOWERED_FILE),
+                    lowering.moduleInitsReachableFrom(api.entry),
+                ).define()
+            }
         } catch (e: KirLoweringException) {
             refusals.add(e.diagnostic)
             throw e
@@ -184,5 +260,7 @@ private fun lowerAndEmit(
         typeErrors = emptyList(),
         refusals = refusals,
         emit = emit,
+        api = extracted?.module,
+        apiRefusals = extracted?.refusals.orEmpty(),
     )
 }

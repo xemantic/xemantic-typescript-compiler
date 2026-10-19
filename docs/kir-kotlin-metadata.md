@@ -12,9 +12,9 @@ no platform — so a Kotlin developer can `import` a TypeScript library and have
 the compiler type their calls.
 
 This is the DECLARATION half of using a TypeScript library from Kotlin. The
-other half — a platform artifact whose signatures match — is what the KIR JVM
-and Native backends would provide; §5.2 measures that today they do not, and
-why.
+other half — JVM classes a `jvmMain` compilation links against — is the KIR
+JVM backend's, compiled from the same program with the API declared by kotlinc
+itself (§5.3); `KirPlatformAgreementTest` holds the two halves together.
 
 ```
 .ts ──▶ Parser/Binder/Checker ──▶ CheckedProject ──▶ export surface walk
@@ -54,6 +54,20 @@ java -Xmx4g -cp <kir + core + deps> \
 
 It writes the generated Kotlin source beside the klib as a `.kt` file, which is
 the reviewable form of what the artifact contains.
+
+The platform half is the same program compiled to JVM classes with its API
+exported, with the same `runtimeKlib` choice the klib was made with:
+
+```kotlin
+compileTypeScriptProjectToJvm(
+    projectPath = "…/my-library",
+    entryFileName = "main.ts",          // the program's own entry, for `main`
+    outputDirectory = out / "classes",
+    packageName = "ts",                 // the klib's package
+    apiEntryFileName = "index.ts",      // the library's entry, as exported
+    apiRuntimeTypes = true,             // = runtimeKlib != null
+)
+```
 
 ## 1. Why it goes through generated source
 
@@ -295,31 +309,53 @@ updated, the moment one moves):
    `increment(double): double` are the same JVM signatures on both sides, as is
    `mitt`'s and `parse`'s erasure.
 
-Fixing (2) alone changes nothing a consumer sees, because of (1). The decision
-that fixes both is which side states the declarations:
+Fixing (2) alone would have changed nothing a consumer sees, because of (1).
+§5.3 is how both were fixed.
 
-- **kotlinc declares, KIR defines (proposed).** Seed the KIR JVM pipeline with the
-  exported API source instead of the empty seed, so FIR produces the declarations
-  — with real metadata and kotlinc's JVM names, from the same text the klib was
-  compiled from — and have the lowering fill those declarations' bodies (and an
-  exported class's fields and bag protocol) rather than create its own. Agreement
-  is then by construction, and this pin stays as its proof. Top-level functions
-  and properties can delegate to the lowered implementation; an exported CLASS
-  cannot (a wrapper breaks identity), so the declare pass must bind a TypeScript
-  class to the fir2ir-produced `IrClass`.
-- **Transplant the metadata** from a kotlinc compile of the API onto the KIR
-  classes after renaming their members to match. Smaller, but a second copy of
-  kotlinc's naming rules that breaks silently whenever they move.
+### 5.3 kotlinc declares, KIR defines ((KAPI.4), 2026-10-19)
+
+The exported API's Kotlin source — the text the klib is compiled from — is
+compiled INTO the KIR JVM pipeline beside the lowered program
+(`KotlinIrEmitter.emit(sources)`), as `TypeScriptApi.kt`. kotlinc's frontend
+therefore declares every exported name, with its own metadata and its own JVM
+names, and `KirApiDefinition` fills in the behaviour only the lowering knows:
+
+- a top-level function's body calls the lowered implementation, with a cast
+  where the two erasures state one value differently (`Any?` against `JsMap?`);
+- a top-level property's accessors call the module variable's `x$get`/`x$set`, so
+  a Kotlin write and the library's own code share one slot;
+- an `enum`'s `object` answers its constants (the enum has no runtime object);
+- an exported CLASS is the lowered class itself — a wrapper would hand a consumer
+  a different object from the one the library holds. kotlinc's stub of it lends
+  its METADATA to the lowered class (class, constructor, methods; an exported
+  field or getter becomes the stub's property, moved onto the lowered class and
+  reading the lowered member) and is dropped, and the API's types that named the
+  stub name the lowered class. kotlinc serializes class metadata only inside a
+  file that has file metadata, so the lowered file borrows an EMPTY seeded file's
+  (`TypeScriptLowered.kt`) — not the API file's, whose functions it would then
+  list a second time.
+- The API facade's static initializer runs the module inits the API entry's
+  imports reach, in initialization order, so the first call into the library
+  evaluates it as its first `import` would. A module init now runs at most ONCE,
+  as a JavaScript module body does, so `main` and the API can both be used.
+
+Measured: every reference of the pinned library, of `mitt` and of `smol-toml`
+resolves on both sides; every JVM member kotlinc writes for the API exists in
+the emitted classes; and a JVM consumer RUNS the library through its API with no
+`main`, giving node's answers. Three ablations (no metadata lent, no module inits,
+no init guard) each fail the pin that names them.
+
+What a Kotlin consumer does not see: an exported class's `JsObject` base (the
+metadata says `Any`) and its bag protocol, which are runtime representation, not
+API. The Native backend has no equivalent yet.
 
 ## 6. What is not done yet
 
 In rough order of what a user would miss first.
 
-1. **The platform half.** The metadata declares signatures; the JVM classes the
-   KIR backend emits must match them (package, name, erased JVM signature) for a
-   `jvmMain` compilation to link. The agreement is now PINNED (§5.2) and it does
-   not hold: a JVM consumer resolves nothing the backend emits. Making it hold is
-   the design decision §5.2 ends on.
+1. **The platform half on Native.** The JVM half agrees with the klib (§5.3);
+   a Kotlin/Native consumer would need the same from the Native backend, which
+   does not yet compile the API source beside the program.
 2. **Interfaces as shapes.** An interface is a property bag at run time, so a
    Kotlin `interface` would be a claim about a representation that does not
    exist; `docs/kir-structural-typing.md` §7 is where the nominal encoding that

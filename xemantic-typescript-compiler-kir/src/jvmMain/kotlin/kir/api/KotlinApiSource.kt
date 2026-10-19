@@ -64,6 +64,16 @@ internal fun KotlinApiModule.render(): String = buildString {
     }
 }
 
+/**
+ * The same API for the JVM half (`KirApiDefinition`): [render] plus one PRIVATE
+ * property whose initializer becomes the facade's static initializer — where the
+ * library's module inits run. Private, so the public surface a consumer resolves
+ * is exactly the klib's.
+ */
+internal fun KotlinApiModule.renderForJvm(): String =
+    render() + "\n// Runs the library's modules when the facade is first used.\n" +
+        "private val `module-init`: Unit = Unit\n"
+
 private fun StringBuilder.renderDeclaration(declaration: KotlinDeclaration, indent: String) {
     appendLine("$indent// ${declaration.origin}")
     when (declaration) {

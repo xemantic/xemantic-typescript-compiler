@@ -572,8 +572,39 @@ internal class KirFileLowering(
         irFile.declarations.add(init)
         builder.pluginContext.metadataDeclarationRegistrar
             .registerFunctionAsMetadataVisible(init)
+        // ONCE, as a JavaScript module body runs once: `main` runs every module
+        // and a library's exported API (`KirApiDefinition`) runs the ones its
+        // entry imports, and a program may do both. Set BEFORE the body runs,
+        // which is what an import cycle sees in JavaScript too — a module that
+        // is still evaluating is not evaluated again.
+        val initialized = builder.irFactory.buildField {
+            name = Name.identifier("moduleInitialized")
+            type = irBuiltIns.booleanType
+            visibility = DescriptorVisibilities.PRIVATE
+            isStatic = true
+            isFinal = false
+            origin = builder.generatedOrigin
+        }
+        initialized.parent = irFile
+        irFile.declarations.add(initialized)
         inFunction(init, irBuiltIns.unitType, null, null) {
-            init.body = blockBody(init, emptyList(), statements)
+            val body = blockBody(init, emptyList(), statements)
+            val guard = DeclarationIrBuilder(builder.pluginContext, init.symbol)
+            body.statements.addAll(
+                0,
+                listOf(
+                    guard.irIfThen(
+                        irBuiltIns.unitType,
+                        IrGetFieldImpl(UNDEFINED, UNDEFINED, initialized.symbol, irBuiltIns.booleanType, null, null, null),
+                        guard.irReturnUnit(),
+                    ),
+                    IrSetFieldImpl(
+                        UNDEFINED, UNDEFINED, initialized.symbol, null,
+                        guard.irBoolean(true), irBuiltIns.unitType, null, null,
+                    ),
+                ),
+            )
+            init.body = body
         }
         return init
     }

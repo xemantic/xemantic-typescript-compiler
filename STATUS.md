@@ -1,5 +1,7 @@
 # Status
 
+**(KAPI.4) DONE — a JVM Kotlin consumer links and runs a TypeScript library through its exported API (2026-10-19):** owner chose "kotlinc declares, KIR defines". The klib's own API source is compiled into the KIR JVM pipeline (`TypeScriptApi.kt`); `KirApiDefinition` fills top-level bodies by delegating to the lowering, routes properties through `x$get`/`x$set`, answers enum constants, and makes each exported class the LOWERED class carrying kotlinc's metadata (stub dropped, types re-pointed; the lowered file borrows an empty seeded file's metadata). The facade's `<clinit>` runs the API entry's module inits; a module init now runs once. `KirPlatformAgreementTest` 8 pins: all references resolve on both sides for the pinned library, mitt and smol-toml; JVM signatures agree; a consumer RUNS with node's answers; 3 ablations each fail their pin. KIR 342 / 0, warning-clean, bench equivalence agrees.
+
 **(BENCH.4) DONE — Perry runs our fixtures unmodified, and is too slow on mitt to record (2026-10-18):** `KIR_BENCH_PERRY=1` adds Perry 0.5.1520 (SWC + LLVM 22.1.8; needs clang, both under gitignored `tools/`) as the TS-to-native peer, gated by the same `sink=` equivalence and refusing when absent. Measured one process each: toml 577.55 µs/parse = 24.2× tsgo→node, sink agrees; mitt did not finish in 60 min (node ~6 s), each round slower than the last (heap/GC growth), so no recorded run includes it. Prose + raw numbers: `docs/perf/kir-bench.md`, `bench-history/kir-runs/perry-probe-20261018/`. Also: bench.yml "Commit results" fixed (re-apply onto the fresh tip; the first queued run after it pushed cleanly).
 
 **(KAPI.2) 2026-10-18 — the platform-half agreement is pinned, and it does not hold.** `KirPlatformAgreementTest` (6 pins) compiles one reference per exported declaration as common code against the klib and as JVM code against the KIR classes from ONE export; its positive control (kotlinc's JVM compile of the same API source) resolves everything. Measured: the JVM consumer resolves NOTHING KIR emits — every class is `@Metadata(k=3)` (synthetic, empty), which kotlinc skips — and beneath that the JVM names disagree (`MainKt`/`ApiKt`, `x$get`/`getX`, `object$`/`object`, no enum class); class members and `mitt`/`parse` erasures agree. Fix is a design choice → (KAPI.4) BLOCKED-PENDING-USER. KIR 340 tests, 0 failures, warning-clean.
@@ -19,13 +21,3 @@ it. Paired in one round (A/B/A/B, 5 processes each, pinned to CPU 3): the contro
 2.1/1.0%), so the default recipe is unchanged and the series does not restart. The JVM arm's 500+ ms mitt outliers
 appear unpinned too (an earlier run today) — JVM noise, not placement. Receipts:
 `bench-history/kir-runs/placement-ab-20261018/`. Next: (KIR.LOWER.2).
-
-**(BENCH.3) DONE — the KIR bench's table is generated and refuses itself (2026-10-18):** `scripts/kir-bench.sh` writes
-the run as schema-1 JSON (commit, dirty flag, box, the arms actually run, per-process samples, median/sigma/min/max,
-each library's `sink=` verdict); `--record` commits it under `bench-history/kir-runs/` and
-`scripts/kir_bench_report.py` regenerates `docs/perf/kir-bench.md` between markers, losses included and labelled
-(runtime peer / control / ours). The generator refuses a run with non-positive medians, a ratio disagreeing with its
-medians, rows short of arms × libraries, sample counts off the process count, or a split equivalence verdict —
-`--self-test` proves all five (and fails when the checks are ablated). First recorded run (5 processes): mitt KIR
-1.18× faster than tsgo/node, toml 1.49× slower; README's KIR row now cites it instead of pre-port prose.
-Next: (BENCH.2).

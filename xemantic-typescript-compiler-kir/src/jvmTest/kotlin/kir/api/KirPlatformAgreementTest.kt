@@ -46,7 +46,7 @@ import kotlin.io.path.writeText
 import kotlin.test.Test
 
 /**
- * (KAPI.2) The PLATFORM half: do the JVM classes the KIR backend emits for a
+ * (KAPI.2, KAPI.4) The PLATFORM half: do the JVM classes the KIR backend emits for a
  * program agree with the metadata klib exported from the SAME program?
  *
  * The failure this exists for is the worst-shaped one available — a Kotlin
@@ -58,27 +58,17 @@ import kotlin.test.Test
  * against the klib and as JVM code against the emitted classes, each reference
  * on its own line so an error names the declaration that did not resolve.
  *
- * The POSITIVE CONTROL is what makes a JVM-side failure mean something: the same
- * exported API source compiled by kotlinc's own JVM compiler is what a platform
- * artifact that agrees looks like, and the JVM consumer resolves every
- * reference against it. Without that control "the JVM side resolves nothing"
- * could be a consumer harness that resolves nothing.
+ * The POSITIVE CONTROL is what makes a JVM-side verdict mean something: the same
+ * exported API source compiled by kotlinc's own JVM compiler is what an agreeing
+ * platform artifact looks like, and the JVM consumer resolves every reference
+ * against it. And because resolving is not linking, the last pin RUNS a JVM
+ * consumer against the emitted classes, with node's answers as the expected ones.
  *
- * What it measured (2026-10-18), each pinned below as a KNOWN DIVERGENCE so the
- * pin fails — and is updated — the moment one moves:
- *
- * 1. The JVM consumer resolves NOTHING the KIR backend emits. Every class it
- *    writes carries `@Metadata(k = 3)`, the SYNTHETIC-class kind, with empty
- *    data — hand-built IR has no metadata source for the JVM backend to
- *    serialize — and kotlinc skips a synthetic class on the classpath entirely:
- *    it is not even visible as a Java class.
- * 2. Beneath that, the erased JVM signatures disagree with what kotlinc writes
- *    for the exported API: the facade is `<package>.MainKt` where the metadata
- *    says `<package>.ApiKt` (the file the API was rendered into), a module
- *    variable is a `name$get`/`name$set` pair where Kotlin's is `getName`/
- *    `setName`, a name the lowering escapes (`object$`) is a different JVM name
- *    from the one Kotlin escapes with backticks (`object`), and an `enum` has no
- *    class at all where the metadata declares an `object`.
+ * History: (KAPI.2) measured that the JVM consumer resolved NOTHING — every emitted
+ * class was `@Metadata(k = 3)`, synthetic and empty, and the JVM names disagreed
+ * (`MainKt`/`ApiKt`, `x$get`/`getX`, `object$`/`object`, no enum class). (KAPI.4)
+ * made kotlinc declare the API and KIR define it (`KirApiDefinition`), and these
+ * pins now hold the agreement instead of the divergence.
  */
 class KirPlatformAgreementTest {
 
@@ -88,60 +78,130 @@ class KirPlatformAgreementTest {
         assert(agreement.commonUnresolved.isEmpty())
         assert(agreement.stubUnresolved.isEmpty())
         assert(agreement.references == listOf(
-            "::VERSION", "::counter", "::greet", "Counter::class", "::Counter", "Counter::increment",
+            "::VERSION", "::counter", "::greet", "::TWICE", "::bump", "Counter::class", "::Counter",
+            "Counter::increment", "Point::class", "::Point", "Point::x", "Point::double", "::origin",
             "Kind", "Kind::Alpha", "Kind::Beta", "::`object`",
         ))
     }
 
     @Test
-    fun `the JVM consumer resolves nothing the KIR backend emits`() {
+    fun `the JVM consumer resolves every declaration the KIR backend emits`() {
         val agreement = agreementOf(LIBRARY)
         assert(agreement.commonUnresolved.isEmpty())
-        assert(agreement.jvmUnresolved == agreement.references.toSet())
+        assert(agreement.jvmUnresolved.isEmpty())
     }
 
+    /**
+     * Kotlin reads the exported classes' metadata, the API facade's and the
+     * constants object's; the lowered program's own facade is a file facade that
+     * declares nothing (it lends its file metadata to the classes it holds).
+     */
     @Test
-    fun `every class the KIR backend emits is marked synthetic`() {
+    fun `the exported classes carry kotlinc's metadata`() {
         val agreement = agreementOf(LIBRARY)
-        assert(agreement.kirMetadataKinds == mapOf("ts.Counter" to 3, "ts.MainKt" to 3))
+        assert(agreement.kirMetadataKinds == mapOf(
+            "ts.Counter" to 1, "ts.Kind" to 1, "ts.MainKt" to 2, "ts.Point" to 1, "ts.TypeScriptApiKt" to 2,
+        ))
         assert(agreement.stubMetadataKinds ==
-            mapOf("ts.ApiKt" to 2, "ts.Counter" to 1, "ts.Kind" to 1))
+            mapOf("ts.Counter" to 1, "ts.Kind" to 1, "ts.Point" to 1, "ts.TypeScriptApiKt" to 2))
     }
 
+    /** Every JVM member kotlinc writes for the API exists in the emitted classes, by name and erasure. */
     @Test
-    fun `the erased JVM signatures diverge where named`() {
+    fun `the erased JVM signatures agree`() {
         val agreement = agreementOf(LIBRARY)
-        assert(agreement.missingOnJvm == listOf(
-            "ts.ApiKt (class)",
-            "ts.Kind (class)",
-        ))
+        assert(agreement.missingOnJvm.isEmpty())
+        assert(agreement.missingFacadeMembers.isEmpty())
         assert(agreement.missingClassMembers.isEmpty())
-        assert(agreement.missingFacadeMembers == listOf(
-            "getCounter(): double",
-            "getVERSION(): java.lang.String",
-            "object(java.lang.String): java.lang.String",
-            "setCounter(double): void",
-        ))
+    }
+
+    /**
+     * The JVM consumer LINKS and RUNS against the emitted classes, with no `main`:
+     * the first call into the API runs the library's module inits (`VERSION` and
+     * `TWICE` are assigned there), a field and a getter of an exported class read
+     * the lowered members, and the module variable a Kotlin caller sees is the one
+     * the library's own code bumps.
+     *
+     * Expected from tsgo 7.0.2 + node over the same calls (`1.0|abab|hihi|3|0|1|2|2|2|4|5|10|0|a|b|o`),
+     * plus two the JavaScript importer cannot spell: a Kotlin WRITE through the
+     * exported `var` (`counter = 10.0`, then `bump()` is 11) and the same read back.
+     */
+    @Test
+    fun `a JVM consumer runs the library through its exported API`() {
+        val work = Files.createTempDirectory("xtsc-kapi4-run")
+        val classes = work.resolve("kir")
+        val compiled = compileTypeScriptToJvm("api.ts", LIBRARY.trimIndent(), classes, packageName = PACKAGE, exportApi = true)
+        assert(compiled.successful)
+        val runtime = GeneratedProgramClasspath.minimal()
+        val consumerClasses = work.resolve("consumer")
+        val errors = compileJvm(
+            """
+            package consumer
+            import ts.*
+            fun n(value: Double): String = value.toInt().toString()
+            fun run(): String {
+                val out = mutableListOf(VERSION, TWICE, greet("hi", 2.0))
+                out += n(Counter(1.0).increment(2.0))
+                out += n(counter)
+                out += listOf(n(bump()), n(bump()), n(counter))
+                val p = Point(2.0)
+                out += listOf(n(p.x), n(p.double))
+                p.x = 5.0
+                out += listOf(n(p.x), n(p.double), n(origin().x))
+                out += listOf(Kind.Alpha, Kind.Beta, `object`("o"))
+                counter = 10.0
+                out += listOf(n(bump()), n(counter))
+                return out.joinToString("|")
+            }
+            """.trimIndent(),
+            "Consumer.kt", listOf(classes) + runtime, consumerClasses,
+        )
+        assert(errors.isEmpty())
+        val loader = URLClassLoader((listOf(consumerClasses, classes) + runtime).map { it.toUri().toURL() }.toTypedArray(), null)
+        val output = loader.loadClass("consumer.ConsumerKt").getMethod("run").invoke(null)
+        assert(output == "1.0|abab|hihi|3|0|1|2|2|2|4|5|10|0|a|b|o|11|11")
+    }
+
+    /**
+     * A module runs ONCE, as in JavaScript, when a program uses both doors: `main`
+     * runs the module inits, the lowered code then moves `counter`, and the API's
+     * first use must not run them again and reset it.
+     */
+    @Test
+    fun `the API does not evaluate a module main already evaluated`() {
+        val work = Files.createTempDirectory("xtsc-kapi4-once")
+        val classes = work.resolve("kir")
+        val compiled = compileTypeScriptToJvm("api.ts", LIBRARY.trimIndent(), classes, packageName = PACKAGE, exportApi = true)
+        assert(compiled.successful)
+        val runtime = GeneratedProgramClasspath.minimal()
+        val loader = URLClassLoader((listOf(classes) + runtime).map { it.toUri().toURL() }.toTypedArray(), null)
+        val lowered = loader.loadClass("$PACKAGE.MainKt")
+        lowered.getMethod("main").invoke(null)
+        lowered.getMethod("counter\$set", Double::class.javaPrimitiveType).invoke(null, 7.0)
+        val api = loader.loadClass("$PACKAGE.TypeScriptApiKt")
+        val counter = api.getMethod("getCounter").invoke(null)
+        assert(counter == 7.0)
     }
 
     @Test
-    fun `a real library - mitt - agrees on nothing but its declarations`() {
+    fun `a real library - mitt - agrees with its klib`() {
         val agreement = agreementOfProject("mitt-consumer", MITT_FILES, exportEntry = "mitt.ts")
         assert(agreement.references == listOf("::mitt"))
         assert(agreement.commonUnresolved.isEmpty())
         assert(agreement.stubUnresolved.isEmpty())
-        assert(agreement.jvmUnresolved == setOf("::mitt"))
-        assert(agreement.missingOnJvm == listOf("ts.ApiKt (class)"))
+        assert(agreement.jvmUnresolved.isEmpty())
+        assert(agreement.missingOnJvm.isEmpty())
         assert(agreement.missingFacadeMembers.isEmpty())
     }
 
     @Test
-    fun `a real parser - smol-toml - agrees on nothing but its declarations`() {
+    fun `a real parser - smol-toml - agrees with its klib`() {
         val agreement = agreementOfProject("toml", TOML_FILES, exportEntry = "parse.ts")
+        assert(agreement.references == listOf("::parse"))
         assert(agreement.commonUnresolved.isEmpty())
         assert(agreement.stubUnresolved.isEmpty())
-        assert(agreement.jvmUnresolved == agreement.references.toSet())
-        assert(agreement.missingOnJvm == listOf("ts.ApiKt (class)"))
+        assert(agreement.jvmUnresolved.isEmpty())
+        assert(agreement.missingOnJvm.isEmpty())
         assert(agreement.missingFacadeMembers.isEmpty())
     }
 
@@ -165,7 +225,7 @@ class KirPlatformAgreementTest {
     private fun agreementOf(source: String): Agreement {
         val work = Files.createTempDirectory("xtsc-kapi2")
         val classes = work.resolve("kir")
-        val compiled = compileTypeScriptToJvm("api.ts", source.trimIndent(), classes, packageName = PACKAGE)
+        val compiled = compileTypeScriptToJvm("api.ts", source.trimIndent(), classes, packageName = PACKAGE, exportApi = true)
         assert(compiled.successful)
         val export = exportTypeScriptApi("api.ts", source.trimIndent(), work.resolve("lib.klib"),
             packageName = PACKAGE, runtimeKlib = work.resolve("runtime.klib"))
@@ -183,7 +243,9 @@ class KirPlatformAgreementTest {
         val classes = work.resolve("kir")
         // The program's own entry is the acceptance driver: the backend compiles a PROGRAM,
         // and the library's declarations are emitted with it.
-        val compiled = compileTypeScriptProjectToJvm(project.toString(), "main.ts", classes, packageName = PACKAGE)
+        val compiled = compileTypeScriptProjectToJvm(
+            project.toString(), "main.ts", classes, packageName = PACKAGE, apiEntryFileName = exportEntry,
+        )
         assert(compiled.successful)
         val export = exportTypeScriptProjectApi(project.toString(), exportEntry, work.resolve("lib.klib"),
             packageName = PACKAGE, runtimeKlib = work.resolve("runtime.klib"))
@@ -210,14 +272,14 @@ class KirPlatformAgreementTest {
         // What a platform artifact that AGREES looks like: kotlinc's own JVM classes for the
         // exported API source, against the same runtime the KIR program links.
         val stubs = work.resolve("stubs")
-        val stubCompile = compileJvm(export.source, "Api.kt", runtime, stubs)
+        val stubCompile = compileJvm(export.source, API_FILE, runtime, stubs)
         assert(stubCompile.isEmpty())
         val againstKir = compileJvm(consumer, "Consumer.kt", listOf(kirClasses) + runtime, work.resolve("c1"))
         val againstStubs = compileJvm(consumer, "Consumer.kt", listOf(stubs) + runtime, work.resolve("c2"))
 
         val kir = surfaceOf(kirClasses, runtime)
         val stub = surfaceOf(stubs, runtime)
-        val facade = "$PACKAGE.ApiKt"
+        val facade = "$PACKAGE.${API_FILE.removeSuffix(".kt")}Kt"
         val kirMembers = kir.members.values.flatten().toSet()
         return Agreement(
             references = references,
@@ -298,16 +360,27 @@ class KirPlatformAgreementTest {
     private companion object {
         const val PACKAGE = "ts"
 
+        /** The file the JVM half compiles the API from, so the two facades have one name. */
+        const val API_FILE = "TypeScriptApi.kt"
+
         /** Every declaration kind the export writes, and a keyword name. */
         val LIBRARY = """
             export const VERSION: string = "1.0"
             export let counter: number = 0
             export function greet(name: string, times: number): string { return name.repeat(times) }
+            export const TWICE: string = greet("ab", 2)
+            export function bump(): number { counter = counter + 1; return counter }
             export class Counter {
                 private value: number
                 constructor(start: number) { this.value = start }
                 increment(by: number): number { this.value = this.value + by; return this.value }
             }
+            export class Point {
+                x: number
+                constructor(x: number) { this.x = x }
+                get double(): number { return this.x * 2 }
+            }
+            export function origin(): Point { return new Point(0) }
             export enum Kind { Alpha = "a", Beta = "b" }
             export function object(fun: string): string { return fun }
         """
