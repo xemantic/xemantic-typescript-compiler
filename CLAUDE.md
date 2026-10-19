@@ -144,6 +144,8 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
   `0 0 0`, indistinguishable from a suite that never ran. Wipe the whole results dir, not
   `/binary`. Count with a real XML parser, never a regex (passed testcases self-close).
 - `--tests '*Name*'` wipes the XMLs — rerun the full suite before any XML-reading script.
+- Never `pkill -f <pattern>` from the Bash tool: the tool's own shell has the pattern in its command line and is
+  killed with the target (the rest of the command silently never runs). Find PIDs with `ps | grep -v grep`, kill by PID.
 - Always `grep -a` on Gradle output AND on large sources (the generated `-tsgo` files trip grep's
   binary heuristic and silently match nothing). Retry a surprising empty grep with `-a`.
 - Warning gate: the build is warning-clean; check with
