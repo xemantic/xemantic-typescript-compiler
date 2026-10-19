@@ -24,6 +24,15 @@ How to read it:
   unpinned, pinned, unpinned, pinned, 5 processes each, `bench-history/kir-runs/placement-ab-20261018/` — narrowed
   the control arm's spread but not the baseline's, so the default recipe (and the series) is unchanged.
 
+- **Perry, the TS-to-native peer** ((BENCH.4), `KIR_BENCH_PERRY=1`) is an arm the script can run and gate, but
+  it is not in the table below, because a recorded run with it does not finish. Perry 0.5.1520 compiles both
+  fixtures unmodified and computes the same `sink=` as every other arm. On toml it measures 577.55 µs/parse, 24.2×
+  tsgo's JavaScript on node, at 197 s for one process. On mitt one process did not finish in 60 minutes; node
+  takes ~6 s. A probe printing every round shows why: each round is slower than the one before (479 ms, then
+  1,274 ms by round 16, at 1/40 of the driver), so the cost grows with work already done rather than per
+  operation. The raw numbers are in `bench-history/kir-runs/perry-probe-20261018/`. Perry has no type checker,
+  so it is a peer for what it computes, not for what it accepts.
+
 <!-- KIR-BENCH-TABLE-START -->
 Run `20261018T142401Z-852b3b3c76e3.json` — commit `852b3b3c76e3` (dirty tree), 2026-10-18T14:24:01Z, 5 processes per arm, interleaved.
 Box: AMD EPYC-Rome Processor, 8 cores, 15.2 GB; java openjdk version 26.0.2 2026-07-21, node v22.20.0.

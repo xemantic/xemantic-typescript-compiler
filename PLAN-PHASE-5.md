@@ -25,6 +25,8 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(BENCH.4) 2026-10-18 session note.** Owner approved installing Perry. npm `@perryts/perry@0.5.1520` into `tools/perry`; it refused to compile without clang ("statepoint compact-map rewrite needs an assembler"), no sudo → LLVM 22.1.8 release clang only (bin/clang-22 + lib/clang, 370 MB) into `tools/llvm-22`. The 3-process `--record` run was abandoned inside the equivalence gate (mitt still running at 30 min); a standalone mitt process was stopped at 60 min. The superlinear growth is Perry's (per-round times rise monotonically at 1/40 scale), not the driver's: node/JVM rounds are flat. Trap for the next agent: `pkill -f <pattern>` kills the Bash tool's own shell when the pattern appears in the command line — kill by PID.
+
 **(KAPI.2) 2026-10-18 session note.** Instrument, not a fix: two consumers of one export, per-declaration references (one per line, errors mapped back by line), plus a kotlinc-compiled stub of the API as the positive control (the harness resolves all 10 references there and 0 against KIR — the same harness discriminating is the ablation). The plan's expected `MittKt` facade did not materialise: a project has ONE `<package>.MainKt` facade. The root divergence is that hand-built IR gets `k=3` synthetic metadata, so name fixes alone would change nothing a consumer sees; proposal recorded as (KAPI.4), owner to choose (doc §5.2). Also this session: bench.yml "Commit results" now re-applies onto the fresh tip (the concurrency group was already there; checkout@ of the pushed sha was the cause).
 
 ### Round (KIR.LOWER.2) — the target-symbol fallback in `ErasedTypes.mapObject`
@@ -5275,7 +5277,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   say a generator that emits quietly where it cannot see is the thing that keeps being wrong
   here. Cheap and separable from (BENCH.2); do this one first.
 
-- [ ] **(BENCH.4) THE TS-TO-NATIVE CATEGORY HAS EXACTLY ONE ARM THAT COULD TAKE OUR FIXTURES
+- [x] **(BENCH.4) THE TS-TO-NATIVE CATEGORY HAS EXACTLY ONE ARM THAT COULD TAKE OUR FIXTURES
   UNMODIFIED, AND IT IS PERRY ITSELF — NOT AssemblyScript (2026-08-28).** Perry's own peer
   classification (`benchmarks/README.md`) is worth adopting verbatim in our table header:
   **runtime peers** (same input language, same job — for them node/bun, for us tsgo),

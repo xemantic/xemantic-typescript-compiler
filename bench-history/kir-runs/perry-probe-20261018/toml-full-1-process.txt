@@ -1,0 +1,2 @@
+toml best_ms=11551 mean_ms=12375.6 parses_per_round=20000 us_per_parse=577.55 sink=-5440000
+toml 197.24 s 190456 KB

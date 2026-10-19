@@ -1,5 +1,7 @@
 # Status
 
+**(BENCH.4) DONE — Perry runs our fixtures unmodified, and is too slow on mitt to record (2026-10-18):** `KIR_BENCH_PERRY=1` adds Perry 0.5.1520 (SWC + LLVM 22.1.8; needs clang, both under gitignored `tools/`) as the TS-to-native peer, gated by the same `sink=` equivalence and refusing when absent. Measured one process each: toml 577.55 µs/parse = 24.2× tsgo→node, sink agrees; mitt did not finish in 60 min (node ~6 s), each round slower than the last (heap/GC growth), so no recorded run includes it. Prose + raw numbers: `docs/perf/kir-bench.md`, `bench-history/kir-runs/perry-probe-20261018/`. Also: bench.yml "Commit results" fixed (re-apply onto the fresh tip; the first queued run after it pushed cleanly).
+
 **(KAPI.2) 2026-10-18 — the platform-half agreement is pinned, and it does not hold.** `KirPlatformAgreementTest` (6 pins) compiles one reference per exported declaration as common code against the klib and as JVM code against the KIR classes from ONE export; its positive control (kotlinc's JVM compile of the same API source) resolves everything. Measured: the JVM consumer resolves NOTHING KIR emits — every class is `@Metadata(k=3)` (synthetic, empty), which kotlinc skips — and beneath that the JVM names disagree (`MainKt`/`ApiKt`, `x$get`/`getX`, `object$`/`object`, no enum class); class members and `mitt`/`parse` erasures agree. Fix is a design choice → (KAPI.4) BLOCKED-PENDING-USER. KIR 340 tests, 0 failures, warning-clean.
 
 **(KIR.LOWER.2) DONE — a named library type with no runtime class is refused, not erased to the bag (2026-10-18):**
@@ -27,13 +29,3 @@ medians, rows short of arms × libraries, sample counts off the process count, o
 `--self-test` proves all five (and fails when the checks are ablated). First recorded run (5 processes): mitt KIR
 1.18× faster than tsgo/node, toml 1.49× slower; README's KIR row now cites it instead of pre-port prose.
 Next: (BENCH.2).
-
-**(KIR.NATIVE.2) DONE — a TypeScript `function main()` compiles, and a backend clash no longer reads as success
-(2026-10-18):** re-measured on the JVM first: a top-level `function main()` (or `moduleInit()`) has the generated
-entry's / initializer's JVM signature, the backend files `CONFLICTING_JVM_DECLARATIONS` with the generation state's
-reporter, which `KotlinIrEmitter`'s hand-assembled pipeline never forwarded — the result said "emit succeeded, 0
-class file(s)" and the program died on a missing class. Now: the backend's errors are the failure reason, an emit
-that wrote no class file fails, and user top-level functions named `main` / `moduleInit` get the `$` suffix a keyword
-gets — which also leaves the native plugin's by-name lookup exactly one entry. Three pins, each red under its
-ablation. KIR 333 / 0, warning-clean, `kir-bench.sh` equivalence green. The native link itself was not run here
-(Kotlin/Native lives in CI). Next: (BENCH.2).

@@ -14,9 +14,10 @@
 # category that takes the fixture bytes UNMODIFIED, so the equivalence gate can
 # hold it like any other arm. It has no type checker (SWC parses, LLVM
 # generates), so it is a peer for what it computes, not for what it accepts. It
-# is opt-in for the reason `wasi` is: measured 2026-10-18 at ~61x node's time on
-# mitt and ~19x on toml, so one process of it is ~8 minutes where the others
-# are seconds. It needs clang (Perry assembles its statepoint rewrite with it).
+# is opt-in for the reason `wasi` is, only more so: measured 2026-10-18, toml is
+# 24x node's time (197 s a process) and ONE mitt process did not finish in an
+# hour, because each round is slower than the last (docs/perf/kir-bench.md).
+# It needs clang (Perry assembles its statepoint rewrite with it).
 #
 # The BUN arms re-run arms 1 and 3's OWN emitted files on a second JavaScript
 # engine, so the pair (1,5) and the pair (3,6) each hold the compiler AND the

@@ -1,3 +1,13 @@
+**(KIR.NATIVE.2) DONE — a TypeScript `function main()` compiles, and a backend clash no longer reads as success
+(2026-10-18):** re-measured on the JVM first: a top-level `function main()` (or `moduleInit()`) has the generated
+entry's / initializer's JVM signature, the backend files `CONFLICTING_JVM_DECLARATIONS` with the generation state's
+reporter, which `KotlinIrEmitter`'s hand-assembled pipeline never forwarded — the result said "emit succeeded, 0
+class file(s)" and the program died on a missing class. Now: the backend's errors are the failure reason, an emit
+that wrote no class file fails, and user top-level functions named `main` / `moduleInit` get the `$` suffix a keyword
+gets — which also leaves the native plugin's by-name lookup exactly one entry. Three pins, each red under its
+ablation. KIR 333 / 0, warning-clean, `kir-bench.sh` equivalence green. The native link itself was not run here
+(Kotlin/Native lives in CI). Next: (BENCH.2).
+
 **(KIR.LOWER.7) DONE — a class declared in a body lowers (2026-10-18):** a Kotlin IR LOCAL class built whole at its
 own statement (shell, members, override links, the (LIB.6) bag protocol, bodies — a class is not hoisted), so Kotlin's
 closure lowering gives methods their captures; its VALUE is a fresh `JsConstructor` per execution, in a block-scoped
