@@ -838,6 +838,17 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
     CLAUDE.md's `-core` sections). BLOCKED-PENDING-USER on WHEN: a deprecation means something only once a release ships
     it, so the proposal is to delete after the next release.
 
+- [ ] **(KIR.PERF.3) mitt's lead over node fell from 1.54x (2026-08, `docs/perf/kir-backend-levers.md` §2b) to 1.18x
+  (recorded 2026-10-18 and 2026-10-20).** Read from the bytecode: (LIB.6) (2026-09-17) routed every member call on a
+  bag-typed receiver through `JsObject.invokeMember(name, jsArgs(…))`, whose default body spreads the array into the
+  vararg `jsCall` — two argument arrays per call and none of lever (1)'s arity specialization, on the `emitter.emit`
+  hot path. Fix: arity-specialized `invokeMember0..3` (default `jsCallN(get(name), …)`), forwarders on every generated
+  class that overrides `invokeMember`; measure with `scripts/kir-bench.sh --record 5`, ranges disjoint, node arms flat.
+- [ ] **(KIR.PERF.4) shape-typed locals — the next nominal slice (`docs/perf/kir-backend-levers.md` §2b).** A local
+  whose initializer IS a shape construction keeps the generated shape class as its IR type, so a property access on it
+  is a direct field read rather than a virtual `get`. Needs no new checker information; it is also the slice
+  Kotlin/Native needs (no JIT to devirtualize). Shapes arriving as PARAMETERS (smol-toml's context) stay out of scope.
+
 - [ ] **(TSGO.10) an incremental project system on the port — LATER (owner 2026-10-16: keep the learnings, implement
   later; not before (TSGO.8)).** `TsgoProject` opens a fresh program per change. What `-project` proved and the port should
   inherit (docs/goport-perf.md, docs/history): body edit 137-226 ms and a no-op 0 ms through per-file invalidation;

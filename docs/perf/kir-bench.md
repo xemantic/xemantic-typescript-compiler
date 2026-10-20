@@ -34,23 +34,23 @@ How to read it:
   so it is a peer for what it computes, not for what it accepts.
 
 <!-- KIR-BENCH-TABLE-START -->
-Run `20261018T142401Z-852b3b3c76e3.json` — commit `852b3b3c76e3` (dirty tree), 2026-10-18T14:24:01Z, 5 processes per arm, interleaved.
+Run `20261020T203137Z-72019b2368e5.json` — commit `72019b2368e5`, 2026-10-20T20:31:37Z, 5 processes per arm, interleaved.
 Box: AMD EPYC-Rome Processor, 8 cores, 15.2 GB; java openjdk version 26.0.2 2026-07-21, node v22.20.0.
-Placement: tsgo os scheduler (not recorded), xtsc os scheduler (not recorded), kir os scheduler (not recorded).
+Placement: tsgo os scheduler, xtsc os scheduler, kir os scheduler.
 
 **mitt** — 4,000,000 ops/round; every arm printed `sink=128000000`.
 
 | arm | class | median | per op | spread (min..max) | vs tsgo |
 |---|---|---:|---:|---:|---|
-| tsgo 7.0.2 -> JS -> node | runtime peer (baseline) | 361 ms | 90.25 ns/emit | 343..437 | baseline |
-| xtsc -> JS -> node | control: our front end, same runtime | 364 ms | 91.00 ns/emit | 351..372 | 1.01x slower |
-| xtsc -> JVM bytecode -> java | ours | 307 ms | 76.75 ns/emit | 298..546 | 1.18x faster |
+| tsgo 7.0.2 -> JS -> node | runtime peer (baseline) | 352 ms | 88.00 ns/emit | 344..360 | baseline |
+| xtsc -> JS -> node | control: our front end, same runtime | 350 ms | 87.50 ns/emit | 346..367 | 1.01x faster |
+| xtsc -> JVM bytecode -> java | ours | 299 ms | 74.75 ns/emit | 295..558 | 1.18x faster |
 
 **toml** — 20,000 ops/round; every arm printed `sink=-5440000`.
 
 | arm | class | median | per op | spread (min..max) | vs tsgo |
 |---|---|---:|---:|---:|---|
-| tsgo 7.0.2 -> JS -> node | runtime peer (baseline) | 478 ms | 23.90 us/parse | 460..493 | baseline |
-| xtsc -> JS -> node | control: our front end, same runtime | 477 ms | 23.85 us/parse | 468..501 | 1.00x faster |
-| xtsc -> JVM bytecode -> java | ours | 710 ms | 35.50 us/parse | 694..727 | 1.49x slower |
+| tsgo 7.0.2 -> JS -> node | runtime peer (baseline) | 470 ms | 23.50 us/parse | 465..486 | baseline |
+| xtsc -> JS -> node | control: our front end, same runtime | 459 ms | 22.95 us/parse | 446..468 | 1.02x faster |
+| xtsc -> JVM bytecode -> java | ours | 698 ms | 34.90 us/parse | 665..718 | 1.49x slower |
 <!-- KIR-BENCH-TABLE-END -->
