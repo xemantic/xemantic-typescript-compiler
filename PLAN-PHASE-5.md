@@ -855,6 +855,12 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
   whose initializer IS a shape construction keeps the generated shape class as its IR type, so a property access on it
   is a direct field read rather than a virtual `get`. Needs no new checker information; it is also the slice
   Kotlin/Native needs (no JIT to devirtualize). Shapes arriving as PARAMETERS (smol-toml's context) stay out of scope.
+  **SIZED 2026-10-20, BEFORE BUILDING — PAUSED FOR THE OWNER: on the JVM benchmarks its ceiling is under 1%.** smol-toml
+  has one shape-initialized local on a hot path (`parse`'s `ctx`, ~10 reads); the other ~87 `ctx.` sites are in callees
+  that take it as a parameter, and mitt's literal is a RETURN value. The toml leaf profile after (KIR.PERF.3) puts the
+  whole shape `get`+`set` at ~8% of samples (`JsShape_parse_2`), against `JsRegexProgram.test` 18.5% and
+  `PrimitiveKt.parseString` 16.4%. Its value is Kotlin/Native (no JIT); the JVM lever behind it is parameter-shape
+  inference (§7, whole-program).
 
 - [ ] **(TSGO.10) an incremental project system on the port — LATER (owner 2026-10-16: keep the learnings, implement
   later; not before (TSGO.8)).** `TsgoProject` opens a fresh program per change. What `-project` proved and the port should
