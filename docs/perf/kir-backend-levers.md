@@ -433,7 +433,11 @@ with it, ranges disjoint.
 | mitt | 299 ms `[295..558]`, 74.75 ns/emit, 1.18x faster | **204** `[203..207]`, **51.00**, **1.75x faster** | **−31%**, ranges disjoint, unimodal |
 | smol-toml | 698 ms `[665..718]` | 686 `[682..704]` | flat |
 
-Both Node arms stayed flat across the pair. Pins: `KirDynamicCallArityTest`, which checks the
+Both Node arms stayed flat across the pair. Recorded at the commit (`664578d9a1`) it is
+`20261020T212353Z`: mitt **207 ms `[203..214]`, 1.73x faster**, toml 689 `[676..719]`. The run just
+before it, `20261020T211724Z`, read 225 `[208..373]` while a background `git` repack was running; 15
+single processes sampled straight after it all fell in 204..224 ms, so the 373 is that run's
+contention, not the slow mode coming back. Both runs are kept. Pins: `KirDynamicCallArityTest`, which checks the
 positional call shape in the disassembly (fails with (3) ablated) and the callback arities against
 node's output (fails with `visit`'s fast path broken).
 

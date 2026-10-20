@@ -34,7 +34,7 @@ How to read it:
   so it is a peer for what it computes, not for what it accepts.
 
 <!-- KIR-BENCH-TABLE-START -->
-Run `20261020T203137Z-72019b2368e5.json` — commit `72019b2368e5`, 2026-10-20T20:31:37Z, 5 processes per arm, interleaved.
+Run `20261020T212353Z-664578d9a178.json` — commit `664578d9a178` (dirty tree), 2026-10-20T21:23:53Z, 5 processes per arm, interleaved.
 Box: AMD EPYC-Rome Processor, 8 cores, 15.2 GB; java openjdk version 26.0.2 2026-07-21, node v22.20.0.
 Placement: tsgo os scheduler, xtsc os scheduler, kir os scheduler.
 
@@ -42,15 +42,15 @@ Placement: tsgo os scheduler, xtsc os scheduler, kir os scheduler.
 
 | arm | class | median | per op | spread (min..max) | vs tsgo |
 |---|---|---:|---:|---:|---|
-| tsgo 7.0.2 -> JS -> node | runtime peer (baseline) | 352 ms | 88.00 ns/emit | 344..360 | baseline |
-| xtsc -> JS -> node | control: our front end, same runtime | 350 ms | 87.50 ns/emit | 346..367 | 1.01x faster |
-| xtsc -> JVM bytecode -> java | ours | 299 ms | 74.75 ns/emit | 295..558 | 1.18x faster |
+| tsgo 7.0.2 -> JS -> node | runtime peer (baseline) | 359 ms | 89.75 ns/emit | 342..364 | baseline |
+| xtsc -> JS -> node | control: our front end, same runtime | 356 ms | 89.00 ns/emit | 339..393 | 1.01x faster |
+| xtsc -> JVM bytecode -> java | ours | 207 ms | 51.75 ns/emit | 203..214 | 1.73x faster |
 
 **toml** — 20,000 ops/round; every arm printed `sink=-5440000`.
 
 | arm | class | median | per op | spread (min..max) | vs tsgo |
 |---|---|---:|---:|---:|---|
-| tsgo 7.0.2 -> JS -> node | runtime peer (baseline) | 470 ms | 23.50 us/parse | 465..486 | baseline |
-| xtsc -> JS -> node | control: our front end, same runtime | 459 ms | 22.95 us/parse | 446..468 | 1.02x faster |
-| xtsc -> JVM bytecode -> java | ours | 698 ms | 34.90 us/parse | 665..718 | 1.49x slower |
+| tsgo 7.0.2 -> JS -> node | runtime peer (baseline) | 471 ms | 23.55 us/parse | 457..494 | baseline |
+| xtsc -> JS -> node | control: our front end, same runtime | 483 ms | 24.15 us/parse | 458..490 | 1.03x slower |
+| xtsc -> JVM bytecode -> java | ours | 689 ms | 34.45 us/parse | 676..719 | 1.46x slower |
 <!-- KIR-BENCH-TABLE-END -->

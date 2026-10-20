@@ -1,0 +1,150 @@
+{
+ "schema": 1,
+ "commit": "664578d9a178e48a99927975e0a5223537fabfff",
+ "dirty": false,
+ "utc": "2026-10-20T21:17:24Z",
+ "processes": 5,
+ "arms": [
+  "tsgo",
+  "xtsc",
+  "kir"
+ ],
+ "placement": {
+  "tsgo": "os scheduler",
+  "xtsc": "os scheduler",
+  "kir": "os scheduler"
+ },
+ "libs": [
+  "mitt",
+  "toml"
+ ],
+ "box": {
+  "cpu": "AMD EPYC-Rome Processor",
+  "cores": 8,
+  "mem_gb": 15.2,
+  "java": "openjdk version 26.0.2 2026-07-21",
+  "node": "v22.20.0"
+ },
+ "units": {
+  "mitt": {
+   "ops": 4000000,
+   "scale": 1000000.0,
+   "name": "ns/emit"
+  },
+  "toml": {
+   "ops": 20000,
+   "scale": 1000.0,
+   "name": "us/parse"
+  }
+ },
+ "equivalence": {
+  "mitt": {
+   "verdict": "agree",
+   "sinks": {
+    "tsgo": "128000000",
+    "xtsc": "128000000",
+    "kir": "128000000"
+   }
+  },
+  "toml": {
+   "verdict": "agree",
+   "sinks": {
+    "tsgo": "-5440000",
+    "xtsc": "-5440000",
+    "kir": "-5440000"
+   }
+  }
+ },
+ "rows": [
+  {
+   "lib": "mitt",
+   "arm": "tsgo",
+   "samples": [
+    337,
+    356,
+    360,
+    375,
+    351
+   ],
+   "median": 356,
+   "sigma": 12.351518125315609,
+   "min": 337,
+   "max": 375
+  },
+  {
+   "lib": "mitt",
+   "arm": "xtsc",
+   "samples": [
+    341,
+    350,
+    361,
+    354,
+    356
+   ],
+   "median": 354,
+   "sigma": 6.711184694225007,
+   "min": 341,
+   "max": 361
+  },
+  {
+   "lib": "mitt",
+   "arm": "kir",
+   "samples": [
+    238,
+    210,
+    208,
+    225,
+    373
+   ],
+   "median": 225,
+   "sigma": 62.06254909363617,
+   "min": 208,
+   "max": 373
+  },
+  {
+   "lib": "toml",
+   "arm": "tsgo",
+   "samples": [
+    478,
+    472,
+    479,
+    501,
+    476
+   ],
+   "median": 478,
+   "sigma": 10.186265262597475,
+   "min": 472,
+   "max": 501
+  },
+  {
+   "lib": "toml",
+   "arm": "xtsc",
+   "samples": [
+    494,
+    482,
+    474,
+    461,
+    487
+   ],
+   "median": 482,
+   "sigma": 11.35957745693034,
+   "min": 461,
+   "max": 494
+  },
+  {
+   "lib": "toml",
+   "arm": "kir",
+   "samples": [
+    694,
+    679,
+    714,
+    735,
+    689
+   ],
+   "median": 694,
+   "sigma": 19.973983077994234,
+   "min": 679,
+   "max": 735
+  }
+ ]
+}
