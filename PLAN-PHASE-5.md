@@ -25,6 +25,13 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (KIR.PERF.3) — the dynamic call's own type tests; mitt −31%
+
+- Found from the bytecode and `-XX:+PrintInlining`, not the profile alone: KIR's mitt was bimodal (~75 / ~140 ns/emit) by JIT decision. Three causes: Kotlin's `is FunctionN` is the out-of-line `TypeIntrinsics.isFunctionOfArity` (and the cast repeats it); `JsArray.visit` called one-parameter callbacks through `jsCall3`, whose adaptation became hot and made C2 compile `jsCall3` too big to inline; (LIB.6)'s `invokeMember(name, jsArgs(…))` built two arrays per bag member call.
+- Order mattered: positional `invokeMember0..3` alone measured mitt 299 → 409 ms (worse); after the runtime fixes it is worth 231 → 205 (ranges disjoint).
+- Recorded: mitt 204 ms [203..207] = 1.75x faster than node (was 299, 1.18x); toml 686 vs 698, flat. KIR 345/0; warning-clean. Pins: `KirDynamicCallArityTest` (call shape by javap, ablation fails; callback arities from node, broken fast path fails); `KirNominalSlotTest` fails 12 without the forwarders.
+- Side finding, not fixed: `Array.prototype.join()` with no separator is refused by KIR ("'join' with 0 argument(s) is not a member").
+
 **(KAPI.4) 2026-10-19 session note.** Binding a TS class to the fir2ir `IrClass` (the plan's wording) proved unnecessary: lending the stub's `metadata` to KIR's own class works because the class-member JVM signatures already agreed (KAPI.2's measurement), and kotlinc serializes from FIR, not from IR members. Two traps hit: (1) `ClassCodegen` refuses class metadata unless the containing IrFile has `MetadataSource.File` — reusing the API file's would make the lowered facade list the API twice, so an empty seeded `TypeScriptLowered.kt` lends it; (2) a moved property's ACCESSORS need re-parenting too, or IR validation fails "Declaration with wrong parent". `compileTypeScript*ToJvm` gained `@JvmOverloads` because the Java bench harness (`scripts/kir-bench/KirBench.java`) calls them positionally. Native has no API half yet (doc §6 item 1).
 
 **(BENCH.4) 2026-10-18 session note.** Owner approved installing Perry. npm `@perryts/perry@0.5.1520` into `tools/perry`; it refused to compile without clang ("statepoint compact-map rewrite needs an assembler"), no sudo → LLVM 22.1.8 release clang only (bin/clang-22 + lib/clang, 370 MB) into `tools/llvm-22`. The 3-process `--record` run was abandoned inside the equivalence gate (mitt still running at 30 min); a standalone mitt process was stopped at 60 min. The superlinear growth is Perry's (per-round times rise monotonically at 1/40 scale), not the driver's: node/JVM rounds are flat. Trap for the next agent: `pkill -f <pattern>` kills the Bash tool's own shell when the pattern appears in the command line — kill by PID.
@@ -838,7 +845,7 @@ items below stay as a record and as the fallback if the gate says no-go; do NOT 
     CLAUDE.md's `-core` sections). BLOCKED-PENDING-USER on WHEN: a deprecation means something only once a release ships
     it, so the proposal is to delete after the next release.
 
-- [ ] **(KIR.PERF.3) mitt's lead over node fell from 1.54x (2026-08, `docs/perf/kir-backend-levers.md` §2b) to 1.18x
+- [x] **(KIR.PERF.3) mitt's lead over node fell from 1.54x (2026-08, `docs/perf/kir-backend-levers.md` §2b) to 1.18x
   (recorded 2026-10-18 and 2026-10-20).** Read from the bytecode: (LIB.6) (2026-09-17) routed every member call on a
   bag-typed receiver through `JsObject.invokeMember(name, jsArgs(…))`, whose default body spreads the array into the
   vararg `jsCall` — two argument arrays per call and none of lever (1)'s arity specialization, on the `emitter.emit`

@@ -168,6 +168,7 @@ import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 import org.jetbrains.kotlin.ir.expressions.IrLoop
 import org.jetbrains.kotlin.ir.expressions.impl.IrBlockImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrCallImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrVarargImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrTypeOperatorCallImpl
 import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
 import org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl
@@ -4776,6 +4777,22 @@ internal class KirFileLowering(
             // values. `JsObject.invokeMember`'s own body is exactly the read
             // and the `jsCall`, so a genuine bag is unchanged, while a class
             // instance sitting in an interface-typed slot reaches its method.
+            //
+            // Up to `MAX_SPECIALIZED_CALL_ARITY` arguments through
+            // `invokeMemberN`, which passes them positionally: the array form
+            // cost an array at the call site and a second one in the base's
+            // spread into `jsCall`, on mitt's `emit` path.
+            intrinsics.jsObjectInvokeMemberSpecialized(node.arguments.size)?.let { specialized ->
+                return scope.irCall(specialized, types.anyNullable).apply {
+                    arguments[0] = coerce(
+                        callee.expression, lowerExpression(callee.expression), intrinsics.jsObjectType
+                    )
+                    arguments[1] = scope.irString(callee.name.text)
+                    node.arguments.forEachIndexed { index, argument ->
+                        arguments[index + 2] = coerce(argument, lowerExpression(argument), types.anyNullable)
+                    }
+                }
+            }
             return scope.irCall(intrinsics.jsObjectInvokeMember, types.anyNullable).apply {
                 arguments[0] = coerce(
                     callee.expression, lowerExpression(callee.expression), intrinsics.jsObjectType
@@ -5979,6 +5996,13 @@ internal class KirFileLowering(
                         "arguments" to irBuiltIns.arrayClass.typeWith(types.anyNullable),
                     )
                 )
+                for (arity in 0..KirIntrinsics.MAX_SPECIALIZED_CALL_ARITY) {
+                    table["invokeMember$arity"] = bagOverride(
+                        irClass, "invokeMember$arity", types.anyNullable,
+                        listOf("name" to types.string) +
+                            (0 until arity).map { "a$it" to types.anyNullable }
+                    )
+                }
             }
             // `delete` and `keys` SPILL first, and the ROOT of a chain is the
             // one place to say so: the override is inherited, and `spillNow`
@@ -6012,6 +6036,11 @@ internal class KirFileLowering(
             table["spill"]?.let { buildClassSpill(declaration, it, slots) }
             table["invokeMember"]?.let {
                 buildClassInvokeMember(declaration, it, ownBagMethods(declaration))
+            }
+            for (arity in 0..KirIntrinsics.MAX_SPECIALIZED_CALL_ARITY) {
+                table["invokeMember$arity"]?.let { forwarder ->
+                    table["invokeMember"]?.let { buildClassInvokeMemberForwarder(forwarder, it) }
+                }
             }
             table["delete"]?.let { buildShapeDelete(it) }
             table["keys"]?.let { buildShapeKeys(it) }
@@ -6303,6 +6332,41 @@ internal class KirFileLowering(
             }
         }
         function.body = blockBodyOf(arms + shapeReturn(function, fallback))
+    }
+
+    /**
+     * `override fun invokeMemberN(name, a0, …) = invokeMember(name, jsArgs(a0, …))`.
+     *
+     * The specialized entry points' base bodies read a PROPERTY, which a
+     * class's method is not; forwarding to this class's [buildClassInvokeMember]
+     * — virtually, so a subclass's own override answers — keeps the array cost
+     * where it was for a class instance in an interface-typed slot and removes
+     * it for every genuine bag.
+     */
+    private fun buildClassInvokeMemberForwarder(
+        function: IrSimpleFunction,
+        invokeMember: IrSimpleFunction,
+    ) {
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val values = function.parameters.drop(2)
+        val call = IrCallImpl(
+            UNDEFINED, UNDEFINED, types.anyNullable, invokeMember.symbol, typeArgumentsCount = 0,
+        ).apply {
+            arguments[0] = IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol)
+            arguments[1] = IrGetValueImpl(UNDEFINED, UNDEFINED, name.type, name.symbol)
+            arguments[2] = IrCallImpl(
+                UNDEFINED, UNDEFINED, irBuiltIns.arrayClass.typeWith(types.anyNullable),
+                intrinsics.jsArgs, typeArgumentsCount = 0,
+            ).apply {
+                arguments[0] = IrVarargImpl(
+                    UNDEFINED, UNDEFINED, irBuiltIns.arrayClass.typeWith(types.anyNullable),
+                    types.anyNullable,
+                    values.map { IrGetValueImpl(UNDEFINED, UNDEFINED, it.type, it.symbol) },
+                )
+            }
+        }
+        function.body = blockBodyOf(listOf(shapeReturn(function, call)))
     }
 
     /**

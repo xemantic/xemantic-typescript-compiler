@@ -1,5 +1,7 @@
 # Status
 
+**(KIR.PERF.3) DONE — mitt on the JVM is 1.75x faster than node again (2026-10-20):** the lead had fallen from 1.54x (Aug) to 1.18x, and the JVM arm was bimodal by JIT decision. Fixed in the dynamic-call runtime: `jsCall0..3` test arity with one `Class.isInstance` instead of Kotlin's `isFunctionOfArity` walk (~14% of samples; Native gets `is FunctionN` back from the generator); `JsArray` callbacks try a one-parameter function first, so `jsCall3`'s adaptation no longer bloats into a non-inlinable method; bag member calls up to 3 args go through positional `invokeMember0..3` (forwarders on generated classes). mitt 299 → 204 ms [203..207] (−31%, unimodal), toml flat; KIR 345/0, warning-clean. `docs/perf/kir-backend-levers.md` §3c.
+
 **(KAPI.4) DONE — a JVM Kotlin consumer links and runs a TypeScript library through its exported API (2026-10-19):** owner chose "kotlinc declares, KIR defines". The klib's own API source is compiled into the KIR JVM pipeline (`TypeScriptApi.kt`); `KirApiDefinition` fills top-level bodies by delegating to the lowering, routes properties through `x$get`/`x$set`, answers enum constants, and makes each exported class the LOWERED class carrying kotlinc's metadata (stub dropped, types re-pointed; the lowered file borrows an empty seeded file's metadata). The facade's `<clinit>` runs the API entry's module inits; a module init now runs once. `KirPlatformAgreementTest` 8 pins: all references resolve on both sides for the pinned library, mitt and smol-toml; JVM signatures agree; a consumer RUNS with node's answers; 3 ablations each fail their pin. KIR 342 / 0, warning-clean, bench equivalence agrees.
 
 **(BENCH.4) DONE — Perry runs our fixtures unmodified, and is too slow on mitt to record (2026-10-18):** `KIR_BENCH_PERRY=1` adds Perry 0.5.1520 (SWC + LLVM 22.1.8; needs clang, both under gitignored `tools/`) as the TS-to-native peer, gated by the same `sink=` equivalence and refusing when absent. Measured one process each: toml 577.55 µs/parse = 24.2× tsgo→node, sink agrees; mitt did not finish in 60 min (node ~6 s), each round slower than the last (heap/GC growth), so no recorded run includes it. Prose + raw numbers: `docs/perf/kir-bench.md`, `bench-history/kir-runs/perry-probe-20261018/`. Also: bench.yml "Commit results" fixed (re-apply onto the fresh tip; the first queued run after it pushed cleanly).
@@ -12,12 +14,3 @@ no symbol of its own and `ErasedTypes.mapObject` read its declaration as null ("
 falls back to the reference's TARGET symbol, so the type has its lib declaration and refuses ("cannot map the type
 'Promise<string>'"); `WeakMap` still maps to `JsMap` by design. No other erasure moved: KIR 334 / 0 and the
 `kir-bench.sh` equivalence gate agree on mitt and toml. Pin red under ablation. Next: (KAPI.2).
-
-**(BENCH.2) DONE — placement is an option with a banner, graded and NOT adopted as the default (2026-10-18):**
-`KIR_BENCH_PIN=<cpus>` runs the node/bun/native/wasm arms under `taskset -c`, never the JVM arm (its C1/C2 threads are
-part of it); every run prints each arm's placement first and records it in the JSON, and the generated table shows
-it. Paired in one round (A/B/A/B, 5 processes each, pinned to CPU 3): the control arm's CV fell (mitt 2.3/2.7% →
-1.8/0.8%, toml 4.2/4.1% → 2.3/1.4%) but the tsgo baseline's did not (mitt 2.2/1.7% → 1.1/3.2%, toml 1.4/0.9% →
-2.1/1.0%), so the default recipe is unchanged and the series does not restart. The JVM arm's 500+ ms mitt outliers
-appear unpinned too (an earlier run today) — JVM noise, not placement. Receipts:
-`bench-history/kir-runs/placement-ab-20261018/`. Next: (KIR.LOWER.2).

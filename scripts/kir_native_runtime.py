@@ -27,6 +27,27 @@ def sub(old, new, count=1):
         raise SystemExit(f"anchor occurs {n} times, expected {count}: {old[:90]!r}")
     src = src.replace(old, new)
 
+# ---- (0) the arity tests: a JVM `Class.isInstance` -> Kotlin's `is FunctionN` ----
+_arity_start = '// ---- the arity tests, one JVM `instanceof` each (Native: `is FunctionN`) ----'
+_arity_end = '// ---- end of the arity tests ----'
+if src.count(_arity_start) != 1 or src.count(_arity_end) != 1:
+    raise SystemExit("anchor for the arity tests does not occur exactly once")
+_head, _rest = src.split(_arity_start)
+_, _tail = _rest.split(_arity_end)
+src = _head + """// ---- the arity tests (generated: Kotlin/Native has no Class.isInstance) ----
+@Suppress("UNCHECKED_CAST")
+private fun function0(callee: Any?): Function0<Any?>? =
+    if (callee is Function0<*>) callee as Function0<Any?> else null
+@Suppress("UNCHECKED_CAST")
+private fun function1(callee: Any?): Function1<Any?, Any?>? =
+    if (callee is Function1<*, *>) callee as Function1<Any?, Any?> else null
+@Suppress("UNCHECKED_CAST")
+private fun function2(callee: Any?): Function2<Any?, Any?, Any?>? =
+    if (callee is Function2<*, *, *>) callee as Function2<Any?, Any?, Any?> else null
+@Suppress("UNCHECKED_CAST")
+private fun function3(callee: Any?): Function3<Any?, Any?, Any?, Any?>? =
+    if (callee is Function3<*, *, *, *>) callee as Function3<Any?, Any?, Any?, Any?> else null
+""" + _tail
 # ---- (1) bigint: java.math.BigInteger -> a runtime-provided JsBigInt --------
 sub(
     'public fun jsBigInt(digits: String): java.math.BigInteger = java.math.BigInteger(digits)',

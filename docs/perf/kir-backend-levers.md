@@ -394,6 +394,49 @@ casts the lowering emits at every numeric use of a bag read.
 ranges overlapping.** Counted as a fidelity fix that measures favourably, not as
 a win.
 
+## 3c. The dynamic call's own type tests — LANDED 2026-10-20 (KIR.PERF.3), and mitt is −31%
+
+mitt's lead over Node had fallen from 1.54x (§2b) to **1.18x**, and its JVM spread had widened to
+`[295..558]` ms. The process-level distribution, sampled one JVM at a time, said why: KIR's mitt was
+**bimodal**, ~75 or ~140 ns/emit depending on which inlining decisions a process happened to make.
+
+Three causes, each found in the bytecode or in `-XX:+PrintInlining`, not inferred:
+
+1. **`is FunctionN` is not a type test.** Kotlin compiles `callee is Function2<*, *, *>` to
+   `TypeIntrinsics.isFunctionOfArity` — an out-of-line walk of `Function0`, `Function1`, … — and the
+   cast after it repeats the walk in `beforeCheckcastToFunctionOfArity`. That was **~14%** of the
+   arm's leaf samples on its own. `jsCall0`..`jsCall3` now test with one `Class.isInstance` per arity
+   and cast through an unchecked generic, which compiles to a plain `checkcast`. The case the
+   intrinsic guards against, an object that implements one `FunctionN` but reports another arity
+   through `FunctionBase`, is never created by this backend. `scripts/kir_native_runtime.py` swaps
+   the block back to `is FunctionN` for Native and Wasm, which have no `Class.isInstance`.
+2. **`JsArray`'s callbacks paid the adaptation on every element.** `map`/`forEach`/`filter` called a
+   callback as `jsCall3(callback, element, index, array)`, and callbacks almost always take one
+   parameter, so every element missed the fast path and ran the adaptation. That made the
+   adaptation hot enough that C2 compiled `jsCall3` too large to inline back into `visit`
+   ("already compiled into a big method"), and this was the slow mode. `visit` now tests for a
+   one-parameter callback first. Dropping the surplus arguments is what JavaScript does.
+3. **(LIB.6)'s member call built two argument arrays.** `o.m(a, b)` on a bag became
+   `invokeMember("m", jsArgs(a, b))`, whose base body spreads the array into the vararg `jsCall`.
+   `JsObject.invokeMember0`..`3` take the arguments positionally. A generated class that overrides
+   `invokeMember` gets forwarders, so its JVM methods are still reached (12 `KirNominalSlotTest`
+   cases fail without them).
+
+**The order of the work matters, and it is the lesson.** (3) alone, measured first, made mitt
+**slower**, 299 to 409 ms: moving the outer call into the shared `jsCall2` grew the compiled code
+that the mode switch depends on. It turned into a win only once (1) and (2) had made the call
+small. Built without (3), the fixed runtime measures 231 ms `[230..296]`, against 205 `[203..207]`
+with it, ranges disjoint.
+
+| | before (2026-10-20, `72019b2368`) | after | |
+|---|---:|---:|---|
+| mitt | 299 ms `[295..558]`, 74.75 ns/emit, 1.18x faster | **204** `[203..207]`, **51.00**, **1.75x faster** | **−31%**, ranges disjoint, unimodal |
+| smol-toml | 698 ms `[665..718]` | 686 `[682..704]` | flat |
+
+Both Node arms stayed flat across the pair. Pins: `KirDynamicCallArityTest`, which checks the
+positional call shape in the disassembly (fails with (3) ablated) and the callback arities against
+node's output (fails with `visit`'s fast path broken).
+
 ## 4. Where it stands, replicated
 
 The session's last four benchmark runs cover changes that measured inside the

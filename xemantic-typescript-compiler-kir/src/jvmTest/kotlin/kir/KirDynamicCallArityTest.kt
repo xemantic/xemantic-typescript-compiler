@@ -28,7 +28,9 @@ package com.xemantic.typescript.compiler.kir
 import com.xemantic.kotlin.test.assert
 import com.xemantic.typescript.compiler.kir.emit.GeneratedProgramClasspath
 import com.xemantic.typescript.compiler.kir.emit.runGeneratedProgram
+import java.io.File
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.Test
 
 /**
@@ -53,8 +55,10 @@ import kotlin.test.Test
  */
 class KirDynamicCallArityTest {
 
-    private fun compileAndRun(source: String): String {
-        val output = Files.createTempDirectory("xtsc-kir-arity")
+    private fun compileAndRun(source: String): String =
+        compileAndRun(source, Files.createTempDirectory("xtsc-kir-arity"))
+
+    private fun compileAndRun(source: String, output: Path): String {
         val compilation = compileTypeScriptToJvm("t.ts", source, output)
         assert(compilation.successful)
         val run = runGeneratedProgram(
@@ -131,6 +135,118 @@ class KirDynamicCallArityTest {
             """.trimIndent()
         )
         assert(stdout == "abcd\n")
+    }
+
+    // ---- (KIR.PERF.3) a MEMBER call on a bag, at every specialized arity ----
+
+    /** The program's own bytecode — `javap`, not a constant-pool scan. */
+    private fun disassemble(output: Path): String {
+        val javap = Path.of(System.getProperty("java.home"), "bin", "javap").toString()
+        val classes = output.toFile().walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".class") }
+            .map { it.absolutePath }
+            .sorted()
+            .toList()
+        val dump = File.createTempFile("xtsc-kir-arity-javap", ".txt")
+        try {
+            ProcessBuilder(listOf(javap, "-p", "-c") + classes)
+                .redirectOutput(dump)
+                .redirectErrorStream(true)
+                .start()
+                .waitFor()
+            return dump.readText()
+        } finally {
+            dump.delete()
+        }
+    }
+
+    @Test
+    fun `a bag member call up to three arguments passes them positionally`() {
+        // `o.m(a, b)` on a bag was `invokeMember("m", jsArgs(a, b))`: an array at
+        // the call site and a second in the base's spread into `jsCall`, on
+        // mitt's `emit` path. Only the four-argument call may still build one.
+        val output = Files.createTempDirectory("xtsc-kir-arity")
+        val stdout = compileAndRun(
+            """
+            interface Bag {
+              zero(): string
+              one(a: string): string
+              two(a: string, b: string): string
+              three(a: string, b: string, c: string): string
+              four(a: string, b: string, c: string, d: string): string
+            }
+            const bag: Bag = {
+              zero(): string { return 'z' },
+              one(a: string): string { return '1' + a },
+              two(a: string, b: string): string { return '2' + a + b },
+              three(a: string, b: string, c: string): string { return '3' + a + b + c },
+              four(a: string, b: string, c: string, d: string): string { return '4' + a + b + c + d }
+            }
+            console.log(bag.zero() + bag.one('a') + bag.two('a', 'b') + bag.three('a', 'b', 'c') +
+              bag.four('a', 'b', 'c', 'd'))
+            """.trimIndent(),
+            output,
+        )
+        assert(stdout == "z1a2ab3abc4abcd\n")
+        val code = disassemble(output).lines()
+        val specialized = (0..3).map { arity ->
+            code.count { it.contains("JsObject.invokeMember$arity:") }
+        }
+        val general = code.count { it.contains("JsObject.invokeMember:") }
+        val arrays = code.count { it.contains("JsRuntimeKt.jsArgs:") }
+        assert(specialized == listOf(1, 1, 1, 1))
+        assert(general == 1)
+        assert(arrays == 1)
+    }
+
+    @Test
+    fun `a class instance in an interface slot answers every specialized arity`() {
+        // The specialized entry points' base bodies read a PROPERTY, which a
+        // class's method is not: a generated class forwards them to its own
+        // `invokeMember`, virtually, so a subclass's override is the one reached.
+        // Expected output from tsgo 7.0.2 + node.
+        val stdout = compileAndRun(
+            """
+            interface Shape {
+              zero(): string
+              one(a: string): string
+              two(a: string, b: string): string
+              three(a: string, b: string, c: string): string
+            }
+            class Base implements Shape {
+              zero(): string { return 'z' }
+              one(a: string): string { return '1' + a }
+              two(a: string, b: string): string { return '2' + a + b }
+              three(a: string, b: string, c: string): string { return '3' + a + b + c }
+            }
+            class Derived extends Base {
+              two(a: string, b: string): string { return 'D' + b + a }
+            }
+            const shapes: Shape[] = [new Base(), new Derived()]
+            for (const s of shapes) {
+              console.log(s.zero() + s.one('a') + s.two('a', 'b') + s.three('a', 'b', 'c'))
+            }
+            """.trimIndent()
+        )
+        assert(stdout == "z1a2ab3abc\nz1aDba3abc\n")
+    }
+
+    @Test
+    fun `an array callback of any arity sees element, index and array as JavaScript passes them`() {
+        // `JsArray`'s callbacks test for a ONE-parameter function first and fall
+        // back to `jsCall3`'s adaptation; both halves must answer as node does.
+        // Expected output from tsgo 7.0.2 + node.
+        val stdout = compileAndRun(
+            """
+            const xs = [10, 20]
+            console.log(xs.map(() => 7).join(','))
+            console.log(xs.map((x) => x * 2).join(','))
+            console.log(xs.map((x, i) => x + i).join(','))
+            console.log(xs.map((x, i, a) => x + i + a.length).join(','))
+            console.log(xs.filter((x) => x > 15).join(','))
+            """.trimIndent()
+        )
+        assert(stdout == "7,7\n20,40\n10,21\n12,23\n20\n")
     }
 
 }

@@ -542,8 +542,21 @@ public class JsArray private constructor(
      * already arranges, and one that WANTS the index gets it: a runtime member
      * typed to take a `Function1` would have dropped it silently.
      */
-    private fun visit(callback: Any?, index: Int): Any? =
-        jsCall3(callback, backing[index], index.toDouble(), this)
+    /**
+     * One callback call of `map`/`forEach`/`filter`/…, as `(element, index, array)`.
+     *
+     * A ONE-parameter callback first, because that is what callbacks almost
+     * always are and what `jsCall3` reaches only through its adapting path: on
+     * mitt that path was hot enough that C2 compiled `jsCall3` too big to inline
+     * here, and a process that did so ran `emit` ~60% slower (KIR.PERF.3).
+     * Dropping the surplus arguments is what JavaScript does, so the answer is
+     * the same.
+     */
+    private fun visit(callback: Any?, index: Int): Any? {
+        val element = backing[index]
+        val unary = function1(callback) ?: return jsCall3(callback, element, index.toDouble(), this)
+        return unary(element)
+    }
 
     /** `Array.prototype.join` with the default separator, as `toString` uses it. */
     public fun joinToJsString(separator: String = ","): String =
@@ -645,6 +658,22 @@ public open class JsObject {
      */
     public open fun invokeMember(name: String, arguments: Array<out Any?>): Any? =
         jsCall(get(name), *arguments)
+
+    /**
+     * [invokeMember] specialized to a small argument COUNT, for the reason
+     * `jsCall0`..`jsCall3` exist: no argument array, and the callee's own arity
+     * tested once. A generated class that overrides [invokeMember] overrides
+     * these too, forwarding to it, so its JVM methods are still reached.
+     */
+    public open fun invokeMember0(name: String): Any? = jsCall0(get(name))
+
+    public open fun invokeMember1(name: String, a0: Any?): Any? = jsCall1(get(name), a0)
+
+    public open fun invokeMember2(name: String, a0: Any?, a1: Any?): Any? =
+        jsCall2(get(name), a0, a1)
+
+    public open fun invokeMember3(name: String, a0: Any?, a1: Any?, a2: Any?): Any? =
+        jsCall3(get(name), a0, a1, a2)
 
     /**
      * `delete object.name`, whose result is `true` for a configurable property.
@@ -1106,50 +1135,98 @@ public fun jsVarargRest(arguments: JsArray, from: Int): JsArray {
  * rather than defensive — `mitt` registers a one-parameter wildcard handler and
  * `emit` calls it with two arguments. Dropping the fallbacks would compile and
  * then fail on the library this backend exists to run.
+ *
+ * Each is a one-type-test FAST PATH with the adaptation out of line, so it stays
+ * small enough for HotSpot to inline wherever it is called (KIR.PERF.3).
  */
 
+// ---- the arity tests, one JVM `instanceof` each (Native: `is FunctionN`) ----
+//
+// Kotlin's `callee is Function2<*, *, *>` is `TypeIntrinsics.isFunctionOfArity`,
+// an out-of-line walk of `Function0`, `Function1`, ... until one matches, and an
+// `as Function2<…>` repeats it in `beforeCheckcastToFunctionOfArity`. The arity
+// it guards against — an object implementing one `FunctionN` while reporting
+// another through `FunctionBase` — is not a value this backend creates, so a
+// plain type test is the same answer. Measured on mitt (KIR.PERF.3): the walks
+// were ~14% of the JVM arm's leaf samples, because `JsArray.map` calls a
+// one-parameter callback through `jsCall3` and paid three of them per element.
+
+private val FUNCTION_0: Class<*> = Function0::class.java
+private val FUNCTION_1: Class<*> = Function1::class.java
+private val FUNCTION_2: Class<*> = Function2::class.java
+private val FUNCTION_3: Class<*> = Function3::class.java
+
+/** A cast the compiler emits as a plain `checkcast` at the call site. */
 @Suppress("UNCHECKED_CAST")
-public fun jsCall0(callee: Any?): Any? = when (callee) {
-    is Function0<*> -> callee()
-    is Function1<*, *> -> (callee as Function1<Any?, Any?>)(null)
-    is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(null, null)
-    is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(null, null, null)
-    is JsVarargFunction -> callee.impl(JsArray())
+private fun <T> unchecked(value: Any?): T = value as T
+
+private fun function0(callee: Any?): Function0<Any?>? =
+    if (FUNCTION_0.isInstance(callee)) unchecked(callee) else null
+
+private fun function1(callee: Any?): Function1<Any?, Any?>? =
+    if (FUNCTION_1.isInstance(callee)) unchecked(callee) else null
+
+private fun function2(callee: Any?): Function2<Any?, Any?, Any?>? =
+    if (FUNCTION_2.isInstance(callee)) unchecked(callee) else null
+
+private fun function3(callee: Any?): Function3<Any?, Any?, Any?, Any?>? =
+    if (FUNCTION_3.isInstance(callee)) unchecked(callee) else null
+
+// ---- end of the arity tests ----
+
+/** What every arity-specialized call does once no `FunctionN` matched. */
+private fun jsCallVararg(callee: Any?, arguments: () -> JsArray): Any? = when (callee) {
+    is JsVarargFunction -> callee.impl(arguments())
     null -> throw JsTypeError("undefined is not a function")
     else -> throw JsTypeError("${jsToString(callee)} is not a function")
 }
 
-@Suppress("UNCHECKED_CAST")
-public fun jsCall1(callee: Any?, a0: Any?): Any? = when (callee) {
-    is Function1<*, *> -> (callee as Function1<Any?, Any?>)(a0)
-    is Function0<*> -> callee()
-    is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(a0, null)
-    is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(a0, null, null)
-    is JsVarargFunction -> callee.impl(jsArrayOf(a0))
-    null -> throw JsTypeError("undefined is not a function")
-    else -> throw JsTypeError("${jsToString(callee)} is not a function")
+public fun jsCall0(callee: Any?): Any? {
+    val exact = function0(callee) ?: return jsCall0Adapting(callee)
+    return exact()
 }
 
-@Suppress("UNCHECKED_CAST")
-public fun jsCall2(callee: Any?, a0: Any?, a1: Any?): Any? = when (callee) {
-    is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(a0, a1)
-    is Function1<*, *> -> (callee as Function1<Any?, Any?>)(a0)
-    is Function0<*> -> callee()
-    is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(a0, a1, null)
-    is JsVarargFunction -> callee.impl(jsArrayOf(a0, a1))
-    null -> throw JsTypeError("undefined is not a function")
-    else -> throw JsTypeError("${jsToString(callee)} is not a function")
+private fun jsCall0Adapting(callee: Any?): Any? {
+    function1(callee)?.let { return it(null) }
+    function2(callee)?.let { return it(null, null) }
+    function3(callee)?.let { return it(null, null, null) }
+    return jsCallVararg(callee) { JsArray() }
 }
 
-@Suppress("UNCHECKED_CAST")
-public fun jsCall3(callee: Any?, a0: Any?, a1: Any?, a2: Any?): Any? = when (callee) {
-    is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(a0, a1, a2)
-    is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(a0, a1)
-    is Function1<*, *> -> (callee as Function1<Any?, Any?>)(a0)
-    is Function0<*> -> callee()
-    is JsVarargFunction -> callee.impl(jsArrayOf(a0, a1, a2))
-    null -> throw JsTypeError("undefined is not a function")
-    else -> throw JsTypeError("${jsToString(callee)} is not a function")
+public fun jsCall1(callee: Any?, a0: Any?): Any? {
+    val exact = function1(callee) ?: return jsCall1Adapting(callee, a0)
+    return exact(a0)
+}
+
+private fun jsCall1Adapting(callee: Any?, a0: Any?): Any? {
+    function0(callee)?.let { return it() }
+    function2(callee)?.let { return it(a0, null) }
+    function3(callee)?.let { return it(a0, null, null) }
+    return jsCallVararg(callee) { jsArrayOf(a0) }
+}
+
+public fun jsCall2(callee: Any?, a0: Any?, a1: Any?): Any? {
+    val exact = function2(callee) ?: return jsCall2Adapting(callee, a0, a1)
+    return exact(a0, a1)
+}
+
+private fun jsCall2Adapting(callee: Any?, a0: Any?, a1: Any?): Any? {
+    function1(callee)?.let { return it(a0) }
+    function0(callee)?.let { return it() }
+    function3(callee)?.let { return it(a0, a1, null) }
+    return jsCallVararg(callee) { jsArrayOf(a0, a1) }
+}
+
+public fun jsCall3(callee: Any?, a0: Any?, a1: Any?, a2: Any?): Any? {
+    val exact = function3(callee) ?: return jsCall3Adapting(callee, a0, a1, a2)
+    return exact(a0, a1, a2)
+}
+
+private fun jsCall3Adapting(callee: Any?, a0: Any?, a1: Any?, a2: Any?): Any? {
+    function2(callee)?.let { return it(a0, a1) }
+    function1(callee)?.let { return it(a0) }
+    function0(callee)?.let { return it() }
+    return jsCallVararg(callee) { jsArrayOf(a0, a1, a2) }
 }
 
 /**

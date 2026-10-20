@@ -1,3 +1,12 @@
+**(BENCH.2) DONE — placement is an option with a banner, graded and NOT adopted as the default (2026-10-18):**
+`KIR_BENCH_PIN=<cpus>` runs the node/bun/native/wasm arms under `taskset -c`, never the JVM arm (its C1/C2 threads are
+part of it); every run prints each arm's placement first and records it in the JSON, and the generated table shows
+it. Paired in one round (A/B/A/B, 5 processes each, pinned to CPU 3): the control arm's CV fell (mitt 2.3/2.7% →
+1.8/0.8%, toml 4.2/4.1% → 2.3/1.4%) but the tsgo baseline's did not (mitt 2.2/1.7% → 1.1/3.2%, toml 1.4/0.9% →
+2.1/1.0%), so the default recipe is unchanged and the series does not restart. The JVM arm's 500+ ms mitt outliers
+appear unpinned too (an earlier run today) — JVM noise, not placement. Receipts:
+`bench-history/kir-runs/placement-ab-20261018/`. Next: (KIR.LOWER.2).
+
 **(BENCH.3) DONE — the KIR bench's table is generated and refuses itself (2026-10-18):** `scripts/kir-bench.sh` writes
 the run as schema-1 JSON (commit, dirty flag, box, the arms actually run, per-process samples, median/sigma/min/max,
 each library's `sink=` verdict); `--record` commits it under `bench-history/kir-runs/` and

@@ -343,6 +343,19 @@ internal class KirIntrinsics(
             ?: error("JsObject.invokeMember is missing")
     }
 
+    /**
+     * `JsObject.invokeMemberN(name, a0, …)` — [jsObjectInvokeMember] without the
+     * argument array. Null above [MAX_SPECIALIZED_CALL_ARITY].
+     */
+    fun jsObjectInvokeMemberSpecialized(argumentCount: Int): IrSimpleFunctionSymbol? =
+        if (argumentCount > MAX_SPECIALIZED_CALL_ARITY) null
+        else specializedMemberCalls.getOrPut(argumentCount) {
+            runtimeMember(jsObjectClass, "invokeMember$argumentCount", argumentCount + 1)
+                ?: error("JsObject.invokeMember$argumentCount is missing")
+        }
+
+    private val specializedMemberCalls = HashMap<Int, IrSimpleFunctionSymbol>()
+
     /** `jsArgs(vararg values)` — the argument array [jsObjectInvokeMember] takes. */
     val jsArgs: IrSimpleFunctionSymbol by lazy { runtime("jsArgs") }
 
@@ -538,7 +551,7 @@ internal class KirIntrinsics(
         }
     }
 
-    private companion object {
+    internal companion object {
         /** How many arguments [jsCallSpecialized] has a fixed-arity entry point for. */
         const val MAX_SPECIALIZED_CALL_ARITY: Int = 3
 
