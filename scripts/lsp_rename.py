@@ -2,7 +2,7 @@
 """Ask tsc 7.0.2's LSP server what RENAME does at a list of carets — GROUND TRUTH.
 
 Round 925's step 1, and the same technique rounds 923/924 used for hover:
-`tools/tsgo-7.0.2/lib/tsc --lsp -stdio` answers `textDocument/prepareRename` and
+`tools/tsgo-7.1.0-beta/lib/tsc --lsp -stdio` answers `textDocument/prepareRename` and
 `textDocument/rename`, so what a shorthand `{ p }` or an `import { p as q }`
 rewrites to can be READ OUT of tsc rather than reasoned about.
 
@@ -17,7 +17,7 @@ reproduce.
 """
 import json, os, subprocess, sys, threading
 
-TSC = "/home/claude/git/xemantic-typescript-compiler/tools/tsgo-7.0.2/lib/tsc"
+TSC = "/home/claude/git/xemantic-typescript-compiler/tools/tsgo-7.1.0-beta/lib/tsc"
 
 
 class Lsp:

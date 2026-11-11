@@ -3,7 +3,7 @@
 # (TSGO.6) The -tsgo native-image gate from a FRESH checkout, as the `tsgo-native-image` job of
 # .github/workflows/native.yml runs it (it also runs locally):
 #
-#   1. tsgo 7.0.2 at tools/tsgo-7.0.2 — the official `@typescript/typescript-linux-x64` tarball from the npm
+#   1. tsgo 7.0.2 at tools/tsgo-7.1.0-beta — the official `@typescript/typescript-linux-x64` tarball from the npm
 #      registry (no Node needed), its sha1 pinned below; the tree is byte-identical to the local reference.
 #   2. the 8 tsc profiles under build/bench (`bench-compile-tsc.sh --materialize-only`).
 #   3. the PGO image (`scripts/tsgo-native-image-pgo.sh`, Oracle GraalVM — trained on tsc's compiler profile).
@@ -31,18 +31,18 @@ done
 [[ -n $GRAAL ]] || { echo "usage: $0 --graalvm <ORACLE_GRAALVM_HOME> [--workers N]" >&2; exit 2; }
 cd "$R"
 
-TSGO_URL=https://registry.npmjs.org/@typescript/typescript-linux-x64/-/typescript-linux-x64-7.0.2.tgz
+TSGO_URL=https://registry.npmjs.org/@typescript/typescript-linux-x64/-/typescript-linux-x64-7.1.0-beta.tgz
 TSGO_SHA1=73269cb0baba50aea0ca060445a6b88e583f1ce2
-if [[ ! -x tools/tsgo-7.0.2/lib/tsc ]]; then
+if [[ ! -x tools/tsgo-7.1.0-beta/lib/tsc ]]; then
   tmp=$(mktemp -d)
   curl -sSfL -o "$tmp/tsgo.tgz" "$TSGO_URL"
   echo "$TSGO_SHA1  $tmp/tsgo.tgz" | sha1sum -c --quiet
   tar xzf "$tmp/tsgo.tgz" -C "$tmp"
   mkdir -p tools
-  mv "$tmp/package" tools/tsgo-7.0.2
+  mv "$tmp/package" tools/tsgo-7.1.0-beta
   rm -r -- "$tmp"
 fi
-tools/tsgo-7.0.2/lib/tsc --version
+tools/tsgo-7.1.0-beta/lib/tsc --version
 
 # Only when absent: a dev tree's typescript-repo may have moved past its profiles' commit, and a second set
 # (other suffix) would double the recorder's profile cases and change which one PGO trains on.

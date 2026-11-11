@@ -42,7 +42,7 @@ import kotlin.test.Test
  * fresh `JsConstructor` per execution of the statement — `node` answers
  * `outer() !== outer()`.
  *
- * Every expected string is `node`'s, over `tools/tsgo-7.0.2/lib/tsc`'s output for
+ * Every expected string is `node`'s, over `tools/tsgo-7.1.0-beta/lib/tsc`'s output for
  * the same source (each program type-checks clean under tsgo). Where the two
  * differ the pin says `divergence` and why.
  */

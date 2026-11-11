@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tsgo encoded-AST oracle for the (TSGO.1) gate (docs/goport-oracle.md).
 
-For every input file, asks the shipped tsgo binary (`tools/tsgo-7.0.2/lib/tsc --api`, MessagePack
+For every input file, asks the shipped tsgo binary (`tools/tsgo-7.1.0-beta/lib/tsc --api`, MessagePack
 stdio protocol) for `getSourceFile` and stores the raw `encoder.EncodeSourceFile` bytes:
 
     build/goport/oracle/<source>/<path relative to the source root>.bin
@@ -36,8 +36,8 @@ import threading
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TSC = os.path.join(REPO, "tools/tsgo-7.0.2/lib/tsc")
-TSGO_TAG = "typescript/v7.0.2"
+TSC = os.path.join(REPO, "tools/tsgo-7.1.0-beta/lib/tsc")
+TSGO_TAG = "typescript@7.1.0-beta (microsoft/TypeScript 3e9236361fa9)"
 OUT_DIR = os.path.join(REPO, "build/goport/oracle")
 WORK_DIR = os.path.join(REPO, "build/goport/oracle-work")
 EXTS = (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs")

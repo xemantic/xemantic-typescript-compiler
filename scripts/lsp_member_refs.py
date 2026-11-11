@@ -2,7 +2,7 @@
 """Ask tsc 7.0.2's LSP server for the REFERENCES of a member at a list of carets.
 
 (API.9)'s step 1, and the technique rounds 923/924/925 used for hover and rename:
-`tools/tsgo-7.0.2/lib/tsc --lsp -stdio` answers `textDocument/references`, so the
+`tools/tsgo-7.1.0-beta/lib/tsc --lsp -stdio` answers `textDocument/references`, so the
 occurrence set of a MEMBER — which round 925 measured as short here by three
 kinds — can be READ OUT of tsc rather than reasoned about.
 

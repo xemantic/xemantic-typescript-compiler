@@ -2,7 +2,7 @@
 """Ask tsc 7.0.2's LSP server for the COMPLETIONS at a list of carets.
 
 (API.12)'s step 1, the same technique rounds 923-928 used for hover, references
-and rename: `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` answers
+and rename: `tools/tsgo-7.1.0-beta/lib/tsc --lsp -stdio` answers
 `textDocument/completion`, so what a caret INSIDE the string of `o["…"]` is
 supposed to offer — and, decisively, whether the item text carries the quotes and
 what span accepting it replaces — can be READ OUT of tsc rather than reasoned

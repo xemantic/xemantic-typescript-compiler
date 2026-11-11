@@ -2,7 +2,7 @@
 """The (TSGO.3-b) type-oracle recording (docs/goport-api.md § 4).
 
 Materializes the request corpus's projects under build/goport/api-projects/ and records, for each, the
-shipped tsgo binary's API answers (`tools/tsgo-7.0.2/lib/tsc --api`) to every request the recorder
+shipped tsgo binary's API answers (`tools/tsgo-7.1.0-beta/lib/tsc --api`) to every request the recorder
 generates (`build/goport/bin/tsgo-oracle api`, oracle-go/api.go):
 
     build/goport/api-oracle/<name>.jsonl.gz      one {"m","p","r"|"e"} line per request
@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TSC = os.path.join(REPO, "tools/tsgo-7.0.2/lib/tsc")
+TSC = os.path.join(REPO, "tools/tsgo-7.1.0-beta/lib/tsc")
 RECORDER = os.path.join(REPO, "build/goport/bin/tsgo-oracle")
 PROJECTS = os.path.join(REPO, "build/goport/api-projects")
 OUT = os.path.join(REPO, "build/goport/api-oracle")

@@ -11,7 +11,7 @@ beside the project, renamed in: one event), and a cycle block identical to the o
 sides — on a slow machine one change can still reach tsgo as two debounce batches, a second identical cycle (seen
 on a CI runner).
 
-Usage: scripts/tsgo-watch-smoke.py --bin <port executable> [--tsgo tools/tsgo-7.0.2/lib/tsc]
+Usage: scripts/tsgo-watch-smoke.py --bin <port executable> [--tsgo tools/tsgo-7.1.0-beta/lib/tsc]
 """
 import argparse
 import os
@@ -104,7 +104,7 @@ def run(exe, args, files, steps, env):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True)
-    ap.add_argument("--tsgo", default="tools/tsgo-7.0.2/lib/tsc")
+    ap.add_argument("--tsgo", default="tools/tsgo-7.1.0-beta/lib/tsc")
     a = ap.parse_args()
     a.bin, a.tsgo = os.path.abspath(a.bin), os.path.abspath(a.tsgo)
     env = dict(os.environ)

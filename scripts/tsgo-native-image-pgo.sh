@@ -46,7 +46,7 @@ cd "$R"
 ./gradlew -q :xemantic-typescript-compiler-tsgo:nativeImage -PgraalvmHome="$GRAAL" -PnativeImageGc="$GC" \
   "-PnativeImageArgs=--pgo-instrument $SNAPSHOT" -PnativeImageOutput=xtsc-tsgo-instrumented$SUFFIX
 
-export XTSC_TSGO_LIB_DIR=${XTSC_TSGO_LIB_DIR:-$R/tools/tsgo-7.0.2/lib}
+export XTSC_TSGO_LIB_DIR=${XTSC_TSGO_LIB_DIR:-$R/tools/tsgo-7.1.0-beta/lib}
 profiles=(); i=0
 for p in "${PROJECTS[@]}"; do
   i=$((i + 1))

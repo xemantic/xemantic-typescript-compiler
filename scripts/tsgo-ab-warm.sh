@@ -19,7 +19,7 @@ JAVA="${TSGO_JAVA:-java}"
 DEF_CP=""; [[ -n "${CP_FILE:-}" ]] && DEF_CP=$(cat "$CP_FILE")
 A_CP=${A_CP:-$DEF_CP}; B_CP=${B_CP:-$DEF_CP}
 [[ -n "$A_CP" && -n "$B_CP" ]] || { echo "no classpath (set CP_FILE or A_CP/B_CP)"; exit 2; }
-export XTSC_TSGO_LIB_DIR="${XTSC_TSGO_LIB_DIR:-$REPO/tools/tsgo-7.0.2/lib}"
+export XTSC_TSGO_LIB_DIR="${XTSC_TSGO_LIB_DIR:-$REPO/tools/tsgo-7.1.0-beta/lib}"
 OUT=$(mktemp -d)
 run() { # arm idx
   local arm=$1 idx=$2 cp flags log="$OUT/$1-$2.log"

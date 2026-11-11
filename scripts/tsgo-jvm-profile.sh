@@ -43,7 +43,7 @@ G
 (cd "$REPO" && flock "$GRADLE_LOCK" ./gradlew -q -I "$INIT" :xemantic-typescript-compiler-tsgo:printJvmProfileClasspath) > "$OUT/gradle.log" 2>&1
 [[ $(grep -ac '^JVMPROFILE_CP=' "$OUT/gradle.log") == 1 ]] || { cat "$OUT/gradle.log"; exit 1; }
 CP=$(grep -a '^JVMPROFILE_CP=' "$OUT/gradle.log" | sed 's/^JVMPROFILE_CP=//')
-export XTSC_TSGO_LIB_DIR="$REPO/tools/tsgo-7.0.2/lib"
+export XTSC_TSGO_LIB_DIR="$REPO/tools/tsgo-7.1.0-beta/lib"
 # The JVM: `TSGO_JAVA=tools/jdk-27/bin/java …` (docs/goport-perf.md § 8.1 — a runtime arm only; the build stays on JDK 25 bytecode).
 JAVA="${TSGO_JAVA:-java}"
 case "$MODE" in

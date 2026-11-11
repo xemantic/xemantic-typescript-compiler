@@ -31,7 +31,7 @@ import kotlin.test.Test
 
 /**
  * (TSGO.4-a) THE LANGUAGE-SERVICE GATE (docs/goport-ls.md § 4): every request the shipped tsgo LANGUAGE
- * SERVER (`tools/tsgo-7.0.2/lib/tsc --lsp -stdio`) answered in `build/goport/ls-oracle`
+ * SERVER (`tools/tsgo-7.1.0-beta/lib/tsc --lsp -stdio`) answered in `build/goport/ls-oracle`
  * (scripts/tsgo-ls-oracle.py: hover, definition, references, completion, pull diagnostics over tsc's 78
  * sources and 200 conformance projects) is replayed against the PORTED language service in process
  * ([TsgoLanguageService.request], the server's handler for the method over `ls.LanguageService`), with

@@ -35,7 +35,7 @@ import kotlin.test.Test
 
 /**
  * (TSGO.5) the command line's own pins (docs/goport-cli.md); the differential against the tsgo binary is
- * [CliParityTest]. Texts here were read from `tools/tsgo-7.0.2/lib/tsc` over the same inputs.
+ * [CliParityTest]. Texts here were read from `tools/tsgo-7.1.0-beta/lib/tsc` over the same inputs.
  */
 class TsgoCliTest {
 
@@ -56,7 +56,7 @@ class TsgoCliTest {
     fun `--version prints tsgo's version and exits 0`() {
         val (exit, out) = tsc(project(), "--version")
         assert(exit == 0)
-        assert(out == "Version 7.0.2\n")
+        assert(out == "Version 7.1.0-beta\n")
     }
 
     @Test

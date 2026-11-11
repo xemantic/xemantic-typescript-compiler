@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ask tsc 7.0.2's LSP server for hovers at a list of carets — GROUND TRUTH.
 
-`tools/tsgo-7.0.2/lib/tsc --lsp -stdio` is an LSP server, so an (API.*) expectation
+`tools/tsgo-7.1.0-beta/lib/tsc --lsp -stdio` is an LSP server, so an (API.*) expectation
 can be READ OUT of tsc rather than reasoned from `typescript-go-repo/internal/ls`.
 Round 924 used it for (BUG.4) and two of its own predictions were wrong: an object
 literal's member widens to `number` where a shorthand's `const` source keeps `5`,
@@ -14,7 +14,7 @@ Prints TSV: label \t offset \t hover-text (newlines escaped)
 """
 import json, os, subprocess, sys, threading
 
-TSC = "/home/claude/git/xemantic-typescript-compiler/tools/tsgo-7.0.2/lib/tsc"
+TSC = "/home/claude/git/xemantic-typescript-compiler/tools/tsgo-7.1.0-beta/lib/tsc"
 
 
 class Lsp:

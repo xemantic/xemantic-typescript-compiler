@@ -24,7 +24,7 @@ P="${1:-build/bench/tsgo-bench}"
 EDIT_REL="${2:-src/compiler/binder.ts}"
 EDITS="${3:-/tmp/claude-1000}"
 REPS="${4:-3}"
-TSGO="${TSC_BIN:-tools/tsgo-7.0.2/lib/tsc}"
+TSGO="${TSC_BIN:-tools/tsgo-7.1.0-beta/lib/tsc}"
 F="$P/$EDIT_REL"
 
 [[ -x $TSGO ]] || { echo "REFUSED: no tsgo binary at $TSGO" >&2; exit 2; }

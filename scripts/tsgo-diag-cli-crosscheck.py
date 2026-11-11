@@ -4,7 +4,7 @@
 
 For a sample of materialized configurations, runs
 
-    tools/tsgo-7.0.2/lib/tsc -p <projectDir>/tsconfig.json --noEmit --pretty false   (cwd = projectDir)
+    tools/tsgo-7.1.0-beta/lib/tsc -p <projectDir>/tsconfig.json --noEmit --pretty false   (cwd = projectDir)
 
 parses its output, and compares it with build/goport/diag-oracle/<case>/<variation>.jsonl on
 (file, line, column, code, flattened message text). Related information is not printed by
@@ -40,7 +40,7 @@ import subprocess
 import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TSC = os.path.join(REPO, "tools/tsgo-7.0.2/lib/tsc")
+TSC = os.path.join(REPO, "tools/tsgo-7.1.0-beta/lib/tsc")
 CASES_DIR = os.path.join(REPO, "build/goport/diag-cases")
 ORACLE = os.path.join(REPO, "build/goport/diag-oracle")
 

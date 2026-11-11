@@ -26,7 +26,7 @@ Output: TSV rows  server cell rep ms receipt  on stdout; diagnostics to stderr.
 import json, os, subprocess, sys, threading, time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TSGO = os.path.join(REPO, "tools/tsgo-7.0.2/lib/tsc")
+TSGO = os.path.join(REPO, "tools/tsgo-7.1.0-beta/lib/tsc")
 
 
 class Server:

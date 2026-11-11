@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The (TSGO.5) command-line recording (docs/goport-cli.md).
 
-Runs the SHIPPED tsgo binary (`tools/tsgo-7.0.2/lib/tsc`) as a user would — a fresh process per case,
+Runs the SHIPPED tsgo binary (`tools/tsgo-7.1.0-beta/lib/tsc`) as a user would — a fresh process per case,
 stdout piped (so not a terminal), a fixed environment — and records what it prints, its exit status and,
 for a case run in a scratch COPY of its project, every file it writes:
 
@@ -39,7 +39,7 @@ import subprocess
 import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TSC = os.path.realpath(os.path.join(REPO, "tools/tsgo-7.0.2/lib/tsc"))
+TSC = os.path.realpath(os.path.join(REPO, "tools/tsgo-7.1.0-beta/lib/tsc"))
 OUT = os.path.join(REPO, "build/goport/cli-oracle")
 WORK = os.path.join(REPO, "build/goport/cli-work/oracle")
 FIXTURES = os.path.join(REPO, "build/goport/cli-projects")

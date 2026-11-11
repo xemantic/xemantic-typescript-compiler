@@ -29,7 +29,7 @@ if [[ -z "$PROJECT" ]]; then
 fi
 PROJECT="$(cd "$PROJECT" && pwd)"
 [[ -f "$PROJECT/tsconfig.json" ]] || { echo "no $PROJECT/tsconfig.json" >&2; exit 2; }
-TSGO="$REPO/tools/tsgo-7.0.2/lib/tsc"
+TSGO="$REPO/tools/tsgo-7.1.0-beta/lib/tsc"
 [[ -x "$TSGO" ]] || { echo "no tsgo binary at $TSGO" >&2; exit 2; }
 mkdir -p "$OUT"
 

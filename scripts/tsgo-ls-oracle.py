@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The (TSGO.4-a) language-service recording (docs/goport-ls.md § 4).
 
-Drives the SHIPPED tsgo language server (`tools/tsgo-7.0.2/lib/tsc --lsp -stdio`) over the projects
+Drives the SHIPPED tsgo language server (`tools/tsgo-7.1.0-beta/lib/tsc --lsp -stdio`) over the projects
 of the type-oracle corpus (build/goport/api-projects: tsc's 78 sources and 200 conformance cases, made
 by scripts/tsgo-api-oracle.py) and records its answers:
 
@@ -35,7 +35,7 @@ import sys
 import threading
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TSC = os.path.realpath(os.path.join(REPO, "tools/tsgo-7.0.2/lib/tsc"))
+TSC = os.path.realpath(os.path.join(REPO, "tools/tsgo-7.1.0-beta/lib/tsc"))
 LIB_DIR = os.path.dirname(TSC)
 OUT = os.path.join(REPO, "build/goport/ls-oracle")
 

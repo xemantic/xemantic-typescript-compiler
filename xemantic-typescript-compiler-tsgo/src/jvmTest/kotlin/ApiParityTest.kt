@@ -65,7 +65,7 @@ class ApiParityTest {
         val projects = manifest.filter { it.isNotBlank() }.map { it.split('\t') }.filter { filter == null || filter in it[0] }.take(limit)
         val out = File(root, "build/goport/api-kotlin").apply { mkdirs() }
         // The recorded answers name the shipped binary's own lib files (it reads them next to its executable).
-        val libDir = File(root, "tools/tsgo-7.0.2/lib").canonicalPath
+        val libDir = File(root, "tools/tsgo-7.1.0-beta/lib").canonicalPath
         val byMethod = java.util.TreeMap<String, IntArray>() // equal, differ, crash
         val report = StringBuilder()
         var equal = 0

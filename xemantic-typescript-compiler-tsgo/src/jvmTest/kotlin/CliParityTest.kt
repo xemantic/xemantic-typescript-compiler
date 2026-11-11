@@ -35,7 +35,7 @@ import kotlin.test.Test
 
 /**
  * (TSGO.5) THE COMMAND-LINE GATE (docs/goport-cli.md): every case the shipped tsgo binary
- * (`tools/tsgo-7.0.2/lib/tsc`) ran in `build/goport/cli-oracle` (scripts/tsgo-cli-oracle.py: the 8 tsc
+ * (`tools/tsgo-7.1.0-beta/lib/tsc`) ran in `build/goport/cli-oracle` (scripts/tsgo-cli-oracle.py: the 8 tsc
  * profiles, the census libraries, cronstrue, marked, type-oracle projects and command-line shapes) is run
  * through the PORTED command line in process ([TsgoCli.run]: same arguments, working directory, environment
  * and default-library directory). Its stdout must equal the binary's BYTE FOR BYTE, its exit status must be

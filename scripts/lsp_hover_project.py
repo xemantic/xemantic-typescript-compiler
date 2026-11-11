@@ -7,7 +7,7 @@ at `build/bench/tsc-project-*` would rewrite tsc's own sources from a spec. This
 opens the files that are already there, by path, and never writes.
 
 CLAUDE.md's rule stands and is why this exists: do not hand-write an expected
-hover while `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` can be asked. Note the standing
+hover while `tools/tsgo-7.1.0-beta/lib/tsc --lsp -stdio` can be asked. Note the standing
 caveat — that binary DIVERGES from pristine tsc in places, so it is the best
 instrument for a *naming/display* question and not a baseline oracle.
 
@@ -18,7 +18,7 @@ Prints TSV: label \t file \t offset \t hover-text (newlines escaped)
 import json, os, subprocess, sys, threading
 
 TSC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                   "..", "tools", "tsgo-7.0.2", "lib", "tsc")
+                   "..", "tools", "tsgo-7.1.0-beta", "lib", "tsc")
 TSC = os.path.normpath(TSC)
 
 

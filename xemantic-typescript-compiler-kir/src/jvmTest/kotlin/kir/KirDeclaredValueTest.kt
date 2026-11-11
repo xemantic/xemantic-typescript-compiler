@@ -47,7 +47,7 @@ import kotlin.test.Test
  *
  * ## Every expectation below is node's
  *
- * Measured against `tools/tsgo-7.0.2/lib/tsc` + `tools/node/bin/node` over the
+ * Measured against `tools/tsgo-7.1.0-beta/lib/tsc` + `tools/node/bin/node` over the
  * same source, which is where each expected string comes from. Where the two
  * diverge it is named as a divergence and its reason is stated.
  *

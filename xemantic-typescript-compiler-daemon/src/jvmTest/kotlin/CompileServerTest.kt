@@ -40,7 +40,7 @@ import kotlin.test.Test
  * is the part least likely to break silently.
  *
  * The server runs the ported tsc ((TSGO.7)), so each response is asserted
- * whole against what `tools/tsgo-7.0.2/lib/tsc` prints for the same project
+ * whole against what `tools/tsgo-7.1.0-beta/lib/tsc` prints for the same project
  * (non-pretty: stdout is not a terminal) and its exit status.
  */
 class CompileServerTest {

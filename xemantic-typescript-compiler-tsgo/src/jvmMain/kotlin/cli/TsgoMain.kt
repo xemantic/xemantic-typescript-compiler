@@ -38,7 +38,7 @@ import kotlin.system.exitProcess
  *
  * The default libraries are the bundled ones; `XTSC_TSGO_LIB_DIR=<dir>` reads the `lib.*.d.ts` of `<dir>`
  * instead, as the shipped npm binary reads those next to its executable (the CLI differential sets it to
- * `tools/tsgo-7.0.2/lib`, so file names in diagnostics agree byte for byte).
+ * `tools/tsgo-7.1.0-beta/lib`, so file names in diagnostics agree byte for byte).
  */
 fun main(args: Array<String>) {
     exitProcess(runMain(args))
