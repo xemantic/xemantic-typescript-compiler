@@ -411,6 +411,43 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   First run: 205 classes, 10 of them extended. Hand-written code reaches inherited fields directly
   (`r.typeArguments`, not `r.nodeWithTypeArgumentsBase.typeArguments`). Pins: `LoweringRulesTest` (the hierarchy, a
   copy, `AsNode`, the rename), `NodeShapeTest` (a factory-made identifier IS its data and its `AsNode`).
+- **Header chains** ((TSGO.7.1), generalizes "One object per node"; `Program.computeNodeChain`/`chainDescends`,
+  `HEADER_ROOTS`, `CallLowering.unsafeConvert`). TypeScript 7.1 dropped `nodeData`/`TypeData`: a node, a type and a
+  type mapper are each ONE struct whose first embedded field (transitively) is a header — `ast.Node`,
+  `checker.Type`, `checker.TypeMapper` — and Go recovers the concrete struct with `(*Identifier)(unsafe.Pointer(n))`
+  (static `unsafe.Offsetof(...) == 0` asserts). The chain is now computed per root: every struct whose embedded
+  fields reach a root extends the unique shallowest one, so `Identifier : NodeDefault : Node`,
+  `IntrinsicType : TypeBase : Type`, `SimpleTypeMapper : TypeMapperBase : TypeMapper`; `nodeData`, when present
+  (tsgo ≤ 7.0), still sits between NodeDefault and Node. The identity checks run per root. Lowering of
+  `unsafe.Pointer`: `unsafe.Pointer(p)` of a struct pointer is the reference; `(*T)(unsafe.Pointer(p))` is
+  `p as T?` when T is p's struct or a header-chain subclass of it (a struct alias such as `type MutableNode Node`
+  resolves to its root), or a type parameter (`castType[T]`, unchecked; the call site names the class); anything
+  else refuses `unsafe-conv`/`unsafe-downcast`. First run: 238 classes, 22 extended. Pin: `LoweringRulesTest` "a
+  header downcast through unsafe Pointer is a Kotlin cast down the header chain".
+- **Addressed globals** ((TSGO.7.1), `ExprLowering.globalAddr`). `&g` of a package-level NON-struct variable
+  (`diagnostics.allMessages = [...]**Message{&Unterminated_string_literal, …}`) is a `GoFieldPtr` keyed by the Go
+  object key whose accessors read/write the global — the global stays a plain property with its public name; a
+  write through the pointer to an immutable global panics. (Was the `addr-global` refusal.)
+- **Go 1.27 promoted fields in composite literals** ((TSGO.7.1), `ExprLowering.regroupPromoted`).
+  `SyncMapEntry[K, V]{m: m, key: k, …}` names fields of the embedded `mapEntry`: such keys move into a synthesized
+  literal of their embedded field (recursively), placed at the first one's position; refused
+  (`promoted-field-literal-call-order`) only if that reorders two elements whose values contain calls.
+- **Go 1.27 generic methods** ((TSGO.7.1), `Decls.funcDecl`, `CallLowering.methodCall`/`dictArgs`).
+  `func (p *Parser) doInContext[T any](…)`: the method's own type parameters (the IR's `tparams`; the receiver's
+  are `recvTparams`) take leading `GoElem` dictionaries like a generic function's, and every call — explicit
+  `x.m[T](…)` or inferred — passes them (the callee object's kind is `method`).
+- **Named results modified by a defer** ((TSGO.7.1), `Lowering.withDefersIfNeeded`/`returnStmt`, runtime
+  `withDefersNamed`). When a deferred call (or any func literal of the body) mentions a named result, the body runs
+  in `withDefersNamed({ results }) { … }`: `return v` assigns the result variables (all values evaluated first) and
+  leaves the lambda; the defers run; the variables' values are returned — Go's order, also after a recovered panic.
+  (Was the `defer-named-results` refusal: `ipc.AsyncConn.Run`'s `err = errors.Join(err, …)`.)
+- **Type parameters with a string core** ((TSGO.7.1), `CallLowering.convert`; runtime `goStringOfTypeParam`,
+  `goTypeParamOfString`). 7.1's typed paths make `func f[T ~string]` common: `string(t)` unwraps the erased value
+  (a `String` or a boxed `GoBasicValue`), `T(s)` builds the named value through T's dictionary's zero.
+- **Generic `*P` results with a non-struct P** ((TSGO.7.1), `CallLowering.opaquePtrResult`, override
+  `core.Arena.New`). The port lowers `*P` for a type parameter as `P?` (a struct pointer IS the struct). 7.1
+  instantiates `core.Arena[[]*Type]`: its `New()` hands out a `GoBox` typed as `P?` (as `goOpaqueAddr` does) and the
+  call site casts it back to `GoPtr<…>` (the instantiated object's `origin` gives the generic signature).
 - **Abstract-class interfaces** ((TSGO.6-i), `Program.computeAbstractIfaces`, `Decls.ifaceDecl`/`superCall`). An
   interface in `ABSTRACT_IFACE_CANDIDATES` (`ast.nodeData`, `checker.TypeData`) is lowered as an `abstract class`
   (`abstract fun` members) when the whole run proves it legal: every named type whose IR `implements` lists it is a
