@@ -38,12 +38,18 @@ private const val DECREASING_HINT = 2
 private const val UNKNOWN_HINT = 0
 
 /** Sorts `data[0 until n]` (absolute window `[base, base + n)`) with Go's pdqsort and [less]. */
-internal class Pdq<T>(private val data: Array<Any?>, private val base: Int, private val less: (T, T) -> Boolean) {
+internal class Pdq<T>(
+    private val data: Array<Any?>,
+    private val base: Int,
+    private val less: (T, T) -> Boolean,
+    /** `sort.Slice`'s index-based `less(i, j)` (zsortfunc.go): the same algorithm, comparing by position. */
+    private val lessAt: ((Int, Int) -> Boolean)? = null,
+) {
 
     @Suppress("UNCHECKED_CAST")
     private fun at(i: Int): T = data[base + i] as T
 
-    private fun lt(i: Int, j: Int): Boolean = less(at(i), at(j))
+    private fun lt(i: Int, j: Int): Boolean = lessAt?.invoke(i, j) ?: less(at(i), at(j))
 
     private fun swap(i: Int, j: Int) {
         val t = data[base + i]
@@ -271,4 +277,9 @@ internal class Pdq<T>(private val data: Array<Any?>, private val base: Int, priv
             j--
         }
     }
+}
+
+/** `sort.Slice(x, less)`'s sort: Go's pdqsort over [x] in place, comparing by index (Go's zsortfunc.go). */
+internal fun <T> pdqSortAt(x: com.xemantic.typescript.tsgo.runtime.GoSlice<T>, less: (Int, Int) -> Boolean) {
+    Pdq<T>(x.array, x.offset, { _, _ -> false }, less).sort(x.len)
 }

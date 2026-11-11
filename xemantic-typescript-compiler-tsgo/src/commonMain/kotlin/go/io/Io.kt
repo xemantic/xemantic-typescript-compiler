@@ -45,9 +45,28 @@ interface Closer {
     fun close(): GoError?
 }
 
-/** `io.ReadCloser`, `io.WriteCloser`. */
+/** `io.ReadCloser`, `io.WriteCloser`, `io.ReadWriter`, `io.ReadWriteCloser`. */
 interface ReadCloser : Reader, Closer
 interface WriteCloser : Writer, Closer
+interface ReadWriter : Reader, Writer
+interface ReadWriteCloser : ReadWriter, ReadCloser, WriteCloser
+
+/** `io.ReadFull(r, buf)`: reads exactly `len(buf)` bytes; `ErrUnexpectedEOF` on a short read, `EOF` on none. */
+fun readFull(r: Reader?, buf: GoSlice<Int>): Tuple2<Int, GoError?> {
+    val rd = r ?: throw NullPointerException("io.ReadFull: nil reader")
+    var n = 0
+    var err: GoError? = null
+    while (n < buf.len && err == null) {
+        val (k, e) = rd.read(buf.slice(n))
+        n += k
+        err = e
+    }
+    return when {
+        n >= buf.len -> Tuple2(n, null)
+        n > 0 && err === EOF -> Tuple2(n, errUnexpectedEOF)
+        else -> Tuple2(n, err)
+    }
+}
 
 /** `io.StringWriter`. */
 interface StringWriter {
@@ -59,3 +78,15 @@ val EOF: GoError = GoPlainError("EOF")
 
 /** `io.ErrUnexpectedEOF`. */
 val errUnexpectedEOF: GoError = GoPlainError("unexpected EOF")
+
+/** `io.ErrShortWrite`. */
+val errShortWrite: GoError = GoPlainError("short write")
+
+/** `io.EOF` under its lowered Kotlin name (`EOF` → `eof`): the same error value. */
+val eof: GoError get() = EOF
+
+/** `io.Discard`: a Writer on which every write succeeds and is dropped. */
+val discard: Writer = object : Writer, StringWriter {
+    override fun write(p: GoSlice<Int>): Tuple2<Int, GoError?> = Tuple2(p.len, null)
+    override fun writeString(s: String): Tuple2<Int, GoError?> = Tuple2(s.length, null)
+}

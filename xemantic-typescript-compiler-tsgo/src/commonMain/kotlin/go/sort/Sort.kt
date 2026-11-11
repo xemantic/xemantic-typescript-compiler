@@ -35,3 +35,12 @@ fun search(n: Int, f: (Int) -> Boolean): Int {
     }
     return i
 }
+
+/**
+ * `sort.Slice(x, less)`: sorts the slice [x] in place with Go's (unstable) pdqsort — the same algorithm as
+ * `slices.SortFunc`, so equal elements land where Go puts them. [less] indexes the slice as it is being sorted.
+ */
+fun slice(x: Any?, less: (Int, Int) -> Boolean) {
+    val s = x as? com.xemantic.typescript.tsgo.runtime.GoSlice<*> ?: com.xemantic.typescript.tsgo.runtime.goPanic("sort.Slice: not a slice")
+    com.xemantic.typescript.tsgo.go.slices.pdqSortAt(s, less)
+}

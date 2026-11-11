@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/checker.getRelationKey efe123b6
+// go: github.com/microsoft/TypeScript/tsc/internal/checker.getRelationKey 7a913587
 // OVERRIDE (performance, docs/goport-perf.md § 28): a PLAIN key (`'s'`, source id, target id, intersection state)
 // is the 128-bit value itself instead of its xxh3 hash — no key builder, no buffer, no hashing (the relation-key
 // path was ~10% of the checker thread, § 10). ts-rust keeps the same split (`PlainRelationKey`). A relation key
@@ -26,14 +26,10 @@ fun getRelationKey(source_0: Type?, target_1: Type?, intersectionState: Intersec
             false,
         )
     }
-    val ls4 = com.xemantic.typescript.tsgo.checker.keyBuilder.POOL.stack()
-    val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls4.acquire()
-    try {
-        b.writeByte(103)
-        val constrained = b.writeGenericTypeReferences(source, target, ignoreConstraints)
-        hashWrite32<IntersectionState>(IntersectionState.ELEM, b.h, intersectionState)
-        return Tuple2<CacheHashKey, Boolean>(b.hash(), constrained)
-    } finally {
-        ls4.release()
-    }
+    // TypeScript 7.1: a fresh `var b keyBuilder` (inline buffer + overflow), as Go.
+    val b = com.xemantic.typescript.tsgo.checker.keyBuilder()
+    b.writeByte(103)
+    val constrained = b.writeGenericTypeReferences(source, target, ignoreConstraints)
+    b.writeUint32(intersectionState.value)
+    return Tuple2<CacheHashKey, Boolean>(b.hash(), constrained)
 }

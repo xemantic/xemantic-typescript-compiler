@@ -64,6 +64,26 @@ private class CancelContext(private val parent: Context) : Context {
     private val mu = Mutex()
     private var failure: GoError? = null
     private val children = ArrayList<CancelContext>()
+    private val afterFuncs = ArrayList<() -> Unit>()
+
+    /** `context.AfterFunc` on this context: [f] runs in its own goroutine once done; stop answers whether it prevented that. */
+    fun afterFunc(f: () -> Unit): () -> Boolean {
+        mu.lock()
+        if (failure != null) {
+            mu.unlock()
+            com.xemantic.typescript.tsgo.go.sync.GoProcs.go(f)
+            return { false }
+        }
+        val entry: () -> Unit = { f() }
+        afterFuncs += entry
+        mu.unlock()
+        return {
+            mu.lock()
+            val removed = afterFuncs.remove(entry)
+            mu.unlock()
+            removed
+        }
+    }
 
     init {
         var p: Context? = parent
@@ -88,9 +108,12 @@ private class CancelContext(private val parent: Context) : Context {
         failure = err
         val kids = children.toList()
         children.clear()
+        val after = afterFuncs.toList()
+        afterFuncs.clear()
         mu.unlock()
         done.close()
         for (c in kids) c.cancel(err)
+        for (f in after) com.xemantic.typescript.tsgo.go.sync.GoProcs.go(f)
     }
 
     override fun done(): GoChan<Unit> = done
@@ -106,6 +129,40 @@ private class CancelContext(private val parent: Context) : Context {
 }
 
 /** `context.Background()`. */
+/**
+ * `context.AfterFunc(ctx, f)`: runs [f] in its own goroutine after [ctx] is done; the returned stop function
+ * reports whether it prevented that. A context that is never done never runs [f] (stop answers true).
+ */
+fun afterFunc(ctx: Context?, f: () -> Unit): () -> Boolean {
+    if (ctx == null) com.xemantic.typescript.tsgo.runtime.goPanic("cannot create context from nil parent")
+    var p: Context = ctx
+    while (p is ValueContext) p = p.parent
+    val c = p as? CancelContext ?: return { true }
+    return c.afterFunc(f)
+}
+
+/** `context.DeadlineExceeded`. */
+val deadlineExceeded: GoError = GoPlainError("context deadline exceeded")
+
+/**
+ * `context.WithTimeout(parent, d)`: [withCancel] whose context is also cancelled with [deadlineExceeded] once [d]
+ * has passed — a goroutine that sleeps with its run token given back (as `time.After`), then cancels (a no-op
+ * when the cancel function ran first).
+ */
+fun withTimeout(parent: Context?, d: com.xemantic.typescript.tsgo.go.time.Duration): com.xemantic.typescript.tsgo.runtime.Tuple2<Context?, () -> Unit> {
+    if (parent == null) com.xemantic.typescript.tsgo.runtime.goPanic("cannot create context from nil parent")
+    val ctx = CancelContext(parent)
+    if (d.value <= 0) ctx.cancel(deadlineExceeded)
+    else com.xemantic.typescript.tsgo.go.sync.GoProcs.go {
+        com.xemantic.typescript.tsgo.go.sync.blockingWait { com.xemantic.typescript.tsgo.go.time.platformSleep(d.value) }
+        ctx.cancel(deadlineExceeded)
+    }
+    return com.xemantic.typescript.tsgo.runtime.Tuple2(ctx) { ctx.cancel(canceled) }
+}
+
+/** `context.CancelFunc` (`func()`). */
+typealias CancelFunc = () -> Unit
+
 fun background(): Context = EmptyContext
 
 /** `context.TODO()`. */

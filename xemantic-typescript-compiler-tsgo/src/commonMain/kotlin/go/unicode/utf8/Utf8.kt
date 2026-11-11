@@ -143,3 +143,6 @@ fun appendRune(p: GoSlice<Int>, r: Int): GoSlice<Int> {
     appendRuneBytes(sb, r)
     return goAppendString(p, sb.toString())
 }
+
+/** `utf8.Valid(p)`: whether [p] is entirely valid UTF-8. */
+fun valid(p: GoSlice<Int>): Boolean = validString(goBytesToString(p))

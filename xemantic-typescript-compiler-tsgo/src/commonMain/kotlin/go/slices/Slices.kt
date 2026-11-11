@@ -193,13 +193,13 @@ fun <T> reverse(s: GoSlice<T>) {
 /** `slices.Sort(x)`: Go's pdqsort with `cmp.Less` (NaNs first). Not stable — Go's exact order. */
 fun <T : Comparable<T>> sort(x: GoSlice<T>) {
     for (i in 0 until x.len) x[i] // materialize implicit zeros
-    Pdq<T>(x.array, x.offset) { a, b -> cmpLess(a, b) }.sort(x.len)
+    Pdq<T>(x.array, x.offset, less = { a, b -> cmpLess(a, b) }).sort(x.len)
 }
 
 /** `slices.SortFunc(x, cmp)`: Go's pdqsort. Not stable — Go's exact order. */
 fun <T> sortFunc(x: GoSlice<T>, cmp: (T, T) -> Int) {
     for (i in 0 until x.len) x[i]
-    Pdq<T>(x.array, x.offset) { a, b -> cmp(a, b) < 0 }.sort(x.len)
+    Pdq<T>(x.array, x.offset, less = { a, b -> cmp(a, b) < 0 }).sort(x.len)
 }
 
 /**
@@ -309,4 +309,13 @@ fun <T> repeat(x: GoSlice<T>, count: Int): GoSlice<T> {
     var n = goCopy(out, x)
     while (n < out.len) n += goCopy(out.slice(n), out.slice(0, n))
     return out
+}
+
+/** `slices.Backward(s)`: index-value pairs from the last element to the first. */
+fun <T> backward(s: GoSlice<T>): com.xemantic.typescript.tsgo.go.iter.Seq2<Int, T> = { yield ->
+    var i = s.len - 1
+    while (i >= 0) {
+        if (!yield(i, s[i])) break
+        i--
+    }
 }

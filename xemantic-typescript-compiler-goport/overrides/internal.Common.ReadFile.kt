@@ -1,11 +1,11 @@
-// go: github.com/microsoft/typescript-go/internal/vfs/internal.Common.ReadFile c6a005d3
+// go: github.com/microsoft/TypeScript/tsc/internal/vfs/internal.Common.ReadFile aedee4da
 // OVERRIDE (performance, docs/goport-perf.md § 17): Go's `string(b)` of the file's bytes is one copy; generated, it
 // was a `[]byte` slice filled element by element from the host's byte array, then a string built from it element by
 // element again — ~20% of the GraalVM image's parse phase. A host file system that reads a file straight into a byte
 // string (go.os.StringFileFS) is asked for it; any other FS keeps Go's path. `decodeBytes` (the BOM handling) and the
 // `ok` results are Go's.
-fun Common?.readFile(path: String): Tuple2<String, Boolean> {
-    val t0 = this.rootAndPath(path)
+fun Common?.readFile(path: com.xemantic.typescript.tsgo.tspath.RootedFilePath): Tuple2<String, Boolean> {
+    val t0 = this.rootAndPath(path.asPath())
     val fsys: FS? = t0.first
     val rest: String = t0.third
     if (fsys == null) {

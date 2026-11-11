@@ -30,7 +30,7 @@ import (
 // irSchemaVersion is bumped on every incompatible change to the IR shape.
 const irSchemaVersion = 2
 
-const tsgoModule = "github.com/microsoft/typescript-go"
+const tsgoModule = "github.com/microsoft/TypeScript/tsc"
 
 var defaultClosure = []string{
 	"ast", "diagnostics", "parser", "stringutil", "scanner", "api/encoder", "core",
@@ -57,6 +57,9 @@ var defaultClosure = []string{
 	"execute/tsc", "vfs/osvfs",
 	// (TSGO.5-c) `--watch` records the paths a build read (the watcher's dependencies).
 	"vfs/trackingvfs",
+	// (TSGO.7.1) TypeScript 7.1's content mappers (a tsconfig plugin turning e.g. .vue into virtual
+	// TypeScript, served by a child process over JSON-RPC) and their span maps, which the LS reads.
+	"spanmap", "contentmapper", "ipc", "osutil",
 }
 
 // overlayFiles are ADDED to tsgo packages through go/packages' Overlay (never written into
@@ -105,6 +108,8 @@ func main() {
 	outDir := flag.String("out", filepath.Join(root, "build", "goport", "ir"), "output directory for the IR")
 	statsFile := flag.String("stats", "", "write the closure census (markdown) to this file")
 	check := flag.Bool("check", false, "report IR holes (expressions without a type, identifiers without an object); exit 1 if any")
+	noOverlay := flag.Bool("no-overlay", false, "extract the closure WITHOUT the overlays and partial packages (upgrade triage: "+
+		"the overlay glue is written against one tsgo API and is the first thing a tsgo upgrade breaks)")
 	flag.Parse()
 	// go/packages reports REAL paths, so an overlay keyed by a symlinked tsgo path (a worktree that
 	// links typescript-go-repo) would silently never apply: resolve the link first.
@@ -123,12 +128,15 @@ func main() {
 	useOverlay := false
 	if len(pkgs) == 0 {
 		pkgs = defaultClosure
+		if *noOverlay {
+			partialClosure = nil
+		}
 		for p, roots := range partialClosure {
 			pkgs = append(pkgs, p)
 			partial[tsgoModule+"/internal/"+p] = roots
 		}
 		sort.Strings(pkgs[len(defaultClosure):])
-		useOverlay = true
+		useOverlay = !*noOverlay
 	}
 	var patterns []string
 	closure := map[string]bool{}
@@ -150,6 +158,9 @@ func main() {
 			os.Setenv("GOTOOLCHAIN", "local")
 		}
 	}
+	// Since TypeScript 7.1 tsgo lives in microsoft/TypeScript's tsc/, under a monorepo go.work that
+	// also `use`s ./tools — absent from a sparse checkout, so `go list` fails. The module alone is the input.
+	os.Setenv("GOWORK", "off")
 	env := os.Environ()
 	cfg := &packages.Config{
 		Dir: *tsgoDir,

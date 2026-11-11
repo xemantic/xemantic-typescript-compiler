@@ -36,3 +36,37 @@ typealias Value = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.
 
 /** `v.Kind()` (an extension: a method of the typealias). */
 fun Value.kind(): Kind = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.valueKind(this)
+
+// ---- TypeScript 7.1: `internal/json` calls the standard package directly. Delegates to the go-json-experiment shim.
+
+private typealias Options = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.Options
+
+/** `jsontext.AllowInvalidUTF8(v)`. */
+fun allowInvalidUTF8(v: Boolean): Options = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.allowInvalidUTF8(v)
+
+/** `jsontext.AllowDuplicateNames(v)`. */
+fun allowDuplicateNames(v: Boolean): Options = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.allowDuplicateNames(v)
+
+/** `jsontext.WithIndent(indent)`. */
+fun withIndent(indent: String): Options = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.withIndent(indent)
+
+/** `jsontext.WithIndentPrefix(prefix)`. */
+fun withIndentPrefix(prefix: String): Options = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.withIndentPrefix(prefix)
+
+/** `jsontext.NewDecoder(r, opts...)`. */
+fun newDecoder(r: com.xemantic.typescript.tsgo.go.io.Reader?, vararg opts: Options): Decoder = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.newDecoder(r, *opts)
+
+/** `jsontext.NewEncoder(w, opts...)`. */
+fun newEncoder(w: com.xemantic.typescript.tsgo.go.io.Writer?, vararg opts: Options): Encoder = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.newEncoder(w, *opts)
+
+/** `jsontext.BeginObject`, `EndObject`, `BeginArray`, `EndArray`, `Null`, `True`, `False` (vars). */
+val beginObject: Token get() = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.beginObject
+val endObject: Token get() = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endObject
+val beginArray: Token get() = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.beginArray
+val endArray: Token get() = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.endArray
+val `null`: Token get() = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.`null`
+val `true`: Token get() = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.`true`
+val `false`: Token get() = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.`false`
+
+/** `v.Clone()`: a copy of the raw value's bytes. */
+fun Value.clone(): Value = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.jsontext.valueClone(this)

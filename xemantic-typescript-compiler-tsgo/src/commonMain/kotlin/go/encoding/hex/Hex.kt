@@ -38,3 +38,44 @@ fun encodeToString(src: GoSlice<Int>): String {
     }
     return sb.toString()
 }
+
+private fun fromHexChar(c: Char): Int = when (c) {
+    in '0'..'9' -> c - '0'
+    in 'a'..'f' -> c - 'a' + 10
+    in 'A'..'F' -> c - 'A' + 10
+    else -> -1
+}
+
+/** `hex.InvalidByteError`'s text: `encoding/hex: invalid byte: %#U`. */
+private fun invalidByte(c: Char): com.xemantic.typescript.tsgo.runtime.GoError {
+    val b = c.code and 0xFF
+    val hex = b.toString(16).uppercase().padStart(4, '0')
+    val shown = if (b in 0x20..0x7E) " '${b.toChar()}'" else ""
+    return com.xemantic.typescript.tsgo.runtime.GoPlainError("encoding/hex: invalid byte: U+$hex$shown")
+}
+
+/**
+ * `hex.DecodeString(s)` → (bytes, err): as Go, the bytes decoded before an invalid byte, and for an odd length
+ * the invalid-byte error when the last char is not hex, else `ErrLength`.
+ */
+fun decodeString(s: String): com.xemantic.typescript.tsgo.runtime.Tuple2<GoSlice<Int>, com.xemantic.typescript.tsgo.runtime.GoError?> {
+    val out = StringBuilder(s.length / 2)
+    fun done(e: com.xemantic.typescript.tsgo.runtime.GoError?) = com.xemantic.typescript.tsgo.runtime.Tuple2(com.xemantic.typescript.tsgo.runtime.goStringToBytes(out.toString()), e)
+    var i = 1
+    while (i < s.length) {
+        val p = fromHexChar(s[i - 1])
+        val q = fromHexChar(s[i])
+        if (p < 0) return done(invalidByte(s[i - 1]))
+        if (q < 0) return done(invalidByte(s[i]))
+        out.append(((p shl 4) or q).toChar())
+        i += 2
+    }
+    if (s.length % 2 == 1) {
+        if (fromHexChar(s[i - 1]) < 0) return done(invalidByte(s[i - 1]))
+        return done(errLength)
+    }
+    return done(null)
+}
+
+/** `hex.ErrLength`. */
+val errLength: com.xemantic.typescript.tsgo.runtime.GoError = com.xemantic.typescript.tsgo.runtime.GoPlainError("encoding/hex: odd length hex string")

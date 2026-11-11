@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/tsoptions.floatOrInt32ToFlag 5e695971
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.floatOrInt32ToFlag 5e695971
 // OVERRIDE: `value.(T)` and `T(float)` on a type parameter `T ~int32` — an erased value class can be neither
 // tested nor constructed generically; the six instantiations are the core option enums. See checker.hashWrite32.
 @Suppress("UNCHECKED_CAST")

@@ -8,7 +8,7 @@ package testrunner
 import (
 	"testing"
 
-	"github.com/microsoft/typescript-go/internal/testutil/harnessutil"
+	"github.com/microsoft/TypeScript/tsc/internal/testutil/harnessutil"
 )
 
 // XtscCaseConfigurations is getCompilerFileBasedTest (compiler_runner.go, tag typescript/v7.0.2)

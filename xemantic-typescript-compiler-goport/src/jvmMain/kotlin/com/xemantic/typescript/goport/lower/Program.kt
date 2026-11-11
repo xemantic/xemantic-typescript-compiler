@@ -49,8 +49,8 @@ const val INLINE_MAX_LINES = 15
  * check's allocation.
  */
 val WINDOW_FIELD_CANDIDATES = setOf(
-    "github.com/microsoft/typescript-go/internal/parser.Parser.sourceText",
-    "github.com/microsoft/typescript-go/internal/scanner.Scanner.text",
+    "github.com/microsoft/TypeScript/tsc/internal/parser.Parser.sourceText",
+    "github.com/microsoft/TypeScript/tsc/internal/scanner.Scanner.text",
 )
 
 /**
@@ -59,7 +59,7 @@ val WINDOW_FIELD_CANDIDATES = setOf(
  * and `getTypeAtFlowNode`'s `t` was an address-stable object only because `t.isNil()` takes `&t`.
  */
 val IMMUTABLE_STRUCT_CANDIDATES = setOf(
-    "github.com/microsoft/typescript-go/internal/checker.FlowType",
+    "github.com/microsoft/TypeScript/tsc/internal/checker.FlowType",
 )
 
 /**
@@ -67,7 +67,7 @@ val IMMUTABLE_STRUCT_CANDIDATES = setOf(
  * `core.TextRange` (two `int32`s) is every node's `Loc` — an object per node and a hop on every position read.
  */
 val PACKED_STRUCT_CANDIDATES = setOf(
-    "github.com/microsoft/typescript-go/internal/core.TextRange",
+    "github.com/microsoft/TypeScript/tsc/internal/core.TextRange",
 )
 
 /** Basic kinds a [PACKED_STRUCT_CANDIDATES] field may have (each packs into 32 bits of the `Long`). */
@@ -79,9 +79,9 @@ val PACKED_FIELD_KINDS = setOf("Int32", "Uint32", "Int16", "Uint16", "Int8", "Ui
  * (an `atomic.Uint32` and the `AtomicInt` inside it).
  */
 val INLINE_ATOMIC_FIELD_CANDIDATES = setOf(
-    "github.com/microsoft/typescript-go/internal/ast.Node.id",
-    "github.com/microsoft/typescript-go/internal/ast.Symbol.id",
-    "github.com/microsoft/typescript-go/internal/ast.CompositeBase.facts",
+    "github.com/microsoft/TypeScript/tsc/internal/ast.Node.id",
+    "github.com/microsoft/TypeScript/tsc/internal/ast.Symbol.id",
+    "github.com/microsoft/TypeScript/tsc/internal/ast.CompositeBase.facts",
 )
 
 /** The `sync/atomic` types an [INLINE_ATOMIC_FIELD_CANDIDATES] field may have, with the Kotlin type of the inlined field. */
@@ -104,9 +104,20 @@ fun inlineAtomicConv(atomicKey: String): Pair<(String) -> String, (String) -> St
 }
 
 /** One object per node ([Program.nodeChain], docs/goport-lowering.md § 3): the struct every node data struct embeds. */
-const val NODE_CHAIN_ROOT = "github.com/microsoft/typescript-go/internal/ast.NodeDefault"
-const val NODE_STRUCT = "github.com/microsoft/typescript-go/internal/ast.Node"
-const val NODE_DATA_IFACE = "github.com/microsoft/typescript-go/internal/ast.nodeData"
+const val NODE_CHAIN_ROOT = "github.com/microsoft/TypeScript/tsc/internal/ast.NodeDefault"
+const val NODE_STRUCT = "github.com/microsoft/TypeScript/tsc/internal/ast.Node"
+const val NODE_DATA_IFACE = "github.com/microsoft/TypeScript/tsc/internal/ast.nodeData"
+
+/**
+ * Header chains ([Program.nodeChain], docs/goport-lowering.md § 3): the header structs TypeScript 7.1 embeds, at
+ * offset zero, in every concrete struct of a family, recovering the concrete struct with
+ * `(*T)(unsafe.Pointer(header))`. Every struct whose embedded fields reach one EXTENDS it in Kotlin.
+ */
+val HEADER_ROOTS = listOf(
+    NODE_STRUCT,
+    "github.com/microsoft/TypeScript/tsc/internal/checker.Type",
+    "github.com/microsoft/TypeScript/tsc/internal/checker.TypeMapper",
+)
 
 /**
  * Struct types whose objects get a dense port-internal index (`runtime.GoLinkKey`, docs/goport-lowering.md § 3,
@@ -114,8 +125,8 @@ const val NODE_DATA_IFACE = "github.com/microsoft/typescript-go/internal/ast.nod
  * instead of hashing the pointer (docs/goport-perf.md § 14).
  */
 val LINK_KEY_TYPES = setOf(
-    "github.com/microsoft/typescript-go/internal/ast.Node",
-    "github.com/microsoft/typescript-go/internal/ast.Symbol",
+    "github.com/microsoft/TypeScript/tsc/internal/ast.Node",
+    "github.com/microsoft/TypeScript/tsc/internal/ast.Symbol",
 )
 
 /**
@@ -125,8 +136,8 @@ val LINK_KEY_TYPES = setOf(
  * receiver class's itable) where a class call is one vtable load.
  */
 val ABSTRACT_IFACE_CANDIDATES = setOf(
-    "github.com/microsoft/typescript-go/internal/ast.nodeData",
-    "github.com/microsoft/typescript-go/internal/checker.TypeData",
+    "github.com/microsoft/TypeScript/tsc/internal/ast.nodeData",
+    "github.com/microsoft/TypeScript/tsc/internal/checker.TypeData",
 )
 
 /**
@@ -136,7 +147,7 @@ val ABSTRACT_IFACE_CANDIDATES = setOf(
  * `Object`, so each call boxed its `Int` — 85% of the boxed `Integer`s a check allocated.
  */
 val PRIM_FUNC_FIELD_CANDIDATES = setOf(
-    "github.com/microsoft/typescript-go/internal/checker.Checker.compareSymbols",
+    "github.com/microsoft/TypeScript/tsc/internal/checker.Checker.compareSymbols",
 )
 
 /** Go basic result types a JVM method returns unboxed (not `string`, not `unsafe.Pointer`). */
@@ -1262,14 +1273,33 @@ class Program(
     /** Why the whole rule was refused (null when it holds); the rule is all or nothing. */
     var nodeChainRefusal: String? = null
 
+    /** The header root ([HEADER_ROOTS]) each [nodeChain] class descends from. */
+    val chainRoot = HashMap<String, String>()
+
+    /** Whether [sub] is [sup] or extends it through the header chains ([nodeChain]). */
+    fun chainDescends(sub: String, sup: String): Boolean {
+        var k: String? = sub
+        var guard = 0
+        while (k != null && guard++ < 64) {
+            if (k == sup) return true
+            k = nodeChain[k]?.second
+        }
+        return false
+    }
+
     fun computeNodeChain() {
         nodeChain.clear()
         nodeChainNext.clear()
         nodeChainOpen.clear()
+        chainRoot.clear()
         nodeChainRefusal = null
-        fun refuse(why: String) { if (nodeChainRefusal == null) nodeChainRefusal = why; nodeChain.clear(); nodeChainNext.clear(); nodeChainOpen.clear() }
-        if (NODE_CHAIN_ROOT !in structTypes || NODE_STRUCT !in structTypes) return refuse("ast.NodeDefault / ast.Node not in the run")
-        if (NODE_DATA_IFACE !in abstractIfaces) return refuse("ast.nodeData is not an abstract class (Program.abstractIfaces)")
+        fun refuse(why: String) { if (nodeChainRefusal == null) nodeChainRefusal = why; nodeChain.clear(); nodeChainNext.clear(); nodeChainOpen.clear(); chainRoot.clear() }
+        if (NODE_STRUCT !in structTypes) return refuse("ast.Node not in the run")
+        val roots = HEADER_ROOTS.filter { it in structTypes }
+        // tsgo <= 7.0 kept a node's payload behind the `nodeData` interface: NodeDefault extends its abstract class,
+        // which extends Node. 7.1 embeds the header directly and has no nodeData.
+        val legacyNodeData = NODE_DATA_IFACE in namedIfaceByKey
+        if (legacyNodeData && NODE_DATA_IFACE !in abstractIfaces) return refuse("ast.nodeData is not an abstract class (Program.abstractIfaces)")
         // Every named struct's embedded struct fields: (field index, the embedded type's key).
         val embeds = HashMap<String, List<Pair<Int, String>>>()
         val generic = HashSet<String>()
@@ -1287,33 +1317,35 @@ class Program(
                 }
             }
         }
-        // Go's embedding depth from each struct to NodeDefault (null: none).
-        val depth = HashMap<String, Int?>()
-        fun depthOf(k: String, guard: Int = 0): Int? {
-            if (k == NODE_CHAIN_ROOT) return 0
-            if (guard > 32) return null
-            if (k in depth) return depth[k]
-            val d = embeds[k].orEmpty().mapNotNull { (_, e) -> depthOf(e, guard + 1)?.plus(1) }.minOrNull()
-            depth[k] = d
-            return d
+        // Go's embedding depth from each struct to each root (null: none).
+        for (root in roots) {
+            val depth = HashMap<String, Int?>()
+            fun depthOf(k: String, guard: Int = 0): Int? {
+                if (k == root) return 0
+                if (guard > 32) return null
+                if (k in depth) return depth[k]
+                val d = embeds[k].orEmpty().mapNotNull { (_, e) -> depthOf(e, guard + 1)?.plus(1) }.minOrNull()
+                depth[k] = d
+                return d
+            }
+            for (k in embeds.keys) {
+                if (k in roots || k in transparentWrappers) continue
+                val ds = embeds.getValue(k).mapNotNull { (j, e) -> depthOf(e)?.let { Triple(j, e, it) } }
+                if (ds.isEmpty()) continue
+                val min = ds.minOf { it.third }
+                val best = ds.filter { it.third == min }
+                if (best.size != 1) return refuse("$k embeds the $root chain twice at depth ${min + 1}")
+                chainRoot.put(k, root)?.let { other -> return refuse("$k reaches two header chains, $other and $root") }
+                if (k in generic) return refuse("$k is generic")
+                if (k in reflectStructs) return refuse("$k is reflected")
+                nodeChain[k] = best[0].first to wrapperTarget(best[0].second)
+                nodeChainNext[k] = best[0].second
+            }
         }
-        for (k in embeds.keys) {
-            if (k == NODE_CHAIN_ROOT || k in transparentWrappers) continue
-            val ds = embeds.getValue(k).mapNotNull { (j, e) -> depthOf(e)?.let { Triple(j, e, it) } }
-            if (ds.isEmpty()) continue
-            val min = ds.minOf { it.third }
-            val best = ds.filter { it.third == min }
-            if (best.size != 1) return refuse("$k embeds the node chain twice at depth ${min + 1}")
-            if (k in generic) return refuse("$k is generic")
-            if (k in reflectStructs) return refuse("$k is reflected")
-            nodeChain[k] = best[0].first to wrapperTarget(best[0].second)
-            nodeChainNext[k] = best[0].second
-        }
-        val nodeIdx = embeds.getValue(NODE_CHAIN_ROOT).firstOrNull { it.second == NODE_STRUCT }?.first ?: return refuse("NodeDefault does not embed Node")
-        nodeChain[NODE_CHAIN_ROOT] = nodeIdx to NODE_STRUCT
-        nodeChainNext[NODE_CHAIN_ROOT] = NODE_STRUCT
         nodeChainOpen += nodeChain.values.map { it.second }
-        for ((t, _) in ifaceImplementers[NODE_DATA_IFACE].orEmpty()) if (wrapperTarget(t) !in nodeChain) return refuse("nodeData implementer $t is not on the chain")
+        if (legacyNodeData) {
+            for ((t, _) in ifaceImplementers[NODE_DATA_IFACE].orEmpty()) if (wrapperTarget(t) !in nodeChain) return refuse("nodeData implementer $t is not on the chain")
+        }
         // A chain class's fields may not shadow an ancestor's (Kotlin: one class, one member per name).
         fun ownFields(k: String): Set<String> {
             val p = byPath[k.substringBeforeLast('.')] ?: return emptySet()
@@ -1324,7 +1356,7 @@ class Program(
             return st.fields.mapIndexedNotNull { j, f -> if (j == skip) null else fieldName("$k.${f.name}", f.name, j) }.toSet()
         }
         val fieldsOf = HashMap<String, Set<String>>()
-        for (k in nodeChain.keys + NODE_STRUCT) fieldsOf[k] = ownFields(k)
+        for (k in nodeChain.keys + roots) fieldsOf[k] = ownFields(k)
         for (k in nodeChain.keys) {
             var a: String? = nodeChain[k]?.second
             while (a != null) {
@@ -1333,12 +1365,12 @@ class Program(
                 a = nodeChain[a]?.second
             }
         }
-        // Identity: a node and its data are one object now. Go tells *Node from a data pointer by DYNAMIC TYPE in an
-        // interface; Kotlin by class, and every data object IS a Node. Refuse any interface that may hold both, any
-        // assertion to *Node on one that may hold a data pointer, and any to a data type / nodeData on one that may hold
-        // a *Node; and any assertion to a class something extends (Kotlin's `is` would also match its subclasses).
-        val chainPtr = HashSet<String>()
-        val nodePtr = HashSet<String>()
+        // Identity: a header and its concrete struct are one object. Go tells *Node from *Identifier by DYNAMIC TYPE in
+        // an interface; Kotlin by class, and every concrete object IS its header. Per root: refuse any interface that may
+        // hold both, any assertion to the header on one that may hold a concrete pointer, and any to a concrete type on
+        // one that may hold a header; and any assertion to a class something extends (Kotlin's `is` matches subclasses).
+        val chainPtr = HashMap<String, MutableSet<String>>()
+        val rootPtr = HashMap<String, MutableSet<String>>()
         val flowsTo = HashMap<String, MutableSet<String>>()
         fun typeKey(tt: TypeTable, id: Int?): String? = id?.let { tt[it].key }
         fun ptrElemKey(tt: TypeTable, id: Int?): String? {
@@ -1356,8 +1388,8 @@ class Program(
                     val from = im.int("from")
                     val fe = ptrElemKey(tt, from)
                     when {
-                        fe == NODE_STRUCT -> nodePtr += to
-                        fe != null && fe in nodeChain -> chainPtr += to
+                        fe != null && fe in roots -> rootPtr.getOrPut(fe) { HashSet() } += to
+                        fe != null && fe in nodeChain -> chainPtr.getOrPut(chainRoot.getValue(fe)) { HashSet() } += to
                         from != null && tt.under(from) is com.xemantic.typescript.goport.types.InterfaceType -> flowsTo.getOrPut(typeKey(tt, from)!!) { HashSet() } += to
                     }
                 }
@@ -1373,21 +1405,27 @@ class Program(
                 true
             }
         }
-        val nodeDataKey = packages.firstNotNullOfOrNull { p -> TypeTable(p).let { tt -> (0 until tt.size).firstNotNullOfOrNull { i -> (tt[i] as? com.xemantic.typescript.goport.types.NamedType)?.takeIf { it.key == NODE_DATA_IFACE }?.key } } }
-        if (nodeDataKey != null) chainPtr += nodeDataKey
+        if (legacyNodeData) chainPtr.getOrPut(NODE_STRUCT) { HashSet() } += NODE_DATA_IFACE
         fun close(seed: MutableSet<String>) {
             val work = ArrayDeque(seed)
             while (work.isNotEmpty()) for (t in flowsTo[work.removeFirst()].orEmpty()) if (seed.add(t)) work += t
         }
-        close(chainPtr)
-        close(nodePtr)
-        (chainPtr intersect nodePtr).firstOrNull()?.let { return refuse("interface $it may hold both a *Node and a node data pointer") }
+        chainPtr.values.forEach { close(it) }
+        rootPtr.values.forEach { close(it) }
+        for (root in roots) {
+            val cp = chainPtr[root].orEmpty()
+            val rp = rootPtr[root].orEmpty()
+            (cp intersect rp).firstOrNull()?.let { return refuse("interface $it may hold both a *$root and a pointer to a struct embedding it") }
+        }
         for ((op, tgt, where) in asserts) {
             val tk = tgt.removePrefix("*")
             when {
-                tgt == "*$NODE_STRUCT" && op in chainPtr -> return refuse("x.(*Node) on $op, which may hold a data pointer ($where)")
-                (tgt.startsWith("*") && tk in nodeChain || tgt == NODE_DATA_IFACE) && op in nodePtr -> return refuse("x.($tgt) on $op, which may hold a *Node ($where)")
-                tgt.startsWith("*") && tk in nodeChainOpen && tk != NODE_STRUCT -> return refuse("x.($tgt) names a class the chain extends ($where)")
+                tgt.startsWith("*") && tk in roots && op in chainPtr[tk].orEmpty() ->
+                    return refuse("x.($tgt) on $op, which may hold a pointer to a struct embedding it ($where)")
+                tgt.startsWith("*") && tk in nodeChain && op in rootPtr[chainRoot.getValue(tk)].orEmpty() ->
+                    return refuse("x.($tgt) on $op, which may hold a *${chainRoot.getValue(tk)} ($where)")
+                legacyNodeData && tgt == NODE_DATA_IFACE && op in rootPtr[NODE_STRUCT].orEmpty() -> return refuse("x.($tgt) on $op, which may hold a *Node ($where)")
+                tgt.startsWith("*") && tk in nodeChainOpen && tk !in roots -> return refuse("x.($tgt) names a class the chain extends ($where)")
             }
         }
         // Dispatch: a call reached only through chain steps is a Kotlin member call — virtual — where Go's is static.

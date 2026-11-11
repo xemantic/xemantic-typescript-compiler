@@ -26,6 +26,7 @@
 package com.xemantic.typescript.goport.lower
 
 import com.xemantic.typescript.goport.emit.Ex
+import com.xemantic.typescript.goport.emit.Ex.Companion.AS
 import com.xemantic.typescript.goport.emit.Ex.Companion.PRIMARY
 import com.xemantic.typescript.goport.ir.Node
 import com.xemantic.typescript.goport.ir.bool
@@ -189,7 +190,8 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             val targs = ident.obj("inst")?.ints("targs") ?: fnExpr.obj("inst")?.ints("targs") ?: refuse("generic-call-without-targs")
             return targs.take(n).map { tm.elem(it) }
         }
-        if (o.str("k") != "func" || o.str("pkg") !in prog.ported) return emptyList()
+        // A Go 1.27 generic METHOD's object is a "method": its own type parameters take dictionaries too.
+        if ((o.str("k") != "func" && o.str("k") != "method") || o.str("pkg") !in prog.ported) return emptyList()
         val generic = o.int("t")?.let { types.unalias(it) as? SignatureType } ?: return emptyList()
         if (generic.tparams.isEmpty()) return emptyList()
         val targs = ident.obj("inst")?.ints("targs") ?: fnExpr.obj("inst")?.ints("targs") ?: refuse("generic-call-without-targs")
@@ -399,8 +401,19 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
     }
 
     fun methodCall(e: Node): Ex {
-        val sel = e.reqObj("fun").let { if (it.k == "ParenExpr") it.reqObj("x") else it }
+        val fun0 = e.reqObj("fun").let { if (it.k == "ParenExpr") it.reqObj("x") else it }
+        // Go 1.27 generic method: `x.m[T](…)` — the dictionaries of m's own type parameters lead (Decls.funcDecl).
+        val inst = fun0.takeIf { it.k == "IndexExpr" || it.k == "IndexListExpr" }
+        val sel = inst?.reqObj("x")?.let { if (it.k == "ParenExpr") it.reqObj("x") else it } ?: fun0
         if (sel.k != "SelectorExpr") refuse("method-call-shape", sel.k)
+        // Explicit (`x.m[T](…)`) or inferred (`p.doInContext(flags, v, f)`) instantiation of a generic method.
+        val methodDict = dictArgs(inst ?: sel)
+        if (inst != null || methodDict.isNotEmpty()) {
+            val (recv, name, _) = methodTarget(sel)
+            val codes = methodDict + args(e, sigOf(e), false, false)
+            val mo0 = pc.obj(sel.reqObj("sel").int("obj")!!)
+            return opaquePtrResult(e, mo0, withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$name(${codes.joinToString(", ")})")))
+        }
         atomicFieldCall(e, sel)?.let { return it }
         val (recv, name, _) = methodTarget(sel)
         val sig = sigOf(e)
@@ -421,7 +434,25 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             if (key in prog.extensionMethods && mpkg != null && mpkg != pc.pkg.path) fn.fc.importFun(naming(mpkg), wname)
             return withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$wname(${codes.joinToString(", ")})"))
         }
-        return withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$name(${inlineArgs(e, mo.str("key"), args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})"))
+        return opaquePtrResult(e, mo, withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$name(${inlineArgs(e, mo.str("key"), args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})")))
+    }
+
+    /**
+     * A generic callee whose single result is `*P` for a type parameter P lowers that result as `P?` (a pointer to a
+     * struct IS the struct). Instantiated with a NON-struct P (`core.Arena[[]*Type].New()`), Go's `*P` is a pointer
+     * variable — the port's `GoPtr`, which the callee hands out typed as `P?` (`goOpaqueAddr`): cast it back.
+     */
+    private fun opaquePtrResult(e: Node, callee: Node, call: Ex): Ex {
+        // A method of an instantiated generic type is an instantiated object; its `origin` has the generic signature.
+        val g = callee.int("origin")?.let { pc.obj(it) } ?: callee
+        val generic = g.int("t")?.let { types.unalias(it) as? SignatureType } ?: return call
+        val gr = generic.results.singleOrNull()?.t ?: return call
+        val gp = types.unalias(gr) as? PointerType ?: return call
+        if (types.unalias(gp.elem) !is TypeParamType) return call
+        val inst = sigOf(e).results.singleOrNull()?.t ?: return call
+        val ip = types.under(inst) as? PointerType ?: return call
+        if (tm.pointsToObject(ip.elem) || tm.opaqueTP(ip.elem)) return call
+        return Ex("${call.at(AS)} as ${tm.kt(inst).removeSuffix("?")}?", AS)
     }
 
     /**
@@ -538,7 +569,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             return bad
         }
 
-        val JSON_PACKAGES = setOf("github.com/microsoft/typescript-go/internal/json", "github.com/go-json-experiment/json")
+        val JSON_PACKAGES = setOf("github.com/microsoft/TypeScript/tsc/internal/json", "github.com/go-json-experiment/json")
         val JSON_UNMARSHALS = setOf("Unmarshal", "UnmarshalRead", "UnmarshalDecode")
 
         /** The fusable shim calls by callee key (rune-decoding ones have no bounded form). */
@@ -567,6 +598,15 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         if (x.str("m") == "nil") return Ex.primary(tm.zero(to))
         val tu = types.under(to)
         val fu = types.under(ty(x))
+        unsafeConvert(to, tu, x, fu)?.let { return it }
+        // `T(s)` to a type parameter whose core type is string (runtime goTypeParamOfString, via T's dictionary).
+        if (types.unalias(to) is TypeParamType && fu is BasicType && tm.rep(fu) == Rep.STRING &&
+            (types.under(types.core(to)) as? BasicType)?.let { tm.rep(it) == Rep.STRING } == true
+        ) return Ex.primary("goTypeParamOfString(${tm.elem(to)}, ${raw(x).code})")
+        // `string(v)` of a type parameter whose core type is string (runtime goStringOfTypeParam).
+        if (tu is BasicType && tm.rep(tu) == Rep.STRING && types.unalias(ty(x)) is TypeParamType &&
+            (types.under(types.core(ty(x))) as? BasicType)?.let { tm.rep(it) == Rep.STRING } == true
+        ) return wrap(Ex.primary("goStringOfTypeParam(${lower(x).code})"), to)
         if (tu is InterfaceType) return tm.boxOf(ty(x))?.let { Ex.primary("$it(${lower(x).code})") } ?: lower(x)
         if (tu is BasicType && fu is BasicType) return wrap(convertBasic(raw(x), fu, tu), to)
         if (tu is BasicType && tm.rep(tu) == Rep.STRING) {
@@ -604,6 +644,49 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             }
             else -> lower(x)
         }
+    }
+
+    /**
+     * Header downcasts through `unsafe.Pointer` (docs/goport-lowering.md § 3, "Header chains"). TypeScript 7.1
+     * allocates a node, a type and a type mapper as ONE struct whose first embedded field (transitively) is the
+     * header (`ast.Node`, `checker.Type`, `checker.TypeMapper`), and recovers the concrete struct with
+     * `(*Identifier)(unsafe.Pointer(n))`. The port lowers the concrete struct as a SUBCLASS of its header
+     * ([Program.nodeChain]), so the pointer conversion is a Kotlin cast. Only these shapes:
+     *  - `unsafe.Pointer(p)` of a struct pointer: the reference itself (`Any?`);
+     *  - `(*T)(unsafe.Pointer(p))`: `p as T?` — refused unless T is p's struct or a header-chain subclass of
+     *    it, or a type parameter (`castType[T]`: the instantiation is checked at its call sites).
+     * Anything else through `unsafe.Pointer` is refused (`unsafe-conv`).
+     */
+    private fun unsafeConvert(to: Int, tu: com.xemantic.typescript.goport.types.GoType, x: Node, fu: com.xemantic.typescript.goport.types.GoType): Ex? {
+        val toUnsafe = tu is BasicType && tm.rep(tu) == TypeMapper.Rep.UNSAFE
+        val fromUnsafe = fu is BasicType && tm.rep(fu) == TypeMapper.Rep.UNSAFE
+        if (!toUnsafe && !fromUnsafe) return null
+        if (toUnsafe && fromUnsafe) return lower(x)
+        if (toUnsafe) {
+            val pt = fu as? PointerType ?: refuse("unsafe-conv", "${types[ty(x)].key} -> unsafe.Pointer")
+            if (!tm.pointsToObject(pt.elem)) refuse("unsafe-conv", "${types[ty(x)].key} -> unsafe.Pointer")
+            return lower(x)
+        }
+        val pt = tu as? PointerType ?: refuse("unsafe-conv", "unsafe.Pointer -> ${types[to].key}")
+        val target = pt.elem
+        var src = x
+        while (src.k == "ParenExpr") src = src.reqObj("x")
+        val inner = src.takeIf { it.k == "CallExpr" && it.str("call") == "conv" }?.list("args")?.singleOrNull()
+            ?: refuse("unsafe-conv", "unsafe.Pointer value of unknown origin -> ${types[to].key}")
+        val from = (types.under(ty(inner)) as? PointerType)?.elem ?: refuse("unsafe-conv", "${types[ty(inner)].key} -> unsafe.Pointer")
+        val kt = tm.kt(to).removeSuffix("?")
+        if (tm.opaqueTP(target)) return Ex("${lower(inner).at(AS)} as $kt?", AS)
+        val tk = (types.unalias(target) as? com.xemantic.typescript.goport.types.NamedType)?.key
+        val fk0 = (types.unalias(from) as? com.xemantic.typescript.goport.types.NamedType)?.key
+        // A struct alias (`type MutableNode Node`, a Kotlin typealias): the header root of the same layout.
+        val fk = if (fk0 != null && fk0 in prog.aliasTypes) {
+            val under = types.under(from).id
+            HEADER_ROOTS.firstOrNull { r -> (0 until types.size).any { i -> (types[i] as? com.xemantic.typescript.goport.types.NamedType)?.let { it.key == r && types.under(it.id).id == under } == true } } ?: fk0
+        } else fk0
+        if (tk == null || fk == null || !tm.pointsToObject(target)) refuse("unsafe-conv", "${types[ty(inner)].key} -> ${types[to].key}")
+        if (tk == fk) return lower(inner)
+        if (!prog.chainDescends(tk, fk)) refuse("unsafe-downcast", "$fk -> $tk is not a header-chain subclass")
+        return Ex("${lower(inner).at(AS)} as $kt?", AS)
     }
 
     private fun isStructAlias(t: Int): Boolean {

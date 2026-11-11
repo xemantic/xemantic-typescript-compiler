@@ -96,6 +96,12 @@ fun cut(s: String, sep: String): Tuple3<String, String, Boolean> {
     return if (i >= 0) Tuple3(s.substring(0, i), s.substring(i + sep.length), true) else Tuple3(s, "", false)
 }
 
+/** `strings.CutLast(s, sep)` (Go 1.27) → (before, after, found), around the LAST [sep]. */
+fun cutLast(s: String, sep: String): Tuple3<String, String, Boolean> {
+    val i = s.lastIndexOf(sep)
+    return if (i >= 0) Tuple3(s.substring(0, i), s.substring(i + sep.length), true) else Tuple3(s, "", false)
+}
+
 /** `strings.CutPrefix(s, prefix)` → (after, found). */
 fun cutPrefix(s: String, prefix: String): Tuple2<String, Boolean> =
     if (s.startsWith(prefix)) Tuple2(s.substring(prefix.length), true) else Tuple2(s, false)
@@ -181,6 +187,19 @@ fun indexAny(s: String, chars: String): Int {
         i += p.width()
     }
     return -1
+}
+
+/** `strings.LastIndexAny(s, chars)`: the byte index of the last rune of [s] that is in [chars]. */
+fun lastIndexAny(s: String, chars: String): Int {
+    if (chars.isEmpty()) return -1
+    var last = -1
+    var i = 0
+    while (i < s.length) {
+        val p = runeAt(s, i)
+        if (indexRune(chars, p.rune()) >= 0) last = i
+        i += p.width()
+    }
+    return last
 }
 
 /** `strings.IndexFunc(s, f)`. */

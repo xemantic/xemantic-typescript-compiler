@@ -32,6 +32,10 @@ package com.xemantic.typescript.tsgo.go.os
 @Suppress("UNUSED_PARAMETER")
 fun getenv(key: String): String = ""
 
+/** `os.Args`: the embedding host sets it (the JVM port has no process argv of its own). */
+@kotlin.jvm.JvmField
+var args: com.xemantic.typescript.tsgo.runtime.GoSlice<String> = com.xemantic.typescript.tsgo.runtime.GoElem.STRING.nilSlice
+
 /**
  * `os.DirFS(dir)`: a read-only `fs.FS` over a real directory — reached only from the ported test
  * harness's `/.lib` loader ((TSGO.2), `harnessutil.testLibFolderMap`). The host file access is the

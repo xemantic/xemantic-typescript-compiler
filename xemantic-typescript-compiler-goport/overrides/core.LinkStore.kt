@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/core.LinkStore f19b4f42
+// go: github.com/microsoft/TypeScript/tsc/internal/core.LinkStore f19b4f42
 // OVERRIDE (performance, docs/goport-perf.md § 14): Go's `map[K]*V` keyed by a pointer is one cheap hash of the
 // address; the port's map reads the key's header for an identity hash and probes a random slot, and ~half of a
 // warm check's map time was these link reads (~8% of the thread). A key with a dense index (runtime.GoLinkKey:

@@ -57,3 +57,29 @@ interface Unmarshaler {
 interface UnmarshalerFrom {
     fun unmarshalJSONFrom(dec: Decoder?): GoError?
 }
+
+// ---- TypeScript 7.1: `internal/json` calls the standard package directly (it used to call go-json-experiment,
+// which aliases it). The functions delegate to the go-json-experiment shim, which implements both.
+
+typealias Options = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.Options
+
+/** `json.Marshal(in, opts...)`. */
+fun marshal(input: Any?, vararg opts: Options): Tuple2<GoSlice<Int>, GoError?> = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshal(input, *opts)
+
+/** `json.MarshalWrite(out, in, opts...)`. */
+fun marshalWrite(out: com.xemantic.typescript.tsgo.go.io.Writer?, input: Any?, vararg opts: Options): GoError? = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshalWrite(out, input, *opts)
+
+/** `json.MarshalEncode(enc, in, opts...)`. */
+fun marshalEncode(out: Encoder?, input: Any?, vararg opts: Options): GoError? = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.marshalEncode(out, input, *opts)
+
+/** `json.Unmarshal(in, out, opts...)`. */
+fun unmarshal(input: GoSlice<Int>, out: Any?, vararg opts: Options): GoError? = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshal(input, out, *opts)
+
+/** `json.UnmarshalRead(in, out, opts...)`. */
+fun unmarshalRead(input: com.xemantic.typescript.tsgo.go.io.Reader?, out: Any?, vararg opts: Options): GoError? = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshalRead(input, out, *opts)
+
+/** `json.UnmarshalDecode(dec, out, opts...)`. */
+fun unmarshalDecode(input: Decoder?, out: Any?, vararg opts: Options): GoError? = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.unmarshalDecode(input, out, *opts)
+
+/** `json.Deterministic(v)`. */
+fun deterministic(v: Boolean): Options = com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.deterministic(v)

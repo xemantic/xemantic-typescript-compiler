@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/diagnostics.loadLocaleData 1f99a75d
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.loadLocaleData 1f99a75d
 // OVERRIDE ((TSGO.5), docs/goport-cli.md): `json.UnmarshalRead` into a `map[Key]string`. A GoMap carries its
 // VALUE kind but not its KEY type, so the json shim decodes object names as plain strings and every lookup by
 // a `Key` missed — `tsc --locale de` printed English. Go's body, decoding a `map[string]string` and re-keying it.

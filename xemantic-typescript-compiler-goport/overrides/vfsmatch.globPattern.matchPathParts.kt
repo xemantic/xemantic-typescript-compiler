@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.globPattern.matchPathParts e8ec35a9
+// go: github.com/microsoft/TypeScript/tsc/internal/vfs/vfsmatch.globPattern.matchPathParts e8ec35a9
 // OVERRIDE (performance, docs/goport-perf.md § 22): the same walk over the path's components, with each component
 // located IN PLACE in `prefix` + `suffix` rather than copied out (Go's `rest[:idx]` is an O(1) slice; lowered, every
 // component of every candidate path became a `substring`, and the config phase's include matching was ~half of that
@@ -93,7 +93,7 @@ fun com.xemantic.typescript.tsgo.vfs.vfsmatch.globPattern?.matchPathParts(prefix
                     goPanic("unreachable: literal components never have skipPackageFolders")
                 }
                 val lit = comp.literal
-                if (this!!.caseSensitive) {
+                if (this!!.caseSensitivity.isCaseSensitive()) {
                     val len = end - start
                     if (lit.length != len) return false
                     val equal = if (end <= prefix.length) prefix.regionMatches(start, lit, 0, len) else suffix.regionMatches(start - prefix.length, lit, 0, len)

@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/core.NewLimitedSemaphore 7b85113c
+// go: github.com/microsoft/TypeScript/tsc/internal/core.NewLimitedSemaphore 7b85113c
 // OVERRIDE ((TSGO.5)): `make(chan struct{}, maxConcurrency)` is a CountingSemaphore — see core.LimitedSemaphore.
 fun newLimitedSemaphore(maxConcurrency: Int): LimitedSemaphore? {
     if (maxConcurrency <= 0) {

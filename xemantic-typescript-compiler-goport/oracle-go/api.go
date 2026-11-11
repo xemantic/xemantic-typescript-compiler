@@ -31,10 +31,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/microsoft/typescript-go/internal/api"
-	"github.com/microsoft/typescript-go/internal/api/encoder"
-	"github.com/microsoft/typescript-go/internal/ast"
-	"github.com/microsoft/typescript-go/internal/vfs/osvfs"
+	"github.com/microsoft/TypeScript/tsc/internal/api"
+	"github.com/microsoft/TypeScript/tsc/internal/api/encoder"
+	"github.com/microsoft/TypeScript/tsc/internal/ast"
+	"github.com/microsoft/TypeScript/tsc/internal/vfs/osvfs"
 )
 
 type apiClient struct {

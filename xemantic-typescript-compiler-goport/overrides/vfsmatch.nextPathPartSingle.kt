@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.nextPathPartSingle e86f7965
+// go: github.com/microsoft/TypeScript/tsc/internal/vfs/vfsmatch.nextPathPartSingle e86f7965
 // OVERRIDE (performance, docs/goport-perf.md § 16): Go's `rest := s[offset:]` is an O(1) slice; lowered as `substring`
 // it COPIED the rest of the path once per component (quadratic in the path's length, ~a quarter of a 1,445-file
 // project's config phase with nextPathPartParts). The same search over `s` from `offset`, the same results.

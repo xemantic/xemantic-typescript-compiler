@@ -201,9 +201,19 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
         // them (osvfs.osFS.ReadFile: `defer readSema.Acquire()()`): a defer then can neither read a result
         // before the return assigns it nor change it after, so returning the evaluated value is Go's
         // answer; a recovered panic returns the result variables' CURRENT values, as Go does.
-        if (named != null && deferMentions(bodyNode, named.toSet())) refuse("defer-named-results")
         val frameName = fn.fresh("df")
         fn.frame.deferFrame = frameName
+        if (named != null && deferMentions(bodyNode, named.toSet())) {
+            // A deferred call may read or change a named result (`defer func() { if r := recover(); r != nil
+            // { err = … } }()`): Go's `return v` assigns the result variables, runs the defers, then returns
+            // the variables' values. `withDefersNamed` does exactly that; a `return` here assigns and leaves
+            // the body lambda (returnStmt, Frame.namedDefer).
+            fn.frame.namedDefer = true
+            w.line("return withDefersNamed({ ${tupleOf(named.map { lower(identOf(it)).code }, results)} }) { $frameName ->")
+            w.indent { content() }
+            w.line("}")
+            return
+        }
         val zero = if (named != null) tupleOf(named.map { lower(identOf(it)).code }, results)
         else when (results.size) {
             0 -> "Unit"
@@ -665,6 +675,25 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             if (vals.isNotEmpty()) w.line("$ret = ${tupleOf(vals, f.results)}")
             w.line("$done = true")
             w.line("return false")
+            return
+        }
+        if (f.namedDefer) {
+            val named = f.namedResults!!
+            if (!s.bool("bare")) {
+                val rs = s.list("results")
+                // Go evaluates every result before assigning any.
+                val vals: List<String> = if (rs.size == 1 && named.size > 1) {
+                    val t = fn.fresh("t")
+                    w.line("val $t = ${lower(rs[0]).code}")
+                    val impls = rs[0].nullableList("implTuple")
+                    named.indices.map { i -> impls.getOrNull(i)?.takeIf { it.str("k") == "nil" }?.let { tm.zero(it.int("to")!!) } ?: "$t.${COMPS[i]}" }
+                } else rs.map { r ->
+                    val code = returnValue(r).code
+                    if (rs.size == 1) code else fn.fresh("r").also { t -> w.line("val $t = $code") }
+                }
+                named.forEachIndexed { i, id -> w.line("${lower(identOf(id)).code} = ${vals[i]}") }
+            }
+            w.line("return@withDefersNamed")
             return
         }
         if (s.bool("bare")) {

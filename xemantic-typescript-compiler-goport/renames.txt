@@ -5,22 +5,27 @@
 # override stale.
 
 # ast.NodeVisitor has exported VisitX and unexported visitX with identical signatures.
-github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitNode visitNodeImpl
-github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitEmbeddedStatement visitEmbeddedStatementImpl
-github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitNodes visitNodesImpl
-github.com/microsoft/typescript-go/internal/ast.NodeVisitor.visitModifiers visitModifiersImpl
+github.com/microsoft/TypeScript/tsc/internal/ast.NodeVisitor.visitNode visitNodeImpl
+github.com/microsoft/TypeScript/tsc/internal/ast.NodeVisitor.visitEmbeddedStatement visitEmbeddedStatementImpl
+github.com/microsoft/TypeScript/tsc/internal/ast.NodeVisitor.visitNodes visitNodesImpl
+github.com/microsoft/TypeScript/tsc/internal/ast.NodeVisitor.visitModifiers visitModifiersImpl
 
 # collections.OrderedMap / OrderedSet: exported Clone (nil-safe) and unexported clone.
-github.com/microsoft/typescript-go/internal/collections.OrderedMap.clone cloneImpl
+github.com/microsoft/TypeScript/tsc/internal/collections.OrderedMap.clone cloneImpl
 
 # binder: exported BindSourceFile (bound-check wrapper) and unexported bindSourceFile (the worker).
-github.com/microsoft/typescript-go/internal/binder.bindSourceFile bindSourceFileImpl
+github.com/microsoft/TypeScript/tsc/internal/binder.bindSourceFile bindSourceFileImpl
 
 # A method of a named MAP/SLICE type is an extension on a GoMap/GoSlice typealias; one named like a member of
 # that runtime class is SHADOWED by it ((TSGO.5): `m.Get(name)` resolved to GoMap.get and lost the lower-case
 # fallback, so --showConfig printed no compilerOptions). The porter refuses the build until it is renamed.
-github.com/microsoft/typescript-go/internal/tsoptions.CommandLineOptionNameMap.Get getOption
+github.com/microsoft/TypeScript/tsc/internal/tsoptions.CommandLineOptionNameMap.Get getOption
 
 # One object per node (docs/goport-lowering.md § 3): ast.SourceFile EXTENDS ast.Node there, whose `data` field
 # (the node's nodeData) it would shadow; Go keeps them apart as a promoted field and a shallower one.
-github.com/microsoft/typescript-go/internal/ast.SourceFile.data sourceFileData
+github.com/microsoft/TypeScript/tsc/internal/ast.SourceFile.data sourceFileData
+
+# (TSGO.7.1) TypeScript 7.1's `compiler.declarationTransformer` interface makes DeclarationTransformer forward the
+# PROMOTED `Transformer.TransformSourceFile` (*SourceFile result); its own unexported `transformSourceFile` (*Node
+# result) lowers to the same Kotlin name.
+github.com/microsoft/TypeScript/tsc/internal/transformers/declarations.DeclarationTransformer.transformSourceFile transformSourceFileImpl

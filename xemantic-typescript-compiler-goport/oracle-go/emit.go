@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/microsoft/typescript-go/internal/testrunner"
-	"github.com/microsoft/typescript-go/internal/testutil/harnessutil"
+	"github.com/microsoft/TypeScript/tsc/internal/testrunner"
+	"github.com/microsoft/TypeScript/tsc/internal/testutil/harnessutil"
 )
 
 type emitStatus struct {

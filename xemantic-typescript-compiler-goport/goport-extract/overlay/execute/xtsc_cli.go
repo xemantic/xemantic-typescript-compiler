@@ -10,8 +10,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/microsoft/typescript-go/internal/tspath"
-	"github.com/microsoft/typescript-go/internal/vfs"
+	"github.com/microsoft/TypeScript/tsc/internal/tspath"
+	"github.com/microsoft/TypeScript/tsc/internal/vfs"
 )
 
 // xtscSystem is cmd/tsgo/sys.go's osSys (tag typescript/v7.0.2) with its process ends injected: the

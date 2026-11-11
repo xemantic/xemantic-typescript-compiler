@@ -47,3 +47,15 @@ fun isSymlinkOrReparsePoint(path: String): Boolean = com.xemantic.typescript.tsg
 internal expect fun platformRealpath(path: String): String?
 
 internal expect fun platformIsSymlink(path: String): Boolean
+
+/**
+ * `nativepath.IsNetworkPath(path)` (TypeScript 7.1): whether Windows may resolve [path] over the network — a UNC
+ * path (`//server/share`), a Win32 device path (`//?/…`, `//./…`) or an NT object path (`/??/…`), either separator.
+ * tsgo never accesses one, on any platform. Verbatim port (pure).
+ */
+fun isNetworkPath(path: String): Boolean {
+    fun sep(c: Char): Boolean = c == '/' || c == '\\'
+    if (path.length < 2 || !sep(path[0])) return false
+    if (sep(path[1])) return true
+    return path.length >= 3 && path[1] == '?' && path[2] == '?' && (path.length == 3 || sep(path[3]))
+}

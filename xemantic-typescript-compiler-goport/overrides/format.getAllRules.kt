@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/format.getAllRules 30597eb3
+// go: github.com/microsoft/TypeScript/tsc/internal/format.getAllRules 30597eb3
 // OVERRIDE ((TSGO.4-a), JIT.1: huge_methods.py --fail-over 0): getAllRules builds three rule tables of ~45
 // rules each from ~20 locals, 13,377 bytecodes as one method (never JIT-compiled). The body is the generated
 // lowering VERBATIM with each table moved into its own function taking the locals it may read.

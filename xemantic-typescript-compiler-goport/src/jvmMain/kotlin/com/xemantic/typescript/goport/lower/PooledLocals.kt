@@ -42,7 +42,7 @@ import kotlinx.serialization.json.JsonObject
  * where Go keeps all of it on the stack.
  */
 val POOLED_LOCAL_CANDIDATES = setOf(
-    "github.com/microsoft/typescript-go/internal/checker.keyBuilder",
+    "github.com/microsoft/TypeScript/tsc/internal/checker.keyBuilder",
 )
 
 /**

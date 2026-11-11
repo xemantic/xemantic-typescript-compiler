@@ -195,6 +195,7 @@ class PackageEmitter(
         // An extension's receiver is `T?` (Go calls a pointer method on nil) unless it is a VALUE
         // receiver of a non-nullable type (a named slice/map: `func (g group) String()`).
         var recvNullableExt = extension
+        var extRecvTparams = emptyList<Int>()
         if (recvField != null) {
             val named = recvNamed(recvField)
             val origin = named.origin?.let { types.unalias(it) as NamedType } ?: named
@@ -209,6 +210,7 @@ class PackageEmitter(
             if (extension) {
                 val tm0 = TypeMapper(fc, tpNames)
                 classTparams = tm0.typeParamDecl(recvTparams)
+                extRecvTparams = recvTparams
                 val kept = recvTparams.filter { !tm0.isSubstituted(it) }
                 val ptrRecv = recvField.reqObj("type").str("star") == "pointerType"
                 recvNullableExt = ptrRecv || tm0.nullable(origin.id)
@@ -217,8 +219,10 @@ class PackageEmitter(
         }
         // A generic function takes the element kind of each type parameter (Go zeroes a `T`;
         // Kotlin erases it): `getSpellingSuggestion[string]` must answer "" for "no candidate", not null.
+        // Go 1.27's generic METHODS (`func (v *JSONValue) unmarshalJSONValueFrom[T any](…)`) likewise, for
+        // their own type parameters (sig.tparams; the receiver's are recvTparams).
         val funDict = ArrayList<Int>()
-        if (recvField == null) {
+        run {
             val tmp = TypeMapper(fc)
             for (id in sig.tparams) if (!tmp.isSubstituted(id)) {
                 funDict += id
@@ -260,7 +264,11 @@ class PackageEmitter(
             }
             fn.recvNullable = recvNullableExt
             val decl = funDict.map { "goElem_${(types.unalias(it) as TypeParamType).name}: GoElem<${tm.kt(it)}>" } + low.paramDecls(params, sig)
-            val tparams = if (recvField == null) tm.typeParamDecl(sig.tparams) else classTparams
+            val tparams = when {
+                recvField == null -> tm.typeParamDecl(sig.tparams)
+                sig.tparams.isEmpty() -> classTparams
+                else -> tm.typeParamDecl(extRecvTparams + sig.tparams)
+            }
             val result = tm.returns(sig.results.map { it.t })
             val ov = member?.overrides?.contains(name) == true
             val jvmName = if (member != null && name in OBJECT_MEMBERS && !ov) "@kotlin.jvm.JvmName(\"go${name.replaceFirstChar { it.uppercase() }}\")\n" else ""
@@ -750,7 +758,7 @@ class PackageEmitter(
         val supers1 = (if (linkKey) listOf("GoLinkKey()") else emptyList()) + supers0 +
             (if (reflect) listOf("GoReflectStruct") else emptyList()) + (if (json) listOf(jsonIface) else emptyList())
         val supers = if (chain == null) supers1 else {
-            val parent = if (chain.second == NODE_STRUCT) fc.typeRef(Naming.kotlinPackage(NODE_DATA_IFACE.substringBeforeLast('.')), "nodeData") + "()"
+            val parent = if (chain.second == NODE_STRUCT && NODE_DATA_IFACE in prog.abstractIfaces) fc.typeRef(Naming.kotlinPackage(NODE_DATA_IFACE.substringBeforeLast('.')), "nodeData") + "()"
                 else fc.typeRef(Naming.kotlinPackage(chain.second.substringBeforeLast('.')), prog.typeName(chain.second, chain.second.substringAfterLast('.'))) + "()"
             listOf(parent) + supers1.filter { !it.endsWith("nodeData()") }
         }
@@ -1260,7 +1268,6 @@ class PackageEmitter(
                     w.line("private val ${fn.fresh("blank")}: Any? = $init")
                     return@forEachIndexed
                 }
-                if (o.bool("addr") && !tm.isStructValue(t)) refuse("addr-global")
                 val name = prog.varName(qn[i], goName)
                 val kw = if (o.bool("mut")) "var" else "val"
                 w.line(traceLine(qn[i], s.str("hash")))

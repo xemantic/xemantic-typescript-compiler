@@ -62,6 +62,49 @@ interface Locker {
     fun unlock()
 }
 
+/**
+ * `sync.Cond`: Go's ticket-based notify list (runtime/sema.go `notifyList`). [wait] takes a ticket, unlocks [l]
+ * and parks until [signal] (the oldest unnotified ticket) or [broadcast] (all of them) passes it, then relocks.
+ * Parking goes through [WaitQueue], which gives the goroutine's run token back (`blockingWait`).
+ */
+class Cond(@kotlin.jvm.JvmField var l: Locker? = null) {
+    private val waitTicket = AtomicInt(0)
+    private val notifyTicket = AtomicInt(0)
+    private val waiters = WaitQueue()
+
+    fun wait() {
+        val t = waitTicket.fetchAndAdd(1)
+        (l ?: goPanic("sync.Cond: nil Locker")).unlock()
+        waiters.await(notifyTicket) { notifyTicket.load() > t }
+        l!!.lock()
+    }
+
+    fun signal() {
+        while (true) {
+            val n = notifyTicket.load()
+            if (n >= waitTicket.load()) return
+            if (notifyTicket.compareAndSet(n, n + 1)) break
+        }
+        waiters.signalAll()
+    }
+
+    fun broadcast() {
+        while (true) {
+            val n = notifyTicket.load()
+            val w = waitTicket.load()
+            if (n >= w) return
+            if (notifyTicket.compareAndSet(n, w)) break
+        }
+        waiters.signalAll()
+    }
+
+    /** A Go value copy (`go vet` flags it): a fresh notify list on the same Locker. */
+    fun goCopy(): Cond = Cond(l)
+}
+
+/** `sync.NewCond(l)`. */
+fun newCond(l: Locker?): Cond = Cond(l)
+
 /** `sync.Mutex`: not reentrant (a second `Lock` from the same thread never returns, as in Go). */
 class Mutex : Locker {
     // 0 = unlocked, 1 = locked

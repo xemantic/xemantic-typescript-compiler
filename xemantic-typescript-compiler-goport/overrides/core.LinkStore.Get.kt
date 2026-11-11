@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/core.LinkStore.Get cd5a7b8c
+// go: github.com/microsoft/TypeScript/tsc/internal/core.LinkStore.Get cd5a7b8c
 // OVERRIDE (performance, docs/goport-perf.md § 14): see core.LinkStore — an indexed key reads `dense`.
 @Suppress("UNCHECKED_CAST")
 fun <K, V> LinkStore<K, V>?.get(key: K): V? {

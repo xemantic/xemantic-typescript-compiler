@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/vfs/vfsmatch.nextPathPartParts 4159d623
+// go: github.com/microsoft/TypeScript/tsc/internal/vfs/vfsmatch.nextPathPartParts 4159d623
 // OVERRIDE (performance, docs/goport-perf.md § 16): see nextPathPartSingle — `prefix[offset:]` searched in place
 // instead of copied; the same results.
 fun nextPathPartParts(prefix: String, suffix: String, offset_0: Int): Tuple3<String, Int, Boolean> {

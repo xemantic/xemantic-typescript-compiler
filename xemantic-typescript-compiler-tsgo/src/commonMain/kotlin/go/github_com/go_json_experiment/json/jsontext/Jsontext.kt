@@ -160,6 +160,9 @@ typealias Value = GoSlice<Int>
 /** `v.Kind()`: the kind of the value's first token after whitespace (a number is `'0'`), or 0 when empty. */
 fun Value.kind(): Kind = valueKind(this)
 
+/** `v.Clone()` (`bytes.Clone`): a copy of the bytes; nil stays nil. */
+fun valueClone(v: Value): Value = if (v.isNil) v else com.xemantic.typescript.tsgo.runtime.GoSlice.make(com.xemantic.typescript.tsgo.runtime.GoElem.BYTE, 0, v.len).appendSlice(v)
+
 /** [kind] of [v]. */
 fun valueKind(v: Value): Kind {
     val len = v.len

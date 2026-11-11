@@ -110,3 +110,20 @@ interface GoBasicValue {
     /** The same named type holding [raw] (of the underlying Kotlin type): `reflect`'s `Set`, json decoding. */
     fun goWithRaw(raw: Any): GoBasicValue
 }
+
+/**
+ * `string(v)` of a type parameter `T ~string` (TypeScript 7.1's typed paths: `vfsmatch.NewSpecMatcher[T PathPatternInput]`).
+ * Kotlin erases T: the value is a `String`, or a named string type's value class boxed as [GoBasicValue].
+ */
+fun goStringOfTypeParam(v: Any?): String = when (v) {
+    is String -> v
+    is GoBasicValue -> v.goRaw as String
+    else -> goPanic("string(${v?.let { it::class.simpleName }}): not a string type")
+}
+
+/** `T(s)` for a type parameter `T ~string`: [s] as T's named string type (its value class), or the string itself. */
+@Suppress("UNCHECKED_CAST")
+fun <T> goTypeParamOfString(elem: GoElem<T>, s: String): T {
+    val z = elem.zeroValue()
+    return if (z is GoBasicValue) z.goWithRaw(s) as T else s as T
+}

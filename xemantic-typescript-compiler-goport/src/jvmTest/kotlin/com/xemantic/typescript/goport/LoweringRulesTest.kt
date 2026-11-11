@@ -64,7 +64,7 @@ class LoweringRulesTest {
 
     @Test
     fun `Go packages map to Kotlin packages`() {
-        assert(Naming.kotlinPackage("github.com/microsoft/typescript-go/internal/api/encoder") == "com.xemantic.typescript.tsgo.api.encoder")
+        assert(Naming.kotlinPackage("github.com/microsoft/TypeScript/tsc/internal/api/encoder") == "com.xemantic.typescript.tsgo.api.encoder")
         assert(Naming.kotlinPackage("unicode/utf8") == "com.xemantic.typescript.tsgo.go.unicode.utf8")
         assert(Naming.kotlinPackage("golang.org/x/text/language") == "com.xemantic.typescript.tsgo.go.golang_org.x.text.language")
     }
@@ -127,9 +127,9 @@ class LoweringRulesTest {
 
     @Test
     fun `the parse-path string slices that only feed an index or a prefix test are never copied`() {
-        val scanner = "github.com/microsoft/typescript-go/internal/scanner"
-        val parser = "github.com/microsoft/typescript-go/internal/parser"
-        val ast = "github.com/microsoft/typescript-go/internal/ast"
+        val scanner = "github.com/microsoft/TypeScript/tsc/internal/scanner"
+        val parser = "github.com/microsoft/TypeScript/tsc/internal/parser"
+        val ast = "github.com/microsoft/TypeScript/tsc/internal/ast"
         // A view local: `text := s.text[s.pos:s.end]` read only through len/index (the 134x of docs/goport-perf.md § 2).
         val ascii = genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanASCIIWhile")
         assert(!ascii.contains(".substring("))
@@ -191,7 +191,7 @@ class LoweringRulesTest {
     @Test
     fun `a comma-ok map read is one probe and no tuple`() {
         // `identifier, ok := p.identifiers[text]` in internIdentifier, the hottest map read of a parse.
-        val intern = genFunction("parser/Parser2.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.internIdentifier")
+        val intern = genFunction("parser/Parser2.kt", "github.com/microsoft/TypeScript/tsc/internal/parser.Parser.internIdentifier")
         assert(intern.contains(".probe(text)") && intern.contains("!== GoMapAbsent"))
         // No generated code calls the two-probe, tuple-allocating GoMap.lookup any more.
         val calls = Regex("""\b[mte]\d*\.lookup\(|\.(identifiers|args)\.lookup\(""")
@@ -201,13 +201,13 @@ class LoweringRulesTest {
 
     @Test
     fun `a function whose func-typed parameters are only called is inline and takes them non-null`() {
-        val scanner = "github.com/microsoft/typescript-go/internal/scanner"
+        val scanner = "github.com/microsoft/TypeScript/tsc/internal/scanner"
         // scanASCIIWhile: one call site, six predicates — a megamorphic boxed Function1 unless inlined.
         val ascii = genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanASCIIWhile")
         assert(ascii.contains("inline fun Scanner?.scanASCIIWhile(pred: ((Int) -> Boolean))"))
         assert(ascii.contains("!pred(b)") && !ascii.contains("pred!!"))
         // A named func type is a NULLABLE typealias (`Visitor`); the inline parameter takes its signature.
-        val visit = genFunction("ast/Ast.kt", "github.com/microsoft/typescript-go/internal/ast.visit")
+        val visit = genFunction("ast/Ast.kt", "github.com/microsoft/TypeScript/tsc/internal/ast.visit")
         assert(visit.contains("inline fun visit(v: ((Node?) -> Boolean), node: Node?)"))
         // The callers pass function literals as is (Kotlin inlines them); no `!!` on a literal.
         val ident = genFunction("scanner/Scanner.kt", "$scanner.Scanner.scanIdentifier")
@@ -222,15 +222,15 @@ class LoweringRulesTest {
         assert(ls <= 9)
         // A function that stores, nil-tests or passes on its func parameter stays a normal function.
         // SetParseJSDocForNode STORES its parameter; parseList passes it into a closure.
-        assert(!genFunction("ast/Ast.kt", "github.com/microsoft/typescript-go/internal/ast.SetParseJSDocForNode").contains("inline fun"))
-        assert(!genFunction("parser/Parser1.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.parseList").contains("inline fun"))
+        assert(!genFunction("ast/Ast.kt", "github.com/microsoft/TypeScript/tsc/internal/ast.SetParseJSDocForNode").contains("inline fun"))
+        assert(!genFunction("parser/Parser1.kt", "github.com/microsoft/TypeScript/tsc/internal/parser.Parser.parseList").contains("inline fun"))
     }
 
     // ---- the check-path rules of docs/goport-perf.md § 6
 
     @Test
     fun `a struct copy is elided only where no other reference can reach the object`() {
-        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val checker = "github.com/microsoft/TypeScript/tsc/internal/checker"
         // `return CacheHashKey(b.h.Sum128())`: a conversion of a call's (fresh) result is fresh.
         assert(genFunction("checker/Checker6.kt", "$checker.keyBuilder.hash").contains("return this!!.h.sum128()\n"))
         // `return flowType` in getTypeAtFlowCall: a local defined once from a single value, never captured
@@ -246,7 +246,7 @@ class LoweringRulesTest {
     @Test
     fun `a map range is one table snapshot, not a key list probed again per entry`() {
         // initializeChecker merges every file's locals into the globals: the old form hashed each key twice.
-        val init = genFunction("checker/Checker1.kt", "github.com/microsoft/typescript-go/internal/checker.Checker.initializeChecker")
+        val init = genFunction("checker/Checker1.kt", "github.com/microsoft/TypeScript/tsc/internal/checker.Checker.initializeChecker")
         assert(init.contains(".localsContainerBase.locals.iter()") && init.contains(".next())"))
         val snapshots = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f -> Regex("""\.keysSnapshot\(\)""").findAll(f.readText()).count() }
         assert(snapshots == 0)
@@ -255,15 +255,15 @@ class LoweringRulesTest {
     @Test
     fun `slot identity and a prefix LastIndex allocate nothing`() {
         // core.Same: `&s1[0] == &s2[0]` compares slots without two GoElemPtr objects.
-        assert(genFunction("core/Core.kt", "github.com/microsoft/typescript-go/internal/core.Same").contains("s1.sameSlot(0, s2, 0)"))
+        assert(genFunction("core/Core.kt", "github.com/microsoft/TypeScript/tsc/internal/core.Same").contains("s1.sameSlot(0, s2, 0)"))
         // parseJSDocComment's indent: `strings.LastIndex(p.sourceText[:start], "\n")`, once a prefix copy per JSDoc comment.
-        val jsdoc = genFunction("parser/Jsdoc.kt", "github.com/microsoft/typescript-go/internal/parser.Parser.parseJSDocComment")
+        val jsdoc = genFunction("parser/Jsdoc.kt", "github.com/microsoft/TypeScript/tsc/internal/parser.Parser.parseJSDocComment")
         assert(jsdoc.contains("lastIndexIn(this!!.sourceText, this!!.sourceText_o, this!!.sourceText_o + goViewBound(this!!.sourceText_n, start), \"\\n\")") && !jsdoc.contains("substring(0, start)"))
     }
 
     @Test
     fun `a string parameter used only as a view gets a window overload and a sliced argument is not copied`() {
-        val parser = "github.com/microsoft/typescript-go/internal/parser"
+        val parser = "github.com/microsoft/TypeScript/tsc/internal/parser"
         // isJSDocLikeText(p.sourceText[start:]) — a suffix copy of the whole source per JSDoc comment.
         val jsdoc = genFunction("parser/Jsdoc.kt", "$parser.Parser.parseJSDocComment")
         // (TSGO.6-g) sourceText is a window field now, so the window is read through its slots.
@@ -278,8 +278,8 @@ class LoweringRulesTest {
 
     @Test
     fun `a window field narrows without copying - the parser's JSDoc source and the scanner's text`() {
-        val parser = "github.com/microsoft/typescript-go/internal/parser"
-        val scanner = "github.com/microsoft/typescript-go/internal/scanner"
+        val parser = "github.com/microsoft/TypeScript/tsc/internal/parser"
+        val scanner = "github.com/microsoft/TypeScript/tsc/internal/scanner"
         // p.sourceText = p.sourceText[:end-2] was a copy of the file prefix per JSDoc comment (docs/goport-perf.md § 8.2).
         val jsdoc = genFunction("parser/Jsdoc.kt", "$parser.Parser.parseJSDocComment")
         assert(!jsdoc.contains("this!!.sourceText.substring("))
@@ -297,7 +297,7 @@ class LoweringRulesTest {
 
     @Test
     fun `an immutable struct is its own copy and its pure-receiver local is rebound - FlowType`() {
-        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val checker = "github.com/microsoft/TypeScript/tsc/internal/checker"
         val flow = File(gen, "checker/Flow.kt").readText()
         assert(flow.contains("fun goCopy(): FlowType = this"))
         val node = genFunction("checker/Flow.kt", "$checker.Checker.getTypeAtFlowNode")
@@ -317,7 +317,7 @@ class LoweringRulesTest {
         assert(File(gen, "ast/Ast.kt").readText().contains("@get:kotlin.jvm.JvmName(\"goGet_loc\") @set:kotlin.jvm.JvmName(\"goSet_loc\") var loc: TextRange = TextRange(),"))
         // `&decl.Loc` is a live pointer to the holder's field, and a value-receiver call through it dereferences.
         assert(File(gen, "transformers/moduletransforms/Commonjsmodule.kt").readText().contains("run { val o1 = decl!!; GoFieldPtr(o1, 2, { o1.loc }, { o1.loc = it }) }"))
-        val format = "github.com/microsoft/typescript-go/internal/format"
+        val format = "github.com/microsoft/TypeScript/tsc/internal/format"
         val skip = genFunction("format/Scanner.kt", "$format.formattingScanner.skipToEndOf")
         assert(skip.contains("skipToEndOf(r: GoPtr<TextRange>?)"))
         assert(skip.contains("this!!.s.resetTokenState(r!!.value.end())"))
@@ -345,7 +345,7 @@ class LoweringRulesTest {
         assert(!ast.contains("var id: Uint64"))
         assert(File(gen, "ast/AstGenerated1.kt").readText().contains("    @kotlin.concurrent.Volatile @kotlin.jvm.JvmField var facts: Int = 0,"))
         // A load is a volatile read; a compare-and-swap runs under the holder's stripe lock.
-        val astPkg = "github.com/microsoft/typescript-go/internal/ast"
+        val astPkg = "github.com/microsoft/TypeScript/tsc/internal/ast"
         val getNodeId = genFunction("ast/Utilities1.kt", "$astPkg.GetNodeId")
         assert(getNodeId.contains("var id: ULong = node!!.id.toULong()"))
         assert(getNodeId.contains("goAtomicCasLong(h1, { h1.id }, { h1.id = it }, (0uL).toLong(), (id).toLong())"))
@@ -384,7 +384,7 @@ class LoweringRulesTest {
         // A copy is a fresh object of the class with every superclass's fields set through the super chain.
         assert(ast1.contains("    override fun goCopy(): Identifier = Identifier().also { it.goSet(this) }\n\n    fun goSet(o: Identifier) {\n        super.goSet(o)\n"))
         // `data.AsNode()` is the object itself; a member reached through the chain is inherited, not delegated.
-        val astPkg = "github.com/microsoft/typescript-go/internal/ast"
+        val astPkg = "github.com/microsoft/TypeScript/tsc/internal/ast"
         assert(genFunction("ast/Ast.kt", "$astPkg.NodeDefault.AsNode").contains("return this"))
         assert(!ast1.contains("override fun asNode(): Node? = this.asNode()"))
         // ast.SourceFile's own `data` field is renamed (it would shadow Node.data).
@@ -409,7 +409,7 @@ class LoweringRulesTest {
 
     @Test
     fun `an owned slice field appends and reslices its own header in place - Checker sharedFlows and Relater maybeKeys`() {
-        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val checker = "github.com/microsoft/TypeScript/tsc/internal/checker"
         assert(genFunction("checker/Flow.kt", "$checker.Checker.getTypeAtFlowNode").contains("this!!.sharedFlows = this!!.sharedFlows.append1Owned(SharedFlow("))
         assert(genFunction("checker/Flow.kt", "$checker.Checker.getFlowTypeOfReferenceEx").contains("this!!.sharedFlows = this!!.sharedFlows.sliceOwned(0, f!!.sharedFlowStart)"))
         val rel = File(gen, "checker/Relater1.kt").readText()
@@ -427,7 +427,7 @@ class LoweringRulesTest {
 
     @Test
     fun `a struct literal stored through a pointer is written in place - putRelater builds no temporary Relater`() {
-        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val checker = "github.com/microsoft/TypeScript/tsc/internal/checker"
         val put = genFunction("checker/Relater1.kt", "$checker.Checker.putRelater")
         assert(!put.contains("goSet("))
         assert(!put.contains("= Relater(") && !put.contains("goSet(Relater("))
@@ -468,7 +468,7 @@ class LoweringRulesTest {
 
     @Test
     fun `every keyBuilder local is pooled - acquired from the thread's stack and released in a finally`() {
-        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val checker = "github.com/microsoft/TypeScript/tsc/internal/checker"
         val c6 = File(gen, "checker/Checker6.kt").readText()
         assert(c6.contains("val POOL: GoLocalPool<keyBuilder> = GoLocalPool({ keyBuilder() }, { it.goReset() })"))
         assert(c6.contains("    fun goReset() {\n        h.goReset()\n    }"))
@@ -537,7 +537,7 @@ class LoweringRulesTest {
 
     @Test
     fun `compareSymbols is a primitive fun interface - SAM-converted where assigned, called unboxed, adapted where handed on`() {
-        val checker = "github.com/microsoft/typescript-go/internal/checker"
+        val checker = "github.com/microsoft/TypeScript/tsc/internal/checker"
         val c1 = File(gen, "checker/Checker1.kt").readText()
         assert(c1.contains("@kotlin.jvm.JvmField var compareSymbols: Checker_compareSymbols_Fn? = null"))
         assert(c1.contains("fun interface Checker_compareSymbols_Fn {\n    operator fun invoke(p0: Symbol?, p1: Symbol?): Int\n}"))

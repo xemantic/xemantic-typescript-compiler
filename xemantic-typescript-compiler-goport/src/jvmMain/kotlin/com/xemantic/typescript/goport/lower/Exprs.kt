@@ -437,10 +437,16 @@ open class ExprLowering(val fn: FnCtx) {
                 val o = pc.obj(id)
                 if (structLike) return lower(x)
                 if (o.bool("local") && id in fn.boxed) return Ex.primary(fn.nameOf(id) ?: fn.declare(id))
+                if (o.str("k") == "var" && !o.bool("local")) return globalAddr(o, lower(x))
                 refuse("addr-of", "${o.str("k")} ${o.str("name")}")
             }
             "SelectorExpr" -> {
                 if (structLike) return lower(x)
+                if (x.bool("qual")) {
+                    val o = pc.obj(x.reqObj("sel").int("obj") ?: refuse("addr-qual"))
+                    if (o.str("k") == "var") return globalAddr(o, lower(x))
+                    refuse("addr-of", "${o.str("k")} ${o.str("name")}")
+                }
                 if (x.str("selk") != "field") refuse("addr-selector")
                 val (owner, field) = fieldOwner(x)
                 val o = fn.fresh("o")
@@ -457,6 +463,18 @@ open class ExprLowering(val fn: FnCtx) {
             "StarExpr" -> lower(x.reqObj("x"))
             else -> refuse("addr-of", x.k)
         }
+    }
+
+    /**
+     * `&g` of a package-level NON-struct variable (docs/goport-lowering.md § 3, "Addressed globals"): the
+     * global stays a plain Kotlin property (its public name unchanged) and the pointer reads and writes it
+     * through accessors. Two pointers to one global are equal — the identity is the Go object key.
+     * TypeScript 7.1's `diagnostics.allMessages` (a `[...]**Message` of every message variable) is the case.
+     */
+    private fun globalAddr(o: Node, v: Ex): Ex {
+        val key = o.str("key") ?: refuse("addr-global-key")
+        val set = if (o.bool("mut")) "{ ${v.code} = it }" else "{ _ -> goPanic(\"assignment through a pointer to an immutable global\") }"
+        return Ex.primary("GoFieldPtr(\"$key\", 0, { ${v.code} }, $set)")
     }
 
     fun deref(e: Node): Ex {
@@ -833,12 +851,59 @@ open class ExprLowering(val fn: FnCtx) {
         return "$make.also { ${calls.joinToString("; ")} }"
     }
 
+    /**
+     * Go 1.27 lets a struct literal name a PROMOTED field (`SyncMapEntry[K, V]{m: m, key: k}`, `key` a field of
+     * the embedded `mapEntry`). Each such key moves into a synthesized literal of its embedded field, in the
+     * position of the first one (Go evaluates the elements in order; an embedded literal's are contiguous here,
+     * which only reorders the evaluation of DIFFERENT fields' values — tsgo's are side-effect free, and a
+     * value with a call is refused). The synthesized literal recurses for deeper promotions.
+     */
+    private fun regroupPromoted(u: StructType, elts: List<Node>): List<Node> {
+        fun nameOf(el: Node): String? = el.takeIf { it.k == "KeyValueExpr" }?.reqObj("key")?.int("obj")?.let { pc.obj(it).str("name") }
+        if (elts.all { el -> nameOf(el)?.let { n -> u.fields.any { it.name == n } } ?: true }) return elts
+        // Embedded struct field index whose (transitive) fields include [name].
+        fun promotedVia(st: StructType, name: String, guard: Int = 0): Int? {
+            if (guard > 16) return null
+            st.fields.forEachIndexed { i, f ->
+                if (!f.embedded) return@forEachIndexed
+                val es = types.under(f.t) as? StructType ?: return@forEachIndexed
+                if (es.fields.any { it.name == name } || promotedVia(es, name, guard + 1) != null) return i
+            }
+            return null
+        }
+        val groups = LinkedHashMap<Any, MutableList<Node>>()
+        for (el in elts) {
+            val n = nameOf(el)
+            if (n == null || u.fields.any { it.name == n }) { groups[el] = mutableListOf(el); continue }
+            val via = promotedVia(u, n) ?: refuse("composite-key-not-a-field", n)
+            groups.getOrPut(via) { ArrayList() } += el
+        }
+        // Go evaluates the elements' calls in source order: refuse a regrouping that reorders two of them.
+        fun hasCall(el: Node): Boolean {
+            var found = false
+            Program.walk(el) { x -> if (x.str("k") == "CallExpr" && x.str("call") != "conv" && x.str("call") != "builtin") found = true; !found }
+            return found
+        }
+        val before = elts.filter { hasCall(it) }
+        val after = groups.values.flatten().filter { hasCall(it) }
+        if (before != after) refuse("promoted-field-literal-call-order", nameOf(before.first()) ?: "?")
+        return groups.map { (k, list) ->
+            if (k !is Int) list.single()
+            else kotlinx.serialization.json.buildJsonObject {
+                put("k", kotlinx.serialization.json.JsonPrimitive("CompositeLit"))
+                put("t", kotlinx.serialization.json.JsonPrimitive(u.fields[k].t))
+                put("fieldIndex", kotlinx.serialization.json.JsonPrimitive(k))
+                put("elts", kotlinx.serialization.json.JsonArray(list))
+            }
+        }
+    }
+
     fun composite(e: Node): Ex {
         var t = ty(e)
         val pt = types.under(t)
         if (pt is PointerType) t = pt.elem
         val u = types.under(t)
-        val elts = e.list("elts")
+        val elts = if (u is StructType) regroupPromoted(u, e.list("elts")) else e.list("elts")
         return when (u) {
             is StructType -> {
                 // `struct{}` is Unit; a NAMED empty struct (`type star struct{}`) is its class (it implements interfaces).
@@ -875,6 +940,7 @@ open class ExprLowering(val fn: FnCtx) {
                         val key = el.reqObj("key")
                         val fo = pc.obj(key.int("obj") ?: refuse("field-key-without-object"))
                         val idx = u.fields.indexOfFirst { it.name == fo.str("name") }
+                        if (idx < 0) refuse("composite-key-not-a-field", "${fo.str("name")} in ${(types.unalias(t) as? NamedType)?.key}")
                         "${fieldNameOf(t, idx)} = ${fieldValue(idx, el.reqObj("value"))}"
                     } else {
                         val idx = el.int("fieldIndex") ?: refuse("positional-field-without-index")

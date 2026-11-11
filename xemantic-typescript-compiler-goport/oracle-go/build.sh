@@ -2,7 +2,7 @@
 # Builds the tsgo-oracle dev tool (docs/goport-oracle.md).
 #
 # main.go imports typescript-go's internal/ packages, which Go only permits from inside the
-# github.com/microsoft/typescript-go module. Instead of writing into typescript-go-repo (a
+# github.com/microsoft/TypeScript/tsc module. Instead of writing into typescript-go-repo (a
 # read-only reference checkout), we compile main.go as the VIRTUAL package
 # <typescript-go-repo>/cmd/xtsc-oracle via `go build -overlay`: the overlay maps that
 # non-existent path to this directory's main.go, so the build happens inside the tsgo module

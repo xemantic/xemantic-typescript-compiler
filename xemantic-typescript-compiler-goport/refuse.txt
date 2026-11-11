@@ -7,5 +7,13 @@
 # (TSGO.3) tsgo's baseline WRITER: compares against and writes files under testdata/baselines and
 # records them through testing.TB (no shim). The emit gate never calls it — the overlay copies
 # (oracle-go/overlay/tsbaseline) RETURN the rendered text instead — so it stays a stub.
-github.com/microsoft/typescript-go/internal/testutil/baseline.Run baseline-files-on-disk
-github.com/microsoft/typescript-go/internal/testutil/baseline.RunAgainstSubmodule baseline-files-on-disk
+github.com/microsoft/TypeScript/tsc/internal/testutil/baseline.Run baseline-files-on-disk
+github.com/microsoft/TypeScript/tsc/internal/testutil/baseline.RunAgainstSubmodule baseline-files-on-disk
+
+# (TSGO.7.1) TypeScript 7.1's `ipc.PipeTransport` listens on a Unix domain socket in a private temp directory
+# (Windows: a named pipe). commonMain has no socket or directory-permission API; `go/net` reports Listen
+# unsupported. Content mappers use the stdio transport (`ipc.StdioTransport`), which is ported; xtsc serves
+# its own LSP and API, so no port path starts a pipe transport.
+github.com/microsoft/TypeScript/tsc/internal/ipc.newPipeListener unix-socket-transport
+github.com/microsoft/TypeScript/tsc/internal/ipc.newPrivatePipeListener unix-socket-transport
+github.com/microsoft/TypeScript/tsc/internal/ipc.listenInPrivatePipeDirectory unix-socket-transport

@@ -1,4 +1,4 @@
-// go: github.com/microsoft/typescript-go/internal/core.LimitedSemaphore 7e50933d
+// go: github.com/microsoft/TypeScript/tsc/internal/core.LimitedSemaphore 7e50933d
 // OVERRIDE ((TSGO.5), docs/goport-cli.md): the struct's only state is a buffered `chan struct{}` used as a
 // counting semaphore (Acquire sends, the release func receives) — the port has no channels, so the channel is
 // `go.sync.CountingSemaphore` with the same capacity. TryAcquire's `select` races the send against
@@ -11,13 +11,13 @@ class LimitedSemaphore(
 
     fun goCopy(): LimitedSemaphore = LimitedSemaphore(ch, release)
 
-    // go: github.com/microsoft/typescript-go/internal/core.LimitedSemaphore.Acquire
+    // go: github.com/microsoft/TypeScript/tsc/internal/core.LimitedSemaphore.Acquire
     override fun acquire(): (() -> Unit)? {
         this.ch!!.acquire()
         return this.release
     }
 
-    // go: github.com/microsoft/typescript-go/internal/core.LimitedSemaphore.TryAcquire
+    // go: github.com/microsoft/TypeScript/tsc/internal/core.LimitedSemaphore.TryAcquire
     override fun tryAcquire(ctx: Context?): Tuple2<(() -> Unit)?, Boolean> {
         if (this.ch!!.tryAcquire()) return Tuple2(this.release, true)
         if (ctx?.err() != null) return Tuple2(fun() {}, false)

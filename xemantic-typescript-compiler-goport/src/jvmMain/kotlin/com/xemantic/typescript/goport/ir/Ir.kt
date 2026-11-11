@@ -103,7 +103,7 @@ class IrPackage(
     fun obj(id: Int): Node = objects[id]
 
     companion object {
-        const val MODULE = "github.com/microsoft/typescript-go"
+        const val MODULE = "github.com/microsoft/TypeScript/tsc"
         const val SCHEMA = 2
 
         private val json = Json { ignoreUnknownKeys = true }

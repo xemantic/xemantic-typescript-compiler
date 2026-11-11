@@ -63,3 +63,20 @@ fun equal(a: GoSlice<Int>, b: GoSlice<Int>): Boolean {
     for (i in 0 until a.len) if (a[i] != b[i]) return false
     return true
 }
+
+/** `bytes.Cut(s, sep)` → (before, after, found): sub-slices of [s] around the first [sep] (no copy, as Go). */
+fun cut(s: GoSlice<Int>, sep: GoSlice<Int>): com.xemantic.typescript.tsgo.runtime.Tuple3<GoSlice<Int>, GoSlice<Int>, Boolean> {
+    val i = com.xemantic.typescript.tsgo.runtime.goBytesToString(s).indexOf(com.xemantic.typescript.tsgo.runtime.goBytesToString(sep))
+    return if (i >= 0) com.xemantic.typescript.tsgo.runtime.Tuple3(s.slice(0, i), s.slice(i + sep.len), true)
+    else com.xemantic.typescript.tsgo.runtime.Tuple3(s, com.xemantic.typescript.tsgo.runtime.GoElem.BYTE.nilSlice, false)
+}
+
+/** `bytes.TrimSpace(s)`: the sub-slice without leading/trailing Unicode white space; nil when nothing is left (as Go). */
+fun trimSpace(s: GoSlice<Int>): GoSlice<Int> {
+    val str = com.xemantic.typescript.tsgo.runtime.goBytesToString(s)
+    val left = com.xemantic.typescript.tsgo.go.strings.trimLeftFunc(str) { com.xemantic.typescript.tsgo.go.unicode.isSpace(it) }
+    val both = com.xemantic.typescript.tsgo.go.strings.trimRightFunc(left) { com.xemantic.typescript.tsgo.go.unicode.isSpace(it) }
+    if (both.isEmpty()) return com.xemantic.typescript.tsgo.runtime.GoElem.BYTE.nilSlice
+    val start = str.length - left.length
+    return s.slice(start, start + both.length)
+}

@@ -112,7 +112,7 @@ class Report {
         appendLine("(Go lines of top-level declarations; a struct's lines include its methods.)")
         appendLine()
         appendLine("inline functions (${inlinedDecls.size}):")
-        inlinedDecls.forEach { appendLine("  ${it.removePrefix("github.com/microsoft/typescript-go/internal/")}") }
+        inlinedDecls.forEach { appendLine("  ${it.removePrefix("github.com/microsoft/TypeScript/tsc/internal/")}") }
         appendLine()
         appendLine("refusals by reason (declarations / Go lines):")
         for ((r, n) in reasons.entries.sortedByDescending { reasonLines[it.key] }) {

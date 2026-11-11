@@ -52,6 +52,9 @@ class View(val base: String, val off: String, val len: String)
 /** Per function-like activation (the top-level function or a func literal). */
 class Frame(val results: List<Int>, val namedResults: List<Int>?) {
     var deferFrame: String? = null
+
+    /** `withDefersNamed` (Stmts.withDefersIfNeeded): a `return` assigns the named results, then leaves the body. */
+    var namedDefer: Boolean = false
     /**
      * A `return` inside a range-over-func body (the yield function): the flag and result locals of
      * the OUTERMOST such loop of this frame (docs/goport-lowering.md § 3); null outside one.
