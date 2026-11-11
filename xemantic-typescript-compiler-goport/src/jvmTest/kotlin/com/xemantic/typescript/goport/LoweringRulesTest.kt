@@ -44,8 +44,8 @@ import kotlin.test.Test
  * Pins for lowering rules whose failure is SILENT (a wrong value that still compiles). The
  * end-to-end gate is `-tsgo`'s OracleParityTest (encoded-AST byte equality against tsgo).
  */
-/** The owned-slice operations in gen/ (docs/goport-lowering.md § 3, "Owned slice fields"); re-count when the IR changes. */
-private const val OWNED_SLICE_OPS = 43
+/** The owned-slice operations in gen/ (docs/goport-lowering.md § 3, "Owned slice fields"); re-count when the IR changes. 43 at tsgo 7.0.2, 38 at TypeScript 7.1.0-beta. */
+private const val OWNED_SLICE_OPS = 38
 
 class LoweringRulesTest {
 
@@ -173,9 +173,11 @@ class LoweringRulesTest {
             .sumOf { f -> suffixCopy.findAll(f.readText()).count() }
         // The (TSGO.1) spike's 14 packages: 48 as first generated; 34 after the window rule, 33 after window parameters (2026-10-07).
         val spike = listOf("api", "ast", "binder", "collections", "core", "debug", "diagnostics", "jsnum", "json", "locale", "parser", "scanner", "stringutil", "tspath")
-        assert(census(spike) <= 33)
+        // TypeScript 7.1 (2026-11-11): 45 — tspath's typed-path rewrite (rooted_path.go's `path[i:]` suffixes) 9 -> 21.
+        assert(census(spike) <= 45)
         // The whole (TSGO.2) closure (checker, compiler, printer, transformers, …): 108 at first generation (2026-10-07).
-        assert(census(null) <= 108)
+        // TypeScript 7.1 (2026-11-11): 112 — tspath's +12 above, less what upstream dropped elsewhere.
+        assert(census(null) <= 112)
         // The harness slices: 7 at first generation (2026-10-08); 8 once (TSGO.3) reached the emit baselines
         // (`harnessutil` `Repeat`'s option parsing, `tsbaseline` type baselines — none on the compiler's path).
         assert(census(null, harnessOnly = true) <= 8)
@@ -190,9 +192,10 @@ class LoweringRulesTest {
 
     @Test
     fun `a comma-ok map read is one probe and no tuple`() {
-        // `identifier, ok := p.identifiers[text]` in internIdentifier, the hottest map read of a parse.
-        val intern = genFunction("parser/Parser2.kt", "github.com/microsoft/TypeScript/tsc/internal/parser.Parser.internIdentifier")
-        assert(intern.contains(".probe(text)") && intern.contains("!== GoMapAbsent"))
+        // `types, typesOk := pragma.Args["types"]` in processPragmasIntoFields (TypeScript 7.1 dropped the parser's
+        // identifier interning, the old example: `p.identifiers[text]`).
+        val pragmas = genFunction("parser/Parser3.kt", "github.com/microsoft/TypeScript/tsc/internal/parser.Parser.processPragmasIntoFields")
+        assert(pragmas.contains("val t2 = pragma.args.probe(\"types\")") && pragmas.contains("val typesOk: Boolean = t2 !== GoMapAbsent"))
         // No generated code calls the two-probe, tuple-allocating GoMap.lookup any more.
         val calls = Regex("""\b[mte]\d*\.lookup\(|\.(identifiers|args)\.lookup\(""")
         val n = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f -> calls.findAll(f.readText()).count() }
@@ -219,7 +222,8 @@ class LoweringRulesTest {
         assert(all.size in 20..64)
         // (TSGO.4-a) the language service's: 9 at first generation (2026-10-08).
         val ls = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") && isLanguageService(it) }.sumOf { f -> inline.findAll(f.readText()).count() }
-        assert(ls <= 9)
+        // TypeScript 7.1 (2026-11-11): 10 — the language service's new code.
+        assert(ls <= 10)
         // A function that stores, nil-tests or passes on its func parameter stays a normal function.
         // SetParseJSDocForNode STORES its parameter; parseList passes it into a closure.
         assert(!genFunction("ast/Ast.kt", "github.com/microsoft/TypeScript/tsc/internal/ast.SetParseJSDocForNode").contains("inline fun"))
@@ -231,8 +235,8 @@ class LoweringRulesTest {
     @Test
     fun `a struct copy is elided only where no other reference can reach the object`() {
         val checker = "github.com/microsoft/TypeScript/tsc/internal/checker"
-        // `return CacheHashKey(b.h.Sum128())`: a conversion of a call's (fresh) result is fresh.
-        assert(genFunction("checker/Checker6.kt", "$checker.keyBuilder.hash").contains("return this!!.h.sum128()\n"))
+        // `return CacheHashKey(xxh3.Hash128(b.inlineBuffer[:b.inlineLength]))`: a conversion of a call's (fresh) result is fresh.
+        assert(genFunction("checker/Checker6.kt", "$checker.keyBuilder.hash").contains("        return com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hash128(this!!.inlineBuffer.slice(0, this!!.inlineLength))\n"))
         // `return flowType` in getTypeAtFlowCall: a local defined once from a single value, never captured
         // nor address-taken, is handed out as is.
         val call = genFunction("checker/Flow.kt", "$checker.Checker.getTypeAtFlowCall")
@@ -374,37 +378,67 @@ class LoweringRulesTest {
     fun `a node and its data are one object - every data class extends its node-embedding parent`() {
         val ast = File(gen, "ast/Ast.kt").readText()
         val ast1 = File(gen, "ast/AstGenerated1.kt").readText()
-        // Node <- nodeData <- NodeDefault <- (StatementBase, …) <- the data classes; the chain field is gone.
+        // TypeScript 7.1 embeds the Node header in every concrete node (no `nodeData`): Node <- NodeDefault <-
+        // (StatementBase, …) <- the data classes; the chain field is gone.
         assert(ast.contains("open class Node(\n"))
-        assert(ast.contains("abstract class nodeData : Node() {"))
-        assert(ast.contains("open class NodeDefault(\n) : nodeData(), "))
+        assert(!ast.contains("nodeData"))
+        assert(ast.contains("open class NodeDefault(\n) : Node(), "))
         assert(!ast.contains("var node: Node = Node()"))
         assert(ast1.contains("class Identifier(\n    @kotlin.jvm.JvmField var flowNodeBase: FlowNodeBase = FlowNodeBase(),\n    @kotlin.jvm.JvmField var text: String = \"\",\n) : NodeDefault(), "))
         assert(ast1.contains("open class StatementBase(\n"))
         // A copy is a fresh object of the class with every superclass's fields set through the super chain.
         assert(ast1.contains("    override fun goCopy(): Identifier = Identifier().also { it.goSet(this) }\n\n    fun goSet(o: Identifier) {\n        super.goSet(o)\n"))
-        // `data.AsNode()` is the object itself; a member reached through the chain is inherited, not delegated.
-        val astPkg = "github.com/microsoft/TypeScript/tsc/internal/ast"
-        assert(genFunction("ast/Ast.kt", "$astPkg.NodeDefault.AsNode").contains("return this"))
-        assert(!ast1.contains("override fun asNode(): Node? = this.asNode()"))
-        // ast.SourceFile's own `data` field is renamed (it would shadow Node.data).
-        assert(File(gen, "ast/Ast.kt").readText().contains("var sourceFileData: "))
+        // ast.SourceFile's own `data` field is renamed (it would shadow a Node member).
+        assert(ast.contains("var sourceFileData: "))
     }
 
     @Test
-    fun `nodeData and TypeData are abstract classes and every implementer calls their constructor`() {
-        val ast = File(gen, "ast/Ast.kt").readText()
-        assert(ast.contains("abstract class nodeData : Node() {"))
-        assert(ast.contains("    abstract fun localsContainerData(): LocalsContainerBase?"))
-        assert(!ast.contains("interface nodeData"))
+    fun `a header downcast through unsafe Pointer is a Kotlin cast down the header chain`() {
+        // `(*Identifier)(unsafe.Pointer(n))` (TypeScript 7.1's ast_generated.go casts): Identifier extends Node here.
+        val asIdent = genFunction("ast/AstGenerated4.kt", "github.com/microsoft/TypeScript/tsc/internal/ast.Node.AsIdentifier")
+        assert(asIdent.contains("        goPanic(\"Invalid node cast to Identifier\")\n    }\n    return this as Identifier?\n}"))
+        // checker.Type and checker.TypeMapper are headers too: each concrete struct extends its base, which extends the header.
         val types = File(gen, "checker/Types.kt").readText()
-        assert(types.contains("abstract class TypeData {"))
-        assert(types.contains(") : TypeData() {"))
-        // Every implementer's supertype list names them with a constructor call (`nodeData()`), never bare.
-        val bare = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.sumOf { f ->
-            Regex("""\bnodeData[,{ ]|\bTypeData[,{ ]""").findAll(f.readText().lines().filter { it.startsWith(") : ") }.joinToString("\n")).count()
-        }
-        assert(bare == 0)
+        assert(types.contains("open class Type(\n"))
+        assert(Regex("""open class TypeBase\([\s\S]*?\n\) : Type\(\) \{""").containsMatchIn(types))
+        assert(Regex("""\nclass IntrinsicType\([\s\S]*?\n\) : TypeBase\(\) \{""").containsMatchIn(types))
+        assert(Regex("""open class ObjectType\([\s\S]*?\n\) : StructuredType\(\) \{""").containsMatchIn(types))
+        val mapper = File(gen, "checker/Mapper.kt").readText()
+        assert(Regex("""\nclass SimpleTypeMapper\([\s\S]*?\n\) : TypeMapperBase\(\) \{""").containsMatchIn(mapper))
+        // A cast to a TYPE PARAMETER (`castType[T]`, `castTypeMapper[T]`) is unchecked: the call sites name the class.
+        assert(genFunction("checker/Types.kt", "github.com/microsoft/TypeScript/tsc/internal/checker.castType").contains("    return t as T?\n"))
+        assert(genFunction("checker/Mapper.kt", "github.com/microsoft/TypeScript/tsc/internal/checker.castTypeMapper").contains("    return m as T?\n"))
+        // No unsafe.Pointer value survives as an `Any?` round trip: every cast is direct.
+        val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.map { it.readText() }.toList()
+        assert(all.none { it.contains("refused unsafe-downcast") || it.contains("refused conv-struct") })
+    }
+
+    @Test
+    fun `TypeScript 7_1 Go shapes - addressed globals, promoted-field literals, generic methods, named results under defer`() {
+        val tsc = "github.com/microsoft/TypeScript/tsc/internal"
+        // `var allMessages = [...]**Message{&Unterminated_string_literal, …}`: a pointer to the global itself (the
+        // global stays a plain property; the pointer's identity is the Go object key).
+        val diags = gen.walkTopDown().filter { it.isFile && it.parentFile.name == "diagnostics" }.joinToString("\n") { it.readText() }
+        assert(diags.contains("GoFieldPtr(\"$tsc/diagnostics.Unterminated_string_literal\", 0, { unterminated_string_literal }, { _ -> goPanic(\"assignment through a pointer to an immutable global\") })"))
+        assert(!diags.contains("refused addr-global"))
+        // `&SyncMapEntry[K, V]{m: m, key: key, original: val, …}` (Go 1.27 names the PROMOTED fields of mapEntry):
+        // the promoted keys become the embedded field's own literal.
+        val load = genFunction("project/dirty/Syncmap.kt", "$tsc/project/dirty.SyncMap.Load")
+        assert(load.contains("SyncMapEntry<K, V>(goElem_K = this!!.goElem_K, goElem_V = this!!.goElem_V, m = this, mapEntry = com.xemantic.typescript.tsgo.project.dirty.mapEntry<K, V>(goElem_K = this!!.goElem_K, goElem_V = this!!.goElem_V, key = key, original = val_, "))
+        // Go 1.27 generic method `func (p *Parser) doInContext[T any](…)`: its own type parameter takes a dictionary,
+        // passed by every call (here inferred: `p.doInContext(flags, v, f)`).
+        assert(genFunction("parser/Parser2.kt", "$tsc/parser.Parser.doInContext").contains("inline fun <T> Parser?.doInContext(goElem_T: GoElem<T>, flags: NodeFlags, value_1: Boolean, f: ((Parser?) -> T)): T {"))
+        assert(File(gen, "parser/Parser1.kt").readText().contains("this.doInContext(GoElem.ref<Node?>(), NodeFlags(1024u), true, fun(p0: Parser?): Node? = p0.parseExpression())"))
+        // `func (c *AsyncConn) Run(ctx) (err error)` whose deferred func reads and joins `err`: Go's `return x` assigns
+        // the result variable, the defers run, the variable is returned (runtime withDefersNamed).
+        val run = genFunction("ipc/ConnAsync.kt", "$tsc/ipc.AsyncConn.Run")
+        assert(run.contains("return withDefersNamed({ err }) { df0 ->") && run.contains("                    err = ctx!!.err()\n                    return@withDefersNamed\n"))
+        assert(gen.walkTopDown().none { it.isFile && it.name.endsWith(".kt") && it.readText().contains("refused defer-named-results") })
+        // `string(spec)` / `T(s)` for `T ~string` (typed paths): through the erased value, and T's dictionary.
+        assert(File(gen, "vfs/vfsmatch/Vfsmatch.kt").readText().contains("com.xemantic.typescript.tsgo.tspath.isRootedDiskPath(goStringOfTypeParam(include))"))
+        assert(File(gen, "tsoptions/Tsconfigparsing.kt").readText().contains("result[i] = goTypeParamOfString(goElem_T, getSubstitutedPathWithConfigDirTemplate(goStringOfTypeParam(element), basePath))"))
+        // `core.Arena[[]*Type].New()`: a generic `*T` result with a NON-struct T is the GoPtr the arena hands out.
+        assert(genFunction("checker/Types.kt", "$tsc/checker.TypeNodeLinks.setOuterTypeParameters").contains("c!!.outerTypeParameterListArena.new() as GoPtr<GoSlice<Type?>>?"))
     }
 
     @Test
@@ -443,7 +477,7 @@ class LoweringRulesTest {
     @Test
     fun `Node and Symbol are link keys and the link store files them densely`() {
         assert(File(gen, "ast/Ast.kt").readText().contains(") : GoLinkKey(), com.xemantic.typescript.tsgo.printer.triviaPositionKey"))
-        assert(File(gen, "ast/Symbol.kt").readText().contains(") : GoLinkKey() {"))
+        assert(File(gen, "ast/Symbol.kt").readText().contains(") : GoLinkKey(), Named {"))
         val ls = File(gen, "core/Linkstore.kt").readText()
         assert(ls.contains("@kotlin.jvm.JvmField var dense: GoLinkTable = GoLinkTable(),"))
         assert(ls.contains("val i = (key as? GoLinkKey)?.goLinkIndex ?: -1"))
@@ -467,20 +501,18 @@ class LoweringRulesTest {
     }
 
     @Test
-    fun `every keyBuilder local is pooled - acquired from the thread's stack and released in a finally`() {
+    fun `a keyBuilder local is not pooled since TypeScript 7_1 - its writers hand out views of the receiver's buffer`() {
+        // 7.1's keyBuilder keeps an inline [192]byte buffer and returns sub-slices of it to its writers: a method whose
+        // result aliases the receiver is retaining, so the escape proof (EscapeAnalysis, pinned on synthetic IR below)
+        // refuses every keyBuilder local. Pooling them again needs the proof to follow such a view to its last use.
         val checker = "github.com/microsoft/TypeScript/tsc/internal/checker"
         val c6 = File(gen, "checker/Checker6.kt").readText()
-        assert(c6.contains("val POOL: GoLocalPool<keyBuilder> = GoLocalPool({ keyBuilder() }, { it.goReset() })"))
-        assert(c6.contains("    fun goReset() {\n        h.goReset()\n    }"))
+        assert(!c6.contains("GoLocalPool<keyBuilder>"))
+        // The getRelationKey override builds its hashed key in a fresh keyBuilder, as Go's `var b keyBuilder`.
         val rel = genFunction("checker/Checker6.kt", "$checker.getRelationKey")
-        assert(rel.contains("val b: com.xemantic.typescript.tsgo.checker.keyBuilder = ls4.acquire()\n    try {"))
-        assert(rel.contains("    } finally {\n        ls4.release()\n    }\n}"))
-        // `&b` handed to writeFlowCacheKey (whose parameter is proved non-retaining) does not refuse the local.
-        assert(genFunction("checker/Flow.kt", "$checker.Checker.getFlowReferenceKey").contains("ls0.acquire()"))
-        // All 13 sites, and no keyBuilder is constructed anywhere but in the pool's zero.
+        assert(rel.contains("    val b = com.xemantic.typescript.tsgo.checker.keyBuilder()\n    b.writeByte(103)\n"))
         val all = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.map { it.readText() }.toList()
-        assert(all.sumOf { Regex("""keyBuilder\.POOL\.stack\(\)""").findAll(it).count() } == 13)
-        assert(all.sumOf { Regex("""= com\.xemantic\.typescript\.tsgo\.checker\.keyBuilder\(\)""").findAll(it).count() } == 0)
+        assert(all.sumOf { Regex("""keyBuilder\.POOL\.stack\(\)""").findAll(it).count() } == 0)
     }
 
     /** A tiny synthetic IR: `type kb struct{ h xxh3.Hasher }` and functions using `var b kb` locals. */

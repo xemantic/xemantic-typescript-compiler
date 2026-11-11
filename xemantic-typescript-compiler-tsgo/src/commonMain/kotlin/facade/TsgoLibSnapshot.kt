@@ -56,26 +56,28 @@ object TsgoLibSnapshot {
         val out = HashMap<String, Entry>()
         val names = com.xemantic.typescript.tsgo.bundled.libNames
         for (i in 0 until names.len) {
-            val fileName = com.xemantic.typescript.tsgo.tspath.combinePaths(libDir, com.xemantic.typescript.tsgo.runtime.GoSlice.of(com.xemantic.typescript.tsgo.runtime.GoElem.STRING, names[i]))
+            // TypeScript 7.1's typed paths: the lib file as the program names it (`libDir.ResolveFile(name)`), its
+            // case-sensitive path key (the bundled FS is case-sensitive), as compiler/fileloader.go builds them.
+            val fileName = libDir.resolveFile(names[i])
             val read = fs.readFile(fileName)
             if (!read.second) continue
             val opts = SourceFileParseOptions(
                 fileName = fileName,
-                path = com.xemantic.typescript.tsgo.tspath.toPath(fileName, "", true),
+                pathKey = com.xemantic.typescript.tsgo.tspath.CaseSensitive.pathKey(fileName.asPath()),
                 externalModuleIndicatorOptions = ExternalModuleIndicatorOptions(),
             )
-            val file = com.xemantic.typescript.tsgo.parser.parseSourceFile(opts.goCopy(), read.first, com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(fileName)) ?: continue
+            val file = com.xemantic.typescript.tsgo.parser.parseSourceFile(opts.goCopy(), read.first, com.xemantic.typescript.tsgo.core.ensureScriptKindFromFileName(fileName)) ?: continue
             // Bound ahead too: binding reads nothing but the file (`binder.BindSourceFile`), tsgo shares a bound file
             // between programs and between its concurrent checkers, and a run's `BindSourceFile` finds it bound.
             com.xemantic.typescript.tsgo.binder.bindSourceFile(file)
-            out[fileName] = Entry(opts, file)
+            out[fileName.asString()] = Entry(opts, file)
         }
         return out
     }
 
     /** The tree parsed ahead for exactly these options and this text, or null (parse it). */
     fun lookup(opts: SourceFileParseOptions, text: String): SourceFile? {
-        val e = files[opts.fileName] ?: return null
+        val e = files[opts.fileName.asString()] ?: return null
         if (!e.opts.goEquals(opts) || e.file.text() != text) return null
         return e.file
     }
