@@ -128,6 +128,10 @@ def write_fixtures():
 
 def profiles():
     dirs = sorted(d for d in glob.glob(os.path.join(BENCH, "tsc-*")) if os.path.isfile(os.path.join(d, "tsconfig.json")))
+    # One profile per sub-project: a bench dir may hold the same sub-project at two TypeScript commits
+    # (tsc-project-4d4f005c and tsc-project-637d5746); the first, in sorted order, is kept.
+    seen = set()
+    dirs = [d for d in dirs if not (os.path.basename(d).split("-")[1] in seen or seen.add(os.path.basename(d).split("-")[1]))]
     if len(dirs) < 8:
         sys.exit(f"REFUSED: found {len(dirs)} tsc profiles with a tsconfig.json under {BENCH}, need 8")
     return dirs
