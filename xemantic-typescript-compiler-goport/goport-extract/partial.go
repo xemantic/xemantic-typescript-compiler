@@ -39,7 +39,7 @@ var partialClosure = map[string][]string{
 	// Session, whose methods (HandleRequest and every handler) are kept with it.
 	"api": {"XtscNewSession", "XtscMarshal", "XtscOpenProgram", "NewStandaloneSession",
 		// (TSGO.4-a) the language service behind the language server's handlers (docs/goport-ls.md)
-		"XtscResolveClientCapabilities", "XtscUserPreferences", "XtscLanguageService"},
+		"XtscResolveClientCapabilities", "XtscUserPreferences", "XtscLanguageService", "XtscSnapshotHost"},
 	// (TSGO.5) the command line (docs/goport-cli.md): the overlay's runMain keeps CommandLine and
 	// what it reaches; --build and --watch are ported ((TSGO.5-b), (TSGO.5-c), below).
 	"execute": {"XtscCommandLine"},

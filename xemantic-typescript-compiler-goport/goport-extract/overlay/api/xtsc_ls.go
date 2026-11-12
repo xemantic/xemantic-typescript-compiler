@@ -68,6 +68,35 @@ type XtscLanguageService struct {
 	Snapshot *project.Snapshot
 	Project  *project.Project
 	Caps     *lsproto.ResolvedClientCapabilities
+	// Host clones the snapshot with auto-imports prepared when a completion needs them (server.go's
+	// registerLanguageServiceWithAutoImportsRequestHandler); nil turns that retry off.
+	Host *project.SnapshotHost
+}
+
+// XtscSnapshotHost is the API session's snapshot host (for XtscLanguageService.Host).
+func XtscSnapshotHost(s *Session) *project.SnapshotHost {
+	return s.snapshotHost
+}
+
+// withAutoImports re-runs fn on a snapshot whose auto-import registry is prepared for uri, as the language
+// server does on ls.ErrNeedsAutoImports (Session.GetLanguageServiceWithAutoImports); the prepared snapshot
+// becomes this service's, as the server adopts it, so later requests reuse it.
+func (x *XtscLanguageService) withAutoImports(ctx context.Context, uri lsproto.DocumentUri, fn func(*ls.LanguageService) (any, error)) (any, error) {
+	if x.Host == nil {
+		return nil, fmt.Errorf("completion needs auto-imports and no snapshot host is set: %w", ls.ErrNeedsAutoImports)
+	}
+	snapshot := x.Host.CloneSnapshotWithAutoImports(ctx, x.Snapshot, uri, nil)
+	proj := snapshot.GetDefaultProject(uri)
+	if proj == nil {
+		snapshot.Deref()
+		return nil, fmt.Errorf("no project found for URI %s", uri)
+	}
+	x.Snapshot, x.Project = snapshot, proj
+	resp, err := fn(x.languageService(uri))
+	if errors.Is(err, ls.ErrNeedsAutoImports) {
+		panic("textDocument/completion returned ErrNeedsAutoImports even after enabling auto imports")
+	}
+	return resp, err
 }
 
 func (x *XtscLanguageService) languageService(uri lsproto.DocumentUri) *ls.LanguageService {
@@ -117,9 +146,9 @@ func (x *XtscLanguageService) XtscLSRequest(ctx context.Context, requestID strin
 		}
 		resp, err := x.languageService(p.TextDocumentURI()).ProvideCompletion(ctx, p.TextDocument.Uri, p.Position, p.Context)
 		if errors.Is(err, ls.ErrNeedsAutoImports) {
-			// The project system's auto-import registry is not ported: the client must switch
-			// auto-import completions off (js/ts.suggest.autoImports: false).
-			return nil, fmt.Errorf("completion needs auto-imports, which the port does not provide: %w", err)
+			return x.withAutoImports(ctx, p.TextDocument.Uri, func(l *ls.LanguageService) (any, error) {
+				return l.ProvideCompletion(ctx, p.TextDocument.Uri, p.Position, p.Context)
+			})
 		}
 		return resp, err
 	case "textDocument/signatureHelp":

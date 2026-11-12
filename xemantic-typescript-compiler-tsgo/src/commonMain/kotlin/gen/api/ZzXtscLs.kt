@@ -46,6 +46,7 @@ import com.xemantic.typescript.tsgo.lsp.lsproto.ResolvedClientCapabilities
 import com.xemantic.typescript.tsgo.go.iter.Seq
 import com.xemantic.typescript.tsgo.lsp.lsproto.SignatureHelpParams
 import com.xemantic.typescript.tsgo.project.Snapshot
+import com.xemantic.typescript.tsgo.project.SnapshotHost
 import com.xemantic.typescript.tsgo.lsp.lsproto.TypeDefinitionParams
 import com.xemantic.typescript.tsgo.ls.lsutil.UserPreferences
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Value
@@ -59,6 +60,9 @@ import com.xemantic.typescript.tsgo.ls.provideReferences
 import com.xemantic.typescript.tsgo.ls.provideSignatureHelp
 import com.xemantic.typescript.tsgo.ls.provideTypeDefinition
 import com.xemantic.typescript.tsgo.lsp.lsproto.resolve
+import com.xemantic.typescript.tsgo.project.cloneSnapshotWithAutoImports
+import com.xemantic.typescript.tsgo.project.deref
+import com.xemantic.typescript.tsgo.project.getDefaultProject
 import com.xemantic.typescript.tsgo.project.projectID
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.XtscResolveClientCapabilities 860d46ef
@@ -105,28 +109,59 @@ fun xtscUserPreferences(configurations: Value): Tuple2<UserPreferences, GoError?
     return Tuple2<UserPreferences, GoError?>(com.xemantic.typescript.tsgo.ls.lsutil.parseUserPreferences(configMap), null)
 }
 
-// go: github.com/microsoft/TypeScript/tsc/internal/api.XtscLanguageService c2224ce7
+// go: github.com/microsoft/TypeScript/tsc/internal/api.XtscLanguageService 2ba9b2c0
 class XtscLanguageService(
     @kotlin.jvm.JvmField var snapshot: Snapshot? = null,
     @kotlin.jvm.JvmField var project: Project? = null,
     @kotlin.jvm.JvmField var caps: ResolvedClientCapabilities? = null,
+    @kotlin.jvm.JvmField var host: SnapshotHost? = null,
 ) {
 
-    fun goCopy(): XtscLanguageService = XtscLanguageService(snapshot = snapshot, project = project, caps = caps)
+    fun goCopy(): XtscLanguageService = XtscLanguageService(snapshot = snapshot, project = project, caps = caps, host = host)
 
     fun goSet(o: XtscLanguageService) {
         snapshot = o.snapshot
         project = o.project
         caps = o.caps
+        host = o.host
     }
 
-    fun goEquals(o: XtscLanguageService): Boolean = snapshot === o.snapshot && project === o.project && caps === o.caps
+    fun goEquals(o: XtscLanguageService): Boolean = snapshot === o.snapshot && project === o.project && caps === o.caps && host === o.host
 
-    fun goHash(): Int = 31 * snapshot.hashCode() + 31 * project.hashCode() + 31 * caps.hashCode()
+    fun goHash(): Int = 31 * snapshot.hashCode() + 31 * project.hashCode() + 31 * caps.hashCode() + 31 * host.hashCode()
 
     companion object {
         val ELEM: GoElem<XtscLanguageService> = GoElem({ XtscLanguageService() }, { it.goCopy() })
     }
+}
+
+// go: github.com/microsoft/TypeScript/tsc/internal/api.XtscSnapshotHost db04e2b9
+fun xtscSnapshotHost(s: Session?): SnapshotHost? {
+    return s!!.snapshotHost
+}
+
+// go: github.com/microsoft/TypeScript/tsc/internal/api.XtscLanguageService.withAutoImports 7a5c0693
+fun XtscLanguageService?.withAutoImports(ctx: Context?, uri: DocumentUri, fn: ((LanguageService?) -> Tuple2<Any?, GoError?>)?): Tuple2<Any?, GoError?> {
+    if (this!!.host == null) {
+        return Tuple2<Any?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("completion needs auto-imports and no snapshot host is set: %w", com.xemantic.typescript.tsgo.ls.errNeedsAutoImports))
+    }
+    val snapshot: Snapshot? = this!!.host.cloneSnapshotWithAutoImports(ctx, this!!.snapshot, uri, null)
+    val proj: Project? = snapshot.getDefaultProject(uri)
+    if (proj == null) {
+        snapshot.deref()
+        return Tuple2<Any?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("no project found for URI %s", uri))
+    }
+    val t0 = snapshot
+    val t1 = proj
+    this!!.snapshot = t0
+    this!!.project = t1
+    val t2 = fn!!(this.languageService(uri))
+    val resp: Any? = t2.first
+    val err: GoError? = t2.second
+    if (com.xemantic.typescript.tsgo.go.errors.`is`(err, com.xemantic.typescript.tsgo.ls.errNeedsAutoImports)) {
+        goPanic("textDocument/completion returned ErrNeedsAutoImports even after enabling auto imports")
+    }
+    return Tuple2<Any?, GoError?>(resp, err)
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.XtscLanguageService.languageService 73d410ed
@@ -134,7 +169,7 @@ fun XtscLanguageService?.languageService(uri: DocumentUri): LanguageService? {
     return com.xemantic.typescript.tsgo.ls.newLanguageService(this!!.project.projectID(), this!!.project!!.getProgram(), this!!.snapshot, uri.fileName().asString())
 }
 
-// go: github.com/microsoft/TypeScript/tsc/internal/api.XtscLanguageService.XtscLSRequest 86e87ce2
+// go: github.com/microsoft/TypeScript/tsc/internal/api.XtscLanguageService.XtscLSRequest c6030d9b
 fun XtscLanguageService?.xtscLSRequest(ctx_0: Context?, requestID: String, method: String, params: Value): Tuple2<Any?, GoError?> {
     var ctx: Context? = ctx_0
     ctx = com.xemantic.typescript.tsgo.core.withRequestID(com.xemantic.typescript.tsgo.lsp.lsproto.withClientCapabilities(ctx, this!!.caps), requestID)
@@ -194,7 +229,10 @@ fun XtscLanguageService?.xtscLSRequest(ctx_0: Context?, requestID: String, metho
             val resp: CompletionItemsOrListOrNull = t6.first
             val err_6: GoError? = t6.second
             if (com.xemantic.typescript.tsgo.go.errors.`is`(err_6, com.xemantic.typescript.tsgo.ls.errNeedsAutoImports)) {
-                return Tuple2<Any?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("completion needs auto-imports, which the port does not provide: %w", err_6))
+                return this.withAutoImports(ctx, p_5.textDocument.uri, fun(l: LanguageService?): Tuple2<Any?, GoError?> {
+                    val t7 = l.provideCompletion(ctx, p_5.textDocument.uri, p_5.position.goCopy(), p_5.context)
+                    return Tuple2<Any?, GoError?>(t7.first, t7.second)
+                })
             }
             return Tuple2<Any?, GoError?>(resp.goCopy(), err_6)
         }
@@ -204,8 +242,8 @@ fun XtscLanguageService?.xtscLSRequest(ctx_0: Context?, requestID: String, metho
             if (err_7 != null) {
                 return Tuple2<Any?, GoError?>(null, err_7)
             }
-            val t7 = this.languageService(p_6.textDocumentURI()).provideSignatureHelp(ctx, p_6.textDocument.uri, p_6.position.goCopy(), p_6.context)
-            return Tuple2<Any?, GoError?>(t7.first, t7.second)
+            val t8 = this.languageService(p_6.textDocumentURI()).provideSignatureHelp(ctx, p_6.textDocument.uri, p_6.position.goCopy(), p_6.context)
+            return Tuple2<Any?, GoError?>(t8.first, t8.second)
         }
         "textDocument/documentHighlight" -> {
             val p_7: DocumentHighlightParams = DocumentHighlightParams()
@@ -213,8 +251,8 @@ fun XtscLanguageService?.xtscLSRequest(ctx_0: Context?, requestID: String, metho
             if (err_8 != null) {
                 return Tuple2<Any?, GoError?>(null, err_8)
             }
-            val t8 = this.languageService(p_7.textDocumentURI()).provideDocumentHighlights(ctx, p_7.textDocument.uri, p_7.position.goCopy())
-            return Tuple2<Any?, GoError?>(t8.first, t8.second)
+            val t9 = this.languageService(p_7.textDocumentURI()).provideDocumentHighlights(ctx, p_7.textDocument.uri, p_7.position.goCopy())
+            return Tuple2<Any?, GoError?>(t9.first, t9.second)
         }
         "textDocument/diagnostic" -> {
             val p_8: DocumentDiagnosticParams = DocumentDiagnosticParams()
@@ -223,8 +261,8 @@ fun XtscLanguageService?.xtscLSRequest(ctx_0: Context?, requestID: String, metho
                 return Tuple2<Any?, GoError?>(null, err_9)
             }
             ctx = com.xemantic.typescript.tsgo.core.withCheckerLifetime(ctx, CheckerLifetime(1))
-            val t9 = this.languageService(p_8.textDocumentURI()).provideDiagnostics(ctx, p_8.textDocument.uri)
-            return Tuple2<Any?, GoError?>(t9.first, t9.second)
+            val t10 = this.languageService(p_8.textDocumentURI()).provideDiagnostics(ctx, p_8.textDocument.uri)
+            return Tuple2<Any?, GoError?>(t10.first, t10.second)
         }
     }
     return Tuple2<Any?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("%w: %s", ErrorCode(-32601), method))

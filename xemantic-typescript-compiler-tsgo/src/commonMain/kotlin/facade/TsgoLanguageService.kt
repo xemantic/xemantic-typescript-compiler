@@ -129,7 +129,7 @@ class TsgoLanguageService private constructor(
             val opened = TsgoApiSnapshot.open(configFileName, fs, libDirectory, if (utf8) PositionEncodingKindUTF8 else PositionEncodingKindUTF16, prefs)
             TsgoLanguageService(
                 GoString.toUtf16(opened.configFileName.value), opened.program, opened.configDiagnostics,
-                XtscLanguageService(opened.snapshot, opened.project, caps), opened.fs, utf8, opened,
+                XtscLanguageService(opened.snapshot, opened.project, caps, com.xemantic.typescript.tsgo.api.xtscSnapshotHost(opened.session)), opened.fs, utf8, opened,
             )
         }
     }
