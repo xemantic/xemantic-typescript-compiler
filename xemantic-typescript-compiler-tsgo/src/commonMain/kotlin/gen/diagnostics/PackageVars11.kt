@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Have_recompiles_in_incremental_and_watch_assume_that_changes_within_a_file_will_only_affect_files_directly_depending_on_it db6c7a22
+@kotlin.jvm.JvmField val have_recompiles_in_incremental_and_watch_assume_that_changes_within_a_file_will_only_affect_files_directly_depending_on_it: Message? = Message(code = 6384, category = CategoryMessage, key = Key("Have_recompiles_in_incremental_and_watch_assume_that_changes_within_a_file_will_only_affect_files_di_6384"), text = "Have recompiles in '--incremental' and '--watch' assume that changes within a file will only affect files directly depending on it.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_is_deprecated 1b941d86
+@kotlin.jvm.JvmField val x_0_is_deprecated: Message? = Message(code = 6385, category = CategorySuggestion, key = Key("_0_is_deprecated_6385"), text = "'{0}' is deprecated.", reportsDeprecated = true)
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Performance_timings_for_diagnostics_or_extendedDiagnostics_are_not_available_in_this_session_A_native_implementation_of_the_Web_Performance_API_could_not_be_found 77704643
+@kotlin.jvm.JvmField val performance_timings_for_diagnostics_or_extendedDiagnostics_are_not_available_in_this_session_A_native_implementation_of_the_Web_Performance_API_could_not_be_found: Message? = Message(code = 6386, category = CategoryMessage, key = Key("Performance_timings_for_diagnostics_or_extendedDiagnostics_are_not_available_in_this_session_A_nativ_6386"), text = "Performance timings for '--diagnostics' or '--extendedDiagnostics' are not available in this session. A native implementation of the Web Performance API could not be found.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_signature_0_of_1_is_deprecated 76b70724
+@kotlin.jvm.JvmField val the_signature_0_of_1_is_deprecated: Message? = Message(code = 6387, category = CategorySuggestion, key = Key("The_signature_0_of_1_is_deprecated_6387"), text = "The signature '{0}' of '{1}' is deprecated.", reportsDeprecated = true)
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Project_0_is_being_forcibly_rebuilt 1adee678
+@kotlin.jvm.JvmField val project_0_is_being_forcibly_rebuilt: Message? = Message(code = 6388, category = CategoryMessage, key = Key("Project_0_is_being_forcibly_rebuilt_6388"), text = "Project '{0}' is being forcibly rebuilt")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_module_0_from_1_of_old_program_it_was_not_resolved b9110383
+@kotlin.jvm.JvmField val reusing_resolution_of_module_0_from_1_of_old_program_it_was_not_resolved: Message? = Message(code = 6389, category = CategoryMessage, key = Key("Reusing_resolution_of_module_0_from_1_of_old_program_it_was_not_resolved_6389"), text = "Reusing resolution of module '{0}' from '{1}' of old program, it was not resolved.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_successfully_resolved_to_2 b2a5e807
+@kotlin.jvm.JvmField val reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_successfully_resolved_to_2: Message? = Message(code = 6390, category = CategoryMessage, key = Key("Reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_successfully_resolved__6390"), text = "Reusing resolution of type reference directive '{0}' from '{1}' of old program, it was successfully resolved to '{2}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_successfully_resolved_to_2_with_Package_ID_3 8671ccc8
+@kotlin.jvm.JvmField val reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_successfully_resolved_to_2_with_Package_ID_3: Message? = Message(code = 6391, category = CategoryMessage, key = Key("Reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_successfully_resolved__6391"), text = "Reusing resolution of type reference directive '{0}' from '{1}' of old program, it was successfully resolved to '{2}' with Package ID '{3}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_not_resolved 4cce8821
+@kotlin.jvm.JvmField val reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_not_resolved: Message? = Message(code = 6392, category = CategoryMessage, key = Key("Reusing_resolution_of_type_reference_directive_0_from_1_of_old_program_it_was_not_resolved_6392"), text = "Reusing resolution of type reference directive '{0}' from '{1}' of old program, it was not resolved.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_3 965448e5
+@kotlin.jvm.JvmField val reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_3: Message? = Message(code = 6393, category = CategoryMessage, key = Key("Reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_6393"), text = "Reusing resolution of module '{0}' from '{1}' found in cache from location '{2}', it was successfully resolved to '{3}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_3_with_Package_ID_4 f0601568
+@kotlin.jvm.JvmField val reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_3_with_Package_ID_4: Message? = Message(code = 6394, category = CategoryMessage, key = Key("Reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_6394"), text = "Reusing resolution of module '{0}' from '{1}' found in cache from location '{2}', it was successfully resolved to '{3}' with Package ID '{4}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_not_resolved 661dd18c
+@kotlin.jvm.JvmField val reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_not_resolved: Message? = Message(code = 6395, category = CategoryMessage, key = Key("Reusing_resolution_of_module_0_from_1_found_in_cache_from_location_2_it_was_not_resolved_6395"), text = "Reusing resolution of module '{0}' from '{1}' found in cache from location '{2}', it was not resolved.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_3 b9f1ddcc
+@kotlin.jvm.JvmField val reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_3: Message? = Message(code = 6396, category = CategoryMessage, key = Key("Reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_succes_6396"), text = "Reusing resolution of type reference directive '{0}' from '{1}' found in cache from location '{2}', it was successfully resolved to '{3}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_3_with_Package_ID_4 7bce4a79
+@kotlin.jvm.JvmField val reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_successfully_resolved_to_3_with_Package_ID_4: Message? = Message(code = 6397, category = CategoryMessage, key = Key("Reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_succes_6397"), text = "Reusing resolution of type reference directive '{0}' from '{1}' found in cache from location '{2}', it was successfully resolved to '{3}' with Package ID '{4}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_not_resolved 17ecedb2
+@kotlin.jvm.JvmField val reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_not_resolved: Message? = Message(code = 6398, category = CategoryMessage, key = Key("Reusing_resolution_of_type_reference_directive_0_from_1_found_in_cache_from_location_2_it_was_not_re_6398"), text = "Reusing resolution of type reference directive '{0}' from '{1}' found in cache from location '{2}', it was not resolved.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Project_0_is_out_of_date_because_buildinfo_file_1_indicates_that_some_of_the_changes_were_not_emitted b1493e43
 @kotlin.jvm.JvmField val project_0_is_out_of_date_because_buildinfo_file_1_indicates_that_some_of_the_changes_were_not_emitted: Message? = Message(code = 6399, category = CategoryMessage, key = Key("Project_0_is_out_of_date_because_buildinfo_file_1_indicates_that_some_of_the_changes_were_not_emitte_6399"), text = "Project '{0}' is out of date because buildinfo file '{1}' indicates that some of the changes were not emitted")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Suppress_noImplicitAny_errors_when_indexing_objects_that_lack_index_signatures 65e7b5ef
 @kotlin.jvm.JvmField val suppress_noImplicitAny_errors_when_indexing_objects_that_lack_index_signatures: Message? = Message(code = 6703, category = CategoryMessage, key = Key("Suppress_noImplicitAny_errors_when_indexing_objects_that_lack_index_signatures_6703"), text = "Suppress 'noImplicitAny' errors when indexing objects that lack index signatures.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Synchronously_call_callbacks_and_update_the_state_of_directory_watchers_on_platforms_that_don_t_support_recursive_watching_natively 868f063f
-@kotlin.jvm.JvmField val synchronously_call_callbacks_and_update_the_state_of_directory_watchers_on_platforms_that_don_t_support_recursive_watching_natively: Message? = Message(code = 6704, category = CategoryMessage, key = Key("Synchronously_call_callbacks_and_update_the_state_of_directory_watchers_on_platforms_that_don_t_supp_6704"), text = "Synchronously call callbacks and update the state of directory watchers on platforms that don`t support recursive watching natively.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Set_the_JavaScript_language_version_for_emitted_JavaScript_and_include_compatible_library_declarations 922c4299
-@kotlin.jvm.JvmField val set_the_JavaScript_language_version_for_emitted_JavaScript_and_include_compatible_library_declarations: Message? = Message(code = 6705, category = CategoryMessage, key = Key("Set_the_JavaScript_language_version_for_emitted_JavaScript_and_include_compatible_library_declaratio_6705"), text = "Set the JavaScript language version for emitted JavaScript and include compatible library declarations.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Log_paths_used_during_the_moduleResolution_process ef48fa50
-@kotlin.jvm.JvmField val log_paths_used_during_the_moduleResolution_process: Message? = Message(code = 6706, category = CategoryMessage, key = Key("Log_paths_used_during_the_moduleResolution_process_6706"), text = "Log paths used during the 'moduleResolution' process.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_the_path_to_tsbuildinfo_incremental_compilation_file 4aa5aa87
-@kotlin.jvm.JvmField val specify_the_path_to_tsbuildinfo_incremental_compilation_file: Message? = Message(code = 6707, category = CategoryMessage, key = Key("Specify_the_path_to_tsbuildinfo_incremental_compilation_file_6707"), text = "Specify the path to .tsbuildinfo incremental compilation file.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_options_for_automatic_acquisition_of_declaration_files 797354d5
-@kotlin.jvm.JvmField val specify_options_for_automatic_acquisition_of_declaration_files: Message? = Message(code = 6709, category = CategoryMessage, key = Key("Specify_options_for_automatic_acquisition_of_declaration_files_6709"), text = "Specify options for automatic acquisition of declaration files.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_multiple_folders_that_act_like_Slashnode_modules_Slash_types f6c333b8
-@kotlin.jvm.JvmField val specify_multiple_folders_that_act_like_Slashnode_modules_Slash_types: Message? = Message(code = 6710, category = CategoryMessage, key = Key("Specify_multiple_folders_that_act_like_Slashnode_modules_Slash_types_6710"), text = "Specify multiple folders that act like './node_modules/@types'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_type_package_names_to_be_included_without_being_referenced_in_a_source_file 1b58e02b
-@kotlin.jvm.JvmField val specify_type_package_names_to_be_included_without_being_referenced_in_a_source_file: Message? = Message(code = 6711, category = CategoryMessage, key = Key("Specify_type_package_names_to_be_included_without_being_referenced_in_a_source_file_6711"), text = "Specify type package names to be included without being referenced in a source file.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Emit_ECMAScript_standard_compliant_class_fields 2756769e
-@kotlin.jvm.JvmField val emit_ECMAScript_standard_compliant_class_fields: Message? = Message(code = 6712, category = CategoryMessage, key = Key("Emit_ECMAScript_standard_compliant_class_fields_6712"), text = "Emit ECMAScript-standard-compliant class fields.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Enable_verbose_logging 8337982d
-@kotlin.jvm.JvmField val enable_verbose_logging: Message? = Message(code = 6713, category = CategoryMessage, key = Key("Enable_verbose_logging_6713"), text = "Enable verbose logging.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_how_directories_are_watched_on_systems_that_lack_recursive_file_watching_functionality 295891d8
-@kotlin.jvm.JvmField val specify_how_directories_are_watched_on_systems_that_lack_recursive_file_watching_functionality: Message? = Message(code = 6714, category = CategoryMessage, key = Key("Specify_how_directories_are_watched_on_systems_that_lack_recursive_file_watching_functionality_6714"), text = "Specify how directories are watched on systems that lack recursive file-watching functionality.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_how_the_TypeScript_watch_mode_works 5c93e675
-@kotlin.jvm.JvmField val specify_how_the_TypeScript_watch_mode_works: Message? = Message(code = 6715, category = CategoryMessage, key = Key("Specify_how_the_TypeScript_watch_mode_works_6715"), text = "Specify how the TypeScript watch mode works.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Require_undeclared_properties_from_index_signatures_to_use_element_accesses 14697f50
-@kotlin.jvm.JvmField val require_undeclared_properties_from_index_signatures_to_use_element_accesses: Message? = Message(code = 6717, category = CategoryMessage, key = Key("Require_undeclared_properties_from_index_signatures_to_use_element_accesses_6717"), text = "Require undeclared properties from index signatures to use element accesses.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_emit_Slashchecking_behavior_for_imports_that_are_only_used_for_types c0150b5c
-@kotlin.jvm.JvmField val specify_emit_Slashchecking_behavior_for_imports_that_are_only_used_for_types: Message? = Message(code = 6718, category = CategoryMessage, key = Key("Specify_emit_Slashchecking_behavior_for_imports_that_are_only_used_for_types_6718"), text = "Specify emit/checking behavior for imports that are only used for types.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Require_sufficient_annotation_on_exports_so_other_tools_can_trivially_generate_declaration_files fb53e263
-@kotlin.jvm.JvmField val require_sufficient_annotation_on_exports_so_other_tools_can_trivially_generate_declaration_files: Message? = Message(code = 6719, category = CategoryMessage, key = Key("Require_sufficient_annotation_on_exports_so_other_tools_can_trivially_generate_declaration_files_6719"), text = "Require sufficient annotation on exports so other tools can trivially generate declaration files.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Built_in_iterators_are_instantiated_with_a_TReturn_type_of_undefined_instead_of_any c580b105
-@kotlin.jvm.JvmField val built_in_iterators_are_instantiated_with_a_TReturn_type_of_undefined_instead_of_any: Message? = Message(code = 6720, category = CategoryMessage, key = Key("Built_in_iterators_are_instantiated_with_a_TReturn_type_of_undefined_instead_of_any_6720"), text = "Built-in iterators are instantiated with a 'TReturn' type of 'undefined' instead of 'any'.")
 

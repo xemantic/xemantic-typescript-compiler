@@ -24,39 +24,114 @@
 package com.xemantic.typescript.tsgo.ls
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyIncomingCall
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyIncomingCallsOrNull
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyItem
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyItemsOrNull
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyOutgoingCall
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyOutgoingCallsOrNull
 import com.xemantic.typescript.tsgo.checker.Checker
+import com.xemantic.typescript.tsgo.ast.ClassStaticBlockDeclaration
+import com.xemantic.typescript.tsgo.lsp.lsproto.CodeActionKind
+import com.xemantic.typescript.tsgo.lsp.lsproto.CodeActionParams
+import com.xemantic.typescript.tsgo.lsp.lsproto.CommandOrCodeAction
+import com.xemantic.typescript.tsgo.lsp.lsproto.CommandOrCodeActionArrayOrNull
 import com.xemantic.typescript.tsgo.go.context.Context
-import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.lsp.lsproto.Diagnostic
+import com.xemantic.typescript.tsgo.lsp.lsproto.DocumentUri
+import com.xemantic.typescript.tsgo.printer.EmitTextWriter
+import com.xemantic.typescript.tsgo.spanmap.Feature
+import com.xemantic.typescript.tsgo.spanmap.Fidelity
+import com.xemantic.typescript.tsgo.lsp.lsproto.HasTextDocumentPosition
+import com.xemantic.typescript.tsgo.lsp.lsproto.HasTextDocumentURI
 import com.xemantic.typescript.tsgo.ls.autoimport.ImportAdder
+import com.xemantic.typescript.tsgo.lsp.lsproto.InsertTextFormat
+import com.xemantic.typescript.tsgo.ast.JsxElement
+import com.xemantic.typescript.tsgo.ast.JsxFragment
 import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.lsp.lsproto.Location
+import com.xemantic.typescript.tsgo.ls.lsconv.MappedPosition
+import com.xemantic.typescript.tsgo.ls.lsconv.MappedSpan
 import com.xemantic.typescript.tsgo.ast.ModifierFlags
+import com.xemantic.typescript.tsgo.ast.ModifierList
 import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.ast.NodeId
+import com.xemantic.typescript.tsgo.go.sync.Once
+import com.xemantic.typescript.tsgo.lsp.lsproto.Position
+import com.xemantic.typescript.tsgo.printer.PrintHandlers
+import com.xemantic.typescript.tsgo.printer.Printer
+import com.xemantic.typescript.tsgo.printer.PrinterOptions
+import com.xemantic.typescript.tsgo.compiler.Program
+import com.xemantic.typescript.tsgo.lsp.lsproto.Range
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.go.iter.Seq
+import com.xemantic.typescript.tsgo.scanner.SkipTriviaOptions
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.Symbol
+import com.xemantic.typescript.tsgo.lsp.lsproto.SymbolKind
 import com.xemantic.typescript.tsgo.ast.SymbolTable
+import com.xemantic.typescript.tsgo.ast.TaggedTemplateExpression
 import com.xemantic.typescript.tsgo.lsp.lsproto.TextEdit
+import com.xemantic.typescript.tsgo.core.TextPos
 import com.xemantic.typescript.tsgo.core.TextRange
 import com.xemantic.typescript.tsgo.ls.change.Tracker
 import com.xemantic.typescript.tsgo.checker.Type
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertParams
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertResponseItem
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertResponseItemOrNull
 import com.xemantic.typescript.tsgo.ls.autoimport.View
+import com.xemantic.typescript.tsgo.lsp.lsproto.WorkspaceEdit
+import com.xemantic.typescript.tsgo.ast.arguments
+import com.xemantic.typescript.tsgo.ast.asClassStaticBlockDeclaration
+import com.xemantic.typescript.tsgo.ast.asJsxElement
+import com.xemantic.typescript.tsgo.ast.asJsxFragment
 import com.xemantic.typescript.tsgo.ast.asNode
+import com.xemantic.typescript.tsgo.ast.asSourceFile
+import com.xemantic.typescript.tsgo.ast.asTaggedTemplateExpression
+import com.xemantic.typescript.tsgo.ast.attributes
+import com.xemantic.typescript.tsgo.ast.body
+import com.xemantic.typescript.tsgo.ast.code
+import com.xemantic.typescript.tsgo.ast.contentMapper
+import com.xemantic.typescript.tsgo.ast.declarations
+import com.xemantic.typescript.tsgo.ast.expression
+import com.xemantic.typescript.tsgo.ast.flags
+import com.xemantic.typescript.tsgo.ast.forEachChild
+import com.xemantic.typescript.tsgo.ast.initializer
 import com.xemantic.typescript.tsgo.ast.memberList
 import com.xemantic.typescript.tsgo.ast.members
+import com.xemantic.typescript.tsgo.ast.modifiers
+import com.xemantic.typescript.tsgo.ast.name
+import com.xemantic.typescript.tsgo.ast.parameters
+import com.xemantic.typescript.tsgo.ast.source
+import com.xemantic.typescript.tsgo.ast.statements
 import com.xemantic.typescript.tsgo.ast.symbol
+import com.xemantic.typescript.tsgo.ast.tagName
+import com.xemantic.typescript.tsgo.ast.text
+import com.xemantic.typescript.tsgo.ast.valueDeclaration
 import com.xemantic.typescript.tsgo.checker.getNumberIndexType
 import com.xemantic.typescript.tsgo.checker.getNumberType
 import com.xemantic.typescript.tsgo.checker.getPropertiesOfType
 import com.xemantic.typescript.tsgo.checker.getStringIndexType
 import com.xemantic.typescript.tsgo.checker.getStringType
 import com.xemantic.typescript.tsgo.checker.getTypeAtLocation
+import com.xemantic.typescript.tsgo.checker.getTypeOfSymbolAtLocation
+import com.xemantic.typescript.tsgo.checker.symbolToString
+import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.addIfAbsent
+import com.xemantic.typescript.tsgo.collections.has
+import com.xemantic.typescript.tsgo.compiler.getTypeChecker
 import com.xemantic.typescript.tsgo.compiler.getTypeCheckerForFile
 import com.xemantic.typescript.tsgo.diagnostics.code
 import com.xemantic.typescript.tsgo.diagnostics.localize
 import com.xemantic.typescript.tsgo.ls.change.getChanges
 import com.xemantic.typescript.tsgo.ls.change.insertMemberAtStart
 import com.xemantic.typescript.tsgo.ls.change.insertNodeAfter
+import com.xemantic.typescript.tsgo.ls.lsconv.fromLSPPositionForSourceFile
+import com.xemantic.typescript.tsgo.ls.lsconv.fromLSPRangeForSourceFile
+import com.xemantic.typescript.tsgo.ls.lsconv.toLSPPositionForFeature
+import com.xemantic.typescript.tsgo.ls.lsconv.toLSPRangeForFeature
+import com.xemantic.typescript.tsgo.lsp.lsproto.compare
+import com.xemantic.typescript.tsgo.printer.write
 
 // go: github.com/microsoft/TypeScript/tsc/internal/ls.fixClassIncorrectlyImplementsInterfaceFixID df8b19c3
 const val fixClassIncorrectlyImplementsInterfaceFixID: String = "fixClassIncorrectlyImplementsInterface"
@@ -100,7 +175,7 @@ fun getCodeActionsToFixClassIncorrectlyImplementsInterface(context: Context?, fi
 // go: github.com/microsoft/TypeScript/tsc/internal/ls.getAllCodeActionsToFixClassIncorrectlyImplementsInterface cfe2b41c
 fun getAllCodeActionsToFixClassIncorrectlyImplementsInterface(context: Context?, fixContext: CodeFixContext?): Tuple2<CombinedCodeActions?, GoError?> {
     return withDefers({ Tuple2<CombinedCodeActions?, GoError?>(null, null) }) { df0 ->
-        val allDiags: GoSlice<Diagnostic?> = getAllDiagnostics(context, fixContext!!.program, fixContext!!.sourceFile)
+        val allDiags: GoSlice<com.xemantic.typescript.tsgo.ast.Diagnostic?> = getAllDiagnostics(context, fixContext!!.program, fixContext!!.sourceFile)
         val t1 = fixContext!!.program.getTypeCheckerForFile(context, fixContext!!.sourceFile)
         val typeChecker: Checker? = t1.first
         val done: (() -> Unit)? = t1.second
@@ -116,7 +191,7 @@ fun getAllCodeActionsToFixClassIncorrectlyImplementsInterface(context: Context?,
         val seenClassDeclarations: com.xemantic.typescript.tsgo.collections.Set<Node?> = com.xemantic.typescript.tsgo.collections.Set<Node?>(goElem_T = GoElem.ref<Node?>())
         val s4 = allDiags
         l0@ for (i5 in 0 until s4.len) {
-            val diag: Diagnostic? = s4[i5]
+            val diag: com.xemantic.typescript.tsgo.ast.Diagnostic? = s4[i5]
             if (isFixableDiagnostic(diag, fixClassIncorrectlyImplementsInterfaceErrorCodes)) {
                 val classDeclaration: Node? = getClass(fixContext!!.sourceFile, com.xemantic.typescript.tsgo.core.newTextRange(diag!!.pos(), diag!!.end()))
                 if (classDeclaration == null) {
@@ -291,10 +366,4 @@ fun createImportAdder(context: Context?, fixContext: CodeFixContext?, typeChecke
     }
     return Tuple2<ImportAdder?, GoError?>(com.xemantic.typescript.tsgo.ls.autoimport.newImportAdder(context, fixContext!!.program, typeChecker, fixContext!!.sourceFile, view, fixContext!!.ls.formatOptions(), fixContext!!.ls!!.converters, fixContext!!.ls.userPreferences()), null)
 }
-
-// go: github.com/microsoft/TypeScript/tsc/internal/ls.fixClassIncorrectlyImplementsInterfaceErrorCodes 50a17aa6
-@kotlin.jvm.JvmField val fixClassIncorrectlyImplementsInterfaceErrorCodes: GoSlice<Int> = GoSlice.of(GoElem.INT, com.xemantic.typescript.tsgo.diagnostics.class_0_incorrectly_implements_interface_1.code(), com.xemantic.typescript.tsgo.diagnostics.class_0_incorrectly_implements_class_1_Did_you_mean_to_extend_1_and_inherit_its_members_as_a_subclass.code())
-
-// go: github.com/microsoft/TypeScript/tsc/internal/ls.FixClassIncorrectlyImplementsInterfaceProvider ef0c8497
-@kotlin.jvm.JvmField val fixClassIncorrectlyImplementsInterfaceProvider: CodeFixProvider? = CodeFixProvider(errorCodes = fixClassIncorrectlyImplementsInterfaceErrorCodes, getCodeActions = fun(p0: Context?, p1: CodeFixContext?): Tuple2<GoSlice<CodeAction?>, GoError?> = getCodeActionsToFixClassIncorrectlyImplementsInterface(p0, p1), fixIds = GoSlice.of(GoElem.STRING, "fixClassIncorrectlyImplementsInterface"), getAllCodeActions = fun(p0: Context?, p1: CodeFixContext?): Tuple2<CombinedCodeActions?, GoError?> = getAllCodeActionsToFixClassIncorrectlyImplementsInterface(p0, p1))
 

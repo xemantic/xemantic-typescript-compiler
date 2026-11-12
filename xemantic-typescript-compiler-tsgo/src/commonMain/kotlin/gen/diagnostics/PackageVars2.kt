@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unexpected_token_expected cf6a384c
+@kotlin.jvm.JvmField val unexpected_token_expected: Message? = Message(code = 1179, category = CategoryError, key = Key("Unexpected_token_expected_1179"), text = "Unexpected token. '{' expected.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Property_destructuring_pattern_expected 9356a3f2
+@kotlin.jvm.JvmField val property_destructuring_pattern_expected: Message? = Message(code = 1180, category = CategoryError, key = Key("Property_destructuring_pattern_expected_1180"), text = "Property destructuring pattern expected.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Array_element_destructuring_pattern_expected 95369c1c
+@kotlin.jvm.JvmField val array_element_destructuring_pattern_expected: Message? = Message(code = 1181, category = CategoryError, key = Key("Array_element_destructuring_pattern_expected_1181"), text = "Array element destructuring pattern expected.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_destructuring_declaration_must_have_an_initializer 90938a8a
+@kotlin.jvm.JvmField val a_destructuring_declaration_must_have_an_initializer: Message? = Message(code = 1182, category = CategoryError, key = Key("A_destructuring_declaration_must_have_an_initializer_1182"), text = "A destructuring declaration must have an initializer.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_implementation_cannot_be_declared_in_ambient_contexts 21245da8
+@kotlin.jvm.JvmField val an_implementation_cannot_be_declared_in_ambient_contexts: Message? = Message(code = 1183, category = CategoryError, key = Key("An_implementation_cannot_be_declared_in_ambient_contexts_1183"), text = "An implementation cannot be declared in ambient contexts.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Modifiers_cannot_appear_here bec61d7d
+@kotlin.jvm.JvmField val modifiers_cannot_appear_here: Message? = Message(code = 1184, category = CategoryError, key = Key("Modifiers_cannot_appear_here_1184"), text = "Modifiers cannot appear here.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Merge_conflict_marker_encountered b5d65e67
+@kotlin.jvm.JvmField val merge_conflict_marker_encountered: Message? = Message(code = 1185, category = CategoryError, key = Key("Merge_conflict_marker_encountered_1185"), text = "Merge conflict marker encountered.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_rest_element_cannot_have_an_initializer 44963622
+@kotlin.jvm.JvmField val a_rest_element_cannot_have_an_initializer: Message? = Message(code = 1186, category = CategoryError, key = Key("A_rest_element_cannot_have_an_initializer_1186"), text = "A rest element cannot have an initializer.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_parameter_property_may_not_be_declared_using_a_binding_pattern 1ceca949
+@kotlin.jvm.JvmField val a_parameter_property_may_not_be_declared_using_a_binding_pattern: Message? = Message(code = 1187, category = CategoryError, key = Key("A_parameter_property_may_not_be_declared_using_a_binding_pattern_1187"), text = "A parameter property may not be declared using a binding pattern.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Only_a_single_variable_declaration_is_allowed_in_a_for_of_statement ef07d87f
+@kotlin.jvm.JvmField val only_a_single_variable_declaration_is_allowed_in_a_for_of_statement: Message? = Message(code = 1188, category = CategoryError, key = Key("Only_a_single_variable_declaration_is_allowed_in_a_for_of_statement_1188"), text = "Only a single variable declaration is allowed in a 'for...of' statement.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_variable_declaration_of_a_for_in_statement_cannot_have_an_initializer 55e63bb6
+@kotlin.jvm.JvmField val the_variable_declaration_of_a_for_in_statement_cannot_have_an_initializer: Message? = Message(code = 1189, category = CategoryError, key = Key("The_variable_declaration_of_a_for_in_statement_cannot_have_an_initializer_1189"), text = "The variable declaration of a 'for...in' statement cannot have an initializer.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_variable_declaration_of_a_for_of_statement_cannot_have_an_initializer ef59496a
+@kotlin.jvm.JvmField val the_variable_declaration_of_a_for_of_statement_cannot_have_an_initializer: Message? = Message(code = 1190, category = CategoryError, key = Key("The_variable_declaration_of_a_for_of_statement_cannot_have_an_initializer_1190"), text = "The variable declaration of a 'for...of' statement cannot have an initializer.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_import_declaration_cannot_have_modifiers 2f16c745
+@kotlin.jvm.JvmField val an_import_declaration_cannot_have_modifiers: Message? = Message(code = 1191, category = CategoryError, key = Key("An_import_declaration_cannot_have_modifiers_1191"), text = "An import declaration cannot have modifiers.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Module_0_has_no_default_export 5582b2a0
+@kotlin.jvm.JvmField val module_0_has_no_default_export: Message? = Message(code = 1192, category = CategoryError, key = Key("Module_0_has_no_default_export_1192"), text = "Module '{0}' has no default export.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_export_declaration_cannot_have_modifiers 8680323d
+@kotlin.jvm.JvmField val an_export_declaration_cannot_have_modifiers: Message? = Message(code = 1193, category = CategoryError, key = Key("An_export_declaration_cannot_have_modifiers_1193"), text = "An export declaration cannot have modifiers.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Export_declarations_are_not_permitted_in_a_namespace 683a3184
 @kotlin.jvm.JvmField val export_declarations_are_not_permitted_in_a_namespace: Message? = Message(code = 1194, category = CategoryError, key = Key("Export_declarations_are_not_permitted_in_a_namespace_1194"), text = "Export declarations are not permitted in a namespace.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Print_the_final_configuration_instead_of_building bac225c5
 @kotlin.jvm.JvmField val print_the_final_configuration_instead_of_building: Message? = Message(code = 1350, category = CategoryMessage, key = Key("Print_the_final_configuration_instead_of_building_1350"), text = "Print the final configuration instead of building.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_identifier_or_keyword_cannot_immediately_follow_a_numeric_literal dd121ba8
-@kotlin.jvm.JvmField val an_identifier_or_keyword_cannot_immediately_follow_a_numeric_literal: Message? = Message(code = 1351, category = CategoryError, key = Key("An_identifier_or_keyword_cannot_immediately_follow_a_numeric_literal_1351"), text = "An identifier or keyword cannot immediately follow a numeric literal.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_bigint_literal_cannot_use_exponential_notation abbdfd87
-@kotlin.jvm.JvmField val a_bigint_literal_cannot_use_exponential_notation: Message? = Message(code = 1352, category = CategoryError, key = Key("A_bigint_literal_cannot_use_exponential_notation_1352"), text = "A bigint literal cannot use exponential notation.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_bigint_literal_must_be_an_integer c5aa272c
-@kotlin.jvm.JvmField val a_bigint_literal_must_be_an_integer: Message? = Message(code = 1353, category = CategoryError, key = Key("A_bigint_literal_must_be_an_integer_1353"), text = "A bigint literal must be an integer.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_readonly_type_modifier_is_only_permitted_on_array_and_tuple_literal_types f6ade0de
-@kotlin.jvm.JvmField val x_readonly_type_modifier_is_only_permitted_on_array_and_tuple_literal_types: Message? = Message(code = 1354, category = CategoryError, key = Key("readonly_type_modifier_is_only_permitted_on_array_and_tuple_literal_types_1354"), text = "'readonly' type modifier is only permitted on array and tuple literal types.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_const_assertion_can_only_be_applied_to_references_to_enum_members_or_string_number_boolean_array_or_object_literals 25c0f590
-@kotlin.jvm.JvmField val a_const_assertion_can_only_be_applied_to_references_to_enum_members_or_string_number_boolean_array_or_object_literals: Message? = Message(code = 1355, category = CategoryError, key = Key("A_const_assertion_can_only_be_applied_to_references_to_enum_members_or_string_number_boolean_array_o_1355"), text = "A 'const' assertion can only be applied to references to enum members, or string, number, boolean, array, or object literals.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Did_you_mean_to_mark_this_function_as_async 550797f6
-@kotlin.jvm.JvmField val did_you_mean_to_mark_this_function_as_async: Message? = Message(code = 1356, category = CategoryError, key = Key("Did_you_mean_to_mark_this_function_as_async_1356"), text = "Did you mean to mark this function as 'async'?")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_enum_member_name_must_be_followed_by_a_or 829c762a
-@kotlin.jvm.JvmField val an_enum_member_name_must_be_followed_by_a_or: Message? = Message(code = 1357, category = CategoryError, key = Key("An_enum_member_name_must_be_followed_by_a_or_1357"), text = "An enum member name must be followed by a ',', '=', or '}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Tagged_template_expressions_are_not_permitted_in_an_optional_chain 4fe5ec70
-@kotlin.jvm.JvmField val tagged_template_expressions_are_not_permitted_in_an_optional_chain: Message? = Message(code = 1358, category = CategoryError, key = Key("Tagged_template_expressions_are_not_permitted_in_an_optional_chain_1358"), text = "Tagged template expressions are not permitted in an optional chain.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Identifier_expected_0_is_a_reserved_word_that_cannot_be_used_here 53a571dd
-@kotlin.jvm.JvmField val identifier_expected_0_is_a_reserved_word_that_cannot_be_used_here: Message? = Message(code = 1359, category = CategoryError, key = Key("Identifier_expected_0_is_a_reserved_word_that_cannot_be_used_here_1359"), text = "Identifier expected. '{0}' is a reserved word that cannot be used here.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_0_does_not_satisfy_the_expected_type_1 287c3cbc
-@kotlin.jvm.JvmField val type_0_does_not_satisfy_the_expected_type_1: Message? = Message(code = 1360, category = CategoryError, key = Key("Type_0_does_not_satisfy_the_expected_type_1_1360"), text = "Type '{0}' does not satisfy the expected type '{1}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_cannot_be_used_as_a_value_because_it_was_imported_using_import_type 4df8721a
-@kotlin.jvm.JvmField val x_0_cannot_be_used_as_a_value_because_it_was_imported_using_import_type: Message? = Message(code = 1361, category = CategoryError, key = Key("_0_cannot_be_used_as_a_value_because_it_was_imported_using_import_type_1361"), text = "'{0}' cannot be used as a value because it was imported using 'import type'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_cannot_be_used_as_a_value_because_it_was_exported_using_export_type affcb4e5
-@kotlin.jvm.JvmField val x_0_cannot_be_used_as_a_value_because_it_was_exported_using_export_type: Message? = Message(code = 1362, category = CategoryError, key = Key("_0_cannot_be_used_as_a_value_because_it_was_exported_using_export_type_1362"), text = "'{0}' cannot be used as a value because it was exported using 'export type'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_type_only_import_can_specify_a_default_import_or_named_bindings_but_not_both e6c34f5a
-@kotlin.jvm.JvmField val a_type_only_import_can_specify_a_default_import_or_named_bindings_but_not_both: Message? = Message(code = 1363, category = CategoryError, key = Key("A_type_only_import_can_specify_a_default_import_or_named_bindings_but_not_both_1363"), text = "A type-only import can specify a default import or named bindings, but not both.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_to_type_only_export a0ee20a5
-@kotlin.jvm.JvmField val convert_to_type_only_export: Message? = Message(code = 1364, category = CategoryMessage, key = Key("Convert_to_type_only_export_1364"), text = "Convert to type-only export")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_all_re_exported_types_to_type_only_exports d8755d6a
-@kotlin.jvm.JvmField val convert_all_re_exported_types_to_type_only_exports: Message? = Message(code = 1365, category = CategoryMessage, key = Key("Convert_all_re_exported_types_to_type_only_exports_1365"), text = "Convert all re-exported types to type-only exports")
 

@@ -24,21 +24,38 @@
 package com.xemantic.typescript.tsgo.transformers.declarations
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.ast.AllAccessorDeclarations
 import com.xemantic.typescript.tsgo.ast.Diagnostic
 import com.xemantic.typescript.tsgo.printer.EmitResolver
+import com.xemantic.typescript.tsgo.ast.FileReference
 import com.xemantic.typescript.tsgo.ast.FindAncestorResult
+import com.xemantic.typescript.tsgo.ast.GetAccessorDeclaration
+import com.xemantic.typescript.tsgo.ast.Kind
 import com.xemantic.typescript.tsgo.diagnostics.Message
+import com.xemantic.typescript.tsgo.ast.ModifierFlags
 import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.tspath.RelativePath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.ast.SetAccessorDeclaration
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.Symbol
 import com.xemantic.typescript.tsgo.printer.SymbolAccessibilityResult
 import com.xemantic.typescript.tsgo.ast.SymbolFlags
 import com.xemantic.typescript.tsgo.nodebuilder.SymbolTracker
 import com.xemantic.typescript.tsgo.ast.addRelatedInfo
+import com.xemantic.typescript.tsgo.ast.arguments
 import com.xemantic.typescript.tsgo.ast.asBinaryExpression
 import com.xemantic.typescript.tsgo.ast.asExportAssignment
+import com.xemantic.typescript.tsgo.ast.asHeritageClause
+import com.xemantic.typescript.tsgo.ast.asNode
 import com.xemantic.typescript.tsgo.ast.declarations
 import com.xemantic.typescript.tsgo.ast.flags
+import com.xemantic.typescript.tsgo.ast.initializer
+import com.xemantic.typescript.tsgo.ast.name
+import com.xemantic.typescript.tsgo.ast.parameters
+import com.xemantic.typescript.tsgo.ast.supplementalSourceFiles
+import com.xemantic.typescript.tsgo.ast.symbol
+import com.xemantic.typescript.tsgo.ast.type
 
 // go: github.com/microsoft/TypeScript/tsc/internal/transformers/declarations.SymbolTrackerImpl dc21ecc0
 class SymbolTrackerImpl(

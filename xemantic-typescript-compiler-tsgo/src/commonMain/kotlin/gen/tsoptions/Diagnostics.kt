@@ -24,8 +24,46 @@
 package com.xemantic.typescript.tsgo.tsoptions
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.core.BuildOptions
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.core.CompilerOptions
+import com.xemantic.typescript.tsgo.packagejson.ContentMapperFields
+import com.xemantic.typescript.tsgo.module.DefaultResolver
+import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.packagejson.Fields
+import com.xemantic.typescript.tsgo.core.JsxEmit
+import com.xemantic.typescript.tsgo.contentmapper.Manifest
+import com.xemantic.typescript.tsgo.collections.MapEntry
 import com.xemantic.typescript.tsgo.diagnostics.Message
+import com.xemantic.typescript.tsgo.core.ModuleDetectionKind
+import com.xemantic.typescript.tsgo.core.ModuleKind
+import com.xemantic.typescript.tsgo.core.ModuleResolutionKind
+import com.xemantic.typescript.tsgo.core.NewLineKind
+import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.go.sync.Once
+import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.tspath.PathKey
+import com.xemantic.typescript.tsgo.core.ProjectReference
+import com.xemantic.typescript.tsgo.module.ResolutionHost
+import com.xemantic.typescript.tsgo.module.ResolvedModule
+import com.xemantic.typescript.tsgo.module.ResolverOptions
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
+import com.xemantic.typescript.tsgo.core.ScriptTarget
+import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.tspath.SourceMapLocation
+import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.clone
+import com.xemantic.typescript.tsgo.collections.delete
+import com.xemantic.typescript.tsgo.collections.entries
+import com.xemantic.typescript.tsgo.collections.get
+import com.xemantic.typescript.tsgo.collections.has
+import com.xemantic.typescript.tsgo.collections.set
+import com.xemantic.typescript.tsgo.module.resolvePackageDirectory
+import com.xemantic.typescript.tsgo.packagejson.getValue
 
 // go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.DidYouMeanOptionsDiagnostics 464d25e3
 class DidYouMeanOptionsDiagnostics(
@@ -97,10 +135,4 @@ class ParseCommandLineWorkerDiagnostics(
 fun getParseCommandLineWorkerDiagnostics(decls: GoSlice<CommandLineOption?>): ParseCommandLineWorkerDiagnostics? {
     return ParseCommandLineWorkerDiagnostics(didYouMean = DidYouMeanOptionsDiagnostics(alternateMode = AlternateModeDiagnostics(diagnostic = com.xemantic.typescript.tsgo.diagnostics.compiler_option_0_may_only_be_used_with_build, optionsNameMap = buildNameMap), optionDeclarations = decls, unknownOptionDiagnostic = com.xemantic.typescript.tsgo.diagnostics.unknown_compiler_option_0, unknownDidYouMeanDiagnostic = com.xemantic.typescript.tsgo.diagnostics.unknown_compiler_option_0_Did_you_mean_1), optionTypeMismatchDiagnostic = com.xemantic.typescript.tsgo.diagnostics.compiler_option_0_expects_an_argument)
 }
-
-// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.buildOptionsDidYouMeanDiagnostics a2fc1c6a
-@kotlin.jvm.JvmField val buildOptionsDidYouMeanDiagnostics: ParseCommandLineWorkerDiagnostics? = ParseCommandLineWorkerDiagnostics(didYouMean = DidYouMeanOptionsDiagnostics(alternateMode = AlternateModeDiagnostics(diagnostic = com.xemantic.typescript.tsgo.diagnostics.compiler_option_0_may_not_be_used_with_build, optionsNameMap = compilerNameMap), optionDeclarations = buildOpts, unknownOptionDiagnostic = com.xemantic.typescript.tsgo.diagnostics.unknown_build_option_0, unknownDidYouMeanDiagnostic = com.xemantic.typescript.tsgo.diagnostics.unknown_build_option_0_Did_you_mean_1), optionTypeMismatchDiagnostic = com.xemantic.typescript.tsgo.diagnostics.build_option_0_requires_a_value_of_type_1)
-
-// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.CompilerOptionsDidYouMeanDiagnostics a3b40210
-@kotlin.jvm.JvmField val compilerOptionsDidYouMeanDiagnostics: ParseCommandLineWorkerDiagnostics? = getParseCommandLineWorkerDiagnostics(optionsDeclarations)
 

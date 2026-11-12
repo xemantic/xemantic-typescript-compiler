@@ -28,10 +28,8 @@ package com.xemantic.typescript.tsgo
 import com.xemantic.typescript.tsgo.api.XtscLanguageService
 import com.xemantic.typescript.tsgo.api.xtscLSRequest
 import com.xemantic.typescript.tsgo.api.xtscMarshal
-import com.xemantic.typescript.tsgo.api.xtscOpenProgram
 import com.xemantic.typescript.tsgo.api.xtscResolveClientCapabilities
 import com.xemantic.typescript.tsgo.api.xtscUserPreferences
-import com.xemantic.typescript.tsgo.ast.localize
 import com.xemantic.typescript.tsgo.compiler.Program
 import com.xemantic.typescript.tsgo.lsp.lsproto.CompletionItem
 import com.xemantic.typescript.tsgo.lsp.lsproto.CompletionItemsOrListOrNull
@@ -48,7 +46,6 @@ import com.xemantic.typescript.tsgo.runtime.GoError
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.goBytesToString
 import com.xemantic.typescript.tsgo.runtime.goStringToBytes
-import com.xemantic.typescript.tsgo.tspath.Path
 import com.xemantic.typescript.tsgo.vfs.FS
 import kotlin.concurrent.atomics.AtomicLong
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -56,18 +53,21 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 // (TSGO.4-a) THE LANGUAGE SERVICE: tsgo's `internal/ls` (ported, gen/ls) behind its language server's
 // request handling, in process. docs/goport-ls.md.
 //
-// A [TsgoLanguageService] is one tsconfig's program as tsgo's project system builds a configured
-// project's (`api.XtscOpenProgram`) and the language server's handlers over it (`api.XtscLanguageService`,
-// each handler's body as `internal/lsp/server.go` writes it): [request] takes an LSP method and its JSON
-// params and answers the JSON result the server sends — the gate (LsParityTest, `TSGO_LS=1`) compares it
-// with the shipped `tsc --lsp`. The typed queries ([hover], [definition], [references], [completions],
-// [diagnostics]) are the same requests at a UTF-16 offset of a file's text, their answers in offsets.
+// A [TsgoLanguageService] is one tsconfig's configured project as tsgo's project system builds it (a
+// standalone API session's `createSnapshot`, in the client's position encoding and with its preferences)
+// and the language server's handlers over it (`api.XtscLanguageService`, each handler's body as
+// `internal/lsp/server.go` writes it): [request] takes an LSP method and its JSON params and answers the
+// JSON result the server sends — the gate (LsParityTest, `TSGO_LS=1`) compares it with the shipped
+// `tsc --lsp`. The typed queries ([hover], [definition], [references], [completions], [diagnostics]) are
+// the same requests at a UTF-16 offset of a file's text, their answers in offsets.
 //
 // The client is described as the server learns it: [initializeParams] is the `initialize` request's
-// params (the capabilities decide, e.g., markdown or plain-text hovers and definition links), and
+// params (the capabilities decide, e.g., markdown or plain-text hovers and definition links; TypeScript
+// 7.1's lsproto requires its `processId` and `rootUri` properties, `null` allowed), and
 // [configuration] the client's `workspace/configuration` answer for js/ts, typescript, javascript and
-// editor (a JSON array; empty = tsgo's default preferences). Auto-import completions need the project
-// system's registry, which is not ported: configure `{"suggest": {"autoImports": false}}`.
+// editor (a JSON array; empty = tsgo's default preferences). Auto-import completions need the server's
+// retry with an auto-import-prepared snapshot (server.go on `ls.ErrNeedsAutoImports`), which
+// `XtscLSRequest` does not do: configure `{"suggest": {"autoImports": false}}`.
 
 /** A UTF-16 range `[start, end)` of a file's text. */
 data class TsgoTextRange(val start: Int, val end: Int)
@@ -95,6 +95,8 @@ class TsgoLanguageService private constructor(
     private val service: XtscLanguageService,
     private val fs: FS,
     private val utf8Positions: Boolean,
+    /** The API session holding the snapshot (kept alive with the service). */
+    @Suppress("unused") private val apiSnapshot: TsgoApiSnapshot,
 ) {
 
     private val ctx = com.xemantic.typescript.tsgo.go.context.background()
@@ -111,18 +113,10 @@ class TsgoLanguageService private constructor(
             configFileName: String,
             fs: FS = TsgoProject.diskFS(),
             libDirectory: String? = null,
-            initializeParams: String = "{\"capabilities\":{}}",
+            initializeParams: String = "{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}",
             configuration: String = "",
         ): TsgoLanguageService = onGoStack {
             TsgoProject.init()
-            val name = com.xemantic.typescript.tsgo.tspath.normalizePath(GoString.fromUtf16(configFileName))
-            val lib = libDirectory?.let { com.xemantic.typescript.tsgo.tspath.normalizePath(GoString.fromUtf16(it)) } ?: ""
-            val (program, pool, errs) = xtscOpenProgram(name, fs, lib)
-            val diags = (0 until errs.len).map { i ->
-                val d = errs[i]!!
-                "TS${d.code}: " + GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))
-            }
-            if (program == null) throw TsgoApiException("$configFileName: ${diags.joinToString("; ")}")
             val (caps, cerr) = xtscResolveClientCapabilities(goStringToBytes(GoString.fromUtf16(initializeParams)))
             if (cerr != null) throw TsgoApiException("initialize params: " + GoString.toUtf16(cerr.error()))
             val config = if (configuration.isEmpty()) GoElem.BYTE.nilSlice else goStringToBytes(GoString.fromUtf16(configuration))
@@ -130,17 +124,13 @@ class TsgoLanguageService private constructor(
             if (perr != null) throw TsgoApiException("configuration: " + GoString.toUtf16(perr.error()))
             // handleInitialize: UTF-8 positions when the client offers them, else UTF-16.
             val utf8 = caps!!.general.positionEncodings.let { s -> (0 until s.len).any { s[it] == PositionEncodingKindUTF8 } }
-            val proj = com.xemantic.typescript.tsgo.project.Project(Path(name), program, pool)
-            // The snapshot reads files as the program does: the bundled libraries through the bundled FS.
-            val snapshotFs = if (lib.isEmpty()) com.xemantic.typescript.tsgo.bundled.wrapFS(fs)!! else fs
-            val snapshot = com.xemantic.typescript.tsgo.project.Snapshot(
-                1uL,
-                com.xemantic.typescript.tsgo.project.ProjectCollection(mapOf(name to proj)),
-                snapshotFs,
-                prefs,
-                if (utf8) PositionEncodingKindUTF8 else PositionEncodingKindUTF16,
+            // The project system builds the configured project (a standalone session's createSnapshot, the
+            // client's preferences as the snapshot's); the snapshot reads files as the program does.
+            val opened = TsgoApiSnapshot.open(configFileName, fs, libDirectory, if (utf8) PositionEncodingKindUTF8 else PositionEncodingKindUTF16, prefs)
+            TsgoLanguageService(
+                GoString.toUtf16(opened.configFileName.value), opened.program, opened.configDiagnostics,
+                XtscLanguageService(opened.snapshot, opened.project, caps), opened.fs, utf8, opened,
             )
-            TsgoLanguageService(GoString.toUtf16(name), program, diags, XtscLanguageService(snapshot, proj, caps), snapshotFs, utf8)
         }
     }
 
@@ -191,7 +181,7 @@ class TsgoLanguageService private constructor(
             r.definitionLinks != null -> r.definitionLinks!!.value.let { s ->
                 List(s.len) { i ->
                     val l = s[i]!!
-                    val f = GoString.toUtf16(l.targetUri.fileName())
+                    val f = GoString.toUtf16(l.targetUri.fileName().value)
                     TsgoLocation(f, textRange(f, l.targetSelectionRange))
                 }
             }
@@ -274,7 +264,7 @@ class TsgoLanguageService private constructor(
         } finally {
             lineMapsLock.unlock()
         }
-        val (text, ok) = fs.readFile(GoString.fromUtf16(fileName))
+        val (text, ok) = fs.readFile(com.xemantic.typescript.tsgo.tspath.rootedFilePathFromAbsolute(GoString.fromUtf16(fileName)))
         if (!ok) throw TsgoApiException("file not found: $fileName")
         val map = LineMap(GoString.toUtf16(text))
         lineMapsLock.lock()
@@ -318,12 +308,12 @@ class TsgoLanguageService private constructor(
         TsgoTextRange(offset(fileName, r.start.line.toInt(), r.start.character.toInt()), offset(fileName, r.end.line.toInt(), r.end.character.toInt()))
 
     private fun location(l: Location): TsgoLocation {
-        val f = GoString.toUtf16(l.uri.fileName())
+        val f = GoString.toUtf16(l.uri.fileName().value)
         return TsgoLocation(f, textRange(f, l.range))
     }
 
     private fun uri(fileName: String): String =
-        GoString.toUtf16(com.xemantic.typescript.tsgo.ls.lsconv.fileNameToDocumentURI(GoString.fromUtf16(fileName)).value)
+        GoString.toUtf16(com.xemantic.typescript.tsgo.ls.lsconv.fileNameToDocumentURI(com.xemantic.typescript.tsgo.tspath.rootedFilePathFromAbsolute(GoString.fromUtf16(fileName))).value)
 
     private fun positionParams(fileName: String, offset: Int): String =
         "{\"textDocument\":{\"uri\":${quote(uri(fileName))}},\"position\":${position(fileName, offset)}}"

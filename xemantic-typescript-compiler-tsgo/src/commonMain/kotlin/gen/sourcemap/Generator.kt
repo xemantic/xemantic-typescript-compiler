@@ -24,15 +24,18 @@
 package com.xemantic.typescript.tsgo.sourcemap
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.core.Arena
 import com.xemantic.typescript.tsgo.go.strings.Builder
 import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.Options
 import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
 import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.go.iter.Seq
 import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.core.UTF16Offset
 import com.xemantic.typescript.tsgo.go.io.WriteCloser
+import com.xemantic.typescript.tsgo.core.new
 
 // go: github.com/microsoft/TypeScript/tsc/internal/sourcemap.SourceIndex bcdc04b2
 @kotlin.jvm.JvmInline

@@ -26,14 +26,20 @@
 package com.xemantic.typescript.tsgo
 
 import com.xemantic.typescript.tsgo.compiler.EmitOptions
+import com.xemantic.typescript.tsgo.compiler.ProgramConfig
+import com.xemantic.typescript.tsgo.compiler.ProgramHosts
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.core.CompilerOptions
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
-import com.xemantic.typescript.tsgo.go.io.fs.WalkDirFunc
 import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.runtime.GoError
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.Tuple2
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.vfs.Entries
 import com.xemantic.typescript.tsgo.vfs.FS
 import java.io.File
@@ -70,33 +76,31 @@ fun main(args: Array<String>) {
 /** The real disk, readable everywhere and writable (Go byte strings as one char per byte). */
 private class WritableDiskFS : FS {
     private val disk = DiskFS()
-    override fun useCaseSensitiveFileNames(): Boolean = true
-    override fun fileExists(p0: String): Boolean = disk.fileExists(p0)
-    override fun readFile(p0: String): Tuple2<String, Boolean> = disk.readFile(p0)
-    override fun directoryExists(p0: String): Boolean = disk.directoryExists(p0)
-    override fun getAccessibleEntries(p0: String): Entries = disk.getAccessibleEntries(p0)
-    override fun realpath(p0: String): String = p0
-    override fun stat(p0: String): FileInfo? = null
-    override fun walkDir(p0: String, p1: WalkDirFunc?): GoError? = error("walkDir not supported")
-    override fun writeFile(p0: String, p1: String): GoError? {
-        val f = File(GoString.toUtf16(p0))
+    override fun caseSensitivity(): CaseSensitivity = CaseSensitive
+    override fun fileExists(p0: RootedFilePath): Boolean = disk.fileExists(p0)
+    override fun readFile(p0: RootedFilePath): Tuple2<String, Boolean> = disk.readFile(p0)
+    override fun directoryExists(p0: RootedDirectoryPath): Boolean = disk.directoryExists(p0)
+    override fun getAccessibleEntries(p0: RootedDirectoryPath): Entries = disk.getAccessibleEntries(p0)
+    override fun realpath(p0: RootedPath): RootedPath = p0
+    override fun stat(p0: RootedPath): FileInfo? = null
+    override fun writeFile(p0: RootedFilePath, p1: String): GoError? {
+        val f = File(GoString.toUtf16(p0.value))
         f.parentFile.mkdirs()
         f.writeBytes(p1.toByteArray(Charsets.ISO_8859_1))
         return null
     }
-    override fun appendFile(p0: String, p1: String): GoError? = error("appendFile not supported")
-    override fun remove(p0: String): GoError? = error("remove not supported")
-    override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = error("chtimes not supported")
+    override fun appendFile(p0: RootedFilePath, p1: String): GoError? = error("appendFile not supported")
+    override fun remove(p0: RootedPath): GoError? = error("remove not supported")
+    override fun chtimes(p0: RootedPath, p1: Time, p2: Time): GoError? = error("chtimes not supported")
 }
 
 private fun emitProject(config: File, outDir: File) {
     TsgoPort.init()
     val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(WritableDiskFS())
-    val cwd = GoString.fromUtf16(config.parentFile.path)
-    val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost(cwd, fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)!!
-    val cli = CompilerOptions().also { it.outDir = GoString.fromUtf16(outDir.path) }
-    val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(GoString.fromUtf16(config.path), cli, null, host, null)
-    val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = parsed))!!
+    val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost(fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null, null)!!
+    val cli = CompilerOptions().also { it.outDir = RootedDirectoryPath(GoString.fromUtf16(outDir.path)) }
+    val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(RootedFilePath(GoString.fromUtf16(config.path)), cli, null, host.fs(), null)
+    val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(programConfig = ProgramConfig(config = parsed), programHosts = ProgramHosts(host = host)))!!
     val ctx = com.xemantic.typescript.tsgo.go.context.background()
     val result = program.emit(ctx, EmitOptions())!!
     var diags = configDiags.len

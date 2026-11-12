@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_missing_enum_member_0 06f2c61e
+@kotlin.jvm.JvmField val add_missing_enum_member_0: Message? = Message(code = 95063, category = CategoryMessage, key = Key("Add_missing_enum_member_0_95063"), text = "Add missing enum member '{0}'")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_all_missing_imports b0cc16d4
+@kotlin.jvm.JvmField val add_all_missing_imports: Message? = Message(code = 95064, category = CategoryMessage, key = Key("Add_all_missing_imports_95064"), text = "Add all missing imports")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_to_async_function c0896890
+@kotlin.jvm.JvmField val convert_to_async_function: Message? = Message(code = 95065, category = CategoryMessage, key = Key("Convert_to_async_function_95065"), text = "Convert to async function")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_all_to_async_functions ce179d1a
+@kotlin.jvm.JvmField val convert_all_to_async_functions: Message? = Message(code = 95066, category = CategoryMessage, key = Key("Convert_all_to_async_functions_95066"), text = "Convert all to async functions")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_missing_call_parentheses 8e3d5dd4
+@kotlin.jvm.JvmField val add_missing_call_parentheses: Message? = Message(code = 95067, category = CategoryMessage, key = Key("Add_missing_call_parentheses_95067"), text = "Add missing call parentheses")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_all_missing_call_parentheses 36ad4ac0
+@kotlin.jvm.JvmField val add_all_missing_call_parentheses: Message? = Message(code = 95068, category = CategoryMessage, key = Key("Add_all_missing_call_parentheses_95068"), text = "Add all missing call parentheses")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_unknown_conversion_for_non_overlapping_types 86ac0152
+@kotlin.jvm.JvmField val add_unknown_conversion_for_non_overlapping_types: Message? = Message(code = 95069, category = CategoryMessage, key = Key("Add_unknown_conversion_for_non_overlapping_types_95069"), text = "Add 'unknown' conversion for non-overlapping types")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_unknown_to_all_conversions_of_non_overlapping_types 39387347
+@kotlin.jvm.JvmField val add_unknown_to_all_conversions_of_non_overlapping_types: Message? = Message(code = 95070, category = CategoryMessage, key = Key("Add_unknown_to_all_conversions_of_non_overlapping_types_95070"), text = "Add 'unknown' to all conversions of non-overlapping types")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_missing_new_operator_to_call bb4a9c97
+@kotlin.jvm.JvmField val add_missing_new_operator_to_call: Message? = Message(code = 95071, category = CategoryMessage, key = Key("Add_missing_new_operator_to_call_95071"), text = "Add missing 'new' operator to call")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_missing_new_operator_to_all_calls b0a6e74c
+@kotlin.jvm.JvmField val add_missing_new_operator_to_all_calls: Message? = Message(code = 95072, category = CategoryMessage, key = Key("Add_missing_new_operator_to_all_calls_95072"), text = "Add missing 'new' operator to all calls")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_names_to_all_parameters_without_names 84c80a1c
+@kotlin.jvm.JvmField val add_names_to_all_parameters_without_names: Message? = Message(code = 95073, category = CategoryMessage, key = Key("Add_names_to_all_parameters_without_names_95073"), text = "Add names to all parameters without names")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Enable_the_experimentalDecorators_option_in_your_configuration_file de17c082
+@kotlin.jvm.JvmField val enable_the_experimentalDecorators_option_in_your_configuration_file: Message? = Message(code = 95074, category = CategoryMessage, key = Key("Enable_the_experimentalDecorators_option_in_your_configuration_file_95074"), text = "Enable the 'experimentalDecorators' option in your configuration file")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_parameters_to_destructured_object 19b45d6a
+@kotlin.jvm.JvmField val convert_parameters_to_destructured_object: Message? = Message(code = 95075, category = CategoryMessage, key = Key("Convert_parameters_to_destructured_object_95075"), text = "Convert parameters to destructured object")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Extract_type 3527ce28
+@kotlin.jvm.JvmField val extract_type: Message? = Message(code = 95077, category = CategoryMessage, key = Key("Extract_type_95077"), text = "Extract type")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Extract_to_type_alias 5cd120c4
+@kotlin.jvm.JvmField val extract_to_type_alias: Message? = Message(code = 95078, category = CategoryMessage, key = Key("Extract_to_type_alias_95078"), text = "Extract to type alias")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Extract_to_typedef ebe3a714
 @kotlin.jvm.JvmField val extract_to_typedef: Message? = Message(code = 95079, category = CategoryMessage, key = Key("Extract_to_typedef_95079"), text = "Extract to typedef")
@@ -2688,4 +2741,34 @@ private fun goLit_diagnostics_allMessages_0_14(it: GoArray<GoPtr<Message?>?>) {
     it[2227] = GoFieldPtr("github.com/microsoft/TypeScript/tsc/internal/diagnostics.Sort_Imports", 0, { sort_Imports }, { _ -> goPanic("assignment through a pointer to an immutable global") })
     it[2228] = GoFieldPtr("github.com/microsoft/TypeScript/tsc/internal/diagnostics.JSDoc_comment", 0, { jsDoc_comment }, { _ -> goPanic("assignment through a pointer to an immutable global") })
 }
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.messagesByKey e02c69f8
+@kotlin.jvm.JvmField val messagesByKey: (() -> GoMap<Key, Message?>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, Message?>>(fun(): GoMap<Key, Message?> {
+    val messages: GoMap<Key, Message?> = GoMap.make<Key, Message?>(GoElem.ref<Message?>(), 2229)
+    val s0 = allMessages
+    l0@ for (i1 in 0 until s0.size) {
+        val p: GoPtr<Message?>? = s0[i1]
+        val message: Message? = p!!.value
+        messages[message!!.key] = message
+    }
+    return messages
+})
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.matcher ab5aaba4
+@kotlin.jvm.JvmField val matcher: Matcher? = com.xemantic.typescript.tsgo.go.golang_org.x.text.language.newMatcher(GoSlice.of(GoElem<Tag>({ Tag() }, { it.goCopy() }), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.english.goCopy(), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("zh-CN"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("zh-TW"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("cs-CZ"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("de-DE"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("es-ES"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("fr-FR"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("it-IT"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("ja-JP"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("ko-KR"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("pl-PL"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("pt-BR"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("ru-RU"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("tr-TR")))
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.zhCN a6b668bd
+@kotlin.jvm.JvmField val zhCN: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
+    return loadLocaleData(zhCNData)
+})
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.zhTW cc61fe03
+@kotlin.jvm.JvmField val zhTW: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
+    return loadLocaleData(zhTWData)
+})
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.csCZ b96928e6
+@kotlin.jvm.JvmField val csCZ: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
+    return loadLocaleData(csCZData)
+})
 

@@ -24,12 +24,49 @@
 package com.xemantic.typescript.tsgo.tsoptions
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.core.BuildOptions
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.core.CompilerOptions
+import com.xemantic.typescript.tsgo.packagejson.ContentMapperFields
+import com.xemantic.typescript.tsgo.module.DefaultResolver
 import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.packagejson.Fields
+import com.xemantic.typescript.tsgo.core.JsxEmit
+import com.xemantic.typescript.tsgo.contentmapper.Manifest
+import com.xemantic.typescript.tsgo.collections.MapEntry
 import com.xemantic.typescript.tsgo.diagnostics.Message
+import com.xemantic.typescript.tsgo.core.ModuleDetectionKind
+import com.xemantic.typescript.tsgo.core.ModuleKind
+import com.xemantic.typescript.tsgo.core.ModuleResolutionKind
+import com.xemantic.typescript.tsgo.core.NewLineKind
 import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.go.sync.Once
+import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.tspath.PathKey
+import com.xemantic.typescript.tsgo.core.ProjectReference
+import com.xemantic.typescript.tsgo.module.ResolutionHost
+import com.xemantic.typescript.tsgo.module.ResolvedModule
+import com.xemantic.typescript.tsgo.module.ResolverOptions
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
+import com.xemantic.typescript.tsgo.core.ScriptTarget
 import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.tspath.SourceMapLocation
+import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.clone
+import com.xemantic.typescript.tsgo.collections.delete
+import com.xemantic.typescript.tsgo.collections.entries
+import com.xemantic.typescript.tsgo.collections.get
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
+import com.xemantic.typescript.tsgo.collections.set
+import com.xemantic.typescript.tsgo.collections.values
+import com.xemantic.typescript.tsgo.core.getEmitScriptTarget
+import com.xemantic.typescript.tsgo.module.resolvePackageDirectory
+import com.xemantic.typescript.tsgo.packagejson.getValue
 
 // go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.createDiagnosticForInvalidEnumType 7a2f9cc2
 fun createDiagnosticForInvalidEnumType(opt: CommandLineOption?, sourceFile: SourceFile?, node: Node?): Diagnostic? {

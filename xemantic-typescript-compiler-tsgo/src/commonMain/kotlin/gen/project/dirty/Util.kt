@@ -24,6 +24,10 @@
 package com.xemantic.typescript.tsgo.project.dirty
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.sync.Mutex
+import com.xemantic.typescript.tsgo.collections.load
+import com.xemantic.typescript.tsgo.collections.loadOrStore
+import com.xemantic.typescript.tsgo.collections.range
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.CloneMapIfNil da0b05ee
 inline fun <K, V, T> cloneMapIfNil(goElem_K: GoElem<K>, goElem_V: GoElem<V>, goElem_T: GoElem<T>, dirty: T?, original: T?, getMap: ((T?) -> GoMap<K, V>)): GoMap<K, V> {

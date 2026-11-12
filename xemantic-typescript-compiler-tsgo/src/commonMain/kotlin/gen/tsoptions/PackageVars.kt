@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/tsoptions/declarations_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/tsoptions, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,15 +24,124 @@
 package com.xemantic.typescript.tsgo.tsoptions
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.core.BuildOptions
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.core.CompilerOptions
+import com.xemantic.typescript.tsgo.packagejson.ContentMapperFields
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Decoder
+import com.xemantic.typescript.tsgo.module.DefaultResolver
+import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Encoder
+import com.xemantic.typescript.tsgo.tspath.ExtensionRewrite
+import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.packagejson.Fields
+import com.xemantic.typescript.tsgo.tspath.FileSpec
+import com.xemantic.typescript.tsgo.glob.Glob
 import com.xemantic.typescript.tsgo.core.JsxEmit
+import com.xemantic.typescript.tsgo.ast.Kind
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.contentmapper.Manifest
 import com.xemantic.typescript.tsgo.collections.MapEntry
+import com.xemantic.typescript.tsgo.contentmapper.Mapper
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.MarshalerTo
+import com.xemantic.typescript.tsgo.diagnostics.Message
 import com.xemantic.typescript.tsgo.core.ModuleDetectionKind
 import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.core.ModuleResolutionKind
 import com.xemantic.typescript.tsgo.core.NewLineKind
+import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.ast.NodeFactory
+import com.xemantic.typescript.tsgo.ast.ObjectLiteralExpression
+import com.xemantic.typescript.tsgo.go.sync.Once
+import com.xemantic.typescript.tsgo.contentmapper.OptionPathSegment
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.Options
 import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.outputpaths.OutputPathsHost
+import com.xemantic.typescript.tsgo.tspath.PathKey
+import com.xemantic.typescript.tsgo.tspath.PathPattern
+import com.xemantic.typescript.tsgo.core.PluginImport
+import com.xemantic.typescript.tsgo.core.ProjectReference
+import com.xemantic.typescript.tsgo.ast.PropertyAssignment
+import com.xemantic.typescript.tsgo.tspath.RelativePath
+import com.xemantic.typescript.tsgo.module.ResolutionHost
+import com.xemantic.typescript.tsgo.module.ResolvedModule
+import com.xemantic.typescript.tsgo.module.ResolvedProjectReference
+import com.xemantic.typescript.tsgo.module.ResolverOptions
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
+import com.xemantic.typescript.tsgo.core.ScriptKind
 import com.xemantic.typescript.tsgo.core.ScriptTarget
+import com.xemantic.typescript.tsgo.go.iter.Seq
+import com.xemantic.typescript.tsgo.go.iter.Seq2
+import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
+import com.xemantic.typescript.tsgo.tspath.SourceMapLocation
+import com.xemantic.typescript.tsgo.vfs.vfsmatch.SpecMatcher
+import com.xemantic.typescript.tsgo.ast.StringLiteral
+import com.xemantic.typescript.tsgo.core.TextRange
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Token
 import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.go.reflect.Type
+import com.xemantic.typescript.tsgo.core.TypeAcquisition
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
+import com.xemantic.typescript.tsgo.vfs.vfsmatch.Usage
+import com.xemantic.typescript.tsgo.go.reflect.Value
+import com.xemantic.typescript.tsgo.ast.asNode
+import com.xemantic.typescript.tsgo.ast.asObjectLiteralExpression
+import com.xemantic.typescript.tsgo.ast.asPrefixUnaryExpression
+import com.xemantic.typescript.tsgo.ast.asPropertyAssignment
+import com.xemantic.typescript.tsgo.ast.asSourceFile
+import com.xemantic.typescript.tsgo.ast.asStringLiteral
+import com.xemantic.typescript.tsgo.ast.diagnostics
+import com.xemantic.typescript.tsgo.ast.elements
+import com.xemantic.typescript.tsgo.ast.expression
+import com.xemantic.typescript.tsgo.ast.name
+import com.xemantic.typescript.tsgo.ast.newNodeList
+import com.xemantic.typescript.tsgo.ast.newSourceFile
+import com.xemantic.typescript.tsgo.ast.newToken
+import com.xemantic.typescript.tsgo.ast.questionToken
+import com.xemantic.typescript.tsgo.ast.setDiagnostics
+import com.xemantic.typescript.tsgo.ast.setFile
+import com.xemantic.typescript.tsgo.ast.setLocation
+import com.xemantic.typescript.tsgo.ast.text
+import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.clone
+import com.xemantic.typescript.tsgo.collections.delete
+import com.xemantic.typescript.tsgo.collections.entries
+import com.xemantic.typescript.tsgo.collections.get
+import com.xemantic.typescript.tsgo.collections.getOrZero
+import com.xemantic.typescript.tsgo.collections.has
+import com.xemantic.typescript.tsgo.collections.keys
+import com.xemantic.typescript.tsgo.collections.set
+import com.xemantic.typescript.tsgo.collections.size
+import com.xemantic.typescript.tsgo.collections.values
+import com.xemantic.typescript.tsgo.contentmapper.equals
+import com.xemantic.typescript.tsgo.core.equals
+import com.xemantic.typescript.tsgo.core.getAllowImportingTsExtensions
+import com.xemantic.typescript.tsgo.core.getAllowJS
+import com.xemantic.typescript.tsgo.core.getAreDeclarationMapsEnabled
+import com.xemantic.typescript.tsgo.core.getEmitDeclarations
+import com.xemantic.typescript.tsgo.core.getEmitModuleDetectionKind
+import com.xemantic.typescript.tsgo.core.getEmitModuleKind
+import com.xemantic.typescript.tsgo.core.getEmitScriptTarget
+import com.xemantic.typescript.tsgo.core.getIsolatedModules
+import com.xemantic.typescript.tsgo.core.getModuleResolutionKind
+import com.xemantic.typescript.tsgo.core.getResolveJsonModule
+import com.xemantic.typescript.tsgo.core.getResolvePackageJsonExports
+import com.xemantic.typescript.tsgo.core.getResolvePackageJsonImports
+import com.xemantic.typescript.tsgo.core.getStrictOptionValue
+import com.xemantic.typescript.tsgo.core.getUseDefineForClassFields
+import com.xemantic.typescript.tsgo.core.isIncremental
+import com.xemantic.typescript.tsgo.core.shouldPreserveConstEnums
+import com.xemantic.typescript.tsgo.glob.match
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
+import com.xemantic.typescript.tsgo.module.isResolved
+import com.xemantic.typescript.tsgo.module.resolvePackageDirectory
+import com.xemantic.typescript.tsgo.packagejson.getValue
+import com.xemantic.typescript.tsgo.vfs.vfsmatch.matchFileName
+import com.xemantic.typescript.tsgo.vfs.vfsmatch.matchFileNameIndex
+import com.xemantic.typescript.tsgo.vfs.vfsmatch.matchString
 
 // go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.commonOptionsWithBuild f63948f2
 @kotlin.jvm.JvmField val commonOptionsWithBuild: GoSlice<CommandLineOption?> = GoSlice.of(GoElem.ref<CommandLineOption?>(), CommandLineOption(name = "help", kind = CommandLineOptionTypeBoolean, shortName = "h", showInSimplifiedHelpView = true, isCommandLineOnly = true, category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, description = com.xemantic.typescript.tsgo.diagnostics.print_this_message, defaultValueDescription = false), CommandLineOption(name = "help", kind = CommandLineOptionTypeBoolean, shortName = "?", isCommandLineOnly = true, category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, defaultValueDescription = false), CommandLineOption(name = "watch", kind = CommandLineOptionTypeBoolean, shortName = "w", showInSimplifiedHelpView = true, isCommandLineOnly = true, category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, description = com.xemantic.typescript.tsgo.diagnostics.watch_input_files, defaultValueDescription = false), CommandLineOption(name = "preserveWatchOutput", kind = CommandLineOptionTypeBoolean, showInSimplifiedHelpView = false, category = com.xemantic.typescript.tsgo.diagnostics.output_Formatting, description = com.xemantic.typescript.tsgo.diagnostics.disable_wiping_the_console_in_watch_mode, defaultValueDescription = false), CommandLineOption(name = "listFiles", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.print_all_of_the_files_read_during_the_compilation, defaultValueDescription = false), CommandLineOption(name = "explainFiles", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.print_files_read_during_the_compilation_including_why_it_was_included, defaultValueDescription = false), CommandLineOption(name = "listEmittedFiles", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.print_the_names_of_emitted_files_after_a_compilation, defaultValueDescription = false), CommandLineOption(name = "pretty", kind = CommandLineOptionTypeBoolean, showInSimplifiedHelpView = true, category = com.xemantic.typescript.tsgo.diagnostics.output_Formatting, description = com.xemantic.typescript.tsgo.diagnostics.enable_color_and_formatting_in_TypeScript_s_output_to_make_compiler_errors_easier_to_read, defaultValueDescription = true), CommandLineOption(name = "traceResolution", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.log_paths_used_during_the_moduleResolution_process, defaultValueDescription = false), CommandLineOption(name = "diagnostics", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.output_compiler_performance_information_after_building, defaultValueDescription = false), CommandLineOption(name = "extendedDiagnostics", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.output_more_detailed_compiler_performance_information_after_building, defaultValueDescription = false), CommandLineOption(name = "generateCpuProfile", kind = CommandLineOptionTypeString, pathKind = CommandLineOptionPathKindFile, isFilePath = true, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.emit_a_v8_CPU_profile_of_the_compiler_run_for_debugging, defaultValueDescription = "profile.cpuprofile"), CommandLineOption(name = "generateTrace", kind = CommandLineOptionTypeString, pathKind = CommandLineOptionPathKindDirectory, isFilePath = true, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.generates_an_event_trace_and_a_list_of_types), CommandLineOption(name = "incremental", kind = CommandLineOptionTypeBoolean, shortName = "i", category = com.xemantic.typescript.tsgo.diagnostics.projects, description = com.xemantic.typescript.tsgo.diagnostics.save_tsbuildinfo_files_to_allow_for_incremental_compilation_of_projects, defaultValueDescription = com.xemantic.typescript.tsgo.diagnostics.x_false_unless_composite_is_set), CommandLineOption(name = "declaration", kind = CommandLineOptionTypeBoolean, shortName = "d", showInSimplifiedHelpView = true, category = com.xemantic.typescript.tsgo.diagnostics.emit, description = com.xemantic.typescript.tsgo.diagnostics.generate_d_ts_files_from_TypeScript_and_JavaScript_files_in_your_project, defaultValueDescription = com.xemantic.typescript.tsgo.diagnostics.x_false_unless_composite_is_set), CommandLineOption(name = "declarationMap", kind = CommandLineOptionTypeBoolean, showInSimplifiedHelpView = true, category = com.xemantic.typescript.tsgo.diagnostics.emit, defaultValueDescription = false, description = com.xemantic.typescript.tsgo.diagnostics.create_sourcemaps_for_d_ts_files), CommandLineOption(name = "emitDeclarationOnly", kind = CommandLineOptionTypeBoolean, showInSimplifiedHelpView = true, category = com.xemantic.typescript.tsgo.diagnostics.emit, description = com.xemantic.typescript.tsgo.diagnostics.only_output_d_ts_files_and_not_JavaScript_files, defaultValueDescription = false), CommandLineOption(name = "sourceMap", kind = CommandLineOptionTypeBoolean, showInSimplifiedHelpView = true, category = com.xemantic.typescript.tsgo.diagnostics.emit, defaultValueDescription = false, description = com.xemantic.typescript.tsgo.diagnostics.create_source_map_files_for_emitted_JavaScript_files), CommandLineOption(name = "inlineSourceMap", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.emit, description = com.xemantic.typescript.tsgo.diagnostics.include_sourcemap_files_inside_the_emitted_JavaScript, defaultValueDescription = false), CommandLineOption(name = "noCheck", kind = CommandLineOptionTypeBoolean, showInSimplifiedHelpView = false, category = com.xemantic.typescript.tsgo.diagnostics.compiler_Diagnostics, description = com.xemantic.typescript.tsgo.diagnostics.disable_full_type_checking_only_critical_parse_and_emit_errors_will_be_reported, defaultValueDescription = false), CommandLineOption(name = "deduplicatePackages", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.type_Checking, description = com.xemantic.typescript.tsgo.diagnostics.deduplicate_packages_with_the_same_name_and_version, defaultValueDescription = true), CommandLineOption(name = "noEmit", kind = CommandLineOptionTypeBoolean, showInSimplifiedHelpView = true, category = com.xemantic.typescript.tsgo.diagnostics.emit, description = com.xemantic.typescript.tsgo.diagnostics.disable_emitting_files_from_a_compilation, defaultValueDescription = false), CommandLineOption(name = "assumeChangesOnlyAffectDirectDependencies", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.watch_and_Build_Modes, description = com.xemantic.typescript.tsgo.diagnostics.have_recompiles_in_projects_that_use_incremental_and_watch_mode_assume_that_changes_within_a_file_will_only_affect_files_directly_depending_on_it, defaultValueDescription = false), CommandLineOption(name = "locale", kind = CommandLineOptionTypeString, category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, isCommandLineOnly = true, description = com.xemantic.typescript.tsgo.diagnostics.set_the_language_of_the_messaging_from_TypeScript_This_does_not_affect_emit, defaultValueDescription = com.xemantic.typescript.tsgo.diagnostics.platform_specific, extraValidation = extraValidationLocale), CommandLineOption(name = "quiet", kind = CommandLineOptionTypeBoolean, shortName = "q", category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, description = com.xemantic.typescript.tsgo.diagnostics.do_not_print_diagnostics), CommandLineOption(name = "singleThreaded", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, description = com.xemantic.typescript.tsgo.diagnostics.run_in_single_threaded_mode), CommandLineOption(name = "pprofDir", kind = CommandLineOptionTypeString, pathKind = CommandLineOptionPathKindDirectory, isFilePath = true, category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, description = com.xemantic.typescript.tsgo.diagnostics.generate_pprof_CPU_Slashmemory_profiles_to_the_given_directory), CommandLineOption(name = "checkers", kind = CommandLineOptionTypeNumber, category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, description = com.xemantic.typescript.tsgo.diagnostics.set_the_number_of_checkers_per_project, defaultValueDescription = com.xemantic.typescript.tsgo.diagnostics.x_4_unless_singleThreaded_is_passed, minValue = 1), CommandLineOption(name = "runExternalCode", kind = CommandLineOptionTypeBoolean, category = com.xemantic.typescript.tsgo.diagnostics.command_line_Options, isCommandLineOnly = true, description = com.xemantic.typescript.tsgo.diagnostics.allow_loading_external_content_mapper_plugins_that_execute_code_during_compilation, defaultValueDescription = false))
@@ -96,6 +205,39 @@ import com.xemantic.typescript.tsgo.core.Tristate
 
 // go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.targetToLibMap 36bc13d3
 @kotlin.jvm.JvmField val targetToLibMap: GoMap<ScriptTarget, String> = GoMap.make<ScriptTarget, String>(GoElem.STRING).also { it[ScriptTarget(99)] = "lib.esnext.full.d.ts"; it[ScriptTarget(13)] = "lib.es2026.full.d.ts"; it[ScriptTarget(12)] = "lib.es2025.full.d.ts"; it[ScriptTarget(11)] = "lib.es2024.full.d.ts"; it[ScriptTarget(10)] = "lib.es2023.full.d.ts"; it[ScriptTarget(9)] = "lib.es2022.full.d.ts"; it[ScriptTarget(8)] = "lib.es2021.full.d.ts"; it[ScriptTarget(7)] = "lib.es2020.full.d.ts"; it[ScriptTarget(6)] = "lib.es2019.full.d.ts"; it[ScriptTarget(5)] = "lib.es2018.full.d.ts"; it[ScriptTarget(4)] = "lib.es2017.full.d.ts"; it[ScriptTarget(3)] = "lib.es2016.full.d.ts"; it[ScriptTarget(2)] = "lib.es6.d.ts" }
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.Libs 420cf045
+@kotlin.jvm.JvmField val libs: GoSlice<String> = com.xemantic.typescript.tsgo.go.slices.collect<String>(GoElem.STRING, (libMap.keys())!!)
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.LibFilesSet c655400b
+@kotlin.jvm.JvmField val libFilesSet: com.xemantic.typescript.tsgo.collections.Set<String>? = com.xemantic.typescript.tsgo.collections.newSetFromItems<String>(GoElem.STRING, com.xemantic.typescript.tsgo.core.map<Any?, String>(GoElem.ref<Any?>(), GoElem.STRING, com.xemantic.typescript.tsgo.go.slices.collect<Any?>(GoElem.ref<Any?>(), (libMap.values())!!), fun(s: Any?): String {
+    return s as String
+}))
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.CompilerNameMap 798c2ab5
+@kotlin.jvm.JvmField val compilerNameMap: NameMap? = getNameMapFromList(optionsDeclarations)
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.buildOptionsDidYouMeanDiagnostics a2fc1c6a
+@kotlin.jvm.JvmField val buildOptionsDidYouMeanDiagnostics: ParseCommandLineWorkerDiagnostics? = ParseCommandLineWorkerDiagnostics(didYouMean = DidYouMeanOptionsDiagnostics(alternateMode = AlternateModeDiagnostics(diagnostic = com.xemantic.typescript.tsgo.diagnostics.compiler_option_0_may_not_be_used_with_build, optionsNameMap = compilerNameMap), optionDeclarations = buildOpts, unknownOptionDiagnostic = com.xemantic.typescript.tsgo.diagnostics.unknown_build_option_0, unknownDidYouMeanDiagnostic = com.xemantic.typescript.tsgo.diagnostics.unknown_build_option_0_Did_you_mean_1), optionTypeMismatchDiagnostic = com.xemantic.typescript.tsgo.diagnostics.build_option_0_requires_a_value_of_type_1)
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.BuildNameMap 963e2443
+@kotlin.jvm.JvmField val buildNameMap: NameMap? = getNameMapFromList(buildOpts)
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.CompilerOptionsDidYouMeanDiagnostics a3b40210
+@kotlin.jvm.JvmField val compilerOptionsDidYouMeanDiagnostics: ParseCommandLineWorkerDiagnostics? = getParseCommandLineWorkerDiagnostics(optionsDeclarations)
+
+
+
+
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.impliedOptions 869af1f5
+@kotlin.jvm.JvmField val impliedOptions: GoSlice<com.xemantic.typescript.tsgo.tsoptions.impliedOption> = GoSlice.of(com.xemantic.typescript.tsgo.tsoptions.impliedOption.ELEM, com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "Module", dependencies = GoSlice.of(GoElem.STRING, "Target"), compute = computeFn<ModuleKind>(ModuleKind.ELEM, fun(p0: CompilerOptions?): ModuleKind = p0.getEmitModuleKind())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ModuleResolution", dependencies = GoSlice.of(GoElem.STRING, "Module", "Target"), compute = computeFn<ModuleResolutionKind>(ModuleResolutionKind.ELEM, fun(p0: CompilerOptions?): ModuleResolutionKind = p0.getModuleResolutionKind())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ModuleDetection", dependencies = GoSlice.of(GoElem.STRING, "Module", "Target"), compute = computeFn<ModuleDetectionKind>(ModuleDetectionKind.ELEM, fun(p0: CompilerOptions?): ModuleDetectionKind = p0.getEmitModuleDetectionKind())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "IsolatedModules", dependencies = GoSlice.of(GoElem.STRING, "VerbatimModuleSyntax"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getIsolatedModules())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "PreserveConstEnums", dependencies = GoSlice.of(GoElem.STRING, "IsolatedModules", "VerbatimModuleSyntax"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.shouldPreserveConstEnums())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "Declaration", dependencies = GoSlice.of(GoElem.STRING, "Composite"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getEmitDeclarations())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "DeclarationMap", dependencies = GoSlice.of(GoElem.STRING, "Declaration", "Composite"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getAreDeclarationMapsEnabled())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "Incremental", dependencies = GoSlice.of(GoElem.STRING, "Composite"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.isIncremental())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "UseDefineForClassFields", dependencies = GoSlice.of(GoElem.STRING, "Target", "Module"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getUseDefineForClassFields())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ResolvePackageJsonExports", dependencies = GoSlice.of(GoElem.STRING, "ModuleResolution", "Module", "Target"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getResolvePackageJsonExports())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ResolvePackageJsonImports", dependencies = GoSlice.of(GoElem.STRING, "ModuleResolution", "ResolvePackageJsonExports", "Module", "Target"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getResolvePackageJsonImports())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ResolveJsonModule", dependencies = GoSlice.of(GoElem.STRING, "ModuleResolution", "Module", "Target"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getResolveJsonModule())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "AllowJs", dependencies = GoSlice.of(GoElem.STRING, "CheckJs"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getAllowJS())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "AllowImportingTsExtensions", dependencies = GoSlice.of(GoElem.STRING, "RewriteRelativeImportExtensions"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getAllowImportingTsExtensions())))
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.orderedMapType 551fb660
+@kotlin.jvm.JvmField val orderedMapType: Type? = com.xemantic.typescript.tsgo.go.reflect.typeFor(GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, Any?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<Any?>()) }), zero = { null }))
+
+// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.CommandLineCompilerOptionsMap c3ba5e09
+@kotlin.jvm.JvmField val commandLineCompilerOptionsMap: CommandLineOptionNameMap = commandLineOptionsToMap(optionsDeclarations)
 
 // go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.compilerOptionsDeclaration e5d712fd
 @kotlin.jvm.JvmField val compilerOptionsDeclaration: CommandLineOption? = CommandLineOption(name = "compilerOptions", kind = CommandLineOptionTypeObject, elementOptions = commandLineCompilerOptionsMap)

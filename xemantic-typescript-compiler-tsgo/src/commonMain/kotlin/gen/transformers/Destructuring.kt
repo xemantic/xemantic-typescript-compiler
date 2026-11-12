@@ -24,14 +24,25 @@
 package com.xemantic.typescript.tsgo.transformers
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.core.CompilerOptions
+import com.xemantic.typescript.tsgo.printer.EmitContext
+import com.xemantic.typescript.tsgo.printer.EmitResolver
+import com.xemantic.typescript.tsgo.tspath.ExtensionRewrite
+import com.xemantic.typescript.tsgo.ast.HasFileName
 import com.xemantic.typescript.tsgo.ast.Kind
+import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeFlags
+import com.xemantic.typescript.tsgo.binder.ReferenceResolver
+import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.core.TextRange
 import com.xemantic.typescript.tsgo.ast.TokenFlags
 import com.xemantic.typescript.tsgo.ast.asBinaryExpression
 import com.xemantic.typescript.tsgo.ast.asElementAccessExpression
+import com.xemantic.typescript.tsgo.ast.asNode
 import com.xemantic.typescript.tsgo.ast.asShorthandPropertyAssignment
+import com.xemantic.typescript.tsgo.ast.asSourceFile
 import com.xemantic.typescript.tsgo.ast.asVariableDeclaration
 import com.xemantic.typescript.tsgo.ast.clone
 import com.xemantic.typescript.tsgo.ast.expression

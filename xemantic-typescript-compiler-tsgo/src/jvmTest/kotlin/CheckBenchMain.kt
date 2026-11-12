@@ -30,10 +30,11 @@ import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
 import com.xemantic.typescript.tsgo.ast.localize
 import com.xemantic.typescript.tsgo.compiler.CompilerHost
+import com.xemantic.typescript.tsgo.compiler.ProgramConfig
+import com.xemantic.typescript.tsgo.compiler.ProgramHosts
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.core.TSTrue
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
-import com.xemantic.typescript.tsgo.go.io.fs.WalkDirFunc
 import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoError
@@ -41,6 +42,11 @@ import com.xemantic.typescript.tsgo.runtime.GoMap
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.Tuple2
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.vfs.Entries
 import com.xemantic.typescript.tsgo.vfs.FS
 import java.io.File
@@ -98,39 +104,38 @@ class DiskFS : FS {
     private val missing = Any()
     private fun file(p: String) = File(GoString.toUtf16(p))
 
-    override fun useCaseSensitiveFileNames(): Boolean = true
-    override fun fileExists(p0: String): Boolean = file(p0).isFile
-    override fun readFile(p0: String): Tuple2<String, Boolean> {
-        contents[p0]?.let { return Tuple2(it, true) }
-        val f = file(p0)
+    override fun caseSensitivity(): CaseSensitivity = CaseSensitive
+    override fun fileExists(p0: RootedFilePath): Boolean = file(p0.value).isFile
+    override fun readFile(p0: RootedFilePath): Tuple2<String, Boolean> {
+        contents[p0.value]?.let { return Tuple2(it, true) }
+        val f = file(p0.value)
         if (!f.isFile) return Tuple2("", false)
         var s = String(f.readBytes(), Charsets.ISO_8859_1)
         if (s.length >= 3 && s[0].code == 0xEF && s[1].code == 0xBB && s[2].code == 0xBF) s = s.substring(3)
-        contents[p0] = s
+        contents[p0.value] = s
         return Tuple2(s, true)
     }
-    override fun directoryExists(p0: String): Boolean = file(p0).isDirectory
-    override fun getAccessibleEntries(p0: String): Entries {
-        val list = file(p0).listFiles()?.sortedBy { it.name } ?: return Entries()
+    override fun directoryExists(p0: RootedDirectoryPath): Boolean = file(p0.value).isDirectory
+    override fun getAccessibleEntries(p0: RootedDirectoryPath): Entries {
+        val list = file(p0.value).listFiles()?.sortedBy { it.name } ?: return Entries()
         return Entries(
             files = GoSlice.of(GoElem.STRING, *list.filter { it.isFile }.map { GoString.fromUtf16(it.name) }.toTypedArray()),
             directories = GoSlice.of(GoElem.STRING, *list.filter { it.isDirectory }.map { GoString.fromUtf16(it.name) }.toTypedArray()),
             symlinks = GoMap.make(com.xemantic.typescript.tsgo.runtime.goUnitElem),
         )
     }
-    override fun realpath(p0: String): String = p0
-    override fun stat(p0: String): FileInfo? = null
-    override fun walkDir(p0: String, p1: WalkDirFunc?): GoError? = error("walkDir not supported")
-    override fun writeFile(p0: String, p1: String): GoError? = error("read-only")
-    override fun appendFile(p0: String, p1: String): GoError? = error("read-only")
-    override fun remove(p0: String): GoError? = error("read-only")
-    override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = error("read-only")
+    override fun realpath(p0: RootedPath): RootedPath = p0
+    override fun stat(p0: RootedPath): FileInfo? = null
+    override fun writeFile(p0: RootedFilePath, p1: String): GoError? = error("read-only")
+    override fun appendFile(p0: RootedFilePath, p1: String): GoError? = error("read-only")
+    override fun remove(p0: RootedPath): GoError? = error("read-only")
+    override fun chtimes(p0: RootedPath, p1: Time, p2: Time): GoError? = error("read-only")
 }
 
 /** Shares parsed bundled-lib files across programs (what tsgo's harness and language server do), keyed as Go does. */
 class LibCachingHost(private val inner: CompilerHost) : CompilerHost by inner {
     override fun getSourceFile(p0: SourceFileParseOptions): SourceFile? {
-        if (!p0.fileName.startsWith("bundled:")) return inner.getSourceFile(p0)
+        if (!p0.fileName.value.startsWith("bundled:")) return inner.getSourceFile(p0)
         val read = inner.fs()!!.readFile(p0.fileName)
         if (!read.second) return null
         val kind = com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(p0.fileName)
@@ -170,13 +175,12 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
         // and read 77 of 78 files on Oracle GraalVM).
         val emitted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         val disk: FS = if (!emit) read else object : FS by read {
-            override fun writeFile(p0: String, p1: String): GoError? {
-                emitted.add(p0)
+            override fun writeFile(p0: RootedFilePath, p1: String): GoError? {
+                emitted.add(p0.value)
                 return null
             }
         }
-        val cwd = GoString.fromUtf16(config.parentFile.path)
-        val configName = GoString.fromUtf16(config.path)
+        val configName = RootedFilePath(GoString.fromUtf16(config.path))
         println("project=$config warmup=$warmup iters=$iters libcache=$libCache parallel=$parallel osfs=$osfs emit=$emit java=${System.getProperty("java.version")}")
         val totals = ArrayList<Double>()
         val cpus = ArrayList<Double>()
@@ -198,11 +202,11 @@ private class CheckBench(val config: File, val warmup: Int, val iters: Int, val 
             val g0 = gcMs()
             val t0 = System.nanoTime()
             val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(disk)
-            val inner = com.xemantic.typescript.tsgo.compiler.newCompilerHost(cwd, fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)!!
+            val inner = com.xemantic.typescript.tsgo.compiler.newCompilerHost(fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null, null)!!
             val host = if (libCache) LibCachingHost(inner) else inner
-            val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(configName, null, null, host, null)
+            val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(configName, null, null, host.fs(), null)
             val t1 = System.nanoTime()
-            val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = parsed, singleThreaded = if (parallel) com.xemantic.typescript.tsgo.core.TSFalse else TSTrue))!!
+            val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(programConfig = ProgramConfig(config = parsed, singleThreaded = if (parallel) com.xemantic.typescript.tsgo.core.TSFalse else TSTrue), programHosts = ProgramHosts(host = host)))!!
             if (probe) histogram("1-after-program.txt")
             val t2 = System.nanoTime()
             val ctx = com.xemantic.typescript.tsgo.go.context.background()

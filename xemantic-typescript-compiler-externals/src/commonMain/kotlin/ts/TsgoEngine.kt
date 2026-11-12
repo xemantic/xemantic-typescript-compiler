@@ -58,12 +58,12 @@ import com.xemantic.typescript.tsgo.checker.getDeclaredTypeOfSymbol
 import com.xemantic.typescript.tsgo.checker.getMergedSymbol
 import com.xemantic.typescript.tsgo.compiler.CompilerHost
 import com.xemantic.typescript.tsgo.compiler.Program
+import com.xemantic.typescript.tsgo.compiler.ProgramConfig
+import com.xemantic.typescript.tsgo.compiler.ProgramHosts
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.compiler.getTypeChecker
 import com.xemantic.typescript.tsgo.core.CompilerOptions
-import com.xemantic.typescript.tsgo.core.ParsedOptions
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
-import com.xemantic.typescript.tsgo.go.io.fs.WalkDirFunc
 import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoError
@@ -71,7 +71,12 @@ import com.xemantic.typescript.tsgo.runtime.GoMap
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.Tuple2
-import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
+import com.xemantic.typescript.tsgo.tsoptions.newParsedCommandLine
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.vfs.Entries
 import com.xemantic.typescript.tsgo.vfs.FS
 import com.xemantic.typescript.tsgo.ast.Node as RawNode
@@ -135,24 +140,28 @@ internal class Tree(files: List<Pair<String, String>>) {
         val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(MapFS(contents))
         val host = BundledLibSharingHost(
             com.xemantic.typescript.tsgo.compiler.newCompilerHost(
-                "/", fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null,
+                fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null, null,
             )!!,
         )
-        val config = ParsedCommandLine(
-            parsedConfig = ParsedOptions(
-                compilerOptions = CompilerOptions(),
-                fileNames = GoSlice.of(GoElem.STRING, *contents.keys.map { GoString.fromUtf16(it) }.toTypedArray()),
-            ),
+        val config = newParsedCommandLine(
+            CompilerOptions(),
+            GoSlice.of(RootedFilePath.ELEM, *contents.keys.map { RootedFilePath(GoString.fromUtf16(it)) }.toTypedArray()),
+            GoElem.ref<com.xemantic.typescript.tsgo.core.ProjectReference?>().nilSlice,
+            RootedDirectoryPath("/"),
+            CaseSensitive,
         )
         program = com.xemantic.typescript.tsgo.compiler.newProgram(
-            ProgramOptions(host = host, config = config, singleThreaded = com.xemantic.typescript.tsgo.core.TSTrue),
+            ProgramOptions(
+                programConfig = ProgramConfig(config = config, singleThreaded = com.xemantic.typescript.tsgo.core.TSTrue),
+                programHosts = ProgramHosts(host = host),
+            ),
         ) ?: error("tsgo built no program")
         val ctx = com.xemantic.typescript.tsgo.go.context.background()
         val (c, done) = program.getTypeChecker(ctx)
         checker = c ?: error("tsgo built no checker")
         releaseChecker = done
         val rawFiles = contents.keys.map { path ->
-            program.getSourceFile(GoString.fromUtf16(path)) ?: error("tsgo did not load $path")
+            program.getSourceFile(RootedFilePath(GoString.fromUtf16(path))) ?: error("tsgo did not load $path")
         }
         val collected = mutableListOf<ExternalsDiagnostic>()
         for (file in rawFiles) {
@@ -182,7 +191,7 @@ internal class Tree(files: List<Pair<String, String>>) {
                 null to null
             }
             ExternalsDiagnostic(
-                fileName = file?.let { originalName(it.fileName) },
+                fileName = file?.let { originalName(it.fileName.value) },
                 line = line,
                 character = character,
                 category = when (diagnostic.category.value) {
@@ -247,10 +256,10 @@ internal class Tree(files: List<Pair<String, String>>) {
 
     fun symbol(raw: RawSymbol): Symbol = symbols.getOrPut(raw) { Symbol(this, raw) }
 
-    fun symbolName(raw: RawSymbol): String = GoString.toUtf16(raw.name)
+    fun symbolName(raw: RawSymbol): String = GoString.toUtf16(raw.name())
 
     fun symbolDeclarations(raw: RawSymbol): List<Node> {
-        val declarations = raw.declarations
+        val declarations = raw.declarations()
         return (0 until declarations.len).mapNotNull { declarations[it]?.let(::node) }
     }
 
@@ -270,14 +279,14 @@ internal class Tree(files: List<Pair<String, String>>) {
         val symbol = raw.symbol?.let(::symbol)
         val objectFlags = raw.objectFlags.value
         return when {
-            raw.data is IntrinsicType -> Type.Intrinsic(raw, intrinsicFlags(flags), GoString.toUtf16((raw.data as IntrinsicType).intrinsicName))
+            raw is IntrinsicType -> Type.Intrinsic(raw, intrinsicFlags(flags), GoString.toUtf16(raw.intrinsicName))
             // An ENUM type — the union of its members' literals carrying
             // EnumLiteral, a computed enum's Enum type, or the one literal of a
             // single-member enum: whichever it is, it is the enum's DECLARED
             // type. An enum MEMBER's literal (`Kind.A` of a larger enum) is not
             // a plain literal and maps to nothing.
             has(ENUM) || has(ENUM_LITERAL) -> {
-                val owner = listOfNotNull(raw.symbol, raw.symbol?.parent?.let { checker.getMergedSymbol(it) })
+                val owner = listOfNotNull(raw.symbol, raw.symbol?.parent()?.let { checker.getMergedSymbol(it) })
                     .firstOrNull { it.flags.value and ENUM_SYMBOL != 0u && checker.getDeclaredTypeOfSymbol(it) === raw }
                 if (owner != null) Type.Object(raw, symbol(owner)) else Type.Other(raw)
             }
@@ -292,13 +301,13 @@ internal class Tree(files: List<Pair<String, String>>) {
             has(BIGINT_LITERAL) -> Type.BigIntLiteral(raw)
             has(TYPE_PARAMETER) -> Type.TypeParam(raw, symbol)
             has(UNION) -> {
-                val members = rawList(raw.data?.let { (it as com.xemantic.typescript.tsgo.checker.UnionType).unionOrIntersectionType.types })
+                val members = rawList((raw as com.xemantic.typescript.tsgo.checker.UnionType).types)
                 Type.Union(raw) { collapseEnums(members).map(::type) }
             }
             has(OBJECT) -> when {
                 objectFlags and CLASS_OR_INTERFACE != 0u -> interfaceType(raw, symbol)
                 objectFlags and REFERENCE != 0u && !isTupleType(raw) -> {
-                    val targetRaw = (raw.data as com.xemantic.typescript.tsgo.checker.TypeReference).objectType.target
+                    val targetRaw = (raw as com.xemantic.typescript.tsgo.checker.TypeReference).target
                     val target = targetRaw?.let(::type) as? Type.Interface
                     if (target == null) {
                         Type.Other(raw)
@@ -326,7 +335,7 @@ internal class Tree(files: List<Pair<String, String>>) {
         val byEnum = LinkedHashMap<RawType, MutableList<RawType>>()
         for (member in members) {
             if (member.flags.value and ENUM_LITERAL == 0u || member.flags.value and UNION != 0u) continue
-            val owner = member.symbol?.parent?.let { checker.getMergedSymbol(it) } ?: continue
+            val owner = member.symbol?.parent()?.let { checker.getMergedSymbol(it) } ?: continue
             if (owner.flags.value and ENUM_SYMBOL == 0u) continue
             val declared = checker.getDeclaredTypeOfSymbol(owner) ?: continue
             byEnum.getOrPut(declared) { mutableListOf() }.add(member)
@@ -337,7 +346,7 @@ internal class Tree(files: List<Pair<String, String>>) {
         for (member in members) {
             val declared = byEnum.entries.firstOrNull { (declared, present) ->
                 member in present && declared.flags.value and UNION != 0u &&
-                    rawList(declared.data?.let { (it as com.xemantic.typescript.tsgo.checker.UnionType).unionOrIntersectionType.types })
+                    rawList((declared as com.xemantic.typescript.tsgo.checker.UnionType).types)
                         .all { it in present }
             }?.key
             if (declared == null) result += member
@@ -348,7 +357,7 @@ internal class Tree(files: List<Pair<String, String>>) {
 
     private fun interfaceType(raw: RawType, symbol: Symbol?): Type.Interface {
         val parameters = rawList(
-            (raw.data as? com.xemantic.typescript.tsgo.checker.InterfaceType)?.let { it.typeParameters() },
+            (raw as? com.xemantic.typescript.tsgo.checker.InterfaceType)?.let { it.typeParameters() },
         )
         return Type.Interface(raw, symbol) { parameters.map(::type) }
     }
@@ -385,65 +394,65 @@ internal class Tree(files: List<Pair<String, String>>) {
     private fun create(raw: RawNode): Node {
         val kind = raw.kind.value
         return when (kind) {
-            307 -> SourceFile(this, raw, originalName(raw.asSourceFile()!!.fileName))
-            244 -> VariableStatement(this, raw)
-            262 -> VariableDeclarationList(this, raw)
-            261 -> VariableDeclaration(this, raw)
-            263 -> FunctionDeclaration(this, raw)
-            264 -> ClassDeclaration(this, raw)
-            265 -> InterfaceDeclaration(this, raw)
-            266 -> TypeAliasDeclaration(this, raw)
-            267 -> EnumDeclaration(this, raw)
-            306 -> EnumMember(this, raw)
-            268 -> moduleDeclaration(raw)
-            269 -> ModuleBlock(this, raw)
-            273 -> ImportDeclaration(this, raw)
-            274 -> ImportClause(this, raw)
-            275 -> NamespaceImport(this, raw)
-            276 -> NamedImports(this, raw)
-            277 -> ImportSpecifier(this, raw)
-            272 -> ImportEqualsDeclaration(this, raw)
-            284 -> ExternalModuleReference(this, raw)
-            279 -> ExportDeclaration(this, raw)
-            278 -> ExportAssignment(this, raw)
-            280 -> NamedExports(this, raw)
-            281 -> NamespaceExport(this, raw)
-            282 -> ExportSpecifier(this, raw)
-            79, 80 -> Identifier(this, raw, GoString.toUtf16(raw.text()))
-            10, 14 -> StringLiteralNode(this, raw, GoString.toUtf16(raw.text()))
-            8 -> NumericLiteralNode(this, raw, GoString.toUtf16(raw.text()))
-            9 -> BigIntLiteralNode(this, raw, GoString.toUtf16(raw.text()))
-            225 -> PrefixUnaryExpression(this, raw)
-            212 -> PropertyAccessExpression(
+            KindSourceFile.value -> SourceFile(this, raw, originalName(raw.asSourceFile()!!.fileName.value))
+            KindVariableStatement.value -> VariableStatement(this, raw)
+            KindVariableDeclarationList.value -> VariableDeclarationList(this, raw)
+            KindVariableDeclaration.value -> VariableDeclaration(this, raw)
+            KindFunctionDeclaration.value -> FunctionDeclaration(this, raw)
+            KindClassDeclaration.value -> ClassDeclaration(this, raw)
+            KindInterfaceDeclaration.value -> InterfaceDeclaration(this, raw)
+            KindTypeAliasDeclaration.value -> TypeAliasDeclaration(this, raw)
+            KindEnumDeclaration.value -> EnumDeclaration(this, raw)
+            KindEnumMember.value -> EnumMember(this, raw)
+            KindModuleDeclaration.value -> moduleDeclaration(raw)
+            KindModuleBlock.value -> ModuleBlock(this, raw)
+            KindImportDeclaration.value -> ImportDeclaration(this, raw)
+            KindImportClause.value -> ImportClause(this, raw)
+            KindNamespaceImport.value -> NamespaceImport(this, raw)
+            KindNamedImports.value -> NamedImports(this, raw)
+            KindImportSpecifier.value -> ImportSpecifier(this, raw)
+            KindImportEqualsDeclaration.value -> ImportEqualsDeclaration(this, raw)
+            KindExternalModuleReference.value -> ExternalModuleReference(this, raw)
+            KindExportDeclaration.value -> ExportDeclaration(this, raw)
+            KindExportAssignment.value -> ExportAssignment(this, raw)
+            KindNamedExports.value -> NamedExports(this, raw)
+            KindNamespaceExport.value -> NamespaceExport(this, raw)
+            KindExportSpecifier.value -> ExportSpecifier(this, raw)
+            KindIdentifier.value, KindPrivateIdentifier.value -> Identifier(this, raw, GoString.toUtf16(raw.text()))
+            KindStringLiteral.value, KindNoSubstitutionTemplateLiteral.value -> StringLiteralNode(this, raw, GoString.toUtf16(raw.text()))
+            KindNumericLiteral.value -> NumericLiteralNode(this, raw, GoString.toUtf16(raw.text()))
+            KindBigIntLiteral.value -> BigIntLiteralNode(this, raw, GoString.toUtf16(raw.text()))
+            KindPrefixUnaryExpression.value -> PrefixUnaryExpression(this, raw)
+            KindPropertyAccessExpression.value -> PropertyAccessExpression(
                 this, raw,
                 { expression(raw.asPropertyAccessExpression()!!.expression) },
                 { identifier(raw.asPropertyAccessExpression()!!.name) },
             )
-            232 -> ClassExpression(this, raw)
-            172, 173 -> PropertyDeclaration(this, raw)
-            174, 175 -> MethodDeclaration(this, raw, syntheticName = null)
-            180 -> MethodDeclaration(this, raw, syntheticName = "")
-            181 -> MethodDeclaration(this, raw, syntheticName = "new")
-            177 -> Constructor(this, raw)
-            178 -> GetAccessor(this, raw)
-            179 -> SetAccessor(this, raw)
-            182 -> IndexSignature(this, raw)
-            241 -> SemicolonClassElement(this, raw)
-            176 -> ClassStaticBlockDeclaration(this, raw)
-            170 -> Parameter(this, raw)
-            299 -> HeritageClause(this, raw)
-            234 -> ExpressionWithTypeArguments(this, raw)
-            169 -> TypeParameter(this, raw)
-            167 -> QualifiedName(this, raw)
-            184 -> TypeReference(this, raw)
-            185 -> FunctionType(this, raw)
-            187 -> TypeQuery(this, raw)
-            189 -> ArrayType(this, raw)
-            193 -> UnionType(this, raw)
-            197 -> ParenthesizedType(this, raw)
-            199 -> TypeOperator(this, raw)
-            202 ->
-                if (raw.asLiteralTypeNode()!!.literal?.kind?.value == 105) KeywordTypeNode(this, raw, SyntaxKind.NullKeyword)
+            KindClassExpression.value -> ClassExpression(this, raw)
+            KindPropertySignature.value, KindPropertyDeclaration.value -> PropertyDeclaration(this, raw)
+            KindMethodSignature.value, KindMethodDeclaration.value -> MethodDeclaration(this, raw, syntheticName = null)
+            KindCallSignature.value -> MethodDeclaration(this, raw, syntheticName = "")
+            KindConstructSignature.value -> MethodDeclaration(this, raw, syntheticName = "new")
+            KindConstructor.value -> Constructor(this, raw)
+            KindGetAccessor.value -> GetAccessor(this, raw)
+            KindSetAccessor.value -> SetAccessor(this, raw)
+            KindIndexSignature.value -> IndexSignature(this, raw)
+            KindSemicolonClassElement.value -> SemicolonClassElement(this, raw)
+            KindClassStaticBlockDeclaration.value -> ClassStaticBlockDeclaration(this, raw)
+            KindParameter.value -> Parameter(this, raw)
+            KindHeritageClause.value -> HeritageClause(this, raw)
+            KindExpressionWithTypeArguments.value -> ExpressionWithTypeArguments(this, raw)
+            KindTypeParameter.value -> TypeParameter(this, raw)
+            KindQualifiedName.value -> QualifiedName(this, raw)
+            KindTypeReference.value -> TypeReference(this, raw)
+            KindFunctionType.value -> FunctionType(this, raw)
+            KindTypeQuery.value -> TypeQuery(this, raw)
+            KindArrayType.value -> ArrayType(this, raw)
+            KindUnionType.value -> UnionType(this, raw)
+            KindParenthesizedType.value -> ParenthesizedType(this, raw)
+            KindTypeOperator.value -> TypeOperator(this, raw)
+            KindLiteralType.value ->
+                if (raw.asLiteralTypeNode()!!.literal?.kind?.value == KindNullKeyword.value) KeywordTypeNode(this, raw, SyntaxKind.NullKeyword)
                 else LiteralType(this, raw)
             else -> keywordKind(kind)?.let { KeywordTypeNode(this, raw, it) }
                 ?: OtherNode(this, raw, GoString.toUtf16(raw.kind.string()))
@@ -451,19 +460,19 @@ internal class Tree(files: List<Pair<String, String>>) {
     }
 
     private fun keywordKind(kind: Int): SyntaxKind? = when (kind) {
-        132 -> SyntaxKind.AnyKeyword
-        159 -> SyntaxKind.UnknownKeyword
-        157 -> SyntaxKind.UndefinedKeyword
-        154 -> SyntaxKind.StringKeyword
-        150 -> SyntaxKind.NumberKeyword
-        135 -> SyntaxKind.BooleanKeyword
-        163 -> SyntaxKind.BigIntKeyword
-        155 -> SyntaxKind.SymbolKeyword
-        151 -> SyntaxKind.ObjectKeyword
-        146 -> SyntaxKind.NeverKeyword
-        115 -> SyntaxKind.VoidKeyword
-        141 -> SyntaxKind.IntrinsicKeyword
-        198 -> SyntaxKind.ThisType
+        KindAnyKeyword.value -> SyntaxKind.AnyKeyword
+        KindUnknownKeyword.value -> SyntaxKind.UnknownKeyword
+        KindUndefinedKeyword.value -> SyntaxKind.UndefinedKeyword
+        KindStringKeyword.value -> SyntaxKind.StringKeyword
+        KindNumberKeyword.value -> SyntaxKind.NumberKeyword
+        KindBooleanKeyword.value -> SyntaxKind.BooleanKeyword
+        KindBigIntKeyword.value -> SyntaxKind.BigIntKeyword
+        KindSymbolKeyword.value -> SyntaxKind.SymbolKeyword
+        KindObjectKeyword.value -> SyntaxKind.ObjectKeyword
+        KindNeverKeyword.value -> SyntaxKind.NeverKeyword
+        KindVoidKeyword.value -> SyntaxKind.VoidKeyword
+        KindIntrinsicKeyword.value -> SyntaxKind.IntrinsicKeyword
+        KindThisType.value -> SyntaxKind.ThisType
         else -> null
     }
 
@@ -476,7 +485,7 @@ internal class Tree(files: List<Pair<String, String>>) {
         var outer = raw
         while (outer.flags.value and NESTED_NAMESPACE != 0u) {
             val parent = outer.parent ?: break
-            if (parent.kind.value != 268) break
+            if (parent.kind.value != KindModuleDeclaration.value) break
             outer = parent
         }
         if (outer !== raw) return node(outer)
@@ -484,7 +493,7 @@ internal class Tree(files: List<Pair<String, String>>) {
         val chain = mutableListOf(raw)
         while (true) {
             val body = innermost.body() ?: break
-            if (body.kind.value != 268) break
+            if (body.kind.value != KindModuleDeclaration.value) break
             innermost = body
             chain += body
         }
@@ -514,8 +523,8 @@ internal class Tree(files: List<Pair<String, String>>) {
     fun literalOf(owner: LiteralType, raw: RawNode): Expression {
         val literal = raw.asLiteralTypeNode()!!.literal!!
         return when (literal.kind.value) {
-            111 -> Identifier(this, null, "true").synthesizedUnder(owner) as Expression
-            96 -> Identifier(this, null, "false").synthesizedUnder(owner) as Expression
+            KindTrueKeyword.value -> Identifier(this, null, "true").synthesizedUnder(owner) as Expression
+            KindFalseKeyword.value -> Identifier(this, null, "false").synthesizedUnder(owner) as Expression
             else -> expression(literal)
         }
     }
@@ -592,7 +601,7 @@ internal class Tree(files: List<Pair<String, String>>) {
 
     fun elementsOf(raw: RawNode): List<Node> = list(
         when (raw.kind.value) {
-            276 -> raw.asNamedImports()!!.elements
+            KindNamedImports.value -> raw.asNamedImports()!!.elements
             else -> raw.asNamedExports()!!.elements
         },
     )
@@ -602,18 +611,18 @@ internal class Tree(files: List<Pair<String, String>>) {
     fun hasDotDotDotToken(raw: RawNode): Boolean = raw.asParameterDeclaration()!!.dotDotDotToken != null
 
     fun prefixOperator(raw: RawNode): SyntaxKind = when (raw.asPrefixUnaryExpression()!!.operator.value) {
-        41 -> SyntaxKind.MinusToken
-        40 -> SyntaxKind.PlusToken
-        55 -> SyntaxKind.TildeToken
-        54 -> SyntaxKind.ExclamationToken
+        KindMinusToken.value -> SyntaxKind.MinusToken
+        KindPlusToken.value -> SyntaxKind.PlusToken
+        KindTildeToken.value -> SyntaxKind.TildeToken
+        KindExclamationToken.value -> SyntaxKind.ExclamationToken
         else -> SyntaxKind.Other
     }
 
     fun prefixOperand(raw: RawNode): RawNode? = raw.asPrefixUnaryExpression()!!.operand
 
     fun heritageToken(raw: RawNode): SyntaxKind = when (raw.asHeritageClause()!!.token.value) {
-        95 -> SyntaxKind.ExtendsKeyword
-        118 -> SyntaxKind.ImplementsKeyword
+        KindExtendsKeyword.value -> SyntaxKind.ExtendsKeyword
+        KindImplementsKeyword.value -> SyntaxKind.ImplementsKeyword
         else -> SyntaxKind.Other
     }
 
@@ -652,12 +661,12 @@ internal class Tree(files: List<Pair<String, String>>) {
     fun elementTypeOf(raw: RawNode): RawNode = raw.asArrayTypeNode()!!.elementType!!
 
     fun unionTypes(raw: RawNode): List<TypeNode> =
-        list(raw.asUnionTypeNode()!!.unionOrIntersectionTypeNodeBase.types).map { it as TypeNode }
+        list(raw.asUnionTypeNode()!!.types).map { it as TypeNode }
 
     fun typeOperatorKind(raw: RawNode): SyntaxKind = when (raw.asTypeOperatorNode()!!.operator.value) {
-        148 -> SyntaxKind.ReadonlyKeyword
-        143 -> SyntaxKind.KeyOfKeyword
-        158 -> SyntaxKind.UniqueKeyword
+        KindReadonlyKeyword.value -> SyntaxKind.ReadonlyKeyword
+        KindKeyOfKeyword.value -> SyntaxKind.KeyOfKeyword
+        KindUniqueKeyword.value -> SyntaxKind.UniqueKeyword
         else -> SyntaxKind.Other
     }
 
@@ -740,15 +749,15 @@ internal val booleanType: Type = Type.Intrinsic(null, setOf(TypeFlags.Boolean), 
 private class BundledLibSharingHost(private val delegate: CompilerHost) : CompilerHost by delegate {
 
     override fun getSourceFile(p0: SourceFileParseOptions): com.xemantic.typescript.tsgo.ast.SourceFile? {
-        if (!p0.fileName.startsWith("bundled:///")) return delegate.getSourceFile(p0)
+        if (!p0.fileName.value.startsWith("bundled:///")) return delegate.getSourceFile(p0)
         val cached = libraries.load()
-        cached[p0.fileName]?.firstOrNull { it.first.goEquals(p0) }?.let { return it.second }
+        cached[p0.fileName.value]?.firstOrNull { it.first.goEquals(p0) }?.let { return it.second }
         val parsed = delegate.getSourceFile(p0) ?: return null
         val entry = p0.goCopy() to parsed
         while (true) {
             val current = libraries.load()
             val next = HashMap(current)
-            next[p0.fileName] = (current[p0.fileName] ?: emptyList()) + entry
+            next[p0.fileName.value] = (current[p0.fileName.value] ?: emptyList()) + entry
             if (libraries.compareAndSet(current, next)) return parsed
         }
     }
@@ -765,12 +774,12 @@ private class MapFS(files: Map<String, String>) : FS {
         file.split('/').dropLast(1).runningReduce { a, b -> "$a/$b" }.map { it.ifEmpty { "/" } }
     }.toSet() + "/"
 
-    override fun useCaseSensitiveFileNames(): Boolean = true
-    override fun fileExists(p0: String): Boolean = p0 in files
-    override fun readFile(p0: String): Tuple2<String, Boolean> = files[p0]?.let { Tuple2(it, true) } ?: Tuple2("", false)
-    override fun directoryExists(p0: String): Boolean = p0 in dirs
-    override fun getAccessibleEntries(p0: String): Entries {
-        val prefix = if (p0.endsWith("/")) p0 else "$p0/"
+    override fun caseSensitivity(): CaseSensitivity = CaseSensitive
+    override fun fileExists(p0: RootedFilePath): Boolean = p0.value in files
+    override fun readFile(p0: RootedFilePath): Tuple2<String, Boolean> = files[p0.value]?.let { Tuple2(it, true) } ?: Tuple2("", false)
+    override fun directoryExists(p0: RootedDirectoryPath): Boolean = p0.value in dirs
+    override fun getAccessibleEntries(p0: RootedDirectoryPath): Entries {
+        val prefix = if (p0.value.endsWith("/")) p0.value else "${p0.value}/"
         val children = (files.keys + dirs).filter {
             it.startsWith(prefix) && it.length > prefix.length && '/' !in it.substring(prefix.length)
         }
@@ -780,11 +789,10 @@ private class MapFS(files: Map<String, String>) : FS {
             symlinks = GoMap.make(com.xemantic.typescript.tsgo.runtime.goUnitElem),
         )
     }
-    override fun realpath(p0: String): String = p0
-    override fun stat(p0: String): FileInfo? = null
-    override fun walkDir(p0: String, p1: WalkDirFunc?): GoError? = error("walkDir is not supported on an in-memory program")
-    override fun writeFile(p0: String, p1: String): GoError? = error("read-only")
-    override fun appendFile(p0: String, p1: String): GoError? = error("read-only")
-    override fun remove(p0: String): GoError? = error("read-only")
-    override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = error("read-only")
+    override fun realpath(p0: RootedPath): RootedPath = p0
+    override fun stat(p0: RootedPath): FileInfo? = null
+    override fun writeFile(p0: RootedFilePath, p1: String): GoError? = error("read-only")
+    override fun appendFile(p0: RootedFilePath, p1: String): GoError? = error("read-only")
+    override fun remove(p0: RootedPath): GoError? = error("read-only")
+    override fun chtimes(p0: RootedPath, p1: Time, p2: Time): GoError? = error("read-only")
 }

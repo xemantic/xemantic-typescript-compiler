@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Parameter_type_of_public_static_setter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2 32f511b9
+@kotlin.jvm.JvmField val parameter_type_of_public_static_setter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2: Message? = Message(code = 4034, category = CategoryError, key = Key("Parameter_type_of_public_static_setter_0_from_exported_class_has_or_is_using_name_1_from_private_mod_4034"), text = "Parameter type of public static setter '{0}' from exported class has or is using name '{1}' from private module '{2}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Parameter_type_of_public_static_setter_0_from_exported_class_has_or_is_using_private_name_1 2126d97e
+@kotlin.jvm.JvmField val parameter_type_of_public_static_setter_0_from_exported_class_has_or_is_using_private_name_1: Message? = Message(code = 4035, category = CategoryError, key = Key("Parameter_type_of_public_static_setter_0_from_exported_class_has_or_is_using_private_name_1_4035"), text = "Parameter type of public static setter '{0}' from exported class has or is using private name '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Parameter_type_of_public_setter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2 e622bfab
+@kotlin.jvm.JvmField val parameter_type_of_public_setter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2: Message? = Message(code = 4036, category = CategoryError, key = Key("Parameter_type_of_public_setter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2_4036"), text = "Parameter type of public setter '{0}' from exported class has or is using name '{1}' from private module '{2}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Parameter_type_of_public_setter_0_from_exported_class_has_or_is_using_private_name_1 1cb4e1bb
+@kotlin.jvm.JvmField val parameter_type_of_public_setter_0_from_exported_class_has_or_is_using_private_name_1: Message? = Message(code = 4037, category = CategoryError, key = Key("Parameter_type_of_public_setter_0_from_exported_class_has_or_is_using_private_name_1_4037"), text = "Parameter type of public setter '{0}' from exported class has or is using private name '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_name_1_from_external_module_2_but_cannot_be_named 5da7498b
+@kotlin.jvm.JvmField val return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_name_1_from_external_module_2_but_cannot_be_named: Message? = Message(code = 4038, category = CategoryError, key = Key("Return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_name_1_from_external_modul_4038"), text = "Return type of public static getter '{0}' from exported class has or is using name '{1}' from external module {2} but cannot be named.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2 99083b61
+@kotlin.jvm.JvmField val return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2: Message? = Message(code = 4039, category = CategoryError, key = Key("Return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_name_1_from_private_module_4039"), text = "Return type of public static getter '{0}' from exported class has or is using name '{1}' from private module '{2}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_private_name_1 92a79159
+@kotlin.jvm.JvmField val return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_private_name_1: Message? = Message(code = 4040, category = CategoryError, key = Key("Return_type_of_public_static_getter_0_from_exported_class_has_or_is_using_private_name_1_4040"), text = "Return type of public static getter '{0}' from exported class has or is using private name '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_public_getter_0_from_exported_class_has_or_is_using_name_1_from_external_module_2_but_cannot_be_named 11b1b277
+@kotlin.jvm.JvmField val return_type_of_public_getter_0_from_exported_class_has_or_is_using_name_1_from_external_module_2_but_cannot_be_named: Message? = Message(code = 4041, category = CategoryError, key = Key("Return_type_of_public_getter_0_from_exported_class_has_or_is_using_name_1_from_external_module_2_but_4041"), text = "Return type of public getter '{0}' from exported class has or is using name '{1}' from external module {2} but cannot be named.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_public_getter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2 4a5ea2b8
+@kotlin.jvm.JvmField val return_type_of_public_getter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2: Message? = Message(code = 4042, category = CategoryError, key = Key("Return_type_of_public_getter_0_from_exported_class_has_or_is_using_name_1_from_private_module_2_4042"), text = "Return type of public getter '{0}' from exported class has or is using name '{1}' from private module '{2}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_public_getter_0_from_exported_class_has_or_is_using_private_name_1 3252faa8
+@kotlin.jvm.JvmField val return_type_of_public_getter_0_from_exported_class_has_or_is_using_private_name_1: Message? = Message(code = 4043, category = CategoryError, key = Key("Return_type_of_public_getter_0_from_exported_class_has_or_is_using_private_name_1_4043"), text = "Return type of public getter '{0}' from exported class has or is using private name '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_constructor_signature_from_exported_interface_has_or_is_using_name_0_from_private_module_1 54a73573
+@kotlin.jvm.JvmField val return_type_of_constructor_signature_from_exported_interface_has_or_is_using_name_0_from_private_module_1: Message? = Message(code = 4044, category = CategoryError, key = Key("Return_type_of_constructor_signature_from_exported_interface_has_or_is_using_name_0_from_private_mod_4044"), text = "Return type of constructor signature from exported interface has or is using name '{0}' from private module '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_constructor_signature_from_exported_interface_has_or_is_using_private_name_0 ebe416c6
+@kotlin.jvm.JvmField val return_type_of_constructor_signature_from_exported_interface_has_or_is_using_private_name_0: Message? = Message(code = 4045, category = CategoryError, key = Key("Return_type_of_constructor_signature_from_exported_interface_has_or_is_using_private_name_0_4045"), text = "Return type of constructor signature from exported interface has or is using private name '{0}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_call_signature_from_exported_interface_has_or_is_using_name_0_from_private_module_1 540115a1
+@kotlin.jvm.JvmField val return_type_of_call_signature_from_exported_interface_has_or_is_using_name_0_from_private_module_1: Message? = Message(code = 4046, category = CategoryError, key = Key("Return_type_of_call_signature_from_exported_interface_has_or_is_using_name_0_from_private_module_1_4046"), text = "Return type of call signature from exported interface has or is using name '{0}' from private module '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_call_signature_from_exported_interface_has_or_is_using_private_name_0 a4a0c8cd
+@kotlin.jvm.JvmField val return_type_of_call_signature_from_exported_interface_has_or_is_using_private_name_0: Message? = Message(code = 4047, category = CategoryError, key = Key("Return_type_of_call_signature_from_exported_interface_has_or_is_using_private_name_0_4047"), text = "Return type of call signature from exported interface has or is using private name '{0}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_index_signature_from_exported_interface_has_or_is_using_name_0_from_private_module_1 19b678d5
+@kotlin.jvm.JvmField val return_type_of_index_signature_from_exported_interface_has_or_is_using_name_0_from_private_module_1: Message? = Message(code = 4048, category = CategoryError, key = Key("Return_type_of_index_signature_from_exported_interface_has_or_is_using_name_0_from_private_module_1_4048"), text = "Return type of index signature from exported interface has or is using name '{0}' from private module '{1}'.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_index_signature_from_exported_interface_has_or_is_using_private_name_0 99061350
 @kotlin.jvm.JvmField val return_type_of_index_signature_from_exported_interface_has_or_is_using_private_name_0: Message? = Message(code = 4049, category = CategoryError, key = Key("Return_type_of_index_signature_from_exported_interface_has_or_is_using_private_name_0_4049"), text = "Return type of index signature from exported interface has or is using private name '{0}'.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_verbatimModuleSyntax_cannot_be_used_when_module_is_set_to_UMD_AMD_or_System 35793176
 @kotlin.jvm.JvmField val option_verbatimModuleSyntax_cannot_be_used_when_module_is_set_to_UMD_AMD_or_System: Message? = Message(code = 5105, category = CategoryError, key = Key("Option_verbatimModuleSyntax_cannot_be_used_when_module_is_set_to_UMD_AMD_or_System_5105"), text = "Option 'verbatimModuleSyntax' cannot be used when 'module' is set to 'UMD', 'AMD', or 'System'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Use_0_instead 5a2ef8ea
-@kotlin.jvm.JvmField val use_0_instead: Message? = Message(code = 5106, category = CategoryMessage, key = Key("Use_0_instead_5106"), text = "Use '{0}' instead.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_0_1_is_deprecated_and_will_stop_functioning_in_TypeScript_2_Specify_compilerOption_ignoreDeprecations_Colon_3_to_silence_this_error d6501ae4
-@kotlin.jvm.JvmField val option_0_1_is_deprecated_and_will_stop_functioning_in_TypeScript_2_Specify_compilerOption_ignoreDeprecations_Colon_3_to_silence_this_error: Message? = Message(code = 5107, category = CategoryError, key = Key("Option_0_1_is_deprecated_and_will_stop_functioning_in_TypeScript_2_Specify_compilerOption_ignoreDepr_5107"), text = "Option '{0}={1}' is deprecated and will stop functioning in TypeScript {2}. Specify compilerOption '\"ignoreDeprecations\": \"{3}\"' to silence this error.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_0_1_has_been_removed_Please_remove_it_from_your_configuration a9d8d17b
-@kotlin.jvm.JvmField val option_0_1_has_been_removed_Please_remove_it_from_your_configuration: Message? = Message(code = 5108, category = CategoryError, key = Key("Option_0_1_has_been_removed_Please_remove_it_from_your_configuration_5108"), text = "Option '{0}={1}' has been removed. Please remove it from your configuration.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_moduleResolution_must_be_set_to_0_or_left_unspecified_when_option_module_is_set_to_1 53a02af3
-@kotlin.jvm.JvmField val option_moduleResolution_must_be_set_to_0_or_left_unspecified_when_option_module_is_set_to_1: Message? = Message(code = 5109, category = CategoryError, key = Key("Option_moduleResolution_must_be_set_to_0_or_left_unspecified_when_option_module_is_set_to_1_5109"), text = "Option 'moduleResolution' must be set to '{0}' (or left unspecified) when option 'module' is set to '{1}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_module_must_be_set_to_0_when_option_moduleResolution_is_set_to_1 40caa915
-@kotlin.jvm.JvmField val option_module_must_be_set_to_0_when_option_moduleResolution_is_set_to_1: Message? = Message(code = 5110, category = CategoryError, key = Key("Option_module_must_be_set_to_0_when_option_moduleResolution_is_set_to_1_5110"), text = "Option 'module' must be set to '{0}' when option 'moduleResolution' is set to '{1}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Visit_https_Colon_Slash_Slashaka_ms_Slashts6_for_migration_information a3a66b4f
-@kotlin.jvm.JvmField val visit_https_Colon_Slash_Slashaka_ms_Slashts6_for_migration_information: Message? = Message(code = 5111, category = CategoryMessage, key = Key("Visit_https_Colon_Slash_Slashaka_ms_Slashts6_for_migration_information_5111"), text = "Visit https://aka.ms/ts6 for migration information.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConfig_to_skip_this_error 14520a8d
-@kotlin.jvm.JvmField val x_tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConfig_to_skip_this_error: Message? = Message(code = 5112, category = CategoryError, key = Key("tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConf_5112"), text = "tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_is_only_assignable_to_the_non_distributed_1_but_1_has_been_distributed_here b5ac2704
-@kotlin.jvm.JvmField val x_0_is_only_assignable_to_the_non_distributed_1_but_1_has_been_distributed_here: Message? = Message(code = 5113, category = CategoryError, key = Key("_0_is_only_assignable_to_the_non_distributed_1_but_1_has_been_distributed_here_5113"), text = "'{0}' is only assignable to the non-distributed '{1}', but '{1}' has been distributed here.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Instantiations_of_type_0_appear_infinitely_circular d5e29b64
-@kotlin.jvm.JvmField val instantiations_of_type_0_appear_infinitely_circular: Message? = Message(code = 5114, category = CategoryError, key = Key("Instantiations_of_type_0_appear_infinitely_circular_5114"), text = "Instantiations of type '{0}' appear infinitely circular.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Instantiations_of_the_following_types_appear_infinitely_circular_Colon_0 0bb671e0
-@kotlin.jvm.JvmField val instantiations_of_the_following_types_appear_infinitely_circular_Colon_0: Message? = Message(code = 5115, category = CategoryError, key = Key("Instantiations_of_the_following_types_appear_infinitely_circular_Colon_0_5115"), text = "Instantiations of the following types appear infinitely circular: {0}.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Network_path_0_is_not_supported c1af4692
-@kotlin.jvm.JvmField val network_path_0_is_not_supported: Message? = Message(code = 5116, category = CategoryError, key = Key("Network_path_0_is_not_supported_5116"), text = "Network path '{0}' is not supported.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Generates_a_sourcemap_for_each_corresponding_d_ts_file d0bc61fe
-@kotlin.jvm.JvmField val generates_a_sourcemap_for_each_corresponding_d_ts_file: Message? = Message(code = 6000, category = CategoryMessage, key = Key("Generates_a_sourcemap_for_each_corresponding_d_ts_file_6000"), text = "Generates a sourcemap for each corresponding '.d.ts' file.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Concatenate_and_emit_output_to_single_file 010007f4
-@kotlin.jvm.JvmField val concatenate_and_emit_output_to_single_file: Message? = Message(code = 6001, category = CategoryMessage, key = Key("Concatenate_and_emit_output_to_single_file_6001"), text = "Concatenate and emit output to single file.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Generates_corresponding_d_ts_file 13850690
-@kotlin.jvm.JvmField val generates_corresponding_d_ts_file: Message? = Message(code = 6002, category = CategoryMessage, key = Key("Generates_corresponding_d_ts_file_6002"), text = "Generates corresponding '.d.ts' file.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_the_location_where_debugger_should_locate_TypeScript_files_instead_of_source_locations c06511d2
-@kotlin.jvm.JvmField val specify_the_location_where_debugger_should_locate_TypeScript_files_instead_of_source_locations: Message? = Message(code = 6004, category = CategoryMessage, key = Key("Specify_the_location_where_debugger_should_locate_TypeScript_files_instead_of_source_locations_6004"), text = "Specify the location where debugger should locate TypeScript files instead of source locations.")
 

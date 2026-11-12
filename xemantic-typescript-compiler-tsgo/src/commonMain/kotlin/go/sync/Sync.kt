@@ -72,6 +72,8 @@ class Cond(@kotlin.jvm.JvmField var l: Locker? = null) {
     private val notifyTicket = AtomicInt(0)
     private val waiters = WaitQueue()
 
+    // `wait()V` would clash with java.lang.Object.wait on the JVM.
+    @kotlin.jvm.JvmName("goWait")
     fun wait() {
         val t = waitTicket.fetchAndAdd(1)
         (l ?: goPanic("sync.Cond: nil Locker")).unlock()

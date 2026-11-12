@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Use_0_instead 5a2ef8ea
+@kotlin.jvm.JvmField val use_0_instead: Message? = Message(code = 5106, category = CategoryMessage, key = Key("Use_0_instead_5106"), text = "Use '{0}' instead.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_0_1_is_deprecated_and_will_stop_functioning_in_TypeScript_2_Specify_compilerOption_ignoreDeprecations_Colon_3_to_silence_this_error d6501ae4
+@kotlin.jvm.JvmField val option_0_1_is_deprecated_and_will_stop_functioning_in_TypeScript_2_Specify_compilerOption_ignoreDeprecations_Colon_3_to_silence_this_error: Message? = Message(code = 5107, category = CategoryError, key = Key("Option_0_1_is_deprecated_and_will_stop_functioning_in_TypeScript_2_Specify_compilerOption_ignoreDepr_5107"), text = "Option '{0}={1}' is deprecated and will stop functioning in TypeScript {2}. Specify compilerOption '\"ignoreDeprecations\": \"{3}\"' to silence this error.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_0_1_has_been_removed_Please_remove_it_from_your_configuration a9d8d17b
+@kotlin.jvm.JvmField val option_0_1_has_been_removed_Please_remove_it_from_your_configuration: Message? = Message(code = 5108, category = CategoryError, key = Key("Option_0_1_has_been_removed_Please_remove_it_from_your_configuration_5108"), text = "Option '{0}={1}' has been removed. Please remove it from your configuration.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_moduleResolution_must_be_set_to_0_or_left_unspecified_when_option_module_is_set_to_1 53a02af3
+@kotlin.jvm.JvmField val option_moduleResolution_must_be_set_to_0_or_left_unspecified_when_option_module_is_set_to_1: Message? = Message(code = 5109, category = CategoryError, key = Key("Option_moduleResolution_must_be_set_to_0_or_left_unspecified_when_option_module_is_set_to_1_5109"), text = "Option 'moduleResolution' must be set to '{0}' (or left unspecified) when option 'module' is set to '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Option_module_must_be_set_to_0_when_option_moduleResolution_is_set_to_1 40caa915
+@kotlin.jvm.JvmField val option_module_must_be_set_to_0_when_option_moduleResolution_is_set_to_1: Message? = Message(code = 5110, category = CategoryError, key = Key("Option_module_must_be_set_to_0_when_option_moduleResolution_is_set_to_1_5110"), text = "Option 'module' must be set to '{0}' when option 'moduleResolution' is set to '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Visit_https_Colon_Slash_Slashaka_ms_Slashts6_for_migration_information a3a66b4f
+@kotlin.jvm.JvmField val visit_https_Colon_Slash_Slashaka_ms_Slashts6_for_migration_information: Message? = Message(code = 5111, category = CategoryMessage, key = Key("Visit_https_Colon_Slash_Slashaka_ms_Slashts6_for_migration_information_5111"), text = "Visit https://aka.ms/ts6 for migration information.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConfig_to_skip_this_error 14520a8d
+@kotlin.jvm.JvmField val x_tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConfig_to_skip_this_error: Message? = Message(code = 5112, category = CategoryError, key = Key("tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConf_5112"), text = "tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_is_only_assignable_to_the_non_distributed_1_but_1_has_been_distributed_here b5ac2704
+@kotlin.jvm.JvmField val x_0_is_only_assignable_to_the_non_distributed_1_but_1_has_been_distributed_here: Message? = Message(code = 5113, category = CategoryError, key = Key("_0_is_only_assignable_to_the_non_distributed_1_but_1_has_been_distributed_here_5113"), text = "'{0}' is only assignable to the non-distributed '{1}', but '{1}' has been distributed here.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Instantiations_of_type_0_appear_infinitely_circular d5e29b64
+@kotlin.jvm.JvmField val instantiations_of_type_0_appear_infinitely_circular: Message? = Message(code = 5114, category = CategoryError, key = Key("Instantiations_of_type_0_appear_infinitely_circular_5114"), text = "Instantiations of type '{0}' appear infinitely circular.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Instantiations_of_the_following_types_appear_infinitely_circular_Colon_0 0bb671e0
+@kotlin.jvm.JvmField val instantiations_of_the_following_types_appear_infinitely_circular_Colon_0: Message? = Message(code = 5115, category = CategoryError, key = Key("Instantiations_of_the_following_types_appear_infinitely_circular_Colon_0_5115"), text = "Instantiations of the following types appear infinitely circular: {0}.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Network_path_0_is_not_supported c1af4692
+@kotlin.jvm.JvmField val network_path_0_is_not_supported: Message? = Message(code = 5116, category = CategoryError, key = Key("Network_path_0_is_not_supported_5116"), text = "Network path '{0}' is not supported.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Generates_a_sourcemap_for_each_corresponding_d_ts_file d0bc61fe
+@kotlin.jvm.JvmField val generates_a_sourcemap_for_each_corresponding_d_ts_file: Message? = Message(code = 6000, category = CategoryMessage, key = Key("Generates_a_sourcemap_for_each_corresponding_d_ts_file_6000"), text = "Generates a sourcemap for each corresponding '.d.ts' file.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Concatenate_and_emit_output_to_single_file 010007f4
+@kotlin.jvm.JvmField val concatenate_and_emit_output_to_single_file: Message? = Message(code = 6001, category = CategoryMessage, key = Key("Concatenate_and_emit_output_to_single_file_6001"), text = "Concatenate and emit output to single file.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Generates_corresponding_d_ts_file 13850690
+@kotlin.jvm.JvmField val generates_corresponding_d_ts_file: Message? = Message(code = 6002, category = CategoryMessage, key = Key("Generates_corresponding_d_ts_file_6002"), text = "Generates corresponding '.d.ts' file.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_the_location_where_debugger_should_locate_TypeScript_files_instead_of_source_locations c06511d2
+@kotlin.jvm.JvmField val specify_the_location_where_debugger_should_locate_TypeScript_files_instead_of_source_locations: Message? = Message(code = 6004, category = CategoryMessage, key = Key("Specify_the_location_where_debugger_should_locate_TypeScript_files_instead_of_source_locations_6004"), text = "Specify the location where debugger should locate TypeScript files instead of source locations.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Watch_input_files e9284a4e
 @kotlin.jvm.JvmField val watch_input_files: Message? = Message(code = 6005, category = CategoryMessage, key = Key("Watch_input_files_6005"), text = "Watch input files.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Deprecated_Use_skipLibCheck_instead_Skip_type_checking_of_default_library_declaration_files 15d7e83f
 @kotlin.jvm.JvmField val deprecated_Use_skipLibCheck_instead_Skip_type_checking_of_default_library_declaration_files: Message? = Message(code = 6160, category = CategoryMessage, key = Key("Deprecated_Use_skipLibCheck_instead_Skip_type_checking_of_default_library_declaration_files_6160"), text = "[Deprecated] Use '--skipLibCheck' instead. Skip type checking of default library declaration files.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.List_of_folders_to_include_type_definitions_from ef7fd29f
-@kotlin.jvm.JvmField val list_of_folders_to_include_type_definitions_from: Message? = Message(code = 6161, category = CategoryMessage, key = Key("List_of_folders_to_include_type_definitions_from_6161"), text = "List of folders to include type definitions from.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Disable_size_limitations_on_JavaScript_projects 518ca5e4
-@kotlin.jvm.JvmField val disable_size_limitations_on_JavaScript_projects: Message? = Message(code = 6162, category = CategoryMessage, key = Key("Disable_size_limitations_on_JavaScript_projects_6162"), text = "Disable size limitations on JavaScript projects.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_character_set_of_the_input_files ade33f9a
-@kotlin.jvm.JvmField val the_character_set_of_the_input_files: Message? = Message(code = 6163, category = CategoryMessage, key = Key("The_character_set_of_the_input_files_6163"), text = "The character set of the input files.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Skipping_module_0_that_looks_like_an_absolute_URI_target_file_types_Colon_1 8605c0c2
-@kotlin.jvm.JvmField val skipping_module_0_that_looks_like_an_absolute_URI_target_file_types_Colon_1: Message? = Message(code = 6164, category = CategoryMessage, key = Key("Skipping_module_0_that_looks_like_an_absolute_URI_target_file_types_Colon_1_6164"), text = "Skipping module '{0}' that looks like an absolute URI, target file types: {1}.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Do_not_truncate_error_messages 84371862
-@kotlin.jvm.JvmField val do_not_truncate_error_messages: Message? = Message(code = 6165, category = CategoryMessage, key = Key("Do_not_truncate_error_messages_6165"), text = "Do not truncate error messages.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Output_directory_for_generated_declaration_files d7d6c9b3
-@kotlin.jvm.JvmField val output_directory_for_generated_declaration_files: Message? = Message(code = 6166, category = CategoryMessage, key = Key("Output_directory_for_generated_declaration_files_6166"), text = "Output directory for generated declaration files.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_series_of_entries_which_re_map_imports_to_lookup_locations_relative_to_the_baseUrl 1384382c
-@kotlin.jvm.JvmField val a_series_of_entries_which_re_map_imports_to_lookup_locations_relative_to_the_baseUrl: Message? = Message(code = 6167, category = CategoryMessage, key = Key("A_series_of_entries_which_re_map_imports_to_lookup_locations_relative_to_the_baseUrl_6167"), text = "A series of entries which re-map imports to lookup locations relative to the 'baseUrl'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.List_of_root_folders_whose_combined_content_represents_the_structure_of_the_project_at_runtime ea170f96
-@kotlin.jvm.JvmField val list_of_root_folders_whose_combined_content_represents_the_structure_of_the_project_at_runtime: Message? = Message(code = 6168, category = CategoryMessage, key = Key("List_of_root_folders_whose_combined_content_represents_the_structure_of_the_project_at_runtime_6168"), text = "List of root folders whose combined content represents the structure of the project at runtime.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Show_all_compiler_options f41cfdc7
-@kotlin.jvm.JvmField val show_all_compiler_options: Message? = Message(code = 6169, category = CategoryMessage, key = Key("Show_all_compiler_options_6169"), text = "Show all compiler options.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Deprecated_Use_outFile_instead_Concatenate_and_emit_output_to_single_file fd2c1304
-@kotlin.jvm.JvmField val deprecated_Use_outFile_instead_Concatenate_and_emit_output_to_single_file: Message? = Message(code = 6170, category = CategoryMessage, key = Key("Deprecated_Use_outFile_instead_Concatenate_and_emit_output_to_single_file_6170"), text = "[Deprecated] Use '--outFile' instead. Concatenate and emit output to single file")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Command_line_Options da14c9ff
-@kotlin.jvm.JvmField val command_line_Options: Message? = Message(code = 6171, category = CategoryMessage, key = Key("Command_line_Options_6171"), text = "Command-line Options")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Provide_full_support_for_iterables_in_for_of_spread_and_destructuring_when_targeting_ES5 00d9ccf7
-@kotlin.jvm.JvmField val provide_full_support_for_iterables_in_for_of_spread_and_destructuring_when_targeting_ES5: Message? = Message(code = 6179, category = CategoryMessage, key = Key("Provide_full_support_for_iterables_in_for_of_spread_and_destructuring_when_targeting_ES5_6179"), text = "Provide full support for iterables in 'for-of', spread, and destructuring when targeting 'ES5'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Enable_all_strict_type_checking_options 2f349a8b
-@kotlin.jvm.JvmField val enable_all_strict_type_checking_options: Message? = Message(code = 6180, category = CategoryMessage, key = Key("Enable_all_strict_type_checking_options_6180"), text = "Enable all strict type-checking options.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Scoped_package_detected_looking_in_0 3d96425e
-@kotlin.jvm.JvmField val scoped_package_detected_looking_in_0: Message? = Message(code = 6182, category = CategoryMessage, key = Key("Scoped_package_detected_looking_in_0_6182"), text = "Scoped package detected, looking in '{0}'")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Reusing_resolution_of_module_0_from_1_of_old_program_it_was_successfully_resolved_to_2 e23b7185
-@kotlin.jvm.JvmField val reusing_resolution_of_module_0_from_1_of_old_program_it_was_successfully_resolved_to_2: Message? = Message(code = 6183, category = CategoryMessage, key = Key("Reusing_resolution_of_module_0_from_1_of_old_program_it_was_successfully_resolved_to_2_6183"), text = "Reusing resolution of module '{0}' from '{1}' of old program, it was successfully resolved to '{2}'.")
 

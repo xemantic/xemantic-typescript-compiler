@@ -55,6 +55,7 @@ class TsgoProjectTest {
     @Test
     fun `a project opens with its files and no config errors`() {
         assert(project.configDiagnostics.isEmpty())
+        assert(project.projectId == "/p/tsconfig.json")
         assert("/p/a.ts" in project.sourceFileNames())
         assert(project.semanticDiagnostics("/p/a.ts").isEmpty())
     }
@@ -96,24 +97,46 @@ class TsgoProjectTest {
 
     @Test
     fun `the raw protocol answers any proto method`() {
-        val json = project.request("getTypeAtPosition", """{"snapshot":${project.snapshotId},"project":"/p/tsconfig.json","file":"/p/a.ts","position":${at("d = len")}}""")
+        val json = project.request("getTypeAtPosition", """{"snapshot":${project.snapshotId},"project":"${project.projectId}","file":"/p/a.ts","position":${at("d = len")}}""")
         assert(json.startsWith("{\"id\":") && "\"intrinsicName\":\"number\"" in json)
     }
 
     @Test
-    fun `the language-service handlers of the API answer - completions and references`() {
+    fun `the language-service handlers of the API answer - completions`() {
         // (TSGO.4-a) ported with internal/ls; not yet in the API recording (LsParityTest gates the language service itself).
         val completions = project.request(
             "getCompletionsAtPosition",
-            """{"snapshot":${project.snapshotId},"project":"/p/tsconfig.json","file":"/p/a.ts","position":${at("home)")}}""",
+            """{"snapshot":${project.snapshotId},"project":"${project.projectId}","file":"/p/a.ts","position":${at("home)")}}""",
         )
         assert("\"name\":\"home\"" in completions && "\"name\":\"len\"" in completions)
-        val point = project.symbolAtPosition("/p/a.ts", at("Point {", 1))!!
+    }
+
+    @Test
+    fun `the language-service handlers of the API answer - references`() {
+        // A symbol is named by its SymbolReference (owner + id), as the API's symbol responses carry it.
+        val symbol = project.request(
+            "getSymbolAtPosition",
+            """{"snapshot":${project.snapshotId},"project":"${project.projectId}","file":"/p/a.ts","position":${at("Point {", 1)}}""",
+        )
+        val reference = jsonObjectAt(symbol, "\"reference\":")
         val refs = project.request(
             "getReferencesToSymbolInFile",
-            """{"snapshot":${project.snapshotId},"project":"/p/tsconfig.json","file":"/p/a.ts","symbol":${point.id}}""",
+            """{"snapshot":${project.snapshotId},"project":"${project.projectId}","file":"/p/a.ts","symbol":$reference}""",
         )
         assert(refs.count { it == ',' } + 1 == 3) // the declaration and the two type references
+    }
+
+    /** The JSON object following [key] in [json] (balanced braces; no braces inside its strings). */
+    private fun jsonObjectAt(json: String, key: String): String {
+        val start = json.indexOf(key) + key.length
+        var depth = 0
+        for (i in start until json.length) {
+            when (json[i]) {
+                '{' -> depth++
+                '}' -> if (--depth == 0) return json.substring(start, i + 1)
+            }
+        }
+        error("no object after $key in $json")
     }
 
     @Test

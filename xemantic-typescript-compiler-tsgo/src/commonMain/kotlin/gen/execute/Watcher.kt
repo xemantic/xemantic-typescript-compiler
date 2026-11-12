@@ -25,6 +25,7 @@ package com.xemantic.typescript.tsgo.execute
 
 import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.execute.tsc.CommandLineResult
 import com.xemantic.typescript.tsgo.execute.tsc.CommandLineTesting
 import com.xemantic.typescript.tsgo.execute.watchmanager.CommandLineTestingWithWatchBackend
 import com.xemantic.typescript.tsgo.execute.tsc.CompileAndEmitResult
@@ -36,15 +37,21 @@ import com.xemantic.typescript.tsgo.ast.Diagnostic
 import com.xemantic.typescript.tsgo.execute.watchmanager.DirWatchSet
 import com.xemantic.typescript.tsgo.execute.tsc.EmitInput
 import com.xemantic.typescript.tsgo.fswatch.EventKind
+import com.xemantic.typescript.tsgo.execute.tsc.ExitStatus
 import com.xemantic.typescript.tsgo.execute.tsc.ExtendedConfigCache
 import com.xemantic.typescript.tsgo.vfs.FS
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
 import com.xemantic.typescript.tsgo.contentmapper.Host
+import com.xemantic.typescript.tsgo.locale.Locale
 import com.xemantic.typescript.tsgo.contentmapper.Mapper
 import com.xemantic.typescript.tsgo.diagnostics.Message
+import com.xemantic.typescript.tsgo.execute.build.Options
+import com.xemantic.typescript.tsgo.execute.build.Orchestrator
 import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.tsoptions.ParsedBuildCommandLine
 import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
 import com.xemantic.typescript.tsgo.tspath.PathKey
+import com.xemantic.typescript.tsgo.pprof.ProfileSession
 import com.xemantic.typescript.tsgo.execute.incremental.Program
 import com.xemantic.typescript.tsgo.compiler.ProgramConfig
 import com.xemantic.typescript.tsgo.compiler.ProgramHosts
@@ -59,7 +66,9 @@ import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
 import com.xemantic.typescript.tsgo.contentmapper.SourceFiles
 import com.xemantic.typescript.tsgo.collections.SyncMap
 import com.xemantic.typescript.tsgo.execute.tsc.System
+import com.xemantic.typescript.tsgo.tsoptions.TSConfig
 import com.xemantic.typescript.tsgo.go.time.Time
+import com.xemantic.typescript.tsgo.tracing.Tracing
 import com.xemantic.typescript.tsgo.execute.watchmanager.WatchManager
 import com.xemantic.typescript.tsgo.ast.contentMapper
 import com.xemantic.typescript.tsgo.ast.parseOptions
@@ -68,10 +77,13 @@ import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.load
 import com.xemantic.typescript.tsgo.collections.range
+import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.store
 import com.xemantic.typescript.tsgo.collections.toSlice
 import com.xemantic.typescript.tsgo.compiler.filesByPath
 import com.xemantic.typescript.tsgo.compiler.reuseProgram
+import com.xemantic.typescript.tsgo.core.isIncremental
+import com.xemantic.typescript.tsgo.execute.build.start
 import com.xemantic.typescript.tsgo.execute.incremental.getProgram
 import com.xemantic.typescript.tsgo.execute.watchmanager.covered
 import com.xemantic.typescript.tsgo.execute.watchmanager.dirs
@@ -84,6 +96,7 @@ import com.xemantic.typescript.tsgo.execute.watchmanager.resolveDesiredDirs
 import com.xemantic.typescript.tsgo.execute.watchmanager.runLoop
 import com.xemantic.typescript.tsgo.execute.watchmanager.set
 import com.xemantic.typescript.tsgo.execute.watchmanager.setBackend
+import com.xemantic.typescript.tsgo.tracing.stopTracing
 import com.xemantic.typescript.tsgo.tsoptions.baseDirectory
 import com.xemantic.typescript.tsgo.tsoptions.compilerOptions
 import com.xemantic.typescript.tsgo.tsoptions.configName

@@ -36,7 +36,9 @@ import com.xemantic.typescript.tsgo.tspath.PathKey
 import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.tspath.SourceMapLocation
 import com.xemantic.typescript.tsgo.collections.add
 import com.xemantic.typescript.tsgo.collections.clone
 import com.xemantic.typescript.tsgo.collections.delete

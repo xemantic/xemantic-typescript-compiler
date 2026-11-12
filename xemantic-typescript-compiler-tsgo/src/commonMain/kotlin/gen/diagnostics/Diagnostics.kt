@@ -274,21 +274,3 @@ fun newAdHocMessage(message: String): Message? {
     return Message(code = -1, category = CategoryError, key = Key("-1"), text = message)
 }
 
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.localizedMessagesCache 39ccd85e
-@kotlin.jvm.JvmField val localizedMessagesCache: com.xemantic.typescript.tsgo.go.sync.Map = com.xemantic.typescript.tsgo.go.sync.Map()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.placeholderRegexp 618396c8
-@kotlin.jvm.JvmField val placeholderRegexp: Regexp? = com.xemantic.typescript.tsgo.go.regexp.mustCompile("{(\\d+)}")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.messagesByKey e02c69f8
-@kotlin.jvm.JvmField val messagesByKey: (() -> GoMap<Key, Message?>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, Message?>>(fun(): GoMap<Key, Message?> {
-    val messages: GoMap<Key, Message?> = GoMap.make<Key, Message?>(GoElem.ref<Message?>(), 2229)
-    val s0 = allMessages
-    l0@ for (i1 in 0 until s0.size) {
-        val p: GoPtr<Message?>? = s0[i1]
-        val message: Message? = p!!.value
-        messages[message!!.key] = message
-    }
-    return messages
-})
-

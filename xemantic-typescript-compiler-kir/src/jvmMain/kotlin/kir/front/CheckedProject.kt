@@ -85,7 +85,7 @@ public fun checkTypeScriptProject(projectPath: String): CheckedProject {
         val maps = (0 until sources.len).mapNotNull { i ->
             val file = sources[i] ?: return@mapNotNull null
             if (!TsgoPrograms.isProgramFile(program, file)) return@mapNotNull null
-            val name = GoString.toUtf16(file.fileName)
+            val name = GoString.toUtf16(file.fileName.value)
             TsgoSyntax(file, name)
         }
         val facts = CheckedFacts()

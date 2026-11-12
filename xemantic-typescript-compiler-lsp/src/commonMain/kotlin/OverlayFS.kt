@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.lsp
 
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
-import com.xemantic.typescript.tsgo.go.io.fs.WalkDirFunc
 import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoError
@@ -36,6 +35,11 @@ import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.Tuple2
 import com.xemantic.typescript.tsgo.runtime.goUnitElem
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.vfs.Entries
 import com.xemantic.typescript.tsgo.vfs.FS
 
@@ -60,22 +64,22 @@ public class OverlayFS(private val base: FS? = null) : FS {
         overlays.remove(GoString.fromUtf16(path))
     }
 
-    override fun useCaseSensitiveFileNames(): Boolean = base?.useCaseSensitiveFileNames() ?: true
+    override fun caseSensitivity(): CaseSensitivity = base?.caseSensitivity() ?: CaseSensitive
 
-    override fun fileExists(p0: String): Boolean = p0 in overlays || base?.fileExists(p0) == true
+    override fun fileExists(p0: RootedFilePath): Boolean = p0.value in overlays || base?.fileExists(p0) == true
 
-    override fun readFile(p0: String): Tuple2<String, Boolean> =
-        overlays[p0]?.let { Tuple2(it, true) } ?: base?.readFile(p0) ?: Tuple2("", false)
+    override fun readFile(p0: RootedFilePath): Tuple2<String, Boolean> =
+        overlays[p0.value]?.let { Tuple2(it, true) } ?: base?.readFile(p0) ?: Tuple2("", false)
 
-    override fun directoryExists(p0: String): Boolean {
+    override fun directoryExists(p0: RootedDirectoryPath): Boolean {
         if (base?.directoryExists(p0) == true) return true
-        val prefix = if (p0.endsWith("/")) p0 else "$p0/"
+        val prefix = prefix(p0)
         return overlays.keys.any { it.startsWith(prefix) }
     }
 
-    override fun getAccessibleEntries(p0: String): Entries {
+    override fun getAccessibleEntries(p0: RootedDirectoryPath): Entries {
         val fromBase = base?.getAccessibleEntries(p0)
-        val prefix = if (p0.endsWith("/")) p0 else "$p0/"
+        val prefix = prefix(p0)
         val files = LinkedHashSet<String>()
         val dirs = LinkedHashSet<String>()
         fromBase?.files?.let { s -> for (i in 0 until s.len) files += s[i] }
@@ -93,16 +97,16 @@ public class OverlayFS(private val base: FS? = null) : FS {
         )
     }
 
-    override fun realpath(p0: String): String = if (p0 in overlays) p0 else base?.realpath(p0) ?: p0
+    override fun realpath(p0: RootedPath): RootedPath = if (p0.value in overlays) p0 else base?.realpath(p0) ?: p0
 
-    override fun stat(p0: String): FileInfo? = base?.stat(p0)
+    override fun stat(p0: RootedPath): FileInfo? = base?.stat(p0)
 
-    override fun walkDir(p0: String, p1: WalkDirFunc?): GoError? = base?.walkDir(p0, p1)
+    override fun writeFile(p0: RootedFilePath, p1: String): GoError? = READ_ONLY
+    override fun appendFile(p0: RootedFilePath, p1: String): GoError? = READ_ONLY
+    override fun remove(p0: RootedPath): GoError? = READ_ONLY
+    override fun chtimes(p0: RootedPath, p1: Time, p2: Time): GoError? = READ_ONLY
 
-    override fun writeFile(p0: String, p1: String): GoError? = READ_ONLY
-    override fun appendFile(p0: String, p1: String): GoError? = READ_ONLY
-    override fun remove(p0: String): GoError? = READ_ONLY
-    override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = READ_ONLY
+    private fun prefix(dir: RootedDirectoryPath): String = if (dir.value.endsWith("/")) dir.value else "${dir.value}/"
 
     private companion object {
         val READ_ONLY: GoError = GoPlainError("the language server's file system is read-only")

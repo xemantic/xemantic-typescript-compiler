@@ -24,7 +24,13 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
 import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.loadLocaleData 1f99a75d
@@ -54,114 +60,4 @@ fun loadLocaleData(data: String): GoMap<Key, String> {
         return result
     }
 }
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.zhCNData 2071fd0c
-@kotlin.jvm.JvmField val zhCNData: String = goEmbed_zhCNData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.zhTWData 7bf0a8dd
-@kotlin.jvm.JvmField val zhTWData: String = goEmbed_zhTWData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.csCZData 8da6147f
-@kotlin.jvm.JvmField val csCZData: String = goEmbed_csCZData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.deDEData b1999203
-@kotlin.jvm.JvmField val deDEData: String = goEmbed_deDEData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.esESData 3d79c36d
-@kotlin.jvm.JvmField val esESData: String = goEmbed_esESData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.frFRData e26c448e
-@kotlin.jvm.JvmField val frFRData: String = goEmbed_frFRData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.itITData def5cb19
-@kotlin.jvm.JvmField val itITData: String = goEmbed_itITData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.jaJPData 02c771f5
-@kotlin.jvm.JvmField val jaJPData: String = goEmbed_jaJPData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.koKRData a531fc04
-@kotlin.jvm.JvmField val koKRData: String = goEmbed_koKRData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.plPLData bd2f1511
-@kotlin.jvm.JvmField val plPLData: String = goEmbed_plPLData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.ptBRData bf902323
-@kotlin.jvm.JvmField val ptBRData: String = goEmbed_ptBRData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.ruRUData 2b2c7154
-@kotlin.jvm.JvmField val ruRUData: String = goEmbed_ruRUData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.trTRData 70dfae57
-@kotlin.jvm.JvmField val trTRData: String = goEmbed_trTRData()
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.matcher ab5aaba4
-@kotlin.jvm.JvmField val matcher: Matcher? = com.xemantic.typescript.tsgo.go.golang_org.x.text.language.newMatcher(GoSlice.of(GoElem<Tag>({ Tag() }, { it.goCopy() }), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.english.goCopy(), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("zh-CN"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("zh-TW"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("cs-CZ"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("de-DE"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("es-ES"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("fr-FR"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("it-IT"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("ja-JP"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("ko-KR"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("pl-PL"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("pt-BR"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("ru-RU"), com.xemantic.typescript.tsgo.go.golang_org.x.text.language.mustParse("tr-TR")))
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.zhCN a6b668bd
-@kotlin.jvm.JvmField val zhCN: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(zhCNData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.zhTW cc61fe03
-@kotlin.jvm.JvmField val zhTW: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(zhTWData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.csCZ b96928e6
-@kotlin.jvm.JvmField val csCZ: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(csCZData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.deDE d648c0ec
-@kotlin.jvm.JvmField val deDE: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(deDEData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.esES ea291373
-@kotlin.jvm.JvmField val esES: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(esESData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.frFR 8eda5e97
-@kotlin.jvm.JvmField val frFR: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(frFRData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.itIT 2fd5b85e
-@kotlin.jvm.JvmField val itIT: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(itITData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.jaJP d1796c7e
-@kotlin.jvm.JvmField val jaJP: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(jaJPData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.koKR af47b652
-@kotlin.jvm.JvmField val koKR: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(koKRData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.plPL b7625432
-@kotlin.jvm.JvmField val plPL: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(plPLData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.ptBR f2b4d8cf
-@kotlin.jvm.JvmField val ptBR: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(ptBRData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.ruRU 481ba22c
-@kotlin.jvm.JvmField val ruRU: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(ruRUData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.trTR 2c67ea59
-@kotlin.jvm.JvmField val trTR: (() -> GoMap<Key, String>)? = com.xemantic.typescript.tsgo.go.sync.onceValue<GoMap<Key, String>>(fun(): GoMap<Key, String> {
-    return loadLocaleData(trTRData)
-})
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.localeFuncs 73b8112e
-@kotlin.jvm.JvmField val localeFuncs: GoSlice<(() -> GoMap<Key, String>)?> = GoSlice.of(GoElem.ref<(() -> GoMap<Key, String>)?>(), null, zhCN, zhTW, csCZ, deDE, esES, frFR, itIT, jaJP, koKR, plPL, ptBR, ruRU, trTR)
 

@@ -39,6 +39,9 @@ import com.xemantic.typescript.tsgo.spanmap.Feature
 import com.xemantic.typescript.tsgo.spanmap.Fidelity
 import com.xemantic.typescript.tsgo.lsp.lsproto.HasTextDocumentPosition
 import com.xemantic.typescript.tsgo.lsp.lsproto.HasTextDocumentURI
+import com.xemantic.typescript.tsgo.lsp.lsproto.InsertTextFormat
+import com.xemantic.typescript.tsgo.ast.JsxElement
+import com.xemantic.typescript.tsgo.ast.JsxFragment
 import com.xemantic.typescript.tsgo.lsp.lsproto.Location
 import com.xemantic.typescript.tsgo.ls.lsconv.MappedPosition
 import com.xemantic.typescript.tsgo.ast.ModifierFlags
@@ -59,10 +62,17 @@ import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.Symbol
 import com.xemantic.typescript.tsgo.lsp.lsproto.SymbolKind
 import com.xemantic.typescript.tsgo.ast.TaggedTemplateExpression
+import com.xemantic.typescript.tsgo.lsp.lsproto.TextEdit
 import com.xemantic.typescript.tsgo.core.TextPos
 import com.xemantic.typescript.tsgo.core.TextRange
+import com.xemantic.typescript.tsgo.checker.Type
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertParams
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertResponseItem
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertResponseItemOrNull
 import com.xemantic.typescript.tsgo.ast.arguments
 import com.xemantic.typescript.tsgo.ast.asClassStaticBlockDeclaration
+import com.xemantic.typescript.tsgo.ast.asJsxElement
+import com.xemantic.typescript.tsgo.ast.asJsxFragment
 import com.xemantic.typescript.tsgo.ast.asNode
 import com.xemantic.typescript.tsgo.ast.asSourceFile
 import com.xemantic.typescript.tsgo.ast.asTaggedTemplateExpression
@@ -82,6 +92,7 @@ import com.xemantic.typescript.tsgo.ast.statements
 import com.xemantic.typescript.tsgo.ast.tagName
 import com.xemantic.typescript.tsgo.ast.text
 import com.xemantic.typescript.tsgo.ast.valueDeclaration
+import com.xemantic.typescript.tsgo.checker.getTypeOfSymbolAtLocation
 import com.xemantic.typescript.tsgo.checker.symbolToString
 import com.xemantic.typescript.tsgo.collections.addIfAbsent
 import com.xemantic.typescript.tsgo.compiler.getTypeChecker
@@ -1262,5 +1273,4 @@ fun LanguageService?.callHierarchyDeclarations(file: SourceFile?, position: Posi
     }
     return declarations
 }
-
 

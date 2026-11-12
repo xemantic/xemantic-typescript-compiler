@@ -31,12 +31,14 @@ import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
 import com.xemantic.typescript.tsgo.ast.localize
 import com.xemantic.typescript.tsgo.compiler.CompilerHost
 import com.xemantic.typescript.tsgo.compiler.Program
+import com.xemantic.typescript.tsgo.compiler.ProgramConfig
+import com.xemantic.typescript.tsgo.compiler.ProgramFactories
+import com.xemantic.typescript.tsgo.compiler.ProgramHosts
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.compiler.getDiagnosticsOfAnyProgram
 import com.xemantic.typescript.tsgo.compiler.newCachedFSCompilerHost
 import com.xemantic.typescript.tsgo.core.ScriptKind
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
-import com.xemantic.typescript.tsgo.go.io.fs.WalkDirFunc
 import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoError
@@ -44,6 +46,11 @@ import com.xemantic.typescript.tsgo.runtime.GoMap
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.Tuple2
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.vfs.Entries
 import com.xemantic.typescript.tsgo.vfs.FS
 import java.util.concurrent.ConcurrentHashMap
@@ -98,13 +105,12 @@ internal object TsgoPrograms {
     /** Opens the project of [configFileName] (absolute) over [fs], bundled libraries included. */
     fun open(configFileName: String, fs: FS): TsgoProgram {
         init()
-        val name = com.xemantic.typescript.tsgo.tspath.normalizePath(GoString.fromUtf16(configFileName))
+        val name = com.xemantic.typescript.tsgo.tspath.rootedFilePathFromAbsolute(GoString.fromUtf16(configFileName))
         val wrapped = com.xemantic.typescript.tsgo.bundled.wrapFS(fs)
         val libPath = com.xemantic.typescript.tsgo.bundled.libPath()
-        val cwd = com.xemantic.typescript.tsgo.tspath.getDirectoryPath(name)
-        val host = LibCachingHost(newCachedFSCompilerHost(cwd, wrapped, libPath, null, null)!!, libPath)
+        val host = LibCachingHost(newCachedFSCompilerHost(wrapped, libPath, null, null, null)!!, libPath)
         val (config, errors) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(
-            name, null, null, host, null
+            name, null, null, host.fs(), null
         )
         val configErrors = List(errors.len) { errors[it]!! }
         check(config != null) {
@@ -112,7 +118,8 @@ internal object TsgoPrograms {
         }
         val program = com.xemantic.typescript.tsgo.compiler.newProgram(
             ProgramOptions(
-                host = host,
+                programHosts = ProgramHosts(host = host),
+                programConfig = ProgramConfig(
                 config = config,
                 useSourceOfProjectReference = true,
                 // SINGLE-THREADED: the front end runs on one deep-stack thread,
@@ -122,7 +129,10 @@ internal object TsgoPrograms {
                 // checker exception surfaced as a silent deadlock (measured)
                 // where on this thread it propagates.
                 singleThreaded = com.xemantic.typescript.tsgo.core.TSTrue,
-                createCheckerPool = { p -> com.xemantic.typescript.tsgo.api.XtscCheckerPool(program = p) },
+                ),
+                programFactories = ProgramFactories(
+                    createCheckerPool = { p -> com.xemantic.typescript.tsgo.api.XtscCheckerPool(program = p) },
+                ),
             )
         )!!
         program.bindSourceFiles()
@@ -140,7 +150,7 @@ internal object TsgoPrograms {
         val program = opened.program
         val ctx = com.xemantic.typescript.tsgo.go.context.background()
         val all = getDiagnosticsOfAnyProgram(
-            ctx, program, null, false,
+            ctx, program, GoElem.ref<TsgoSourceFile?>().nilSlice, false,
             { c, f -> program.getBindDiagnostics(c, f) },
             { c, f -> if (f != null) program.getSemanticDiagnostics(c, f) else ownSemanticDiagnostics(opened, c) },
         )
@@ -191,7 +201,7 @@ internal object TsgoPrograms {
             message = message(d),
             category = category,
             code = d.code,
-            fileName = fileNameOf(GoString.toUtf16(file.fileName)),
+            fileName = fileNameOf(GoString.toUtf16(file.fileName.value)),
             line = line + 1,
             character = start - lineStart + 1,
             start = start,
@@ -204,7 +214,7 @@ internal object TsgoPrograms {
 
     /** Whether [file] is one of the program's own files rather than a default library. */
     fun isProgramFile(program: Program, file: TsgoSourceFile): Boolean =
-        !program.isSourceFileDefaultLibrary(file.path())
+        !program.isSourceFileDefaultLibrary(file.pathKey())
 
 }
 
@@ -219,11 +229,15 @@ internal object TsgoPrograms {
  */
 private class LibCachingHost(
     private val delegate: CompilerHost,
-    private val libPath: String,
+    libPath: RootedDirectoryPath,
 ) : CompilerHost by delegate {
 
+    /** The library directory as a file-name prefix. */
+    private val libPrefix = if (libPath.value.endsWith("/")) libPath.value else libPath.value + "/"
+
+
     override fun getSourceFile(p0: SourceFileParseOptions): TsgoSourceFile? {
-        if (!p0.fileName.startsWith(libPath)) return delegate.getSourceFile(p0)
+        if (!p0.fileName.value.startsWith(libPrefix)) return delegate.getSourceFile(p0)
         val (text, ok) = delegate.fs()!!.readFile(p0.fileName)
         if (!ok) return null
         val key = LibKey(p0.goCopy(), text)
@@ -303,13 +317,13 @@ internal class InMemoryFS(files: Map<String, String>) : FS {
         f.split('/').dropLast(1).runningReduce { a, b -> "$a/$b" }.map { it.ifEmpty { "/" } }
     }.toSet() + "/"
 
-    override fun useCaseSensitiveFileNames(): Boolean = true
-    override fun fileExists(p0: String): Boolean = p0 in files
-    override fun readFile(p0: String): Tuple2<String, Boolean> =
-        files[p0]?.let { Tuple2(it, true) } ?: Tuple2("", false)
-    override fun directoryExists(p0: String): Boolean = p0 in dirs
-    override fun getAccessibleEntries(p0: String): Entries {
-        val prefix = if (p0.endsWith("/")) p0 else "$p0/"
+    override fun caseSensitivity(): CaseSensitivity = CaseSensitive
+    override fun fileExists(p0: RootedFilePath): Boolean = p0.value in files
+    override fun readFile(p0: RootedFilePath): Tuple2<String, Boolean> =
+        files[p0.value]?.let { Tuple2(it, true) } ?: Tuple2("", false)
+    override fun directoryExists(p0: RootedDirectoryPath): Boolean = p0.value in dirs
+    override fun getAccessibleEntries(p0: RootedDirectoryPath): Entries {
+        val prefix = if (p0.value.endsWith("/")) p0.value else "${p0.value}/"
         val children = (files.keys + dirs).filter {
             it.startsWith(prefix) && it.length > prefix.length && '/' !in it.substring(prefix.length)
         }
@@ -321,12 +335,11 @@ internal class InMemoryFS(files: Map<String, String>) : FS {
             symlinks = GoMap.make(com.xemantic.typescript.tsgo.runtime.goUnitElem),
         )
     }
-    override fun realpath(p0: String): String = p0
-    override fun stat(p0: String): FileInfo? = null
-    override fun walkDir(p0: String, p1: WalkDirFunc?): GoError? = error("walkDir is not supported")
-    override fun writeFile(p0: String, p1: String): GoError? = error("read-only")
-    override fun appendFile(p0: String, p1: String): GoError? = error("read-only")
-    override fun remove(p0: String): GoError? = error("read-only")
-    override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = error("read-only")
+    override fun realpath(p0: RootedPath): RootedPath = p0
+    override fun stat(p0: RootedPath): FileInfo? = null
+    override fun writeFile(p0: RootedFilePath, p1: String): GoError? = error("read-only")
+    override fun appendFile(p0: RootedFilePath, p1: String): GoError? = error("read-only")
+    override fun remove(p0: RootedPath): GoError? = error("read-only")
+    override fun chtimes(p0: RootedPath, p1: Time, p2: Time): GoError? = error("read-only")
 
 }

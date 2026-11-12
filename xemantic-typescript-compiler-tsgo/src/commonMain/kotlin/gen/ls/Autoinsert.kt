@@ -24,6 +24,7 @@
 package com.xemantic.typescript.tsgo.ls
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.checker.Checker
 import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.spanmap.Feature
 import com.xemantic.typescript.tsgo.lsp.lsproto.InsertTextFormat
@@ -31,16 +32,23 @@ import com.xemantic.typescript.tsgo.ast.JsxElement
 import com.xemantic.typescript.tsgo.ast.JsxFragment
 import com.xemantic.typescript.tsgo.ls.lsconv.MappedPosition
 import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.compiler.Program
 import com.xemantic.typescript.tsgo.lsp.lsproto.Range
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
 import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.ast.Symbol
 import com.xemantic.typescript.tsgo.lsp.lsproto.TextEdit
 import com.xemantic.typescript.tsgo.core.TextPos
+import com.xemantic.typescript.tsgo.checker.Type
 import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertParams
 import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertResponseItem
 import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertResponseItemOrNull
 import com.xemantic.typescript.tsgo.ast.asJsxElement
 import com.xemantic.typescript.tsgo.ast.asJsxFragment
 import com.xemantic.typescript.tsgo.ast.tagName
+import com.xemantic.typescript.tsgo.checker.getTypeOfSymbolAtLocation
+import com.xemantic.typescript.tsgo.compiler.getTypeChecker
+import com.xemantic.typescript.tsgo.compiler.getTypeCheckerForFile
 import com.xemantic.typescript.tsgo.ls.lsconv.fromLSPPositionForSourceFile
 
 // go: github.com/microsoft/TypeScript/tsc/internal/ls.LanguageService.ProvideOnAutoInsert 2ec22613

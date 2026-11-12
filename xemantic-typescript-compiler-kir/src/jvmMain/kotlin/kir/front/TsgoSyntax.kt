@@ -151,7 +151,7 @@ internal class TsgoSyntax(private val file: TsgoSourceFile, private val fileName
     val sourceFile: SourceFile = run {
         val statements = list(file.statements!!.nodes) { st(it) }
         SourceFile(fileName = fileName, statements = statements, text = text, pos = 0, end = text.length)
-            .also { track(it, file.asNode()!!); indexSourceFile(it) }
+            .also { track(it, file); indexSourceFile(it) }
     }
 
     /** The converted file — the syntax the lowering walks. */
@@ -593,7 +593,7 @@ internal class TsgoSyntax(private val file: TsgoSourceFile, private val fileName
             "Decorator" -> Decorator(expression = ex(n.expression()!!), pos = start(n), end = end(n))
             "HeritageClause" -> n.asHeritageClause()!!.let { h ->
                 HeritageClause(
-                    token = token(h.token), types = list(h.types!!.nodes) { node(it) as ExpressionWithTypeArguments },
+                    token = token(h.token), types = list(h.types!!.nodes) { heritageElement(it) },
                     pos = start(n), end = end(n),
                 )
             }
@@ -636,8 +636,8 @@ internal class TsgoSyntax(private val file: TsgoSourceFile, private val fileName
             }
             "OptionalType" -> OptionalType(type = ty(n.type()!!), pos = start(n), end = end(n))
             "RestType" -> RestType(type = ty(n.type()!!), pos = start(n), end = end(n))
-            "UnionType" -> UnionType(types = list(run { n.asUnionTypeNode()!!.unionOrIntersectionTypeNodeBase.types!!.nodes }) { ty(it) }, pos = start(n), end = end(n))
-            "IntersectionType" -> IntersectionType(types = list(run { n.asIntersectionTypeNode()!!.unionOrIntersectionTypeNodeBase.types!!.nodes }) { ty(it) }, pos = start(n), end = end(n))
+            "UnionType" -> UnionType(types = list(run { n.asUnionTypeNode()!!.types!!.nodes }) { ty(it) }, pos = start(n), end = end(n))
+            "IntersectionType" -> IntersectionType(types = list(run { n.asIntersectionTypeNode()!!.types!!.nodes }) { ty(it) }, pos = start(n), end = end(n))
             "ConditionalType" -> n.asConditionalTypeNode()!!.let { c ->
                 ConditionalType(
                     checkType = ty(c.checkType!!), extendsType = ty(c.extendsType!!), trueType = ty(c.trueType!!),
@@ -724,6 +724,30 @@ internal class TsgoSyntax(private val file: TsgoSourceFile, private val fileName
             else -> throw UnsupportedSyntax(k, fileName, start(n))
         }
         return track(core, n)
+    }
+
+    /**
+     * A heritage clause element as `-core`'s tree holds it: an [ExpressionWithTypeArguments]. TypeScript 7.1
+     * parses an interface's `extends` and a class's `implements` element as a TYPE REFERENCE
+     * (`parseTypeHeritageClauseElement`), its entity name for the expression.
+     */
+    private fun heritageElement(n: TsgoNode): ExpressionWithTypeArguments {
+        if (kind(n) != "TypeReference") return node(n) as ExpressionWithTypeArguments
+        val r = n.asTypeReferenceNode()!!
+        val element = ExpressionWithTypeArguments(
+            expression = entityNameExpression(r.typeName!!), typeArguments = typeArguments(r.typeArguments), pos = start(n), end = end(n),
+        )
+        return track(element, n)
+    }
+
+    /** An entity name (`A`, `ns.A`) as the expression `-core` parsed it to: an identifier or a property access. */
+    private fun entityNameExpression(n: TsgoNode): Expression {
+        if (kind(n) != "QualifiedName") return ex(n)
+        val q = n.asQualifiedName()!!
+        val access = PropertyAccessExpression(
+            expression = entityNameExpression(q.left!!), name = id(q.right!!), questionDotToken = false, pos = start(n), end = end(n),
+        )
+        return track(access, n)
     }
 
     private fun jsxAttributes(attributes: TsgoNode?): List<Node> =

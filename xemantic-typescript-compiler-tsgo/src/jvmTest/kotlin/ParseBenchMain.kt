@@ -28,7 +28,9 @@ package com.xemantic.typescript.tsgo
 import com.xemantic.typescript.tsgo.ast.ExternalModuleIndicatorOptions
 import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
 import com.xemantic.typescript.tsgo.runtime.GoString
-import com.xemantic.typescript.tsgo.tspath.Path
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import java.io.File
 import kotlin.system.exitProcess
 
@@ -89,12 +91,12 @@ private class ParseBench(val arm: String, val repo: File, val warmup: Int, val i
         if (arm == "tsgo") com.xemantic.typescript.tsgo.parser.goInitPackage()
         val opts = inputs.map {
             SourceFileParseOptions(
-                fileName = it.fileName,
-                path = Path(it.fileName),
+                fileName = RootedFilePath(it.fileName),
+                pathKey = CaseSensitive.pathKey(RootedPath(it.fileName)),
                 externalModuleIndicatorOptions = ExternalModuleIndicatorOptions(jsx = false, force = false),
             )
         }
-        val kinds = inputs.map { com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(it.fileName) }
+        val kinds = inputs.map { com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(RootedFilePath(it.fileName)) }
         println("arm=$arm files=${inputs.size} chars=$chars warmup=$warmup iters=$iters java=${System.getProperty("java.version")}")
         val totals = ArrayList<Double>()
         val convs = ArrayList<Double>()

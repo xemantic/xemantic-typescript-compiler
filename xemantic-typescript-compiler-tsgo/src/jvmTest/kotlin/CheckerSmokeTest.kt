@@ -29,9 +29,10 @@ import com.xemantic.kotlin.test.assert
 import com.xemantic.typescript.tsgo.ast.localize
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.core.CompilerOptions
-import com.xemantic.typescript.tsgo.core.ParsedOptions
+import com.xemantic.typescript.tsgo.compiler.ProgramConfig
+import com.xemantic.typescript.tsgo.compiler.ProgramHosts
+import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.go.io.fs.FileInfo
-import com.xemantic.typescript.tsgo.go.io.fs.WalkDirFunc
 import com.xemantic.typescript.tsgo.go.time.Time
 import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoError
@@ -39,7 +40,12 @@ import com.xemantic.typescript.tsgo.runtime.GoMap
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.Tuple2
-import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
+import com.xemantic.typescript.tsgo.tsoptions.newParsedCommandLine
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.vfs.Entries
 import com.xemantic.typescript.tsgo.vfs.FS
 import kotlin.test.Test
@@ -56,12 +62,12 @@ class CheckerSmokeTest {
         private val files = files.mapValues { GoString.fromUtf16(it.value) }
         private val dirs = files.keys.flatMap { f -> f.split('/').dropLast(1).runningReduce { a, b -> "$a/$b" }.map { it.ifEmpty { "/" } } }.toSet() + "/"
 
-        override fun useCaseSensitiveFileNames(): Boolean = true
-        override fun fileExists(p0: String): Boolean = p0 in files
-        override fun readFile(p0: String): Tuple2<String, Boolean> = files[p0]?.let { Tuple2(it, true) } ?: Tuple2("", false)
-        override fun directoryExists(p0: String): Boolean = p0 in dirs
-        override fun getAccessibleEntries(p0: String): Entries {
-            val prefix = if (p0.endsWith("/")) p0 else "$p0/"
+        override fun caseSensitivity(): CaseSensitivity = CaseSensitive
+        override fun fileExists(p0: RootedFilePath): Boolean = p0.value in files
+        override fun readFile(p0: RootedFilePath): Tuple2<String, Boolean> = files[p0.value]?.let { Tuple2(it, true) } ?: Tuple2("", false)
+        override fun directoryExists(p0: RootedDirectoryPath): Boolean = p0.value in dirs
+        override fun getAccessibleEntries(p0: RootedDirectoryPath): Entries {
+            val prefix = if (p0.value.endsWith("/")) p0.value else "${p0.value}/"
             val children = (files.keys + dirs).filter { it.startsWith(prefix) && it.length > prefix.length && '/' !in it.substring(prefix.length) }
             return Entries(
                 files = GoSlice.of(GoElem.STRING, *children.filter { it in files }.map { it.substring(prefix.length) }.sorted().toTypedArray()),
@@ -69,13 +75,12 @@ class CheckerSmokeTest {
                 symlinks = GoMap.make(com.xemantic.typescript.tsgo.runtime.goUnitElem),
             )
         }
-        override fun realpath(p0: String): String = p0
-        override fun stat(p0: String): FileInfo? = null
-        override fun walkDir(p0: String, p1: WalkDirFunc?): GoError? = error("walkDir not supported")
-        override fun writeFile(p0: String, p1: String): GoError? = error("read-only")
-        override fun appendFile(p0: String, p1: String): GoError? = error("read-only")
-        override fun remove(p0: String): GoError? = error("read-only")
-        override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = error("read-only")
+        override fun realpath(p0: RootedPath): RootedPath = p0
+        override fun stat(p0: RootedPath): FileInfo? = null
+        override fun writeFile(p0: RootedFilePath, p1: String): GoError? = error("read-only")
+        override fun appendFile(p0: RootedFilePath, p1: String): GoError? = error("read-only")
+        override fun remove(p0: RootedPath): GoError? = error("read-only")
+        override fun chtimes(p0: RootedPath, p1: Time, p2: Time): GoError? = error("read-only")
     }
 
     private fun onDeepStack(body: () -> Unit) {
@@ -90,10 +95,10 @@ class CheckerSmokeTest {
     private fun check(source: String, chains: Boolean = false): List<String> {
         TsgoPort.init()
         val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(MapFS(mapOf("/src/a.ts" to source)))
-        val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost("/src", fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)
-        val config = ParsedCommandLine(parsedConfig = ParsedOptions(compilerOptions = CompilerOptions(), fileNames = GoSlice.of(GoElem.STRING, "/src/a.ts")))
-        val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = config))!!
-        val file = program.getSourceFile("/src/a.ts")
+        val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost(fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null, null)
+        val config = newParsedCommandLine(CompilerOptions(), GoSlice.of(RootedFilePath.ELEM, RootedFilePath("/src/a.ts")), GoElem.ref<ProjectReference?>().nilSlice, RootedDirectoryPath("/src"), CaseSensitive)
+        val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(programConfig = ProgramConfig(config = config), programHosts = ProgramHosts(host = host)))!!
+        val file = program.getSourceFile(RootedFilePath("/src/a.ts"))
         val diags = program.getSemanticDiagnostics(com.xemantic.typescript.tsgo.go.context.background(), file)
         return (0 until diags.len).map { i ->
             val d = diags[i]!!

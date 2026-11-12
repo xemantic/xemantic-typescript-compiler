@@ -84,6 +84,3 @@ fun parse(localeStr: String): Tuple2<Locale, Boolean> {
     return Tuple2<Locale, Boolean>(tag.goCopy(), err == null)
 }
 
-// go: github.com/microsoft/TypeScript/tsc/internal/locale.Default ff89171c
-@kotlin.jvm.JvmField val default: Locale = Locale()
-

@@ -186,7 +186,7 @@ class PackageEmitter(
         val qname = d.str("qname")!!
         val o = pc.obj(d.reqInt("obj"))
         val sig = types.unalias(o.reqInt("t")) as SignatureType
-        overrides[qname]?.let { ov -> return spliceOverride(ov, d) }
+        overrides[qname]?.let { ov -> return spliceOverride(ov, d, fc) }
         val tpNames = HashMap<Int, String>()
         var recvTypeText = ""
         var classTparams = ""
@@ -271,7 +271,9 @@ class PackageEmitter(
             }
             val result = tm.returns(sig.results.map { it.t })
             val ov = member?.overrides?.contains(name) == true
-            val jvmName = if (member != null && name in OBJECT_MEMBERS && !ov) "@kotlin.jvm.JvmName(\"go${name.replaceFirstChar { it.uppercase() }}\")\n" else ""
+            // A Go `Equals` method must not take `goEquals`, the JVM name of a comparable struct's synthesized
+            // structural equality (TypeScript 7.1's `ata.TypingsInfo.Equals`).
+            val jvmName = if (member != null && name in OBJECT_MEMBERS && !ov) "@kotlin.jvm.JvmName(\"go${name.replaceFirstChar { it.uppercase() }}${if (name == "equals") "Method" else ""}\")\n" else ""
             sigText = "$jvmName${if (ov) "override " else ""}fun ${if (tparams.isEmpty()) "" else "$tparams "}$recvTypeText$name(${decl.joinToString(", ")})$result"
             declList = decl
             tparamsText = tparams
@@ -458,8 +460,14 @@ class PackageEmitter(
         return types.unalias(tId) as? NamedType ?: refuse("receiver-not-named")
     }
 
-    private fun spliceOverride(ov: Override, d: Node): String {
+    private fun spliceOverride(ov: Override, d: Node, fc: FileCtx? = null): String {
         ov.used = true
+        // `// import <package>.<function>` lines: extension functions the hand port calls (Kotlin cannot call an
+        // extension by its qualified name), imported into the generated file the override lands in.
+        for (line in ov.text.lineSequence()) {
+            val fqn = line.trim().removePrefix("// import ").takeIf { it != line.trim() } ?: continue
+            fc?.importFun(fqn.substringBeforeLast('.'), fqn.substringAfterLast('.'))
+        }
         val qname = d.str("qname")!!
         if (ov.hash8 != hash8(d)) report.stale(qname, ov.hash8, hash8(d), ov.file)
         report.overridden(pc.pkg, qname, d.reqInt("lines"))

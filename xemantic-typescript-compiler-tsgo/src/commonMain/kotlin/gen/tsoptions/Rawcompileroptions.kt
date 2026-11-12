@@ -24,19 +24,76 @@
 package com.xemantic.typescript.tsgo.tsoptions
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.core.BuildOptions
+import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
 import com.xemantic.typescript.tsgo.core.CompilerOptions
+import com.xemantic.typescript.tsgo.packagejson.ContentMapperFields
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Decoder
+import com.xemantic.typescript.tsgo.module.DefaultResolver
 import com.xemantic.typescript.tsgo.ast.Diagnostic
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Encoder
+import com.xemantic.typescript.tsgo.tspath.ExtensionRewrite
+import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.packagejson.Fields
+import com.xemantic.typescript.tsgo.glob.Glob
+import com.xemantic.typescript.tsgo.core.JsxEmit
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.contentmapper.Manifest
+import com.xemantic.typescript.tsgo.collections.MapEntry
+import com.xemantic.typescript.tsgo.contentmapper.Mapper
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.MarshalerTo
+import com.xemantic.typescript.tsgo.diagnostics.Message
+import com.xemantic.typescript.tsgo.core.ModuleDetectionKind
+import com.xemantic.typescript.tsgo.core.ModuleKind
+import com.xemantic.typescript.tsgo.core.ModuleResolutionKind
+import com.xemantic.typescript.tsgo.core.NewLineKind
+import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.go.sync.Once
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.Options
 import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.outputpaths.OutputPathsHost
+import com.xemantic.typescript.tsgo.tspath.PathKey
+import com.xemantic.typescript.tsgo.tspath.PathPattern
+import com.xemantic.typescript.tsgo.core.PluginImport
+import com.xemantic.typescript.tsgo.core.ProjectReference
+import com.xemantic.typescript.tsgo.module.ResolutionHost
+import com.xemantic.typescript.tsgo.module.ResolvedModule
+import com.xemantic.typescript.tsgo.module.ResolvedProjectReference
+import com.xemantic.typescript.tsgo.module.ResolverOptions
 import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
+import com.xemantic.typescript.tsgo.core.ScriptTarget
+import com.xemantic.typescript.tsgo.go.iter.Seq
+import com.xemantic.typescript.tsgo.go.iter.Seq2
+import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.tspath.SourceMapLocation
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Token
+import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.core.TypeAcquisition
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
+import com.xemantic.typescript.tsgo.ast.diagnostics
+import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.clone
+import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.entries
+import com.xemantic.typescript.tsgo.collections.get
+import com.xemantic.typescript.tsgo.collections.getOrZero
+import com.xemantic.typescript.tsgo.collections.has
+import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.set
+import com.xemantic.typescript.tsgo.collections.size
+import com.xemantic.typescript.tsgo.collections.values
+import com.xemantic.typescript.tsgo.contentmapper.equals
+import com.xemantic.typescript.tsgo.core.equals
+import com.xemantic.typescript.tsgo.core.getAreDeclarationMapsEnabled
+import com.xemantic.typescript.tsgo.core.getEmitDeclarations
+import com.xemantic.typescript.tsgo.core.getEmitScriptTarget
+import com.xemantic.typescript.tsgo.core.getStrictOptionValue
+import com.xemantic.typescript.tsgo.glob.match
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
+import com.xemantic.typescript.tsgo.module.resolvePackageDirectory
+import com.xemantic.typescript.tsgo.packagejson.getValue
 
 // go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.RawCompilerOptions 4cb81c9a
 class RawCompilerOptions(
@@ -169,6 +226,4 @@ fun RawCompilerOptions?.finalize(basePath: RootedDirectoryPath): Tuple2<Compiler
     })
     return Tuple2<CompilerOptions?, GoSlice<Diagnostic?>>(options, diagnostics)
 }
-
-
 

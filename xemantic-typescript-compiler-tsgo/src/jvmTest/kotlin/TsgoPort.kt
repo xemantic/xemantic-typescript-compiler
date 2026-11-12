@@ -29,7 +29,9 @@ import com.xemantic.typescript.tsgo.ast.ExternalModuleIndicatorOptions
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
 import com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.Uint128
-import com.xemantic.typescript.tsgo.tspath.Path
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 
 /** The ported pipeline the parity tests drive: tsgo's `parsecache` parse, the binder, the API encoder. */
 object TsgoPort {
@@ -48,11 +50,11 @@ object TsgoPort {
     fun parse(fileName: String, text: String, jsx: Boolean, force: Boolean): SourceFile {
         init()
         val opts = SourceFileParseOptions(
-            fileName = fileName,
-            path = Path(fileName),
+            fileName = RootedFilePath(fileName),
+            pathKey = CaseSensitive.pathKey(RootedPath(fileName)),
             externalModuleIndicatorOptions = ExternalModuleIndicatorOptions(jsx = jsx, force = force),
         )
-        val kind = com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(fileName)
+        val kind = com.xemantic.typescript.tsgo.core.getScriptKindFromFileName(RootedFilePath(fileName))
         return com.xemantic.typescript.tsgo.parser.parseSourceFile(opts, text, kind)!!
     }
 

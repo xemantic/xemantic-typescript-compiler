@@ -24,6 +24,7 @@
 package com.xemantic.typescript.tsgo.transformers.declarations
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.ast.AllAccessorDeclarations
 import com.xemantic.typescript.tsgo.ast.ArrowFunction
 import com.xemantic.typescript.tsgo.printer.AutoGenerateOptions
 import com.xemantic.typescript.tsgo.ast.BinaryExpression
@@ -48,6 +49,7 @@ import com.xemantic.typescript.tsgo.ast.EnumDeclaration
 import com.xemantic.typescript.tsgo.ast.ExpressionWithTypeArguments
 import com.xemantic.typescript.tsgo.tspath.ExtensionRewrite
 import com.xemantic.typescript.tsgo.ast.FileReference
+import com.xemantic.typescript.tsgo.ast.FindAncestorResult
 import com.xemantic.typescript.tsgo.nodebuilder.Flags
 import com.xemantic.typescript.tsgo.ast.FunctionDeclaration
 import com.xemantic.typescript.tsgo.ast.FunctionExpression
@@ -75,6 +77,7 @@ import com.xemantic.typescript.tsgo.ast.Kind
 import com.xemantic.typescript.tsgo.core.LanguageVariant
 import com.xemantic.typescript.tsgo.ast.LocalsContainerBase
 import com.xemantic.typescript.tsgo.ast.MappedTypeNode
+import com.xemantic.typescript.tsgo.diagnostics.Message
 import com.xemantic.typescript.tsgo.ast.MethodDeclaration
 import com.xemantic.typescript.tsgo.ast.MethodSignatureDeclaration
 import com.xemantic.typescript.tsgo.ast.ModifierFlags
@@ -93,6 +96,7 @@ import com.xemantic.typescript.tsgo.outputpaths.OutputPathsHost
 import com.xemantic.typescript.tsgo.ast.ParameterDeclaration
 import com.xemantic.typescript.tsgo.ast.PropertyDeclaration
 import com.xemantic.typescript.tsgo.ast.PropertySignatureDeclaration
+import com.xemantic.typescript.tsgo.tspath.RelativePath
 import com.xemantic.typescript.tsgo.evaluator.Result
 import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
@@ -102,6 +106,8 @@ import com.xemantic.typescript.tsgo.scanner.SkipTriviaOptions
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.Symbol
 import com.xemantic.typescript.tsgo.printer.SymbolAccessibilityResult
+import com.xemantic.typescript.tsgo.ast.SymbolFlags
+import com.xemantic.typescript.tsgo.nodebuilder.SymbolTracker
 import com.xemantic.typescript.tsgo.ast.TokenFlags
 import com.xemantic.typescript.tsgo.transformers.Transformer
 import com.xemantic.typescript.tsgo.ast.TypeAliasDeclaration
@@ -109,6 +115,7 @@ import com.xemantic.typescript.tsgo.ast.TypeParameterDeclaration
 import com.xemantic.typescript.tsgo.ast.TypeReferenceNode
 import com.xemantic.typescript.tsgo.ast.VariableDeclaration
 import com.xemantic.typescript.tsgo.ast.VariableStatement
+import com.xemantic.typescript.tsgo.ast.addRelatedInfo
 import com.xemantic.typescript.tsgo.ast.arguments
 import com.xemantic.typescript.tsgo.ast.asArrowFunction
 import com.xemantic.typescript.tsgo.ast.asBinaryExpression
@@ -235,6 +242,7 @@ import com.xemantic.typescript.tsgo.ast.propertyName
 import com.xemantic.typescript.tsgo.ast.questionToken
 import com.xemantic.typescript.tsgo.ast.setModifiers
 import com.xemantic.typescript.tsgo.ast.statementList
+import com.xemantic.typescript.tsgo.ast.supplementalSourceFiles
 import com.xemantic.typescript.tsgo.ast.symbol
 import com.xemantic.typescript.tsgo.ast.text
 import com.xemantic.typescript.tsgo.ast.type

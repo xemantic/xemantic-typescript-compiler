@@ -84,9 +84,3 @@ fun LanguageService?.getTypeOfSymbol(ctx: Context?, symbol: Symbol?): Type? {
     }
 }
 
-// go: github.com/microsoft/TypeScript/tsc/internal/ls.ErrNoSourceFile 60018cfd
-@kotlin.jvm.JvmField val errNoSourceFile: GoError? = com.xemantic.typescript.tsgo.go.errors.new("source file not found")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/ls.ErrNoTokenAtPosition 8c973d9b
-@kotlin.jvm.JvmField val errNoTokenAtPosition: GoError? = com.xemantic.typescript.tsgo.go.errors.new("no token found at position")
-

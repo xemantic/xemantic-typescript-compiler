@@ -214,14 +214,26 @@ fun main(argv: Array<String>) {
         em.checkPackageCollisions()
         val dir = File(args.out, p.shortPath)
         dir.mkdirs()
+        // Package variables across files (docs/goport-lowering.md § 3, "Package variable order"): Go initializes a
+        // package's variables in ONE dependency order; a Kotlin file facade initializes its own on first touch. When
+        // that order interleaves files, a cycle between two files' initializers reads a half-built file (TypeScript
+        // 7.1's tsoptions: declarations_generated.go <-> tsconfigparsing.go). Such a package emits all its variables
+        // together, in Go's order, chunked: a variable depends only on earlier ones, so touching any chunk first
+        // initializes only earlier chunks.
+        val initFiles = p.initOrder.mapNotNull { it.str("file") }
+        val interleaved = initFiles.zipWithNext().count { (a, b) -> a != b } + 1 > initFiles.distinct().size
+        val sharedFc = if (interleaved) FileCtx(pc) else null
+        val packageVars = ArrayList<Item>()
         for (f in p.files) {
             val goFile = f.str("name")!!
             val base = camelFile(goFile)
             // Lower once with a throwaway import context to learn the item sizes, then render
             // each chunk with its own imports.
             val chunks = ArrayList<List<Item>>()
-            val fcAll = FileCtx(pc)
-            val items = em.lowerFile(f, fcAll)
+            val fcAll = sharedFc ?: FileCtx(pc)
+            val items = em.lowerFile(f, fcAll).let { all ->
+                if (!interleaved) all else all.filter { !it.isVar }.also { packageVars += all.filter { it.isVar } }
+            }
             var cur = ArrayList<Item>()
             var lines = 0
             var vars = 0
@@ -240,6 +252,14 @@ fun main(argv: Array<String>) {
             chunks.forEachIndexed { ci, chunk ->
                 val name = if (chunks.size == 1) "$base.kt" else "$base${ci + 1}.kt"
                 File(dir, name).writeText(render(pc, fcAll, chunk, "${p.sourceDir}/$goFile"))
+                written++
+            }
+        }
+        if (packageVars.isNotEmpty()) {
+            val chunks = packageVars.sortedBy { it.initOrder }.chunked(CHUNK_VARS)
+            chunks.forEachIndexed { ci, chunk ->
+                val name = if (chunks.size == 1) "PackageVars.kt" else "PackageVars${ci + 1}.kt"
+                File(dir, name).writeText(render(pc, sharedFc!!, chunk, "package variables of ${p.sourceDir}, in Go's initialization order"))
                 written++
             }
         }

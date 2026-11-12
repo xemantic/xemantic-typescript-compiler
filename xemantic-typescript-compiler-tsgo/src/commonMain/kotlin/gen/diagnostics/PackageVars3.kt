@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_identifier_or_keyword_cannot_immediately_follow_a_numeric_literal dd121ba8
+@kotlin.jvm.JvmField val an_identifier_or_keyword_cannot_immediately_follow_a_numeric_literal: Message? = Message(code = 1351, category = CategoryError, key = Key("An_identifier_or_keyword_cannot_immediately_follow_a_numeric_literal_1351"), text = "An identifier or keyword cannot immediately follow a numeric literal.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_bigint_literal_cannot_use_exponential_notation abbdfd87
+@kotlin.jvm.JvmField val a_bigint_literal_cannot_use_exponential_notation: Message? = Message(code = 1352, category = CategoryError, key = Key("A_bigint_literal_cannot_use_exponential_notation_1352"), text = "A bigint literal cannot use exponential notation.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_bigint_literal_must_be_an_integer c5aa272c
+@kotlin.jvm.JvmField val a_bigint_literal_must_be_an_integer: Message? = Message(code = 1353, category = CategoryError, key = Key("A_bigint_literal_must_be_an_integer_1353"), text = "A bigint literal must be an integer.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_readonly_type_modifier_is_only_permitted_on_array_and_tuple_literal_types f6ade0de
+@kotlin.jvm.JvmField val x_readonly_type_modifier_is_only_permitted_on_array_and_tuple_literal_types: Message? = Message(code = 1354, category = CategoryError, key = Key("readonly_type_modifier_is_only_permitted_on_array_and_tuple_literal_types_1354"), text = "'readonly' type modifier is only permitted on array and tuple literal types.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_const_assertion_can_only_be_applied_to_references_to_enum_members_or_string_number_boolean_array_or_object_literals 25c0f590
+@kotlin.jvm.JvmField val a_const_assertion_can_only_be_applied_to_references_to_enum_members_or_string_number_boolean_array_or_object_literals: Message? = Message(code = 1355, category = CategoryError, key = Key("A_const_assertion_can_only_be_applied_to_references_to_enum_members_or_string_number_boolean_array_o_1355"), text = "A 'const' assertion can only be applied to references to enum members, or string, number, boolean, array, or object literals.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Did_you_mean_to_mark_this_function_as_async 550797f6
+@kotlin.jvm.JvmField val did_you_mean_to_mark_this_function_as_async: Message? = Message(code = 1356, category = CategoryError, key = Key("Did_you_mean_to_mark_this_function_as_async_1356"), text = "Did you mean to mark this function as 'async'?")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_enum_member_name_must_be_followed_by_a_or 829c762a
+@kotlin.jvm.JvmField val an_enum_member_name_must_be_followed_by_a_or: Message? = Message(code = 1357, category = CategoryError, key = Key("An_enum_member_name_must_be_followed_by_a_or_1357"), text = "An enum member name must be followed by a ',', '=', or '}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Tagged_template_expressions_are_not_permitted_in_an_optional_chain 4fe5ec70
+@kotlin.jvm.JvmField val tagged_template_expressions_are_not_permitted_in_an_optional_chain: Message? = Message(code = 1358, category = CategoryError, key = Key("Tagged_template_expressions_are_not_permitted_in_an_optional_chain_1358"), text = "Tagged template expressions are not permitted in an optional chain.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Identifier_expected_0_is_a_reserved_word_that_cannot_be_used_here 53a571dd
+@kotlin.jvm.JvmField val identifier_expected_0_is_a_reserved_word_that_cannot_be_used_here: Message? = Message(code = 1359, category = CategoryError, key = Key("Identifier_expected_0_is_a_reserved_word_that_cannot_be_used_here_1359"), text = "Identifier expected. '{0}' is a reserved word that cannot be used here.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_0_does_not_satisfy_the_expected_type_1 287c3cbc
+@kotlin.jvm.JvmField val type_0_does_not_satisfy_the_expected_type_1: Message? = Message(code = 1360, category = CategoryError, key = Key("Type_0_does_not_satisfy_the_expected_type_1_1360"), text = "Type '{0}' does not satisfy the expected type '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_cannot_be_used_as_a_value_because_it_was_imported_using_import_type 4df8721a
+@kotlin.jvm.JvmField val x_0_cannot_be_used_as_a_value_because_it_was_imported_using_import_type: Message? = Message(code = 1361, category = CategoryError, key = Key("_0_cannot_be_used_as_a_value_because_it_was_imported_using_import_type_1361"), text = "'{0}' cannot be used as a value because it was imported using 'import type'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_cannot_be_used_as_a_value_because_it_was_exported_using_export_type affcb4e5
+@kotlin.jvm.JvmField val x_0_cannot_be_used_as_a_value_because_it_was_exported_using_export_type: Message? = Message(code = 1362, category = CategoryError, key = Key("_0_cannot_be_used_as_a_value_because_it_was_exported_using_export_type_1362"), text = "'{0}' cannot be used as a value because it was exported using 'export type'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_type_only_import_can_specify_a_default_import_or_named_bindings_but_not_both e6c34f5a
+@kotlin.jvm.JvmField val a_type_only_import_can_specify_a_default_import_or_named_bindings_but_not_both: Message? = Message(code = 1363, category = CategoryError, key = Key("A_type_only_import_can_specify_a_default_import_or_named_bindings_but_not_both_1363"), text = "A type-only import can specify a default import or named bindings, but not both.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_to_type_only_export a0ee20a5
+@kotlin.jvm.JvmField val convert_to_type_only_export: Message? = Message(code = 1364, category = CategoryMessage, key = Key("Convert_to_type_only_export_1364"), text = "Convert to type-only export")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_all_re_exported_types_to_type_only_exports d8755d6a
+@kotlin.jvm.JvmField val convert_all_re_exported_types_to_type_only_exports: Message? = Message(code = 1365, category = CategoryMessage, key = Key("Convert_all_re_exported_types_to_type_only_exports_1365"), text = "Convert all re-exported types to type-only exports")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Split_into_two_separate_import_declarations 6f0de505
 @kotlin.jvm.JvmField val split_into_two_separate_import_declarations: Message? = Message(code = 1366, category = CategoryMessage, key = Key("Split_into_two_separate_import_declarations_1366"), text = "Split into two separate import declarations")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_q_must_be_followed_by_string_alternatives_enclosed_in_braces ec41a3ad
 @kotlin.jvm.JvmField val x_q_must_be_followed_by_string_alternatives_enclosed_in_braces: Message? = Message(code = 1521, category = CategoryError, key = Key("q_must_be_followed_by_string_alternatives_enclosed_in_braces_1521"), text = "'\\q' must be followed by string alternatives enclosed in braces.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_character_class_must_not_contain_a_reserved_double_punctuator_Did_you_mean_to_escape_it_with_backslash 6269457d
-@kotlin.jvm.JvmField val a_character_class_must_not_contain_a_reserved_double_punctuator_Did_you_mean_to_escape_it_with_backslash: Message? = Message(code = 1522, category = CategoryError, key = Key("A_character_class_must_not_contain_a_reserved_double_punctuator_Did_you_mean_to_escape_it_with_backs_1522"), text = "A character class must not contain a reserved double punctuator. Did you mean to escape it with backslash?")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expected_a_Unicode_property_name 5b7519b3
-@kotlin.jvm.JvmField val expected_a_Unicode_property_name: Message? = Message(code = 1523, category = CategoryError, key = Key("Expected_a_Unicode_property_name_1523"), text = "Expected a Unicode property name.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unknown_Unicode_property_name 15ff0692
-@kotlin.jvm.JvmField val unknown_Unicode_property_name: Message? = Message(code = 1524, category = CategoryError, key = Key("Unknown_Unicode_property_name_1524"), text = "Unknown Unicode property name.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expected_a_Unicode_property_value d20a5835
-@kotlin.jvm.JvmField val expected_a_Unicode_property_value: Message? = Message(code = 1525, category = CategoryError, key = Key("Expected_a_Unicode_property_value_1525"), text = "Expected a Unicode property value.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unknown_Unicode_property_value 7f2e6a5d
-@kotlin.jvm.JvmField val unknown_Unicode_property_value: Message? = Message(code = 1526, category = CategoryError, key = Key("Unknown_Unicode_property_value_1526"), text = "Unknown Unicode property value.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expected_a_Unicode_property_name_or_value e52bc7cb
-@kotlin.jvm.JvmField val expected_a_Unicode_property_name_or_value: Message? = Message(code = 1527, category = CategoryError, key = Key("Expected_a_Unicode_property_name_or_value_1527"), text = "Expected a Unicode property name or value.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Any_Unicode_property_that_would_possibly_match_more_than_a_single_character_is_only_available_when_the_Unicode_Sets_v_flag_is_set fc97ab1b
-@kotlin.jvm.JvmField val any_Unicode_property_that_would_possibly_match_more_than_a_single_character_is_only_available_when_the_Unicode_Sets_v_flag_is_set: Message? = Message(code = 1528, category = CategoryError, key = Key("Any_Unicode_property_that_would_possibly_match_more_than_a_single_character_is_only_available_when_t_1528"), text = "Any Unicode property that would possibly match more than a single character is only available when the Unicode Sets (v) flag is set.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unknown_Unicode_property_name_or_value 8702e2b5
-@kotlin.jvm.JvmField val unknown_Unicode_property_name_or_value: Message? = Message(code = 1529, category = CategoryError, key = Key("Unknown_Unicode_property_name_or_value_1529"), text = "Unknown Unicode property name or value.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unicode_property_value_expressions_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v_flag_is_set ba5cbe73
-@kotlin.jvm.JvmField val unicode_property_value_expressions_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v_flag_is_set: Message? = Message(code = 1530, category = CategoryError, key = Key("Unicode_property_value_expressions_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v__1530"), text = "Unicode property value expressions are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_must_be_followed_by_a_Unicode_property_value_expression_enclosed_in_braces b0beb0fe
-@kotlin.jvm.JvmField val x_0_must_be_followed_by_a_Unicode_property_value_expression_enclosed_in_braces: Message? = Message(code = 1531, category = CategoryError, key = Key("_0_must_be_followed_by_a_Unicode_property_value_expression_enclosed_in_braces_1531"), text = "'\\{0}' must be followed by a Unicode property value expression enclosed in braces.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.There_is_no_capturing_group_named_0_in_this_regular_expression d84e6e17
-@kotlin.jvm.JvmField val there_is_no_capturing_group_named_0_in_this_regular_expression: Message? = Message(code = 1532, category = CategoryError, key = Key("There_is_no_capturing_group_named_0_in_this_regular_expression_1532"), text = "There is no capturing group named '{0}' in this regular expression.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_backreference_refers_to_a_group_that_does_not_exist_There_are_only_0_capturing_groups_in_this_regular_expression 822decdc
-@kotlin.jvm.JvmField val this_backreference_refers_to_a_group_that_does_not_exist_There_are_only_0_capturing_groups_in_this_regular_expression: Message? = Message(code = 1533, category = CategoryError, key = Key("This_backreference_refers_to_a_group_that_does_not_exist_There_are_only_0_capturing_groups_in_this_r_1533"), text = "This backreference refers to a group that does not exist. There are only {0} capturing groups in this regular expression.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_backreference_refers_to_a_group_that_does_not_exist_There_are_no_capturing_groups_in_this_regular_expression b4ce1bf5
-@kotlin.jvm.JvmField val this_backreference_refers_to_a_group_that_does_not_exist_There_are_no_capturing_groups_in_this_regular_expression: Message? = Message(code = 1534, category = CategoryError, key = Key("This_backreference_refers_to_a_group_that_does_not_exist_There_are_no_capturing_groups_in_this_regul_1534"), text = "This backreference refers to a group that does not exist. There are no capturing groups in this regular expression.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_character_cannot_be_escaped_in_a_regular_expression c645e2d7
-@kotlin.jvm.JvmField val this_character_cannot_be_escaped_in_a_regular_expression: Message? = Message(code = 1535, category = CategoryError, key = Key("This_character_cannot_be_escaped_in_a_regular_expression_1535"), text = "This character cannot be escaped in a regular expression.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended_as_an_escape_sequence_use_the_syntax_0_instead 3838e57a
-@kotlin.jvm.JvmField val octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended_as_an_escape_sequence_use_the_syntax_0_instead: Message? = Message(code = 1536, category = CategoryError, key = Key("Octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended__1536"), text = "Octal escape sequences and backreferences are not allowed in a character class. If this was intended as an escape sequence, use the syntax '{0}' instead.")
 

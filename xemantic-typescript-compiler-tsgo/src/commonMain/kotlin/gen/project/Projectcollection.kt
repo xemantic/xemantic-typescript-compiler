@@ -93,7 +93,7 @@ class APIState(
     }
 
     // go: github.com/microsoft/TypeScript/tsc/internal/project.APIState.equals b3e74609
-    @kotlin.jvm.JvmName("goEquals")
+    @kotlin.jvm.JvmName("goEqualsMethod")
     fun equals(other: APIState): Boolean {
         return com.xemantic.typescript.tsgo.go.maps.equal<PathKey, Int>(this.openProjects, other.openProjects) && com.xemantic.typescript.tsgo.go.maps.equal<PathKey, com.xemantic.typescript.tsgo.project.apiOpenedFile>(this.openFiles, other.openFiles)
     }

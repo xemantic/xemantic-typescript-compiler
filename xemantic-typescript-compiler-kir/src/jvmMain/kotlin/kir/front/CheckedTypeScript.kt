@@ -90,7 +90,7 @@ public fun checkTypeScript(
     return TsgoPrograms.onDeepStack {
         val opened = TsgoPrograms.open(config, fs)
         val diagnostics = TsgoPrograms.diagnostics(opened) { if (it == absolute) fileName else it }
-        val tsgoFile = opened.program.getSourceFile(com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(absolute))
+        val tsgoFile = opened.program.getSourceFile(com.xemantic.typescript.tsgo.tspath.RootedFilePath(com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(absolute)))
             ?: error("tsgo did not load '$absolute'")
         val syntax = TsgoSyntax(tsgoFile, fileName)
         val facts = CheckedFacts()

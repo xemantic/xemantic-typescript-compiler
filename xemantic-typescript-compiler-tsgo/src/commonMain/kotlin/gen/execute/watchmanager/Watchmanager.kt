@@ -27,12 +27,15 @@ import com.xemantic.typescript.tsgo.runtime.*
 import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
 import com.xemantic.typescript.tsgo.go.io.Closer
 import com.xemantic.typescript.tsgo.go.context.Context
+import com.xemantic.typescript.tsgo.fswatch.Event
 import com.xemantic.typescript.tsgo.fswatch.EventKind
 import com.xemantic.typescript.tsgo.go.sync.Locker
 import com.xemantic.typescript.tsgo.go.sync.Mutex
 import com.xemantic.typescript.tsgo.tspath.PathKey
 import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
 import com.xemantic.typescript.tsgo.tspath.RootedPath
+import com.xemantic.typescript.tsgo.fswatch.Watch
+import com.xemantic.typescript.tsgo.fswatch.WatchOption
 import com.xemantic.typescript.tsgo.fswatch.Watcher
 import com.xemantic.typescript.tsgo.go.io.Writer
 

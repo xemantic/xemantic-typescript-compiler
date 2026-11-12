@@ -68,9 +68,12 @@ import com.xemantic.typescript.compiler.kir.model.undefinedType
 import com.xemantic.typescript.compiler.kir.model.unknownType
 import com.xemantic.typescript.compiler.kir.model.voidType
 import com.xemantic.typescript.tsgo.ast.forEachChild as tsgoForEachChild
+import com.xemantic.typescript.tsgo.ast.declarations
+import com.xemantic.typescript.tsgo.ast.exports
 import com.xemantic.typescript.tsgo.ast.modifiers
 import com.xemantic.typescript.tsgo.ast.name
 import com.xemantic.typescript.tsgo.ast.symbol
+import com.xemantic.typescript.tsgo.ast.valueDeclaration
 import com.xemantic.typescript.tsgo.checker.symbol
 import com.xemantic.typescript.tsgo.checker.SignatureKindCall
 import com.xemantic.typescript.tsgo.checker.SignatureKindConstruct
@@ -358,18 +361,18 @@ internal class TsgoTranslator(
 
     private fun translateSymbol(s: TsgoSymbol): Symbol {
         symbols[s]?.let { return it }
-        val core = Symbol(coreSymbolFlags(s.flags.value), GoString.toUtf16(s.name))
+        val core = Symbol(coreSymbolFlags(s.flags.value), GoString.toUtf16(s.name()))
         symbols[s] = core
         pending.add {
-            for (i in 0 until s.declarations.len) coreNode(s.declarations[i])?.let { core.declarations.add(it) }
-            core.valueDeclaration = coreNode(s.valueDeclaration)
+            for (i in 0 until s.declarations().len) coreNode(s.declarations()[i])?.let { core.declarations.add(it) }
+            core.valueDeclaration = coreNode(s.valueDeclaration())
             // A namespace the PROGRAM declares has its exports read by the
             // lowering (`ns.member`); a library namespace never does, and
             // translating `Intl`'s would be most of the lib.
             val module = s.flags.value and com.xemantic.typescript.tsgo.ast.SymbolFlagsModule.value != 0u
             if (module && core.declarations.any { it !is EmptyStatement }) {
                 val exports = LinkedHashMap<String, Symbol>()
-                s.exports.entriesSnapshot().forEach { (name, export) ->
+                s.exports().entriesSnapshot().forEach { (name, export) ->
                     if (export != null) exports[GoString.toUtf16(name)] = translateSymbol(export)
                 }
                 core.exports = exports
@@ -503,7 +506,7 @@ internal class TsgoFactsBuilder(
                 val tsgo = map.tsgoOf(specifier) ?: continue
                 ask {
                     val module = checker.getSymbolAtLocation(tsgo) ?: return@ask
-                    val file = module.valueDeclaration?.let {
+                    val file = module.valueDeclaration()?.let {
                         com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(it)
                     } ?: return@ask
                     byFile[file]?.let { edges.add(map.core.fileName to it.core.fileName) }
@@ -606,7 +609,7 @@ internal class TsgoFactsBuilder(
         val byName = LinkedHashMap<String, TsgoSymbol>()
         for (i in 0 until exports.len) {
             val export = exports[i] ?: continue
-            val name = GoString.toUtf16(export.name)
+            val name = GoString.toUtf16(export.name())
             if (name == "export=") return null
             byName[name] = export
         }
@@ -630,7 +633,7 @@ internal class TsgoFactsBuilder(
      */
     private fun exportOrder(module: TsgoSymbol, visiting: MutableSet<TsgoSymbol>): List<String> {
         if (!visiting.add(module)) return emptyList()
-        val file = module.valueDeclaration?.let { com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(it) }
+        val file = module.valueDeclaration()?.let { com.xemantic.typescript.tsgo.ast.getSourceFileOfNode(it) }
         val map = maps.firstOrNull { it.tsgo === file } ?: return emptyList()
         val names = mutableListOf<String>()
         for (statement in map.core.statements) {
@@ -640,10 +643,10 @@ internal class TsgoFactsBuilder(
             val target = checker.getSymbolAtLocation(specifier) ?: continue
             names += exportOrder(target, visiting).filter { it != "default" }
         }
-        names += module.exports.entriesSnapshot()
+        names += module.exports().entriesSnapshot()
             .mapNotNull { (name, symbol) -> symbol?.let { name to it } }
             .sortedBy { (_, symbol) ->
-                (0 until symbol.declarations.len).minOfOrNull { symbol.declarations[it]?.pos() ?: Int.MAX_VALUE }
+                (0 until symbol.declarations().len).minOfOrNull { symbol.declarations()[it]?.pos() ?: Int.MAX_VALUE }
                     ?: Int.MAX_VALUE
             }
             .map { (name, _) -> GoString.toUtf16(name) }

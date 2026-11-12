@@ -96,8 +96,8 @@ class DiagParityTest {
             if (want != got) problems += "$what: case.json=$want harness=$got"
         }
         expect("caseSha256", cj["caseSha256"], sha(content))
-        expect("currentDirectory", cj["currentDirectory"], u(prep.currentDirectory))
-        expect("rootFiles", cj["rootFiles"], (0 until check.programFileNames.len).map { u(check.programFileNames[it]) })
+        expect("currentDirectory", cj["currentDirectory"], u(prep.currentDirectory.value))
+        expect("rootFiles", cj["rootFiles"], (0 until check.programFileNames.len).map { u(check.programFileNames[it].value) })
         // files: last content wins per path, in first-write order (the oracle's writeProject)
         val files = LinkedHashMap<String, Pair<String, String>>()
         fun norm(name: String) = u(com.xemantic.typescript.tsgo.tspath.getNormalizedAbsolutePath(name, prep.currentDirectory))
@@ -180,7 +180,7 @@ class DiagParityTest {
     }
 
     private fun fields(d: Diagnostic): String {
-        val file = d.file?.let { GoString.toUtf16(it.fileName()) }
+        val file = d.file?.let { GoString.toUtf16(it.fileName().value) }
         return "\"file\":${q(file)},\"start\":${d.loc.pos.value},\"length\":${d.loc.end.value - d.loc.pos.value},\"code\":${d.code}," +
             "\"category\":${q(GoString.toUtf16(d.category.name()))},\"text\":${q(flatten(d))}"
     }

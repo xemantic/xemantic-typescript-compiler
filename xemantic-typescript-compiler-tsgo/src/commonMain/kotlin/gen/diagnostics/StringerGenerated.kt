@@ -24,10 +24,15 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics._Category_name 0d61af6d
 const val _Category_name: String = "CategoryWarningCategoryErrorCategorySuggestionCategoryMessage"
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics._Category_index 0df6f785
-@kotlin.jvm.JvmField val _Category_index: GoArray<Int> = GoArray(5, GoElem.BYTE).also { it[0] = 0; it[1] = 15; it[2] = 28; it[3] = 46; it[4] = 61 }
 

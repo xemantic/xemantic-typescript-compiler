@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.localizedMessagesCache 39ccd85e
+@kotlin.jvm.JvmField val localizedMessagesCache: com.xemantic.typescript.tsgo.go.sync.Map = com.xemantic.typescript.tsgo.go.sync.Map()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.zhCNData 2071fd0c
+@kotlin.jvm.JvmField val zhCNData: String = goEmbed_zhCNData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.zhTWData 7bf0a8dd
+@kotlin.jvm.JvmField val zhTWData: String = goEmbed_zhTWData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.csCZData 8da6147f
+@kotlin.jvm.JvmField val csCZData: String = goEmbed_csCZData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.deDEData b1999203
+@kotlin.jvm.JvmField val deDEData: String = goEmbed_deDEData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.esESData 3d79c36d
+@kotlin.jvm.JvmField val esESData: String = goEmbed_esESData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.frFRData e26c448e
+@kotlin.jvm.JvmField val frFRData: String = goEmbed_frFRData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.itITData def5cb19
+@kotlin.jvm.JvmField val itITData: String = goEmbed_itITData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.jaJPData 02c771f5
+@kotlin.jvm.JvmField val jaJPData: String = goEmbed_jaJPData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.koKRData a531fc04
+@kotlin.jvm.JvmField val koKRData: String = goEmbed_koKRData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.plPLData bd2f1511
+@kotlin.jvm.JvmField val plPLData: String = goEmbed_plPLData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.ptBRData bf902323
+@kotlin.jvm.JvmField val ptBRData: String = goEmbed_ptBRData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.ruRUData 2b2c7154
+@kotlin.jvm.JvmField val ruRUData: String = goEmbed_ruRUData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.trTRData 70dfae57
+@kotlin.jvm.JvmField val trTRData: String = goEmbed_trTRData()
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.placeholderRegexp 618396c8
+@kotlin.jvm.JvmField val placeholderRegexp: Regexp? = com.xemantic.typescript.tsgo.go.regexp.mustCompile("{(\\d+)}")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unterminated_string_literal 84ad776d
 @kotlin.jvm.JvmField val unterminated_string_literal: Message? = Message(code = 1002, category = CategoryError, key = Key("Unterminated_string_literal_1002"), text = "Unterminated string literal.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Octal_digit_expected 0d0685f7
 @kotlin.jvm.JvmField val octal_digit_expected: Message? = Message(code = 1178, category = CategoryError, key = Key("Octal_digit_expected_1178"), text = "Octal digit expected.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unexpected_token_expected cf6a384c
-@kotlin.jvm.JvmField val unexpected_token_expected: Message? = Message(code = 1179, category = CategoryError, key = Key("Unexpected_token_expected_1179"), text = "Unexpected token. '{' expected.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Property_destructuring_pattern_expected 9356a3f2
-@kotlin.jvm.JvmField val property_destructuring_pattern_expected: Message? = Message(code = 1180, category = CategoryError, key = Key("Property_destructuring_pattern_expected_1180"), text = "Property destructuring pattern expected.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Array_element_destructuring_pattern_expected 95369c1c
-@kotlin.jvm.JvmField val array_element_destructuring_pattern_expected: Message? = Message(code = 1181, category = CategoryError, key = Key("Array_element_destructuring_pattern_expected_1181"), text = "Array element destructuring pattern expected.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_destructuring_declaration_must_have_an_initializer 90938a8a
-@kotlin.jvm.JvmField val a_destructuring_declaration_must_have_an_initializer: Message? = Message(code = 1182, category = CategoryError, key = Key("A_destructuring_declaration_must_have_an_initializer_1182"), text = "A destructuring declaration must have an initializer.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_implementation_cannot_be_declared_in_ambient_contexts 21245da8
-@kotlin.jvm.JvmField val an_implementation_cannot_be_declared_in_ambient_contexts: Message? = Message(code = 1183, category = CategoryError, key = Key("An_implementation_cannot_be_declared_in_ambient_contexts_1183"), text = "An implementation cannot be declared in ambient contexts.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Modifiers_cannot_appear_here bec61d7d
-@kotlin.jvm.JvmField val modifiers_cannot_appear_here: Message? = Message(code = 1184, category = CategoryError, key = Key("Modifiers_cannot_appear_here_1184"), text = "Modifiers cannot appear here.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Merge_conflict_marker_encountered b5d65e67
-@kotlin.jvm.JvmField val merge_conflict_marker_encountered: Message? = Message(code = 1185, category = CategoryError, key = Key("Merge_conflict_marker_encountered_1185"), text = "Merge conflict marker encountered.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_rest_element_cannot_have_an_initializer 44963622
-@kotlin.jvm.JvmField val a_rest_element_cannot_have_an_initializer: Message? = Message(code = 1186, category = CategoryError, key = Key("A_rest_element_cannot_have_an_initializer_1186"), text = "A rest element cannot have an initializer.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_parameter_property_may_not_be_declared_using_a_binding_pattern 1ceca949
-@kotlin.jvm.JvmField val a_parameter_property_may_not_be_declared_using_a_binding_pattern: Message? = Message(code = 1187, category = CategoryError, key = Key("A_parameter_property_may_not_be_declared_using_a_binding_pattern_1187"), text = "A parameter property may not be declared using a binding pattern.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Only_a_single_variable_declaration_is_allowed_in_a_for_of_statement ef07d87f
-@kotlin.jvm.JvmField val only_a_single_variable_declaration_is_allowed_in_a_for_of_statement: Message? = Message(code = 1188, category = CategoryError, key = Key("Only_a_single_variable_declaration_is_allowed_in_a_for_of_statement_1188"), text = "Only a single variable declaration is allowed in a 'for...of' statement.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_variable_declaration_of_a_for_in_statement_cannot_have_an_initializer 55e63bb6
-@kotlin.jvm.JvmField val the_variable_declaration_of_a_for_in_statement_cannot_have_an_initializer: Message? = Message(code = 1189, category = CategoryError, key = Key("The_variable_declaration_of_a_for_in_statement_cannot_have_an_initializer_1189"), text = "The variable declaration of a 'for...in' statement cannot have an initializer.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_variable_declaration_of_a_for_of_statement_cannot_have_an_initializer ef59496a
-@kotlin.jvm.JvmField val the_variable_declaration_of_a_for_of_statement_cannot_have_an_initializer: Message? = Message(code = 1190, category = CategoryError, key = Key("The_variable_declaration_of_a_for_of_statement_cannot_have_an_initializer_1190"), text = "The variable declaration of a 'for...of' statement cannot have an initializer.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_import_declaration_cannot_have_modifiers 2f16c745
-@kotlin.jvm.JvmField val an_import_declaration_cannot_have_modifiers: Message? = Message(code = 1191, category = CategoryError, key = Key("An_import_declaration_cannot_have_modifiers_1191"), text = "An import declaration cannot have modifiers.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Module_0_has_no_default_export 5582b2a0
-@kotlin.jvm.JvmField val module_0_has_no_default_export: Message? = Message(code = 1192, category = CategoryError, key = Key("Module_0_has_no_default_export_1192"), text = "Module '{0}' has no default export.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.An_export_declaration_cannot_have_modifiers 8680323d
-@kotlin.jvm.JvmField val an_export_declaration_cannot_have_modifiers: Message? = Message(code = 1193, category = CategoryError, key = Key("An_export_declaration_cannot_have_modifiers_1193"), text = "An export declaration cannot have modifiers.")
 

@@ -26,17 +26,23 @@
 package com.xemantic.typescript.tsgo
 
 import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.localize
 import com.xemantic.typescript.tsgo.compiler.EmitOptions
 import com.xemantic.typescript.tsgo.compiler.Program
+import com.xemantic.typescript.tsgo.compiler.ProgramConfig
+import com.xemantic.typescript.tsgo.compiler.ProgramHosts
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.core.CompilerOptions
 import com.xemantic.typescript.tsgo.core.TSFalse
 import com.xemantic.typescript.tsgo.core.TSTrue
 import com.xemantic.typescript.tsgo.go.time.Time
+import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoError
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.vfs.FS
 import java.io.File
 import kotlin.system.exitProcess
@@ -77,24 +83,23 @@ fun main(args: Array<String>) {
 private class SinkFS(private val disk: DiskFS) : FS by disk {
     var bytes = 0L
     var files = 0
-    override fun writeFile(p0: String, p1: String): GoError? {
+    override fun writeFile(p0: RootedFilePath, p1: String): GoError? {
         bytes += p1.length
         files++
         return null
     }
-    override fun chtimes(p0: String, p1: Time, p2: Time): GoError? = null
+    override fun chtimes(p0: RootedPath, p1: Time, p2: Time): GoError? = null
 }
 
 private fun openProgram(config: File, fs: FS, parallel: Boolean, noEmit: Boolean = false): Pair<Program, GoSlice<Diagnostic?>> {
     TsgoPort.init()
     val wrapped = com.xemantic.typescript.tsgo.bundled.wrapFS(fs)
-    val cwd = GoString.fromUtf16(config.parentFile.path)
-    val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost(cwd, wrapped, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)!!
+    val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost(wrapped, com.xemantic.typescript.tsgo.bundled.libPath(), null, null, null)!!
     val (parsed, configDiags) = com.xemantic.typescript.tsgo.tsoptions.getParsedCommandLineOfConfigFile(
-        GoString.fromUtf16(config.path), CompilerOptions().also { if (noEmit) it.noEmit = TSTrue }, null, host, null,
+        RootedFilePath(GoString.fromUtf16(config.path)), CompilerOptions().also { if (noEmit) it.noEmit = TSTrue }, null, host.fs(), null,
     )
     val program = com.xemantic.typescript.tsgo.compiler.newProgram(
-        ProgramOptions(host = host, config = parsed, singleThreaded = if (parallel) TSFalse else TSTrue),
+        ProgramOptions(programConfig = ProgramConfig(config = parsed, singleThreaded = if (parallel) TSFalse else TSTrue), programHosts = ProgramHosts(host = host)),
     )!!
     return program to configDiags
 }
@@ -120,7 +125,7 @@ private fun sunsetRows(config: File) {
     val ctx = com.xemantic.typescript.tsgo.go.context.background()
     val reported = configDiags.appendSlice(
         com.xemantic.typescript.tsgo.compiler.getDiagnosticsOfAnyProgram(
-            ctx, program, null, false,
+            ctx, program, GoElem.ref<SourceFile?>().nilSlice, false,
             { c, f -> program.getBindDiagnostics(c, f) },
             { c, f -> program.getSemanticDiagnostics(c, f) },
         ),
@@ -134,7 +139,7 @@ private fun sunsetRows(config: File) {
             println("error TS${d.code}: $message")
         } else {
             val (line, character) = com.xemantic.typescript.tsgo.scanner.getECMALineAndUTF16CharacterOfPosition(file, d.loc.pos.value)
-            println("${GoString.toUtf16(file.fileName())}(${line + 1},${character.value + 1}): error TS${d.code}: $message")
+            println("${GoString.toUtf16(file.fileName().value)}(${line + 1},${character.value + 1}): error TS${d.code}: $message")
         }
     }
 }

@@ -75,7 +75,7 @@ class TypingsInfo(
     fun goHash(): Int = 31 * typeAcquisition.hashCode() + 31 * compilerOptions.hashCode() + 31 * unresolvedImports.hashCode()
 
     // go: github.com/microsoft/TypeScript/tsc/internal/project/ata.TypingsInfo.Equals d9b0de8e
-    @kotlin.jvm.JvmName("goEquals")
+    @kotlin.jvm.JvmName("goEqualsMethod")
     fun equals(other: TypingsInfo): Boolean {
         return this.typeAcquisition.equals(other.typeAcquisition) && this.compilerOptions.getAllowJS() == other.compilerOptions.getAllowJS() && this.unresolvedImports.equals(other.unresolvedImports)
     }

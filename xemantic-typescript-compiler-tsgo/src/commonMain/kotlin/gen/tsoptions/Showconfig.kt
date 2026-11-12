@@ -24,37 +24,89 @@
 package com.xemantic.typescript.tsgo.tsoptions
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.core.BuildOptions
 import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
 import com.xemantic.typescript.tsgo.core.CompilerOptions
+import com.xemantic.typescript.tsgo.packagejson.ContentMapperFields
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Decoder
+import com.xemantic.typescript.tsgo.module.DefaultResolver
+import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Encoder
+import com.xemantic.typescript.tsgo.tspath.ExtensionRewrite
+import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.packagejson.Fields
+import com.xemantic.typescript.tsgo.glob.Glob
+import com.xemantic.typescript.tsgo.core.JsxEmit
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.contentmapper.Manifest
+import com.xemantic.typescript.tsgo.collections.MapEntry
+import com.xemantic.typescript.tsgo.contentmapper.Mapper
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.MarshalerTo
+import com.xemantic.typescript.tsgo.diagnostics.Message
 import com.xemantic.typescript.tsgo.core.ModuleDetectionKind
 import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.core.ModuleResolutionKind
+import com.xemantic.typescript.tsgo.core.NewLineKind
+import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.go.sync.Once
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.Options
 import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.outputpaths.OutputPathsHost
+import com.xemantic.typescript.tsgo.tspath.PathKey
 import com.xemantic.typescript.tsgo.tspath.PathPattern
+import com.xemantic.typescript.tsgo.core.PluginImport
 import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.tspath.RelativePath
+import com.xemantic.typescript.tsgo.module.ResolutionHost
+import com.xemantic.typescript.tsgo.module.ResolvedModule
+import com.xemantic.typescript.tsgo.module.ResolvedProjectReference
+import com.xemantic.typescript.tsgo.module.ResolverOptions
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
 import com.xemantic.typescript.tsgo.tspath.RootedPath
+import com.xemantic.typescript.tsgo.core.ScriptTarget
+import com.xemantic.typescript.tsgo.go.iter.Seq
+import com.xemantic.typescript.tsgo.go.iter.Seq2
+import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.tspath.SourceMapLocation
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Token
 import com.xemantic.typescript.tsgo.core.Tristate
+import com.xemantic.typescript.tsgo.core.TypeAcquisition
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
+import com.xemantic.typescript.tsgo.ast.diagnostics
+import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.clone
 import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.entries
+import com.xemantic.typescript.tsgo.collections.get
+import com.xemantic.typescript.tsgo.collections.getOrZero
+import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.size
+import com.xemantic.typescript.tsgo.collections.values
+import com.xemantic.typescript.tsgo.contentmapper.equals
+import com.xemantic.typescript.tsgo.core.equals
 import com.xemantic.typescript.tsgo.core.getAllowImportingTsExtensions
 import com.xemantic.typescript.tsgo.core.getAllowJS
 import com.xemantic.typescript.tsgo.core.getAreDeclarationMapsEnabled
 import com.xemantic.typescript.tsgo.core.getEmitDeclarations
 import com.xemantic.typescript.tsgo.core.getEmitModuleDetectionKind
 import com.xemantic.typescript.tsgo.core.getEmitModuleKind
+import com.xemantic.typescript.tsgo.core.getEmitScriptTarget
 import com.xemantic.typescript.tsgo.core.getIsolatedModules
 import com.xemantic.typescript.tsgo.core.getModuleResolutionKind
 import com.xemantic.typescript.tsgo.core.getResolveJsonModule
 import com.xemantic.typescript.tsgo.core.getResolvePackageJsonExports
 import com.xemantic.typescript.tsgo.core.getResolvePackageJsonImports
+import com.xemantic.typescript.tsgo.core.getStrictOptionValue
 import com.xemantic.typescript.tsgo.core.getUseDefineForClassFields
 import com.xemantic.typescript.tsgo.core.isIncremental
 import com.xemantic.typescript.tsgo.core.shouldPreserveConstEnums
+import com.xemantic.typescript.tsgo.glob.match
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
+import com.xemantic.typescript.tsgo.module.resolvePackageDirectory
+import com.xemantic.typescript.tsgo.packagejson.getValue
 
 // go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.computeFn 9e79c624
 fun <T> computeFn(goElem_T: GoElem<T>, fn: ((CompilerOptions?) -> T)?): ((CompilerOptions?) -> Any?)? {
@@ -330,7 +382,4 @@ fun serializeImpliedOptionValue(optionDecl: CommandLineOption?, value_1: Any?): 
     }
     return value_1
 }
-
-// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.impliedOptions 869af1f5
-@kotlin.jvm.JvmField val impliedOptions: GoSlice<com.xemantic.typescript.tsgo.tsoptions.impliedOption> = GoSlice.of(com.xemantic.typescript.tsgo.tsoptions.impliedOption.ELEM, com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "Module", dependencies = GoSlice.of(GoElem.STRING, "Target"), compute = computeFn<ModuleKind>(ModuleKind.ELEM, fun(p0: CompilerOptions?): ModuleKind = p0.getEmitModuleKind())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ModuleResolution", dependencies = GoSlice.of(GoElem.STRING, "Module", "Target"), compute = computeFn<ModuleResolutionKind>(ModuleResolutionKind.ELEM, fun(p0: CompilerOptions?): ModuleResolutionKind = p0.getModuleResolutionKind())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ModuleDetection", dependencies = GoSlice.of(GoElem.STRING, "Module", "Target"), compute = computeFn<ModuleDetectionKind>(ModuleDetectionKind.ELEM, fun(p0: CompilerOptions?): ModuleDetectionKind = p0.getEmitModuleDetectionKind())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "IsolatedModules", dependencies = GoSlice.of(GoElem.STRING, "VerbatimModuleSyntax"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getIsolatedModules())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "PreserveConstEnums", dependencies = GoSlice.of(GoElem.STRING, "IsolatedModules", "VerbatimModuleSyntax"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.shouldPreserveConstEnums())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "Declaration", dependencies = GoSlice.of(GoElem.STRING, "Composite"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getEmitDeclarations())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "DeclarationMap", dependencies = GoSlice.of(GoElem.STRING, "Declaration", "Composite"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getAreDeclarationMapsEnabled())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "Incremental", dependencies = GoSlice.of(GoElem.STRING, "Composite"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.isIncremental())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "UseDefineForClassFields", dependencies = GoSlice.of(GoElem.STRING, "Target", "Module"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getUseDefineForClassFields())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ResolvePackageJsonExports", dependencies = GoSlice.of(GoElem.STRING, "ModuleResolution", "Module", "Target"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getResolvePackageJsonExports())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ResolvePackageJsonImports", dependencies = GoSlice.of(GoElem.STRING, "ModuleResolution", "ResolvePackageJsonExports", "Module", "Target"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getResolvePackageJsonImports())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "ResolveJsonModule", dependencies = GoSlice.of(GoElem.STRING, "ModuleResolution", "Module", "Target"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getResolveJsonModule())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "AllowJs", dependencies = GoSlice.of(GoElem.STRING, "CheckJs"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getAllowJS())), com.xemantic.typescript.tsgo.tsoptions.impliedOption(name = "AllowImportingTsExtensions", dependencies = GoSlice.of(GoElem.STRING, "RewriteRelativeImportExtensions"), compute = computeFn<Boolean>(GoElem.BOOL, fun(p0: CompilerOptions?): Boolean = p0.getAllowImportingTsExtensions())))
 

@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_character_class_must_not_contain_a_reserved_double_punctuator_Did_you_mean_to_escape_it_with_backslash 6269457d
+@kotlin.jvm.JvmField val a_character_class_must_not_contain_a_reserved_double_punctuator_Did_you_mean_to_escape_it_with_backslash: Message? = Message(code = 1522, category = CategoryError, key = Key("A_character_class_must_not_contain_a_reserved_double_punctuator_Did_you_mean_to_escape_it_with_backs_1522"), text = "A character class must not contain a reserved double punctuator. Did you mean to escape it with backslash?")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expected_a_Unicode_property_name 5b7519b3
+@kotlin.jvm.JvmField val expected_a_Unicode_property_name: Message? = Message(code = 1523, category = CategoryError, key = Key("Expected_a_Unicode_property_name_1523"), text = "Expected a Unicode property name.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unknown_Unicode_property_name 15ff0692
+@kotlin.jvm.JvmField val unknown_Unicode_property_name: Message? = Message(code = 1524, category = CategoryError, key = Key("Unknown_Unicode_property_name_1524"), text = "Unknown Unicode property name.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expected_a_Unicode_property_value d20a5835
+@kotlin.jvm.JvmField val expected_a_Unicode_property_value: Message? = Message(code = 1525, category = CategoryError, key = Key("Expected_a_Unicode_property_value_1525"), text = "Expected a Unicode property value.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unknown_Unicode_property_value 7f2e6a5d
+@kotlin.jvm.JvmField val unknown_Unicode_property_value: Message? = Message(code = 1526, category = CategoryError, key = Key("Unknown_Unicode_property_value_1526"), text = "Unknown Unicode property value.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expected_a_Unicode_property_name_or_value e52bc7cb
+@kotlin.jvm.JvmField val expected_a_Unicode_property_name_or_value: Message? = Message(code = 1527, category = CategoryError, key = Key("Expected_a_Unicode_property_name_or_value_1527"), text = "Expected a Unicode property name or value.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Any_Unicode_property_that_would_possibly_match_more_than_a_single_character_is_only_available_when_the_Unicode_Sets_v_flag_is_set fc97ab1b
+@kotlin.jvm.JvmField val any_Unicode_property_that_would_possibly_match_more_than_a_single_character_is_only_available_when_the_Unicode_Sets_v_flag_is_set: Message? = Message(code = 1528, category = CategoryError, key = Key("Any_Unicode_property_that_would_possibly_match_more_than_a_single_character_is_only_available_when_t_1528"), text = "Any Unicode property that would possibly match more than a single character is only available when the Unicode Sets (v) flag is set.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unknown_Unicode_property_name_or_value 8702e2b5
+@kotlin.jvm.JvmField val unknown_Unicode_property_name_or_value: Message? = Message(code = 1529, category = CategoryError, key = Key("Unknown_Unicode_property_name_or_value_1529"), text = "Unknown Unicode property name or value.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unicode_property_value_expressions_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v_flag_is_set ba5cbe73
+@kotlin.jvm.JvmField val unicode_property_value_expressions_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v_flag_is_set: Message? = Message(code = 1530, category = CategoryError, key = Key("Unicode_property_value_expressions_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v__1530"), text = "Unicode property value expressions are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_must_be_followed_by_a_Unicode_property_value_expression_enclosed_in_braces b0beb0fe
+@kotlin.jvm.JvmField val x_0_must_be_followed_by_a_Unicode_property_value_expression_enclosed_in_braces: Message? = Message(code = 1531, category = CategoryError, key = Key("_0_must_be_followed_by_a_Unicode_property_value_expression_enclosed_in_braces_1531"), text = "'\\{0}' must be followed by a Unicode property value expression enclosed in braces.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.There_is_no_capturing_group_named_0_in_this_regular_expression d84e6e17
+@kotlin.jvm.JvmField val there_is_no_capturing_group_named_0_in_this_regular_expression: Message? = Message(code = 1532, category = CategoryError, key = Key("There_is_no_capturing_group_named_0_in_this_regular_expression_1532"), text = "There is no capturing group named '{0}' in this regular expression.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_backreference_refers_to_a_group_that_does_not_exist_There_are_only_0_capturing_groups_in_this_regular_expression 822decdc
+@kotlin.jvm.JvmField val this_backreference_refers_to_a_group_that_does_not_exist_There_are_only_0_capturing_groups_in_this_regular_expression: Message? = Message(code = 1533, category = CategoryError, key = Key("This_backreference_refers_to_a_group_that_does_not_exist_There_are_only_0_capturing_groups_in_this_r_1533"), text = "This backreference refers to a group that does not exist. There are only {0} capturing groups in this regular expression.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_backreference_refers_to_a_group_that_does_not_exist_There_are_no_capturing_groups_in_this_regular_expression b4ce1bf5
+@kotlin.jvm.JvmField val this_backreference_refers_to_a_group_that_does_not_exist_There_are_no_capturing_groups_in_this_regular_expression: Message? = Message(code = 1534, category = CategoryError, key = Key("This_backreference_refers_to_a_group_that_does_not_exist_There_are_no_capturing_groups_in_this_regul_1534"), text = "This backreference refers to a group that does not exist. There are no capturing groups in this regular expression.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_character_cannot_be_escaped_in_a_regular_expression c645e2d7
+@kotlin.jvm.JvmField val this_character_cannot_be_escaped_in_a_regular_expression: Message? = Message(code = 1535, category = CategoryError, key = Key("This_character_cannot_be_escaped_in_a_regular_expression_1535"), text = "This character cannot be escaped in a regular expression.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended_as_an_escape_sequence_use_the_syntax_0_instead 3838e57a
+@kotlin.jvm.JvmField val octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended_as_an_escape_sequence_use_the_syntax_0_instead: Message? = Message(code = 1536, category = CategoryError, key = Key("Octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended__1536"), text = "Octal escape sequences and backreferences are not allowed in a character class. If this was intended as an escape sequence, use the syntax '{0}' instead.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Decimal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class 074200f5
 @kotlin.jvm.JvmField val decimal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class: Message? = Message(code = 1537, category = CategoryError, key = Key("Decimal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_1537"), text = "Decimal escape sequences and backreferences are not allowed in a character class.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_left_hand_side_of_a_for_in_statement_must_be_a_variable_or_a_property_access 6df09fab
 @kotlin.jvm.JvmField val the_left_hand_side_of_a_for_in_statement_must_be_a_variable_or_a_property_access: Message? = Message(code = 2406, category = CategoryError, key = Key("The_left_hand_side_of_a_for_in_statement_must_be_a_variable_or_a_property_access_2406"), text = "The left-hand side of a 'for...in' statement must be a variable or a property access.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_right_hand_side_of_a_for_in_statement_must_be_of_type_any_an_object_type_or_a_type_parameter_but_here_has_type_0 8e55f644
-@kotlin.jvm.JvmField val the_right_hand_side_of_a_for_in_statement_must_be_of_type_any_an_object_type_or_a_type_parameter_but_here_has_type_0: Message? = Message(code = 2407, category = CategoryError, key = Key("The_right_hand_side_of_a_for_in_statement_must_be_of_type_any_an_object_type_or_a_type_parameter_but_2407"), text = "The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type '{0}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Setters_cannot_return_a_value dd26429d
-@kotlin.jvm.JvmField val setters_cannot_return_a_value: Message? = Message(code = 2408, category = CategoryError, key = Key("Setters_cannot_return_a_value_2408"), text = "Setters cannot return a value.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_constructor_signature_must_be_assignable_to_the_instance_type_of_the_class 1b55383e
-@kotlin.jvm.JvmField val return_type_of_constructor_signature_must_be_assignable_to_the_instance_type_of_the_class: Message? = Message(code = 2409, category = CategoryError, key = Key("Return_type_of_constructor_signature_must_be_assignable_to_the_instance_type_of_the_class_2409"), text = "Return type of constructor signature must be assignable to the instance type of the class.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_with_statement_is_not_supported_All_symbols_in_a_with_block_will_have_type_any 77c27192
-@kotlin.jvm.JvmField val the_with_statement_is_not_supported_All_symbols_in_a_with_block_will_have_type_any: Message? = Message(code = 2410, category = CategoryError, key = Key("The_with_statement_is_not_supported_All_symbols_in_a_with_block_will_have_type_any_2410"), text = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Property_0_of_type_1_is_not_assignable_to_2_index_type_3 a8758bfa
-@kotlin.jvm.JvmField val property_0_of_type_1_is_not_assignable_to_2_index_type_3: Message? = Message(code = 2411, category = CategoryError, key = Key("Property_0_of_type_1_is_not_assignable_to_2_index_type_3_2411"), text = "Property '{0}' of type '{1}' is not assignable to '{2}' index type '{3}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_0_is_not_assignable_to_type_1_with_exactOptionalPropertyTypes_Colon_true_Consider_adding_undefined_to_the_type_of_the_target faa0b22e
-@kotlin.jvm.JvmField val type_0_is_not_assignable_to_type_1_with_exactOptionalPropertyTypes_Colon_true_Consider_adding_undefined_to_the_type_of_the_target: Message? = Message(code = 2412, category = CategoryError, key = Key("Type_0_is_not_assignable_to_type_1_with_exactOptionalPropertyTypes_Colon_true_Consider_adding_undefi_2412"), text = "Type '{0}' is not assignable to type '{1}' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_index_type_1_is_not_assignable_to_2_index_type_3 3203e0f4
-@kotlin.jvm.JvmField val x_0_index_type_1_is_not_assignable_to_2_index_type_3: Message? = Message(code = 2413, category = CategoryError, key = Key("_0_index_type_1_is_not_assignable_to_2_index_type_3_2413"), text = "'{0}' index type '{1}' is not assignable to '{2}' index type '{3}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_name_cannot_be_0 aafbf411
-@kotlin.jvm.JvmField val class_name_cannot_be_0: Message? = Message(code = 2414, category = CategoryError, key = Key("Class_name_cannot_be_0_2414"), text = "Class name cannot be '{0}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_0_incorrectly_extends_base_class_1 c3e337a4
-@kotlin.jvm.JvmField val class_0_incorrectly_extends_base_class_1: Message? = Message(code = 2415, category = CategoryError, key = Key("Class_0_incorrectly_extends_base_class_1_2415"), text = "Class '{0}' incorrectly extends base class '{1}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Property_0_in_type_1_is_not_assignable_to_the_same_property_in_base_type_2 9d1f3cbf
-@kotlin.jvm.JvmField val property_0_in_type_1_is_not_assignable_to_the_same_property_in_base_type_2: Message? = Message(code = 2416, category = CategoryError, key = Key("Property_0_in_type_1_is_not_assignable_to_the_same_property_in_base_type_2_2416"), text = "Property '{0}' in type '{1}' is not assignable to the same property in base type '{2}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_static_side_0_incorrectly_extends_base_class_static_side_1 51105aa8
-@kotlin.jvm.JvmField val class_static_side_0_incorrectly_extends_base_class_static_side_1: Message? = Message(code = 2417, category = CategoryError, key = Key("Class_static_side_0_incorrectly_extends_base_class_static_side_1_2417"), text = "Class static side '{0}' incorrectly extends base class static side '{1}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_of_computed_property_s_value_is_0_which_is_not_assignable_to_type_1 20b560e0
-@kotlin.jvm.JvmField val type_of_computed_property_s_value_is_0_which_is_not_assignable_to_type_1: Message? = Message(code = 2418, category = CategoryError, key = Key("Type_of_computed_property_s_value_is_0_which_is_not_assignable_to_type_1_2418"), text = "Type of computed property's value is '{0}', which is not assignable to type '{1}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Types_of_construct_signatures_are_incompatible c340256a
-@kotlin.jvm.JvmField val types_of_construct_signatures_are_incompatible: Message? = Message(code = 2419, category = CategoryError, key = Key("Types_of_construct_signatures_are_incompatible_2419"), text = "Types of construct signatures are incompatible.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_0_incorrectly_implements_interface_1 7828918d
-@kotlin.jvm.JvmField val class_0_incorrectly_implements_interface_1: Message? = Message(code = 2420, category = CategoryError, key = Key("Class_0_incorrectly_implements_interface_1_2420"), text = "Class '{0}' incorrectly implements interface '{1}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_class_can_only_implement_an_object_type_or_intersection_of_object_types_with_statically_known_members 44e50374
-@kotlin.jvm.JvmField val a_class_can_only_implement_an_object_type_or_intersection_of_object_types_with_statically_known_members: Message? = Message(code = 2422, category = CategoryError, key = Key("A_class_can_only_implement_an_object_type_or_intersection_of_object_types_with_statically_known_memb_2422"), text = "A class can only implement an object type or intersection of object types with statically known members.")
 

@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_right_hand_side_of_a_for_in_statement_must_be_of_type_any_an_object_type_or_a_type_parameter_but_here_has_type_0 8e55f644
+@kotlin.jvm.JvmField val the_right_hand_side_of_a_for_in_statement_must_be_of_type_any_an_object_type_or_a_type_parameter_but_here_has_type_0: Message? = Message(code = 2407, category = CategoryError, key = Key("The_right_hand_side_of_a_for_in_statement_must_be_of_type_any_an_object_type_or_a_type_parameter_but_2407"), text = "The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type '{0}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Setters_cannot_return_a_value dd26429d
+@kotlin.jvm.JvmField val setters_cannot_return_a_value: Message? = Message(code = 2408, category = CategoryError, key = Key("Setters_cannot_return_a_value_2408"), text = "Setters cannot return a value.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_of_constructor_signature_must_be_assignable_to_the_instance_type_of_the_class 1b55383e
+@kotlin.jvm.JvmField val return_type_of_constructor_signature_must_be_assignable_to_the_instance_type_of_the_class: Message? = Message(code = 2409, category = CategoryError, key = Key("Return_type_of_constructor_signature_must_be_assignable_to_the_instance_type_of_the_class_2409"), text = "Return type of constructor signature must be assignable to the instance type of the class.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_with_statement_is_not_supported_All_symbols_in_a_with_block_will_have_type_any 77c27192
+@kotlin.jvm.JvmField val the_with_statement_is_not_supported_All_symbols_in_a_with_block_will_have_type_any: Message? = Message(code = 2410, category = CategoryError, key = Key("The_with_statement_is_not_supported_All_symbols_in_a_with_block_will_have_type_any_2410"), text = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Property_0_of_type_1_is_not_assignable_to_2_index_type_3 a8758bfa
+@kotlin.jvm.JvmField val property_0_of_type_1_is_not_assignable_to_2_index_type_3: Message? = Message(code = 2411, category = CategoryError, key = Key("Property_0_of_type_1_is_not_assignable_to_2_index_type_3_2411"), text = "Property '{0}' of type '{1}' is not assignable to '{2}' index type '{3}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_0_is_not_assignable_to_type_1_with_exactOptionalPropertyTypes_Colon_true_Consider_adding_undefined_to_the_type_of_the_target faa0b22e
+@kotlin.jvm.JvmField val type_0_is_not_assignable_to_type_1_with_exactOptionalPropertyTypes_Colon_true_Consider_adding_undefined_to_the_type_of_the_target: Message? = Message(code = 2412, category = CategoryError, key = Key("Type_0_is_not_assignable_to_type_1_with_exactOptionalPropertyTypes_Colon_true_Consider_adding_undefi_2412"), text = "Type '{0}' is not assignable to type '{1}' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_index_type_1_is_not_assignable_to_2_index_type_3 3203e0f4
+@kotlin.jvm.JvmField val x_0_index_type_1_is_not_assignable_to_2_index_type_3: Message? = Message(code = 2413, category = CategoryError, key = Key("_0_index_type_1_is_not_assignable_to_2_index_type_3_2413"), text = "'{0}' index type '{1}' is not assignable to '{2}' index type '{3}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_name_cannot_be_0 aafbf411
+@kotlin.jvm.JvmField val class_name_cannot_be_0: Message? = Message(code = 2414, category = CategoryError, key = Key("Class_name_cannot_be_0_2414"), text = "Class name cannot be '{0}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_0_incorrectly_extends_base_class_1 c3e337a4
+@kotlin.jvm.JvmField val class_0_incorrectly_extends_base_class_1: Message? = Message(code = 2415, category = CategoryError, key = Key("Class_0_incorrectly_extends_base_class_1_2415"), text = "Class '{0}' incorrectly extends base class '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Property_0_in_type_1_is_not_assignable_to_the_same_property_in_base_type_2 9d1f3cbf
+@kotlin.jvm.JvmField val property_0_in_type_1_is_not_assignable_to_the_same_property_in_base_type_2: Message? = Message(code = 2416, category = CategoryError, key = Key("Property_0_in_type_1_is_not_assignable_to_the_same_property_in_base_type_2_2416"), text = "Property '{0}' in type '{1}' is not assignable to the same property in base type '{2}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_static_side_0_incorrectly_extends_base_class_static_side_1 51105aa8
+@kotlin.jvm.JvmField val class_static_side_0_incorrectly_extends_base_class_static_side_1: Message? = Message(code = 2417, category = CategoryError, key = Key("Class_static_side_0_incorrectly_extends_base_class_static_side_1_2417"), text = "Class static side '{0}' incorrectly extends base class static side '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_of_computed_property_s_value_is_0_which_is_not_assignable_to_type_1 20b560e0
+@kotlin.jvm.JvmField val type_of_computed_property_s_value_is_0_which_is_not_assignable_to_type_1: Message? = Message(code = 2418, category = CategoryError, key = Key("Type_of_computed_property_s_value_is_0_which_is_not_assignable_to_type_1_2418"), text = "Type of computed property's value is '{0}', which is not assignable to type '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Types_of_construct_signatures_are_incompatible c340256a
+@kotlin.jvm.JvmField val types_of_construct_signatures_are_incompatible: Message? = Message(code = 2419, category = CategoryError, key = Key("Types_of_construct_signatures_are_incompatible_2419"), text = "Types of construct signatures are incompatible.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_0_incorrectly_implements_interface_1 7828918d
+@kotlin.jvm.JvmField val class_0_incorrectly_implements_interface_1: Message? = Message(code = 2420, category = CategoryError, key = Key("Class_0_incorrectly_implements_interface_1_2420"), text = "Class '{0}' incorrectly implements interface '{1}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_class_can_only_implement_an_object_type_or_intersection_of_object_types_with_statically_known_members 44e50374
+@kotlin.jvm.JvmField val a_class_can_only_implement_an_object_type_or_intersection_of_object_types_with_statically_known_members: Message? = Message(code = 2422, category = CategoryError, key = Key("A_class_can_only_implement_an_object_type_or_intersection_of_object_types_with_statically_known_memb_2422"), text = "A class can only implement an object type or intersection of object types with statically known members.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Class_0_defines_instance_member_function_1_but_extended_class_2_defines_it_as_instance_member_accessor 60dc61ad
 @kotlin.jvm.JvmField val class_0_defines_instance_member_function_1_but_extended_class_2_defines_it_as_instance_member_accessor: Message? = Message(code = 2423, category = CategoryError, key = Key("Class_0_defines_instance_member_function_1_but_extended_class_2_defines_it_as_instance_member_access_2423"), text = "Class '{0}' defines instance member function '{1}', but extended class '{2}' defines it as instance member accessor.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Property_0_does_not_exist_on_type_1_Did_you_mean_to_access_the_static_member_2_instead b3e2001e
 @kotlin.jvm.JvmField val property_0_does_not_exist_on_type_1_Did_you_mean_to_access_the_static_member_2_instead: Message? = Message(code = 2576, category = CategoryError, key = Key("Property_0_does_not_exist_on_type_1_Did_you_mean_to_access_the_static_member_2_instead_2576"), text = "Property '{0}' does not exist on type '{1}'. Did you mean to access the static member '{2}' instead?")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_annotation_circularly_references_itself 9ff21f08
-@kotlin.jvm.JvmField val return_type_annotation_circularly_references_itself: Message? = Message(code = 2577, category = CategoryError, key = Key("Return_type_annotation_circularly_references_itself_2577"), text = "Return type annotation circularly references itself.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unused_ts_expect_error_directive 25eaea6b
-@kotlin.jvm.JvmField val unused_ts_expect_error_directive: Message? = Message(code = 2578, category = CategoryError, key = Key("Unused_ts_expect_error_directive_2578"), text = "Unused '@ts-expect-error' directive.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashnode d3484e78
-@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashnode: Message? = Message(code = 2580, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashno_2580"), text = "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slashjquery 32480fb2
-@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slashjquery: Message? = Message(code = 2581, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slash_2581"), text = "Cannot find name '{0}'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery`.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_types_Slashjest_or_npm_i_save_dev_types_Slashmocha bd138645
-@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_types_Slashjest_or_npm_i_save_dev_types_Slashmocha: Message? = Message(code = 2582, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_type_2582"), text = "Cannot find name '{0}'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_1_or_later e8bc68dd
-@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_1_or_later: Message? = Message(code = 2583, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_2583"), text = "Cannot find name '{0}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{1}' or later.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_include_dom c706eee8
-@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_include_dom: Message? = Message(code = 2584, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_2584"), text = "Cannot find name '{0}'. Do you need to change your target library? Try changing the 'lib' compiler option to include 'dom'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_only_refers_to_a_type_but_is_being_used_as_a_value_here_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_es2015_or_later 885b7704
-@kotlin.jvm.JvmField val x_0_only_refers_to_a_type_but_is_being_used_as_a_value_here_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_es2015_or_later: Message? = Message(code = 2585, category = CategoryError, key = Key("_0_only_refers_to_a_type_but_is_being_used_as_a_value_here_Do_you_need_to_change_your_target_library_2585"), text = "'{0}' only refers to a type, but is being used as a value here. Do you need to change your target library? Try changing the 'lib' compiler option to es2015 or later.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_assign_to_0_because_it_is_a_constant 485550b8
-@kotlin.jvm.JvmField val cannot_assign_to_0_because_it_is_a_constant: Message? = Message(code = 2588, category = CategoryError, key = Key("Cannot_assign_to_0_because_it_is_a_constant_2588"), text = "Cannot assign to '{0}' because it is a constant.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_instantiation_is_excessively_deep_and_possibly_infinite e5173769
-@kotlin.jvm.JvmField val type_instantiation_is_excessively_deep_and_possibly_infinite: Message? = Message(code = 2589, category = CategoryError, key = Key("Type_instantiation_is_excessively_deep_and_possibly_infinite_2589"), text = "Type instantiation is excessively deep and possibly infinite.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expression_produces_a_union_type_that_is_too_complex_to_represent cc6be853
-@kotlin.jvm.JvmField val expression_produces_a_union_type_that_is_too_complex_to_represent: Message? = Message(code = 2590, category = CategoryError, key = Key("Expression_produces_a_union_type_that_is_too_complex_to_represent_2590"), text = "Expression produces a union type that is too complex to represent.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashnode_and_then_add_node_to_the_types_field_in_your_tsconfig 3d523d5f
-@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashnode_and_then_add_node_to_the_types_field_in_your_tsconfig: Message? = Message(code = 2591, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashno_2591"), text = "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slashjquery_and_then_add_jquery_to_the_types_field_in_your_tsconfig af3fe2cf
-@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slashjquery_and_then_add_jquery_to_the_types_field_in_your_tsconfig: Message? = Message(code = 2592, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slash_2592"), text = "Cannot find name '{0}'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery` and then add 'jquery' to the types field in your tsconfig.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_types_Slashjest_or_npm_i_save_dev_types_Slashmocha_and_then_add_jest_or_mocha_to_the_types_field_in_your_tsconfig 670e58ed
-@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_types_Slashjest_or_npm_i_save_dev_types_Slashmocha_and_then_add_jest_or_mocha_to_the_types_field_in_your_tsconfig: Message? = Message(code = 2593, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_type_2593"), text = "Cannot find name '{0}'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_module_is_declared_with_export_and_can_only_be_used_with_a_default_import_when_using_the_0_flag 58ee9c32
-@kotlin.jvm.JvmField val this_module_is_declared_with_export_and_can_only_be_used_with_a_default_import_when_using_the_0_flag: Message? = Message(code = 2594, category = CategoryError, key = Key("This_module_is_declared_with_export_and_can_only_be_used_with_a_default_import_when_using_the_0_flag_2594"), text = "This module is declared with 'export =', and can only be used with a default import when using the '{0}' flag.")
 

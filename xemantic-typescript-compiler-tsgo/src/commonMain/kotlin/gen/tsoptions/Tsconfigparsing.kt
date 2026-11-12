@@ -24,35 +24,67 @@
 package com.xemantic.typescript.tsgo.tsoptions
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.core.BuildOptions
 import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
 import com.xemantic.typescript.tsgo.core.CompilerOptions
+import com.xemantic.typescript.tsgo.packagejson.ContentMapperFields
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Decoder
+import com.xemantic.typescript.tsgo.module.DefaultResolver
 import com.xemantic.typescript.tsgo.ast.Diagnostic
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Encoder
+import com.xemantic.typescript.tsgo.tspath.ExtensionRewrite
 import com.xemantic.typescript.tsgo.vfs.FS
+import com.xemantic.typescript.tsgo.packagejson.Fields
 import com.xemantic.typescript.tsgo.tspath.FileSpec
+import com.xemantic.typescript.tsgo.glob.Glob
+import com.xemantic.typescript.tsgo.core.JsxEmit
 import com.xemantic.typescript.tsgo.ast.Kind
+import com.xemantic.typescript.tsgo.locale.Locale
 import com.xemantic.typescript.tsgo.contentmapper.Manifest
+import com.xemantic.typescript.tsgo.collections.MapEntry
 import com.xemantic.typescript.tsgo.contentmapper.Mapper
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.MarshalerTo
 import com.xemantic.typescript.tsgo.diagnostics.Message
+import com.xemantic.typescript.tsgo.core.ModuleDetectionKind
+import com.xemantic.typescript.tsgo.core.ModuleKind
+import com.xemantic.typescript.tsgo.core.ModuleResolutionKind
+import com.xemantic.typescript.tsgo.core.NewLineKind
 import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeFactory
 import com.xemantic.typescript.tsgo.ast.ObjectLiteralExpression
+import com.xemantic.typescript.tsgo.go.sync.Once
 import com.xemantic.typescript.tsgo.contentmapper.OptionPathSegment
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.Options
 import com.xemantic.typescript.tsgo.collections.OrderedMap
+import com.xemantic.typescript.tsgo.outputpaths.OutputPathsHost
 import com.xemantic.typescript.tsgo.tspath.PathKey
 import com.xemantic.typescript.tsgo.tspath.PathPattern
+import com.xemantic.typescript.tsgo.core.PluginImport
 import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.ast.PropertyAssignment
+import com.xemantic.typescript.tsgo.tspath.RelativePath
+import com.xemantic.typescript.tsgo.module.ResolutionHost
 import com.xemantic.typescript.tsgo.module.ResolvedModule
+import com.xemantic.typescript.tsgo.module.ResolvedProjectReference
+import com.xemantic.typescript.tsgo.module.ResolverOptions
 import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.core.ScriptKind
+import com.xemantic.typescript.tsgo.core.ScriptTarget
+import com.xemantic.typescript.tsgo.go.iter.Seq
+import com.xemantic.typescript.tsgo.go.iter.Seq2
 import com.xemantic.typescript.tsgo.ast.SourceFile
 import com.xemantic.typescript.tsgo.ast.SourceFileParseOptions
+import com.xemantic.typescript.tsgo.tspath.SourceMapLocation
 import com.xemantic.typescript.tsgo.vfs.vfsmatch.SpecMatcher
 import com.xemantic.typescript.tsgo.ast.StringLiteral
 import com.xemantic.typescript.tsgo.core.TextRange
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Token
+import com.xemantic.typescript.tsgo.core.Tristate
 import com.xemantic.typescript.tsgo.go.reflect.Type
 import com.xemantic.typescript.tsgo.core.TypeAcquisition
+import com.xemantic.typescript.tsgo.go.encoding.json.v2.UnmarshalerFrom
 import com.xemantic.typescript.tsgo.vfs.vfsmatch.Usage
 import com.xemantic.typescript.tsgo.go.reflect.Value
 import com.xemantic.typescript.tsgo.ast.asNode
@@ -74,6 +106,7 @@ import com.xemantic.typescript.tsgo.ast.setFile
 import com.xemantic.typescript.tsgo.ast.setLocation
 import com.xemantic.typescript.tsgo.ast.text
 import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.clone
 import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.entries
 import com.xemantic.typescript.tsgo.collections.get
@@ -83,9 +116,29 @@ import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.size
 import com.xemantic.typescript.tsgo.collections.values
+import com.xemantic.typescript.tsgo.contentmapper.equals
+import com.xemantic.typescript.tsgo.core.equals
+import com.xemantic.typescript.tsgo.core.getAllowImportingTsExtensions
 import com.xemantic.typescript.tsgo.core.getAllowJS
+import com.xemantic.typescript.tsgo.core.getAreDeclarationMapsEnabled
+import com.xemantic.typescript.tsgo.core.getEmitDeclarations
+import com.xemantic.typescript.tsgo.core.getEmitModuleDetectionKind
+import com.xemantic.typescript.tsgo.core.getEmitModuleKind
+import com.xemantic.typescript.tsgo.core.getEmitScriptTarget
+import com.xemantic.typescript.tsgo.core.getIsolatedModules
+import com.xemantic.typescript.tsgo.core.getModuleResolutionKind
 import com.xemantic.typescript.tsgo.core.getResolveJsonModule
+import com.xemantic.typescript.tsgo.core.getResolvePackageJsonExports
+import com.xemantic.typescript.tsgo.core.getResolvePackageJsonImports
+import com.xemantic.typescript.tsgo.core.getStrictOptionValue
+import com.xemantic.typescript.tsgo.core.getUseDefineForClassFields
+import com.xemantic.typescript.tsgo.core.isIncremental
+import com.xemantic.typescript.tsgo.core.shouldPreserveConstEnums
+import com.xemantic.typescript.tsgo.glob.match
+import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
 import com.xemantic.typescript.tsgo.module.isResolved
+import com.xemantic.typescript.tsgo.module.resolvePackageDirectory
+import com.xemantic.typescript.tsgo.packagejson.getValue
 import com.xemantic.typescript.tsgo.vfs.vfsmatch.matchFileName
 import com.xemantic.typescript.tsgo.vfs.vfsmatch.matchFileNameIndex
 
@@ -2219,10 +2272,4 @@ fun getParsedCommandLineOfConfigFilePath(configFileName: RootedFilePath, path: P
     val tsConfigSourceFile: TsConfigSourceFile? = newTsconfigSourceFileFromFilePath(configFileName, path, configFileText)
     return Tuple2<ParsedCommandLine?, GoSlice<Diagnostic?>>(parseJsonSourceFileConfigFileContent(tsConfigSourceFile, fs, configFileName.directory(), options, optionsRaw, PathKey.ELEM.nilSlice, extendedConfigCache), GoElem.ref<Diagnostic?>().nilSlice)
 }
-
-// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.orderedMapType 551fb660
-@kotlin.jvm.JvmField val orderedMapType: Type? = com.xemantic.typescript.tsgo.go.reflect.typeFor(GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, Any?>(goElem_K = GoElem.STRING, goElem_V = GoElem.ref<Any?>()) }), zero = { null }))
-
-// go: github.com/microsoft/TypeScript/tsc/internal/tsoptions.CommandLineCompilerOptionsMap c3ba5e09
-@kotlin.jvm.JvmField val commandLineCompilerOptionsMap: CommandLineOptionNameMap = commandLineOptionsToMap(optionsDeclarations)
 

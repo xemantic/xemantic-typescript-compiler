@@ -29,13 +29,18 @@ import com.xemantic.kotlin.test.assert
 import com.xemantic.typescript.tsgo.ast.localize
 import com.xemantic.typescript.tsgo.compiler.ProgramOptions
 import com.xemantic.typescript.tsgo.core.CompilerOptions
-import com.xemantic.typescript.tsgo.core.ParsedOptions
+import com.xemantic.typescript.tsgo.compiler.ProgramConfig
+import com.xemantic.typescript.tsgo.compiler.ProgramHosts
+import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.core.TSTrue
 import com.xemantic.typescript.tsgo.core.Tristate
 import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
-import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
+import com.xemantic.typescript.tsgo.tsoptions.newParsedCommandLine
+import com.xemantic.typescript.tsgo.tspath.CaseSensitive
+import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
 import kotlin.test.Test
 
 /**
@@ -66,14 +71,14 @@ class ParallelProgramTest {
     private fun diagnostics(singleThreaded: Tristate): List<String> {
         TsgoPort.init()
         val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(CheckerSmokeTest.MapFS(files))
-        val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost("/src", fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null)
-        val roots = GoSlice.of(GoElem.STRING, *files.keys.sorted().toTypedArray())
-        val config = ParsedCommandLine(parsedConfig = ParsedOptions(compilerOptions = CompilerOptions(), fileNames = roots))
-        val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(host = host, config = config, singleThreaded = singleThreaded))!!
+        val host = com.xemantic.typescript.tsgo.compiler.newCompilerHost(fs, com.xemantic.typescript.tsgo.bundled.libPath(), null, null, null)
+        val roots = GoSlice.of(RootedFilePath.ELEM, *files.keys.sorted().map { RootedFilePath(it) }.toTypedArray())
+        val config = newParsedCommandLine(CompilerOptions(), roots, GoElem.ref<ProjectReference?>().nilSlice, RootedDirectoryPath("/src"), CaseSensitive)
+        val program = com.xemantic.typescript.tsgo.compiler.newProgram(ProgramOptions(programConfig = ProgramConfig(config = config, singleThreaded = singleThreaded), programHosts = ProgramHosts(host = host)))!!
         val diags = program.getSemanticDiagnostics(com.xemantic.typescript.tsgo.go.context.background(), null)
         return (0 until diags.len).map { i ->
             val d = diags[i]!!
-            "${d.file?.fileName()}:${d.loc.pos.value}: TS${d.code}: ${GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))}"
+            "${d.file?.fileName()?.value}:${d.loc.pos.value}: TS${d.code}: ${GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))}"
         }.sorted()
     }
 

@@ -27,8 +27,8 @@
 
 package com.xemantic.typescript.tsgo
 
-import com.xemantic.typescript.tsgo.api.CheckerSignatureParams
 import com.xemantic.typescript.tsgo.api.CheckerTypeParams
+import com.xemantic.typescript.tsgo.api.CreateSnapshotParams
 import com.xemantic.typescript.tsgo.api.DocumentIdentifier
 import com.xemantic.typescript.tsgo.api.GetContextualTypeParams
 import com.xemantic.typescript.tsgo.api.GetDiagnosticsParams
@@ -45,13 +45,15 @@ import com.xemantic.typescript.tsgo.api.GetTypeOfSymbolParams
 import com.xemantic.typescript.tsgo.api.GetTypePropertyParams
 import com.xemantic.typescript.tsgo.api.IsTypeAssignableToParams
 import com.xemantic.typescript.tsgo.api.NodeHandle
-import com.xemantic.typescript.tsgo.api.ProjectID
 import com.xemantic.typescript.tsgo.api.Session
 import com.xemantic.typescript.tsgo.api.SignatureResponse
 import com.xemantic.typescript.tsgo.api.SnapshotID
+import com.xemantic.typescript.tsgo.api.SnapshotRequestChangesParams
 import com.xemantic.typescript.tsgo.api.SymbolResponse
 import com.xemantic.typescript.tsgo.api.TypeResponse
 import com.xemantic.typescript.tsgo.api.TypeToTypeNodeParams
+import com.xemantic.typescript.tsgo.api.getSnapshotData
+import com.xemantic.typescript.tsgo.api.handleCreateSnapshot
 import com.xemantic.typescript.tsgo.api.handleGetApparentType
 import com.xemantic.typescript.tsgo.api.handleGetBaseTypes
 import com.xemantic.typescript.tsgo.api.handleGetContextualType
@@ -74,6 +76,8 @@ import com.xemantic.typescript.tsgo.api.handleGetTypesOfType
 import com.xemantic.typescript.tsgo.api.handleIsTypeAssignableTo
 import com.xemantic.typescript.tsgo.api.handleRequest
 import com.xemantic.typescript.tsgo.api.handleTypeToString
+import com.xemantic.typescript.tsgo.api.newStandaloneSession
+import com.xemantic.typescript.tsgo.api.pathKey
 import com.xemantic.typescript.tsgo.ast.localize
 import com.xemantic.typescript.tsgo.api.encoder.getIndex
 import com.xemantic.typescript.tsgo.ast.getPositionMap
@@ -84,13 +88,26 @@ import com.xemantic.typescript.tsgo.go.sync.goSpawn
 import com.xemantic.typescript.tsgo.go.sync.park
 import com.xemantic.typescript.tsgo.go.sync.parkToken
 import com.xemantic.typescript.tsgo.go.sync.unpark
+import com.xemantic.typescript.tsgo.ls.lsutil.UserPreferences
+import com.xemantic.typescript.tsgo.lsp.lsproto.PositionEncodingKind
+import com.xemantic.typescript.tsgo.lsp.lsproto.PositionEncodingKindUTF8
+import com.xemantic.typescript.tsgo.project.ID
+import com.xemantic.typescript.tsgo.project.Project
+import com.xemantic.typescript.tsgo.project.SessionInit
+import com.xemantic.typescript.tsgo.project.Snapshot
+import com.xemantic.typescript.tsgo.project.getProject
+import com.xemantic.typescript.tsgo.runtime.GoElem
 import com.xemantic.typescript.tsgo.runtime.GoError
 import com.xemantic.typescript.tsgo.runtime.GoSlice
 import com.xemantic.typescript.tsgo.runtime.GoString
 import com.xemantic.typescript.tsgo.runtime.Tuple2
 import com.xemantic.typescript.tsgo.runtime.goBytesToString
 import com.xemantic.typescript.tsgo.runtime.goStringToBytes
-import com.xemantic.typescript.tsgo.tspath.Path
+import com.xemantic.typescript.tsgo.tsoptions.getConfigFileParsingDiagnostics
+import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.tspath.rootedDirectoryPathFromAbsolute
+import com.xemantic.typescript.tsgo.tspath.rootedFilePathFromAbsolute
+import com.xemantic.typescript.tsgo.tspath.toRootedFilePath
 import com.xemantic.typescript.tsgo.vfs.FS
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -98,17 +115,20 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 // (TSGO.3-b) THE TYPE ORACLE: tsgo's API (`internal/api`, proto.go / session.go — ported, gen/api) in
 // process, through a Kotlin facade. docs/goport-api.md.
 //
-// A [TsgoProject] is one tsconfig's program as tsgo's project system builds it (`api.XtscOpenProgram`)
-// and an API session over it (`api.XtscNewSession`, the session's own handlers). Every query is a
-// session HANDLER — the very code `tsc --api` runs for that request — so an answer here is tsgo's
-// answer (the gate: ApiParityTest, `TSGO_API=1`). Handles keep tsgo's identity rules: a [TsgoType] or
-// [TsgoSignature] is valid for its project, a [TsgoSymbol] for the session. Positions are UTF-16 offsets
-// (Kotlin `String` indices) into the file's text; file names are absolute paths.
+// A [TsgoProject] is an API session created as `tsc --api` creates it (server.go: a standalone session,
+// `api.NewStandaloneSession`, over its own `project.SnapshotHost`, UTF-8 position encoding) and one
+// snapshot of it, opened by the session's own `createSnapshot` request with the tsconfig as its one open
+// project: tsgo's project system (internal/project, ported) builds the configured project's program and
+// checker pool. Every query is a session HANDLER — the very code `tsc --api` runs for that request — so an
+// answer here is tsgo's answer (the gate: ApiParityTest, `TSGO_API=1`). Handles keep tsgo's identity
+// rules: a [TsgoType] or [TsgoSignature] is valid for its project, a [TsgoSymbol] for the snapshot.
+// Positions are UTF-16 offsets (Kotlin `String` indices) into the file's text — the API's own position
+// unit (its handlers map them with the file's position map); file names are absolute paths.
 //
 // [request] is the raw protocol: any proto.go method name and its JSON params (as `tsc --api` takes
-// them) in, the response JSON out — the whole ~140-method surface, including what the typed facade
-// does not wrap. The handlers that need tsgo's language service (completions, references, JSDoc) or
-// its project system (updateSnapshot, release) are not ported: they throw (docs/goport-api.md § 3).
+// them) in, the response JSON out — the whole surface, including what the typed facade does not wrap
+// (createSnapshot/updateSnapshot/release included). Only the pprof handlers are not ported
+// (docs/goport-api.md § 3).
 
 /**
  * A query the session refused (an unknown handle, a file not in the program, …): the handler's error.
@@ -117,22 +137,91 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  */
 class TsgoApiException(message: String, val panicked: Boolean = false) : RuntimeException(message)
 
+/**
+ * A standalone API session and the snapshot its `createSnapshot` request opened for one tsconfig: the
+ * configured [project] (its [program]) as tsgo's project system builds it. [fs] is the session's file
+ * system (the bundled libraries served through it when no library directory is given).
+ */
+internal class TsgoApiSnapshot(
+    val configFileName: RootedFilePath,
+    val session: Session,
+    val handle: SnapshotID,
+    val snapshot: Snapshot,
+    val projectId: ID,
+    val project: Project,
+    val program: Program,
+    val fs: FS,
+    val configDiagnostics: List<String>,
+) {
+    companion object {
+
+        /**
+         * Must run on a goroutine ([onGoStack]). [encoding] is the session's position encoding (`tsc --api`:
+         * UTF-8; the language server: what the client negotiated), [preferences] the snapshot's user
+         * preferences (null: tsgo's defaults).
+         */
+        fun open(configFileName: String, fs: FS, libDirectory: String?, encoding: PositionEncodingKind, preferences: UserPreferences?): TsgoApiSnapshot {
+            TsgoProject.init()
+            val name = rootedFilePathFromAbsolute(GoString.fromUtf16(configFileName))
+            // `tsc --api` serves the bundled libraries through bundled.WrapFS; the shipped binary reads them
+            // next to its executable (the library directory).
+            val sessionFs = if (libDirectory == null) com.xemantic.typescript.tsgo.bundled.wrapFS(fs)!! else fs
+            val lib = libDirectory?.let { rootedDirectoryPathFromAbsolute(GoString.fromUtf16(it)) } ?: com.xemantic.typescript.tsgo.bundled.libPath()
+            val ctx = com.xemantic.typescript.tsgo.go.context.background()
+            val init = SessionInit(
+                backgroundCtx = ctx,
+                fs = sessionFs,
+                options = com.xemantic.typescript.tsgo.project.SessionOptions(
+                    currentDirectory = name.directory(),
+                    defaultLibraryPath = lib,
+                    positionEncoding = encoding,
+                ),
+            )
+            val session = newStandaloneSession(init, com.xemantic.typescript.tsgo.api.SessionOptions())!!
+            val params = CreateSnapshotParams(
+                snapshotRequestChangesParams = SnapshotRequestChangesParams(openProjects = GoSlice.of(DocumentIdentifier.ELEM, DocumentIdentifier(fileName = name.value))),
+                userPreferences = preferences,
+            )
+            val (response, err) = session.handleCreateSnapshot(ctx, params)
+            if (err != null) throw TsgoApiException("$configFileName: " + GoString.toUtf16(err.error()))
+            val (sd, serr) = session.getSnapshotData(response!!.snapshot)
+            if (serr != null) throw TsgoApiException("$configFileName: " + GoString.toUtf16(serr.error()))
+            val snapshot = sd!!.snapshot!!
+            // A configured project's ID is its tsconfig's path key (project.ConfiguredProjectID).
+            val projectId = ID(session.pathKey(name).value)
+            val project = snapshot.projectCollection.getProject(projectId)
+                ?: throw TsgoApiException("$configFileName: the snapshot has no project $projectId")
+            val diags = project.commandLine.getConfigFileParsingDiagnostics().let { errs ->
+                (0 until errs.len).map { i ->
+                    val d = errs[i]!!
+                    "TS${d.code}: " + GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))
+                }
+            }
+            val program = project.getProgram() ?: throw TsgoApiException("$configFileName: ${diags.joinToString("; ")}")
+            return TsgoApiSnapshot(name, session, response.snapshot, snapshot, projectId, project, program, sessionFs, diags)
+        }
+    }
+}
+
 /** A program and an API session over it: tsgo's type oracle for one tsconfig. */
 class TsgoProject private constructor(
-    /** The tsconfig's normalized absolute path (the API's project id). */
+    /** The tsconfig's normalized absolute path (the configured project's id on a case-sensitive file system). */
     val configFileName: String,
     /** The ported program (the escape hatch to everything the API does not expose). */
     val program: Program,
-    /** tsconfig parse errors, `TSnnnn: message`. */
+    /** tsconfig parse errors, `TSnnnn: message` (the project's config-file parsing diagnostics). */
     val configDiagnostics: List<String>,
     private val session: Session,
     /** The snapshot handle the raw protocol's `snapshot` param names. */
     val snapshotId: ULong,
+    private val project: ID,
 ) {
 
     private val snapshot = SnapshotID(snapshotId)
-    private val project = ProjectID(GoString.fromUtf16(configFileName))
     private val ctx = com.xemantic.typescript.tsgo.go.context.background()
+
+    /** The project handle the raw protocol's `project` param names (`project.ID`: the tsconfig's path key). */
+    val projectId: String get() = GoString.toUtf16(project.value)
 
     companion object {
 
@@ -144,32 +233,18 @@ class TsgoProject private constructor(
         }
 
         /** The host file system (rooted at `/`, case-sensitive): tsgo's `osvfs` minus symlink resolution. */
-        fun diskFS(): FS = com.xemantic.typescript.tsgo.vfs.iovfs.from(com.xemantic.typescript.tsgo.go.os.dirFS("/"), true)!!
+        fun diskFS(): FS = com.xemantic.typescript.tsgo.vfs.iovfs.from(com.xemantic.typescript.tsgo.go.os.dirFS("/"), com.xemantic.typescript.tsgo.tspath.CaseSensitive)!!
 
         /**
-         * Opens [configFileName] (an absolute path to a tsconfig.json) over [fs]: the program is built and
-         * bound as tsgo's project system builds a configured project's. The default libraries are the
-         * bundled ones, or the lib files of [libDirectory] (an absolute path on [fs]) — what the shipped
-         * `tsc` binary uses, its own `lib` directory. Throws when the config cannot be read.
+         * Opens [configFileName] (an absolute path to a tsconfig.json) over [fs]: a standalone API session
+         * whose `createSnapshot` opens the tsconfig as a configured project, built by tsgo's project
+         * system. The default libraries are the bundled ones, or the lib files of [libDirectory] (an
+         * absolute path on [fs]) — what the shipped `tsc` binary uses, its own `lib` directory. Throws when
+         * the config cannot be read.
          */
         fun open(configFileName: String, fs: FS = diskFS(), libDirectory: String? = null): TsgoProject = onGoStack {
-            init()
-            val name = com.xemantic.typescript.tsgo.tspath.normalizePath(GoString.fromUtf16(configFileName))
-            val (program, pool, errs) = com.xemantic.typescript.tsgo.api.xtscOpenProgram(name, fs, libDirectory?.let { com.xemantic.typescript.tsgo.tspath.normalizePath(GoString.fromUtf16(it)) } ?: "")
-            val diags = (0 until errs.len).map { i ->
-                val d = errs[i]!!
-                "TS${d.code}: " + GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))
-            }
-            if (program == null) throw TsgoApiException("$configFileName: ${diags.joinToString("; ")}")
-            val id = 1uL
-            val path = Path(name)
-            val proj = com.xemantic.typescript.tsgo.project.Project(path, program, pool)
-            val snapshot = com.xemantic.typescript.tsgo.project.Snapshot(id, com.xemantic.typescript.tsgo.project.ProjectCollection(mapOf(name to proj)), if (libDirectory == null) com.xemantic.typescript.tsgo.bundled.wrapFS(fs) else fs,
-                // Auto-import completions need the project system's registry (not ported, docs/goport-ls.md): off.
-                com.xemantic.typescript.tsgo.ls.lsutil.newDefaultUserPreferences().also { it.includeCompletionsForModuleExports = com.xemantic.typescript.tsgo.core.TSFalse })
-            val projectSession = com.xemantic.typescript.tsgo.project.Session(fs, com.xemantic.typescript.tsgo.tspath.getDirectoryPath(name))
-            val (session, handle) = com.xemantic.typescript.tsgo.api.xtscNewSession(projectSession, snapshot)
-            TsgoProject(GoString.toUtf16(name), program, diags, session!!, handle.value)
+            val opened = TsgoApiSnapshot.open(configFileName, fs, libDirectory, PositionEncodingKindUTF8, null)
+            TsgoProject(GoString.toUtf16(opened.configFileName.value), opened.program, opened.configDiagnostics, opened.session, opened.handle.value, opened.projectId)
         }
     }
 
@@ -193,22 +268,22 @@ class TsgoProject private constructor(
 
     /** Every file of the program, libraries included (`getSourceFileNames`). */
     fun sourceFileNames(): List<String> = call { session.handleGetSourceFileNames(ctx, GetSourceFileNamesParams(snapshot, project)) }
-        .let { s -> List(s.len) { GoString.toUtf16(s[it]) } }
+        .let { s -> List(s.len) { GoString.toUtf16(s[it].value) } }
 
     /** The semantic diagnostics of [fileName] (all files when null), `TSnnnn: message` (`getSemanticDiagnostics`). */
     fun semanticDiagnostics(fileName: String? = null): List<String> =
-        call { session.handleGetSemanticDiagnostics(ctx, GetDiagnosticsParams(snapshot, project, fileName?.let { doc(it) })) }
+        call { session.handleGetSemanticDiagnostics(ctx, GetDiagnosticsParams(snapshot, project, fileName?.let { GoSlice.of(DocumentIdentifier.ELEM, doc(it)) } ?: DocumentIdentifier.ELEM.nilSlice)) }
             .let { s -> List(s.len) { i -> s[i]!!.let { "TS${it.code}: ${GoString.toUtf16(it.text)}" } } }
 
     // ------------------------------------------------------------------ positions and nodes
 
     /** The node a [TsgoNode] handle names at [position] of [fileName] (the touching property name, as the API resolves positions). */
     fun nodeAt(fileName: String, position: Int): TsgoNode? = onGoStack {
-        val sf = program.getSourceFile(GoString.fromUtf16(fileName)) ?: throw TsgoApiException("source file not found: $fileName")
+        val sf = program.getSourceFile(toRootedFilePath(GoString.fromUtf16(fileName), program.baseDirectory())) ?: throw TsgoApiException("source file not found: $fileName")
         val pos = sf.getPositionMap().utf16ToUTF8(position)
         val node = com.xemantic.typescript.tsgo.astnav.getTouchingPropertyName(sf, pos) ?: return@onGoStack null
         val idx = com.xemantic.typescript.tsgo.api.encoder.getNodeIndexTable(sf).getIndex(node)
-        TsgoNode(this, "$idx.${node.kind.value}.${GoString.toUtf16(sf.path().value)}")
+        TsgoNode(this, "$idx.${node.kind.value}.${GoString.toUtf16(sf.pathKey().value)}")
     }
 
     /** The type at [position] of [fileName] (`getTypeAtPosition`). */
@@ -268,17 +343,17 @@ class TsgoProject private constructor(
 
     /** The apparent type of [type] (`getApparentType`). */
     fun apparentType(type: TsgoType): TsgoType? =
-        call { session.handleGetApparentType(ctx, CheckerTypeParams(snapshot, project, type.r.id)) }?.let { TsgoType(this, it) }
+        call { session.handleGetApparentType(ctx, GetTypePropertyParams(snapshot, project, type.r.id)) }?.let { TsgoType(this, it) }
 
     // ------------------------------------------------------------------ symbols and signatures
 
     /** The type of [symbol] (`getTypeOfSymbol`). */
     fun typeOfSymbol(symbol: TsgoSymbol): TsgoType? =
-        call { session.handleGetTypeOfSymbol(ctx, GetTypeOfSymbolParams(snapshot, project, symbol.r.id)) }?.let { TsgoType(this, it) }
+        call { session.handleGetTypeOfSymbol(ctx, GetTypeOfSymbolParams(snapshot, project, symbol.r.reference)) }?.let { TsgoType(this, it) }
 
     /** The declared type of [symbol] (`getDeclaredTypeOfSymbol`). */
     fun declaredTypeOfSymbol(symbol: TsgoSymbol): TsgoType? =
-        call { session.handleGetDeclaredTypeOfSymbol(ctx, GetTypeOfSymbolParams(snapshot, project, symbol.r.id)) }?.let { TsgoType(this, it) }
+        call { session.handleGetDeclaredTypeOfSymbol(ctx, GetTypeOfSymbolParams(snapshot, project, symbol.r.reference)) }?.let { TsgoType(this, it) }
 
     /** The parameters of [signature] (`getParametersOfSignature`). */
     fun parametersOfSignature(signature: TsgoSignature): List<TsgoSymbol> =
@@ -286,7 +361,7 @@ class TsgoProject private constructor(
 
     /** The return type of [signature] (`getReturnTypeOfSignature`). */
     fun returnTypeOfSignature(signature: TsgoSignature): TsgoType? =
-        call { session.handleGetReturnTypeOfSignature(ctx, CheckerSignatureParams(snapshot, project, signature.r.id)) }?.let { TsgoType(this, it) }
+        call { session.handleGetReturnTypeOfSignature(ctx, GetSignaturePropertyParams(snapshot, project, signature.r.id)) }?.let { TsgoType(this, it) }
 
     // ------------------------------------------------------------------ plumbing
 
@@ -353,7 +428,7 @@ class TsgoType internal constructor(val project: TsgoProject, internal val r: Ty
 /** A symbol (an API `SymbolResponse`; identity is the handle). */
 class TsgoSymbol internal constructor(val project: TsgoProject, internal val r: SymbolResponse) {
     /** The symbol handle. */
-    val id: ULong get() = r.id.value
+    val id: ULong get() = r.reference.id.value
     val name: String get() = GoString.toUtf16(r.name)
     /** `ast.SymbolFlags`. */
     val flags: UInt get() = r.flags
@@ -362,8 +437,8 @@ class TsgoSymbol internal constructor(val project: TsgoProject, internal val r: 
     val declarations: List<TsgoNode> get() = List(r.declarations.len) { TsgoNode(project, GoString.toUtf16(r.declarations[it].value)) }
     val valueDeclaration: TsgoNode? get() = r.valueDeclaration.value.takeIf { it.isNotEmpty() }?.let { TsgoNode(project, GoString.toUtf16(it)) }
 
-    override fun equals(other: Any?): Boolean = other is TsgoSymbol && other.project === project && other.r.id == r.id
-    override fun hashCode(): Int = r.id.hashCode()
+    override fun equals(other: Any?): Boolean = other is TsgoSymbol && other.project === project && other.r.reference.id == r.reference.id
+    override fun hashCode(): Int = r.reference.id.hashCode()
     override fun toString(): String = name
 }
 

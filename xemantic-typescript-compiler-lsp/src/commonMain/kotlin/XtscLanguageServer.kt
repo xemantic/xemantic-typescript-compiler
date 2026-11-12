@@ -74,7 +74,7 @@ public class XtscLanguageServer(
     private val files = OverlayFS(fs)
 
     /** The `initialize` request's params, as the client sent them. */
-    private var initializeParams: String = "{\"capabilities\":{}}"
+    private var initializeParams: String = "{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}"
 
     /** Open documents: URI as the client spells it -> path. */
     private val openDocuments = LinkedHashMap<String, String>()
@@ -243,7 +243,7 @@ public class XtscLanguageServer(
         var dir = path.substringBeforeLast('/', "")
         while (true) {
             val candidate = (if (dir.isEmpty()) "" else dir) + "/tsconfig.json"
-            if (files.fileExists(com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(candidate))) return candidate
+            if (files.fileExists(com.xemantic.typescript.tsgo.tspath.RootedFilePath(com.xemantic.typescript.tsgo.runtime.GoString.fromUtf16(candidate)))) return candidate
             if (dir.isEmpty()) return null
             dir = dir.substringBeforeLast('/', "")
         }

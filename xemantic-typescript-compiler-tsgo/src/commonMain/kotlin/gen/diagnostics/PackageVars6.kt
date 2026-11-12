@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Return_type_annotation_circularly_references_itself 9ff21f08
+@kotlin.jvm.JvmField val return_type_annotation_circularly_references_itself: Message? = Message(code = 2577, category = CategoryError, key = Key("Return_type_annotation_circularly_references_itself_2577"), text = "Return type annotation circularly references itself.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Unused_ts_expect_error_directive 25eaea6b
+@kotlin.jvm.JvmField val unused_ts_expect_error_directive: Message? = Message(code = 2578, category = CategoryError, key = Key("Unused_ts_expect_error_directive_2578"), text = "Unused '@ts-expect-error' directive.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashnode d3484e78
+@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashnode: Message? = Message(code = 2580, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashno_2580"), text = "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slashjquery 32480fb2
+@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slashjquery: Message? = Message(code = 2581, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slash_2581"), text = "Cannot find name '{0}'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery`.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_types_Slashjest_or_npm_i_save_dev_types_Slashmocha bd138645
+@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_types_Slashjest_or_npm_i_save_dev_types_Slashmocha: Message? = Message(code = 2582, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_type_2582"), text = "Cannot find name '{0}'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_1_or_later e8bc68dd
+@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_1_or_later: Message? = Message(code = 2583, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_2583"), text = "Cannot find name '{0}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{1}' or later.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_include_dom c706eee8
+@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_include_dom: Message? = Message(code = 2584, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_2584"), text = "Cannot find name '{0}'. Do you need to change your target library? Try changing the 'lib' compiler option to include 'dom'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_only_refers_to_a_type_but_is_being_used_as_a_value_here_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_es2015_or_later 885b7704
+@kotlin.jvm.JvmField val x_0_only_refers_to_a_type_but_is_being_used_as_a_value_here_Do_you_need_to_change_your_target_library_Try_changing_the_lib_compiler_option_to_es2015_or_later: Message? = Message(code = 2585, category = CategoryError, key = Key("_0_only_refers_to_a_type_but_is_being_used_as_a_value_here_Do_you_need_to_change_your_target_library_2585"), text = "'{0}' only refers to a type, but is being used as a value here. Do you need to change your target library? Try changing the 'lib' compiler option to es2015 or later.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_assign_to_0_because_it_is_a_constant 485550b8
+@kotlin.jvm.JvmField val cannot_assign_to_0_because_it_is_a_constant: Message? = Message(code = 2588, category = CategoryError, key = Key("Cannot_assign_to_0_because_it_is_a_constant_2588"), text = "Cannot assign to '{0}' because it is a constant.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_instantiation_is_excessively_deep_and_possibly_infinite e5173769
+@kotlin.jvm.JvmField val type_instantiation_is_excessively_deep_and_possibly_infinite: Message? = Message(code = 2589, category = CategoryError, key = Key("Type_instantiation_is_excessively_deep_and_possibly_infinite_2589"), text = "Type instantiation is excessively deep and possibly infinite.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expression_produces_a_union_type_that_is_too_complex_to_represent cc6be853
+@kotlin.jvm.JvmField val expression_produces_a_union_type_that_is_too_complex_to_represent: Message? = Message(code = 2590, category = CategoryError, key = Key("Expression_produces_a_union_type_that_is_too_complex_to_represent_2590"), text = "Expression produces a union type that is too complex to represent.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashnode_and_then_add_node_to_the_types_field_in_your_tsconfig 3d523d5f
+@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashnode_and_then_add_node_to_the_types_field_in_your_tsconfig: Message? = Message(code = 2591, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_node_Try_npm_i_save_dev_types_Slashno_2591"), text = "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slashjquery_and_then_add_jquery_to_the_types_field_in_your_tsconfig af3fe2cf
+@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slashjquery_and_then_add_jquery_to_the_types_field_in_your_tsconfig: Message? = Message(code = 2592, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_jQuery_Try_npm_i_save_dev_types_Slash_2592"), text = "Cannot find name '{0}'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery` and then add 'jquery' to the types field in your tsconfig.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_types_Slashjest_or_npm_i_save_dev_types_Slashmocha_and_then_add_jest_or_mocha_to_the_types_field_in_your_tsconfig 670e58ed
+@kotlin.jvm.JvmField val cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_types_Slashjest_or_npm_i_save_dev_types_Slashmocha_and_then_add_jest_or_mocha_to_the_types_field_in_your_tsconfig: Message? = Message(code = 2593, category = CategoryError, key = Key("Cannot_find_name_0_Do_you_need_to_install_type_definitions_for_a_test_runner_Try_npm_i_save_dev_type_2593"), text = "Cannot find name '{0}'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_module_is_declared_with_export_and_can_only_be_used_with_a_default_import_when_using_the_0_flag 58ee9c32
+@kotlin.jvm.JvmField val this_module_is_declared_with_export_and_can_only_be_used_with_a_default_import_when_using_the_0_flag: Message? = Message(code = 2594, category = CategoryError, key = Key("This_module_is_declared_with_export_and_can_only_be_used_with_a_default_import_when_using_the_0_flag_2594"), text = "This module is declared with 'export =', and can only be used with a default import when using the '{0}' flag.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_can_only_be_imported_by_using_a_default_import fd57e6c5
 @kotlin.jvm.JvmField val x_0_can_only_be_imported_by_using_a_default_import: Message? = Message(code = 2595, category = CategoryError, key = Key("_0_can_only_be_imported_by_using_a_default_import_2595"), text = "'{0}' can only be imported by using a default import.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_JSX_tag_s_0_prop_expects_type_1_which_requires_multiple_children_but_only_a_single_child_was_provided 31a8bc92
 @kotlin.jvm.JvmField val this_JSX_tag_s_0_prop_expects_type_1_which_requires_multiple_children_but_only_a_single_child_was_provided: Message? = Message(code = 2745, category = CategoryError, key = Key("This_JSX_tag_s_0_prop_expects_type_1_which_requires_multiple_children_but_only_a_single_child_was_pr_2745"), text = "This JSX tag's '{0}' prop expects type '{1}' which requires multiple children, but only a single child was provided.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.This_JSX_tag_s_0_prop_expects_a_single_child_of_type_1_but_multiple_children_were_provided 418143a2
-@kotlin.jvm.JvmField val this_JSX_tag_s_0_prop_expects_a_single_child_of_type_1_but_multiple_children_were_provided: Message? = Message(code = 2746, category = CategoryError, key = Key("This_JSX_tag_s_0_prop_expects_a_single_child_of_type_1_but_multiple_children_were_provided_2746"), text = "This JSX tag's '{0}' prop expects a single child of type '{1}', but multiple children were provided.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_components_don_t_accept_text_as_child_elements_Text_in_JSX_has_the_type_string_but_the_expected_type_of_1_is_2 54ecaad4
-@kotlin.jvm.JvmField val x_0_components_don_t_accept_text_as_child_elements_Text_in_JSX_has_the_type_string_but_the_expected_type_of_1_is_2: Message? = Message(code = 2747, category = CategoryError, key = Key("_0_components_don_t_accept_text_as_child_elements_Text_in_JSX_has_the_type_string_but_the_expected_t_2747"), text = "'{0}' components don't accept text as child elements. Text in JSX has the type 'string', but the expected type of '{1}' is '{2}'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Cannot_access_ambient_const_enums_when_0_is_enabled 005142f9
-@kotlin.jvm.JvmField val cannot_access_ambient_const_enums_when_0_is_enabled: Message? = Message(code = 2748, category = CategoryError, key = Key("Cannot_access_ambient_const_enums_when_0_is_enabled_2748"), text = "Cannot access ambient const enums when '{0}' is enabled.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_0_refers_to_a_value_but_is_being_used_as_a_type_here_Did_you_mean_typeof_0 200524ae
-@kotlin.jvm.JvmField val x_0_refers_to_a_value_but_is_being_used_as_a_type_here_Did_you_mean_typeof_0: Message? = Message(code = 2749, category = CategoryError, key = Key("_0_refers_to_a_value_but_is_being_used_as_a_type_here_Did_you_mean_typeof_0_2749"), text = "'{0}' refers to a value, but is being used as a type here. Did you mean 'typeof {0}'?")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_implementation_signature_is_declared_here 6610e075
-@kotlin.jvm.JvmField val the_implementation_signature_is_declared_here: Message? = Message(code = 2750, category = CategoryError, key = Key("The_implementation_signature_is_declared_here_2750"), text = "The implementation signature is declared here.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Circularity_originates_in_type_at_this_location 40cfa39b
-@kotlin.jvm.JvmField val circularity_originates_in_type_at_this_location: Message? = Message(code = 2751, category = CategoryError, key = Key("Circularity_originates_in_type_at_this_location_2751"), text = "Circularity originates in type at this location.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_first_export_default_is_here 86e6e216
-@kotlin.jvm.JvmField val the_first_export_default_is_here: Message? = Message(code = 2752, category = CategoryError, key = Key("The_first_export_default_is_here_2752"), text = "The first export default is here.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Another_export_default_is_here adcb6e80
-@kotlin.jvm.JvmField val another_export_default_is_here: Message? = Message(code = 2753, category = CategoryError, key = Key("Another_export_default_is_here_2753"), text = "Another export default is here.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.X_super_may_not_use_type_arguments 236314fa
-@kotlin.jvm.JvmField val x_super_may_not_use_type_arguments: Message? = Message(code = 2754, category = CategoryError, key = Key("super_may_not_use_type_arguments_2754"), text = "'super' may not use type arguments.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.No_constituent_of_type_0_is_callable 30ed8c1a
-@kotlin.jvm.JvmField val no_constituent_of_type_0_is_callable: Message? = Message(code = 2755, category = CategoryError, key = Key("No_constituent_of_type_0_is_callable_2755"), text = "No constituent of type '{0}' is callable.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Not_all_constituents_of_type_0_are_callable f158fbc6
-@kotlin.jvm.JvmField val not_all_constituents_of_type_0_are_callable: Message? = Message(code = 2756, category = CategoryError, key = Key("Not_all_constituents_of_type_0_are_callable_2756"), text = "Not all constituents of type '{0}' are callable.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_0_has_no_call_signatures 9dbdd2dc
-@kotlin.jvm.JvmField val type_0_has_no_call_signatures: Message? = Message(code = 2757, category = CategoryError, key = Key("Type_0_has_no_call_signatures_2757"), text = "Type '{0}' has no call signatures.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Each_member_of_the_union_type_0_has_signatures_but_none_of_those_signatures_are_compatible_with_each_other f1531946
-@kotlin.jvm.JvmField val each_member_of_the_union_type_0_has_signatures_but_none_of_those_signatures_are_compatible_with_each_other: Message? = Message(code = 2758, category = CategoryError, key = Key("Each_member_of_the_union_type_0_has_signatures_but_none_of_those_signatures_are_compatible_with_each_2758"), text = "Each member of the union type '{0}' has signatures, but none of those signatures are compatible with each other.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.No_constituent_of_type_0_is_constructable cd5183f8
-@kotlin.jvm.JvmField val no_constituent_of_type_0_is_constructable: Message? = Message(code = 2759, category = CategoryError, key = Key("No_constituent_of_type_0_is_constructable_2759"), text = "No constituent of type '{0}' is constructable.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Not_all_constituents_of_type_0_are_constructable 4bb065c5
-@kotlin.jvm.JvmField val not_all_constituents_of_type_0_are_constructable: Message? = Message(code = 2760, category = CategoryError, key = Key("Not_all_constituents_of_type_0_are_constructable_2760"), text = "Not all constituents of type '{0}' are constructable.")
 

@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_content_mapper_command_0_could_not_be_started_Colon_1 0fd386a5
+@kotlin.jvm.JvmField val the_content_mapper_command_0_could_not_be_started_Colon_1: Message? = Message(code = 18100, category = CategoryMessage, key = Key("The_content_mapper_command_0_could_not_be_started_Colon_1_18100"), text = "The content mapper command '{0}' could not be started: {1}")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_content_mapper_process_exited_before_responding_to_the_initialize_request_exit_code_0 e6405601
+@kotlin.jvm.JvmField val the_content_mapper_process_exited_before_responding_to_the_initialize_request_exit_code_0: Message? = Message(code = 18101, category = CategoryMessage, key = Key("The_content_mapper_process_exited_before_responding_to_the_initialize_request_exit_code_0_18101"), text = "The content mapper process exited before responding to the 'initialize' request (exit code {0}).")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_content_mapper_did_not_respond_to_the_initialize_request_within_0_seconds c05d3b5d
+@kotlin.jvm.JvmField val the_content_mapper_did_not_respond_to_the_initialize_request_within_0_seconds: Message? = Message(code = 18102, category = CategoryMessage, key = Key("The_content_mapper_did_not_respond_to_the_initialize_request_within_0_seconds_18102"), text = "The content mapper did not respond to the 'initialize' request within {0} seconds.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_content_mapper_returned_an_initialize_response_that_could_not_be_decoded_Colon_0 ea8d6945
+@kotlin.jvm.JvmField val the_content_mapper_returned_an_initialize_response_that_could_not_be_decoded_Colon_0: Message? = Message(code = 18103, category = CategoryMessage, key = Key("The_content_mapper_returned_an_initialize_response_that_could_not_be_decoded_Colon_0_18103"), text = "The content mapper returned an 'initialize' response that could not be decoded: {0}")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_content_mapper_s_initialize_request_failed_Colon_0 fbbb0967
+@kotlin.jvm.JvmField val the_content_mapper_s_initialize_request_failed_Colon_0: Message? = Message(code = 18104, category = CategoryMessage, key = Key("The_content_mapper_s_initialize_request_failed_Colon_0_18104"), text = "The content mapper's 'initialize' request failed: {0}")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Diagnostic_directive_0_returned_by_the_content_mapper_has_an_invalid_range d545647b
+@kotlin.jvm.JvmField val diagnostic_directive_0_returned_by_the_content_mapper_has_an_invalid_range: Message? = Message(code = 18105, category = CategoryMessage, key = Key("Diagnostic_directive_0_returned_by_the_content_mapper_has_an_invalid_range_18105"), text = "Diagnostic directive {0} returned by the content mapper has an invalid range.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_content_mapper_returned_a_diagnostic_directive_with_invalid_policy_0 52f5c756
+@kotlin.jvm.JvmField val the_content_mapper_returned_a_diagnostic_directive_with_invalid_policy_0: Message? = Message(code = 18106, category = CategoryMessage, key = Key("The_content_mapper_returned_a_diagnostic_directive_with_invalid_policy_0_18106"), text = "The content mapper returned a diagnostic directive with invalid policy '{0}'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Diagnostic_directive_0_returned_by_the_content_mapper_must_specify_unusedExpectDirectiveIndex_when_there_is_not_exactly_one_unusedExpectDirectiveDiagnostics_entry 4d2a3ef1
+@kotlin.jvm.JvmField val diagnostic_directive_0_returned_by_the_content_mapper_must_specify_unusedExpectDirectiveIndex_when_there_is_not_exactly_one_unusedExpectDirectiveDiagnostics_entry: Message? = Message(code = 18107, category = CategoryMessage, key = Key("Diagnostic_directive_0_returned_by_the_content_mapper_must_specify_unusedExpectDirectiveIndex_when_t_18107"), text = "Diagnostic directive {0} returned by the content mapper must specify 'unusedExpectDirectiveIndex' when there is not exactly one 'unusedExpectDirectiveDiagnostics' entry.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_content_mapper_returned_diagnostic_directives_with_overlapping_virtual_ranges 0116764e
+@kotlin.jvm.JvmField val the_content_mapper_returned_diagnostic_directives_with_overlapping_virtual_ranges: Message? = Message(code = 18108, category = CategoryMessage, key = Key("The_content_mapper_returned_diagnostic_directives_with_overlapping_virtual_ranges_18108"), text = "The content mapper returned diagnostic directives with overlapping virtual ranges.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.The_invalid_diagnostic_directive_is_in_supplemental_output_0_returned_by_the_content_mapper 5e11584b
+@kotlin.jvm.JvmField val the_invalid_diagnostic_directive_is_in_supplemental_output_0_returned_by_the_content_mapper: Message? = Message(code = 18109, category = CategoryMessage, key = Key("The_invalid_diagnostic_directive_is_in_supplemental_output_0_returned_by_the_content_mapper_18109"), text = "The invalid diagnostic directive is in supplemental output {0} returned by the content mapper.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Diagnostic_directive_0_returned_by_the_content_mapper_has_an_invalid_unusedExpectDirectiveIndex b0925386
+@kotlin.jvm.JvmField val diagnostic_directive_0_returned_by_the_content_mapper_has_an_invalid_unusedExpectDirectiveIndex: Message? = Message(code = 18110, category = CategoryMessage, key = Key("Diagnostic_directive_0_returned_by_the_content_mapper_has_an_invalid_unusedExpectDirectiveIndex_18110"), text = "Diagnostic directive {0} returned by the content mapper has an invalid 'unusedExpectDirectiveIndex'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_source_phase_import_must_specify_a_local_binding f9b8348e
+@kotlin.jvm.JvmField val a_source_phase_import_must_specify_a_local_binding: Message? = Message(code = 18111, category = CategoryError, key = Key("A_source_phase_import_must_specify_a_local_binding_18111"), text = "A source phase import must specify a local binding.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Named_and_namespace_imports_are_not_allowed_in_a_source_phase_import b8058e14
+@kotlin.jvm.JvmField val named_and_namespace_imports_are_not_allowed_in_a_source_phase_import: Message? = Message(code = 18112, category = CategoryError, key = Key("Named_and_namespace_imports_are_not_allowed_in_a_source_phase_import_18112"), text = "Named and namespace imports are not allowed in a source phase import.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Source_phase_imports_are_only_supported_when_the_module_option_is_set_to_esnext_nodenext_or_preserve 664ee873
+@kotlin.jvm.JvmField val source_phase_imports_are_only_supported_when_the_module_option_is_set_to_esnext_nodenext_or_preserve: Message? = Message(code = 18113, category = CategoryError, key = Key("Source_phase_imports_are_only_supported_when_the_module_option_is_set_to_esnext_nodenext_or_preserve_18113"), text = "Source phase imports are only supported when the '--module' option is set to 'esnext', 'nodenext', or 'preserve'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Optional_chaining_cannot_be_used_with_import_source a48c1573
+@kotlin.jvm.JvmField val optional_chaining_cannot_be_used_with_import_source: Message? = Message(code = 18114, category = CategoryError, key = Key("Optional_chaining_cannot_be_used_with_import_source_18114"), text = "Optional chaining cannot be used with 'import.source'.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Source_phase_imports_are_not_allowed_on_statements_that_compile_to_CommonJS_require_calls 0739a2b6
 @kotlin.jvm.JvmField val source_phase_imports_are_not_allowed_on_statements_that_compile_to_CommonJS_require_calls: Message? = Message(code = 18115, category = CategoryError, key = Key("Source_phase_imports_are_not_allowed_on_statements_that_compile_to_CommonJS_require_calls_18115"), text = "Source phase imports are not allowed on statements that compile to CommonJS 'require' calls.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_named_export_to_default_export 1f43f5f4
 @kotlin.jvm.JvmField val convert_named_export_to_default_export: Message? = Message(code = 95062, category = CategoryMessage, key = Key("Convert_named_export_to_default_export_95062"), text = "Convert named export to default export")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_missing_enum_member_0 06f2c61e
-@kotlin.jvm.JvmField val add_missing_enum_member_0: Message? = Message(code = 95063, category = CategoryMessage, key = Key("Add_missing_enum_member_0_95063"), text = "Add missing enum member '{0}'")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_all_missing_imports b0cc16d4
-@kotlin.jvm.JvmField val add_all_missing_imports: Message? = Message(code = 95064, category = CategoryMessage, key = Key("Add_all_missing_imports_95064"), text = "Add all missing imports")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_to_async_function c0896890
-@kotlin.jvm.JvmField val convert_to_async_function: Message? = Message(code = 95065, category = CategoryMessage, key = Key("Convert_to_async_function_95065"), text = "Convert to async function")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_all_to_async_functions ce179d1a
-@kotlin.jvm.JvmField val convert_all_to_async_functions: Message? = Message(code = 95066, category = CategoryMessage, key = Key("Convert_all_to_async_functions_95066"), text = "Convert all to async functions")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_missing_call_parentheses 8e3d5dd4
-@kotlin.jvm.JvmField val add_missing_call_parentheses: Message? = Message(code = 95067, category = CategoryMessage, key = Key("Add_missing_call_parentheses_95067"), text = "Add missing call parentheses")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_all_missing_call_parentheses 36ad4ac0
-@kotlin.jvm.JvmField val add_all_missing_call_parentheses: Message? = Message(code = 95068, category = CategoryMessage, key = Key("Add_all_missing_call_parentheses_95068"), text = "Add all missing call parentheses")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_unknown_conversion_for_non_overlapping_types 86ac0152
-@kotlin.jvm.JvmField val add_unknown_conversion_for_non_overlapping_types: Message? = Message(code = 95069, category = CategoryMessage, key = Key("Add_unknown_conversion_for_non_overlapping_types_95069"), text = "Add 'unknown' conversion for non-overlapping types")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_unknown_to_all_conversions_of_non_overlapping_types 39387347
-@kotlin.jvm.JvmField val add_unknown_to_all_conversions_of_non_overlapping_types: Message? = Message(code = 95070, category = CategoryMessage, key = Key("Add_unknown_to_all_conversions_of_non_overlapping_types_95070"), text = "Add 'unknown' to all conversions of non-overlapping types")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_missing_new_operator_to_call bb4a9c97
-@kotlin.jvm.JvmField val add_missing_new_operator_to_call: Message? = Message(code = 95071, category = CategoryMessage, key = Key("Add_missing_new_operator_to_call_95071"), text = "Add missing 'new' operator to call")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_missing_new_operator_to_all_calls b0a6e74c
-@kotlin.jvm.JvmField val add_missing_new_operator_to_all_calls: Message? = Message(code = 95072, category = CategoryMessage, key = Key("Add_missing_new_operator_to_all_calls_95072"), text = "Add missing 'new' operator to all calls")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Add_names_to_all_parameters_without_names 84c80a1c
-@kotlin.jvm.JvmField val add_names_to_all_parameters_without_names: Message? = Message(code = 95073, category = CategoryMessage, key = Key("Add_names_to_all_parameters_without_names_95073"), text = "Add names to all parameters without names")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Enable_the_experimentalDecorators_option_in_your_configuration_file de17c082
-@kotlin.jvm.JvmField val enable_the_experimentalDecorators_option_in_your_configuration_file: Message? = Message(code = 95074, category = CategoryMessage, key = Key("Enable_the_experimentalDecorators_option_in_your_configuration_file_95074"), text = "Enable the 'experimentalDecorators' option in your configuration file")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Convert_parameters_to_destructured_object 19b45d6a
-@kotlin.jvm.JvmField val convert_parameters_to_destructured_object: Message? = Message(code = 95075, category = CategoryMessage, key = Key("Convert_parameters_to_destructured_object_95075"), text = "Convert parameters to destructured object")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Extract_type 3527ce28
-@kotlin.jvm.JvmField val extract_type: Message? = Message(code = 95077, category = CategoryMessage, key = Key("Extract_type_95077"), text = "Extract type")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Extract_to_type_alias 5cd120c4
-@kotlin.jvm.JvmField val extract_to_type_alias: Message? = Message(code = 95078, category = CategoryMessage, key = Key("Extract_to_type_alias_95078"), text = "Extract to type alias")
 

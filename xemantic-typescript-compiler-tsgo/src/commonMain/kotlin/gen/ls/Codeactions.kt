@@ -24,6 +24,14 @@
 package com.xemantic.typescript.tsgo.ls
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyIncomingCall
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyIncomingCallsOrNull
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyItem
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyItemsOrNull
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyOutgoingCall
+import com.xemantic.typescript.tsgo.lsp.lsproto.CallHierarchyOutgoingCallsOrNull
+import com.xemantic.typescript.tsgo.checker.Checker
+import com.xemantic.typescript.tsgo.ast.ClassStaticBlockDeclaration
 import com.xemantic.typescript.tsgo.lsp.lsproto.CodeActionKind
 import com.xemantic.typescript.tsgo.lsp.lsproto.CodeActionParams
 import com.xemantic.typescript.tsgo.lsp.lsproto.CommandOrCodeAction
@@ -31,22 +39,83 @@ import com.xemantic.typescript.tsgo.lsp.lsproto.CommandOrCodeActionArrayOrNull
 import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.lsp.lsproto.Diagnostic
 import com.xemantic.typescript.tsgo.lsp.lsproto.DocumentUri
+import com.xemantic.typescript.tsgo.printer.EmitTextWriter
 import com.xemantic.typescript.tsgo.spanmap.Feature
+import com.xemantic.typescript.tsgo.spanmap.Fidelity
+import com.xemantic.typescript.tsgo.lsp.lsproto.HasTextDocumentPosition
+import com.xemantic.typescript.tsgo.lsp.lsproto.HasTextDocumentURI
+import com.xemantic.typescript.tsgo.lsp.lsproto.InsertTextFormat
+import com.xemantic.typescript.tsgo.ast.JsxElement
+import com.xemantic.typescript.tsgo.ast.JsxFragment
 import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.lsp.lsproto.Location
+import com.xemantic.typescript.tsgo.ls.lsconv.MappedPosition
 import com.xemantic.typescript.tsgo.ls.lsconv.MappedSpan
+import com.xemantic.typescript.tsgo.ast.ModifierFlags
+import com.xemantic.typescript.tsgo.ast.ModifierList
+import com.xemantic.typescript.tsgo.ast.Node
+import com.xemantic.typescript.tsgo.ast.NodeId
+import com.xemantic.typescript.tsgo.go.sync.Once
+import com.xemantic.typescript.tsgo.lsp.lsproto.Position
+import com.xemantic.typescript.tsgo.printer.PrintHandlers
+import com.xemantic.typescript.tsgo.printer.Printer
+import com.xemantic.typescript.tsgo.printer.PrinterOptions
 import com.xemantic.typescript.tsgo.compiler.Program
+import com.xemantic.typescript.tsgo.lsp.lsproto.Range
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.go.iter.Seq
+import com.xemantic.typescript.tsgo.scanner.SkipTriviaOptions
 import com.xemantic.typescript.tsgo.ast.SourceFile
+import com.xemantic.typescript.tsgo.ast.Symbol
+import com.xemantic.typescript.tsgo.lsp.lsproto.SymbolKind
+import com.xemantic.typescript.tsgo.ast.TaggedTemplateExpression
 import com.xemantic.typescript.tsgo.lsp.lsproto.TextEdit
+import com.xemantic.typescript.tsgo.core.TextPos
 import com.xemantic.typescript.tsgo.core.TextRange
+import com.xemantic.typescript.tsgo.checker.Type
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertParams
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertResponseItem
+import com.xemantic.typescript.tsgo.lsp.lsproto.VSOnAutoInsertResponseItemOrNull
 import com.xemantic.typescript.tsgo.lsp.lsproto.WorkspaceEdit
+import com.xemantic.typescript.tsgo.ast.arguments
+import com.xemantic.typescript.tsgo.ast.asClassStaticBlockDeclaration
+import com.xemantic.typescript.tsgo.ast.asJsxElement
+import com.xemantic.typescript.tsgo.ast.asJsxFragment
+import com.xemantic.typescript.tsgo.ast.asNode
+import com.xemantic.typescript.tsgo.ast.asSourceFile
+import com.xemantic.typescript.tsgo.ast.asTaggedTemplateExpression
+import com.xemantic.typescript.tsgo.ast.attributes
+import com.xemantic.typescript.tsgo.ast.body
 import com.xemantic.typescript.tsgo.ast.code
+import com.xemantic.typescript.tsgo.ast.contentMapper
+import com.xemantic.typescript.tsgo.ast.declarations
+import com.xemantic.typescript.tsgo.ast.expression
+import com.xemantic.typescript.tsgo.ast.flags
+import com.xemantic.typescript.tsgo.ast.forEachChild
+import com.xemantic.typescript.tsgo.ast.initializer
+import com.xemantic.typescript.tsgo.ast.members
+import com.xemantic.typescript.tsgo.ast.modifiers
+import com.xemantic.typescript.tsgo.ast.name
+import com.xemantic.typescript.tsgo.ast.parameters
 import com.xemantic.typescript.tsgo.ast.source
+import com.xemantic.typescript.tsgo.ast.statements
+import com.xemantic.typescript.tsgo.ast.tagName
+import com.xemantic.typescript.tsgo.ast.text
+import com.xemantic.typescript.tsgo.ast.valueDeclaration
+import com.xemantic.typescript.tsgo.checker.getTypeOfSymbolAtLocation
+import com.xemantic.typescript.tsgo.checker.symbolToString
 import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.addIfAbsent
 import com.xemantic.typescript.tsgo.collections.has
+import com.xemantic.typescript.tsgo.compiler.getTypeChecker
+import com.xemantic.typescript.tsgo.compiler.getTypeCheckerForFile
 import com.xemantic.typescript.tsgo.diagnostics.localize
+import com.xemantic.typescript.tsgo.ls.lsconv.fromLSPPositionForSourceFile
 import com.xemantic.typescript.tsgo.ls.lsconv.fromLSPRangeForSourceFile
+import com.xemantic.typescript.tsgo.ls.lsconv.toLSPPositionForFeature
+import com.xemantic.typescript.tsgo.ls.lsconv.toLSPRangeForFeature
 import com.xemantic.typescript.tsgo.lsp.lsproto.compare
+import com.xemantic.typescript.tsgo.printer.write
 
 // go: github.com/microsoft/TypeScript/tsc/internal/ls.CodeFixProvider db9855d3
 class CodeFixProvider(
@@ -424,7 +493,4 @@ fun convertToLSPCodeAction(action: CodeAction?, diag: Diagnostic?, uri: Document
     val diagnostics: GoBox<GoSlice<Diagnostic?>> = GoBox(GoSlice.of(GoElem.ref<Diagnostic?>(), diag))
     return CommandOrCodeAction(codeAction = com.xemantic.typescript.tsgo.lsp.lsproto.CodeAction(title = action!!.description, kind = kind, edit = WorkspaceEdit(changes = changes), diagnostics = diagnostics))
 }
-
-// go: github.com/microsoft/TypeScript/tsc/internal/ls.codeFixProviders b13faa1f
-@kotlin.jvm.JvmField val codeFixProviders: GoSlice<CodeFixProvider?> = GoSlice.of(GoElem.ref<CodeFixProvider?>(), importFixProvider, isolatedDeclarationsFixProvider, fixClassIncorrectlyImplementsInterfaceProvider)
 

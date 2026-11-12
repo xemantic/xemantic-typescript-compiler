@@ -3,7 +3,7 @@
  * (xemantic-typescript-compiler-goport) or add an override (…-goport/overrides/).
  *
  * Derived from tsgo, the Go TypeScript compiler (https://github.com/microsoft/TypeScript,
- * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), internal/diagnostics/diagnostics_generated.go, and MODIFIED:
+ * directory tsc/) at TypeScript 7.1.0-beta (3e9236361fa9), package variables of internal/diagnostics, in Go's initialization order, and MODIFIED:
  * mechanically translated from Go to Kotlin.
  *
  * Original work Copyright (c) Microsoft Corporation, licensed under the Apache License,
@@ -24,6 +24,59 @@
 package com.xemantic.typescript.tsgo.diagnostics
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Confidence
+import com.xemantic.typescript.tsgo.locale.Locale
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Matcher
+import com.xemantic.typescript.tsgo.ls.autoimport.Named
+import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
+import com.xemantic.typescript.tsgo.go.regexp.Regexp
+import com.xemantic.typescript.tsgo.go.fmt.Stringer
+import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Synchronously_call_callbacks_and_update_the_state_of_directory_watchers_on_platforms_that_don_t_support_recursive_watching_natively 868f063f
+@kotlin.jvm.JvmField val synchronously_call_callbacks_and_update_the_state_of_directory_watchers_on_platforms_that_don_t_support_recursive_watching_natively: Message? = Message(code = 6704, category = CategoryMessage, key = Key("Synchronously_call_callbacks_and_update_the_state_of_directory_watchers_on_platforms_that_don_t_supp_6704"), text = "Synchronously call callbacks and update the state of directory watchers on platforms that don`t support recursive watching natively.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Set_the_JavaScript_language_version_for_emitted_JavaScript_and_include_compatible_library_declarations 922c4299
+@kotlin.jvm.JvmField val set_the_JavaScript_language_version_for_emitted_JavaScript_and_include_compatible_library_declarations: Message? = Message(code = 6705, category = CategoryMessage, key = Key("Set_the_JavaScript_language_version_for_emitted_JavaScript_and_include_compatible_library_declaratio_6705"), text = "Set the JavaScript language version for emitted JavaScript and include compatible library declarations.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Log_paths_used_during_the_moduleResolution_process ef48fa50
+@kotlin.jvm.JvmField val log_paths_used_during_the_moduleResolution_process: Message? = Message(code = 6706, category = CategoryMessage, key = Key("Log_paths_used_during_the_moduleResolution_process_6706"), text = "Log paths used during the 'moduleResolution' process.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_the_path_to_tsbuildinfo_incremental_compilation_file 4aa5aa87
+@kotlin.jvm.JvmField val specify_the_path_to_tsbuildinfo_incremental_compilation_file: Message? = Message(code = 6707, category = CategoryMessage, key = Key("Specify_the_path_to_tsbuildinfo_incremental_compilation_file_6707"), text = "Specify the path to .tsbuildinfo incremental compilation file.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_options_for_automatic_acquisition_of_declaration_files 797354d5
+@kotlin.jvm.JvmField val specify_options_for_automatic_acquisition_of_declaration_files: Message? = Message(code = 6709, category = CategoryMessage, key = Key("Specify_options_for_automatic_acquisition_of_declaration_files_6709"), text = "Specify options for automatic acquisition of declaration files.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_multiple_folders_that_act_like_Slashnode_modules_Slash_types f6c333b8
+@kotlin.jvm.JvmField val specify_multiple_folders_that_act_like_Slashnode_modules_Slash_types: Message? = Message(code = 6710, category = CategoryMessage, key = Key("Specify_multiple_folders_that_act_like_Slashnode_modules_Slash_types_6710"), text = "Specify multiple folders that act like './node_modules/@types'.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_type_package_names_to_be_included_without_being_referenced_in_a_source_file 1b58e02b
+@kotlin.jvm.JvmField val specify_type_package_names_to_be_included_without_being_referenced_in_a_source_file: Message? = Message(code = 6711, category = CategoryMessage, key = Key("Specify_type_package_names_to_be_included_without_being_referenced_in_a_source_file_6711"), text = "Specify type package names to be included without being referenced in a source file.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Emit_ECMAScript_standard_compliant_class_fields 2756769e
+@kotlin.jvm.JvmField val emit_ECMAScript_standard_compliant_class_fields: Message? = Message(code = 6712, category = CategoryMessage, key = Key("Emit_ECMAScript_standard_compliant_class_fields_6712"), text = "Emit ECMAScript-standard-compliant class fields.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Enable_verbose_logging 8337982d
+@kotlin.jvm.JvmField val enable_verbose_logging: Message? = Message(code = 6713, category = CategoryMessage, key = Key("Enable_verbose_logging_6713"), text = "Enable verbose logging.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_how_directories_are_watched_on_systems_that_lack_recursive_file_watching_functionality 295891d8
+@kotlin.jvm.JvmField val specify_how_directories_are_watched_on_systems_that_lack_recursive_file_watching_functionality: Message? = Message(code = 6714, category = CategoryMessage, key = Key("Specify_how_directories_are_watched_on_systems_that_lack_recursive_file_watching_functionality_6714"), text = "Specify how directories are watched on systems that lack recursive file-watching functionality.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_how_the_TypeScript_watch_mode_works 5c93e675
+@kotlin.jvm.JvmField val specify_how_the_TypeScript_watch_mode_works: Message? = Message(code = 6715, category = CategoryMessage, key = Key("Specify_how_the_TypeScript_watch_mode_works_6715"), text = "Specify how the TypeScript watch mode works.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Require_undeclared_properties_from_index_signatures_to_use_element_accesses 14697f50
+@kotlin.jvm.JvmField val require_undeclared_properties_from_index_signatures_to_use_element_accesses: Message? = Message(code = 6717, category = CategoryMessage, key = Key("Require_undeclared_properties_from_index_signatures_to_use_element_accesses_6717"), text = "Require undeclared properties from index signatures to use element accesses.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Specify_emit_Slashchecking_behavior_for_imports_that_are_only_used_for_types c0150b5c
+@kotlin.jvm.JvmField val specify_emit_Slashchecking_behavior_for_imports_that_are_only_used_for_types: Message? = Message(code = 6718, category = CategoryMessage, key = Key("Specify_emit_Slashchecking_behavior_for_imports_that_are_only_used_for_types_6718"), text = "Specify emit/checking behavior for imports that are only used for types.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Require_sufficient_annotation_on_exports_so_other_tools_can_trivially_generate_declaration_files fb53e263
+@kotlin.jvm.JvmField val require_sufficient_annotation_on_exports_so_other_tools_can_trivially_generate_declaration_files: Message? = Message(code = 6719, category = CategoryMessage, key = Key("Require_sufficient_annotation_on_exports_so_other_tools_can_trivially_generate_declaration_files_6719"), text = "Require sufficient annotation on exports so other tools can trivially generate declaration files.")
+
+// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Built_in_iterators_are_instantiated_with_a_TReturn_type_of_undefined_instead_of_any c580b105
+@kotlin.jvm.JvmField val built_in_iterators_are_instantiated_with_a_TReturn_type_of_undefined_instead_of_any: Message? = Message(code = 6720, category = CategoryMessage, key = Key("Built_in_iterators_are_instantiated_with_a_TReturn_type_of_undefined_instead_of_any_6720"), text = "Built-in iterators are instantiated with a 'TReturn' type of 'undefined' instead of 'any'.")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Do_not_allow_runtime_constructs_that_are_not_part_of_ECMAScript ba805b19
 @kotlin.jvm.JvmField val do_not_allow_runtime_constructs_that_are_not_part_of_ECMAScript: Message? = Message(code = 6721, category = CategoryMessage, key = Key("Do_not_allow_runtime_constructs_that_are_not_part_of_ECMAScript_6721"), text = "Do not allow runtime constructs that are not part of ECMAScript.")
@@ -429,49 +482,4 @@ import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.You_cannot_rename_elements_that_are_defined_in_a_node_modules_folder d24cd6af
 @kotlin.jvm.JvmField val you_cannot_rename_elements_that_are_defined_in_a_node_modules_folder: Message? = Message(code = 8035, category = CategoryError, key = Key("You_cannot_rename_elements_that_are_defined_in_a_node_modules_folder_8035"), text = "You cannot rename elements that are defined in a 'node_modules' folder.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.You_cannot_rename_elements_that_are_defined_in_another_node_modules_folder 9c9b2402
-@kotlin.jvm.JvmField val you_cannot_rename_elements_that_are_defined_in_another_node_modules_folder: Message? = Message(code = 8036, category = CategoryError, key = Key("You_cannot_rename_elements_that_are_defined_in_another_node_modules_folder_8036"), text = "You cannot rename elements that are defined in another 'node_modules' folder.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Type_satisfaction_expressions_can_only_be_used_in_TypeScript_files e39518a9
-@kotlin.jvm.JvmField val type_satisfaction_expressions_can_only_be_used_in_TypeScript_files: Message? = Message(code = 8037, category = CategoryError, key = Key("Type_satisfaction_expressions_can_only_be_used_in_TypeScript_files_8037"), text = "Type satisfaction expressions can only be used in TypeScript files.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Decorators_may_not_appear_after_export_or_export_default_if_they_also_appear_before_export 7d2fa7d0
-@kotlin.jvm.JvmField val decorators_may_not_appear_after_export_or_export_default_if_they_also_appear_before_export: Message? = Message(code = 8038, category = CategoryError, key = Key("Decorators_may_not_appear_after_export_or_export_default_if_they_also_appear_before_export_8038"), text = "Decorators may not appear after 'export' or 'export default' if they also appear before 'export'.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.A_JSDoc_template_tag_may_not_follow_a_typedef_callback_or_overload_tag a66e6c85
-@kotlin.jvm.JvmField val a_JSDoc_template_tag_may_not_follow_a_typedef_callback_or_overload_tag: Message? = Message(code = 8039, category = CategoryError, key = Key("A_JSDoc_template_tag_may_not_follow_a_typedef_callback_or_overload_tag_8039"), text = "A JSDoc '@template' tag may not follow a '@typedef', '@callback', or '@overload' tag")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.File_rename_is_not_supported_by_the_editor 2bca7339
-@kotlin.jvm.JvmField val file_rename_is_not_supported_by_the_editor: Message? = Message(code = 8040, category = CategoryError, key = Key("File_rename_is_not_supported_by_the_editor_8040"), text = "File rename is not supported by the editor")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Declaration_emit_for_this_file_requires_using_private_name_0_An_explicit_type_annotation_may_unblock_declaration_emit b29994c9
-@kotlin.jvm.JvmField val declaration_emit_for_this_file_requires_using_private_name_0_An_explicit_type_annotation_may_unblock_declaration_emit: Message? = Message(code = 9005, category = CategoryError, key = Key("Declaration_emit_for_this_file_requires_using_private_name_0_An_explicit_type_annotation_may_unblock_9005"), text = "Declaration emit for this file requires using private name '{0}'. An explicit type annotation may unblock declaration emit.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Declaration_emit_for_this_file_requires_using_private_name_0_from_module_1_An_explicit_type_annotation_may_unblock_declaration_emit 06f057ff
-@kotlin.jvm.JvmField val declaration_emit_for_this_file_requires_using_private_name_0_from_module_1_An_explicit_type_annotation_may_unblock_declaration_emit: Message? = Message(code = 9006, category = CategoryError, key = Key("Declaration_emit_for_this_file_requires_using_private_name_0_from_module_1_An_explicit_type_annotati_9006"), text = "Declaration emit for this file requires using private name '{0}' from module '{1}'. An explicit type annotation may unblock declaration emit.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Function_must_have_an_explicit_return_type_annotation_with_isolatedDeclarations 8644d8c6
-@kotlin.jvm.JvmField val function_must_have_an_explicit_return_type_annotation_with_isolatedDeclarations: Message? = Message(code = 9007, category = CategoryError, key = Key("Function_must_have_an_explicit_return_type_annotation_with_isolatedDeclarations_9007"), text = "Function must have an explicit return type annotation with --isolatedDeclarations.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Method_must_have_an_explicit_return_type_annotation_with_isolatedDeclarations 3362f09c
-@kotlin.jvm.JvmField val method_must_have_an_explicit_return_type_annotation_with_isolatedDeclarations: Message? = Message(code = 9008, category = CategoryError, key = Key("Method_must_have_an_explicit_return_type_annotation_with_isolatedDeclarations_9008"), text = "Method must have an explicit return type annotation with --isolatedDeclarations.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.At_least_one_accessor_must_have_an_explicit_type_annotation_with_isolatedDeclarations 428d3f7d
-@kotlin.jvm.JvmField val at_least_one_accessor_must_have_an_explicit_type_annotation_with_isolatedDeclarations: Message? = Message(code = 9009, category = CategoryError, key = Key("At_least_one_accessor_must_have_an_explicit_type_annotation_with_isolatedDeclarations_9009"), text = "At least one accessor must have an explicit type annotation with --isolatedDeclarations.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Variable_must_have_an_explicit_type_annotation_with_isolatedDeclarations aad411fd
-@kotlin.jvm.JvmField val variable_must_have_an_explicit_type_annotation_with_isolatedDeclarations: Message? = Message(code = 9010, category = CategoryError, key = Key("Variable_must_have_an_explicit_type_annotation_with_isolatedDeclarations_9010"), text = "Variable must have an explicit type annotation with --isolatedDeclarations.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Parameter_must_have_an_explicit_type_annotation_with_isolatedDeclarations ab9c335b
-@kotlin.jvm.JvmField val parameter_must_have_an_explicit_type_annotation_with_isolatedDeclarations: Message? = Message(code = 9011, category = CategoryError, key = Key("Parameter_must_have_an_explicit_type_annotation_with_isolatedDeclarations_9011"), text = "Parameter must have an explicit type annotation with --isolatedDeclarations.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Property_must_have_an_explicit_type_annotation_with_isolatedDeclarations 22c84c48
-@kotlin.jvm.JvmField val property_must_have_an_explicit_type_annotation_with_isolatedDeclarations: Message? = Message(code = 9012, category = CategoryError, key = Key("Property_must_have_an_explicit_type_annotation_with_isolatedDeclarations_9012"), text = "Property must have an explicit type annotation with --isolatedDeclarations.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Expression_type_can_t_be_inferred_with_isolatedDeclarations cd4c4529
-@kotlin.jvm.JvmField val expression_type_can_t_be_inferred_with_isolatedDeclarations: Message? = Message(code = 9013, category = CategoryError, key = Key("Expression_type_can_t_be_inferred_with_isolatedDeclarations_9013"), text = "Expression type can't be inferred with --isolatedDeclarations.")
-
-// go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Computed_properties_must_be_number_or_string_literals_variables_or_dotted_expressions_with_isolatedDeclarations df0b7e4d
-@kotlin.jvm.JvmField val computed_properties_must_be_number_or_string_literals_variables_or_dotted_expressions_with_isolatedDeclarations: Message? = Message(code = 9014, category = CategoryError, key = Key("Computed_properties_must_be_number_or_string_literals_variables_or_dotted_expressions_with_isolatedD_9014"), text = "Computed properties must be number or string literals, variables or dotted expressions with --isolatedDeclarations.")
 
