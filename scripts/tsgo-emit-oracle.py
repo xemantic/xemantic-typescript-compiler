@@ -10,8 +10,8 @@ the three emit baselines runSingleConfigTest writes — `output` (.js), `sourcem
     build/goport/emit-oracle/manifest.json
 
 Every rendered baseline is also compared byte for byte with tsgo's committed baseline under
-typescript-go-repo/testdata/baselines/reference/submodule/<suite>/ (a submodule case) or
-reference/<suite>/ (a `local/` case) — the evidence that the oracle IS tsgo's runner.
+typescript-go-repo/testdata/baselines/reference/<suite>/ (TypeScript 7.1: every case is tsgo's own; the
+7.0.2 submodule/local split and its `.diff` layers are gone, so the layer is recorded as none) — the evidence that the oracle IS tsgo's runner.
 
 Caching and completeness as scripts/tsgo-diag-oracle.py: exit status non-zero (manifest
 "complete": false) when ANY configuration is not `ok`, a worker died, or the determinism probe (a
@@ -33,7 +33,6 @@ CASES_ROOT = os.path.join(REPO, "build/goport/diag-src")  # made by scripts/tsgo
 CASES_DIR = os.path.join(REPO, "build/goport/diag-cases")
 OUT = os.path.join(REPO, "build/goport/emit-oracle")
 TOOL = os.path.join(REPO, "build/goport/bin/tsgo-oracle")
-TS_SUBMODULE = os.path.join(REPO, "build/goport/ts-submodule")
 BASELINES = os.path.join(REPO, "typescript-go-repo/testdata/baselines/reference")
 ORACLE_VERSION = 1  # bump when the frame format changes
 
@@ -48,8 +47,6 @@ def die(msg, code=2):
 
 
 def diff_layer(case, suite, configured):
-    if case.startswith("local/"):
-        return "local"
     name = configured
     for ext in (".tsx", ".ts"):
         if name.endswith(ext):
@@ -71,7 +68,7 @@ def run_batch(wid, items, work, runner, label):
     cmd = [TOOL, "emit", "-cases-root", CASES_ROOT, "-batch", lst, "-status", st]
     if runner:
         cmd += ["-baselines", BASELINES]
-    env = dict(os.environ, XTSC_TS_SUBMODULE=TS_SUBMODULE)
+    env = dict(os.environ)
     if os.path.exists(st):
         os.remove(st)
     with open(log, "w") as lf:

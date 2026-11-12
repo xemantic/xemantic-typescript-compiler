@@ -5,10 +5,8 @@ Turns every case tsgo's compiler runner covers into one project directory per co
 runner has FOUR suites (internal/testrunner/compiler_runner_test.go: TestLocal and TestSubmodule,
 each over a compiler and a conformance runner):
 
-    compiler/**, conformance/**              the TypeScript submodule's tests/cases (4d4f005c),
-                                             extracted IN FULL from typescript-repo's git objects
-                                             (the working tree is a sparse checkout)
-    local/compiler/**, local/conformance/**  typescript-go-repo/testdata/tests/cases (tsgo's own)
+    compiler/**, conformance/**   typescript-go-repo/testdata/tests/cases (TypeScript 7.1 moved the
+                                  submodule's cases in-tree; 7.0.2 also had a `local/` pair)
 
 all reached through one cases root, build/goport/diag-src (symlinks). Each case is split EXACTLY as
 tsgo's compiler runner splits it (the splitting, the variation enumeration, the option resolution and tsgo's own skips run in-process in Go, through
@@ -19,7 +17,7 @@ tsgo's compiler runner splits it (the splitting, the variation enumeration, the 
     build/goport/diag-cases/<case>/<variation>/tsconfig.json  for a CLI cross-check ONLY
     build/goport/diag-cases/manifest.json
 
-<case> is the path relative to the cases root (e.g. compiler/foo.ts, local/compiler/bar.ts); <variation> is tsgo's
+<case> is the path relative to the cases root (e.g. compiler/foo.ts, conformance/types/bar.ts); <variation> is tsgo's
 configuration name (e.g. `target=es2015,strict=true`) or `_` for a case without variations.
 
 Skips, all recorded in the manifest with a reason:
@@ -57,7 +55,7 @@ LOCAL_CASES = os.path.join(REPO, "typescript-go-repo/testdata/tests/cases")
 OUT = os.path.join(REPO, "build/goport/diag-cases")
 TOOL = os.path.join(REPO, "build/goport/bin/tsgo-oracle")
 ORACLE_GO = os.path.join(REPO, "xemantic-typescript-compiler-goport/oracle-go")
-TS_SUBMODULE = os.path.join(REPO, "build/goport/ts-submodule")
+TESTDATA = os.path.join(REPO, "typescript-go-repo/testdata")
 MATERIALIZE_VERSION = 1  # bump when the project-directory layout changes
 
 
@@ -85,49 +83,26 @@ def ensure_tool():
     return sha256(open(TOOL, "rb").read())
 
 
-def ensure_ts_submodule():
-    """The harness mounts `/.lib` from <TypeScript submodule>/tests/lib, which is empty in this
-    clone; extract it from typescript-repo (same commit as tsgo's submodule) into build/."""
-    lib = os.path.join(TS_SUBMODULE, "tests/lib")
-    names = subprocess.run(["git", "-C", os.path.join(REPO, "typescript-repo"), "ls-tree", "-r", "--name-only",
-                            "HEAD", "tests/lib"], check=True, capture_output=True, text=True).stdout.split()
-    if not names:
-        die("typescript-repo has no tests/lib")
-    for n in names:
-        dst = os.path.join(TS_SUBMODULE, n)
-        data = subprocess.run(["git", "-C", os.path.join(REPO, "typescript-repo"), "show", f"HEAD:{n}"],
-                              check=True, capture_output=True).stdout
-        if not os.path.exists(dst) or open(dst, "rb").read() != data:
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            open(dst, "wb").write(data)
-    pj = os.path.join(TS_SUBMODULE, "package.json")
-    if not os.path.exists(pj):
-        open(pj, "w").write('{"name": "typescript", "note": "stub: only tests/lib is extracted (docs/goport-diag-oracle.md)"}\n')
+def ensure_test_lib():
+    """TypeScript 7.1: the harness mounts `/.lib` from tsgo's own testdata/tests/lib (repo.TestDataPath; the
+    `_submodules/TypeScript` submodule is gone, its cases and libraries moved in-tree)."""
+    lib = os.path.join(TESTDATA, "tests/lib")
+    if not os.path.isdir(lib):
+        die(f"no {lib} (typescript-go-repo must be the tsgo checkout, docs/goport-tsgo-7.1.md)")
     return lib
 
 
 def ensure_cases_root():
-    """build/goport/diag-src: compiler/ and conformance/ -> the submodule's FULL tests/cases (extracted
-    with `git archive` into build/goport/ts-submodule, re-extracted when the tree hash changes), and
-    local/ -> tsgo's own testdata/tests/cases."""
-    ts = os.path.join(REPO, "typescript-repo")
-    tree = subprocess.run(["git", "-C", ts, "rev-parse", "HEAD:tests/cases"], check=True, capture_output=True,
-                          text=True).stdout.strip()
-    dst = os.path.join(TS_SUBMODULE, "tests/cases")
-    stamp = os.path.join(TS_SUBMODULE, "tests/.cases-tree")
-    if not (os.path.isdir(dst) and os.path.exists(stamp) and open(stamp).read().strip() == tree):
-        print(f"tsgo-diag-cases: extracting the submodule's tests/cases ({tree[:12]})", file=sys.stderr)
-        shutil.rmtree(dst, ignore_errors=True)
-        os.makedirs(TS_SUBMODULE, exist_ok=True)
-        arc = subprocess.run(["git", "-C", ts, "archive", "HEAD", "tests/cases"], check=True, capture_output=True,
-                             env=dict(os.environ, GIT_NO_LAZY_FETCH="1")).stdout
-        subprocess.run(["tar", "-x", "-C", TS_SUBMODULE], input=arc, check=True)
-        open(stamp, "w").write(tree + "\n")
+    """build/goport/diag-src: compiler/ and conformance/ -> typescript-go-repo/testdata/tests/cases/{compiler,
+    conformance} (TypeScript 7.1's single in-tree suite; 7.0.2 had the submodule's plus tsgo's `local/`)."""
     if not os.path.isdir(LOCAL_CASES):
         die(f"no {LOCAL_CASES}")
     os.makedirs(CASES_ROOT, exist_ok=True)
-    for name, target in (("compiler", os.path.join(dst, "compiler")), ("conformance", os.path.join(dst, "conformance")),
-                         ("local", LOCAL_CASES)):
+    stale = os.path.join(CASES_ROOT, "local")
+    if os.path.lexists(stale):
+        os.remove(stale)
+    for name in ("compiler", "conformance"):
+        target = os.path.realpath(os.path.join(LOCAL_CASES, name))
         link = os.path.join(CASES_ROOT, name)
         if os.path.islink(link) and os.readlink(link) == target:
             continue
@@ -137,9 +112,7 @@ def ensure_cases_root():
 
 
 def tool_env():
-    env = dict(os.environ)
-    env["XTSC_TS_SUBMODULE"] = TS_SUBMODULE
-    return env
+    return dict(os.environ)
 
 
 # ------------------------------------------------------------------ corpus
@@ -152,7 +125,7 @@ def conformance_categories():
     return ["expressions/functions", "es6/defaultParameters", "es6/restParameters", "expressions/commaOperator"]
 
 
-SUITES = ("compiler/", "conformance/", "local/compiler/", "local/conformance/")
+SUITES = ("compiler/", "conformance/")
 
 
 def enumerate_cases():
@@ -167,8 +140,8 @@ def enumerate_cases():
             for fn in sorted(fns):
                 if re.search(r"\.tsx?$", fn):
                     out.append(suite + os.path.relpath(os.path.join(dp, fn), top))
-    for pair in (("compiler/", "conformance/"), ("local/",)):
-        names = [os.path.basename(c) for c in out if c.startswith(pair) and (pair[0] == "local/" or not c.startswith("local/"))]
+    for pair in (("compiler/", "conformance/"),):
+        names = [os.path.basename(c) for c in out if c.startswith(pair)]
         dup = {n for n, k in collections.Counter(names).items() if k > 1}
         if dup:
             die(f"duplicate test file name(s) within one runner pair: {sorted(dup)[:5]}")
@@ -180,7 +153,7 @@ def suite_of(rel):
 
 
 def in_corpus(rel, cats):
-    if not rel.endswith(".ts") or rel.startswith("local/"):
+    if not rel.endswith(".ts"):
         return False
     if rel.startswith("compiler/") and rel.count("/") == 1:
         return True
@@ -293,7 +266,7 @@ def main():
     args = ap.parse_args()
 
     tool_sha = ensure_tool()
-    ensure_ts_submodule()
+    ensure_test_lib()
     ensure_cases_root()
     cats = conformance_categories()
     cases = enumerate_cases()

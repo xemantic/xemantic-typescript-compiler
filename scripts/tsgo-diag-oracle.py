@@ -11,8 +11,8 @@ diagnostics:
 With --runner (default ON) every configuration is ALSO compiled through the unmodified runner path
 (pre-emit program + emitting program + the TS-1 count check), rendered exactly as tsgo's
 `.errors.txt`, and compared byte-for-byte with tsgo's committed baseline under
-typescript-go-repo/testdata/baselines/reference/submodule/<suite>/ (a submodule case) or
-reference/<suite>/ (a `local/` case, tsgo's own testdata) — the evidence that the oracle IS tsgo's
+typescript-go-repo/testdata/baselines/reference/<suite>/ (TypeScript 7.1: every case is tsgo's own; the
+7.0.2 submodule/local split and its `.diff` layers are gone, so the layer is recorded as none) — the evidence that the oracle IS tsgo's
 harness. The layer of that baseline is recorded per configuration: `local` for tsgo's own cases, and
 for a submodule case the directory its `.errors.txt.diff` lives in (submodule / submoduleAccepted /
 submoduleTriaged, docs/tsgo-baselines.md) or none.
@@ -40,7 +40,6 @@ CASES_ROOT = os.path.join(REPO, "build/goport/diag-src")  # made by scripts/tsgo
 CASES_DIR = os.path.join(REPO, "build/goport/diag-cases")
 OUT = os.path.join(REPO, "build/goport/diag-oracle")
 TOOL = os.path.join(REPO, "build/goport/bin/tsgo-oracle")
-TS_SUBMODULE = os.path.join(REPO, "build/goport/ts-submodule")
 BASELINES = os.path.join(REPO, "typescript-go-repo/testdata/baselines/reference")
 ORACLE_VERSION = 1  # bump when the JSONL format changes
 
@@ -55,8 +54,6 @@ def die(msg, code=2):
 
 
 def diff_layer(case, suite, configured):
-    if case.startswith("local/"):
-        return "local"
     name = configured
     for ext in (".tsx", ".ts"):
         if name.endswith(ext):
@@ -78,7 +75,7 @@ def run_batch(wid, items, work, runner, label):
     cmd = [TOOL, "diags", "-cases-root", CASES_ROOT, "-batch", lst, "-status", st]
     if runner:
         cmd += ["-runner", "-baselines", BASELINES]
-    env = dict(os.environ, XTSC_TS_SUBMODULE=TS_SUBMODULE)
+    env = dict(os.environ)
     if os.path.exists(st):
         os.remove(st)
     with open(log, "w") as lf:
