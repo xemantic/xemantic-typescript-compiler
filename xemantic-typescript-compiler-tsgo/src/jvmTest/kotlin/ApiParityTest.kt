@@ -169,7 +169,31 @@ class ApiParityTest {
         fun port(kind: String, want: Any?): Any? = when (want) {
             is Json.Num -> Json.Num(fwd[kind]?.get(want.text) ?: throw Unmapped("tsgo $kind ${want.text}"))
             is List<*> -> want.map { port(kind, it) }
+            // TypeScript 7.1: a symbol param is a SymbolReference — its (file node id, symbol id) pair is the handle.
+            is Map<*, *> -> if (kind == "S" && "id" in want) portReference(want) else want
             else -> want
+        }
+
+        private fun refKey(m: Map<*, *>): String = "${fileOf(m["file"]) ?: ""}|${(m["id"] as Json.Num).text}"
+
+        /** A reference's owner file as its node id: the full form `{…, "nodeId": "130"}` or the compact `"130"`. */
+        private fun fileOf(f: Any?): String? = when (f) {
+            is Json.Str -> f.value
+            is Map<*, *> -> (f["nodeId"] as? Json.Str)?.value
+            else -> null
+        }
+
+        private fun portReference(want: Map<*, *>): Map<*, *> {
+            val got = fwd["S"]?.get(refKey(want)) ?: throw Unmapped("tsgo S ${refKey(want)}")
+            val (file, id) = got.split('|')
+            val m = want.toMutableMap()
+            m["id"] = Json.Num(id)
+            when (val f = want["file"]) {
+                is Json.Str -> m["file"] = Json.Str("\"$file\"")
+                is Map<*, *> -> m["file"] = f.toMutableMap().also { it["nodeId"] = Json.Str("\"$file\"") }
+                else -> {}
+            }
+            return m
         }
 
         /** The recorded params with tsgo's handles replaced by the port's. */
@@ -192,18 +216,19 @@ class ApiParityTest {
 
         /** What kind of handle [key] of an object of [shape] holds: "T", "S", "G", "[T]", "[S]", or null. */
         private fun handleKind(shape: Char, key: String): String? = when (shape) {
-            'S' -> if (key == "id" || key == "parent" || key == "exportSymbol") "S" else null
+            // TypeScript 7.1: symbols are SymbolReferences ("R": {id, file?, kind?}), handles by (file node id, id).
+            'S' -> if (key == "id") "S" else if (key == "reference" || key == "parent" || key == "exportSymbol") "R" else null
             'T' -> when (key) {
                 in typeKeys -> "T"
                 in typeListKeys -> "[T]"
-                "aliasSymbol", "symbol" -> "S"
+                "aliasSymbol", "symbol" -> "R"
                 else -> null
             }
             'G' -> when (key) {
                 "id", "target" -> "G"
                 "typeParameters" -> "[T]"
-                "parameters" -> "[S]"
-                "thisParameter" -> "S"
+                "parameters" -> "[R]"
+                "thisParameter" -> "R"
                 else -> null
             }
             else -> null
@@ -265,6 +290,28 @@ class ApiParityTest {
                 if (want !is List<*> || got !is List<*> || want.size != got.size) return "$at: ${Json.write(want)} vs ${Json.write(got)}"
                 for (i in want.indices) handles(kind.substring(1, 2), want[i], got[i], "$at[$i]")?.let { return it }
                 return null
+            }
+            if (kind == "R" && want is Map<*, *> && got is Map<*, *>) {
+                if (want.keys.toList() != got.keys.toList()) return "$at: keys ${want.keys} vs ${got.keys}"
+                for ((k, wv) in want) {
+                    if (k == "id") continue
+                    if (k == "file") {
+                        val gv = got[k]
+                        if (wv is Map<*, *> && gv is Map<*, *>) {
+                            if (wv.keys.toList() != gv.keys.toList()) return "$at.file: keys ${wv.keys} vs ${gv.keys}"
+                            for ((fk, fv) in wv) if (fk != "nodeId") compare(fv, gv[fk], "$at.file.$fk")?.let { return it }
+                        } else if ((wv is Map<*, *>) != (gv is Map<*, *>)) return "$at.file: ${Json.write(wv)} vs ${Json.write(gv)}"
+                        val wf = fileOf(wv)
+                        val gf = fileOf(gv)
+                        if ((wf == null) != (gf == null)) return "$at.file: ${Json.write(wv)} vs ${Json.write(gv)}"
+                        if (wf != null && !bind("F", wf, gf!!)) return "$at.file: F handle tsgo $wf -> port ${fwd["F"]?.get(wf)}, got $gf"
+                        continue
+                    }
+                    compare(wv, got[k], "$at.$k")?.let { return it }
+                }
+                val wk = refKey(want)
+                val gk = refKey(got)
+                return if (bind("S", wk, gk)) null else "$at: S handle tsgo $wk -> port ${fwd["S"]?.get(wk)}, got $gk"
             }
             if (want is Json.Num && got is Json.Num) {
                 if (want.text == "0" || got.text == "0") return if (want.text == got.text) null else "$at: handle ${want.text} vs ${got.text}"

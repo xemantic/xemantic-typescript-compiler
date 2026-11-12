@@ -51,7 +51,7 @@ def materialize(args):
         projects.append(("tsc", os.path.join(dst, "tsconfig.json")))
     else:
         print("no tsc profile (--tsc-src)", file=sys.stderr)
-    cases_root = args.cases or os.path.join(REPO, "build/goport/ts-submodule/tests/cases/conformance")
+    cases_root = args.cases or os.path.join(REPO, "typescript-go-repo/testdata/tests/cases/conformance")  # TypeScript 7.1: in-tree
     if args.conformance and os.path.isdir(cases_root):
         cases = []
         for d, _, fs in os.walk(cases_root):
