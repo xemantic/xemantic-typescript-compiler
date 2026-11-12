@@ -33,7 +33,7 @@ class AnonStruct_27e89197(
     @kotlin.jvm.JvmField var params: com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Value = GoElem.BYTE.nilSlice,
     @kotlin.jvm.JvmField var result: com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Value = GoElem.BYTE.nilSlice,
     @kotlin.jvm.JvmField var error: com.xemantic.typescript.tsgo.jsonrpc.ResponseError? = null,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_27e89197 = AnonStruct_27e89197(jsonrpc = jsonrpc, method = method, id = id, params = params, result = result, error = error)
 
     fun goSet(o: AnonStruct_27e89197) {
@@ -48,6 +48,33 @@ class AnonStruct_27e89197(
     override fun equals(other: Any?): Boolean = other is AnonStruct_27e89197 && jsonrpc == other.jsonrpc && method == other.method && id == other.id && params == other.params && result == other.result && error == other.error
 
     override fun hashCode(): Int = 31 * jsonrpc.hashCode() + 31 * method.hashCode() + 31 * id.hashCode() + 31 * params.hashCode() + 31 * result.hashCode() + 31 * error.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { jsonrpc }, { jsonrpc = (it as com.xemantic.typescript.tsgo.jsonrpc.JSONRPCVersion) })
+        1 -> GoFieldPtr(this, 1, { method }, { method = (it as com.xemantic.typescript.tsgo.lsp.lsproto.Method) })
+        2 -> GoFieldPtr(this, 2, { id }, { id = (it as com.xemantic.typescript.tsgo.jsonrpc.ID?) })
+        3 -> GoFieldPtr(this, 3, { params }, { params = (it as com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Value) })
+        4 -> GoFieldPtr(this, 4, { result }, { result = (it as com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Value) })
+        5 -> GoFieldPtr(this, 5, { error }, { error = (it as com.xemantic.typescript.tsgo.jsonrpc.ResponseError?) })
+        else -> goPanicIndex(i, 6)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("JSONRPC", "json:\"jsonrpc\"", true, false, GoTypeInfo(25, "jsonrpc.JSONRPCVersion", cls = com.xemantic.typescript.tsgo.jsonrpc.JSONRPCVersion::class, structInfo = { com.xemantic.typescript.tsgo.jsonrpc.JSONRPCVersion.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.jsonrpc.JSONRPCVersion() })),
+                GoFieldInfo("Method", "json:\"method\"", true, false, GoTypeInfo(24, "lsproto.Method", cls = com.xemantic.typescript.tsgo.lsp.lsproto.Method::class, zero = { com.xemantic.typescript.tsgo.lsp.lsproto.Method("") })),
+                GoFieldInfo("ID", "json:\"id,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "jsonrpc.ID", cls = com.xemantic.typescript.tsgo.jsonrpc.ID::class, zero = { com.xemantic.typescript.tsgo.jsonrpc.ID() }), zero = { null })),
+                GoFieldInfo("Params", "json:\"params\"", true, false, GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice })),
+                GoFieldInfo("Result", "json:\"result,omitzero\"", true, false, GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice })),
+                GoFieldInfo("Error", "json:\"error,omitzero\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "jsonrpc.ResponseError", cls = com.xemantic.typescript.tsgo.jsonrpc.ResponseError::class, structInfo = { com.xemantic.typescript.tsgo.jsonrpc.ResponseError.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.jsonrpc.ResponseError() }), zero = { null })),
+            ))
+        }
+    }
 }
 
 // go: anonymous struct struct{JSONRPC github.com/microsoft/TypeScript/tsc/internal/jsonrpc.JSONRPCVersion "json:\"jsonrpc\"";ID *github.com/microsoft/TypeScript/tsc/internal/jsonrpc.I
@@ -56,7 +83,7 @@ class AnonStruct_5ff23aa7(
     @kotlin.jvm.JvmField var id: com.xemantic.typescript.tsgo.jsonrpc.ID? = null,
     @get:kotlin.jvm.JvmName("goGet_method") @set:kotlin.jvm.JvmName("goSet_method") var method: com.xemantic.typescript.tsgo.lsp.lsproto.Method = com.xemantic.typescript.tsgo.lsp.lsproto.Method(""),
     @kotlin.jvm.JvmField var params: com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Value = GoElem.BYTE.nilSlice,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_5ff23aa7 = AnonStruct_5ff23aa7(jsonrpc = jsonrpc, id = id, method = method, params = params)
 
     fun goSet(o: AnonStruct_5ff23aa7) {
@@ -69,5 +96,28 @@ class AnonStruct_5ff23aa7(
     override fun equals(other: Any?): Boolean = other is AnonStruct_5ff23aa7 && jsonrpc == other.jsonrpc && id == other.id && method == other.method && params == other.params
 
     override fun hashCode(): Int = 31 * jsonrpc.hashCode() + 31 * id.hashCode() + 31 * method.hashCode() + 31 * params.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { jsonrpc }, { jsonrpc = (it as com.xemantic.typescript.tsgo.jsonrpc.JSONRPCVersion) })
+        1 -> GoFieldPtr(this, 1, { id }, { id = (it as com.xemantic.typescript.tsgo.jsonrpc.ID?) })
+        2 -> GoFieldPtr(this, 2, { method }, { method = (it as com.xemantic.typescript.tsgo.lsp.lsproto.Method) })
+        3 -> GoFieldPtr(this, 3, { params }, { params = (it as com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Value) })
+        else -> goPanicIndex(i, 4)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("JSONRPC", "json:\"jsonrpc\"", true, false, GoTypeInfo(25, "jsonrpc.JSONRPCVersion", cls = com.xemantic.typescript.tsgo.jsonrpc.JSONRPCVersion::class, structInfo = { com.xemantic.typescript.tsgo.jsonrpc.JSONRPCVersion.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.jsonrpc.JSONRPCVersion() })),
+                GoFieldInfo("ID", "json:\"id\"", true, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "jsonrpc.ID", cls = com.xemantic.typescript.tsgo.jsonrpc.ID::class, zero = { com.xemantic.typescript.tsgo.jsonrpc.ID() }), zero = { null })),
+                GoFieldInfo("Method", "json:\"method\"", true, false, GoTypeInfo(24, "lsproto.Method", cls = com.xemantic.typescript.tsgo.lsp.lsproto.Method::class, zero = { com.xemantic.typescript.tsgo.lsp.lsproto.Method("") })),
+                GoFieldInfo("Params", "json:\"params\"", true, false, GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice })),
+            ))
+        }
+    }
 }
 

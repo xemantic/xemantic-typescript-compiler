@@ -31,7 +31,7 @@ class AnonStruct_60202bad(
     @kotlin.jvm.JvmField var pathFields: com.xemantic.typescript.tsgo.packagejson.PathFields = com.xemantic.typescript.tsgo.packagejson.PathFields(),
     @kotlin.jvm.JvmField var dependencyFields: com.xemantic.typescript.tsgo.packagejson.DependencyFields = com.xemantic.typescript.tsgo.packagejson.DependencyFields(),
     @kotlin.jvm.JvmField var typeScript: com.xemantic.typescript.tsgo.packagejson.Expected<com.xemantic.typescript.tsgo.packagejson.typeScriptFields> = com.xemantic.typescript.tsgo.packagejson.Expected<com.xemantic.typescript.tsgo.packagejson.typeScriptFields>(goElem_T = com.xemantic.typescript.tsgo.packagejson.typeScriptFields.ELEM),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_60202bad = AnonStruct_60202bad(headerFields = headerFields.goCopy(), pathFields = pathFields.goCopy(), dependencyFields = dependencyFields.goCopy(), typeScript = typeScript.goCopy())
 
     fun goSet(o: AnonStruct_60202bad) {
@@ -44,5 +44,28 @@ class AnonStruct_60202bad(
     override fun equals(other: Any?): Boolean = other is AnonStruct_60202bad && headerFields == other.headerFields && pathFields == other.pathFields && dependencyFields == other.dependencyFields && typeScript == other.typeScript
 
     override fun hashCode(): Int = 31 * headerFields.hashCode() + 31 * pathFields.hashCode() + 31 * dependencyFields.hashCode() + 31 * typeScript.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { headerFields }, { headerFields = (it as com.xemantic.typescript.tsgo.packagejson.HeaderFields).goCopy() })
+        1 -> GoFieldPtr(this, 1, { pathFields }, { pathFields = (it as com.xemantic.typescript.tsgo.packagejson.PathFields).goCopy() })
+        2 -> GoFieldPtr(this, 2, { dependencyFields }, { dependencyFields = (it as com.xemantic.typescript.tsgo.packagejson.DependencyFields).goCopy() })
+        3 -> GoFieldPtr(this, 3, { typeScript }, { typeScript = (it as com.xemantic.typescript.tsgo.packagejson.Expected<com.xemantic.typescript.tsgo.packagejson.typeScriptFields>).goCopy() })
+        else -> goPanicIndex(i, 4)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("HeaderFields", "", true, true, GoTypeInfo(25, "packagejson.HeaderFields", cls = com.xemantic.typescript.tsgo.packagejson.HeaderFields::class, structInfo = { com.xemantic.typescript.tsgo.packagejson.HeaderFields.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.packagejson.HeaderFields() })),
+                GoFieldInfo("PathFields", "", true, true, GoTypeInfo(25, "packagejson.PathFields", cls = com.xemantic.typescript.tsgo.packagejson.PathFields::class, structInfo = { com.xemantic.typescript.tsgo.packagejson.PathFields.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.packagejson.PathFields() })),
+                GoFieldInfo("DependencyFields", "", true, true, GoTypeInfo(25, "packagejson.DependencyFields", cls = com.xemantic.typescript.tsgo.packagejson.DependencyFields::class, structInfo = { com.xemantic.typescript.tsgo.packagejson.DependencyFields.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.packagejson.DependencyFields() })),
+                GoFieldInfo("TypeScript", "json:\"typescript\"", true, false, GoTypeInfo(25, "packagejson.Expected", cls = com.xemantic.typescript.tsgo.packagejson.Expected::class, zero = { com.xemantic.typescript.tsgo.packagejson.Expected<com.xemantic.typescript.tsgo.packagejson.typeScriptFields>(goElem_T = com.xemantic.typescript.tsgo.packagejson.typeScriptFields.ELEM) })),
+            ))
+        }
+    }
 }
 

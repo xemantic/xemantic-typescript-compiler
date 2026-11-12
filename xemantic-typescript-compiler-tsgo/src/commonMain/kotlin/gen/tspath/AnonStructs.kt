@@ -29,7 +29,7 @@ import com.xemantic.typescript.tsgo.runtime.*
 class AnonStruct_800e6cf7(
     @kotlin.jvm.JvmField var head: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var tails: GoSlice<GoSlice<String>> = GoElem.slice(GoElem.STRING).nilSlice,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_800e6cf7 = AnonStruct_800e6cf7(head = head, tails = tails)
 
     fun goSet(o: AnonStruct_800e6cf7) {
@@ -40,5 +40,24 @@ class AnonStruct_800e6cf7(
     override fun equals(other: Any?): Boolean = other is AnonStruct_800e6cf7 && head == other.head && tails == other.tails
 
     override fun hashCode(): Int = 31 * head.hashCode() + 31 * tails.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { head }, { head = (it as GoSlice<String>) })
+        1 -> GoFieldPtr(this, 1, { tails }, { tails = (it as GoSlice<GoSlice<String>>) })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("head", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice })),
+                GoFieldInfo("tails", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(24, "string", zero = { "" }), zero = { GoElem.STRING.nilSlice }), zero = { GoElem.slice(GoElem.STRING).nilSlice })),
+            ))
+        }
+    }
 }
 

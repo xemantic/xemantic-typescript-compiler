@@ -29,7 +29,7 @@ import com.xemantic.typescript.tsgo.runtime.*
 class AnonStruct_7205109e(
     @get:kotlin.jvm.JvmName("goGet_flag") @set:kotlin.jvm.JvmName("goSet_flag") var flag: com.xemantic.typescript.tsgo.ls.lsutil.ScriptElementKindModifier = com.xemantic.typescript.tsgo.ls.lsutil.ScriptElementKindModifier(0u),
     @kotlin.jvm.JvmField var name: String = "",
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_7205109e = AnonStruct_7205109e(flag = flag, name = name)
 
     fun goSet(o: AnonStruct_7205109e) {
@@ -40,5 +40,24 @@ class AnonStruct_7205109e(
     override fun equals(other: Any?): Boolean = other is AnonStruct_7205109e && flag == other.flag && name == other.name
 
     override fun hashCode(): Int = 31 * flag.hashCode() + 31 * name.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { flag }, { flag = (it as com.xemantic.typescript.tsgo.ls.lsutil.ScriptElementKindModifier) })
+        1 -> GoFieldPtr(this, 1, { name }, { name = (it as String) })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("flag", "", false, false, GoTypeInfo(10, "lsutil.ScriptElementKindModifier", cls = com.xemantic.typescript.tsgo.ls.lsutil.ScriptElementKindModifier::class, zero = { com.xemantic.typescript.tsgo.ls.lsutil.ScriptElementKindModifier(0u) })),
+                GoFieldInfo("name", "", false, false, GoTypeInfo(24, "string", zero = { "" })),
+            ))
+        }
+    }
 }
 

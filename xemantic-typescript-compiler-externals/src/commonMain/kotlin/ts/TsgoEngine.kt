@@ -626,8 +626,26 @@ internal class Tree(files: List<Pair<String, String>>) {
         else -> SyntaxKind.Other
     }
 
-    fun heritageTypes(raw: RawNode): List<ExpressionWithTypeArguments> =
-        list(raw.asHeritageClause()!!.types).map { it as ExpressionWithTypeArguments }
+    /**
+     * A heritage clause's elements. TypeScript 7.1 parses an interface's `extends` and a class's `implements`
+     * element as a TYPE REFERENCE (`parseTypeHeritageClauseElement`); the view stays an [ExpressionWithTypeArguments]
+     * whose expression is the reference's entity name ([heritageExpressionOf]).
+     */
+    fun heritageTypes(raw: RawNode): List<ExpressionWithTypeArguments> {
+        val nodes = raw.asHeritageClause()!!.types?.nodes ?: return emptyList()
+        return (0 until nodes.len).mapNotNull { nodes[it] }.map { r ->
+            if (r.kind.value == KindTypeReference.value) ExpressionWithTypeArguments(this, r) else node(r) as ExpressionWithTypeArguments
+        }
+    }
+
+    /** A heritage element's expression: an `ExpressionWithTypeArguments`' expression, or a type reference's name as one. */
+    fun heritageExpressionOf(raw: RawNode): Expression =
+        if (raw.kind.value == KindTypeReference.value) entityNameExpression(typeNameOf(raw)) else expression(expressionOf(raw))
+
+    /** An entity name (`A`, `ns.A`) as an expression view: an identifier or a property access over the qualified name. */
+    private fun entityNameExpression(raw: RawNode): Expression =
+        if (raw.kind.value != KindQualifiedName.value) expression(raw)
+        else PropertyAccessExpression(this, raw, { entityNameExpression(qualifiedLeft(raw)) }, { identifier(qualifiedRight(raw)) })
 
     fun heritageClauses(raw: RawNode): List<HeritageClause>? =
         com.xemantic.typescript.tsgo.ast.getHeritageClauses(raw)?.let { clauses -> list(clauses).map { it as HeritageClause } }

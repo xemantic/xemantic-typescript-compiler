@@ -29,7 +29,7 @@ import com.xemantic.typescript.tsgo.runtime.*
 class AnonStruct_3550cc57(
     @kotlin.jvm.JvmField var parent: com.xemantic.typescript.tsgo.ast.Node? = null,
     @kotlin.jvm.JvmField var visit: ((com.xemantic.typescript.tsgo.ast.Node?) -> Boolean)? = null,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_3550cc57 = AnonStruct_3550cc57(parent = parent, visit = visit)
 
     fun goSet(o: AnonStruct_3550cc57) {
@@ -40,5 +40,24 @@ class AnonStruct_3550cc57(
     override fun equals(other: Any?): Boolean = other is AnonStruct_3550cc57 && parent == other.parent && visit == other.visit
 
     override fun hashCode(): Int = 31 * parent.hashCode() + 31 * visit.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { parent }, { parent = (it as com.xemantic.typescript.tsgo.ast.Node?) })
+        1 -> GoFieldPtr(this, 1, { visit }, { visit = (it as ((com.xemantic.typescript.tsgo.ast.Node?) -> Boolean)?) })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("parent", "", false, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "ast.Node", cls = com.xemantic.typescript.tsgo.ast.Node::class, zero = { com.xemantic.typescript.tsgo.ast.Node() }), zero = { null })),
+                GoFieldInfo("visit", "", false, false, GoTypeInfo(19, "", zero = { null })),
+            ))
+        }
+    }
 }
 

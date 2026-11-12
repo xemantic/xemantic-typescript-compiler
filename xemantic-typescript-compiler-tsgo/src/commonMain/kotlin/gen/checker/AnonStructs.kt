@@ -29,7 +29,7 @@ import com.xemantic.typescript.tsgo.runtime.*
 class AnonStruct_8362f1c6(
     @kotlin.jvm.JvmField var primitive: String = "",
     @kotlin.jvm.JvmField var builtin: String = "",
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_8362f1c6 = AnonStruct_8362f1c6(primitive = primitive, builtin = builtin)
 
     fun goSet(o: AnonStruct_8362f1c6) {
@@ -40,6 +40,25 @@ class AnonStruct_8362f1c6(
     override fun equals(other: Any?): Boolean = other is AnonStruct_8362f1c6 && primitive == other.primitive && builtin == other.builtin
 
     override fun hashCode(): Int = 31 * primitive.hashCode() + 31 * builtin.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { primitive }, { primitive = (it as String) })
+        1 -> GoFieldPtr(this, 1, { builtin }, { builtin = (it as String) })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("primitive", "", false, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("builtin", "", false, false, GoTypeInfo(24, "string", zero = { "" })),
+            ))
+        }
+    }
 }
 
 // go: anonymous struct struct{JSX string;IntrinsicElements string;ElementClass string;ElementAttributesPropertyNameContainer string;ElementChildrenAttributeNameContainer string;Elemen
@@ -54,7 +73,7 @@ class AnonStruct_f0efce79(
     @kotlin.jvm.JvmField var intrinsicAttributes: String = "",
     @kotlin.jvm.JvmField var intrinsicClassAttributes: String = "",
     @kotlin.jvm.JvmField var libraryManagedAttributes: String = "",
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_f0efce79 = AnonStruct_f0efce79(jsx = jsx, intrinsicElements = intrinsicElements, elementClass = elementClass, elementAttributesPropertyNameContainer = elementAttributesPropertyNameContainer, elementChildrenAttributeNameContainer = elementChildrenAttributeNameContainer, element = element, elementType = elementType, intrinsicAttributes = intrinsicAttributes, intrinsicClassAttributes = intrinsicClassAttributes, libraryManagedAttributes = libraryManagedAttributes)
 
     fun goSet(o: AnonStruct_f0efce79) {
@@ -73,12 +92,47 @@ class AnonStruct_f0efce79(
     override fun equals(other: Any?): Boolean = other is AnonStruct_f0efce79 && jsx == other.jsx && intrinsicElements == other.intrinsicElements && elementClass == other.elementClass && elementAttributesPropertyNameContainer == other.elementAttributesPropertyNameContainer && elementChildrenAttributeNameContainer == other.elementChildrenAttributeNameContainer && element == other.element && elementType == other.elementType && intrinsicAttributes == other.intrinsicAttributes && intrinsicClassAttributes == other.intrinsicClassAttributes && libraryManagedAttributes == other.libraryManagedAttributes
 
     override fun hashCode(): Int = 31 * jsx.hashCode() + 31 * intrinsicElements.hashCode() + 31 * elementClass.hashCode() + 31 * elementAttributesPropertyNameContainer.hashCode() + 31 * elementChildrenAttributeNameContainer.hashCode() + 31 * element.hashCode() + 31 * elementType.hashCode() + 31 * intrinsicAttributes.hashCode() + 31 * intrinsicClassAttributes.hashCode() + 31 * libraryManagedAttributes.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { jsx }, { jsx = (it as String) })
+        1 -> GoFieldPtr(this, 1, { intrinsicElements }, { intrinsicElements = (it as String) })
+        2 -> GoFieldPtr(this, 2, { elementClass }, { elementClass = (it as String) })
+        3 -> GoFieldPtr(this, 3, { elementAttributesPropertyNameContainer }, { elementAttributesPropertyNameContainer = (it as String) })
+        4 -> GoFieldPtr(this, 4, { elementChildrenAttributeNameContainer }, { elementChildrenAttributeNameContainer = (it as String) })
+        5 -> GoFieldPtr(this, 5, { element }, { element = (it as String) })
+        6 -> GoFieldPtr(this, 6, { elementType }, { elementType = (it as String) })
+        7 -> GoFieldPtr(this, 7, { intrinsicAttributes }, { intrinsicAttributes = (it as String) })
+        8 -> GoFieldPtr(this, 8, { intrinsicClassAttributes }, { intrinsicClassAttributes = (it as String) })
+        9 -> GoFieldPtr(this, 9, { libraryManagedAttributes }, { libraryManagedAttributes = (it as String) })
+        else -> goPanicIndex(i, 10)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("JSX", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("IntrinsicElements", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("ElementClass", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("ElementAttributesPropertyNameContainer", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("ElementChildrenAttributeNameContainer", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("Element", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("ElementType", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("IntrinsicAttributes", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("IntrinsicClassAttributes", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("LibraryManagedAttributes", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+            ))
+        }
+    }
 }
 
 // go: anonymous struct struct{Fragment string}
 class AnonStruct_1354b822(
     @kotlin.jvm.JvmField var fragment: String = "",
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_1354b822 = AnonStruct_1354b822(fragment = fragment)
 
     fun goSet(o: AnonStruct_1354b822) {
@@ -88,13 +142,30 @@ class AnonStruct_1354b822(
     override fun equals(other: Any?): Boolean = other is AnonStruct_1354b822 && fragment == other.fragment
 
     override fun hashCode(): Int = 31 * fragment.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { fragment }, { fragment = (it as String) })
+        else -> goPanicIndex(i, 1)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("Fragment", "", true, false, GoTypeInfo(24, "string", zero = { "" })),
+            ))
+        }
+    }
 }
 
 // go: anonymous struct struct{github.com/microsoft/TypeScript/tsc/internal/checker.flag github.com/microsoft/TypeScript/tsc/internal/checker.TypeFlags;github.com/microsoft/TypeScript/
 class AnonStruct_a9b20e93(
     @get:kotlin.jvm.JvmName("goGet_flag") @set:kotlin.jvm.JvmName("goSet_flag") var flag: com.xemantic.typescript.tsgo.checker.TypeFlags = com.xemantic.typescript.tsgo.checker.TypeFlags(0u),
     @kotlin.jvm.JvmField var name: String = "",
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_a9b20e93 = AnonStruct_a9b20e93(flag = flag, name = name)
 
     fun goSet(o: AnonStruct_a9b20e93) {
@@ -105,5 +176,24 @@ class AnonStruct_a9b20e93(
     override fun equals(other: Any?): Boolean = other is AnonStruct_a9b20e93 && flag == other.flag && name == other.name
 
     override fun hashCode(): Int = 31 * flag.hashCode() + 31 * name.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { flag }, { flag = (it as com.xemantic.typescript.tsgo.checker.TypeFlags) })
+        1 -> GoFieldPtr(this, 1, { name }, { name = (it as String) })
+        else -> goPanicIndex(i, 2)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("flag", "", false, false, GoTypeInfo(10, "checker.TypeFlags", cls = com.xemantic.typescript.tsgo.checker.TypeFlags::class, zero = { com.xemantic.typescript.tsgo.checker.TypeFlags(0u) })),
+                GoFieldInfo("name", "", false, false, GoTypeInfo(24, "string", zero = { "" })),
+            ))
+        }
+    }
 }
 

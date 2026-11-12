@@ -349,6 +349,13 @@ class TypeMapper(
                 com.xemantic.typescript.goport.lower.Program.walkTypes(types, f.t) { tpRef = tpRef || it is TypeParamType }
                 if (tpRef) refuse("anon-struct-generic")
             }
+            // Reflection (docs/goport-lowering.md § 3, "Anonymous structs"): Go's json/reflect see an anonymous struct's
+            // fields like a named one's — TypeScript 7.1's `packagejson.Parse` decodes into `var parsed struct{
+            // HeaderFields; PathFields; …}` — so the class carries the same GoReflectStruct/GoJsonStruct members.
+            val reflectInfos: List<String>? = try {
+                fs.map { (_, f) -> mt.reflectTypeInfo(f.t) }
+            } catch (_: Refusal) { null }
+            val jsonIface = "com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct"
             reg[name] = buildString {
                 append("// go: anonymous struct ${t.key.take(160)}\n")
                 append("class $name(\n")
@@ -358,13 +365,30 @@ class TypeMapper(
                     val ann = if (vc) "@get:kotlin.jvm.JvmName(\"goGet_${n.trim('`')}\") @set:kotlin.jvm.JvmName(\"goSet_${n.trim('`')}\")" else "@kotlin.jvm.JvmField"
                     append("    $ann var $n: ${mt.kt(f.t)} = ${mt.zero(f.t)},\n")
                 }
-                append(") {\n")
+                append(if (reflectInfos != null) ") : GoReflectStruct, $jsonIface {\n" else ") {\n")
                 append("    fun goCopy(): $name = $name(${fs.joinToString(", ") { (n, f) -> "$n = " + if (mt.isStructValue(f.t) && !mt.isEmptyStruct(f.t)) "$n.goCopy()" else n }})\n\n")
                 append("    fun goSet(o: $name) {\n")
                 for ((n, f) in fs) append("        $n = o.$n${if (mt.isStructValue(f.t) && !mt.isEmptyStruct(f.t)) ".goCopy()" else ""}\n")
                 append("    }\n\n")
                 append("    override fun equals(other: Any?): Boolean = other is $name && ${fs.joinToString(" && ") { (n, _) -> "$n == other.$n" }}\n\n")
                 append("    override fun hashCode(): Int = ${fs.joinToString(" + ") { (n, _) -> "31 * $n.hashCode()" }}\n")
+                if (reflectInfos != null) {
+                    append("\n    override fun goStructInfo(): GoStructInfo = GO_STRUCT\n\n")
+                    append("    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {\n")
+                    fs.forEachIndexed { i, (n, f) ->
+                        val kt = mt.kt(f.t)
+                        val copy = if (mt.isStructValue(f.t) && !mt.isEmptyStruct(f.t)) ".goCopy()" else ""
+                        append("        $i -> GoFieldPtr(this, $i, { $n }, { $n = (it as $kt)$copy })\n")
+                    }
+                    append("        else -> goPanicIndex(i, ${fs.size})\n    }\n\n")
+                    append("    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)\n\n")
+                    append("    companion object {\n        val GO_STRUCT: GoStructInfo by lazy {\n            GoStructInfo(\"struct\", listOf(\n")
+                    fs.forEachIndexed { i, (_, f) ->
+                        val tag = f.tag.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$")
+                        append("                GoFieldInfo(\"${f.name}\", \"$tag\", ${f.exported}, ${f.embedded}, ${reflectInfos[i]}),\n")
+                    }
+                    append("            ))\n        }\n    }\n")
+                }
                 append("}\n")
             }
         }

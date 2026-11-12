@@ -30,7 +30,7 @@ class AnonStruct_ac1da98f(
     @kotlin.jvm.JvmField var name: String = "",
     @get:kotlin.jvm.JvmName("goGet_kind") @set:kotlin.jvm.JvmName("goSet_kind") var kind: com.xemantic.typescript.tsgo.lsp.lsproto.SymbolKind = com.xemantic.typescript.tsgo.lsp.lsproto.SymbolKind(0u),
     @kotlin.jvm.JvmField var rng: com.xemantic.typescript.tsgo.lsp.lsproto.Range = com.xemantic.typescript.tsgo.lsp.lsproto.Range(),
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
     fun goCopy(): AnonStruct_ac1da98f = AnonStruct_ac1da98f(name = name, kind = kind, rng = rng.goCopy())
 
     fun goSet(o: AnonStruct_ac1da98f) {
@@ -42,5 +42,26 @@ class AnonStruct_ac1da98f(
     override fun equals(other: Any?): Boolean = other is AnonStruct_ac1da98f && name == other.name && kind == other.kind && rng == other.rng
 
     override fun hashCode(): Int = 31 * name.hashCode() + 31 * kind.hashCode() + 31 * rng.hashCode()
+
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { name }, { name = (it as String) })
+        1 -> GoFieldPtr(this, 1, { kind }, { kind = (it as com.xemantic.typescript.tsgo.lsp.lsproto.SymbolKind) })
+        2 -> GoFieldPtr(this, 2, { rng }, { rng = (it as com.xemantic.typescript.tsgo.lsp.lsproto.Range).goCopy() })
+        else -> goPanicIndex(i, 3)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
+    companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("struct", listOf(
+                GoFieldInfo("name", "", false, false, GoTypeInfo(24, "string", zero = { "" })),
+                GoFieldInfo("kind", "", false, false, GoTypeInfo(10, "lsproto.SymbolKind", cls = com.xemantic.typescript.tsgo.lsp.lsproto.SymbolKind::class, zero = { com.xemantic.typescript.tsgo.lsp.lsproto.SymbolKind(0u) })),
+                GoFieldInfo("rng", "", false, false, GoTypeInfo(25, "lsproto.Range", cls = com.xemantic.typescript.tsgo.lsp.lsproto.Range::class, structInfo = { com.xemantic.typescript.tsgo.lsp.lsproto.Range.GO_STRUCT }, zero = { com.xemantic.typescript.tsgo.lsp.lsproto.Range() })),
+            ))
+        }
+    }
 }
 
