@@ -378,6 +378,16 @@ class Program(
                 if (shims.classHas(Naming.RUNTIME, cls, kn)) shadowedAliasMethods += "$q: lowered as '$kn', a member of $cls that the extension cannot override"
             }
         }
+        // Likewise a typealias of a SHIM struct (`type Locale language.Tag`): its methods are extensions, and a
+        // member of the shim class with the same name wins every call (TypeScript 7.1's Locale.String returned Tag's).
+        for ((typeKey, ms) in methodsByType) {
+            val (pkg, cls) = structAliasTargets[typeKey] ?: continue
+            for ((_, d) in ms) {
+                val q = d.str("qname")!!
+                val kn = methodName(q, d.str("name")!!).trim('`')
+                if (shims.classHas(pkg, cls, kn)) shadowedAliasMethods += "$q: lowered as '$kn', a member of $cls that the extension cannot override"
+            }
+        }
         // Go calls a pointer-receiver method on a nil pointer and only panics where the body
         // dereferences it (`f.UpdateX(node, …)` with a nil factory returns `node` unchanged). An
         // extension on `T?` keeps that: the call never asserts, the body's `this!!.f` panics where

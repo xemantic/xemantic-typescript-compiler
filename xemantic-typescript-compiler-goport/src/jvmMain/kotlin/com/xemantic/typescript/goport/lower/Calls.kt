@@ -489,7 +489,8 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
         val inst = sigOf(e).results.singleOrNull()?.t ?: return call
         val ip = types.under(inst) as? PointerType ?: return call
         if (tm.pointsToObject(ip.elem) || tm.opaqueTP(ip.elem)) return call
-        return Ex("${call.at(AS)} as ${tm.kt(inst).removeSuffix("?")}?", AS)
+        // Through Any?: Kotlin knows the callee's static result (`GoSlice<…>?`) is no GoPtr and flags a direct cast.
+        return Ex("(${call.code} as Any?) as ${tm.kt(inst).removeSuffix("?")}?", AS)
     }
 
     /**

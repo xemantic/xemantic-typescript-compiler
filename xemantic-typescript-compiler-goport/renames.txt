@@ -34,3 +34,6 @@ github.com/microsoft/TypeScript/tsc/internal/transformers/declarations.Declarati
 github.com/microsoft/TypeScript/tsc/internal/project.Project.ID projectID
 # (TSGO.7.1) project.aliasPaths is a named map: its `Len()` would be GoMap's own `len`.
 github.com/microsoft/TypeScript/tsc/internal/project.aliasPaths.Len aliasCount
+# (TSGO.7.1) locale.Locale is a typealias of the shim's language.Tag, whose MEMBER `string()` ("und" for the
+# default) would win over Locale.String's extension ("" for the default).
+github.com/microsoft/TypeScript/tsc/internal/locale.Locale.String localeString

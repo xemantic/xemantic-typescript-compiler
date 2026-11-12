@@ -214,7 +214,10 @@ class PackageEmitter(
                 val kept = recvTparams.filter { !tm0.isSubstituted(it) }
                 val ptrRecv = recvField.reqObj("type").str("star") == "pointerType"
                 recvNullableExt = ptrRecv || tm0.nullable(origin.id)
-                recvTypeText = if (qname in prog.valuePtrMethods) "GoPtr<${tm0.namedRef(origin)}>?." else tm0.namedRef(origin) + (if (kept.isEmpty()) "" else kept.joinToString(", ", "<", ">") { tm0.tpName(types.unalias(it) as TypeParamType) }) + if (recvNullableExt) "?." else "."
+                // A named FUNC type is a typealias of a nullable function type (`typealias SpawnerFunc = ((…) -> …)?`):
+                // its receiver is already nullable.
+                val nullableAlias = origin.key in prog.aliasTypes && types.under(origin.id) is SignatureType
+                recvTypeText = if (qname in prog.valuePtrMethods) "GoPtr<${tm0.namedRef(origin)}>?." else tm0.namedRef(origin) + (if (kept.isEmpty()) "" else kept.joinToString(", ", "<", ">") { tm0.tpName(types.unalias(it) as TypeParamType) }) + if (recvNullableExt && !nullableAlias) "?." else "."
             }
         }
         // A generic function takes the element kind of each type parameter (Go zeroes a `T`;

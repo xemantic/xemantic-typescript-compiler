@@ -1218,7 +1218,7 @@ fun TypeNodeLinks?.setOuterTypeParameters(c: Checker?, types: GoSlice<Type?>) {
         return
     }
     if (this!!.outerTypeParameters == null) {
-        this!!.outerTypeParameters = c!!.outerTypeParameterListArena.new() as GoPtr<GoSlice<Type?>>?
+        this!!.outerTypeParameters = (c!!.outerTypeParameterListArena.new() as Any?) as GoPtr<GoSlice<Type?>>?
     }
     this!!.outerTypeParameters!!.value = types
 }

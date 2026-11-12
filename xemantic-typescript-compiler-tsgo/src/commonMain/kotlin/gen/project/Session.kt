@@ -90,7 +90,7 @@ import com.xemantic.typescript.tsgo.collections.keys
 import com.xemantic.typescript.tsgo.collections.len
 import com.xemantic.typescript.tsgo.collections.range
 import com.xemantic.typescript.tsgo.collections.set
-import com.xemantic.typescript.tsgo.locale.string
+import com.xemantic.typescript.tsgo.locale.localeString
 import com.xemantic.typescript.tsgo.ls.autoimport.getCacheStats
 import com.xemantic.typescript.tsgo.ls.autoimport.isPreparedForImportingFile
 import com.xemantic.typescript.tsgo.project.ata.installTypings
@@ -444,7 +444,7 @@ fun Session?.configure(config_1: UserPreferences) {
             val oldLocale: Locale = this!!.client!!.getLocale()
             this!!.client!!.setLocale(config_1.locale)
             val newLocale: Locale = this!!.client!!.getLocale()
-            if (oldLocale.string() != newLocale.string()) {
+            if (oldLocale.localeString() != newLocale.localeString()) {
                 if (this!!.snapshotHost!!.contentMapperHost != null) {
                     this!!.snapshotHost!!.contentMapperHost!!.setLocale(newLocale.goCopy())
                 }

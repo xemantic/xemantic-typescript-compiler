@@ -68,7 +68,7 @@ import com.xemantic.typescript.tsgo.go.io.Writer
 import com.xemantic.typescript.tsgo.ast.utf16ToUTF8
 import com.xemantic.typescript.tsgo.ast.utf8ToUTF16
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
-import com.xemantic.typescript.tsgo.locale.string
+import com.xemantic.typescript.tsgo.locale.localeString
 import com.xemantic.typescript.tsgo.spanmap.segments
 
 // go: github.com/microsoft/TypeScript/tsc/internal/contentmapper.initializeTimeoutSeconds bfe4dab6
@@ -749,7 +749,7 @@ class host(
             this.lifecycleMu.lock()
             val dr1 = this.lifecycleMu
             df0.defer { dr1.unlock() }
-            if (this.diagnosticLocale.string() == diagnosticLocale_1.string()) {
+            if (this.diagnosticLocale.localeString() == diagnosticLocale_1.localeString()) {
                 return
             }
             this.diagnosticLocale = diagnosticLocale_1.goCopy()
@@ -1123,7 +1123,7 @@ class SpawnerFunc_Box(@kotlin.jvm.JvmField val value: SpawnerFunc) : Spawner {
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/contentmapper.SpawnerFunc.Spawn 10061a2c
-fun SpawnerFunc?.spawn(command: GoSlice<String>, dir: String, stderr: Writer?): Tuple2<ReadWriteCloser?, GoError?> {
+fun SpawnerFunc.spawn(command: GoSlice<String>, dir: String, stderr: Writer?): Tuple2<ReadWriteCloser?, GoError?> {
     return this!!(command, dir, stderr)
 }
 
@@ -2002,7 +2002,7 @@ fun com.xemantic.typescript.tsgo.contentmapper.host?.release(identities: GoSlice
 
 // go: github.com/microsoft/TypeScript/tsc/internal/contentmapper.handshake ef5bca9c
 fun handshake(ctx: Context?, conn: Conn?, diagnosticLocale: Locale): Tuple3<PositionEncoding, String, GoError?> {
-    val t0 = conn!!.call(ctx, "initialize", InitializeParams(locale = diagnosticLocale.string(), positionEncodings = GoSlice.of(PositionEncoding.ELEM, PositionEncodingUTF8, PositionEncodingUTF16)))
+    val t0 = conn!!.call(ctx, "initialize", InitializeParams(locale = diagnosticLocale.localeString(), positionEncodings = GoSlice.of(PositionEncoding.ELEM, PositionEncodingUTF8, PositionEncodingUTF16)))
     val raw: Value = t0.first
     val err: GoError? = t0.second
     if (err != null) {

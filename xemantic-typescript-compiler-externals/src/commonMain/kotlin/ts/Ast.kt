@@ -374,7 +374,7 @@ internal class HeritageClause(tree: Tree, raw: RawNode) : NodeBase(tree, raw), N
 }
 
 internal class ExpressionWithTypeArguments(tree: Tree, raw: RawNode) : NodeBase(tree, raw), Node {
-    val expression: Expression by lazy(LazyThreadSafetyMode.NONE) { tree.heritageExpressionOf(raw!!) }
+    val expression: Expression by lazy(LazyThreadSafetyMode.NONE) { tree.heritageExpressionOf(raw) }
     val typeArguments: List<TypeNode>? by lazy(LazyThreadSafetyMode.NONE) { tree.typeArguments(raw) }
 }
 

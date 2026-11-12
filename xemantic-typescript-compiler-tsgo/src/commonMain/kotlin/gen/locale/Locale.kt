@@ -46,7 +46,7 @@ value class contextKey(val value: Int) : Comparable<contextKey>, GoBasicValue {
 typealias Locale = Tag
 
 // go: github.com/microsoft/TypeScript/tsc/internal/locale.Locale.String 1cb1de71
-fun Locale.string(): String {
+fun Locale.localeString(): String {
     if (this.goEquals(default)) {
         return ""
     }

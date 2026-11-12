@@ -33,7 +33,7 @@ import com.xemantic.typescript.tsgo.contentmapper.SourceFiles
 import com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.Uint128
 import com.xemantic.typescript.tsgo.ast.contentMapperParseOptions
 import com.xemantic.typescript.tsgo.ast.parseOptions
-import com.xemantic.typescript.tsgo.locale.string
+import com.xemantic.typescript.tsgo.locale.localeString
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project.ParseCacheKey 6438261b
 class ParseCacheKey(
@@ -100,12 +100,12 @@ class ContentMappedParseCacheKey(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project.contentMappedParseCacheKey 0d897038
 fun contentMappedParseCacheKey(options: SourceFileParseOptions, rawHash: Uint128, transformIdentity: Uint128, diagnosticLocale: Locale): ContentMappedParseCacheKey {
-    var buf: GoSlice<Int> = GoSlice.make(GoElem.BYTE, 32, 32 + diagnosticLocale.string().length)
+    var buf: GoSlice<Int> = GoSlice.make(GoElem.BYTE, 32, 32 + diagnosticLocale.localeString().length)
     com.xemantic.typescript.tsgo.go.encoding.binary.littleEndian.putUint64(buf.slice(0, 8), rawHash.hi)
     com.xemantic.typescript.tsgo.go.encoding.binary.littleEndian.putUint64(buf.slice(8, 16), rawHash.lo)
     com.xemantic.typescript.tsgo.go.encoding.binary.littleEndian.putUint64(buf.slice(16, 24), transformIdentity.hi)
     com.xemantic.typescript.tsgo.go.encoding.binary.littleEndian.putUint64(buf.slice(24, 32), transformIdentity.lo)
-    buf = goAppendString(buf, diagnosticLocale.string())
+    buf = goAppendString(buf, diagnosticLocale.localeString())
     return ContentMappedParseCacheKey(sourceFileParseOptions = options.goCopy(), hash = com.xemantic.typescript.tsgo.go.github_com.zeebo.xxh3.hash128(buf))
 }
 

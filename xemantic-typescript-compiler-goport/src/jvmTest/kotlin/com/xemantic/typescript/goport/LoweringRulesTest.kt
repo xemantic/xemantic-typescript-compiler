@@ -441,7 +441,7 @@ class LoweringRulesTest {
         assert(File(gen, "vfs/vfsmatch/Vfsmatch.kt").readText().contains("com.xemantic.typescript.tsgo.tspath.isRootedDiskPath(goStringOfTypeParam(include))"))
         assert(File(gen, "tsoptions/Tsconfigparsing.kt").readText().contains("result[i] = goTypeParamOfString(goElem_T, getSubstitutedPathWithConfigDirTemplate(goStringOfTypeParam(element), basePath))"))
         // `core.Arena[[]*Type].New()`: a generic `*T` result with a NON-struct T is the GoPtr the arena hands out.
-        assert(genFunction("checker/Types.kt", "$tsc/checker.TypeNodeLinks.setOuterTypeParameters").contains("c!!.outerTypeParameterListArena.new() as GoPtr<GoSlice<Type?>>?"))
+        assert(genFunction("checker/Types.kt", "$tsc/checker.TypeNodeLinks.setOuterTypeParameters").contains("(c!!.outerTypeParameterListArena.new() as Any?) as GoPtr<GoSlice<Type?>>?"))
     }
 
     @Test
