@@ -64,5 +64,6 @@ bin/
 # The TypeScript 7 (Go) compiler checkout — reference source for the parallel
 # architecture comparison (docs/parallel-bind-sharing.md). Cloned, never edited.
 /typescript-go-repo
+/typescript-src/
 # Third-party binaries kept for benchmarking (the released tsgo/tsc 7.x).
 /tools

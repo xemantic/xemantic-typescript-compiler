@@ -25,6 +25,17 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (TSGO.7.1) — branch `tsgo-7.1`: the port on TypeScript 7.1.0-beta (owner request 2026-11-11)
+
+- Trial first (`docs/goport-tsgo-7.1.md` § 1): the updater failed at extraction (overlays), crashed in the porter
+  and refused "one object per node"; 7.0.2 control regenerated gen/ byte-identically.
+- Porter rules (docs/goport-lowering.md § 3, (TSGO.7.1) entries), each pinned in `LoweringRulesTest`; the header-chain
+  and named-defer pins were proved red by ablation. Overrides re-ported; `project` ported instead of the hand fake.
+- Gates against `tools/tsgo-7.1.0-beta/lib/tsc`: diag 13,728/13,728, emit 13,728/13,728, API 594,730/594,730,
+  LS 22,088/22,088, CLI 121/121; full suite 1,000/1,000; warning-clean.
+- 7.1 behaviour the tests now encode: `--noEmit` with errors exits 2; heritage elements are TypeReferences;
+  `KindSourceKeyword` shifted SyntaxKind numbers. Native-image replay: see the branch's last commit.
+
 ### Round (KIR.PERF.3) — the dynamic call's own type tests; mitt −31%
 
 - Found from the bytecode and `-XX:+PrintInlining`, not the profile alone: KIR's mitt was bimodal (~75 / ~140 ns/emit) by JIT decision. Three causes: Kotlin's `is FunctionN` is the out-of-line `TypeIntrinsics.isFunctionOfArity` (and the cast repeats it); `JsArray.visit` called one-parameter callbacks through `jsCall3`, whose adaptation became hot and made C2 compile `jsCall3` too big to inline; (LIB.6)'s `invokeMember(name, jsArgs(…))` built two arrays per bag member call.

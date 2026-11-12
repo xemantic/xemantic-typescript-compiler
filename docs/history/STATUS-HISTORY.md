@@ -1,3 +1,10 @@
+**(KIR.LOWER.2) DONE — a named library type with no runtime class is refused, not erased to the bag (2026-10-18):**
+the lead held on the port: `function f(p: Promise<string>) { p.then(…) }` COMPILED, because an instantiation carries
+no symbol of its own and `ErasedTypes.mapObject` read its declaration as null ("anonymous object" → bag). It now
+falls back to the reference's TARGET symbol, so the type has its lib declaration and refuses ("cannot map the type
+'Promise<string>'"); `WeakMap` still maps to `JsMap` by design. No other erasure moved: KIR 334 / 0 and the
+`kir-bench.sh` equivalence gate agree on mitt and toml. Pin red under ablation. Next: (KAPI.2).
+
 **(BENCH.2) DONE — placement is an option with a banner, graded and NOT adopted as the default (2026-10-18):**
 `KIR_BENCH_PIN=<cpus>` runs the node/bun/native/wasm arms under `taskset -c`, never the JVM arm (its C1/C2 threads are
 part of it); every run prints each arm's placement first and records it in the JSON, and the generated table shows

@@ -282,8 +282,15 @@ val typeScriptCommit = "4d4f005c8541e0255a9d8791205fdce326e462bc" // tsgo 7.0.2 
 
 val typeScriptGoRepoDir: File = projectDir.resolve("typescript-go-repo")
 
-/** Tag `typescript/v7.0.2` — the released tsgo this project adjudicates against (`tools/tsgo-7.0.2/lib/tsc`). */
-val typeScriptGoCommit = "2bd066d87f5bafd315be9f40889d0a60b9e58e0b" // tag typescript/v7.0.2 (submodule side: 4d4f005c)
+/**
+ * TypeScript 7.1.0-beta — the tsgo this branch adjudicates against (`tools/tsgo-7.1.0-beta/lib/tsc`): since 7.1 tsgo
+ * lives in microsoft/TypeScript under `tsc/` (module github.com/microsoft/TypeScript/tsc), its test cases and
+ * baselines in-tree (`tsc/testdata`). The beta binary's Go build info names this commit (docs/goport-tsgo-7.1.md).
+ */
+val typeScriptGoCommit = "3e9236361fa97a9e6c685f4833ac457ae2d8c50a" // microsoft/TypeScript release-7.1 (7.1.0-beta)
+
+/** The microsoft/TypeScript checkout (sparse: `tsc/`) whose `tsc/` [typeScriptGoRepoDir] links to. */
+val typeScriptSrcDir: File = projectDir.resolve("typescript-src")
 
 val cloneTypeScriptRepo = tasks.register("cloneTypeScriptRepo") {
     group = "typescript"
@@ -332,90 +339,53 @@ val cloneTypeScriptRepo = tasks.register("cloneTypeScriptRepo") {
     }
 }
 /**
- * (LEGACY.0b): ensures `typescript-go-repo/` is present and checked out at
- * [typeScriptGoCommit]: tsgo's own baselines and test cases (the diagnostics/emit oracles read them).
- *
- * THREE ways this deliberately differs from [cloneTypeScriptRepo], each for a measured
- * reason — do not "make them consistent":
- *
- *  1. **No `outputs.dir`.** That checkout is 390 MB / 55k files here and, unlike
- *     `typescript-repo`, it may PRE-EXIST as a full manual clone carrying tsgo's Go
- *     sources (the reference implementation CLAUDE.md sends agents to read). Declaring it
- *     as an output hands Gradle's stale-output handling a directory it did not create and
- *     costs a 55k-file snapshot on every build. The body is instead a fast no-op when the
- *     pin is already checked out, which is the same guarantee for ~30 ms a build.
- *  2. **`sparse-checkout set` only when the clone is already sparse.** A pre-existing full
- *     clone stays full: narrowing it would delete `internal/checker/checker.go` and
- *     `testdata/submoduleTriaged.txt`, both of which this project reads by name.
- *  3. **Sparse, and in NON-CONE mode, to the file kinds we read.** Cone mode can only take
- *     whole directories, and `submodule/{compiler,conformance}` is three quarters `.types` /
- *     `.symbols` that nothing here reads. Measured on a fresh clone: the cone form is 290 MB,
- *     the extension form below is 104 MB of working tree (~40 MB apparent) and 124 MB with
- *     the object store. `docs/tsgo-baselines.md`'s "≈29 MB" counted only the compiler suite's
- *     two extensions and is low by ~4x.
- *
+ * (LEGACY.0b), re-pointed for TypeScript 7.1 (docs/goport-tsgo-7.1.md): ensures `typescript-go-repo/` is tsgo at
+ * [typeScriptGoCommit] — since 7.1 the `tsc/` directory of microsoft/TypeScript, which holds the Go module, the test
+ * cases, the `/.lib` test libraries and the baselines (no submodule, no `.diff` layers). A link the developer made to
+ * any work tree at the pin is accepted; otherwise this partial-clones microsoft/TypeScript (cone-sparse `tsc/`) into
+ * `typescript-src/` and links to its `tsc/`. No `outputs.dir`: the tree is ~410 MB and may pre-exist, so the body is a
+ * fast no-op when the pin is already checked out instead.
  */
 val cloneTypeScriptGoRepo = tasks.register("cloneTypeScriptGoRepo") {
     group = "typescript"
-    description = "Ensures the typescript-go checkout is present and pinned to tsgo 7.0.2 (its baselines are the corpus reference)."
+    description = "Ensures typescript-go-repo is tsgo at TypeScript 7.1.0-beta (microsoft/TypeScript tsc/): its sources, cases and baselines."
     inputs.property("typeScriptGoCommit", typeScriptGoCommit)
 
     doLast {
-        // NON-CONE patterns (gitignore syntax, rooted): the baselines we compare against,
-        // the `.diff` records that classify a divergence by LAYER in all three directories,
-        // and tsgo's two classification lists (docs/tsgo-baselines.md). `.types`/`.symbols` are deliberately absent.
-        val sparsePaths = arrayOf(
-            "--no-cone",
-            "/testdata/baselines/reference/submodule/compiler/*.js",
-            "/testdata/baselines/reference/submodule/compiler/*.errors.txt",
-            "/testdata/baselines/reference/submodule/compiler/*.diff",
-            "/testdata/baselines/reference/submodule/conformance/*.js",
-            "/testdata/baselines/reference/submodule/conformance/*.errors.txt",
-            "/testdata/baselines/reference/submodule/conformance/*.diff",
-            "/testdata/baselines/reference/submoduleAccepted/**",
-            "/testdata/baselines/reference/submoduleTriaged/**",
-            "/testdata/submoduleAccepted.txt",
-            "/testdata/submoduleTriaged.txt",
-        )
-        val baselinesPresent = typeScriptGoRepoDir
-            .resolve("testdata/baselines/reference/submodule/compiler").isDirectory
-
-        if (typeScriptGoRepoDir.resolve(".git").exists()) {
+        // A checkout already pinned (typescript-go-repo IS tsc/ of a microsoft/TypeScript work tree at the commit — a
+        // link to this task's typescript-src/tsc or to any other worktree) is left alone.
+        if (typeScriptGoRepoDir.exists()) {
             val head = runCatching {
                 captureCommand("git", "rev-parse", "HEAD", workingDir = typeScriptGoRepoDir).trim()
             }.getOrNull()
-            if (head == typeScriptGoCommit && baselinesPresent) {
-                logger.info("typescript-go checkout already pinned to $typeScriptGoCommit.")
+            if (head == typeScriptGoCommit && typeScriptGoRepoDir.resolve("go.mod").isFile) {
+                logger.info("typescript-go-repo already pinned to $typeScriptGoCommit.")
                 return@doLast
             }
-            logger.lifecycle("Re-pinning typescript-go repository to $typeScriptGoCommit ...")
-            // `git config --get` EXITS 1 when the key is absent, so this must not go
-            // through runCommand/captureCommand's exit-code check.
-            val sparse = runCatching {
-                captureCommand("git", "config", "--get", "core.sparseCheckout", workingDir = typeScriptGoRepoDir).trim()
-            }.getOrNull() == "true"
-            if (sparse) {
-                runCommand("git", "sparse-checkout", "set", *sparsePaths, workingDir = typeScriptGoRepoDir)
+            check(java.nio.file.Files.isSymbolicLink(typeScriptGoRepoDir.toPath())) {
+                "typescript-go-repo is not tsgo at TypeScript 7.1.0-beta (HEAD $head) and not a link: move it away — " +
+                    "since 7.1 tsgo lives in microsoft/TypeScript tsc/ (docs/goport-tsgo-7.1.md)."
             }
-            runCommand("git", "fetch", "--depth=1", "origin", typeScriptGoCommit, workingDir = typeScriptGoRepoDir)
-            runCommand("git", "checkout", "--force", typeScriptGoCommit, workingDir = typeScriptGoRepoDir)
-            logger.lifecycle("typescript-go repository re-pinned successfully.")
-            return@doLast
         }
-
-        logger.lifecycle("Cloning typescript-go repository (pinned $typeScriptGoCommit, partial+sparse) into: $typeScriptGoRepoDir ...")
-        runCommand(
-            "git", "clone",
-            "--depth=1",
-            "--filter=blob:none",
-            "--sparse",
-            "--no-checkout",
-            "https://github.com/microsoft/typescript-go.git",
-            typeScriptGoRepoDir.absolutePath,
-        )
-        runCommand("git", "sparse-checkout", "set", *sparsePaths, workingDir = typeScriptGoRepoDir)
-        runCommand("git", "fetch", "--depth=1", "origin", typeScriptGoCommit, workingDir = typeScriptGoRepoDir)
-        runCommand("git", "checkout", typeScriptGoCommit, workingDir = typeScriptGoRepoDir)
-        logger.lifecycle("typescript-go repository cloned + pinned successfully.")
+        // Cone mode, `tsc/` only: the Go module, its testdata (cases, /.lib, baselines) — what the porter and the oracles read.
+        if (typeScriptSrcDir.resolve(".git").exists()) {
+            logger.lifecycle("Re-pinning microsoft/TypeScript checkout to $typeScriptGoCommit ...")
+            runCommand("git", "sparse-checkout", "set", "tsc", workingDir = typeScriptSrcDir)
+            runCommand("git", "fetch", "--depth=1", "origin", typeScriptGoCommit, workingDir = typeScriptSrcDir)
+            runCommand("git", "checkout", "--force", typeScriptGoCommit, workingDir = typeScriptSrcDir)
+        } else {
+            logger.lifecycle("Cloning microsoft/TypeScript (pinned $typeScriptGoCommit, partial+sparse tsc/) into: $typeScriptSrcDir ...")
+            runCommand(
+                "git", "clone", "--depth=1", "--filter=blob:none", "--sparse", "--no-checkout",
+                "https://github.com/microsoft/TypeScript.git", typeScriptSrcDir.absolutePath,
+            )
+            runCommand("git", "sparse-checkout", "set", "tsc", workingDir = typeScriptSrcDir)
+            runCommand("git", "fetch", "--depth=1", "origin", typeScriptGoCommit, workingDir = typeScriptSrcDir)
+            runCommand("git", "checkout", typeScriptGoCommit, workingDir = typeScriptSrcDir)
+        }
+        val link = typeScriptGoRepoDir.toPath()
+        java.nio.file.Files.deleteIfExists(link)
+        java.nio.file.Files.createSymbolicLink(link, typeScriptSrcDir.resolve("tsc").toPath())
+        logger.lifecycle("typescript-go-repo -> ${typeScriptSrcDir.resolve("tsc")} pinned to $typeScriptGoCommit.")
     }
 }

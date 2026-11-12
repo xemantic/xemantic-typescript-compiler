@@ -34,8 +34,9 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
   `GOTOOLCHAIN=local tools/go/bin/go`); `-tsgo` is AGPL-3.0-only + output exception (Microsoft
   copyright, Apache `LICENSE` + `NOTICE.txt`, porter-emitted headers). The hand-written `-core` checker is deleted ((TSGO.8-e)): every
   compiler question is answered by the port.
-- **TypeScript 7.0 is the ONLY compatibility target** (2026-09-12). Reference:
-  `tools/tsgo-7.0.2/lib/tsc` (gitignored). TS 6 is not an adjudicator.
+- **TypeScript 7.0 is the ONLY compatibility target** (2026-09-12) — on branch `tsgo-7.1`, **7.1.0-beta**. Reference:
+  `tools/tsgo-7.1.0-beta/lib/tsc` (gitignored). TS 6 is not an adjudicator. 7.1 moved tsgo into microsoft/TypeScript
+  `tsc/` (module `github.com/microsoft/TypeScript/tsc`, no submodule, testdata in-tree): `docs/goport-tsgo-7.1.md`.
 - **Compatibility is an invariant on the shared surface** (2026-09-21): a semantic divergence
   that would make code check differently than in VS Code is refused. A tsgo defect tsgo itself
   records under `submoduleTriaged/` is not a target (the intended answer is); `submoduleAccepted/`
@@ -87,6 +88,12 @@ backend (KIR); an LSP. It is not "a compiler competing with tsgo".
   (client `scripts/lsp_hover.py`) — never hand-write expected LS answers.
 
 ## tsgo port gotchas
+
+- An override's source-hash pin covers its own Go body only, not fields/helpers it inlined: after a tsgo
+  upgrade, COMPILE — "no stale overrides" is not enough (`vfsmatch.matchPathParts` hid a renamed field).
+- `go` commands inside the 7.1 source need `GOWORK=off` (its monorepo `go.work` names an absent `./tools`).
+- `jsontext.Value` is raw JSON: a field of that type, `[]jsontext.Value`, and `GoElem.JSON_VALUE` behind a type
+  parameter decode/encode raw bytes in the json shim — never treat it as a plain `[]byte`.
 
 - A generated struct class doubles as Go's pointer: identity `equals`/`hashCode` except where Go
   compares by value (`Program.structKeys`). Widening that set made every `map[*Node]` structural
