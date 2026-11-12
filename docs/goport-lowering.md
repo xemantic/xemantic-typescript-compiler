@@ -448,6 +448,21 @@ Performance rules (docs/goport-perf.md § 4 — each is a lowering rule, never a
   `core.Arena.New`). The port lowers `*P` for a type parameter as `P?` (a struct pointer IS the struct). 7.1
   instantiates `core.Arena[[]*Type]`: its `New()` hands out a `GoBox` typed as `P?` (as `goOpaqueAddr` does) and the
   call site casts it back to `GoPtr<…>` (the instantiated object's `origin` gives the generic signature).
+- **Constraint dispatch** ((TSGO.7.1), `Program.computeConstraintDispatch`, `CallLowering.constraintDispatch`). A
+  type parameter whose method-set constraint is instantiated — directly, or through another such type parameter
+  (fixpoint) — with a named slice/map/func type (a Kotlin typealias, which cannot implement an interface) loses its
+  Kotlin bound, and a constraint-method call on one dispatches at run time: `is <Iface>` → the interface, else the
+  single alias implementer's extension (two alias implementers refuse). Slots are (generic owner, index); a method's
+  receiver type parameters are its receiver type's type arguments. `dirty.Map[K, V Cloneable[V]]` with
+  `dirty.CloneableMap` is the case.
+- **Package variable order** ((TSGO.7.1), Main.kt). Go initializes a package's variables in one dependency order; a
+  Kotlin file facade initializes its own on first touch. A package whose `initOrder` interleaves files emits all its
+  variables together in Go's order (`PackageVars*.kt`, chunked): a variable depends only on earlier ones, so
+  touching any chunk initializes only earlier chunks. (`tsoptions`' declarations_generated.go ↔ tsconfigparsing.go
+  cycle threw ExceptionInInitializerError on every config parse.)
+- **Anonymous structs and reflection** ((TSGO.7.1), `TypeMapper.anonStruct`). An anonymous struct class implements
+  GoReflectStruct/GoJsonStruct like a named one when every field's type is describable (`packagejson.Parse`
+  decodes into `var parsed struct{HeaderFields; PathFields; …}`).
 - **Abstract-class interfaces** ((TSGO.6-i), `Program.computeAbstractIfaces`, `Decls.ifaceDecl`/`superCall`). An
   interface in `ABSTRACT_IFACE_CANDIDATES` (`ast.nodeData`, `checker.TypeData`) is lowered as an `abstract class`
   (`abstract fun` members) when the whole run proves it legal: every named type whose IR `implements` lists it is a
