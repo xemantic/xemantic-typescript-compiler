@@ -43,7 +43,7 @@ def main():
     o.OUT = os.path.join(REPO, "build/goport/cli-native")
     o.WORK = os.path.join(REPO, "build/goport/cli-work/native")
     o.ENV = dict(o.ENV)
-    o.ENV["XTSC_TSGO_LIB_DIR"] = os.path.join(REPO, "tools/tsgo-7.1.0-beta/lib")
+    o.ENV["XTSC_TSGO_LIB_DIR"] = os.path.realpath(os.path.join(REPO, "tools/tsgo-7.1.0-beta/lib"))  # the binary names its lib by its REAL path
     for d in (o.OUT, o.WORK):
         shutil.rmtree(d, ignore_errors=True)
     times = {}
