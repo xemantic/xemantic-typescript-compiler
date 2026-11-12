@@ -78,7 +78,7 @@ class Handler(
     override fun openProject(p: OpenProjectParams): GoError? {
         return withDefers({ null }) { df0 ->
             val options: GoBox<OrderedMap<String, Value>?> = GoBox(null)
-            val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(p.compilerOptions, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(options, GoTypeInfo(22, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, Value>(goElem_K = GoElem.STRING, goElem_V = GoElem.slice(GoElem.BYTE)) }), zero = { null }), zero = { null })), GoElem.ref<Options?>().nilSlice)
+            val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(p.compilerOptions, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(options, GoTypeInfo(22, "", elem = GoTypeInfo(22, "", elem = GoTypeInfo(25, "collections.OrderedMap", cls = OrderedMap::class, zero = { OrderedMap<String, Value>(goElem_K = GoElem.STRING, goElem_V = GoElem.JSON_VALUE) }), zero = { null }), zero = { null })), GoElem.ref<Options?>().nilSlice)
             if (err != null) {
                 return err
             }

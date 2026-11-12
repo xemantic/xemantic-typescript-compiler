@@ -572,8 +572,8 @@ class BuildInfoDiagnosticsOfFile(
 
     // go: github.com/microsoft/TypeScript/tsc/internal/execute/incremental.BuildInfoDiagnosticsOfFile.UnmarshalJSON fa5e6873
     override fun unmarshalJSON(data: GoSlice<Int>): GoError? {
-        val fileIdAndDiagnostics: GoBox<GoSlice<Value>> = GoBox(GoElem.slice(GoElem.BYTE).nilSlice)
-        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(fileIdAndDiagnostics, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.slice(GoElem.BYTE).nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
+        val fileIdAndDiagnostics: GoBox<GoSlice<Value>> = GoBox(GoElem.JSON_VALUE.nilSlice)
+        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshal(data, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(fileIdAndDiagnostics, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.JSON_VALUE.nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
         if (err != null) {
             return com.xemantic.typescript.tsgo.go.fmt.errorf("invalid BuildInfoDiagnosticsOfFile: %s", data)
         }

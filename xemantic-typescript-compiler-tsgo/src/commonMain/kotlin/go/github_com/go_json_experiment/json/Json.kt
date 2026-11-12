@@ -311,6 +311,12 @@ fun unmarshalDecode(input: Decoder?, out: Any?, vararg opts: Options): GoError? 
 internal fun unmarshalInto(dec: Decoder, out: Any?): GoError? {
     return when (out) {
         null -> SemanticError("cannot unmarshal into Go value of type <nil>")
+        is com.xemantic.typescript.tsgo.runtime.GoRawJsonTarget -> {
+            val (raw, e) = dec.readValue()
+            if (e != null) return e
+            out.value = GoElem.BYTE.nilSlice.appendSlice(raw)
+            null
+        }
         is UnmarshalerFrom -> {
             val (d0, l0) = dec.depthLength()
             val e = out.unmarshalJSONFrom(dec)
@@ -366,11 +372,13 @@ private fun jsonKindName(k: Int): String = when (k.toChar()) {
 /**
  * Whether a named NUMERIC type decodes as its underlying number: the LSP protocol's ((TSGO.4-a),
  * `lsproto.CompletionItemKind`, `DiagnosticSeverity`, … in requests and capabilities) and `incremental`'s
- * buildinfo ids ((TSGO.5-b), `[][]BuildInfoFileId`, read back by `tsc -b`'s up-to-date check and `--incremental`).
+ * buildinfo ids ((TSGO.5-b), `[][]BuildInfoFileId`, read back by `tsc -b`'s up-to-date check and `--incremental`), and
+ * TypeScript 7.1's content-mapper protocol (`contentmapper.DiagnosticDirectivePolicy` in a directive tuple).
  */
 private fun decodesNamedNumber(v: Any): Boolean =
     v::class.qualifiedName.let {
-        it != null && (it.startsWith("com.xemantic.typescript.tsgo.lsp.lsproto.") || it.startsWith("com.xemantic.typescript.tsgo.execute.incremental."))
+        it != null && (it.startsWith("com.xemantic.typescript.tsgo.lsp.lsproto.") || it.startsWith("com.xemantic.typescript.tsgo.execute.incremental.") ||
+            it.startsWith("com.xemantic.typescript.tsgo.contentmapper."))
     }
 
 /** Decodes the next value as the Go type the CURRENT value [cur] stands for (see the file comment). */

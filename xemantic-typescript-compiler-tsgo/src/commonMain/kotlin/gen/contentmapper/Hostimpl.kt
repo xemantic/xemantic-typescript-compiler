@@ -243,7 +243,7 @@ class OpenProjectResult(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/contentmapper.OptionDiagnosticResult 52452655
 class OptionDiagnosticResult(
-    @kotlin.jvm.JvmField var path: GoSlice<Value> = GoElem.slice(GoElem.BYTE).nilSlice,
+    @kotlin.jvm.JvmField var path: GoSlice<Value> = GoElem.JSON_VALUE.nilSlice,
     @kotlin.jvm.JvmField var messageText: String = "",
     @kotlin.jvm.JvmField var code: Int = 0,
 ) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
@@ -270,7 +270,7 @@ class OptionDiagnosticResult(
     companion object {
         val GO_STRUCT: GoStructInfo by lazy {
             GoStructInfo("contentmapper.OptionDiagnosticResult", listOf(
-                GoFieldInfo("Path", "json:\"path\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.slice(GoElem.BYTE).nilSlice })),
+                GoFieldInfo("Path", "json:\"path\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.JSON_VALUE.nilSlice })),
                 GoFieldInfo("MessageText", "json:\"messageText\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
                 GoFieldInfo("Code", "json:\"code\"", true, false, GoTypeInfo(5, "int32", zero = { 0 })),
             ))
@@ -547,8 +547,8 @@ class MappedDiagnosticDirective(
 
     // go: github.com/microsoft/TypeScript/tsc/internal/contentmapper.MappedDiagnosticDirective.UnmarshalJSONFrom 2e178bbe
     override fun unmarshalJSONFrom(dec: Decoder?): GoError? {
-        val tuple: GoBox<GoSlice<Value>> = GoBox(GoElem.slice(GoElem.BYTE).nilSlice)
-        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(tuple, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.slice(GoElem.BYTE).nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
+        val tuple: GoBox<GoSlice<Value>> = GoBox(GoElem.JSON_VALUE.nilSlice)
+        val err: GoError? = com.xemantic.typescript.tsgo.json.unmarshalDecode(dec, com.xemantic.typescript.tsgo.go.reflect.goJsonTarget(tuple, GoTypeInfo(22, "", elem = GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.JSON_VALUE.nilSlice }), zero = { null })), GoElem.ref<Options?>().nilSlice)
         if (err != null) {
             return err
         }

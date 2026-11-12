@@ -74,4 +74,18 @@ fun <T> goNew(elem: GoElem<T>): GoPtr<T> = GoBox(elem.zeroValue())
  * (docs/goport-design.md § 3), so a `.(*S)` assertion on the interface sees the struct; for any other T
  * it is the pointer. `api.unmarshallerFor[P]`'s `return &v` is the case ((TSGO.3-b)).
  */
-fun <T> goOpaqueAddr(elem: GoElem<T>, p: GoPtr<T>): Any? = if (elem.copy != null) p.value else p
+fun <T> goOpaqueAddr(elem: GoElem<T>, p: GoPtr<T>): Any? = when {
+    elem.copy != null -> p.value
+    elem === GoElem.JSON_VALUE -> @Suppress("UNCHECKED_CAST") GoRawJsonTarget(p as GoPtr<GoSlice<Int>>)
+    else -> p
+}
+
+/** A pointer to a `jsontext.Value` reached through a type parameter: the json shim decodes raw bytes into it. */
+class GoRawJsonTarget(val target: GoPtr<GoSlice<Int>>) : GoPtr<GoSlice<Int>> {
+    override var value: GoSlice<Int>
+        get() = target.value
+        set(v) { target.value = v }
+
+    override fun equals(other: Any?): Boolean = other is GoRawJsonTarget && other.target == target
+    override fun hashCode(): Int = target.hashCode()
+}

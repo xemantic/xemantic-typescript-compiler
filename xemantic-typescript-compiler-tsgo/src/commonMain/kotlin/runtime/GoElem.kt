@@ -96,6 +96,13 @@ class GoElem<T>(
         /** `[]E` as an element: zero is the nil slice of [inner]. */
         fun <E> slice(inner: GoElem<E>): GoElem<GoSlice<E>> = GoElem({ inner.nilSlice })
 
+        /**
+         * `jsontext.Value` (raw JSON bytes): a byte slice whose IDENTITY tells the json shim to decode the value's raw
+         * bytes into it — generic code (`collections.OrderedMap[string, json.Value]`) knows its element only by this
+         * dictionary ([goOpaqueAddr] marks a pointer to one as a [GoRawJsonTarget]).
+         */
+        val JSON_VALUE: GoElem<GoSlice<Int>> = GoElem({ BYTE.nilSlice })
+
         /** `map[K]V` as an element: zero is a nil map. */
         fun <K, V> map(valueElem: GoElem<V>): GoElem<GoMap<K, V>> = GoElem({ GoMap.nil(valueElem) })
     }

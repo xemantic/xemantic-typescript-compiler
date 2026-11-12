@@ -944,7 +944,7 @@ class Session(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.batchResponsePage aaa9748d
 class batchResponsePage(
-    @kotlin.jvm.JvmField var encodedResponses: GoSlice<Value> = GoElem.slice(GoElem.BYTE).nilSlice,
+    @kotlin.jvm.JvmField var encodedResponses: GoSlice<Value> = GoElem.JSON_VALUE.nilSlice,
 ) {
 
     fun goCopy(): batchResponsePage = batchResponsePage(encodedResponses = encodedResponses)
@@ -2056,7 +2056,7 @@ fun Session?.handleBatchRequests(ctx: Context?, params: BatchRequestsParams?): T
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.newBatchResponsePage 7309edbf
 fun newBatchResponsePage(responses: GoSlice<BatchResponse>): Tuple2<com.xemantic.typescript.tsgo.api.batchResponsePage, GoError?> {
-    val encodedResponses: GoSlice<Value> = GoSlice.make(GoElem.slice(GoElem.BYTE), responses.len)
+    val encodedResponses: GoSlice<Value> = GoSlice.make(GoElem.JSON_VALUE, responses.len)
     val s0 = responses
     l0@ for (i1 in 0 until s0.len) {
         val i: Int = i1

@@ -271,7 +271,7 @@ fun Mapper?.transformIdentity(options: CompilerOptions?): Uint128 {
 
 // go: github.com/microsoft/TypeScript/tsc/internal/contentmapper.Mapper.MarshalDeclaredOptions e563ae62
 fun Mapper?.marshalDeclaredOptions(options: CompilerOptions?): Tuple2<OrderedMap<String, Value>?, GoError?> {
-    val out: OrderedMap<String, Value>? = com.xemantic.typescript.tsgo.collections.newOrderedMapWithSizeHint<String, Value>(GoElem.STRING, GoElem.slice(GoElem.BYTE), this!!.manifest.compilerOptions.len)
+    val out: OrderedMap<String, Value>? = com.xemantic.typescript.tsgo.collections.newOrderedMapWithSizeHint<String, Value>(GoElem.STRING, GoElem.JSON_VALUE, this!!.manifest.compilerOptions.len)
     if (options == null || this!!.manifest.compilerOptions.len == 0) {
         return Tuple2<OrderedMap<String, Value>?, GoError?>(out, null)
     }

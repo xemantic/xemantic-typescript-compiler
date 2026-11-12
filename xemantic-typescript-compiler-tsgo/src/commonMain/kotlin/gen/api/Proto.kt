@@ -2489,7 +2489,7 @@ class BatchRequest(
 class BatchRequestsResponse(
     @kotlin.jvm.JvmField var responses: GoSlice<BatchResponse> = BatchResponse.ELEM.nilSlice,
     @kotlin.jvm.JvmField var continuationToken: String = "",
-    @kotlin.jvm.JvmField var encodedResponses: GoSlice<Value> = GoElem.slice(GoElem.BYTE).nilSlice,
+    @kotlin.jvm.JvmField var encodedResponses: GoSlice<Value> = GoElem.JSON_VALUE.nilSlice,
 ) : MarshalerTo, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): BatchRequestsResponse = BatchRequestsResponse(responses = responses, continuationToken = continuationToken, encodedResponses = encodedResponses)
@@ -2566,7 +2566,7 @@ class BatchRequestsResponse(
             GoStructInfo("api.BatchRequestsResponse", listOf(
                 GoFieldInfo("Responses", "json:\"responses\" nonnil:\"true\"", true, false, GoTypeInfo(23, "", elem = GoTypeInfo(25, "api.BatchResponse", cls = BatchResponse::class, structInfo = { BatchResponse.GO_STRUCT }, zero = { BatchResponse() }), zero = { BatchResponse.ELEM.nilSlice })),
                 GoFieldInfo("ContinuationToken", "json:\"continuationToken,omitempty\"", true, false, GoTypeInfo(24, "string", zero = { "" })),
-                GoFieldInfo("encodedResponses", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.slice(GoElem.BYTE).nilSlice })),
+                GoFieldInfo("encodedResponses", "", false, false, GoTypeInfo(23, "", elem = GoTypeInfo(23, "jsontext.Value", elem = GoTypeInfo(8, "uint8", zero = { 0 }), zero = { GoElem.BYTE.nilSlice }), zero = { GoElem.JSON_VALUE.nilSlice })),
             ))
         }
         val ELEM: GoElem<BatchRequestsResponse> = GoElem({ BatchRequestsResponse() }, { it.goCopy() })

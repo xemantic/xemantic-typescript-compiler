@@ -329,7 +329,14 @@ fun append(s: Value, vararg x: Value): Value {
 private fun raw(v: Any?): Any? = if (v is GoBasicValue) v.goRaw else v
 
 /** Go's zero test for [v] of static type [t]. */
-fun goIsZero(v: Any?, t: GoTypeInfo?): Boolean = when (v) {
+fun goIsZero(v: Any?, t: GoTypeInfo?): Boolean = when {
+    // An INTERFACE is zero only when nil: `omitzero` keeps an `any` holding a zero struct (TypeScript 7.1's
+    // jsonrpc.ResponseMessage.Result carrying an empty contentmapper.OpenProjectResult).
+    t != null && t.kind == GoTypeInfo.KIND_INTERFACE -> v == null
+    else -> goIsZeroValue(v, t)
+}
+
+private fun goIsZeroValue(v: Any?, t: GoTypeInfo?): Boolean = when (v) {
     null -> true
     is GoSlice<*> -> v.isNil
     is GoMap<*, *> -> v.isNil
@@ -419,6 +426,29 @@ fun goJsonFieldsOf(s: GoReflectStruct): List<com.xemantic.typescript.tsgo.go.git
         }
         if (!f.exported) return@forEachIndexed
         val type = f.type
+        if (isJsonValue(type)) {
+            // A `jsontext.Value` field (TypeScript 7.1's jsonrpc.Message.Params/Result) holds raw JSON: decoded as the
+            // value's exact bytes, encoded verbatim — not as a byte slice.
+            out += com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField(
+                name = opts[0].ifEmpty { f.name },
+                ptr = JsonRawValueField(s.goFieldPtr(i)),
+                omitEmpty = "omitempty" in opts.drop(1),
+                omitZero = "omitzero" in opts.drop(1),
+                isZero = { v -> (v as RawJsonValue).raw.len == 0 },
+            )
+            return@forEachIndexed
+        }
+        if (type.kind == GoTypeInfo.KIND_SLICE && type.elem?.let { isJsonValue(it) } == true) {
+            // `[]jsontext.Value` (contentmapper.OptionDiagnosticResult.Path): each element raw JSON both ways.
+            out += com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField(
+                name = opts[0].ifEmpty { f.name },
+                ptr = JsonRawValueSliceField(s.goFieldPtr(i), type),
+                omitEmpty = "omitempty" in opts.drop(1),
+                omitZero = "omitzero" in opts.drop(1),
+                isZero = { v -> (v as com.xemantic.typescript.tsgo.runtime.GoSlice<*>).isNil },
+            )
+            return@forEachIndexed
+        }
         out += com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField(
             name = opts[0].ifEmpty { f.name },
             ptr = when {
@@ -515,6 +545,47 @@ fun goJsonTarget(target: Any?, pointer: GoTypeInfo): Any? {
 }
 
 private fun isJsonValue(t: GoTypeInfo): Boolean = t.name == "jsontext.Value"
+
+/** A `jsontext.Value` field's value as the encoder sees it: its raw bytes, written verbatim (`null` when empty). */
+private class RawJsonValue(val raw: com.xemantic.typescript.tsgo.runtime.GoSlice<Int>) :
+    com.xemantic.typescript.tsgo.go.encoding.json.v2.Marshaler {
+    override fun marshalJSON(): com.xemantic.typescript.tsgo.runtime.Tuple2<com.xemantic.typescript.tsgo.runtime.GoSlice<Int>, com.xemantic.typescript.tsgo.runtime.GoError?> =
+        com.xemantic.typescript.tsgo.runtime.Tuple2(if (raw.len == 0) com.xemantic.typescript.tsgo.runtime.goStringToBytes("null") else raw, null)
+}
+
+/** A `[]jsontext.Value` field for json: decoded through its static type, encoded with each element raw. */
+private class JsonRawValueSliceField(private val target: GoPtr<Any?>, private val type: GoTypeInfo) :
+    GoPtr<Any?>, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonTyped {
+    @Suppress("UNCHECKED_CAST")
+    override var value: Any?
+        get() {
+            val raw = target.value as com.xemantic.typescript.tsgo.runtime.GoSlice<com.xemantic.typescript.tsgo.runtime.GoSlice<Int>>
+            if (raw.isNil) return raw
+            return com.xemantic.typescript.tsgo.runtime.GoSlice.of(com.xemantic.typescript.tsgo.runtime.GoElem.REF, *Array<Any?>(raw.len) { RawJsonValue(raw[it]) })
+        }
+        set(v) { target.value = v }
+
+    override fun convertDecoded(v: Any?): com.xemantic.typescript.tsgo.runtime.Tuple2<Any?, String?> = convertTyped(v, type)
+
+    override fun equals(other: Any?): Boolean = other is JsonRawValueSliceField && other.target == target
+    override fun hashCode(): Int = target.hashCode()
+}
+
+/** A `jsontext.Value` field for json: decodes by taking the next value's raw bytes, encodes them unchanged. */
+private class JsonRawValueField(private val target: GoPtr<Any?>) : GoPtr<Any?>, com.xemantic.typescript.tsgo.go.encoding.json.v2.Unmarshaler {
+    @Suppress("UNCHECKED_CAST")
+    override var value: Any?
+        get() = RawJsonValue(target.value as com.xemantic.typescript.tsgo.runtime.GoSlice<Int>)
+        set(v) { target.value = v }
+
+    override fun unmarshalJSON(data: com.xemantic.typescript.tsgo.runtime.GoSlice<Int>): com.xemantic.typescript.tsgo.runtime.GoError? {
+        target.value = com.xemantic.typescript.tsgo.runtime.GoElem.BYTE.nilSlice.appendSlice(data)
+        return null
+    }
+
+    override fun equals(other: Any?): Boolean = other is JsonRawValueField && other.target == target
+    override fun hashCode(): Int = target.hashCode()
+}
 
 private fun needsStaticType(t: GoTypeInfo): Boolean = isJsonValue(t) || when (t.kind) {
     GoTypeInfo.KIND_ARRAY, GoTypeInfo.KIND_POINTER -> true

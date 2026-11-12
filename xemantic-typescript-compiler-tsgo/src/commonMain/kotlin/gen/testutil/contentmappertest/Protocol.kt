@@ -115,7 +115,7 @@ class staticProjectHandler(
                 }
                 var diagnostics: GoSlice<OptionDiagnosticResult> = OptionDiagnosticResult.ELEM.nilSlice
                 if (goBytesToString(p.options) == "{\"plugins\":[{\"name\":1}]}") {
-                    diagnostics = GoSlice.of(OptionDiagnosticResult.ELEM, OptionDiagnosticResult(path = GoSlice.of(GoElem.slice(GoElem.BYTE), goStringToBytes("\"plugins\""), goStringToBytes("0"), goStringToBytes("\"name\"")), messageText = "Option 'name' requires a string.", code = 123))
+                    diagnostics = GoSlice.of(OptionDiagnosticResult.ELEM, OptionDiagnosticResult(path = GoSlice.of(GoElem.JSON_VALUE, goStringToBytes("\"plugins\""), goStringToBytes("0"), goStringToBytes("\"name\"")), messageText = "Option 'name' requires a string.", code = 123))
                 }
                 return Tuple2<Any?, GoError?>(OpenProjectResult(optionDiagnostics = diagnostics), null)
             }

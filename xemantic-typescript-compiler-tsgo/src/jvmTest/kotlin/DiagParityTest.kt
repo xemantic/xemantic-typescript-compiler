@@ -170,14 +170,12 @@ class DiagParityTest {
         append('"')
     }
 
-    private fun flatten(d: Diagnostic): String = buildString {
-        append(GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale())))
-        fun chain(c: Diagnostic, level: Int) {
-            append("\n").append("  ".repeat(level)).append(GoString.toUtf16(c.localize(com.xemantic.typescript.tsgo.locale.Locale())))
-            for (j in 0 until c.messageChain.len) chain(c.messageChain[j]!!, level + 1)
-        }
-        for (j in 0 until d.messageChain.len) chain(d.messageChain[j]!!, 1)
-    }
+    /** As the oracle renders it: tsgo's own diagnosticwriter (7.1 adds render-time notes, e.g. for content-mapped virtual code). */
+    private fun flatten(d: Diagnostic): String = GoString.toUtf16(
+        com.xemantic.typescript.tsgo.diagnosticwriter.flattenDiagnosticMessage(
+            com.xemantic.typescript.tsgo.diagnosticwriter.wrapASTDiagnostic(d), "\n", com.xemantic.typescript.tsgo.locale.default,
+        ),
+    )
 
     private fun fields(d: Diagnostic): String {
         val file = d.file?.let { GoString.toUtf16(it.fileName().value) }

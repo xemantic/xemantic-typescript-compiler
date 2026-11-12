@@ -46,6 +46,9 @@ import com.xemantic.typescript.goport.types.UnionType
  *
  * [tpNames] renames type parameters by id (a method's receiver type parameters are the class's).
  */
+/** `jsontext.Value` (Go 1.27's standard package, and go-json-experiment's which aliases it): raw JSON bytes. */
+val JSON_VALUE_TYPES = setOf("encoding/json/jsontext.Value", "github.com/go-json-experiment/json/jsontext.Value")
+
 class TypeMapper(
     val fc: FileCtx,
     val tpNames: Map<Int, String> = emptyMap(),
@@ -482,7 +485,8 @@ class TypeMapper(
             is NamedType -> when (namedKind(t)) {
                 NamedKind.ERROR, NamedKind.IFACE -> "GoElem.ref<${kt(id)}>()"
                 NamedKind.CONSTRAINT -> refuse("constraint-as-type", t.name)
-                NamedKind.ALIAS -> when (types.under(t.id)) {
+                // `jsontext.Value`: its own element kind, so json decodes raw bytes into it behind a type parameter.
+                NamedKind.ALIAS -> if (t.key in JSON_VALUE_TYPES) "GoElem.JSON_VALUE" else when (types.under(t.id)) {
                     is StructType -> "GoElem<${kt(id)}>({ ${zero(id)} }${if (hasGoCopy(t)) ", { it.goCopy() }" else ""})"
                     is SliceType, is MapType, is ArrayType -> elem(t.underlying)
                     else -> "GoElem.ref<${kt(id)}>()"
