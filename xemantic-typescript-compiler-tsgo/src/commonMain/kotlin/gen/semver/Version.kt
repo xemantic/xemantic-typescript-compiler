@@ -36,7 +36,7 @@ class Version(
     @get:kotlin.jvm.JvmName("goGet_patch") @set:kotlin.jvm.JvmName("goSet_patch") var patch: UInt = 0u,
     @kotlin.jvm.JvmField var prerelease: GoSlice<String> = GoElem.STRING.nilSlice,
     @kotlin.jvm.JvmField var build: GoSlice<String> = GoElem.STRING.nilSlice,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): Version = Version(major = major, minor = minor, patch = patch, prerelease = prerelease, build = build)
 

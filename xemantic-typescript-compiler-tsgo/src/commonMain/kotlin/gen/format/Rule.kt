@@ -34,7 +34,7 @@ class ruleImpl(
     @kotlin.jvm.JvmField var context: GoSlice<((FormattingContext?) -> Boolean)?> = GoElem.ref<((FormattingContext?) -> Boolean)?>().nilSlice,
     @get:kotlin.jvm.JvmName("goGet_action") @set:kotlin.jvm.JvmName("goSet_action") var action: com.xemantic.typescript.tsgo.format.ruleAction = com.xemantic.typescript.tsgo.format.ruleAction(0),
     @get:kotlin.jvm.JvmName("goGet_flags") @set:kotlin.jvm.JvmName("goSet_flags") var flags: com.xemantic.typescript.tsgo.format.ruleFlags = com.xemantic.typescript.tsgo.format.ruleFlags(0),
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): ruleImpl = ruleImpl(debugName = debugName, context = context, action = action, flags = flags)
 

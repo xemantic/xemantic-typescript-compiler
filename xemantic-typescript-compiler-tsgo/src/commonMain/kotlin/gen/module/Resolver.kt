@@ -138,7 +138,7 @@ class resolutionCandidate(
     @get:kotlin.jvm.JvmName("goGet_path") @set:kotlin.jvm.JvmName("goSet_path") var path: RootedPath = RootedPath(""),
     @get:kotlin.jvm.JvmName("goGet_directoryPath") @set:kotlin.jvm.JvmName("goSet_directoryPath") var directoryPath: RootedDirectoryPath = RootedDirectoryPath(""),
     @kotlin.jvm.JvmField var directoryOnly: Boolean = false,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): resolutionCandidate = resolutionCandidate(path = path, directoryPath = directoryPath, directoryOnly = directoryOnly)
 

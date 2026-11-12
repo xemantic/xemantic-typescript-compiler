@@ -31,7 +31,7 @@ import com.xemantic.typescript.tsgo.core.UTF16Offset
 import com.xemantic.typescript.tsgo.glob.element
 
 // go: github.com/microsoft/TypeScript/tsc/internal/printer.EmitTextWriter e5bb7b56
-interface EmitTextWriter : element, ProjectID, Stringer {
+interface EmitTextWriter : element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Stringer {
     fun clear()
     fun decreaseIndent()
     fun getColumn(): UTF16Offset

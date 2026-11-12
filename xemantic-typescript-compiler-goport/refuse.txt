@@ -17,3 +17,8 @@ github.com/microsoft/TypeScript/tsc/internal/testutil/baseline.RunAgainstSubmodu
 github.com/microsoft/TypeScript/tsc/internal/ipc.newPipeListener unix-socket-transport
 github.com/microsoft/TypeScript/tsc/internal/ipc.newPrivatePipeListener unix-socket-transport
 github.com/microsoft/TypeScript/tsc/internal/ipc.listenInPrivatePipeDirectory unix-socket-transport
+
+# (TSGO.7.1) the LSP session's performance telemetry (runtime/metrics samples on a time.Ticker): the LSP server
+# starts it; the API session and the port never do.
+github.com/microsoft/TypeScript/tsc/internal/project.Session.StartPerformanceTelemetry lsp-telemetry
+github.com/microsoft/TypeScript/tsc/internal/project.Session.sendPerformanceTelemetry lsp-telemetry

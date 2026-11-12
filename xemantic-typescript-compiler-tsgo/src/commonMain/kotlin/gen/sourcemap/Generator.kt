@@ -105,7 +105,7 @@ class Generator(
     @kotlin.jvm.JvmField var hasPending: Boolean = false,
     @kotlin.jvm.JvmField var hasPendingSource: Boolean = false,
     @kotlin.jvm.JvmField var hasPendingName: Boolean = false,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): Generator = Generator(caseSensitivity = caseSensitivity, file = file, sourceRoot = sourceRoot, sourcesDirectoryPath = sourcesDirectoryPath, rawSources = rawSources, sources = sources, sourceToSourceIndexMap = sourceToSourceIndexMap, sourcesContent = sourcesContent, names = names, nameToNameIndexMap = nameToNameIndexMap, mappings = mappings.goCopy(), lastGeneratedLine = lastGeneratedLine, lastGeneratedCharacter = lastGeneratedCharacter, lastSourceIndex = lastSourceIndex, lastSourceLine = lastSourceLine, lastSourceCharacter = lastSourceCharacter, lastNameIndex = lastNameIndex, hasLast = hasLast, pendingGeneratedLine = pendingGeneratedLine, pendingGeneratedCharacter = pendingGeneratedCharacter, pendingSourceIndex = pendingSourceIndex, pendingSourceLine = pendingSourceLine, pendingSourceCharacter = pendingSourceCharacter, pendingNameIndex = pendingNameIndex, hasPending = hasPending, hasPendingSource = hasPendingSource, hasPendingName = hasPendingName)
 

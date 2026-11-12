@@ -34,7 +34,7 @@ import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
 
 // go: github.com/microsoft/TypeScript/tsc/internal/packagejson.JSONValueType ed9c1aa8
 @kotlin.jvm.JvmInline
-value class JSONValueType(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<JSONValueType>, GoBasicValue {
+value class JSONValueType(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<JSONValueType>, GoBasicValue {
 
     override fun compareTo(other: JSONValueType): Int = value.compareTo(other.value)
 

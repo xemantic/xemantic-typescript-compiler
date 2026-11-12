@@ -31,7 +31,7 @@ import com.xemantic.typescript.tsgo.go.encoding.json.v2.Unmarshaler
 
 // go: github.com/microsoft/TypeScript/tsc/internal/core.Tristate 7bb9787e
 @kotlin.jvm.JvmInline
-value class Tristate(val value: Int) : Marshaler, Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<Tristate>, GoBasicValue {
+value class Tristate(val value: Int) : Marshaler, Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<Tristate>, GoBasicValue {
 
     override fun compareTo(other: Tristate): Int = value.compareTo(other.value)
 

@@ -30,14 +30,14 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 import com.xemantic.typescript.tsgo.glob.element
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/logging.LogCollector 4f963754
-interface LogCollector : Stringer, Logger, element, ProjectID {
+interface LogCollector : Stringer, Logger, element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/logging.logCollector 6adc8216
 class logCollector(
     @kotlin.jvm.JvmField var logger: com.xemantic.typescript.tsgo.project.logging.logger = com.xemantic.typescript.tsgo.project.logging.logger(),
     @kotlin.jvm.JvmField var builder: Builder? = null,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, LogCollector, Logger {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, LogCollector, Logger {
 
     fun goCopy(): logCollector = logCollector(logger = logger.goCopy(), builder = builder)
 

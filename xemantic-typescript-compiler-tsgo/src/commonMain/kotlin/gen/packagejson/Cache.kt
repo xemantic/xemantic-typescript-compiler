@@ -240,7 +240,7 @@ fun VersionPaths?.getPaths(): OrderedMap<String, GoSlice<String>>? {
 class PackageDirectory(
     @get:kotlin.jvm.JvmName("goGet_name") @set:kotlin.jvm.JvmName("goSet_name") var name: RootedDirectoryPath = RootedDirectoryPath(""),
     @get:kotlin.jvm.JvmName("goGet_key") @set:kotlin.jvm.JvmName("goSet_key") var key: PathKey = PathKey(""),
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): PackageDirectory = PackageDirectory(name = name, key = key)
 

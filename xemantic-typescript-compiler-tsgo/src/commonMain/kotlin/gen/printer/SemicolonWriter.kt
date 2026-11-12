@@ -33,7 +33,7 @@ import com.xemantic.typescript.tsgo.core.UTF16Offset
 class trailingSemicolonDeferringWriter(
     @kotlin.jvm.JvmField var inner: EmitTextWriter? = null,
     @kotlin.jvm.JvmField var hasPendingSemicolon: Boolean = false,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): trailingSemicolonDeferringWriter = trailingSemicolonDeferringWriter(inner = inner, hasPendingSemicolon = hasPendingSemicolon)
 

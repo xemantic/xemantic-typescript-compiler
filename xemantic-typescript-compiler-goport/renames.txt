@@ -29,3 +29,8 @@ github.com/microsoft/TypeScript/tsc/internal/ast.SourceFile.data sourceFileData
 # PROMOTED `Transformer.TransformSourceFile` (*SourceFile result); its own unexported `transformSourceFile` (*Node
 # result) lowers to the same Kotlin name.
 github.com/microsoft/TypeScript/tsc/internal/transformers/declarations.DeclarationTransformer.transformSourceFile transformSourceFileImpl
+
+# (TSGO.7.1) project.Project has both `ID() ID` and `Id() string` (ls.Project requires the latter as `id`).
+github.com/microsoft/TypeScript/tsc/internal/project.Project.ID projectID
+# (TSGO.7.1) project.aliasPaths is a named map: its `Len()` would be GoMap's own `len`.
+github.com/microsoft/TypeScript/tsc/internal/project.aliasPaths.Len aliasCount

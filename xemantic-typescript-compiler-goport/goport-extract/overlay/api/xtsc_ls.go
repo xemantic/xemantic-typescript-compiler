@@ -71,7 +71,7 @@ type XtscLanguageService struct {
 }
 
 func (x *XtscLanguageService) languageService(uri lsproto.DocumentUri) *ls.LanguageService {
-	return ls.NewLanguageService(x.Project.Id(), x.Project.GetProgram(), x.Snapshot, uri.FileName())
+	return ls.NewLanguageService(x.Project.ID(), x.Project.GetProgram(), x.Snapshot, uri.FileName().AsString())
 }
 
 // XtscLSRequest answers one language-server request: params are the request's JSON params, the result
@@ -170,7 +170,7 @@ func (o *xtscOrchestrator) GetProjectsForFile(ctx context.Context, uri lsproto.D
 	return nil, nil
 }
 
-func (o *xtscOrchestrator) GetProjectsLoadingProjectTree(ctx context.Context, requestedProjectTrees *collections.Set[tspath.Path]) iter.Seq[ls.Project] {
+func (o *xtscOrchestrator) GetProjectsLoadingProjectTree(ctx context.Context, requestedProjectTrees *collections.Set[tspath.PathKey]) iter.Seq[ls.Project] {
 	return func(yield func(ls.Project) bool) {
 		yield(o.x.Project)
 	}

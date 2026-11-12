@@ -89,13 +89,13 @@ func encodeFile(fileName string, opts ast.ExternalModuleIndicatorOptions, parseO
 	if err != nil {
 		return nil, err
 	}
-	normalized := tspath.NormalizePath(abs)
+	normalized := tspath.RootedFilePathFromAbsolute(abs)
 	text, ok := fs.ReadFile(normalized) // same BOM/UTF-16 decoding as the binary
 	if !ok {
 		return nil, fmt.Errorf("cannot read %s", normalized)
 	}
 	if recordAs != "" {
-		normalized = tspath.NormalizePath(recordAs)
+		normalized = tspath.RootedFilePathFromAbsolute(recordAs)
 	}
 	scriptKind := core.GetScriptKindFromFileName(normalized)
 	if scriptKind == core.ScriptKindUnknown {
@@ -103,7 +103,7 @@ func encodeFile(fileName string, opts ast.ExternalModuleIndicatorOptions, parseO
 	}
 	sf := parser.ParseSourceFile(ast.SourceFileParseOptions{
 		FileName:                       normalized,
-		Path:                           tspath.ToPath(normalized, "", fs.UseCaseSensitiveFileNames()),
+		PathKey:                        fs.CaseSensitivity().PathKey(normalized.AsPath()),
 		ExternalModuleIndicatorOptions: opts,
 	}, text, scriptKind)
 	sf.Hash = xxh3.HashString128(text) // project/parsecache.go: file.Hash = fh.Hash()

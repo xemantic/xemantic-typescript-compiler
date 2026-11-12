@@ -2,7 +2,12 @@
 // oracle-go/build.sh through `go build -overlay`; it is never written into typescript-go-repo.
 //
 // XtscCompileCheckOnly is CompileFiles + CompileFilesEx + the PRE-EMIT half of
-// compileFilesWithHost (harnessutil.go, tag typescript/v7.0.2), copied verbatim except that
+// compileFilesWithHost (harnessutil.go, TypeScript 7.1.0-beta, microsoft/TypeScript 3e9236361fa9
+// tsc/), copied verbatim except that
+//   - CompileFilesEx is split at its program creation: XtscDerive is everything up to (and
+//     including) the ParsedCommandLine, and also returns the `/.lib` files it mounts; the content
+//     mapper host (created first upstream, read by nothing before the compiler host) is created in
+//     XtscCompileCheckOnly, right before the compiler host,
 //   - nothing is emitted (the "post" program and the TS-1 pre/post count check are dropped), and
 //   - each phase's diagnostics are kept apart before the harness's SortAndDeduplicateDiagnostics,
 //     so every diagnostic can be attributed to the program call that produced it.
@@ -21,8 +26,10 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
 	"github.com/microsoft/TypeScript/tsc/internal/bundled"
 	"github.com/microsoft/TypeScript/tsc/internal/compiler"
+	"github.com/microsoft/TypeScript/tsc/internal/contentmapper"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
-	"github.com/microsoft/TypeScript/tsc/internal/repo"
+	"github.com/microsoft/TypeScript/tsc/internal/locale"
+	"github.com/microsoft/TypeScript/tsc/internal/testutil/contentmappertest"
 	"github.com/microsoft/TypeScript/tsc/internal/tsoptions"
 	"github.com/microsoft/TypeScript/tsc/internal/tspath"
 	"github.com/microsoft/TypeScript/tsc/internal/vfs/vfstest"
@@ -35,15 +42,15 @@ const (
 	XtscPhaseSyntactic   = "syntactic"
 	XtscPhaseSemantic    = "semantic"
 	XtscPhaseGlobal      = "global"
-	XtscPhaseDeclaration = "declaration"
 	XtscPhaseSuggestion  = "suggestion"
+	XtscPhaseDeclaration = "declaration"
 )
 
 type XtscCheckOnly struct {
-	Options          *core.CompilerOptions // after harness defaults, directives and absolutization
+	Options          *core.CompilerOptions // after harness defaults and directives
 	HarnessOptions   *HarnessOptions
-	ProgramFileNames []string // root names handed to NewProgram, in order
-	IncludeLibDir    bool     // whether `/.lib` (tests/lib) is mounted in the FS
+	ProgramFileNames []tspath.RootedFilePath // root names handed to NewProgram, in order
+	IncludeLibDir    bool                    // whether `/.lib` (tests/lib) is mounted in the FS
 	LibDirFiles      map[string]string
 	Program          compiler.ProgramLike
 	Diagnostics      []*ast.Diagnostic // SortAndDeduplicateDiagnostics(all phases)
@@ -52,7 +59,7 @@ type XtscCheckOnly struct {
 }
 
 // XtscResolveOptions is the option half of CompileFiles (verbatim).
-func XtscResolveOptions(t *testing.T, testConfig TestConfiguration, tsconfig *tsoptions.ParsedCommandLine, currentDirectory string) (*core.CompilerOptions, *HarnessOptions) {
+func XtscResolveOptions(t *testing.T, testConfig TestConfiguration, tsconfig *tsoptions.ParsedCommandLine, currentDirectory tspath.RootedDirectoryPath) (*core.CompilerOptions, *HarnessOptions) {
 	var compilerOptions *core.CompilerOptions
 	if tsconfig != nil {
 		compilerOptions = tsconfig.ParsedConfig.CompilerOptions.Clone()
@@ -68,7 +75,7 @@ func XtscResolveOptions(t *testing.T, testConfig TestConfiguration, tsconfig *ts
 		compilerOptions.SkipDefaultLibCheck = core.TSTrue
 	}
 	compilerOptions.NoErrorTruncation = core.TSTrue
-	harnessOptions := HarnessOptions{UseCaseSensitiveFileNames: true, CurrentDirectory: currentDirectory}
+	harnessOptions := HarnessOptions{CaseSensitivity: tspath.CaseSensitive, CurrentDirectory: currentDirectory}
 
 	// Parse harness and compiler options from the test configuration
 	if testConfig != nil {
@@ -81,12 +88,13 @@ func XtscResolveOptions(t *testing.T, testConfig TestConfiguration, tsconfig *ts
 type XtscDerived struct {
 	Options          *core.CompilerOptions
 	HarnessOptions   *HarnessOptions
-	ProgramFileNames []string
+	ProgramFileNames []tspath.RootedFilePath
 	IncludeLibDir    bool
 	LibDirFiles      map[string]string // `/.lib/...` path -> content, when IncludeLibDir
 	TestFS           map[string]any
+	ContentMappers   []*contentmapper.Mapper
 	Config           *tsoptions.ParsedCommandLine
-	CurrentDirectory string
+	CurrentDirectory tspath.RootedDirectoryPath
 }
 
 func XtscDerive(
@@ -95,18 +103,18 @@ func XtscDerive(
 	otherFiles []*TestFile,
 	testConfig TestConfiguration,
 	tsconfig *tsoptions.ParsedCommandLine,
-	currentDirectory string,
+	currentDirectory tspath.RootedDirectoryPath,
 	symlinks map[string]string,
 ) *XtscDerived {
 	compilerOptions, harnessOptions := XtscResolveOptions(t, testConfig, tsconfig, currentDirectory)
 
 	// ---- verbatim from CompileFilesEx ----
-	var programFileNames []string
+	var programFileNames []tspath.RootedFilePath
 	for _, file := range inputFiles {
-		fileName := tspath.GetNormalizedAbsolutePath(file.UnitName, currentDirectory)
+		fileName := tspath.ToRootedFilePath(file.UnitName, currentDirectory)
 
-		if !tspath.FileExtensionIs(fileName, tspath.ExtensionJson) &&
-			!tspath.FileExtensionIs(fileName, tspath.ExtensionTsBuildInfo) {
+		if !fileName.ExtensionIs(tspath.ExtensionJson) &&
+			!fileName.ExtensionIs(tspath.ExtensionTsBuildInfo) {
 			programFileNames = append(programFileNames, fileName)
 		}
 	}
@@ -118,38 +126,14 @@ func XtscDerive(
 			if libFile == "lib.d.ts" && compilerOptions.NoLib != core.TSTrue {
 				continue
 			}
-			programFileNames = append(programFileNames, tspath.CombinePaths(testLibFolder, libFile))
+			programFileNames = append(programFileNames, currentDirectory.ResolveFile(tspath.CombinePaths(testLibFolder, libFile)))
 			includeLibDir = true
 		}
 	}
 
-	if includeLibDir {
-		repo.SkipIfNoTypeScriptSubmodule(t)
-	}
-
-	if compilerOptions.OutDir != "" {
-		compilerOptions.OutDir = tspath.GetNormalizedAbsolutePath(compilerOptions.OutDir, currentDirectory)
-	}
-	if compilerOptions.Project != "" {
-		compilerOptions.Project = tspath.GetNormalizedAbsolutePath(compilerOptions.Project, currentDirectory)
-	}
-	if compilerOptions.RootDir != "" {
-		compilerOptions.RootDir = tspath.GetNormalizedAbsolutePath(compilerOptions.RootDir, currentDirectory)
-	}
-	if compilerOptions.TsBuildInfoFile != "" {
-		compilerOptions.TsBuildInfoFile = tspath.GetNormalizedAbsolutePath(compilerOptions.TsBuildInfoFile, currentDirectory)
-	}
-	if compilerOptions.BaseUrl != "" {
-		compilerOptions.BaseUrl = tspath.GetNormalizedAbsolutePath(compilerOptions.BaseUrl, currentDirectory)
-	}
-	if compilerOptions.DeclarationDir != "" {
-		compilerOptions.DeclarationDir = tspath.GetNormalizedAbsolutePath(compilerOptions.DeclarationDir, currentDirectory)
-	}
-	for i, rootDir := range compilerOptions.RootDirs {
-		compilerOptions.RootDirs[i] = tspath.GetNormalizedAbsolutePath(rootDir, currentDirectory)
-	}
-	for i, typeRoot := range compilerOptions.TypeRoots {
-		compilerOptions.TypeRoots[i] = tspath.GetNormalizedAbsolutePath(typeRoot, currentDirectory)
+	var contentMappers []*contentmapper.Mapper
+	if tsconfig != nil && tsconfig.ParsedConfig != nil {
+		contentMappers = tsconfig.ParsedConfig.ContentMappers
 	}
 
 	testfs := map[string]any{}
@@ -186,14 +170,15 @@ func XtscDerive(
 		configFile = tsconfig.ConfigFile
 		errors = tsconfig.Errors
 	}
-	config := &tsoptions.ParsedCommandLine{
-		ParsedConfig: &core.ParsedOptions{
-			CompilerOptions: compilerOptions,
-			FileNames:       programFileNames,
-		},
-		ConfigFile: configFile,
-		Errors:     errors,
+	baseDirectory := currentDirectory
+	if tsconfig != nil && tsconfig.BaseDirectory() != "" {
+		baseDirectory = tsconfig.BaseDirectory()
 	}
+	config := tsoptions.NewParsedCommandLine(compilerOptions, programFileNames, nil, baseDirectory, harnessOptions.CaseSensitivity)
+	config.ParsedConfig.ContentMappers = contentMappers
+	config.ConfigFile = configFile
+	config.Errors = errors
+	// ---- end verbatim (up to the content mapper project and the compiler host) ----
 	return &XtscDerived{
 		Options:          compilerOptions,
 		HarnessOptions:   harnessOptions,
@@ -201,6 +186,7 @@ func XtscDerive(
 		IncludeLibDir:    includeLibDir,
 		LibDirFiles:      libDirFiles,
 		TestFS:           testfs,
+		ContentMappers:   contentMappers,
 		Config:           config,
 		CurrentDirectory: currentDirectory,
 	}
@@ -212,30 +198,49 @@ func XtscCompileCheckOnly(
 	otherFiles []*TestFile,
 	testConfig TestConfiguration,
 	tsconfig *tsoptions.ParsedCommandLine,
-	currentDirectory string,
+	currentDirectory tspath.RootedDirectoryPath,
 	symlinks map[string]string,
 ) *XtscCheckOnly {
 	d := XtscDerive(t, inputFiles, otherFiles, testConfig, tsconfig, currentDirectory, symlinks)
 	compilerOptions, harnessOptions, programFileNames, config := d.Options, d.HarnessOptions, d.ProgramFileNames, d.Config
-	includeLibDir, libDirFiles := d.IncludeLibDir, d.LibDirFiles
+	includeLibDir, libDirFiles, contentMappers := d.IncludeLibDir, d.LibDirFiles, d.ContentMappers
 
-	fs := vfstest.FromMap(d.TestFS, harnessOptions.UseCaseSensitiveFileNames)
+	// ---- verbatim from CompileFilesEx ----
+	fs := vfstest.FromMap(d.TestFS, harnessOptions.CaseSensitivity)
 	fs = bundled.WrapFS(fs)
 	fs = NewOutputRecorderFS(fs)
-	host := createCompilerHost(fs, bundled.LibPath(), currentDirectory)
+
+	var contentMapperHost contentmapper.Host
+	if compilerOptions.RunExternalCode.IsTrue() && len(contentMappers) > 0 {
+		contentMapperHost = contentmapper.NewHost(context.Background(), contentmappertest.NewSpawner(), locale.Default)
+		defer contentMapperHost.Close()
+	}
+
+	var contentMapperProject contentmapper.Project
+	if contentMapperHost != nil {
+		contentMapperProject = contentMapperHost.Project(contentmapper.ProjectSpec{
+			ConfigFileName:  config.ConfigName(),
+			Mappers:         config.ContentMappers(),
+			CompilerOptions: config.CompilerOptions(),
+		})
+		defer contentMapperProject.Close()
+	}
+	host := createCompilerHost(fs, bundled.LibPath(), currentDirectory, contentMapperProject)
 	// ---- end verbatim (CompileFilesEx); below: the pre-emit half of compileFilesWithHost ----
 
 	ctx := context.Background()
 	preCompilerOptions := config.CompilerOptions().Clone()
 	preCompilerOptions.TraceResolution = core.TSFalse
-	preConfig := &tsoptions.ParsedCommandLine{
-		ParsedConfig: &core.ParsedOptions{
-			CompilerOptions: preCompilerOptions,
-			FileNames:       config.FileNames(),
-		},
-		ConfigFile: config.ConfigFile,
-		Errors:     config.Errors,
-	}
+	preConfig := tsoptions.NewParsedCommandLine(
+		preCompilerOptions,
+		config.FileNames(),
+		config.ProjectReferences(),
+		config.BaseDirectory(),
+		config.CaseSensitivity(),
+	)
+	preConfig.ParsedConfig.ContentMappers = config.ContentMappers()
+	preConfig.ConfigFile = config.ConfigFile
+	preConfig.Errors = config.Errors
 	preProgram := createProgram(host, preConfig)
 
 	type phased struct {
@@ -249,11 +254,11 @@ func XtscCompileCheckOnly(
 		{XtscPhaseSemantic, preProgram.GetSemanticDiagnostics(ctx, nil)},
 		{XtscPhaseGlobal, preProgram.GetGlobalDiagnostics(ctx)},
 	}
-	if preProgram.Options().GetEmitDeclarations() {
-		phases = append(phases, phased{XtscPhaseDeclaration, preProgram.GetDeclarationDiagnostics(ctx, nil)})
-	}
 	if harnessOptions.CaptureSuggestions {
 		phases = append(phases, phased{XtscPhaseSuggestion, preProgram.GetSuggestionDiagnostics(ctx, nil)})
+	}
+	if preProgram.Options().GetEmitDeclarations() {
+		phases = append(phases, phased{XtscPhaseDeclaration, preProgram.GetDeclarationDiagnostics(ctx, nil)})
 	}
 	var preErrors []*ast.Diagnostic
 	phaseOf := map[*ast.Diagnostic]string{}

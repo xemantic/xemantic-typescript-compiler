@@ -3,7 +3,8 @@
 //
 // It exports the compiler runner's own case parsing so the diag oracle prepares a case exactly
 // as compiler_runner.go does. XtscPrepare is a VERBATIM copy of newCompilerTest's
-// pre-CompileFiles block (compiler_runner.go, tag typescript/v7.0.2); keep it in sync on a bump.
+// pre-CompileFiles block (compiler_runner.go, TypeScript 7.1.0-beta, microsoft/TypeScript 3e9236361fa9
+// tsc/); keep it in sync on a bump.
 package testrunner
 
 import (
@@ -50,7 +51,7 @@ func XtscConfigurations(t *testing.T, filename string) (string, []XtscConfig) {
 		if nc != nil && nc.Name != "" {
 			c.Name = nc.Name
 			c.TestName = basename + " " + nc.Name
-			extname := tspath.GetAnyExtensionFromPath(basename, nil, false)
+			extname := tspath.GetAnyExtensionFromPath(basename, nil, tspath.CaseSensitive)
 			c.ConfiguredName = basename[:len(basename)-len(extname)] + "(" + nc.Name + ")" + extname
 		}
 		out = append(out, c)
@@ -60,7 +61,7 @@ func XtscConfigurations(t *testing.T, filename string) (string, []XtscConfig) {
 
 type XtscPrepared struct {
 	HarnessConfig    harnessutil.TestConfiguration
-	CurrentDirectory string
+	CurrentDirectory tspath.RootedDirectoryPath
 	ToBeCompiled     []*harnessutil.TestFile
 	OtherFiles       []*harnessutil.TestFile
 	TsConfigFiles    []*harnessutil.TestFile
@@ -85,7 +86,10 @@ func XtscPrepare(filename string, content string, named *harnessutil.NamedTestCo
 
 	// ---- verbatim from newCompilerTest ----
 	harnessConfig := testCaseContentWithConfig.configuration
-	currentDirectory := tspath.GetNormalizedAbsolutePath(harnessConfig["currentdirectory"], srcFolder)
+	currentDirectory := srcFolder
+	if rawCurrentDirectory := harnessConfig["currentdirectory"]; rawCurrentDirectory != "" {
+		currentDirectory = tspath.ToRootedDirectoryPath(rawCurrentDirectory, srcFolder)
+	}
 
 	units := testCaseContentWithConfig.testUnitData
 	var toBeCompiled []*harnessutil.TestFile
@@ -104,7 +108,7 @@ func XtscPrepare(filename string, content string, named *harnessutil.NamedTestCo
 		for _, unit := range units {
 			if slices.Contains(
 				tsConfig.ParsedConfig.FileNames,
-				tspath.GetNormalizedAbsolutePath(unit.name, currentDirectory),
+				tspath.ToRootedFilePath(unit.name, currentDirectory),
 			) {
 				toBeCompiled = append(toBeCompiled, createHarnessTestFile(unit, currentDirectory))
 			} else {
@@ -114,7 +118,7 @@ func XtscPrepare(filename string, content string, named *harnessutil.NamedTestCo
 	} else {
 		baseUrl, ok := harnessConfig["baseurl"]
 		if ok && !tspath.IsRootedDiskPath(baseUrl) {
-			harnessConfig["baseurl"] = tspath.GetNormalizedAbsolutePath(baseUrl, currentDirectory)
+			harnessConfig["baseurl"] = tspath.ToRootedDirectoryPath(baseUrl, currentDirectory).AsString()
 		}
 
 		lastUnit := units[len(units)-1]
@@ -145,15 +149,27 @@ func XtscPrepare(filename string, content string, named *harnessutil.NamedTestCo
 
 // XtscRunnerCompile runs the UNMODIFIED runner path (newCompilerTest → harnessutil.CompileFiles,
 // i.e. a pre-emit program, an emitting program and the TS-1 count check) and returns what
-// verifyDiagnostics would baseline: the files list and the diagnostics.
-func XtscRunnerCompile(t *testing.T, testName string, filename string, content string, named *harnessutil.NamedTestConfiguration) (*harnessutil.CompilationResult, []*harnessutil.TestFile) {
+// verifyDiagnostics would baseline: the files list and the diagnostics, both without the
+// content-mapped files (verifyDiagnostics baselines those separately, verifyContentMapper).
+func XtscRunnerCompile(t *testing.T, testName string, filename string, content string, named *harnessutil.NamedTestConfiguration) (*harnessutil.CompilationResult, []*harnessutil.TestFile, []*ast.Diagnostic) {
 	payload := makeUnitsFromTest(content, filename)
 	if named != nil {
 		named = &harnessutil.NamedTestConfiguration{Name: named.Name, Config: maps.Clone(named.Config)}
 	}
-	ct := newCompilerTest(t, testName, filename, &payload, named)
-	files := core.Concatenate(ct.tsConfigFiles, core.Concatenate(ct.toBeCompiled, ct.otherFiles))
-	return ct.result, files
+	c := newCompilerTest(t, testName, filename, &payload, named)
+	// ---- verbatim from verifyDiagnostics ----
+	files := core.Concatenate(c.tsConfigFiles, core.Concatenate(c.toBeCompiled, c.otherFiles))
+	diagnostics := c.result.Diagnostics
+	if contentMapped := c.contentMappedFileNames(); len(contentMapped) > 0 {
+		files = core.Filter(files, func(f *harnessutil.TestFile) bool {
+			return !contentMapped[f.UnitName]
+		})
+		diagnostics = core.Filter(diagnostics, func(d *ast.Diagnostic) bool {
+			return d.File() == nil || !contentMapped[d.File().FileName().AsString()]
+		})
+	}
+	// ---- end verbatim ----
+	return c.result, files, diagnostics
 }
 
 // XtscErrorBaseline renders diagnostics exactly as verifyDiagnostics → tsbaseline.DoErrorBaseline.

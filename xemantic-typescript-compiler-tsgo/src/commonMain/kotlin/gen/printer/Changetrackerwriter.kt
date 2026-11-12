@@ -46,7 +46,7 @@ class ChangeTrackerWriter(
     @kotlin.jvm.JvmField var lastNonTriviaPosition: Int = 0,
     @kotlin.jvm.JvmField var pos: GoMap<com.xemantic.typescript.tsgo.printer.triviaPositionKey?, Int> = GoMap.nil<com.xemantic.typescript.tsgo.printer.triviaPositionKey?, Int>(GoElem.INT),
     @kotlin.jvm.JvmField var end: GoMap<com.xemantic.typescript.tsgo.printer.triviaPositionKey?, Int> = GoMap.nil<com.xemantic.typescript.tsgo.printer.triviaPositionKey?, Int>(GoElem.INT),
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, Iface_Grow_81b904b4 {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, com.xemantic.typescript.tsgo.project.ata.ProjectID, Iface_Grow_81b904b4 {
 
     fun goCopy(): ChangeTrackerWriter = ChangeTrackerWriter(textWriter = textWriter.goCopy(), lastNonTriviaPosition = lastNonTriviaPosition, pos = pos, end = end)
 

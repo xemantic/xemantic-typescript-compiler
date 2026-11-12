@@ -190,9 +190,6 @@ func emitOne(t *testing.T, casesRoot, dir, out, baselines string) emitStatus {
 	if baselines != "" {
 		st.Baselines = map[string]string{}
 		sub := cj.Suite + "/"
-		if !strings.HasPrefix(cj.Case, localPrefix) {
-			sub = "submodule/" + sub
-		}
 		const noContent = "<no content>"
 		for _, a := range arts {
 			if a.Status != "ok" {

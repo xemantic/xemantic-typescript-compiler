@@ -93,7 +93,7 @@ interface Diagnostic : triviaPositionKey {
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnosticwriter.ASTDiagnostic fa503002
 class ASTDiagnostic(
     @kotlin.jvm.JvmField var diagnostic: com.xemantic.typescript.tsgo.ast.Diagnostic? = null,
-) : Stringer, Diagnostic, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
+) : Stringer, Diagnostic, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.printer.triviaPositionKey, com.xemantic.typescript.tsgo.project.ata.ProjectID, Iface_End_22b3828e {
 
     fun goCopy(): ASTDiagnostic = ASTDiagnostic(diagnostic = diagnostic)
 
@@ -368,7 +368,7 @@ class FormattingOptions(
     @get:kotlin.jvm.JvmName("goGet_caseSensitivity") @set:kotlin.jvm.JvmName("goSet_caseSensitivity") var caseSensitivity: CaseSensitivity = CaseSensitivity(0),
     @get:kotlin.jvm.JvmName("goGet_currentDirectory") @set:kotlin.jvm.JvmName("goSet_currentDirectory") var currentDirectory: RootedDirectoryPath = RootedDirectoryPath(""),
     @kotlin.jvm.JvmField var newLine: String = "",
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): FormattingOptions = FormattingOptions(locale = locale.goCopy(), caseSensitivity = caseSensitivity, currentDirectory = currentDirectory, newLine = newLine)
 

@@ -621,7 +621,7 @@ fun createSnippetPrinter(options: PrinterOptions, emitContext_0: EmitContext?): 
 class snippetEmitTextWriter(
     @kotlin.jvm.JvmField var changeTrackerWriter: ChangeTrackerWriter? = null,
     @kotlin.jvm.JvmField var escapes: GoSlice<TextChange> = TextChange.ELEM.nilSlice,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, Iface_Grow_81b904b4 {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, com.xemantic.typescript.tsgo.project.ata.ProjectID, Iface_Grow_81b904b4 {
 
     fun goCopy(): snippetEmitTextWriter = snippetEmitTextWriter(changeTrackerWriter = changeTrackerWriter, escapes = escapes)
 

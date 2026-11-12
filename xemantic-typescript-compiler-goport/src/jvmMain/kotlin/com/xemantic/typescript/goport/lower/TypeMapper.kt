@@ -577,7 +577,8 @@ class TypeMapper(
         if (kept.isEmpty()) return ""
         return "<" + kept.joinToString(", ") { id ->
             val tp = types.unalias(id) as TypeParamType
-            val b = bound(tp)
+            // Program.unboundedTparams: an alias-typed instantiation cannot satisfy a Kotlin interface bound.
+            val b = if (tp.key in pc.prog.unboundedTparams) null else bound(tp)
             if (b == null) tpName(tp) else "${tpName(tp)} : $b"
         } + ">"
     }

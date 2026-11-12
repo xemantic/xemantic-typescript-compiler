@@ -29,7 +29,7 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 
 // go: github.com/microsoft/TypeScript/tsc/internal/core.ScriptKind b6cd3259
 @kotlin.jvm.JvmInline
-value class ScriptKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<ScriptKind>, GoBasicValue {
+value class ScriptKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<ScriptKind>, GoBasicValue {
 
     override fun compareTo(other: ScriptKind): Int = value.compareTo(other.value)
 

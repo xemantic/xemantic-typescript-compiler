@@ -1465,6 +1465,102 @@ class Program(
         }
     }
 
+    // ---- constraint dispatch (docs/goport-lowering.md § 3, "Constraint dispatch") ----
+
+    /**
+     * Type parameters (by key) whose interface constraint is instantiated — directly or through another such type
+     * parameter — with a named slice/map/func type ([aliasTypes]: a Kotlin typealias, which cannot implement an
+     * interface): their Kotlin bound is dropped and a constraint-method call on one dispatches at run time
+     * ([constraintImpls]). TypeScript 7.1's `dirty.Map[K, V Cloneable[V]]` with `V = dirty.CloneableMap[K2, V2]`.
+     */
+    val unboundedTparams = HashSet<String>()
+
+    /** For each [unboundedTparams] key: the alias implementers (named type keys) its values may be. */
+    val constraintImpls = HashMap<String, MutableSet<String>>()
+
+    fun computeConstraintDispatch() {
+        unboundedTparams.clear()
+        constraintImpls.clear()
+        // Slots: a generic declaration's type parameter by (owner, index); a named type's methods' receiver type
+        // parameters are distinct objects sharing their type's slot.
+        val slotKeys = HashMap<String, MutableSet<String>>()
+        val slotOf = HashMap<String, String>()
+        val slotConstraintOk = HashMap<String, Boolean>()
+        fun addSlot(slot: String, tt: TypeTable, id: Int) {
+            val tp = tt.unalias(id) as? com.xemantic.typescript.goport.types.TypeParamType ?: return
+            slotKeys.getOrPut(slot) { HashSet() } += tp.key
+            slotOf[tp.key] = slot
+            val c = tt.under(tp.constraint) as? com.xemantic.typescript.goport.types.InterfaceType
+            if (c != null && c.isMethodSet && (c.allMethods.ifEmpty { c.methods }).isNotEmpty()) slotConstraintOk[slot] = true
+        }
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (i in 0 until tt.size) {
+                val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                if (n.pkg != p.path || n.origin != null) continue
+                n.tparams.forEachIndexed { j, id -> addSlot("${n.key}#$j", tt, id) }
+            }
+            for (f in p.files) for (d in f.list("decls")) {
+                if (d.k != "FuncDecl") continue
+                val o = d.int("obj")?.let { p.obj(it) } ?: continue
+                val sig = o.int("t")?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.SignatureType ?: continue
+                o.str("key")?.let { k -> sig.tparams.forEachIndexed { j, id -> addSlot("$k#$j", tt, id) } }
+            }
+        }
+        for ((owner, ms) in methodsByType) for ((p, d) in ms) {
+            val tt = TypeTable(p)
+            val sig = d.int("obj")?.let { p.obj(it) }?.int("t")?.let { tt.unalias(it) } as? com.xemantic.typescript.goport.types.SignatureType ?: continue
+            // A method's receiver type parameters: the type arguments of its receiver type `Map[K', V']` (the IR's
+            // method signatures record no recvTparams).
+            var rt = sig.recv?.int("t")?.let { tt.unalias(it) }
+            if (rt is com.xemantic.typescript.goport.types.PointerType) rt = tt.unalias(rt.elem)
+            val recvArgs = (rt as? com.xemantic.typescript.goport.types.NamedType)?.targs.orEmpty().ifEmpty { sig.recvTparams }
+            recvArgs.forEachIndexed { j, id -> addSlot("$owner#$j", tt, id) }
+        }
+        // Instantiations: (slot, type argument) pairs, from instantiated named types and instantiated calls.
+        val uses = ArrayList<Pair<String, Pair<TypeTable, Int>>>()
+        for (p in packages) {
+            val tt = TypeTable(p)
+            for (i in 0 until tt.size) {
+                val n = tt[i] as? com.xemantic.typescript.goport.types.NamedType ?: continue
+                val origin = n.origin?.let { tt.unalias(it) as? com.xemantic.typescript.goport.types.NamedType } ?: continue
+                n.targs.forEachIndexed { j, a -> uses += "${origin.key}#$j" to (tt to a) }
+            }
+            for (f in p.files) walk(f) { x ->
+                val inst = x.obj("inst")
+                val targs = inst?.ints("targs")
+                if (targs != null && x.str("k") == "Ident") {
+                    val o = x.int("obj")?.let { p.obj(it) }
+                    val g = o?.int("origin")?.let { p.obj(it) } ?: o
+                    g?.str("key")?.let { k -> targs.forEachIndexed { j, a -> uses += "$k#$j" to (tt to a) } }
+                }
+                true
+            }
+        }
+        fun aliasImpl(tt: TypeTable, a: Int): String? {
+            val n = tt.unalias(a) as? com.xemantic.typescript.goport.types.NamedType ?: return null
+            val k = n.origin?.let { (tt.unalias(it) as com.xemantic.typescript.goport.types.NamedType).key } ?: n.key
+            return k.takeIf { it in aliasTypes && tt.under(n.id) !is com.xemantic.typescript.goport.types.StructType && methodsByType[it].orEmpty().isNotEmpty() }
+        }
+        val marked = HashMap<String, MutableSet<String>>()
+        var changed = true
+        while (changed) {
+            changed = false
+            for ((slot, use) in uses) {
+                if (slotConstraintOk[slot] != true) continue
+                val (tt, a) = use
+                val impls: Set<String> = aliasImpl(tt, a)?.let { setOf(it) }
+                    ?: (tt.unalias(a) as? com.xemantic.typescript.goport.types.TypeParamType)?.let { tp -> slotOf[tp.key]?.let { marked[it] } }
+                    ?: continue
+                if (marked.getOrPut(slot) { HashSet() }.addAll(impls)) changed = true
+            }
+        }
+        for ((slot, impls) in marked) for (k in slotKeys[slot].orEmpty()) {
+            unboundedTparams += k
+            constraintImpls.getOrPut(k) { HashSet() } += impls
+        }
+    }
+
     // ---- immutable structs (docs/goport-lowering.md § 3, "Immutable structs") ----
 
     /**

@@ -75,6 +75,9 @@ class Time(internal val wallNanos: Long = Long.MIN_VALUE, internal val mono: Lon
         if (mono != Long.MIN_VALUE && u.mono != Long.MIN_VALUE) Duration(mono - u.mono)
         else Duration(wall() - u.wall())
 
+    /** `t.Add(d)`: both readings move by [d] (Go keeps the monotonic reading). */
+    fun add(d: Duration): Time = Time(wall() + d.value, if (mono == Long.MIN_VALUE) mono else mono + d.value)
+
     /** `t.IsZero()`. */
     fun isZero(): Boolean = wallNanos == Long.MIN_VALUE
 
@@ -212,3 +215,55 @@ fun now(): Time {
 
 /** `time.Since(t)` = `Now().Sub(t)`. */
 fun since(t: Time): Duration = now().sub(t)
+
+/**
+ * `time.Timer` as `time.AfterFunc` makes it (TypeScript 7.1's project session and checker pool clean up idle caches
+ * with one): each arming starts a goroutine that sleeps with its run token given back (as [after]), then runs the
+ * function in that goroutine unless a [stop] or [reset] since disarmed it — a generation number decides.
+ */
+class Timer internal constructor(private val f: () -> Unit) {
+    private val lock = com.xemantic.typescript.tsgo.go.sync.Mutex()
+    private var generation = 0L
+    private var active = false
+
+    internal fun arm(d: Duration) {
+        lock.lock()
+        val g = ++generation
+        active = true
+        lock.unlock()
+        com.xemantic.typescript.tsgo.go.sync.goSpawn {
+            if (d.value > 0) com.xemantic.typescript.tsgo.go.sync.blockingWait { platformSleep(d.value) }
+            lock.lock()
+            val fire = active && generation == g
+            if (fire) active = false
+            lock.unlock()
+            if (fire) f()
+        }
+    }
+
+    /** `t.Stop()`: whether the call prevented the function from running. */
+    fun stop(): Boolean {
+        lock.lock()
+        val was = active
+        active = false
+        generation++
+        lock.unlock()
+        return was
+    }
+
+    /** `t.Reset(d)`: re-arms; whether the timer had been active. */
+    fun reset(d: Duration): Boolean {
+        val was = stop()
+        arm(d)
+        return was
+    }
+}
+
+/** `time.AfterFunc(d, f)`. */
+fun afterFunc(d: Duration, f: (() -> Unit)?): Timer? {
+    val fn = f ?: com.xemantic.typescript.tsgo.runtime.goPanic("time: nil func in AfterFunc")
+    return Timer(fn).also { it.arm(d) }
+}
+
+/** `time.Until(t)` = `t.Sub(Now())`. */
+fun until(t: Time): Duration = t.sub(now())

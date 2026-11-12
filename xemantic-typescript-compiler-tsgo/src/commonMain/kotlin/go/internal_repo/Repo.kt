@@ -25,29 +25,17 @@
 
 package com.xemantic.typescript.tsgo.repo
 
-// tsgo's `internal/repo` (paths of the typescript-go checkout), HAND-WRITTEN rather than ported: it
-// finds the repository through `runtime.Caller`'s source path, which a ported binary does not have.
-// Only what the ported test harness reaches ((TSGO.2), `harnessutil.XtscDerive`) is here: the
-// `_submodules/TypeScript` checkout whose `tests/lib` holds the `/.lib` test libraries. The host sets
-// [typeScriptSubmodule] (the diag oracle's `XTSC_TS_SUBMODULE`, docs/goport-diag-oracle.md).
+// tsgo's `internal/repo` (paths of the tsgo checkout), HAND-WRITTEN rather than ported: it finds the
+// repository through `runtime.Caller`'s source path, which a ported binary does not have. TypeScript 7.1 has no
+// `_submodules/TypeScript`: the test cases and the `/.lib` test libraries live in-tree under `testdata/`
+// (`tests/cases`, `tests/lib`). The host sets [testData] (the diag oracle's checkout: `typescript-go-repo/testdata`,
+// docs/goport-diag-oracle.md).
 
-/** The TypeScript submodule directory (`repo.TypeScriptSubmodulePath()`); "" when there is none. */
-var typeScriptSubmodule: String = ""
+/** The checkout's `testdata` directory (`repo.TestDataPath()`); "" when the host set none. */
+var testData: String = ""
 
-/** `repo.TypeScriptSubmodulePath()`. */
-fun typeScriptSubmodulePath(): String = typeScriptSubmodule
+/** `repo.TestDataPath()`. */
+fun testDataPath(): String = testData.ifEmpty { com.xemantic.typescript.tsgo.runtime.goPanic("repo: test data path not set (repo.testData)") }
 
-/** `repo.TypeScriptSubmoduleExists()`: the directory is configured (the host checked it exists). */
-fun typeScriptSubmoduleExists(): Boolean = typeScriptSubmodule.isNotEmpty()
-
-/** `repo.SkippableTest`. */
-interface SkippableTest {
-    fun helper()
-    fun skipf(format: String, vararg args: Any?)
-}
-
-/** `repo.SkipIfNoTypeScriptSubmodule(t)`. */
-fun skipIfNoTypeScriptSubmodule(t: SkippableTest?) {
-    t!!.helper()
-    if (!typeScriptSubmoduleExists()) t.skipf("TypeScript submodule does not exist")
-}
+/** `repo.RootPath()`: the directory holding `testdata`. */
+fun rootPath(): String = testDataPath().removeSuffix("/").substringBeforeLast('/')

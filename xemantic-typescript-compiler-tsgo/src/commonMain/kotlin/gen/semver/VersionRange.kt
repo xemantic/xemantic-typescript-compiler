@@ -32,7 +32,7 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 // go: github.com/microsoft/TypeScript/tsc/internal/semver.VersionRange b9ee2f99
 class VersionRange(
     @kotlin.jvm.JvmField var alternatives: GoSlice<GoSlice<com.xemantic.typescript.tsgo.semver.versionComparator>> = GoElem.slice(com.xemantic.typescript.tsgo.semver.versionComparator.ELEM).nilSlice,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): VersionRange = VersionRange(alternatives = alternatives)
 

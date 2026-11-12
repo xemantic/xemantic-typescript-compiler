@@ -173,9 +173,11 @@ func variationDir(name string) string {
 	return name
 }
 
-// localPrefix marks a case of tsgo's OWN suite (`typescript-go-repo/testdata/tests/cases`, the
-// runner's TestLocal); every other case is the TypeScript submodule's (TestSubmodule). The two
-// differ only in where their committed baselines live (docs/goport-diag-oracle.md § 2).
+// localPrefix marks a case of tsgo's OWN suite (`typescript-go-repo/testdata/tests/cases`). Up to
+// tsgo 7.0 every other case was the TypeScript submodule's, baselined under `submodule/<suite>/`;
+// since TypeScript 7.1 the compiler and conformance cases live in-tree in testdata/tests/cases and
+// are all baselined under `<suite>/` (docs/goport-diag-oracle.md § 2), so the prefix only names
+// the cases-root layout.
 const localPrefix = "local/"
 
 func suiteOf(rel string) string {
@@ -218,7 +220,7 @@ func caseSubtestName(rel, variation string) string { return rel + "|" + variatio
 
 func cmdMaterialize(args []string) error {
 	fl := flag.NewFlagSet("materialize", flag.ExitOnError)
-	casesRoot := fl.String("cases-root", "", "typescript-repo/tests/cases")
+	casesRoot := fl.String("cases-root", "", "typescript-go-repo/testdata/tests/cases")
 	out := fl.String("out", "", "output root (build/goport/diag-cases)")
 	list := fl.String("list", "", "file with case paths relative to -cases-root, one per line")
 	fl.Parse(args)
@@ -290,7 +292,7 @@ func materializeCase(t *testing.T, casesRoot, outRoot, rel string) []matStatus {
 		case r.failed:
 			st.Status, st.Reason = "fatal", "prepare failed (see log)"
 		case r.skipped:
-			st.Status, st.Reason = "skipped", "harness skip (TypeScript submodule / tests/lib missing)"
+			st.Status, st.Reason = "skipped", "harness skip"
 		case unsupported:
 			st.Status, st.Reason = "skipped", "SkipUnsupportedCompilerOptions: "+unsupportedReason(derived.Options)
 		default:
@@ -323,9 +325,9 @@ func writeProject(dir, rel, content string, c testrunner.XtscConfig, cfgMap map[
 		TestName:         c.TestName,
 		ConfiguredName:   c.ConfiguredName,
 		Configuration:    map[string]string{},
-		CurrentDirectory: prep.CurrentDirectory,
+		CurrentDirectory: prep.CurrentDirectory.AsString(),
 		Symlinks:         map[string]string{},
-		RootFiles:        d.ProgramFileNames,
+		RootFiles:        core.Map(d.ProgramFileNames, tspath.RootedFilePath.AsString),
 		IncludeLibDir:    d.IncludeLibDir,
 		HasNonDtsFiles:   prep.HasNonDtsFiles,
 		SkippedEmit:      testrunner.XtscSkippedEmitTest(tspath.GetBaseFileName(rel)),
@@ -503,7 +505,7 @@ func writeCliTsconfig(dir string, prep *testrunner.XtscPrepared, d *harnessutil.
 	}
 	files := []string{}
 	for _, f := range d.ProgramFileNames {
-		files = append(files, vfsRel(f))
+		files = append(files, vfsRel(f.AsString()))
 	}
 	cfg := map[string]any{"compilerOptions": opts, "files": files}
 	if prep.TsConfig != nil {
@@ -547,7 +549,7 @@ func diagFile(d *ast.Diagnostic) *string {
 	if d.File() == nil {
 		return nil
 	}
-	s := d.File().FileName()
+	s := d.File().FileName().AsString()
 	return &s
 }
 
@@ -611,9 +613,9 @@ func readCase(dir string) (*caseJSON, error) {
 
 func cmdDiags(args []string) error {
 	fl := flag.NewFlagSet("diags", flag.ExitOnError)
-	casesRoot := fl.String("cases-root", "", "typescript-repo/tests/cases")
+	casesRoot := fl.String("cases-root", "", "typescript-go-repo/testdata/tests/cases")
 	runner := fl.Bool("runner", false, "also run the unmodified runner and compare against tsgo's committed baseline")
-	baselines := fl.String("baselines", "", "typescript-go-repo/testdata/baselines/reference (with -runner): a local case's baseline is under <suite>/, a submodule case's under submodule/<suite>/")
+	baselines := fl.String("baselines", "", "typescript-go-repo/testdata/baselines/reference (with -runner): a case's baseline is under <suite>/")
 	out := fl.String("o", "", "output JSONL (default stdout; single project)")
 	batch := fl.String("batch", "", "file of PROJECT_DIR<TAB>OUT lines")
 	status := fl.String("status", "", "status JSONL (with -batch)")
@@ -783,7 +785,7 @@ func phaseOf(c *harnessutil.XtscCheckOnly, d *ast.Diagnostic) string {
 // verifyProject checks that the materialized directory is a faithful view of what the oracle is
 // about to compile (file set, roles, content hashes, roots, current directory).
 func verifyProject(dir string, cj *caseJSON, prep *testrunner.XtscPrepared) string {
-	if prep.CurrentDirectory != cj.CurrentDirectory {
+	if prep.CurrentDirectory.AsString() != cj.CurrentDirectory {
 		return "currentDirectory differs from case.json"
 	}
 	want := map[string]string{}
@@ -831,10 +833,13 @@ func runnerCompare(t *testing.T, cj *caseJSON, filename, content string, configs
 	}
 	var result *harnessutil.CompilationResult
 	var files []*harnessutil.TestFile
+	var baselined []*ast.Diagnostic
 	var rendered string
 	r := runUnit(t, "runner", func(t *testing.T) {
-		result, files = testrunner.XtscRunnerCompile(t, testName, filename, content, named)
-		rendered = testrunner.XtscErrorBaseline(t, files, result.Diagnostics, result.Options.Pretty.IsTrue())
+		// baselined: result.Diagnostics without the content-mapped files' (verifyDiagnostics renders
+		// those in the content-mapper baseline); the check-only comparison below uses all of them.
+		result, files, baselined = testrunner.XtscRunnerCompile(t, testName, filename, content, named)
+		rendered = testrunner.XtscErrorBaseline(t, files, baselined, result.Options.Pretty.IsTrue())
 	})
 	if r.failed || r.skipped || result == nil {
 		rc.CheckOnlyVsRunner, rc.BaselineMatch = "runner-failed", "runner-failed"
@@ -867,9 +872,6 @@ func runnerCompare(t *testing.T, cj *caseJSON, filename, content string, configs
 	if baselines != "" {
 		name := strings.TrimSuffix(strings.TrimSuffix(cj.ConfiguredName, ".tsx"), ".ts") + ".errors.txt"
 		rc.Baseline = cj.Suite + "/" + name
-		if !strings.HasPrefix(cj.Case, localPrefix) {
-			rc.Baseline = "submodule/" + rc.Baseline
-		}
 		b, err := os.ReadFile(filepath.Join(baselines, filepath.FromSlash(rc.Baseline)))
 		const noContent = "<no content>"
 		switch {

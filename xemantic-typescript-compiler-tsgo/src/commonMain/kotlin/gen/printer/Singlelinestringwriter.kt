@@ -44,7 +44,7 @@ fun getSingleLineStringWriter(): Tuple2<EmitTextWriter?, (() -> Unit)?> {
 class singleLineStringWriter(
     @kotlin.jvm.JvmField var builder: Builder = Builder(),
     @kotlin.jvm.JvmField var lastWritten: String = "",
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): singleLineStringWriter = singleLineStringWriter(builder = builder.goCopy(), lastWritten = lastWritten)
 

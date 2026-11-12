@@ -2,7 +2,7 @@
 // (go/packages Overlay); it is never written into typescript-go-repo. The port keeps fswatch's
 // platform-independent core verbatim — watcher, dirWatch, eventList (coalescing), debounce, the
 // callbacks' ignore/recursive filtering — and replaces only the OS layer. xtscBackend is
-// inotify_linux.go's inotifyBackend (tag typescript/v7.0.2) with its system calls behind XtscNotifier,
+// inotify_linux.go's inotifyBackend (tag typescript/v7.0.2; unchanged in TypeScript 7.1.0-beta) with its system calls behind XtscNotifier,
 // which the port's runtime implements (JVM: java.nio.file.WatchService; Kotlin/Native: inotify(7)):
 // the event loop, the subscription bookkeeping and handleSubscription are inotify_linux.go's own.
 package fswatch

@@ -34,6 +34,7 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/api"
 	"github.com/microsoft/TypeScript/tsc/internal/api/encoder"
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
+	"github.com/microsoft/TypeScript/tsc/internal/tspath"
 	"github.com/microsoft/TypeScript/tsc/internal/vfs/osvfs"
 )
 
@@ -226,9 +227,12 @@ func (rc *apiRecorder) symbolTypes(raw json.RawMessage) {
 		if s == nil {
 			continue
 		}
-		if v, ok := s["id"].(float64); ok && !rc.symbols[uint64(v)] {
+		// TypeScript 7.1: a SymbolResponse carries its handle as `reference` (SymbolReference: the
+		// owner plus the id), which getTypeOfSymbol takes back verbatim.
+		ref, _ := s["reference"].(map[string]any)
+		if v, ok := ref["id"].(float64); ok && !rc.symbols[uint64(v)] {
 			rc.symbols[uint64(v)] = true
-			rc.noteTypeResponse(rc.do("getTypeOfSymbol", map[string]any{"symbol": uint64(v)}), false)
+			rc.noteTypeResponse(rc.do("getTypeOfSymbol", map[string]any{"symbol": ref}), false)
 		}
 	}
 }
@@ -248,7 +252,7 @@ func (rc *apiRecorder) noteSignatures(raw json.RawMessage) {
 		}
 		if v, ok := s["id"].(float64); ok && !rc.signatures[uint64(v)] {
 			rc.signatures[uint64(v)] = true
-			r := rc.do("getReturnTypeOfSignature", map[string]any{"signature": uint64(v)})
+			r := rc.do("getReturnTypeOfSignature", map[string]any{"objectId": uint64(v)}) // GetSignaturePropertyParams (TypeScript 7.1)
 			rc.noteTypeResponse(r, false)
 		}
 	}
@@ -256,7 +260,7 @@ func (rc *apiRecorder) noteSignatures(raw json.RawMessage) {
 
 func cmdAPI(args []string) error {
 	fl := flag.NewFlagSet("api", flag.ExitOnError)
-	tsc := fl.String("tsc", "", "the tsgo binary (tools/tsgo-7.0.2/lib/tsc)")
+	tsc := fl.String("tsc", "", "the tsgo binary (tools/tsgo-7.1.0-beta/lib/tsc)")
 	outFile := fl.String("out", "", "the recording (.jsonl)")
 	maxFiles := fl.Int("files", 0, "at most this many source files (0: all)")
 	batch := fl.Int("batch", 2000, "locations per batched request")
@@ -264,9 +268,14 @@ func cmdAPI(args []string) error {
 	if fl.NArg() != 1 || *tsc == "" || *outFile == "" {
 		return fmt.Errorf("usage: api -tsc <tsc> -out <file.jsonl> [-files N] <tsconfig.json>")
 	}
-	config := fl.Arg(0)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	configPath := tspath.ToRootedFilePath(fl.Arg(0), tspath.RootedDirectoryPathFromAbsolute(cwd))
+	config := configPath.AsString()
 	// The handles index this process's parse of the same files: build the program as the session does.
-	program, _, _ := api.XtscOpenProgram(config, osvfs.FS(), "")
+	program, _, _ := api.XtscOpenProgram(configPath, osvfs.FS(), "")
 	if program == nil {
 		return fmt.Errorf("%s: no program", config)
 	}
@@ -278,9 +287,11 @@ func cmdAPI(args []string) error {
 	if _, e, err := c.call("initialize", nil); err != nil || e != "" {
 		return fmt.Errorf("initialize: %v %s", err, e)
 	}
-	r, e, err := c.call("updateSnapshot", map[string]any{"openProjects": []string{config}})
+	// TypeScript 7.1 split updateSnapshot: a first snapshot is createSnapshot's (updateSnapshot now
+	// derives from a base snapshot).
+	r, e, err := c.call("createSnapshot", map[string]any{"openProjects": []string{config}})
 	if err != nil || e != "" {
-		return fmt.Errorf("updateSnapshot: %v %s", err, e)
+		return fmt.Errorf("createSnapshot: %v %s", err, e)
 	}
 	var snap struct {
 		Snapshot uint64 `json:"snapshot"`
@@ -289,7 +300,7 @@ func cmdAPI(args []string) error {
 		} `json:"projects"`
 	}
 	if err := json.Unmarshal(r, &snap); err != nil || len(snap.Projects) == 0 {
-		return fmt.Errorf("updateSnapshot response %s: %v", r, err)
+		return fmt.Errorf("createSnapshot response %s: %v", r, err)
 	}
 	f, err := os.Create(*outFile)
 	if err != nil {
@@ -305,7 +316,7 @@ func cmdAPI(args []string) error {
 	// The project's own files, in the program's order (libraries and node_modules excluded).
 	var files []*ast.SourceFile
 	for _, sf := range program.GetSourceFiles() {
-		if program.IsSourceFileDefaultLibrary(sf.Path()) || program.IsSourceFileFromExternalLibrary(sf) || strings.Contains(sf.FileName(), "/node_modules/") {
+		if program.IsSourceFileDefaultLibrary(sf.PathKey()) || program.IsSourceFileFromExternalLibrary(sf) || strings.Contains(sf.FileName().AsString(), "/node_modules/") {
 			continue
 		}
 		files = append(files, sf)
@@ -316,7 +327,7 @@ func cmdAPI(args []string) error {
 	for _, sf := range files {
 		table := encoder.GetNodeIndexTable(sf)
 		var idents, calls, argsList []string
-		handle := func(i int, n *ast.Node) string { return fmt.Sprintf("%d.%d.%s", i, n.Kind, sf.Path()) }
+		handle := func(i int, n *ast.Node) string { return fmt.Sprintf("%d.%d.%s", i, n.Kind, sf.PathKey()) }
 		index := map[*ast.Node]int{}
 		for i, n := range table.Nodes {
 			if n != nil {

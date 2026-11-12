@@ -31,7 +31,7 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 // go: github.com/microsoft/TypeScript/tsc/internal/glob.Glob 72cfa319
 class Glob(
     @kotlin.jvm.JvmField var elems: GoSlice<com.xemantic.typescript.tsgo.glob.element?> = GoElem.ref<com.xemantic.typescript.tsgo.glob.element?>().nilSlice,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): Glob = Glob(elems = elems)
 
@@ -203,7 +203,7 @@ interface element : Stringer {
 
 // go: github.com/microsoft/TypeScript/tsc/internal/glob.slash 4becd5a2
 class slash(
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): slash = slash()
 
@@ -226,7 +226,7 @@ class slash(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/glob.literal 804d054a
 @kotlin.jvm.JvmInline
-value class literal(val value: String) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<literal>, GoBasicValue {
+value class literal(val value: String) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<literal>, GoBasicValue {
 
     override fun compareTo(other: literal): Int = value.compareTo(other.value)
 
@@ -246,7 +246,7 @@ value class literal(val value: String) : Stringer, com.xemantic.typescript.tsgo.
 
 // go: github.com/microsoft/TypeScript/tsc/internal/glob.star eff4938d
 class star(
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): star = star()
 
@@ -269,7 +269,7 @@ class star(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/glob.anyChar a38b56a4
 class anyChar(
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): anyChar = anyChar()
 
@@ -292,7 +292,7 @@ class anyChar(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/glob.starStar 2cabc029
 class starStar(
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): starStar = starStar()
 
@@ -316,7 +316,7 @@ class starStar(
 // go: github.com/microsoft/TypeScript/tsc/internal/glob.group b0e544e3
 typealias group = GoSlice<Glob?>
 // goport: interface box of group (docs/goport-lowering.md § 3)
-class group_Box(@kotlin.jvm.JvmField val value: com.xemantic.typescript.tsgo.glob.group) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+class group_Box(@kotlin.jvm.JvmField val value: com.xemantic.typescript.tsgo.glob.group) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
     override fun string(): String = value.string()
     override fun equals(other: Any?): Boolean = other is group_Box && other.value === value
     override fun hashCode(): Int = value.hashCode()
@@ -327,7 +327,7 @@ class charRange(
     @kotlin.jvm.JvmField var negate: Boolean = false,
     @kotlin.jvm.JvmField var low: Int = 0,
     @kotlin.jvm.JvmField var high: Int = 0,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): charRange = charRange(negate = negate, low = low, high = high)
 

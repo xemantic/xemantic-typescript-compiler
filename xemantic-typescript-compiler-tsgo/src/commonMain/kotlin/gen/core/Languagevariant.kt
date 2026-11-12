@@ -29,7 +29,7 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 
 // go: github.com/microsoft/TypeScript/tsc/internal/core.LanguageVariant 07cf3a40
 @kotlin.jvm.JvmInline
-value class LanguageVariant(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<LanguageVariant>, GoBasicValue {
+value class LanguageVariant(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<LanguageVariant>, GoBasicValue {
 
     override fun compareTo(other: LanguageVariant): Int = value.compareTo(other.value)
 

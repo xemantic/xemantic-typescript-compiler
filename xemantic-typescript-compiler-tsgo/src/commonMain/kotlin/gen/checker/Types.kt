@@ -74,7 +74,7 @@ val ParseFlagsJSDoc: ParseFlags = ParseFlags(32u)
 
 // go: github.com/microsoft/TypeScript/tsc/internal/checker.SignatureKind 58ced086
 @kotlin.jvm.JvmInline
-value class SignatureKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<SignatureKind>, GoBasicValue {
+value class SignatureKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<SignatureKind>, GoBasicValue {
 
     override fun compareTo(other: SignatureKind): Int = value.compareTo(other.value)
 
@@ -902,7 +902,7 @@ class VarianceLinks(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/checker.VarianceFlags dafbe2eb
 @kotlin.jvm.JvmInline
-value class VarianceFlags(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<VarianceFlags>, GoBasicValue {
+value class VarianceFlags(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<VarianceFlags>, GoBasicValue {
 
     override fun compareTo(other: VarianceFlags): Int = value.compareTo(other.value)
 
@@ -1347,7 +1347,7 @@ class SignatureLinks(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/checker.TypeFlags 06d2339b
 @kotlin.jvm.JvmInline
-value class TypeFlags(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<TypeFlags>, GoBasicValue {
+value class TypeFlags(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<TypeFlags>, GoBasicValue {
 
     override fun compareTo(other: TypeFlags): Int = value.compareTo(other.value)
 
@@ -2290,7 +2290,7 @@ class LiteralType(
     @kotlin.jvm.JvmField var value: Any? = null,
     @kotlin.jvm.JvmField var freshType: Type? = null,
     @kotlin.jvm.JvmField var regularType: Type? = null,
-) : TypeBase(), Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : TypeBase(), Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     override fun goCopy(): LiteralType = LiteralType().also { it.goSet(this) }
 

@@ -37,7 +37,7 @@ import com.xemantic.typescript.tsgo.collections.has
 
 // go: github.com/microsoft/TypeScript/tsc/internal/vfs/vfsmatch.Usage 56c72bc2
 @kotlin.jvm.JvmInline
-value class Usage(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<Usage>, GoBasicValue {
+value class Usage(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<Usage>, GoBasicValue {
 
     override fun compareTo(other: Usage): Int = value.compareTo(other.value)
 

@@ -1,8 +1,8 @@
 // PORT OVERLAY FILE ((TSGO.5), docs/goport-cli.md): ADDED to internal/execute by goport-extract
 // (go/packages Overlay) so the port carries tsgo's command line — CommandLine, tscCompilation,
 // performCompilation, performIncrementalCompilation and the whole internal/execute/tsc package, verbatim.
-// It is never written into typescript-go-repo. tsgo's `main` (cmd/tsgo, package main) cannot be imported;
-// this file is its two ends: the System (cmd/tsgo/sys.go's osSys) and runMain's compiler branch.
+// It is never written into typescript-go-repo. tsgo's `main` (cmd/tsc, package main) cannot be imported;
+// this file is its two ends: the System (cmd/tsc/sys.go's osSys) and runMain's compiler branch.
 package execute
 
 import (
@@ -14,19 +14,22 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/vfs"
 )
 
-// xtscSystem is cmd/tsgo/sys.go's osSys (tag typescript/v7.0.2) with its process ends injected: the
-// writer (os.Stdout there), the file system (bundled.WrapFS(osvfs.FS()) there), the default library
-// directory (bundled.LibPath()), whether stdout is a terminal and its width (golang.org/x/term), and the
-// environment (os.Getenv).
+// xtscSystem is cmd/tsc/sys.go's osSys (TypeScript 7.1.0-beta) with its process ends injected: the
+// writer (os.Stdout there), the error writer (os.Stderr), the file system (bundled.WrapFS(osvfs.FS())
+// there), the default library directory (bundled.LibPath()), whether stdout is a terminal and its width
+// (golang.org/x/term), the environment (os.LookupEnv) and the child-process spawner (spawnProcess: the
+// content mappers' processes).
 type xtscSystem struct {
 	writer             io.Writer
+	errorWriter        io.Writer
 	fs                 vfs.FS
-	defaultLibraryPath string
-	cwd                string
+	defaultLibraryPath tspath.RootedDirectoryPath
+	cwd                tspath.RootedDirectoryPath
 	start              time.Time
 	isTTY              bool
 	width              int
-	getenv             func(name string) string
+	lookupEnv          func(name string) (string, bool)
+	spawn              func(command []string, dir string, stderr io.Writer) (io.ReadWriteCloser, error)
 }
 
 func (s *xtscSystem) SinceStart() time.Duration {
@@ -41,16 +44,20 @@ func (s *xtscSystem) FS() vfs.FS {
 	return s.fs
 }
 
-func (s *xtscSystem) DefaultLibraryPath() string {
+func (s *xtscSystem) DefaultLibraryPath() tspath.RootedDirectoryPath {
 	return s.defaultLibraryPath
 }
 
-func (s *xtscSystem) GetCurrentDirectory() string {
+func (s *xtscSystem) GetCurrentDirectory() tspath.RootedDirectoryPath {
 	return s.cwd
 }
 
 func (s *xtscSystem) Writer() io.Writer {
 	return s.writer
+}
+
+func (s *xtscSystem) ErrorWriter() io.Writer {
+	return s.errorWriter
 }
 
 func (s *xtscSystem) WriteOutputIsTTY() bool {
@@ -61,24 +68,43 @@ func (s *xtscSystem) GetWidthOfTerminal() int {
 	return s.width
 }
 
-func (s *xtscSystem) GetEnvironmentVariable(name string) string {
-	return s.getenv(name)
+func (s *xtscSystem) GetEnvironmentVariable(name string) (string, bool) {
+	return s.lookupEnv(name)
 }
 
-// XtscCommandLine is cmd/tsgo/main.go's runMain for the compiler (the `--lsp` and `--api` branches
-// are the language server's and the API's, not the CLI's): newSystem's System over the given ends,
-// then execute.CommandLine, its exit status returned. ctx is runMain's signal context
-// (signal.NotifyContext on SIGINT/SIGTERM there): cancelling it ends `--watch` as a signal ends tsgo's.
-func XtscCommandLine(ctx context.Context, args []string, fs vfs.FS, defaultLibraryPath string, cwd string, writer io.Writer, isTTY bool, width int, getenv func(name string) string) int {
+func (s *xtscSystem) Spawn(command []string, dir string, stderr io.Writer) (io.ReadWriteCloser, error) {
+	return s.spawn(command, dir, stderr)
+}
+
+// XtscCommandLine is cmd/tsc/main.go's runMain for the compiler (the `--lsp` and `--api` branches
+// are the language server's and the API's, not the CLI's): newSystem's System over the given ends
+// (cwd is os.Getwd's answer, rooted as newSystem roots it), then execute.CommandLine, its exit status
+// returned. ctx is runMain's signal context (signal.NotifyContext on SIGINT/SIGTERM there): cancelling
+// it ends `--watch` as a signal ends tsgo's.
+func XtscCommandLine(
+	ctx context.Context,
+	args []string,
+	fs vfs.FS,
+	defaultLibraryPath tspath.RootedDirectoryPath,
+	cwd string,
+	writer io.Writer,
+	errorWriter io.Writer,
+	isTTY bool,
+	width int,
+	lookupEnv func(name string) (string, bool),
+	spawn func(command []string, dir string, stderr io.Writer) (io.ReadWriteCloser, error),
+) int {
 	sys := &xtscSystem{
-		cwd:                tspath.NormalizePath(cwd),
+		cwd:                tspath.RootedDirectoryPathFromAbsolute(cwd),
 		fs:                 fs,
 		defaultLibraryPath: defaultLibraryPath,
 		writer:             writer,
+		errorWriter:        errorWriter,
 		start:              time.Now(),
 		isTTY:              isTTY,
 		width:              width,
-		getenv:             getenv,
+		lookupEnv:          lookupEnv,
+		spawn:              spawn,
 	}
 	result := CommandLine(ctx, sys, args, nil)
 	return int(result.Status)

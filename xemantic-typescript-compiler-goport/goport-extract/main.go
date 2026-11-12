@@ -60,6 +60,11 @@ var defaultClosure = []string{
 	// (TSGO.7.1) TypeScript 7.1's content mappers (a tsconfig plugin turning e.g. .vue into virtual
 	// TypeScript, served by a child process over JSON-RPC) and their span maps, which the LS reads.
 	"spanmap", "contentmapper", "ipc", "osutil",
+	// (TSGO.7.1) the project system the reworked api.Session runs on (it replaces the hand-written
+	// go/internal_project fake of 7.0.2): snapshots, project collections, source-file leases, typings (ata).
+	"project", "project/ata", "project/background",
+	// (TSGO.7.1) the api session's transpile requests and request-scoped file system.
+	"transpile", "api/requestfilesystem",
 }
 
 // overlayFiles are ADDED to tsgo packages through go/packages' Overlay (never written into

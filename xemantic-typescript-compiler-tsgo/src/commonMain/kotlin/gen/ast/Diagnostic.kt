@@ -110,7 +110,7 @@ class Diagnostic(
     @kotlin.jvm.JvmField var reportsDeprecated: Boolean = false,
     @kotlin.jvm.JvmField var skippedOnNoEmit: Boolean = false,
     @kotlin.jvm.JvmField var repopulateInfo: RepopulateDiagnosticInfo? = null,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.printer.triviaPositionKey, Iface_End_22b3828e {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.printer.triviaPositionKey, com.xemantic.typescript.tsgo.project.ata.ProjectID, Iface_End_22b3828e {
 
     fun goCopy(): Diagnostic = Diagnostic(file = file, loc = loc, code = code, category = category, source = source, message = message, messageText = messageText, messageKey = messageKey, messageArgs = messageArgs, messageChain = messageChain, relatedInformation = relatedInformation, reportsUnnecessary = reportsUnnecessary, reportsDeprecated = reportsDeprecated, skippedOnNoEmit = skippedOnNoEmit, repopulateInfo = repopulateInfo)
 

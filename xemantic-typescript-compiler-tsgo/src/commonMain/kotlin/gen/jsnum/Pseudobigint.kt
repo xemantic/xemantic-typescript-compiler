@@ -31,7 +31,7 @@ import com.xemantic.typescript.tsgo.go.fmt.Stringer
 class PseudoBigInt(
     @kotlin.jvm.JvmField var negative: Boolean = false,
     @kotlin.jvm.JvmField var base10Value: String = "",
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): PseudoBigInt = PseudoBigInt(negative = negative, base10Value = base10Value)
 

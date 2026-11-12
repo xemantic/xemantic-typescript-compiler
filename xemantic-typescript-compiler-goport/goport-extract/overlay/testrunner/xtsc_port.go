@@ -11,7 +11,7 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/testutil/harnessutil"
 )
 
-// XtscCaseConfigurations is getCompilerFileBasedTest (compiler_runner.go, tag typescript/v7.0.2)
+// XtscCaseConfigurations is getCompilerFileBasedTest (compiler_runner.go, TypeScript 7.1.0-beta)
 // without its disk read: the configurations runTest enumerates for a case's text.
 func XtscCaseConfigurations(t *testing.T, content string) []*harnessutil.NamedTestConfiguration {
 	settings := extractCompilerSettings(content)

@@ -43,7 +43,7 @@ class textWriter(
     @kotlin.jvm.JvmField var lineCount: Int = 0,
     @kotlin.jvm.JvmField var linePos: Int = 0,
     @kotlin.jvm.JvmField var hasTrailingCommentState: Boolean = false,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, Iface_Grow_81b904b4 {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, com.xemantic.typescript.tsgo.project.ata.ProjectID, Iface_Grow_81b904b4 {
 
     fun goCopy(): textWriter = textWriter(newLine = newLine, indentSize = indentSize, builder = builder.goCopy(), lastWritten = lastWritten, indent = indent, lineStart = lineStart, lineCount = lineCount, linePos = linePos, hasTrailingCommentState = hasTrailingCommentState)
 

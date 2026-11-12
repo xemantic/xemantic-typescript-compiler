@@ -23,22 +23,15 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/vfs"
 )
 
-// XtscNewSession is NewSession plus the snapshot bookkeeping of handleUpdateSnapshot (session.go,
-// tag typescript/v7.0.2) for one snapshot the caller built: the session then answers every query
-// handler against it. It speaks the JSON protocol (UseBinaryResponses false: getSourceFile answers
-// base64, never a RawBinary).
+// XtscNewSession is NewLSPSession plus the snapshot bookkeeping of handleCreateSnapshot
+// (registerSnapshot; session.go, TypeScript 7.1.0-beta) for one snapshot the caller built: the session
+// then answers every query handler against it. It speaks the JSON protocol (UseBinaryResponses false:
+// getSourceFile answers base64, never a RawBinary). The snapshot opens no projects or files of its own
+// (an empty snapshotOpenState) and has no request file system: the snapshot's own FS serves it.
 func XtscNewSession(projectSession *project.Session, snapshot *project.Snapshot) (*Session, SnapshotID) {
-	s := NewSession(projectSession, &SessionOptions{})
-	handle := snapshotHandle(snapshot)
-	s.snapshots[handle] = &snapshotData{
-		snapshot:                snapshot,
-		refCount:                1,
-		symbolRegistry:          make(map[SymbolID]*ast.Symbol),
-		symbolCanonicalProjects: make(map[SymbolID]ProjectID),
-		projectRegistries:       make(map[ProjectID]*projectRegistryData),
-	}
-	s.latestSnapshot = handle
-	return s, handle
+	s := NewLSPSession(projectSession, &SessionOptions{})
+	s.registerSnapshot(snapshot, snapshotOpenState{}, nil)
+	return s, snapshotHandle(snapshot)
 }
 
 // XtscMarshal is the payload MessagePackProtocol.WriteResponse (protocol_msgpack.go) writes for a
@@ -48,18 +41,17 @@ func XtscMarshal(result any) ([]byte, error) {
 }
 
 // XtscOpenProgram builds a configured project's program the way the project system does
-// (project.NewConfiguredProject: the config's directory is the current directory; Project.CreateProgram:
-// UseSourceOfProjectReference and the project's checker pool, then BindSourceFiles). libPath is the
-// default library directory; "" serves the bundled libs (fs wrapped with bundled.WrapFS), as an
-// embedded-libs tsgo build does — the shipped npm binary reads them next to its executable instead.
-func XtscOpenProgram(configFileName string, fs vfs.FS, libPath string) (*compiler.Program, *XtscCheckerPool, []*ast.Diagnostic) {
+// (Project.CreateProgram: UseSourceOfProjectReference and the project's checker pool, then
+// BindSourceFiles; a content-mapper-free host). libPath is the default library directory; "" serves
+// the bundled libs (fs wrapped with bundled.WrapFS), as an embedded-libs tsgo build does — the shipped
+// npm binary reads them next to its executable instead.
+func XtscOpenProgram(configFileName tspath.RootedFilePath, fs vfs.FS, libPath tspath.RootedDirectoryPath) (*compiler.Program, *XtscCheckerPool, []*ast.Diagnostic) {
 	if libPath == "" {
 		fs = bundled.WrapFS(fs)
 		libPath = bundled.LibPath()
 	}
-	cwd := tspath.GetDirectoryPath(configFileName)
-	host := compiler.NewCachedFSCompilerHost(cwd, fs, libPath, nil, nil)
-	config, errs := tsoptions.GetParsedCommandLineOfConfigFile(configFileName, nil, nil, host, nil)
+	host := compiler.NewCachedFSCompilerHost(fs, libPath, nil, nil, nil)
+	config, errs := tsoptions.GetParsedCommandLineOfConfigFile(configFileName, nil, nil, host.FS(), nil)
 	if config == nil {
 		return nil, nil, errs
 	}

@@ -73,7 +73,7 @@ class LogTree(
     @kotlin.jvm.JvmField var verbose: Boolean = false,
     @kotlin.jvm.JvmField var count: Int32 = Int32(),
     @kotlin.jvm.JvmField var stringLength: Int32 = Int32(),
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, LogCollector, Logger {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, LogCollector, Logger {
 
     fun goCopy(): LogTree = LogTree(name = name, mu = mu.goCopy(), logs = logs, root = root, level = level, verbose = verbose, count = count.goCopy(), stringLength = stringLength.goCopy())
 

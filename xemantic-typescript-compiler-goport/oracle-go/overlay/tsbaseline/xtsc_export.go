@@ -3,11 +3,12 @@
 // is never written into typescript-go-repo.
 //
 // VERBATIM copies of DoJSEmitBaseline (js_emit_baseline.go), DoSourcemapBaseline
-// (sourcemap_baseline.go) and DoSourcemapRecordBaseline (sourcemap_record_baseline.go), tag
-// typescript/v7.0.2, with exactly one change each: the final `baseline.Run(t, baselinePath,
-// actual, opts)` -- which writes and compares a file -- RETURNS (baselinePath, actual) instead, so
-// the emit oracle and the port render the same text and compare it themselves. (The sourcemap
-// copy also reports whether it reached baseline.Run at all.) Keep in sync on a tsgo bump.
+// (sourcemap_baseline.go) and DoSourcemapRecordBaseline (sourcemap_record_baseline.go), TypeScript
+// 7.1.0-beta (microsoft/TypeScript 3e9236361fa9 tsc/), with exactly one change each: the final
+// `baseline.Run(t, baselinePath, actual, opts)` -- which writes and compares a file -- RETURNS
+// (baselinePath, actual) instead, so the emit oracle and the port render the same text and compare
+// it themselves. (The sourcemap copy also reports whether it reached baseline.Run at all.) Keep in
+// sync on a tsgo bump.
 package tsbaseline
 
 import (
@@ -64,9 +65,10 @@ func XtscJSEmitBaseline(
 			jsCode.WriteString("\r\n")
 		}
 		if len(result.Diagnostics) == 0 && strings.HasSuffix(file.UnitName, tspath.ExtensionJson) {
+			fileName := tspath.ToRootedFilePath(file.UnitName, result.CurrentDirectory())
 			fileParseResult := parser.ParseSourceFile(ast.SourceFileParseOptions{
-				FileName: file.UnitName,
-				Path:     tspath.Path(file.UnitName),
+				FileName: fileName,
+				PathKey:  tspath.CaseSensitive.PathKey(tspath.RootedPath(fileName)),
 			}, file.Content, core.ScriptKindJSON)
 			if len(fileParseResult.Diagnostics()) > 0 {
 				jsCode.WriteString(GetErrorBaseline(t, []*harnessutil.TestFile{file}, diagnosticwriter.WrapASTDiagnostics(fileParseResult.Diagnostics()), diagnosticwriter.CompareASTDiagnostics, false /*pretty*/))
@@ -109,7 +111,7 @@ func XtscJSEmitBaseline(
 		testConfig := make(map[string]string)
 		testConfig["noCheck"] = "true"
 		withoutChecking := result.Repeat(testConfig)
-		compareResultFileSets := func(a *collections.OrderedMap[string, *harnessutil.TestFile], b *collections.OrderedMap[string, *harnessutil.TestFile]) {
+		compareResultFileSets := func(a *collections.OrderedMap[tspath.RootedFilePath, *harnessutil.TestFile], b *collections.OrderedMap[tspath.RootedFilePath, *harnessutil.TestFile]) {
 			for key, doc := range a.Entries() {
 				original := b.GetOrZero(key)
 				if original == nil {
@@ -175,7 +177,7 @@ func XtscSourcemapBaseline(
 			expectedMapCount += result.GetNumberOfJSFiles( /*includeJSON*/ false)
 		}
 		if declMaps {
-			expectedMapCount += result.GetNumberOfJSFiles( /*includeJSON*/ true)
+			expectedMapCount += result.DTS.Size()
 		}
 		if result.Maps.Size() != expectedMapCount {
 			t.Fatal("Number of sourcemap files should be same as js files.")

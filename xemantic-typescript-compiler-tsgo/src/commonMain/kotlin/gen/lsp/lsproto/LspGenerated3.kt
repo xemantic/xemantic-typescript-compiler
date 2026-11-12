@@ -3769,7 +3769,7 @@ val DocumentDiagnosticReportKindUnchanged: DocumentDiagnosticReportKind = Docume
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.ErrorCode d6c0840e
 @kotlin.jvm.JvmInline
-value class ErrorCode(val value: Int) : GoError, Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<ErrorCode>, GoBasicValue {
+value class ErrorCode(val value: Int) : GoError, Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<ErrorCode>, GoBasicValue {
 
     override fun compareTo(other: ErrorCode): Int = value.compareTo(other.value)
 
@@ -3874,7 +3874,7 @@ val FoldingRangeKindRegion: FoldingRangeKind = FoldingRangeKind("region")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.SymbolKind 88c9b8ea
 @kotlin.jvm.JvmInline
-value class SymbolKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<SymbolKind>, GoBasicValue {
+value class SymbolKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<SymbolKind>, GoBasicValue {
 
     override fun compareTo(other: SymbolKind): Int = value.compareTo(other.value)
 
@@ -3979,7 +3979,7 @@ const val _SymbolKind_name: String = "FileModuleNamespacePackageClassMethodPrope
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.SymbolTag ee8ca3db
 @kotlin.jvm.JvmInline
-value class SymbolTag(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<SymbolTag>, GoBasicValue {
+value class SymbolTag(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<SymbolTag>, GoBasicValue {
 
     override fun compareTo(other: SymbolTag): Int = value.compareTo(other.value)
 
@@ -4063,7 +4063,7 @@ val MonikerKindLocal: MonikerKind = MonikerKind("local")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.InlayHintKind 83be46fd
 @kotlin.jvm.JvmInline
-value class InlayHintKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<InlayHintKind>, GoBasicValue {
+value class InlayHintKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<InlayHintKind>, GoBasicValue {
 
     override fun compareTo(other: InlayHintKind): Int = value.compareTo(other.value)
 
@@ -4096,7 +4096,7 @@ const val _InlayHintKind_name: String = "TypeParameter"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.MessageType b4f373fb
 @kotlin.jvm.JvmInline
-value class MessageType(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<MessageType>, GoBasicValue {
+value class MessageType(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<MessageType>, GoBasicValue {
 
     override fun compareTo(other: MessageType): Int = value.compareTo(other.value)
 
@@ -4138,7 +4138,7 @@ const val _MessageType_name: String = "ErrorWarningInfoLogDebug"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.TextDocumentSyncKind d9b89826
 @kotlin.jvm.JvmInline
-value class TextDocumentSyncKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<TextDocumentSyncKind>, GoBasicValue {
+value class TextDocumentSyncKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<TextDocumentSyncKind>, GoBasicValue {
 
     override fun compareTo(other: TextDocumentSyncKind): Int = value.compareTo(other.value)
 
@@ -4174,7 +4174,7 @@ const val _TextDocumentSyncKind_name: String = "NoneFullIncremental"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.TextDocumentSaveReason b96c0c13
 @kotlin.jvm.JvmInline
-value class TextDocumentSaveReason(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<TextDocumentSaveReason>, GoBasicValue {
+value class TextDocumentSaveReason(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<TextDocumentSaveReason>, GoBasicValue {
 
     override fun compareTo(other: TextDocumentSaveReason): Int = value.compareTo(other.value)
 
@@ -4210,7 +4210,7 @@ const val _TextDocumentSaveReason_name: String = "ManualAfterDelayFocusOut"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.CompletionItemKind abd98068
 @kotlin.jvm.JvmInline
-value class CompletionItemKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<CompletionItemKind>, GoBasicValue {
+value class CompletionItemKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<CompletionItemKind>, GoBasicValue {
 
     override fun compareTo(other: CompletionItemKind): Int = value.compareTo(other.value)
 
@@ -4312,7 +4312,7 @@ const val _CompletionItemKind_name: String = "TextMethodFunctionConstructorField
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.CompletionItemTag a69c33d1
 @kotlin.jvm.JvmInline
-value class CompletionItemTag(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<CompletionItemTag>, GoBasicValue {
+value class CompletionItemTag(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<CompletionItemTag>, GoBasicValue {
 
     override fun compareTo(other: CompletionItemTag): Int = value.compareTo(other.value)
 
@@ -4342,7 +4342,7 @@ const val _CompletionItemTag_name: String = "Deprecated"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.InsertTextFormat 154f2319
 @kotlin.jvm.JvmInline
-value class InsertTextFormat(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<InsertTextFormat>, GoBasicValue {
+value class InsertTextFormat(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<InsertTextFormat>, GoBasicValue {
 
     override fun compareTo(other: InsertTextFormat): Int = value.compareTo(other.value)
 
@@ -4375,7 +4375,7 @@ const val _InsertTextFormat_name: String = "PlainTextSnippet"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.InsertTextMode c76a5bb9
 @kotlin.jvm.JvmInline
-value class InsertTextMode(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<InsertTextMode>, GoBasicValue {
+value class InsertTextMode(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<InsertTextMode>, GoBasicValue {
 
     override fun compareTo(other: InsertTextMode): Int = value.compareTo(other.value)
 
@@ -4408,7 +4408,7 @@ const val _InsertTextMode_name: String = "asIsadjustIndentation"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.DocumentHighlightKind dd53fe16
 @kotlin.jvm.JvmInline
-value class DocumentHighlightKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<DocumentHighlightKind>, GoBasicValue {
+value class DocumentHighlightKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<DocumentHighlightKind>, GoBasicValue {
 
     override fun compareTo(other: DocumentHighlightKind): Int = value.compareTo(other.value)
 
@@ -4494,7 +4494,7 @@ val CodeActionKindSourceFixAll: CodeActionKind = CodeActionKind("source.fixAll")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.CodeActionTag 19233d12
 @kotlin.jvm.JvmInline
-value class CodeActionTag(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<CodeActionTag>, GoBasicValue {
+value class CodeActionTag(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<CodeActionTag>, GoBasicValue {
 
     override fun compareTo(other: CodeActionTag): Int = value.compareTo(other.value)
 
@@ -4770,7 +4770,7 @@ val LanguageKindYAML: LanguageKind = LanguageKind("yaml")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.InlineCompletionTriggerKind fc54aa47
 @kotlin.jvm.JvmInline
-value class InlineCompletionTriggerKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<InlineCompletionTriggerKind>, GoBasicValue {
+value class InlineCompletionTriggerKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<InlineCompletionTriggerKind>, GoBasicValue {
 
     override fun compareTo(other: InlineCompletionTriggerKind): Int = value.compareTo(other.value)
 
@@ -4827,7 +4827,7 @@ val PositionEncodingKindUTF32: PositionEncodingKind = PositionEncodingKind("utf-
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.FileChangeType 7b22e8a6
 @kotlin.jvm.JvmInline
-value class FileChangeType(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<FileChangeType>, GoBasicValue {
+value class FileChangeType(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<FileChangeType>, GoBasicValue {
 
     override fun compareTo(other: FileChangeType): Int = value.compareTo(other.value)
 
@@ -4863,7 +4863,7 @@ const val _FileChangeType_name: String = "CreatedChangedDeleted"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.WatchKind 884b2162
 @kotlin.jvm.JvmInline
-value class WatchKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<WatchKind>, GoBasicValue {
+value class WatchKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<WatchKind>, GoBasicValue {
 
     override fun compareTo(other: WatchKind): Int = value.compareTo(other.value)
 
@@ -4911,7 +4911,7 @@ const val _WatchKind_name: String = "CreateChangeDelete"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.DiagnosticSeverity 628b0bb2
 @kotlin.jvm.JvmInline
-value class DiagnosticSeverity(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<DiagnosticSeverity>, GoBasicValue {
+value class DiagnosticSeverity(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<DiagnosticSeverity>, GoBasicValue {
 
     override fun compareTo(other: DiagnosticSeverity): Int = value.compareTo(other.value)
 
@@ -4950,7 +4950,7 @@ const val _DiagnosticSeverity_name: String = "ErrorWarningInformationHint"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.DiagnosticTag e6bfd67b
 @kotlin.jvm.JvmInline
-value class DiagnosticTag(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<DiagnosticTag>, GoBasicValue {
+value class DiagnosticTag(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<DiagnosticTag>, GoBasicValue {
 
     override fun compareTo(other: DiagnosticTag): Int = value.compareTo(other.value)
 
@@ -4983,7 +4983,7 @@ const val _DiagnosticTag_name: String = "UnnecessaryDeprecated"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.CompletionTriggerKind 6ff9384e
 @kotlin.jvm.JvmInline
-value class CompletionTriggerKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<CompletionTriggerKind>, GoBasicValue {
+value class CompletionTriggerKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<CompletionTriggerKind>, GoBasicValue {
 
     override fun compareTo(other: CompletionTriggerKind): Int = value.compareTo(other.value)
 
@@ -5019,7 +5019,7 @@ const val _CompletionTriggerKind_name: String = "InvokedTriggerCharacterTriggerF
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.ApplyKind 464e1bf5
 @kotlin.jvm.JvmInline
-value class ApplyKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<ApplyKind>, GoBasicValue {
+value class ApplyKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<ApplyKind>, GoBasicValue {
 
     override fun compareTo(other: ApplyKind): Int = value.compareTo(other.value)
 
@@ -5052,7 +5052,7 @@ const val _ApplyKind_name: String = "ReplaceMerge"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.SignatureHelpTriggerKind 071af5fd
 @kotlin.jvm.JvmInline
-value class SignatureHelpTriggerKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<SignatureHelpTriggerKind>, GoBasicValue {
+value class SignatureHelpTriggerKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<SignatureHelpTriggerKind>, GoBasicValue {
 
     override fun compareTo(other: SignatureHelpTriggerKind): Int = value.compareTo(other.value)
 
@@ -5088,7 +5088,7 @@ const val _SignatureHelpTriggerKind_name: String = "InvokedTriggerCharacterConte
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.CodeActionTriggerKind 3b0e0897
 @kotlin.jvm.JvmInline
-value class CodeActionTriggerKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<CodeActionTriggerKind>, GoBasicValue {
+value class CodeActionTriggerKind(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<CodeActionTriggerKind>, GoBasicValue {
 
     override fun compareTo(other: CodeActionTriggerKind): Int = value.compareTo(other.value)
 
@@ -5193,7 +5193,7 @@ val FailureHandlingKindUndo: FailureHandlingKind = FailureHandlingKind("undo")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.PrepareSupportDefaultBehavior c62438cd
 @kotlin.jvm.JvmInline
-value class PrepareSupportDefaultBehavior(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<PrepareSupportDefaultBehavior>, GoBasicValue {
+value class PrepareSupportDefaultBehavior(val value: UInt) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<PrepareSupportDefaultBehavior>, GoBasicValue {
 
     override fun compareTo(other: PrepareSupportDefaultBehavior): Int = value.compareTo(other.value)
 
@@ -5241,7 +5241,7 @@ val TokenFormatRelative: TokenFormat = TokenFormat("relative")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.VSContainerElementStyle c81d4740
 @kotlin.jvm.JvmInline
-value class VSContainerElementStyle(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<VSContainerElementStyle>, GoBasicValue {
+value class VSContainerElementStyle(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<VSContainerElementStyle>, GoBasicValue {
 
     override fun compareTo(other: VSContainerElementStyle): Int = value.compareTo(other.value)
 
@@ -5274,7 +5274,7 @@ const val _VSContainerElementStyle_name: String = "WrappedStacked"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.LogVerbosity 458d9f40
 @kotlin.jvm.JvmInline
-value class LogVerbosity(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<LogVerbosity>, GoBasicValue {
+value class LogVerbosity(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<LogVerbosity>, GoBasicValue {
 
     override fun compareTo(other: LogVerbosity): Int = value.compareTo(other.value)
 
@@ -5319,7 +5319,7 @@ const val _LogVerbosity_name: String = "OffTraceDebugInfoWarningError"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.DiagnosticFlakeLogLevel d3e92fda
 @kotlin.jvm.JvmInline
-value class DiagnosticFlakeLogLevel(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<DiagnosticFlakeLogLevel>, GoBasicValue {
+value class DiagnosticFlakeLogLevel(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<DiagnosticFlakeLogLevel>, GoBasicValue {
 
     override fun compareTo(other: DiagnosticFlakeLogLevel): Int = value.compareTo(other.value)
 
@@ -5355,7 +5355,7 @@ const val _DiagnosticFlakeLogLevel_name: String = "OffLogPanic"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.VSReferenceKind 1abd8b33
 @kotlin.jvm.JvmInline
-value class VSReferenceKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<VSReferenceKind>, GoBasicValue {
+value class VSReferenceKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<VSReferenceKind>, GoBasicValue {
 
     override fun compareTo(other: VSReferenceKind): Int = value.compareTo(other.value)
 
@@ -5457,7 +5457,7 @@ val CodeLensKindImplementations: CodeLensKind = CodeLensKind("implementations")
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.AutoImportFixKind 056d100b
 @kotlin.jvm.JvmInline
-value class AutoImportFixKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<AutoImportFixKind>, GoBasicValue {
+value class AutoImportFixKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<AutoImportFixKind>, GoBasicValue {
 
     override fun compareTo(other: AutoImportFixKind): Int = value.compareTo(other.value)
 
@@ -5499,7 +5499,7 @@ const val _AutoImportFixKind_name: String = "UseNamespaceJsdocTypeImportAddToExi
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.ImportKind 8761f109
 @kotlin.jvm.JvmInline
-value class ImportKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<ImportKind>, GoBasicValue {
+value class ImportKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<ImportKind>, GoBasicValue {
 
     override fun compareTo(other: ImportKind): Int = value.compareTo(other.value)
 
@@ -5538,7 +5538,7 @@ const val _ImportKind_name: String = "NamedDefaultNamespaceCommonJS"
 
 // go: github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto.AddAsTypeOnly 7f8c4635
 @kotlin.jvm.JvmInline
-value class AddAsTypeOnly(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<AddAsTypeOnly>, GoBasicValue {
+value class AddAsTypeOnly(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<AddAsTypeOnly>, GoBasicValue {
 
     override fun compareTo(other: AddAsTypeOnly): Int = value.compareTo(other.value)
 

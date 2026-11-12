@@ -136,7 +136,7 @@ class Statistics(
     @get:kotlin.jvm.JvmName("goGet_memoryUsed") @set:kotlin.jvm.JvmName("goSet_memoryUsed") var memoryUsed: ULong = 0uL,
     @get:kotlin.jvm.JvmName("goGet_memoryAllocs") @set:kotlin.jvm.JvmName("goSet_memoryAllocs") var memoryAllocs: ULong = 0uL,
     @kotlin.jvm.JvmField var compileTimes: CompileTimes? = null,
-) {
+) : GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): Statistics = Statistics(isAggregate = isAggregate, projects = projects, projectsBuilt = projectsBuilt, timestampUpdates = timestampUpdates, files = files, lines = lines, identifiers = identifiers, symbols = symbols, types = types, instantiations = instantiations, memoryUsed = memoryUsed, memoryAllocs = memoryAllocs, compileTimes = compileTimes)
 
@@ -160,7 +160,45 @@ class Statistics(
 
     fun goHash(): Int = 31 * isAggregate.hashCode() + 31 * projects.hashCode() + 31 * projectsBuilt.hashCode() + 31 * timestampUpdates.hashCode() + 31 * files.hashCode() + 31 * lines.hashCode() + 31 * identifiers.hashCode() + 31 * symbols.hashCode() + 31 * types.hashCode() + 31 * instantiations.hashCode() + 31 * memoryUsed.hashCode() + 31 * memoryAllocs.hashCode() + 31 * compileTimes.hashCode()
 
+    override fun goStructInfo(): GoStructInfo = GO_STRUCT
+
+    override fun goFieldPtr(i: Int): GoPtr<Any?> = when (i) {
+        0 -> GoFieldPtr(this, 0, { isAggregate }, { isAggregate = it as Boolean })
+        1 -> GoFieldPtr(this, 1, { projects }, { projects = it as Int })
+        2 -> GoFieldPtr(this, 2, { projectsBuilt }, { projectsBuilt = it as Int })
+        3 -> GoFieldPtr(this, 3, { timestampUpdates }, { timestampUpdates = it as Int })
+        4 -> GoFieldPtr(this, 4, { files }, { files = it as Int })
+        5 -> GoFieldPtr(this, 5, { lines }, { lines = it as Int })
+        6 -> GoFieldPtr(this, 6, { identifiers }, { identifiers = it as Int })
+        7 -> GoFieldPtr(this, 7, { symbols }, { symbols = it as Int })
+        8 -> GoFieldPtr(this, 8, { types }, { types = it as Int })
+        9 -> GoFieldPtr(this, 9, { instantiations }, { instantiations = it as Int })
+        10 -> GoFieldPtr(this, 10, { memoryUsed }, { memoryUsed = it as ULong })
+        11 -> GoFieldPtr(this, 11, { memoryAllocs }, { memoryAllocs = it as ULong })
+        12 -> GoFieldPtr(this, 12, { compileTimes }, { compileTimes = it as CompileTimes? })
+        else -> goPanicIndex(i, 13)
+    }
+
+    override fun goJsonFields(): List<com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.JsonField> = com.xemantic.typescript.tsgo.go.reflect.goJsonFieldsOf(this)
+
     companion object {
+        val GO_STRUCT: GoStructInfo by lazy {
+            GoStructInfo("tsc.Statistics", listOf(
+                GoFieldInfo("isAggregate", "", false, false, GoTypeInfo(1, "bool", zero = { false })),
+                GoFieldInfo("Projects", "", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("ProjectsBuilt", "", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("TimestampUpdates", "", true, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("files", "", false, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("lines", "", false, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("identifiers", "", false, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("symbols", "", false, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("types", "", false, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("instantiations", "", false, false, GoTypeInfo(2, "int", zero = { 0 })),
+                GoFieldInfo("memoryUsed", "", false, false, GoTypeInfo(11, "uint64", zero = { 0uL })),
+                GoFieldInfo("memoryAllocs", "", false, false, GoTypeInfo(11, "uint64", zero = { 0uL })),
+                GoFieldInfo("compileTimes", "", false, false, GoTypeInfo(22, "", elem = GoTypeInfo(25, "tsc.CompileTimes", cls = CompileTimes::class, zero = { CompileTimes() }), zero = { null })),
+            ))
+        }
         val ELEM: GoElem<Statistics> = GoElem({ Statistics() }, { it.goCopy() })
     }
 }

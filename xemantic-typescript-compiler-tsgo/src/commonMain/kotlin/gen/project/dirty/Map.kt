@@ -26,7 +26,7 @@ package com.xemantic.typescript.tsgo.project.dirty
 import com.xemantic.typescript.tsgo.runtime.*
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.MapEntry 31653247
-class MapEntry<K, V : Cloneable<V>?>(
+class MapEntry<K, V>(
     @kotlin.jvm.JvmField val goElem_K: GoElem<K>,
     @kotlin.jvm.JvmField val goElem_V: GoElem<V>,
     @kotlin.jvm.JvmField var m: Map<K, V>? = null,
@@ -50,7 +50,7 @@ class MapEntry<K, V : Cloneable<V>?>(
             goPanic("tried to change a deleted entry")
         }
         if (!this.mapEntry.dirty) {
-            this.mapEntry.value = this.mapEntry.value!!.clone()
+            this.mapEntry.value = (when (val cd0 = this.mapEntry.value) { is Cloneable<*> -> (cd0 as Cloneable<V>).clone(); else -> (cd0 as CloneableMap<Any?, Any?>).clone() } as V)
             this.mapEntry.dirty = true
             this.m!!.dirty[this.mapEntry.key] = this
         }
@@ -86,12 +86,12 @@ class MapEntry<K, V : Cloneable<V>?>(
     override fun value(): V = this.mapEntry.value()
 
     companion object {
-        fun <K, V : Cloneable<V>?> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<MapEntry<K, V>> = GoElem({ MapEntry<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
+        fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<MapEntry<K, V>> = GoElem({ MapEntry<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
     }
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.MapEntry.Replace 91f650f1
-fun <K, V : Cloneable<V>?> MapEntry<K, V>?.replace(newValue: V) {
+fun <K, V> MapEntry<K, V>?.replace(newValue: V) {
     if (this!!.mapEntry.delete) {
         goPanic("tried to change a deleted entry")
     }
@@ -103,7 +103,7 @@ fun <K, V : Cloneable<V>?> MapEntry<K, V>?.replace(newValue: V) {
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map a12c78d0
-class Map<K, V : Cloneable<V>?>(
+class Map<K, V>(
     @kotlin.jvm.JvmField val goElem_K: GoElem<K>,
     @kotlin.jvm.JvmField val goElem_V: GoElem<V>,
     @kotlin.jvm.JvmField var base: GoMap<K, V> = GoMap.nil<K, V>(goElem_V),
@@ -122,17 +122,17 @@ class Map<K, V : Cloneable<V>?>(
     fun goHash(): Int = 31 * base.hashCode() + 31 * dirty.hashCode()
 
     companion object {
-        fun <K, V : Cloneable<V>?> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<Map<K, V>> = GoElem({ Map<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
+        fun <K, V> elem(goElem_K: GoElem<K>, goElem_V: GoElem<V>): GoElem<Map<K, V>> = GoElem({ Map<K, V>(goElem_K = goElem_K, goElem_V = goElem_V) }, { it.goCopy() })
     }
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.NewMap 04472b7c
-fun <K, V : Cloneable<V>?> newMap(goElem_K: GoElem<K>, goElem_V: GoElem<V>, base: GoMap<K, V>): Map<K, V>? {
+fun <K, V> newMap(goElem_K: GoElem<K>, goElem_V: GoElem<V>, base: GoMap<K, V>): Map<K, V>? {
     return Map<K, V>(goElem_K = goElem_K, goElem_V = goElem_V, base = base, dirty = GoMap.make<K, MapEntry<K, V>?>(GoElem.ref<MapEntry<K, V>?>()))
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map.Get eafd55b7
-fun <K, V : Cloneable<V>?> Map<K, V>?.get(key: K): Tuple2<MapEntry<K, V>?, Boolean> {
+fun <K, V> Map<K, V>?.get(key: K): Tuple2<MapEntry<K, V>?, Boolean> {
     val t0 = this!!.dirty.probe(key)
     val entry: MapEntry<K, V>? = goProbeValue<MapEntry<K, V>?>(t0) { null }
     val ok: Boolean = t0 !== GoMapAbsent
@@ -152,12 +152,12 @@ fun <K, V : Cloneable<V>?> Map<K, V>?.get(key: K): Tuple2<MapEntry<K, V>?, Boole
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map.Add 2581877b
-fun <K, V : Cloneable<V>?> Map<K, V>?.add(key: K, value_1: V) {
+fun <K, V> Map<K, V>?.add(key: K, value_1: V) {
     this!!.dirty[key] = MapEntry<K, V>(goElem_K = this!!.goElem_K, goElem_V = this!!.goElem_V, m = this, mapEntry = com.xemantic.typescript.tsgo.project.dirty.mapEntry<K, V>(goElem_K = this!!.goElem_K, goElem_V = this!!.goElem_V, key = key, value = value_1, dirty = true))
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map.Change 0bf2d100
-fun <K, V : Cloneable<V>?> Map<K, V>?.change(key: K, apply: ((V) -> Unit)?) {
+fun <K, V> Map<K, V>?.change(key: K, apply: ((V) -> Unit)?) {
     val t0 = this.get(key)
     val entry: MapEntry<K, V>? = t0.first
     val ok: Boolean = t0.second
@@ -169,7 +169,7 @@ fun <K, V : Cloneable<V>?> Map<K, V>?.change(key: K, apply: ((V) -> Unit)?) {
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map.TryDelete 56e74055
-fun <K, V : Cloneable<V>?> Map<K, V>?.tryDelete(key: K): Boolean {
+fun <K, V> Map<K, V>?.tryDelete(key: K): Boolean {
     val t0 = this.get(key)
     val entry: MapEntry<K, V>? = t0.first
     val ok: Boolean = t0.second
@@ -181,14 +181,14 @@ fun <K, V : Cloneable<V>?> Map<K, V>?.tryDelete(key: K): Boolean {
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map.Delete e0f88b3d
-fun <K, V : Cloneable<V>?> Map<K, V>?.delete(key: K) {
+fun <K, V> Map<K, V>?.delete(key: K) {
     if (!this.tryDelete(key)) {
         goPanic("tried to delete a non-existent entry")
     }
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map.Range 543252b1
-fun <K, V : Cloneable<V>?> Map<K, V>?.range(fn: ((MapEntry<K, V>?) -> Boolean)?) {
+fun <K, V> Map<K, V>?.range(fn: ((MapEntry<K, V>?) -> Boolean)?) {
     val seenInDirty: GoMap<K, Unit> = GoMap.make<K, Unit>(goUnitElem)
     val mi0 = this!!.dirty.iter()
     l0@ while (mi0.next()) {
@@ -214,13 +214,13 @@ fun <K, V : Cloneable<V>?> Map<K, V>?.range(fn: ((MapEntry<K, V>?) -> Boolean)?)
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map.Clear 80df76a4
-fun <K, V : Cloneable<V>?> Map<K, V>?.clear() {
+fun <K, V> Map<K, V>?.clear() {
     this!!.dirty = GoMap.make<K, MapEntry<K, V>?>(GoElem.ref<MapEntry<K, V>?>())
     this!!.base = GoMap.make<K, V>(this!!.goElem_V)
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/project/dirty.Map.Finalize 74838dd1
-fun <K, V : Cloneable<V>?> Map<K, V>?.finalize(): Tuple2<GoMap<K, V>, Boolean> {
+fun <K, V> Map<K, V>?.finalize(): Tuple2<GoMap<K, V>, Boolean> {
     var result: GoMap<K, V> = GoMap.nil<K, V>(this!!.goElem_V)
     var changed: Boolean = false
     if (this!!.dirty.len == 0) {

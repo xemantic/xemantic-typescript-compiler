@@ -81,7 +81,7 @@ const val jsonRPCVersion: String = "\"2.0\""
 class ID(
     @kotlin.jvm.JvmField var str: String = "",
     @kotlin.jvm.JvmField var int: Int = 0,
-) : Marshaler, Unmarshaler, Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Marshaler, Unmarshaler, Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): ID = ID(str = str, int = int)
 
@@ -191,7 +191,7 @@ class ResponseError(
     @kotlin.jvm.JvmField var code: Int = 0,
     @kotlin.jvm.JvmField var message: String = "",
     @kotlin.jvm.JvmField var data: Any? = null,
-) : GoError, Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
+) : GoError, Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, GoReflectStruct, com.xemantic.typescript.tsgo.go.github_com.go_json_experiment.json.GoJsonStruct {
 
     fun goCopy(): ResponseError = ResponseError(code = code, message = message, data = data)
 

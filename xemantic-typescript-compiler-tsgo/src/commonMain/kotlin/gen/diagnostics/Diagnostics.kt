@@ -34,7 +34,7 @@ import com.xemantic.typescript.tsgo.go.golang_org.x.text.language.Tag
 
 // go: github.com/microsoft/TypeScript/tsc/internal/diagnostics.Category 9ed85a7d
 @kotlin.jvm.JvmInline
-value class Category(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Named, ProjectID, Comparable<Category>, GoBasicValue {
+value class Category(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, Named, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<Category>, GoBasicValue {
 
     override fun compareTo(other: Category): Int = value.compareTo(other.value)
 
@@ -111,7 +111,7 @@ class Message(
     @kotlin.jvm.JvmField var reportsUnnecessary: Boolean = false,
     @kotlin.jvm.JvmField var elidedInCompatibilityPyramid: Boolean = false,
     @kotlin.jvm.JvmField var reportsDeprecated: Boolean = false,
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): Message = Message(code = code, category = category, key = key, text = text, reportsUnnecessary = reportsUnnecessary, elidedInCompatibilityPyramid = elidedInCompatibilityPyramid, reportsDeprecated = reportsDeprecated)
 

@@ -46,6 +46,8 @@ import com.xemantic.typescript.goport.types.BasicType
 import com.xemantic.typescript.goport.types.ChanType
 import com.xemantic.typescript.goport.types.InterfaceType
 import com.xemantic.typescript.goport.types.MapType
+import com.xemantic.typescript.goport.types.NamedType
+import com.xemantic.typescript.goport.types.TypeTable
 import com.xemantic.typescript.goport.types.PointerType
 import com.xemantic.typescript.goport.types.SignatureType
 import com.xemantic.typescript.goport.types.SliceType
@@ -415,6 +417,7 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             return opaquePtrResult(e, mo0, withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$name(${codes.joinToString(", ")})")))
         }
         atomicFieldCall(e, sel)?.let { return it }
+        constraintDispatch(e, sel)?.let { return it }
         val (recv, name, _) = methodTarget(sel)
         val sig = sigOf(e)
         val mo = pc.obj(sel.reqObj("sel").int("obj")!!)
@@ -435,6 +438,40 @@ open class CallLowering(fn: FnCtx) : ExprLowering(fn) {
             return withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$wname(${codes.joinToString(", ")})"))
         }
         return opaquePtrResult(e, mo, withTuplePrelude(Ex.primary("${recv.at(PRIMARY)}.$name(${inlineArgs(e, mo.str("key"), args(e, sig, shim && sig.variadic, shim)).joinToString(", ")})")))
+    }
+
+    /**
+     * A constraint-method call on a value of an UNBOUNDED type parameter (Program.unboundedTparams): Kotlin knows
+     * no interface for it, so the call dispatches on the run-time value — an implementer of the constraint
+     * interface through it, else the (single) alias implementer (a typealias of GoMap/GoSlice/a function type)
+     * through its extension method. `e.value.Clone()` in TypeScript 7.1's `dirty.MapEntry[K, V Cloneable[V]]`.
+     */
+    private fun constraintDispatch(e: Node, sel: Node): Ex? {
+        val x = sel.reqObj("x")
+        val tp = types.unalias(ty(x)) as? TypeParamType ?: return null
+        if (tp.key !in prog.unboundedTparams) return null
+        val impls = prog.constraintImpls[tp.key].orEmpty()
+        val impl = impls.singleOrNull() ?: refuse("constraint-dispatch", "${tp.name}: ${impls.size} alias implementers")
+        val mo = pc.obj(sel.reqObj("sel").int("obj")!!)
+        val mn = Naming.escape(Naming.lowerCamel(mo.str("name")!!))
+        val iface = tm.kt(tp.constraint).removeSuffix("?")
+        val ifaceRaw = iface.substringBefore('<')
+        val implPkg = impl.substringBeforeLast('.')
+        val implName = prog.typeName(impl, impl.substringAfterLast('.'))
+        val implTparams = prog.packages.firstOrNull { it.path == implPkg }?.let { p ->
+            val tt = TypeTable(p)
+            (0 until tt.size).firstNotNullOfOrNull { i -> (tt[i] as? NamedType)?.takeIf { it.key == impl && it.origin == null }?.tparams?.size }
+        } ?: 0
+        val implKt = fn.fc.typeRef(naming(implPkg), implName) + (if (implTparams == 0) "" else List(implTparams) { "Any?" }.joinToString(", ", "<", ">"))
+        val implMethod = prog.methodsByType[impl].orEmpty().firstOrNull { it.second.str("name") == mo.str("name") }?.second
+            ?: refuse("constraint-dispatch", "${impl.substringAfterLast('/')} has no ${mo.str("name")}")
+        val implMn = prog.methodName(implMethod.str("qname")!!, implMethod.str("name")!!)
+        if (implPkg != pc.pkg.path) fn.fc.importFun(naming(implPkg), implMn)
+        val r = fn.fresh("cd")
+        val a = args(e, sigOf(e), false, false).joinToString(", ")
+        val result = sigOf(e).results.map { it.t }
+        val cast = if (result.isEmpty()) "" else " as ${tm.returns(result).removePrefix(": ")}"
+        return Ex.primary("(when (val $r = ${lower(x).code}) { is $ifaceRaw<*> -> ($r as $iface).$mn($a); else -> ($r as $implKt).$implMn($a) }$cast)")
     }
 
     /**

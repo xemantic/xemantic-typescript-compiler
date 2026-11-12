@@ -1208,7 +1208,7 @@ val ModuleDetectionKindForce: ModuleDetectionKind = ModuleDetectionKind(3)
 
 // go: github.com/microsoft/TypeScript/tsc/internal/core.ModuleKind be89d3a9
 @kotlin.jvm.JvmInline
-value class ModuleKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<ModuleKind>, GoBasicValue {
+value class ModuleKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<ModuleKind>, GoBasicValue {
 
     override fun compareTo(other: ModuleKind): Int = value.compareTo(other.value)
 
@@ -1307,7 +1307,7 @@ val ModuleKindPreserve: ModuleKind = ModuleKind(200)
 
 // go: github.com/microsoft/TypeScript/tsc/internal/core.ModuleResolutionKind 0fa5effb
 @kotlin.jvm.JvmInline
-value class ModuleResolutionKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<ModuleResolutionKind>, GoBasicValue {
+value class ModuleResolutionKind(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<ModuleResolutionKind>, GoBasicValue {
 
     override fun compareTo(other: ModuleResolutionKind): Int = value.compareTo(other.value)
 
@@ -1405,7 +1405,7 @@ val NewLineKindLF: NewLineKind = NewLineKind(2)
 
 // go: github.com/microsoft/TypeScript/tsc/internal/core.ScriptTarget bca37d21
 @kotlin.jvm.JvmInline
-value class ScriptTarget(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<ScriptTarget>, GoBasicValue {
+value class ScriptTarget(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<ScriptTarget>, GoBasicValue {
 
     override fun compareTo(other: ScriptTarget): Int = value.compareTo(other.value)
 
@@ -1492,7 +1492,7 @@ val ScriptTargetLatestStandard: ScriptTarget = ScriptTarget(13)
 
 // go: github.com/microsoft/TypeScript/tsc/internal/core.JsxEmit 2d5c6eca
 @kotlin.jvm.JvmInline
-value class JsxEmit(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<JsxEmit>, GoBasicValue {
+value class JsxEmit(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<JsxEmit>, GoBasicValue {
 
     override fun compareTo(other: JsxEmit): Int = value.compareTo(other.value)
 

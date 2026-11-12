@@ -873,7 +873,7 @@ fun isExternalModuleNameRelative(moduleName: String): Boolean {
 
 // go: github.com/microsoft/TypeScript/tsc/internal/tspath.CaseSensitivity 71baa164
 @kotlin.jvm.JvmInline
-value class CaseSensitivity(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<CaseSensitivity>, GoBasicValue {
+value class CaseSensitivity(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<CaseSensitivity>, GoBasicValue {
 
     override fun compareTo(other: CaseSensitivity): Int = value.compareTo(other.value)
 

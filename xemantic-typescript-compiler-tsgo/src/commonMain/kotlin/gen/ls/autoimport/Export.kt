@@ -165,7 +165,7 @@ class ExportID(
 
 // go: github.com/microsoft/TypeScript/tsc/internal/ls/autoimport.ExportSyntax e5cb6e33
 @kotlin.jvm.JvmInline
-value class ExportSyntax(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<ExportSyntax>, GoBasicValue {
+value class ExportSyntax(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<ExportSyntax>, GoBasicValue {
 
     override fun compareTo(other: ExportSyntax): Int = value.compareTo(other.value)
 

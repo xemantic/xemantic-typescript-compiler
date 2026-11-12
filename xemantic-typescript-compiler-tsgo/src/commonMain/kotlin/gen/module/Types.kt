@@ -132,7 +132,7 @@ class PackageId(
     @kotlin.jvm.JvmField var subModuleName: String = "",
     @kotlin.jvm.JvmField var version: String = "",
     @kotlin.jvm.JvmField var peerDependencies: String = "",
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): PackageId = PackageId(name = name, subModuleName = subModuleName, version = version, peerDependencies = peerDependencies)
 
@@ -245,7 +245,7 @@ fun ResolvedTypeReferenceDirective?.isResolved(): Boolean {
 
 // go: github.com/microsoft/TypeScript/tsc/internal/module.extensions 7a1558fa
 @kotlin.jvm.JvmInline
-value class extensions(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, Comparable<extensions>, GoBasicValue {
+value class extensions(val value: Int) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, com.xemantic.typescript.tsgo.project.ata.ProjectID, Comparable<extensions>, GoBasicValue {
 
     override fun compareTo(other: extensions): Int = value.compareTo(other.value)
 

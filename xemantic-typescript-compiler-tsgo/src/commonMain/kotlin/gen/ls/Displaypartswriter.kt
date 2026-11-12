@@ -43,7 +43,7 @@ class displayPartsWriter(
     @kotlin.jvm.JvmField var runs: GoSlice<VSClassifiedTextRun?> = GoElem.ref<VSClassifiedTextRun?>().nilSlice,
     @kotlin.jvm.JvmField var vsCapability: Boolean = false,
     @kotlin.jvm.JvmField var lastWritten: String = "",
-) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter {
+) : Stringer, com.xemantic.typescript.tsgo.glob.element, ProjectID, EmitTextWriter, com.xemantic.typescript.tsgo.project.ata.ProjectID {
 
     fun goCopy(): displayPartsWriter = displayPartsWriter(builder = builder.goCopy(), runs = runs, vsCapability = vsCapability, lastWritten = lastWritten)
 

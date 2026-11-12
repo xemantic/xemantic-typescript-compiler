@@ -186,6 +186,8 @@ fun main(argv: Array<String>) {
     prog.computeAbstractIfaces()
     for ((k, why) in prog.abstractIfaceRefusals) println("goport: abstract-class interface refused: $k — $why")
     prog.computeNodeChain()
+    prog.computeConstraintDispatch()
+    println("goport: constraint dispatch: ${prog.unboundedTparams.size} type parameters, implementers ${prog.constraintImpls.values.flatten().toSortedSet().map { it.substringAfterLast('/') }}")
     println("goport: one object per node: ${prog.nodeChainRefusal?.let { "REFUSED — $it" } ?: "${prog.nodeChain.size} classes, ${prog.nodeChainOpen.size} extended"}")
     prog.computeWindowFuncs(overrides.keys)
     prog.computePrimFuncFields()

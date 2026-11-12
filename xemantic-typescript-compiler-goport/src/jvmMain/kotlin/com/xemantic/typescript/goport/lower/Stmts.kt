@@ -1273,6 +1273,11 @@ class Lowering(fn: FnCtx) : CallLowering(fn) {
             w.line("$frame.defer { goPanic(${temps[0]}) }")
             return
         }
+        // `defer close(ch)` (TypeScript 7.1's build orchestrator): the channel is evaluated here, closed at return.
+        if (call.str("call") == "builtin" && call.str("builtin") == "close") {
+            w.line("$frame.defer { goClose(${temps[0]}) }")
+            return
+        }
         val fv = fn.fresh("df")
         w.line("val $fv = ${raw(f).code}")
         w.line("$frame.defer { $fv!!(${temps.joinToString(", ")}) }")
