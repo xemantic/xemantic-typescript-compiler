@@ -42,10 +42,10 @@ import com.xemantic.typescript.tsgo.testutil.harnessutil.sourceFileCache
 // entry points; every decision is the ported code's. A harness skip/fatal surfaces as
 // [com.xemantic.typescript.tsgo.go.testing.TestSkipped] / [com.xemantic.typescript.tsgo.go.testing.TestFailed].
 
-/** The `/.lib` test libraries' TypeScript checkout (`repo.TypeScriptSubmodulePath()`): set by the host. */
-var typeScriptSubmodule: String
-    get() = com.xemantic.typescript.tsgo.repo.typeScriptSubmodule
-    set(v) { com.xemantic.typescript.tsgo.repo.typeScriptSubmodule = v }
+/** The tsgo checkout's `testdata` directory (`repo.TestDataPath()`; its `tests/lib` holds the `/.lib` test libraries): set by the host. */
+var testDataPath: String
+    get() = com.xemantic.typescript.tsgo.repo.testData
+    set(v) { com.xemantic.typescript.tsgo.repo.testData = v }
 
 /** The case text as tsgo's runner reads it from disk (`osvfs`: a UTF-8 BOM stripped, UTF-16 decoded). */
 fun decodeCaseText(raw: String): String = com.xemantic.typescript.tsgo.vfs.internal.decodeBytes(raw).first
@@ -114,7 +114,7 @@ fun emitFrame(arts: List<com.xemantic.typescript.tsgo.testrunner.XtscEmitArtifac
 fun purgeSourceFileCache() {
     val drop = ArrayList<SourceFileCacheKey>()
     sourceFileCache.range { k, _ ->
-        if (!k.opts.fileName.startsWith("bundled:")) drop += k
+        if (!k.opts.fileName.asString().startsWith("bundled:")) drop += k
         true
     }
     for (k in drop) sourceFileCache.delete(k)

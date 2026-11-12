@@ -37,16 +37,16 @@ fun testing(): Boolean = false
  * a failure and continues, as in Go. The methods live on the embedded [Common] (Go's `testing.common`):
  * the lowering reaches promoted methods through the embedded field.
  */
-class T(name: String = "") : com.xemantic.typescript.tsgo.repo.SkippableTest {
+class T(name: String = "") {
 
     /** Go's embedded `testing.common`. */
     val common: Common = Common(name)
 
     fun name(): String = common.name()
 
-    override fun helper() = common.helper()
+    fun helper() = common.helper()
 
-    override fun skipf(format: String, vararg args: Any?): Nothing = common.skipf(format, *args)
+    fun skipf(format: String, vararg args: Any?): Nothing = common.skipf(format, *args)
 
     /**
      * `t.Run(name, f)`: runs [f] as a subtest (Go: in its own goroutine, waited for) and reports

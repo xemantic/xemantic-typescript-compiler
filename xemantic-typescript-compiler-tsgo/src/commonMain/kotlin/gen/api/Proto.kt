@@ -52,6 +52,7 @@ import com.xemantic.typescript.tsgo.project.ParseCacheKey
 import com.xemantic.typescript.tsgo.tsoptions.ParsedCommandLine
 import com.xemantic.typescript.tsgo.tspath.PathKey
 import com.xemantic.typescript.tsgo.ast.PositionMap
+import com.xemantic.typescript.tsgo.project.Project
 import com.xemantic.typescript.tsgo.ls.autoimport.ProjectID
 import com.xemantic.typescript.tsgo.core.ProjectReference
 import com.xemantic.typescript.tsgo.jsnum.PseudoBigInt
@@ -131,6 +132,10 @@ import com.xemantic.typescript.tsgo.collections.getOrZero
 import com.xemantic.typescript.tsgo.collections.set
 import com.xemantic.typescript.tsgo.collections.size
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.kind
+import com.xemantic.typescript.tsgo.project.configFileName
+import com.xemantic.typescript.tsgo.project.currentDirectory
+import com.xemantic.typescript.tsgo.project.isDirty
+import com.xemantic.typescript.tsgo.project.projectID
 import com.xemantic.typescript.tsgo.tsoptions.compilerOptions
 import com.xemantic.typescript.tsgo.tsoptions.fileNames
 import com.xemantic.typescript.tsgo.tsoptions.projectReferences
@@ -3446,6 +3451,19 @@ fun newConfigFileResponse(parsedCommandLine: ParsedCommandLine?): ConfigFileResp
         errors = GoSlice.make(GoElem.ref<DiagnosticResponse?>(), 0)
     }
     return ConfigFileResponse(fileNames = parsedCommandLine.fileNames(), options = compilerOptions, projectReferences = parsedCommandLine.projectReferences(), typeAcquisition = parsedCommandLine.typeAcquisition(), compileOnSave = compileOnSave, raw = parsedCommandLine!!.raw, errors = errors)
+}
+
+// go: github.com/microsoft/TypeScript/tsc/internal/api.NewProjectResponse 966b9840
+fun newProjectResponse(p: Project?): ProjectResponse? {
+    if (p == null || p!!.commandLine == null) {
+        goPanic("NewProjectResponse called with unloaded project")
+    }
+    var configFileName: GoPtr<RootedFilePath>? = null
+    if (p!!.kind.value == 1) {
+        val value_1: GoBox<RootedFilePath> = GoBox(p.configFileName())
+        configFileName = value_1
+    }
+    return ProjectResponse(id = p.projectID(), configFileName = configFileName, currentDirectory = p.currentDirectory(), dirty = p.isDirty(), parsedCommandLine = newConfigFileResponse(p!!.commandLine))
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.GetSymbolAtPositionParams 70fc5d33

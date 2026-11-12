@@ -64,6 +64,8 @@ object TsgoCli {
         terminalWidth: Int = 0,
         environment: (String) -> String? = { null },
         context: com.xemantic.typescript.tsgo.go.context.Context = com.xemantic.typescript.tsgo.go.context.background(),
+        err: (ByteArray) -> Unit = {},
+        spawn: ((GoSlice<String>, String, com.xemantic.typescript.tsgo.go.io.Writer?) -> Tuple2<com.xemantic.typescript.tsgo.go.io.ReadWriteCloser?, GoError?>)? = null,
     ): Int = onGoStack {
         TsgoProject.init()
         com.xemantic.typescript.tsgo.runtime.installFsNotify()
@@ -74,14 +76,27 @@ object TsgoCli {
                 return Tuple2(p.len, null)
             }
         }
+        val errWriter = object : com.xemantic.typescript.tsgo.go.io.Writer {
+            override fun write(p: GoSlice<Int>): Tuple2<Int, GoError?> {
+                err(ByteArray(p.len) { p[it].toByte() })
+                return Tuple2(p.len, null)
+            }
+        }
+        // TypeScript 7.1's content mappers run a child process per mapper (`System.Spawn`); a host without one
+        // answers the spawn with an error, which tsc reports as a content-mapper diagnostic.
+        val spawner = spawn ?: { command: GoSlice<String>, _: String, _: com.xemantic.typescript.tsgo.go.io.Writer? ->
+            Tuple2<com.xemantic.typescript.tsgo.go.io.ReadWriteCloser?, GoError?>(null, com.xemantic.typescript.tsgo.runtime.GoPlainError("cannot start ${if (command.len > 0) command[0] else "process"}: no process spawner in this host"))
+        }
         val goArgs = GoSlice.of(GoElem.STRING, *args.map { GoString.fromUtf16(it) }.toTypedArray())
         val fs = com.xemantic.typescript.tsgo.bundled.wrapFS(com.xemantic.typescript.tsgo.vfs.osvfs.fs())
-        val lib = libDirectory?.let { com.xemantic.typescript.tsgo.tspath.normalizePath(GoString.fromUtf16(it)) }
+        val lib = libDirectory?.let { com.xemantic.typescript.tsgo.tspath.rootedDirectoryPathFromAbsolute(GoString.fromUtf16(it)) }
             ?: com.xemantic.typescript.tsgo.bundled.libPath()
         try {
             com.xemantic.typescript.tsgo.execute.xtscCommandLine(
-                context, goArgs, fs, lib, GoString.fromUtf16(currentDirectory), writer, isTerminal, terminalWidth,
-            ) { name -> GoString.fromUtf16(environment(GoString.toUtf16(name)) ?: "") }
+                context, goArgs, fs, lib, GoString.fromUtf16(currentDirectory), writer, errWriter, isTerminal, terminalWidth,
+                { name -> environment(GoString.toUtf16(name)).let { v -> Tuple2(GoString.fromUtf16(v ?: ""), v != null) } },
+                spawner,
+            )
         } catch (e: NotImplementedError) {
             // A refused declaration of the port (`-b --watch` is a partial stub): say so instead of a stack trace.
             // Any other NotImplementedError is a defect and propagates.

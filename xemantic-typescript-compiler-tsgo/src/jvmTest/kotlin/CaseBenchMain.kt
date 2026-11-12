@@ -70,7 +70,7 @@ private class CaseBench(val repo: File, val stride: Int, val warmup: Int, val it
             Case(f.path, com.xemantic.typescript.tsgo.harness.decodeCaseText(String(f.readBytes(), Charsets.ISO_8859_1)), variation)
         }
         TsgoPort.init()
-        com.xemantic.typescript.tsgo.harness.typeScriptSubmodule = File(repo, "build/goport/ts-submodule").path
+        com.xemantic.typescript.tsgo.harness.testDataPath = File(repo, "typescript-go-repo/testdata").canonicalFile.path
         println("configurations=${cases.size} of ${entries.size} (stride $stride) warmup=$warmup iters=$iters java=${System.getProperty("java.version")}")
         val threads = java.lang.management.ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
         val totals = ArrayList<Double>()

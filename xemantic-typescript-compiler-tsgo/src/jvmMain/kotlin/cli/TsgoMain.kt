@@ -83,6 +83,8 @@ fun runMain(args: Array<String>): Int {
             isTerminal = isTerminal,
             terminalWidth = if (isTerminal) (System.getenv("COLUMNS")?.toIntOrNull() ?: 80) else 0,
             environment = { System.getenv(it) },
+            err = { System.err.write(it); System.err.flush() },
+            spawn = ::jvmSpawn,
             context = context!!,
         )
     } catch (e: Throwable) {

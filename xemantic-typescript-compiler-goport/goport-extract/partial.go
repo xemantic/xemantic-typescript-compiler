@@ -37,7 +37,7 @@ var partialClosure = map[string][]string{
 	"testutil":                {"TestProgramIsSingleThreaded"},
 	// (TSGO.3-b) the API session in-process (docs/goport-api.md): the overlay's entry points keep
 	// Session, whose methods (HandleRequest and every handler) are kept with it.
-	"api": {"XtscNewSession", "XtscMarshal", "XtscOpenProgram",
+	"api": {"XtscNewSession", "XtscMarshal", "XtscOpenProgram", "NewStandaloneSession",
 		// (TSGO.4-a) the language service behind the language server's handlers (docs/goport-ls.md)
 		"XtscResolveClientCapabilities", "XtscUserPreferences", "XtscLanguageService"},
 	// (TSGO.5) the command line (docs/goport-cli.md): the overlay's runMain keeps CommandLine and
@@ -56,20 +56,11 @@ var partialClosure = map[string][]string{
 // partialStubs: methods ("Recv.Name") or functions of a partial package kept as a SIGNATURE ONLY — the
 // body is neither traversed for reachability nor extracted (an empty block stands in), so what only
 // it reaches stays out of the closure; the porter emits the stub (refuse.txt pins each one). These
-// are the API session's handlers that need tsgo's project system or language service, which the
-// in-process session replaces (the caller builds the snapshot) or does not port yet.
+// are API session handlers whose dependencies the port does not have (runtime/pprof).
 var partialStubs = map[string][]string{
 	"api": {
-		// the project-session lifecycle: replaced by XtscNewSession's caller-built snapshot (TypeScript
-		// 7.1 split it into create/update/language-server snapshots; registerSnapshot, which
-		// XtscNewSession calls, stays)
-		"Session.handleInitialize", "Session.handleCreateSnapshot", "Session.handleUpdateSnapshot",
-		"Session.handleGetCurrentLanguageServerSnapshot", "Session.toAPISnapshotRequest",
-		"Session.toLanguageServerSnapshotUpdate", "languageServerSnapshotUpdate.commit",
-		"Session.validatePreparedAutoImports", "Session.createSnapshotResponse",
-		"Session.createSnapshotOperationResponse", "Session.handleRelease",
-		"Session.handleGetDefaultProjectForFile", "Session.Close", "Session.releaseLanguageServerRefs",
-		"Session.toFileChangeSummary", "computeSnapshotChanges",
+		// (TSGO.7.1) the project-session lifecycle is PORTED with internal/project: the facade opens a project
+		// through the session's own createSnapshot, as `tsc --api` does. Only profiling stays out.
 		// runtime/pprof
 		"Session.handleStartCPUProfile", "Session.handleStopCPUProfile", "Session.handleSaveHeapProfile",
 	},

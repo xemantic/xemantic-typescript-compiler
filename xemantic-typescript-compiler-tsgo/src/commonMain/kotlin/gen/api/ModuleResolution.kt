@@ -33,17 +33,21 @@ import com.xemantic.typescript.tsgo.core.ModuleKind
 import com.xemantic.typescript.tsgo.project.ModuleResolverFactory
 import com.xemantic.typescript.tsgo.go.sync.Mutex
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.Options
+import com.xemantic.typescript.tsgo.project.Project
 import com.xemantic.typescript.tsgo.module.ResolutionData
 import com.xemantic.typescript.tsgo.module.ResolvedProjectReference
 import com.xemantic.typescript.tsgo.module.Resolver
 import com.xemantic.typescript.tsgo.module.ResolverOptions
 import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
+import com.xemantic.typescript.tsgo.project.Snapshot
 import com.xemantic.typescript.tsgo.module.StaticResolutionEntry
 import com.xemantic.typescript.tsgo.module.StaticResolutions
 import com.xemantic.typescript.tsgo.go.encoding.json.jsontext.Value
+import com.xemantic.typescript.tsgo.compiler.moduleResolutionError
 import com.xemantic.typescript.tsgo.diagnostics.localize
 import com.xemantic.typescript.tsgo.project.contentMapperExtensions
+import com.xemantic.typescript.tsgo.project.projects
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.moduleResolverFactory 8b49d938
 class moduleResolverFactory(
@@ -331,6 +335,21 @@ fun com.xemantic.typescript.tsgo.api.programResolutionContext?.resolverFor(regis
         this!!.resolvers[registration!!.id] = resolver_1
         return resolver_1
     }
+}
+
+// go: github.com/microsoft/TypeScript/tsc/internal/api.moduleResolutionError d8572c84
+fun moduleResolutionError(snapshot: Snapshot?): GoError? {
+    val s0 = snapshot!!.projectCollection.projects()
+    l0@ for (i1 in 0 until s0.len) {
+        val project: Project? = s0[i1]
+        if (project!!.program != null) {
+            val err: GoError? = project!!.program.moduleResolutionError()
+            if (err != null) {
+                return err
+            }
+        }
+    }
+    return null
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.Session.handleCreateModuleResolver 1f9d2178

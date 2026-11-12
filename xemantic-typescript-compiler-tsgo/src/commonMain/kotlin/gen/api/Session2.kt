@@ -24,6 +24,8 @@
 package com.xemantic.typescript.tsgo.api
 
 import com.xemantic.typescript.tsgo.runtime.*
+import com.xemantic.typescript.tsgo.project.APICreateProgramRequest
+import com.xemantic.typescript.tsgo.project.APIReconfigureProgramRequest
 import com.xemantic.typescript.tsgo.project.APISnapshotRequest
 import com.xemantic.typescript.tsgo.pprof.CPUProfiler
 import com.xemantic.typescript.tsgo.tspath.CaseSensitivity
@@ -33,6 +35,7 @@ import com.xemantic.typescript.tsgo.vfs.vfstest.Clock
 import com.xemantic.typescript.tsgo.core.CompilerOptions
 import com.xemantic.typescript.tsgo.ls.CompletionItem
 import com.xemantic.typescript.tsgo.ls.CompletionList
+import com.xemantic.typescript.tsgo.project.ConfiguredProjectID
 import com.xemantic.typescript.tsgo.ipc.Conn
 import com.xemantic.typescript.tsgo.go.context.Context
 import com.xemantic.typescript.tsgo.checker.ContextFlags
@@ -55,6 +58,7 @@ import com.xemantic.typescript.tsgo.ls.lsconv.LSPLineMap
 import com.xemantic.typescript.tsgo.ls.LanguageService
 import com.xemantic.typescript.tsgo.checker.MappedType
 import com.xemantic.typescript.tsgo.core.ModuleKind
+import com.xemantic.typescript.tsgo.project.ModuleResolverFactory
 import com.xemantic.typescript.tsgo.go.sync.Mutex
 import com.xemantic.typescript.tsgo.ast.Node
 import com.xemantic.typescript.tsgo.ast.NodeFactory
@@ -64,6 +68,7 @@ import com.xemantic.typescript.tsgo.go.sync.Once
 import com.xemantic.typescript.tsgo.go.encoding.json.v2.Options
 import com.xemantic.typescript.tsgo.execute.build.Orchestrator
 import com.xemantic.typescript.tsgo.execute.build.OrchestratorResult
+import com.xemantic.typescript.tsgo.collections.OrderedMap
 import com.xemantic.typescript.tsgo.transpile.Output
 import com.xemantic.typescript.tsgo.project.ParseCacheKey
 import com.xemantic.typescript.tsgo.tsoptions.ParsedBuildCommandLine
@@ -86,6 +91,7 @@ import com.xemantic.typescript.tsgo.tspath.RootedDirectoryPath
 import com.xemantic.typescript.tsgo.tspath.RootedFilePath
 import com.xemantic.typescript.tsgo.tspath.RootedPath
 import com.xemantic.typescript.tsgo.core.ScriptKind
+import com.xemantic.typescript.tsgo.project.SessionInit
 import com.xemantic.typescript.tsgo.checker.Signature
 import com.xemantic.typescript.tsgo.checker.SignatureKind
 import com.xemantic.typescript.tsgo.ls.SignatureUsage
@@ -259,11 +265,14 @@ import com.xemantic.typescript.tsgo.checker.typeToTypeNode
 import com.xemantic.typescript.tsgo.checker.types
 import com.xemantic.typescript.tsgo.checker.valueType
 import com.xemantic.typescript.tsgo.collections.add
+import com.xemantic.typescript.tsgo.collections.clear
 import com.xemantic.typescript.tsgo.collections.clone
 import com.xemantic.typescript.tsgo.collections.delete
 import com.xemantic.typescript.tsgo.collections.has
 import com.xemantic.typescript.tsgo.collections.keys
+import com.xemantic.typescript.tsgo.collections.len
 import com.xemantic.typescript.tsgo.compiler.commandLine
+import com.xemantic.typescript.tsgo.compiler.filesByPath
 import com.xemantic.typescript.tsgo.compiler.getModeForResolutionAtIndex
 import com.xemantic.typescript.tsgo.compiler.getResolvedTypeReferenceDirective
 import com.xemantic.typescript.tsgo.compiler.getSourceFileByPath
@@ -286,13 +295,21 @@ import com.xemantic.typescript.tsgo.module.isResolved
 import com.xemantic.typescript.tsgo.printer.emit
 import com.xemantic.typescript.tsgo.project.acquireExistingSourceFile
 import com.xemantic.typescript.tsgo.project.acquireSourceFile
+import com.xemantic.typescript.tsgo.project.apiUpdate
+import com.xemantic.typescript.tsgo.project.cloneSnapshot
 import com.xemantic.typescript.tsgo.project.cloneSnapshotWithAutoImports
+import com.xemantic.typescript.tsgo.project.close
+import com.xemantic.typescript.tsgo.project.createdPrograms
 import com.xemantic.typescript.tsgo.project.defaultLibraryPath
 import com.xemantic.typescript.tsgo.project.deref
+import com.xemantic.typescript.tsgo.project.getDefaultProject
 import com.xemantic.typescript.tsgo.project.getProject
 import com.xemantic.typescript.tsgo.project.getProjectDiagnostics
 import com.xemantic.typescript.tsgo.project.id
+import com.xemantic.typescript.tsgo.project.newRootSnapshot
 import com.xemantic.typescript.tsgo.project.projectID
+import com.xemantic.typescript.tsgo.project.projects
+import com.xemantic.typescript.tsgo.project.projectsByID
 import com.xemantic.typescript.tsgo.project.release
 import com.xemantic.typescript.tsgo.project.sourceFile
 import com.xemantic.typescript.tsgo.project.tryAdoptSnapshotInBackground
@@ -2273,24 +2290,180 @@ fun com.xemantic.typescript.tsgo.api.snapshotData?.resolveNodeHandle(program: Pr
     return Tuple2<Node?, GoError?>(null, com.xemantic.typescript.tsgo.go.fmt.errorf("%w: node handle %q could not be resolved (file may not be loaded or handle may be stale)", errClientError, handle))
 }
 
+// go: github.com/microsoft/TypeScript/tsc/internal/api.computeSnapshotChanges b559c6cf
+fun computeSnapshotChanges(prev: Snapshot?, next: Snapshot?): SnapshotChanges? {
+    val prevProjects: OrderedMap<ID, Project?>? = prev!!.projectCollection.projectsByID()
+    val nextProjects: OrderedMap<ID, Project?>? = next!!.projectCollection.projectsByID()
+    val changes: SnapshotChanges = SnapshotChanges()
+    com.xemantic.typescript.tsgo.collections.diffOrderedMaps<ID, Project?>(ID.ELEM, GoElem.ref<Project?>(), prevProjects, nextProjects, fun(unused0: ID, unused1: Project?) {
+    }, fun(unused2: ID, oldProj: Project?) {
+        changes.removedProjects = changes.removedProjects.append1(oldProj.projectID())
+    }, fun(unused3: ID, oldProj_1: Project?, newProj: Project?) {
+        if (oldProj_1!!.getProgram() === newProj!!.getProgram()) {
+            return
+        }
+        var oldFiles: GoMap<PathKey, SourceFile?> = GoMap.nil<PathKey, SourceFile?>(GoElem.ref<SourceFile?>())
+        var newFiles: GoMap<PathKey, SourceFile?> = GoMap.nil<PathKey, SourceFile?>(GoElem.ref<SourceFile?>())
+        val p: Program? = oldProj_1!!.getProgram()
+        if (p != null) {
+            oldFiles = p.filesByPath()
+        }
+        val p_1: Program? = newProj!!.getProgram()
+        if (p_1 != null) {
+            newFiles = p_1.filesByPath()
+        }
+        val projectChanges: ProjectFileChanges = ProjectFileChanges()
+        com.xemantic.typescript.tsgo.core.diffMaps<PathKey, SourceFile?>(PathKey.ELEM, GoElem.ref<SourceFile?>(), oldFiles, newFiles, null, fun(path: PathKey, unused4: SourceFile?) {
+            projectChanges.deletedFiles = projectChanges.deletedFiles.append1(path)
+        }, fun(path_1: PathKey, unused5: SourceFile?, unused6: SourceFile?) {
+            projectChanges.changedFiles = projectChanges.changedFiles.append1(path_1)
+        })
+        if (projectChanges.changedFiles.len > 0 || projectChanges.deletedFiles.len > 0) {
+            if (changes.changedProjects.isNil) {
+                changes.changedProjects = GoMap.make<ID, ProjectFileChanges?>(GoElem.ref<ProjectFileChanges?>())
+            }
+            changes.changedProjects[newProj.projectID()] = projectChanges
+        }
+    })
+    return changes
+}
+
 // go: github.com/microsoft/TypeScript/tsc/internal/api.Session.createSnapshotResponse 319882d5
 fun Session?.createSnapshotResponse(snapshot: Snapshot?, base: Snapshot?, request: SnapshotRequestChangesParams?): CreateSnapshotResponse? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/TypeScript/tsc/internal/api.Session.createSnapshotResponse")
+    val operation: SnapshotOperationResponse? = this.createSnapshotOperationResponse(snapshot, request)
+    if (base == null) {
+        val projects: GoSlice<Project?> = snapshot!!.projectCollection.projects()
+        var projectResponses: GoSlice<ProjectResponse?> = GoSlice.make(GoElem.ref<ProjectResponse?>(), 0, projects.len)
+        val s0 = projects
+        l0@ for (i1 in 0 until s0.len) {
+            val proj: Project? = s0[i1]
+            if (proj!!.commandLine != null) {
+                projectResponses = projectResponses.append1(newProjectResponse(proj))
+            }
+        }
+        return CreateSnapshotResponse(snapshot = snapshotHandle(snapshot), projects = projectResponses, operation = operation)
+    }
+    var projectResponses_1: GoSlice<ProjectResponse?> = GoSlice.make(GoElem.ref<ProjectResponse?>(), 0)
+    com.xemantic.typescript.tsgo.collections.diffOrderedMaps<ID, Project?>(ID.ELEM, GoElem.ref<Project?>(), base!!.projectCollection.projectsByID(), snapshot!!.projectCollection.projectsByID(), fun(unused2: ID, proj_1: Project?) {
+        if (proj_1!!.commandLine != null) {
+            projectResponses_1 = projectResponses_1.append1(newProjectResponse(proj_1))
+        }
+    }, fun(unused3: ID, unused4: Project?) {
+    }, fun(unused5: ID, oldProj: Project?, newProj: Project?) {
+        if (oldProj !== newProj && newProj!!.commandLine != null) {
+            projectResponses_1 = projectResponses_1.append1(newProjectResponse(newProj))
+        }
+    })
+    return CreateSnapshotResponse(snapshot = snapshotHandle(snapshot), projects = projectResponses_1, changes = computeSnapshotChanges(base, snapshot), operation = operation)
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.Session.createSnapshotOperationResponse dd812f02
 fun Session?.createSnapshotOperationResponse(snapshot: Snapshot?, request: SnapshotRequestChangesParams?): SnapshotOperationResponse? {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/TypeScript/tsc/internal/api.Session.createSnapshotOperationResponse")
+    val operation: SnapshotOperationResponse? = SnapshotOperationResponse()
+    if (request == null) {
+        return operation
+    }
+    if (!request!!.createPrograms.isNil) {
+        val createdPrograms: GoSlice<Project?> = snapshot.createdPrograms()
+        if (createdPrograms.len != request!!.createPrograms.len) {
+            goPanic("created program result count does not match request")
+        }
+        val results: GoBox<GoSlice<SyntheticProjectID>> = GoBox(GoSlice.make(SyntheticProjectID.ELEM, createdPrograms.len))
+        val s0 = createdPrograms
+        l0@ for (i1 in 0 until s0.len) {
+            val i: Int = i1
+            val createdProgram: Project? = s0[i1]
+            val t2 = createdProgram.projectID().synthetic()
+            val programID: SyntheticProjectID = t2.first
+            val ok: Boolean = t2.second
+            if (!ok) {
+                goPanic("created program has non-synthetic project ID")
+            }
+            results.value[i] = programID
+        }
+        operation!!.createdPrograms = results
+    }
+    if (!request!!.openFiles.isNil) {
+        val results_1: GoBox<GoSlice<OpenedFileOperationResult?>> = GoBox(GoSlice.make(GoElem.ref<OpenedFileOperationResult?>(), request!!.openFiles.len))
+        val s3 = request!!.openFiles
+        l1@ for (i4 in 0 until s3.len) {
+            val i_1: Int = i4
+            val file: DocumentIdentifier = s3[i4].goCopy()
+            val project: Project? = snapshot.getDefaultProject(file.toURI(this!!.getCurrentDirectory()))
+            if (project == null) {
+                goPanic("no project found for opened file " + this.toFileName(file.goCopy()).asString())
+            }
+            results_1.value[i_1] = OpenedFileOperationResult(project = project.projectID())
+        }
+        operation!!.openedFiles = results_1
+    }
+    return operation
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.Session.Close 6d02081b
 fun Session?.close() {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/TypeScript/tsc/internal/api.Session.Close")
+    this!!.closeOnce.`do`(fun() {
+        this.releaseLanguageServerRefs()
+        this.releaseSourceFileLeases()
+        this!!.snapshotsMu.lock()
+        var snapshots: GoSlice<Snapshot?> = GoSlice.make(GoElem.ref<Snapshot?>(), 0, this!!.snapshots.len)
+        val mi0 = this!!.snapshots.iter()
+        l0@ while (mi0.next()) {
+            val sd: com.xemantic.typescript.tsgo.api.snapshotData? = mi0.value
+            snapshots = snapshots.append1(sd!!.snapshot)
+        }
+        this!!.snapshots.clear()
+        this!!.snapshotsMu.unlock()
+        val s1 = snapshots
+        l1@ for (i2 in 0 until s1.len) {
+            val snapshot: Snapshot? = s1[i2]
+            snapshot.deref()
+        }
+        if (this!!.ownsSnapshotHost) {
+            this!!.snapshotHost.close()
+        }
+        this!!.batchResponsePages.clear()
+    })
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.Session.releaseLanguageServerRefs 56355fe4
 fun Session?.releaseLanguageServerRefs() {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/TypeScript/tsc/internal/api.Session.releaseLanguageServerRefs")
+    withDefers({ Unit }) { df0 ->
+        if (this!!.projectSession == null) {
+            return
+        }
+        this!!.languageServerUpdateMu.lock()
+        val dr1 = this!!.languageServerUpdateMu
+        df0.defer { dr1.unlock() }
+        if (this!!.openProjects.len() == 0 && this!!.openFiles.len() == 0 && this!!.createdPrograms.len() == 0) {
+            return
+        }
+        val apiRequest: APISnapshotRequest? = APISnapshotRequest()
+        if (this!!.openProjects.len() > 0) {
+            apiRequest!!.closeProjects = this!!.openProjects.clone()
+        }
+        if (this!!.openFiles.len() > 0) {
+            apiRequest!!.closeFiles = this!!.openFiles.clone()
+        }
+        if (this!!.createdPrograms.len() > 0) {
+            apiRequest!!.removePrograms = com.xemantic.typescript.tsgo.collections.newSetWithSizeHint<SyntheticProjectID>(SyntheticProjectID.ELEM, this!!.createdPrograms.len())
+            val mi2 = this!!.createdPrograms.keys().iter()
+            l0@ while (mi2.next()) {
+                val programID: SyntheticProjectID = mi2.key
+                apiRequest!!.removePrograms.add(programID)
+            }
+        }
+        val t3 = this!!.projectSession.apiUpdate(this!!.withLocale!!(com.xemantic.typescript.tsgo.go.context.background()), FileChangeSummary(), apiRequest)
+        val snapshot: Snapshot? = t3.first
+        val err: GoError? = t3.second
+        if (err != null) {
+            return
+        }
+        snapshot.deref()
+        this!!.openProjects.clear()
+        this!!.openFiles.clear()
+        this!!.createdPrograms.clear()
+    }
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.formatSessionID 9a2607ad
@@ -2315,7 +2488,38 @@ fun Session?.toURI(document: DocumentIdentifier): DocumentUri {
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.Session.toFileChangeSummary 17a60fc3
 fun Session?.toFileChangeSummary(changes: FileNotifications?): FileChangeSummary {
-    TODO("goport: refused partial-stub (body not extracted): github.com/microsoft/TypeScript/tsc/internal/api.Session.toFileChangeSummary")
+    if (changes == null) {
+        return FileChangeSummary()
+    }
+    val summary: FileChangeSummary = FileChangeSummary()
+    if (changes!!.invalidateAll) {
+        summary.invalidateAll = true
+        summary.includesWatchChangeOutsideNodeModules = true
+        return summary.goCopy()
+    }
+    val cwd: RootedDirectoryPath = this!!.getCurrentDirectory()
+    val s0 = changes!!.changed
+    l0@ for (i1 in 0 until s0.len) {
+        val doc: DocumentIdentifier = s0[i1].goCopy()
+        val uri: DocumentUri = doc.toURI(cwd)
+        summary.changed.add(uri)
+    }
+    val s2 = changes!!.created
+    l1@ for (i3 in 0 until s2.len) {
+        val doc_1: DocumentIdentifier = s2[i3].goCopy()
+        val uri_1: DocumentUri = doc_1.toURI(cwd)
+        summary.created.add(uri_1)
+    }
+    val s4 = changes!!.deleted
+    l2@ for (i5 in 0 until s4.len) {
+        val doc_2: DocumentIdentifier = s4[i5].goCopy()
+        val uri_2: DocumentUri = doc_2.toURI(cwd)
+        summary.deleted.add(uri_2)
+    }
+    if (summary.changed.len() + summary.created.len() + summary.deleted.len() > 0) {
+        summary.includesWatchChangeOutsideNodeModules = true
+    }
+    return summary.goCopy()
 }
 
 // go: github.com/microsoft/TypeScript/tsc/internal/api.Session.getDiagnostics d3baccf7

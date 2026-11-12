@@ -205,8 +205,9 @@ class DiagParityTest {
         val entries = Regex(""""case":\s*"([^"]+)",\s*"variation":\s*"([^"]+)"""").findAll(manifest)
             .map { it.groupValues[1] to it.groupValues[2] }.filter { filter == null || it.first.contains(filter) }.take(limit).toList()
         TsgoPort.init()
-        com.xemantic.typescript.tsgo.harness.typeScriptSubmodule = File(root, "build/goport/ts-submodule").also {
-            check(File(it, "tests/lib").isDirectory) { "no /.lib test libraries at $it/tests/lib (scripts/tsgo-diag-cases.py extracts them)" }
+        // TypeScript 7.1: the `/.lib` test libraries are in-tree, `typescript-go-repo/testdata/tests/lib`.
+        com.xemantic.typescript.tsgo.harness.testDataPath = File(root, "typescript-go-repo/testdata").canonicalFile.also {
+            check(File(it, "tests/lib").isDirectory) { "no /.lib test libraries at $it/tests/lib (link typescript-go-repo to the tsgo checkout)" }
         }.path
         var ok = 0
         var crashed = 0
