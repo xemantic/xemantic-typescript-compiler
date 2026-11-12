@@ -136,7 +136,7 @@ class XtscClientExitCodeTest {
         File(dir, "tsconfig.json").writeText("""{ "compilerOptions": { "strict": true } }""")
         File(dir, "a.ts").writeText("export const n: number = 'not a number'\n")
         val (code, _) = dispatch(arrayOf("--daemon", "--noEmit", "-p", dir.absolutePath), null)
-        assert(code == 1)
+        assert(code == 2) // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
         dir.deleteRecursively()
     }
 

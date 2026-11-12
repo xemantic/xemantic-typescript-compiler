@@ -69,10 +69,11 @@ class TsgoCliTest {
     }
 
     @Test
-    fun `--noEmit writes nothing and exits 1 on errors`() {
+    fun `--noEmit writes nothing and exits 2 on errors`() {
         val dir = project("tsconfig.json" to """{ "compilerOptions": { "strict": true, "outDir": "out" } }""", "a.ts" to "let s: string = 1;\n")
         val (exit, out) = tsc(dir, "--noEmit", "-p", ".")
-        assert(exit == 1)
+        // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
+        assert(exit == 2)
         assert(out == "a.ts(1,5): error TS2322: Type 'number' is not assignable to type 'string'.\n")
         assert(!File(dir, "out").exists())
     }
@@ -213,7 +214,7 @@ class TsgoCliTest {
         val stdout = outFile.readText()
         val stderr = errFile.readText()
         val exit = p.exitValue()
-        assert(exit == 1)
+        assert(exit == 2) // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
         assert(stdout == "a.ts(1,7): error TS2322: Type 'number' is not assignable to type 'boolean'.\n")
         assert(stderr == "")
     }

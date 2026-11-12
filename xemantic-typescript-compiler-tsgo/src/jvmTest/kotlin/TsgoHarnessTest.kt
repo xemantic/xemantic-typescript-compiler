@@ -59,7 +59,7 @@ class TsgoHarnessTest {
             val check = runConfiguration(fileName, content, named).check
             variationName(named) to (0 until check.diagnostics.len).map { i ->
                 val d = check.diagnostics[i]!!
-                "${d.file?.fileName()} ${d.loc.pos.value} ${d.loc.end.value - d.loc.pos.value} TS${d.code} " +
+                "${d.file?.fileName()?.asString()} ${d.loc.pos.value} ${d.loc.end.value - d.loc.pos.value} TS${d.code} " +
                     GoString.toUtf16(d.localize(com.xemantic.typescript.tsgo.locale.Locale()))
             }
         }

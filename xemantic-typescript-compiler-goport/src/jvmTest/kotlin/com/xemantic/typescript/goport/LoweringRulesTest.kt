@@ -44,8 +44,8 @@ import kotlin.test.Test
  * Pins for lowering rules whose failure is SILENT (a wrong value that still compiles). The
  * end-to-end gate is `-tsgo`'s OracleParityTest (encoded-AST byte equality against tsgo).
  */
-/** The owned-slice operations in gen/ (docs/goport-lowering.md § 3, "Owned slice fields"); re-count when the IR changes. 43 at tsgo 7.0.2, 38 at TypeScript 7.1.0-beta. */
-private const val OWNED_SLICE_OPS = 38
+/** The owned-slice operations in gen/ (docs/goport-lowering.md § 3, "Owned slice fields"); re-count when the IR changes. 43 at tsgo 7.0.2, 41 at TypeScript 7.1.0-beta (with the ported project system). */
+private const val OWNED_SLICE_OPS = 41
 
 class LoweringRulesTest {
 
@@ -180,14 +180,17 @@ class LoweringRulesTest {
         assert(census(null) <= 112)
         // The harness slices: 7 at first generation (2026-10-08); 8 once (TSGO.3) reached the emit baselines
         // (`harnessutil` `Repeat`'s option parsing, `tsbaseline` type baselines — none on the compiler's path).
-        assert(census(null, harnessOnly = true) <= 8)
+        // TypeScript 7.1 (2026-11-12): 10 — the harness's re-copied prepare blocks and content-mapper test mappers.
+        assert(census(null, harnessOnly = true) <= 10)
         // The API session: 1 at first generation (2026-10-08, `resolveNodeHandle`'s path tail).
-        assert(census(null, apiOnly = true) <= 1)
+        // TypeScript 7.1 (2026-11-12): 2 — the session's ported snapshot lifecycle.
+        assert(census(null, apiOnly = true) <= 2)
         // (TSGO.4-a) the language service (ls, lsp, format, project/*, vfs/wrapvfs, jsonrpc): 54 at first generation (2026-10-08).
         assert(census(null, lsOnly = true) <= 54)
         // (TSGO.5) the command line: 1 at first generation (2026-10-08, `--help`'s description wrapping); 5 with
         // (TSGO.5-c)'s fswatch (2026-10-13, four path tails in `rebasePath` / `joinPathSuffix` / `isDirectChild`, per event).
-        assert(census(null, cliOnly = true) <= 5)
+        // TypeScript 7.1 (2026-11-12): 10 — the command line's content-mapper spawn and typed-path plumbing.
+        assert(census(null, cliOnly = true) <= 10)
     }
 
     @Test
@@ -222,8 +225,8 @@ class LoweringRulesTest {
         assert(all.size in 20..64)
         // (TSGO.4-a) the language service's: 9 at first generation (2026-10-08).
         val ls = gen.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") && isLanguageService(it) }.sumOf { f -> inline.findAll(f.readText()).count() }
-        // TypeScript 7.1 (2026-11-11): 10 — the language service's new code.
-        assert(ls <= 10)
+        // TypeScript 7.1 (2026-11-12): 12 — the language service's new code, the ported project system.
+        assert(ls <= 12)
         // A function that stores, nil-tests or passes on its func parameter stays a normal function.
         // SetParseJSDocForNode STORES its parameter; parseList passes it into a closure.
         assert(!genFunction("ast/Ast.kt", "github.com/microsoft/TypeScript/tsc/internal/ast.SetParseJSDocForNode").contains("inline fun"))

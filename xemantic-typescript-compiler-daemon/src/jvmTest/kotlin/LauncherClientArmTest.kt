@@ -343,7 +343,7 @@ class LauncherClientArmTest {
         val shown = launcher()!!.parentFile.parentFile.toPath().relativize(File(dir, "a.ts").toPath())
         assert("no compile server on" in err)
         assert(out == "$shown(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n")
-        assert(code == 1)
+        assert(code == 2) // TypeScript 7.1: errors exit 2 with --noEmit too; 7.0 exited 1
         assert(!absent.exists())
         dir.deleteRecursively()
     }

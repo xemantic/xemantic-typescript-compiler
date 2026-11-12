@@ -90,7 +90,7 @@ class CompileServerProtocolRefusalTest {
                 ),
             )
             assert(response.output == "loud.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n")
-            assert(response.exitCode == 1)
+            assert(response.exitCode == 2) // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
         } finally {
             dir.deleteRecursively()
         }

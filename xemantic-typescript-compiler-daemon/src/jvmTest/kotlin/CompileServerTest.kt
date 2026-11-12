@@ -73,7 +73,7 @@ class CompileServerTest {
             clientRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
         )
         assert(response.output == "a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n")
-        assert(response.exitCode == 1)
+        assert(response.exitCode == 2) // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
         dir.deleteRecursively()
     }
 
@@ -91,11 +91,11 @@ class CompileServerTest {
         val first = CompileServer.respondTo(clientRequest(listOf("--noEmit"), workingDirectory = failing.absolutePath))
         val second = CompileServer.respondTo(clientRequest(listOf("--noEmit"), workingDirectory = clean.absolutePath))
         val third = CompileServer.respondTo(clientRequest(listOf("--noEmit"), workingDirectory = failing.absolutePath))
-        assert(first.exitCode == 1)
+        assert(first.exitCode == 2) // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
         assert(second.output == "")
         assert(second.exitCode == 0)
         assert(third.output == first.output)
-        assert(third.exitCode == 1)
+        assert(third.exitCode == 2)
         failing.deleteRecursively()
         clean.deleteRecursively()
     }

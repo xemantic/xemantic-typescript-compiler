@@ -71,7 +71,7 @@ class ServeParityWorkingDirectoryTest {
                 clientRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
             )
             assert(response.output == "here.ts(1,14): $ts2322\n")
-            assert(response.exitCode == 1)
+            assert(response.exitCode == 2) // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
         } finally {
             dir.deleteRecursively()
         }
@@ -88,7 +88,7 @@ class ServeParityWorkingDirectoryTest {
                 clientRequest(listOf("--noEmit", "-p", "inner"), workingDirectory = parent.absolutePath),
             )
             assert(response.output == "inner/inner.ts(1,14): $ts2322\n")
-            assert(response.exitCode == 1)
+            assert(response.exitCode == 2) // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
         } finally {
             parent.deleteRecursively()
         }

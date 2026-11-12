@@ -85,11 +85,11 @@ class ExitCodeParityTest {
 
     // The case that was actually broken: the CLI used to answer 0 here.
     @Test
-    fun `a compile with errors exits one on both paths`() {
+    fun `a compile with errors exits two on both paths`() {
         val dir = project("export const n: number = 'not a number'\n")
         val cli = cliExitCode(dir, "--noEmit")
         val daemon = daemonExitCode(dir, "--noEmit")
-        assert(cli == 1)
+        assert(cli == 2) // TypeScript 7.1: errors exit 2 (ExitStatusDiagnosticsPresent_OutputsGenerated) with --noEmit too; 7.0 exited 1
         assert(daemon == cli)
         dir.deleteRecursively()
     }
@@ -97,7 +97,7 @@ class ExitCodeParityTest {
     // Several errors must still be one failure, not a count: a shell reads only
     // zero-vs-non-zero, and an exit code of 46 would collide with a signal.
     @Test
-    fun `many errors still exit one rather than a count`() {
+    fun `many errors still exit two rather than a count`() {
         val dir = project(
             """
             export const a: number = 'x'
@@ -105,7 +105,7 @@ class ExitCodeParityTest {
             export const c: number = 'z'
             """.trimIndent()
         )
-        assert(cliExitCode(dir, "--noEmit") == 1)
+        assert(cliExitCode(dir, "--noEmit") == 2)
         dir.deleteRecursively()
     }
 
